@@ -28,6 +28,10 @@ def test_current_access_token_falls_through_to_settings_before_any_renewal(monke
 
 @responses.activate
 def test_renew_access_token_updates_shared_state(monkeypatch):
+    # This is the REAL live response shape (confirmed empirically against
+    # api.dhan.co) - "token" and "createTime", not the "accessToken"/
+    # "dhanClientName"/etc Dhan's own docs describe. See
+    # renew_access_token's comment.
     monkeypatch.setattr(dhan, "_renewed_token", None)
     monkeypatch.setattr(dhan, "_last_renewed_at", None)
     monkeypatch.setattr(dhan, "_last_renewal_response", None)
@@ -39,12 +43,9 @@ def test_renew_access_token_updates_shared_state(monkeypatch):
         dhan.RENEW_TOKEN_URL,
         body=json.dumps(
             {
-                "dhanClientId": "test-client",
-                "dhanClientName": "Test User",
-                "dhanClientUcc": "ABC123",
-                "givenPowerOfAttorney": True,
-                "accessToken": "renewed-token",
-                "expiryTime": "2026-08-13T09:00:00Z",
+                "createTime": "2026-08-12T15:49:07.392",
+                "expiryTime": "2026-08-13T15:49:07.389",
+                "token": "renewed-token",
             }
         ),
         status=200,
@@ -52,13 +53,13 @@ def test_renew_access_token_updates_shared_state(monkeypatch):
 
     result = dhan.renew_access_token()
 
-    assert result["accessToken"] == "renewed-token"
+    assert result["token"] == "renewed-token"
     assert dhan.current_access_token() == "renewed-token"
 
     status = dhan.renew_token_status()
     assert status["renewed"] is True
-    assert status["expiry_time"] == "2026-08-13T09:00:00Z"
-    assert status["dhan_client_name"] == "Test User"
+    assert status["expiry_time"] == "2026-08-13T15:49:07.389"
+    assert status["create_time"] == "2026-08-12T15:49:07.392"
     assert status["last_renewed_at"] is not None
 
     # Verify the request used the current (seed) token and the
@@ -66,6 +67,27 @@ def test_renew_access_token_updates_shared_state(monkeypatch):
     sent = responses.calls[0].request
     assert sent.headers["access-token"] == "seed-token"
     assert sent.headers["dhanClientId"] == "test-client"
+
+
+@responses.activate
+def test_renew_access_token_also_accepts_documented_access_token_field(monkeypatch):
+    # Defensive fallback for Dhan's own documented shape
+    # (https://docs.dhanhq.co/api/v2/authentication/renew-token), in case
+    # it varies by account/plan or Dhan fixes the docs/response mismatch.
+    monkeypatch.setattr(dhan, "_renewed_token", None)
+    monkeypatch.setattr(settings, "dhan_client_id", "test-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "seed-token")
+
+    responses.add(
+        responses.GET,
+        dhan.RENEW_TOKEN_URL,
+        body=json.dumps({"accessToken": "renewed-token", "expiryTime": "2026-08-13T09:00:00Z"}),
+        status=200,
+    )
+
+    dhan.renew_access_token()
+
+    assert dhan.current_access_token() == "renewed-token"
 
 
 @responses.activate
@@ -78,7 +100,7 @@ def test_renew_access_token_uses_previously_renewed_token(monkeypatch):
     responses.add(
         responses.GET,
         dhan.RENEW_TOKEN_URL,
-        body=json.dumps({"accessToken": "renewed-again", "expiryTime": "2026-08-14T09:00:00Z"}),
+        body=json.dumps({"token": "renewed-again", "expiryTime": "2026-08-14T09:00:00Z"}),
         status=200,
     )
 
@@ -125,7 +147,7 @@ def test_renew_access_token_raises_when_200_response_has_no_access_token(monkeyp
         dhan.renew_access_token()
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
-        assert "did not return an accessToken" in str(exc)
+        assert "did not return a token" in str(exc)
     # Must not have mutated shared state on failure.
     assert dhan.current_access_token() == "expired-token"
 
@@ -154,4 +176,5 @@ def test_renew_token_status_before_any_renewal(monkeypatch):
         "last_renewed_at": None,
         "expiry_time": None,
         "dhan_client_name": None,
+        "create_time": None,
     }

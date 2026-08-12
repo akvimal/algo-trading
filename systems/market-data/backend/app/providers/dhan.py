@@ -178,7 +178,11 @@ def renew_token_status() -> dict:
             "renewed": _renewed_token is not None,
             "last_renewed_at": _last_renewed_at.isoformat() if _last_renewed_at else None,
             "expiry_time": (_last_renewal_response or {}).get("expiryTime"),
+            # dhanClientName is what Dhan's docs describe; createTime is
+            # what the live response actually sends instead - surfacing
+            # both defensively (see renew_access_token's own note).
             "dhan_client_name": (_last_renewal_response or {}).get("dhanClientName"),
+            "create_time": (_last_renewal_response or {}).get("createTime"),
         }
 
 
@@ -212,15 +216,20 @@ def renew_access_token() -> dict:
         raise RuntimeError(f"Dhan token renewal failed ({resp.status_code}): {resp.text[:200]}") from exc
 
     data = resp.json()
-    new_token = data.get("accessToken")
+    # Dhan's own docs (https://docs.dhanhq.co/api/v2/authentication/renew-token)
+    # say this field is "accessToken", but the live response actually
+    # uses "token" (and "createTime" instead of dhanClientId/
+    # dhanClientName/etc - confirmed empirically, docs are stale/wrong
+    # here). Accept either name defensively.
+    new_token = data.get("token") or data.get("accessToken")
     if not new_token:
         # Dhan doesn't always signal a rejected renewal via a non-200
         # status - e.g. an already-expired token has been observed to
         # come back as a 200 with an errorType/errorCode/errorMessage
-        # body instead of accessToken, same shape other Dhan endpoints
-        # use for a real error. Treat a response with no accessToken as
-        # a failure either way, rather than raising an unhandled KeyError.
-        raise RuntimeError(f"Dhan token renewal did not return an accessToken: {resp.text[:200]}")
+        # body instead of a token, same shape other Dhan endpoints use
+        # for a real error. Treat a response with no token as a failure
+        # either way, rather than raising an unhandled KeyError.
+        raise RuntimeError(f"Dhan token renewal did not return a token: {resp.text[:200]}")
 
     global _renewed_token, _last_renewed_at, _last_renewal_response
     with _token_lock:

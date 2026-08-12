@@ -38,10 +38,15 @@ StopLossMethod = Literal["previous_candle", "percent"]
 # already hardcoding to Dhan/NSE elsewhere (see market-data's DhanProvider).
 StopLossInterval = Literal["1min", "5min", "15min", "25min", "60min"]
 # Which market this strategy trades in - distinct from `exchange` (which
-# is still fixed to "NSE" today, the only one actually wired up
-# end-to-end in execution/market-data - see docs/architecture.md). Only
-# used here to pick a sensible square_off_time default; MCX/CRYPTO can be
-# selected as intent even though nothing downstream trades them yet.
+# names the signal SOURCE's webhook shape and is still fixed to "NSE"
+# today, since every external provider wired up so far - Chartink - is
+# NSE-only; unrelated to which markets this platform can actually trade).
+# segment is what signal-processing's resolution and execution's account
+# routing actually key off - MCX and CRYPTO are both wired up end-to-end
+# there as of the options module and the crypto module's Phases 1-3 (see
+# docs/architecture.md); only execution's *option* position support
+# (Phase 4d) and CRYPTO option execution (crypto module Phase 4) remain
+# NSE/MCX-only.
 Segment = Literal["NSE", "MCX", "CRYPTO"]
 # Signal-conflict policy, per-strategy - passed through unchanged on
 # resolved-order to execution's position_manager._resolve_signal_conflicts.

@@ -369,6 +369,92 @@ def test_resolve_option_strategy_for_mcx_uses_resolved_futures_contract():
 
 
 @responses.activate
+def test_resolve_option_strategy_for_crypto_uses_delta_chain():
+    # CRYPTO has no separate spot either (like MCX) - chart_symbol ==
+    # trade_symbol == the perpetual itself ("BTCUSD"), and Delta's own
+    # security_id is a stringified product_id, not Dhan's - same generic
+    # code path, just proving it actually works for the third exchange.
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(segment="CRYPTO"), status=200)
+    responses.add(
+        responses.GET,
+        _resolve_url(),
+        json=_resolved_underlying_json(
+            chart_symbol="BTCUSD",
+            chart_exchange="CRYPTO",
+            trade_symbol="BTCUSD",
+            trade_exchange="CRYPTO",
+            lot_size=1,
+        ),
+        status=200,
+    )
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-15"]}, status=200)
+    responses.add(
+        responses.GET,
+        _chain_url(),
+        json={
+            **_FAKE_CHAIN,
+            "underlying_symbol": "BTCUSD",
+            "underlying_exchange": "CRYPTO",
+            "expiry": "2026-08-15",
+            "underlying_last_price": 63500.0,
+            "strikes": [
+                {
+                    "strike": 63000.0,
+                    "ce": {"security_id": "139801", "moneyness": "ITM", "oi": 120},
+                    "pe": {"security_id": "139802", "moneyness": "OTM", "oi": 90},
+                },
+                {
+                    "strike": 63500.0,
+                    "ce": {"security_id": "139823", "moneyness": "ATM", "oi": 200},
+                    "pe": {"security_id": "139824", "moneyness": "ATM", "oi": 180},
+                },
+                {
+                    "strike": 64000.0,
+                    "ce": {"security_id": "139845", "moneyness": "OTM", "oi": 150},
+                    "pe": {"security_id": "139846", "moneyness": "ITM", "oi": 110},
+                },
+            ],
+        },
+        status=200,
+    )
+
+    resolved = resolve(_signal(symbol="BTCUSD", exchange="CRYPTO", action="BUY"))
+
+    assert resolved.instrument_type == "option"
+    assert resolved.strategy == {
+        "type": "bull_call_spread",
+        "legs": [
+            {"action": "BUY", "option_type": "CE", "strike": 63500.0, "expiry": "2026-08-15", "security_id": "139823"},
+            {"action": "SELL", "option_type": "CE", "strike": 64000.0, "expiry": "2026-08-15", "security_id": "139845"},
+        ],
+    }
+    # calls[0] = strategy fetch, [1] = resolve_underlying, [2] = expiries, [3] = chain
+    assert responses.calls[1].request.params["segment"] == "CRYPTO"
+    assert responses.calls[2].request.params["symbol"] == "BTCUSD"
+    assert responses.calls[2].request.params["exchange"] == "CRYPTO"
+
+
+@responses.activate
+def test_resolve_option_strategy_for_crypto_sell_signal_uses_bear_put_spread():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(segment="CRYPTO"), status=200)
+    responses.add(
+        responses.GET,
+        _resolve_url(),
+        json=_resolved_underlying_json(
+            chart_symbol="BTCUSD", chart_exchange="CRYPTO", trade_symbol="BTCUSD", trade_exchange="CRYPTO", lot_size=1
+        ),
+        status=200,
+    )
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-15"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json={**_FAKE_CHAIN, "underlying_symbol": "BTCUSD"}, status=200)
+
+    resolved = resolve(_signal(symbol="BTCUSD", exchange="CRYPTO", action="SELL"))
+
+    assert resolved.strategy["type"] == "bear_put_spread"
+    assert resolved.strategy["legs"][0]["option_type"] == "PE"
+
+
+@responses.activate
 def test_resolve_option_rejects_when_market_data_unreachable():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
     responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)

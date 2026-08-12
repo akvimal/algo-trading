@@ -47,7 +47,7 @@
               "expiry": { "type": "string", "format": "date" },
               "security_id": {
                 "type": "string",
-                "description": "The option contract's own Dhan security ID (from market-data's option-chain response). Resolved to a trading symbol/lot size by execution at position-open time via market-data's GET /instruments/resolve-by-security-id (Phase 4d), see docs/architecture.md."
+                "description": "The option contract's own provider-assigned ID (Dhan's security ID for NSE/MCX, Delta Exchange India's product_id for CRYPTO - from market-data's option-chain response either way). Resolved to a trading symbol/lot size by execution at position-open time via market-data's GET /instruments/resolve-by-security-id (Phase 4d), see docs/architecture.md."
               }
             }
           }

@@ -27,15 +27,22 @@ def choose_strategy(signal: SignalIngest, horizon: str, instrument_type: str) ->
     "persisted as rejected, nothing published" handling resolve() already
     gives every other ResolutionError.
 
-    Works for both NSE and MCX (SignalIngest.exchange's only two values) -
+    Works for NSE, MCX, and CRYPTO (SignalIngest.exchange's three values) -
     the option chain is always referenced against resolve_underlying(...)
     .chart_symbol, not signal.symbol directly, since that's the only thing
-    correct in all three underlying shapes: an NSE index option chains off
+    correct in all four underlying shapes: an NSE index option chains off
     the index spot, an NSE equity option off the equity itself (chart_symbol
-    == trade_symbol there), and an MCX commodity option off its active-month
+    == trade_symbol there), an MCX commodity option off its active-month
     futures contract (MCX has no separate spot, so chart_symbol ==
     trade_symbol there too, but neither equals the bare underlying name
-    signal.symbol carries, e.g. "GOLDM" vs "GOLDM-04Sep2026-FUT").
+    signal.symbol carries, e.g. "GOLDM" vs "GOLDM-04Sep2026-FUT"), and a
+    CRYPTO option off the perpetual future itself (Delta Exchange India has
+    no separate spot either, so chart_symbol == trade_symbol == signal.symbol
+    there, e.g. "BTCUSD" - see market-data's DeltaProvider.resolve_underlying).
+    This function itself carries no exchange-specific logic at all - it just
+    calls resolve_underlying/get_expiry_list/get_option_chain generically and
+    reads the chain's already-normalized dict shape, so a new exchange only
+    ever needs a new market-data provider, never a change here.
     """
     if instrument_type != "option":
         return None

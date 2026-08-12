@@ -637,7 +637,7 @@ function StrategyManager() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (horizon === "intraday" && !squareOffTime) return; // required for intraday - submit is disabled without it, this is just a guard
+    if (horizon === "intraday" && !squareOffTime && !activeToTime) return; // required for intraday unless an active-to time is set - submit is disabled without it, this is just a guard
     setCreating(true);
     try {
       const ruleConfig = createIsInHouse
@@ -671,7 +671,7 @@ function StrategyManager() {
         target_percent: targetPercent ? Number(targetPercent) : undefined,
         trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
         segment,
-        square_off_time: horizon === "intraday" ? `${squareOffTime}:00` : undefined,
+        square_off_time: horizon === "intraday" && squareOffTime ? `${squareOffTime}:00` : undefined,
         underlying: createIsInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
         underlying_type: createIsInHouse ? underlyingType : undefined,
         rule_config: ruleConfig,
@@ -1166,6 +1166,7 @@ function StrategyManager() {
           {horizon === "intraday" && (
             <label>
               Square-off time
+              {activeToTime && <span className="optional">(optional - active-to time caps it either way)</span>}
               <input
                 type="time"
                 value={squareOffTime}
@@ -1173,7 +1174,7 @@ function StrategyManager() {
                   setSquareOffTime(e.target.value);
                   setSquareOffTimeTouched(true);
                 }}
-                required
+                required={!activeToTime}
               />
             </label>
           )}
@@ -1190,7 +1191,7 @@ function StrategyManager() {
             disabled={
               creating ||
               !name.trim() ||
-              (horizon === "intraday" && !squareOffTime) ||
+              (horizon === "intraday" && !squareOffTime && !activeToTime) ||
               (!createIsInHouse && !externalSourceName.trim()) ||
               (createIsInHouse && ruleType !== "breakout" && !signalInterval) ||
               (createIsInHouse && underlyingType === "symbol" && !underlying.trim()) ||

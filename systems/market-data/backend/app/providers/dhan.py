@@ -36,7 +36,8 @@ from zoneinfo import ZoneInfo
 import requests
 
 from app.config import settings
-from app.domain.models import Candle, ResolvedUnderlying
+from app.domain.models import Candle, OptionChain, OptionChainStrike, OptionGreeks, OptionLegQuote, ResolvedUnderlying
+from app.domain.moneyness import classify_moneyness, infer_strike_step
 from app.providers.base import QuoteProvider
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,8 @@ INSTRUMENT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 LTP_URL = "https://api.dhan.co/v2/marketfeed/ltp"
 CANDLE_URL = "https://api.dhan.co/v2/charts/intraday"
 RENEW_TOKEN_URL = "https://api.dhan.co/v2/RenewToken"
+OPTION_CHAIN_URL = "https://api.dhan.co/v2/optionchain"
+OPTION_EXPIRY_LIST_URL = "https://api.dhan.co/v2/optionchain/expirylist"
 
 # Dhan's charts/intraday only *natively* supports these interval values
 # (minutes) - notably 25, not 30, and no daily granularity (that's a
@@ -149,6 +152,14 @@ QUOTE_CACHE_TTL_SECONDS = 3.0
 # queue - callers already treat a failed quote as "unavailable, try again
 # later" rather than something to block indefinitely on.
 MAX_THROTTLE_WAIT_SECONDS = 4.0
+
+# Dhan documents this one explicitly (unlike LTP/candle above, which are
+# empirically-derived): 1 unique request per 3 seconds. Own lock/timestamp
+# - a different Dhan endpoint, no reason to serialize behind LTP/candle.
+MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS = 3.0
+# A few seconds is enough to absorb a caller polling faster than the
+# chain actually changes, same reasoning as QUOTE_CACHE_TTL_SECONDS above.
+OPTION_CHAIN_CACHE_TTL_SECONDS = 3.0
 
 # Shared, in-memory access-token state - genuinely global (not per
 # DhanProvider instance) since router.py's two instances (dhan-nse,
@@ -358,6 +369,11 @@ class DhanProvider(QuoteProvider):
         # closes.
         self._candle_cache: dict[tuple[str, str], tuple[Candle, float]] = {}
         self._candle_cache_lock = threading.Lock()
+
+        self._option_chain_lock = threading.Lock()
+        self._last_option_chain_call_at: float = 0.0
+        self._option_chain_cache: dict[tuple[str, str], tuple[OptionChain, float]] = {}
+        self._option_chain_cache_lock = threading.Lock()
 
     def status(self) -> dict:
         return {
@@ -758,3 +774,139 @@ class DhanProvider(QuoteProvider):
         from_dt = datetime.combine(from_date, datetime.min.time(), tzinfo=tz)
         to_dt = datetime.combine(to_date, datetime.max.time().replace(microsecond=0), tzinfo=tz)
         return self._fetch_candles(symbol, interval, from_dt, to_dt)
+
+    def _option_chain_headers(self, access_token: str) -> dict:
+        return {"Accept": "application/json", "Content-Type": "application/json", "access-token": access_token, "client-id": settings.dhan_client_id}
+
+    def _throttle_option_chain_call(self) -> None:
+        with self._option_chain_lock:
+            wait = MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_option_chain_call_at)
+            if wait > MAX_THROTTLE_WAIT_SECONDS:
+                raise RuntimeError(f"Dhan option-chain queue is backed up ({wait:.1f}s wait) - try again shortly")
+            if wait > 0:
+                time.sleep(wait)
+            self._last_option_chain_call_at = time.monotonic()
+
+    def get_expiry_list(self, symbol: str) -> Optional[list[str]]:
+        """Every active option expiry date (YYYY-MM-DD) for `symbol` (e.g.
+        "NIFTY") - None if `symbol` doesn't resolve on this provider."""
+        target = self.resolve_feed_target(symbol)
+        if target is None:
+            return None
+        segment_key, security_id = target
+
+        access_token = current_access_token()
+        if not settings.dhan_client_id or not access_token:
+            raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
+
+        self._throttle_option_chain_call()
+        resp = requests.post(
+            OPTION_EXPIRY_LIST_URL,
+            headers=self._option_chain_headers(access_token),
+            json={"UnderlyingScrip": int(security_id), "UnderlyingSeg": segment_key},
+            timeout=15,
+        )
+        if resp.status_code == 401:
+            raise RuntimeError("Dhan API rejected the access token (401) - it may need to be regenerated")
+        if resp.status_code == 429:
+            raise RuntimeError("Dhan API rate limit hit (429) on optionchain/expirylist - retry shortly")
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            raise RuntimeError(f"Dhan API error ({resp.status_code}): {resp.text[:200]}") from exc
+
+        return resp.json().get("data", [])
+
+    def _cached_option_chain(self, symbol: str, expiry: str) -> Optional[OptionChain]:
+        with self._option_chain_cache_lock:
+            cached = self._option_chain_cache.get((symbol, expiry))
+        if cached is None:
+            return None
+        chain, fetched_at = cached
+        if (time.monotonic() - fetched_at) >= OPTION_CHAIN_CACHE_TTL_SECONDS:
+            return None
+        return chain
+
+    def _store_option_chain(self, symbol: str, expiry: str, chain: OptionChain) -> None:
+        with self._option_chain_cache_lock:
+            self._option_chain_cache[(symbol, expiry)] = (chain, time.monotonic())
+
+    @staticmethod
+    def _parse_option_leg(raw: Optional[dict], strike: float, spot: float, option_type: str, strike_step: float) -> Optional[OptionLegQuote]:
+        if raw is None:
+            return None
+        greeks = raw.get("greeks") or {}
+        return OptionLegQuote(
+            security_id=str(raw["security_id"]),
+            last_price=raw["last_price"],
+            oi=raw["oi"],
+            previous_oi=raw["previous_oi"],
+            volume=raw["volume"],
+            implied_volatility=raw["implied_volatility"],
+            top_bid_price=raw["top_bid_price"],
+            top_ask_price=raw["top_ask_price"],
+            greeks=OptionGreeks(delta=greeks["delta"], theta=greeks["theta"], gamma=greeks["gamma"], vega=greeks["vega"]),
+            moneyness=classify_moneyness(strike, spot, option_type, strike_step),
+        )
+
+    def get_option_chain(self, symbol: str, expiry: str) -> Optional[OptionChain]:
+        """Full option chain for `symbol` (e.g. "NIFTY") at `expiry`
+        (YYYY-MM-DD, from get_expiry_list) - OI/Greeks/IV/bid-ask per
+        strike, each leg's ITM/ATM/OTM classification computed via
+        app/domain/moneyness.py. None if `symbol` doesn't resolve on this
+        provider. Self-throttled to Dhan's documented 1-request-per-3s
+        limit and short-cached (OPTION_CHAIN_CACHE_TTL_SECONDS)."""
+        cached = self._cached_option_chain(symbol, expiry)
+        if cached is not None:
+            return cached
+
+        target = self.resolve_feed_target(symbol)
+        if target is None:
+            return None
+        segment_key, security_id = target
+        config = self._config_for(symbol)
+
+        access_token = current_access_token()
+        if not settings.dhan_client_id or not access_token:
+            raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
+
+        self._throttle_option_chain_call()
+        resp = requests.post(
+            OPTION_CHAIN_URL,
+            headers=self._option_chain_headers(access_token),
+            json={"UnderlyingScrip": int(security_id), "UnderlyingSeg": segment_key, "Expiry": expiry},
+            timeout=15,
+        )
+        if resp.status_code == 401:
+            raise RuntimeError("Dhan API rejected the access token (401) - it may need to be regenerated")
+        if resp.status_code == 429:
+            raise RuntimeError("Dhan API rate limit hit (429) on optionchain - retry shortly")
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            raise RuntimeError(f"Dhan API error ({resp.status_code}): {resp.text[:200]}") from exc
+
+        data = resp.json().get("data", {})
+        spot = data.get("last_price", 0.0)
+        raw_strikes = data.get("oc", {})
+        strike_prices = [float(s) for s in raw_strikes]
+        strike_step = infer_strike_step(strike_prices) if len(strike_prices) >= 2 else 1.0
+
+        strikes = [
+            OptionChainStrike(
+                strike=float(strike_str),
+                ce=self._parse_option_leg(raw.get("ce"), float(strike_str), spot, "CE", strike_step),
+                pe=self._parse_option_leg(raw.get("pe"), float(strike_str), spot, "PE", strike_step),
+            )
+            for strike_str, raw in sorted(raw_strikes.items(), key=lambda item: float(item[0]))
+        ]
+
+        chain = OptionChain(
+            underlying_symbol=symbol,
+            underlying_exchange=config.exchange,
+            expiry=expiry,
+            underlying_last_price=spot,
+            strikes=strikes,
+        )
+        self._store_option_chain(symbol, expiry, chain)
+        return chain

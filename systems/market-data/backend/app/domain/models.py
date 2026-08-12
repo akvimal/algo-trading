@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -49,6 +49,52 @@ class Candle(BaseModel):
     close: float
     timestamp: str  # ISO-8601, the candle's start time
     provider: str
+
+
+class OptionGreeks(BaseModel):
+    """Dhan's option-chain response doesn't include rho - only these four."""
+
+    delta: float
+    theta: float
+    gamma: float
+    vega: float
+
+
+class OptionLegQuote(BaseModel):
+    """One CE or PE leg at one strike - see DhanProvider.get_option_chain.
+    Trimmed from Dhan's raw response to what strike/strategy selection
+    (Phase 4b, not built yet - see docs/architecture.md) will actually
+    need; average_price/previous_close_price/previous_volume/bid-ask
+    *quantity* are dropped, easy to add back if a later phase needs them."""
+
+    security_id: str
+    last_price: float
+    oi: int
+    previous_oi: int
+    volume: int
+    implied_volatility: float
+    top_bid_price: float
+    top_ask_price: float
+    greeks: OptionGreeks
+    # Computed by app/domain/moneyness.py at fetch time - not something
+    # Dhan's response itself carries.
+    moneyness: Literal["ITM", "ATM", "OTM"]
+
+
+class OptionChainStrike(BaseModel):
+    strike: float
+    ce: Optional[OptionLegQuote] = None
+    pe: Optional[OptionLegQuote] = None
+
+
+class OptionChain(BaseModel):
+    """GET /options/chain - see DhanProvider.get_option_chain."""
+
+    underlying_symbol: str
+    underlying_exchange: str
+    expiry: str
+    underlying_last_price: float
+    strikes: list[OptionChainStrike]  # sorted ascending by strike
 
 
 class ResolvedUnderlying(BaseModel):

@@ -48,6 +48,23 @@ def get_previous_candle(exchange: str, symbol: str, interval: str) -> Optional[d
     return resp.json()
 
 
+def resolve_symbol_by_security_id(exchange: str, security_id: str) -> Optional[str]:
+    """Given a raw Dhan security ID (an option leg's own security_id, from
+    signal-processing's resolved order - see docs/architecture.md Phase
+    4d), the trading symbol it belongs to - None if unknown. Called once
+    per leg at option-group open time; everything after that reuses the
+    ordinary symbol-keyed get_ltp_batch/get_lot_size unchanged."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/instruments/resolve-by-security-id",
+        params={"exchange": exchange, "security_id": security_id},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()["symbol"]
+
+
 def get_lot_size(exchange: str, symbol: str) -> Optional[int]:
     """Lot size for an already-resolved trading symbol (see market-data's
     GET /instruments/lot-size) - None if unknown, not an error. Only

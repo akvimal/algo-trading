@@ -25,6 +25,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.adapters.db.session import SessionLocal
 from app.adapters.quotes.client import get_ltp_batch, get_previous_candle
 from app.config import settings
+from app.domain.option_position_manager import check_option_group_exits, square_off_due_option_groups
 from app.domain.position_manager import check_exits, square_off_due_positions
 
 logger = logging.getLogger(__name__)
@@ -37,16 +38,24 @@ _EXIT_MONITOR_JOB_ID = "exit-monitor"
 def run_square_off_due() -> dict:
     with SessionLocal() as db:
         result = square_off_due_positions(db, get_ltp_batch)
+        # Multi-leg option groups (Phase 4d) run on the same poll interval
+        # - no separate job/setting needed, see docs/architecture.md.
+        option_result = square_off_due_option_groups(db, get_ltp_batch)
     if result["closed"] or result["failed"]:
         logger.info("square-off run: %s", result)
+    if option_result["closed"] or option_result["failed"]:
+        logger.info("option-group square-off run: %s", option_result)
     return result
 
 
 def run_check_exits() -> dict:
     with SessionLocal() as db:
         result = check_exits(db, get_ltp_batch, get_previous_candle)
+        option_result = check_option_group_exits(db, get_ltp_batch)
     if result["closed_stop_loss"] or result["closed_target"] or result["trailed"]:
         logger.info("exit-monitor run: %s", result)
+    if option_result["closed_stop_loss"] or option_result["closed_target"]:
+        logger.info("option-group exit-monitor run: %s", option_result)
     return result
 
 

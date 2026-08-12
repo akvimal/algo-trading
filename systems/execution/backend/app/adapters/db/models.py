@@ -6,7 +6,7 @@ update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Numeric, SmallInteger, Text, Time, func
+from sqlalchemy import Boolean, Column, ForeignKey, Numeric, SmallInteger, Text, Time, func
 from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -35,6 +35,37 @@ class Account(Base):
     capital_per_trade = Column(Numeric, nullable=False)
     risk_per_trade_pct = Column(Numeric, nullable=False)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class OptionPositionGroup(Base):
+    """One row per multi-leg option order (Phase 4d of the options
+    trading module - see docs/architecture.md) - owns the COMBINED SL/
+    target/status/P&L a spread's legs share. Each leg itself is a
+    Position row below, linked back here via Position.option_group_id."""
+
+    __tablename__ = "option_position_groups"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    signal_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
+    strategy_id = Column(UUID(as_uuid=True), nullable=False)
+    underlying_symbol = Column(Text, nullable=False)
+    exchange = Column(Text, nullable=False)
+    segment = Column(Text, nullable=False)
+    strategy_type = Column(Text, nullable=False)
+    action = Column(Text, nullable=False)
+    horizon = Column(Text, nullable=False)
+    quantity = Column(Numeric)
+    net_debit = Column(Numeric)
+    combined_stop_loss_price = Column(Numeric)
+    combined_target_price = Column(Numeric)
+    status = Column(Text, nullable=False, default="OPEN")
+    rejection_reason = Column(Text)
+    exit_reason = Column(Text)
+    exit_time = Column(TIMESTAMP(timezone=True))
+    pnl = Column(Numeric)
+    square_off_time = Column(Time)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class Position(Base):
@@ -78,3 +109,7 @@ class Position(Base):
     # REJECTED rows that never got this far. See position_manager.open_position.
     square_off_time = Column(Time)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    # Which option_position_groups row this leg belongs to - NULL for
+    # every ordinary spot/future position. See docs/architecture.md
+    # Phase 4d.
+    option_group_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.option_position_groups.id"))

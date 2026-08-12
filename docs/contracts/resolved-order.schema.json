@@ -29,7 +29,7 @@
     },
     "strategy": {
       "type": ["object", "null"],
-      "description": "Option-strategy legs (spread/straddle/etc) - unrelated to strategy_id above. Populated by signal-processing's choose_strategy (Phase 4b of the options trading module, see docs/architecture.md) for instrument_type='option' orders; null for spot/future orders. Not yet actionable by execution - see docs/architecture.md Phase 4d.",
+      "description": "Option-strategy legs (spread/straddle/etc) - unrelated to strategy_id above. Populated by signal-processing's choose_strategy (Phase 4b of the options trading module, see docs/architecture.md) for instrument_type='option' orders; null for spot/future orders. Actioned by execution as a combined-SL 2-leg position (Phase 4d), see docs/architecture.md.",
       "properties": {
         "type": {
           "type": "string",
@@ -47,7 +47,7 @@
               "expiry": { "type": "string", "format": "date" },
               "security_id": {
                 "type": "string",
-                "description": "The option contract's own Dhan security ID (from market-data's option-chain response) - not yet resolvable to a trading symbol/lot size by execution, see docs/architecture.md Phase 4d."
+                "description": "The option contract's own Dhan security ID (from market-data's option-chain response). Resolved to a trading symbol/lot size by execution at position-open time via market-data's GET /instruments/resolve-by-security-id (Phase 4d), see docs/architecture.md."
               }
             }
           }

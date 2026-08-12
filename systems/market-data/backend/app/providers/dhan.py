@@ -365,6 +365,45 @@ MCX_FUTCOM = SegmentConfig(
     underlying_of=_underlying_from_trading_symbol,
 )
 
+# Option contracts (Phase 4d of the options trading module - see
+# docs/architecture.md) - unlike the futures configs above, these don't
+# set underlying_of: execution never needs "the active option contract
+# for underlying X" the way it needs "the active future for X" - it
+# already has the EXACT security_id for the specific leg it wants, from
+# signal-processing's resolved order (Phase 4b). These configs exist
+# purely so sync_instruments() populates _symbol_to_security_id/
+# _symbol_to_lot_size/_security_id_to_symbol for option rows too, reusing
+# the exact same symbol-keyed quoting/lot-size machinery every other
+# instrument type already uses - see resolve_symbol_by_security_id.
+# exchangeSegment/instrument values confirmed against Dhan's annexure
+# during Phase 4c's research (same vocabulary rollingoption uses) - NSE
+# index and stock options both trade in the NSE_FNO segment (not NSE_EQ/
+# IDX_I, the underlying's OWN segment); MCX has no separate derivatives
+# segment at all, so MCX options share MCX_COMM with MCX futures.
+NSE_OPTIDX = SegmentConfig(
+    exchange="NSE",
+    ltp_segment_key="NSE_FNO",
+    candle_exchange_segment="NSE_FNO",
+    candle_instrument="OPTIDX",
+    row_matches=lambda r: r.get("SEM_EXM_EXCH_ID") == "NSE" and r.get("SEM_INSTRUMENT_NAME") == "OPTIDX",
+)
+
+NSE_OPTSTK = SegmentConfig(
+    exchange="NSE",
+    ltp_segment_key="NSE_FNO",
+    candle_exchange_segment="NSE_FNO",
+    candle_instrument="OPTSTK",
+    row_matches=lambda r: r.get("SEM_EXM_EXCH_ID") == "NSE" and r.get("SEM_INSTRUMENT_NAME") == "OPTSTK",
+)
+
+MCX_OPTFUT = SegmentConfig(
+    exchange="MCX",
+    ltp_segment_key="MCX_COMM",
+    candle_exchange_segment="MCX_COMM",
+    candle_instrument="OPTFUT",
+    row_matches=lambda r: r.get("SEM_EXM_EXCH_ID") == "MCX" and r.get("SEM_INSTRUMENT_NAME") == "OPTFUT",
+)
+
 
 @dataclass(frozen=True)
 class ContractInfo:
@@ -390,6 +429,13 @@ class DhanProvider(QuoteProvider):
         # multi-segment refactor - existing tests poke it directly.
         self._symbol_to_config: dict[str, SegmentConfig] = {}
         self._symbol_to_lot_size: dict[str, int] = {}
+        # security_id -> symbol - the reverse of _symbol_to_security_id,
+        # populated for every synced row (not just options), a trivial
+        # byproduct of the same sync loop. Phase 4d's execution needs this
+        # because a resolved option order's leg only ever carries
+        # security_id (from Phase 4a's option-chain response), never a
+        # trading symbol - see resolve_symbol_by_security_id.
+        self._security_id_to_symbol: dict[str, str] = {}
         # underlying (e.g. "GOLDM") -> its contracts across all expiries,
         # sorted by expiry ascending - only populated for configs that
         # set underlying_of.
@@ -455,10 +501,13 @@ class DhanProvider(QuoteProvider):
         for contracts in underlying_to_contracts.values():
             contracts.sort(key=lambda c: c.expiry_date)
 
+        security_id_to_symbol = {security_id: symbol for symbol, security_id in symbol_to_id.items()}
+
         with self._lock:
             self._symbol_to_security_id = symbol_to_id
             self._symbol_to_config = symbol_to_config
             self._symbol_to_lot_size = symbol_to_lot
+            self._security_id_to_symbol = security_id_to_symbol
             self._underlying_to_contracts = underlying_to_contracts
             self._last_synced_at = datetime.now(timezone.utc)
 
@@ -469,6 +518,18 @@ class DhanProvider(QuoteProvider):
         if not self._symbol_to_security_id:
             self.sync_instruments()
         return self._symbol_to_security_id.get(symbol)
+
+    def resolve_symbol_by_security_id(self, security_id: str) -> Optional[str]:
+        """The reverse of _security_id - given a raw Dhan security ID
+        (e.g. from an option leg's security_id, Phase 4a's option-chain
+        response), the trading symbol it belongs to on this provider's
+        exchange. None if unknown. Once execution has this symbol, every
+        downstream operation (quoting, lot size) reuses the ordinary
+        symbol-keyed methods unchanged - see docs/architecture.md Phase
+        4d."""
+        if not self._symbol_to_security_id:
+            self.sync_instruments()
+        return self._security_id_to_symbol.get(security_id)
 
     def resolve_feed_target(self, symbol: str) -> Optional[tuple[str, str]]:
         """(ltp_segment_key, security_id) for subscribing `symbol` on

@@ -109,9 +109,56 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Idempotency: a Redis consumer-group redelivery of the same stream
--- message must never create a second row.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_positions_signal_id ON execution.positions (signal_id);
+-- One row per multi-leg option order (Phase 4d of the options trading
+-- module - see docs/architecture.md), owning the COMBINED SL/target/
+-- status/P&L a spread's legs share - a bull_call_spread/bear_put_spread
+-- always has exactly 2 legs today (signal-processing's fixed templates,
+-- Phase 4b), each stored as its own execution.positions row (below,
+-- linked via option_group_id) rather than duplicating combined fields
+-- onto both leg rows.
+CREATE TABLE IF NOT EXISTS execution.option_position_groups (
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    signal_id                UUID NOT NULL UNIQUE,
+    strategy_id              UUID NOT NULL,
+    underlying_symbol        TEXT NOT NULL,  -- the resolved order's own symbol (e.g. "NIFTY") - NOT either leg's own symbol
+    exchange                 TEXT NOT NULL,
+    segment                  TEXT NOT NULL REFERENCES execution.accounts (segment),
+    strategy_type            TEXT NOT NULL,  -- e.g. "bull_call_spread" - order.strategy['type']
+    action                   TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),  -- the original signal direction, not either leg's own action
+    horizon                  TEXT NOT NULL,
+    quantity                 NUMERIC,  -- lots*lot_size, same units as positions.quantity - NULL if REJECTED
+    net_debit                NUMERIC,  -- combined entry premium (long leg - short leg), per unit
+    combined_stop_loss_price NUMERIC,
+    combined_target_price    NUMERIC,
+    status                   TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'REJECTED')),
+    rejection_reason         TEXT,
+    exit_reason              TEXT CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'manual', 'counter_signal')),
+    exit_time                TIMESTAMPTZ,
+    pnl                      NUMERIC,
+    square_off_time          TIME,
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Which option_position_groups row this leg belongs to - NULL for every
+-- ordinary spot/future position (unchanged from before this column
+-- existed).
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS option_group_id UUID REFERENCES execution.option_position_groups (id);
+
+-- Idempotency used to be enforced by a UNIQUE index here, back when every
+-- resolved signal produced exactly one position row. A multi-leg option
+-- order now legitimately produces 2 rows sharing the SAME signal_id (both
+-- legs of one spread) - the 1-row-per-signal invariant no longer holds
+-- platform-wide, so this can no longer be a unique index. Idempotency
+-- enforcement for OPTIONS moves to option_position_groups.signal_id
+-- UNIQUE above; spot/future singles are unaffected in practice (still
+-- exactly 1 row per signal_id), just no longer backstopped by a DB
+-- constraint - open_position()'s existing query-before-insert check was
+-- always the real enforcement mechanism (the single-threaded orders
+-- consumer never processes two messages concurrently).
+DROP INDEX IF EXISTS execution.uq_positions_signal_id;
+CREATE INDEX IF NOT EXISTS idx_positions_signal_id ON execution.positions (signal_id);
 
 CREATE INDEX IF NOT EXISTS idx_positions_status ON execution.positions (status);
 CREATE INDEX IF NOT EXISTS idx_positions_symbol_entry ON execution.positions (symbol, entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_positions_option_group_id ON execution.positions (option_group_id);
+CREATE INDEX IF NOT EXISTS idx_option_position_groups_status ON execution.option_position_groups (status);

@@ -71,6 +71,7 @@ def list_positions(
             "trailing_stop_enabled": r.trailing_stop_enabled,
             "exit_reason": r.exit_reason,
             "square_off_time": r.square_off_time.isoformat() if r.square_off_time is not None else None,
+            "option_group_id": str(r.option_group_id) if r.option_group_id is not None else None,
         }
         for r in rows
     ]

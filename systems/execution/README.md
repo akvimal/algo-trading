@@ -1,6 +1,6 @@
 # execution
 
-Consumes the `orders.resolved` Redis stream published by `signal-processing` (see `docs/contracts/resolved-order.schema.json`) and manages paper positions. Scope right now: **intraday, spot only** — anything else (swing/positional, futures/options) is recorded as `REJECTED` with a reason, ready to support once that resolution logic exists upstream.
+Consumes the `orders.resolved` Redis stream published by `signal-processing` (see `docs/contracts/resolved-order.schema.json`) and manages paper positions. Scope right now: **intraday** only — spot, future, and (Phase 4d of the options trading module, see `docs/architecture.md`) 2-leg option spreads (`bull_call_spread`/`bear_put_spread`, combined SL/target). Swing/positional is recorded as `REJECTED` with a reason for every instrument type, ready to support once that logic exists here.
 
 ## How it works
 
@@ -9,13 +9,17 @@ Consumes the `orders.resolved` Redis stream published by `signal-processing` (se
 3. An APScheduler job (`app/scheduler.py`), self-contained in this service rather than n8n, fires at `square_off_time` daily: fetches CMP per open symbol from `market-data`, closes each position with signed P&L. `POST /positions/square-off` runs the same logic manually.
 4. Settings (`square_off_time`, `capital_per_trade`) are DB-backed, editable via `GET`/`PUT /settings` from the frontend — a time change reschedules the job immediately. `duplicate_signal_policy`/`counter_signal_policy` used to live here as a global, direction-blind setting; they're per-strategy now (signal-generation), not configured in this service.
 
+An `instrument_type='option'` order (2 legs, `strategy.legs` from signal-processing's Phase 4b templates) is dispatched to `app/domain/option_position_manager.open_option_group()` instead — resolves each leg's `security_id` to a trading symbol via `market-data`'s `GET /instruments/resolve-by-security-id` (Phase 4d), fetches both legs' live premium, and opens one `execution.option_position_groups` row (combined SL/target/status/P&L) plus 2 `execution.positions` rows (one per leg, linked via `option_group_id`). See `docs/architecture.md` § "Making an option order tradeable (Phase 4d)" for the full design.
+
 See `docs/architecture.md` for the full data-flow diagram and the reasoning behind these decisions.
 
 ## Endpoints
 
 - `GET /health`
-- `GET /positions?status=OPEN|CLOSED|REJECTED&limit=100`
+- `GET /positions?status=OPEN|CLOSED|REJECTED&limit=100` — includes `option_group_id` for option legs
 - `POST /positions/square-off` — manual square-off
+- `GET /option-groups?status=OPEN|CLOSED|REJECTED&limit=100` — one row per 2-leg option spread, with nested `legs`
+- `POST /option-groups/square-off` — manual square-off for every open option group
 - `GET` / `PUT /settings`
 
 ## Running it
@@ -28,7 +32,8 @@ Needs `market-data-backend` reachable (always up, no profile) and Dhan credentia
 
 ## Not yet built
 
-- Swing/positional and futures/options handling (depends on real resolution logic in `signal-processing`).
+- Swing/positional handling for any instrument type.
 - A live broker adapter for real order placement — this is paper trading only.
-- Stop-loss/target/exit rules — price is only checked once at entry and once at square-off, there's no continuous monitoring loop.
-- Per-strategy `capital_per_trade` — it's one global setting for every strategy today, not configurable per strategy.
+- A frontend view grouping an option spread's 2 legs together — they currently show up as ordinary rows in the Positions grid, distinguishable by `option_group_id`.
+- More than 2 legs / other option templates (straddle, naked leg, ...) — `open_option_group` rejects anything besides exactly one BUY + one SELL leg.
+- Per-strategy `capital_per_trade` — it's one setting per account (segment) today, not configurable per strategy.

@@ -21,9 +21,11 @@ def sync_status():
 def resolve_underlying(segment: str, underlying: str):
     """Given a logical underlying (e.g. "GOLDM", "NIFTY") on a segment,
     resolve what to chart indicators on and what to actually trade - see
-    DhanProvider.resolve_underlying. Used by signal-generation's engine,
-    never by execution (which only ever deals in already-resolved
-    trading symbols)."""
+    DhanProvider.resolve_underlying. Used by signal-generation's engine
+    and signal-processing's option-strategy resolution; execution instead
+    uses GET /instruments/resolve-by-security-id below (it already deals
+    in already-resolved option legs' security_id, not a logical
+    underlying name)."""
     try:
         provider = get_provider(segment)
     except ValueError as exc:
@@ -33,6 +35,25 @@ def resolve_underlying(segment: str, underlying: str):
     if resolved is None:
         raise HTTPException(status_code=404, detail=f"could not resolve underlying '{underlying}' on segment '{segment}'")
     return resolved
+
+
+@router.get("/instruments/resolve-by-security-id")
+def resolve_symbol_by_security_id(exchange: str, security_id: str):
+    """Given a raw Dhan security ID (e.g. an option leg's own security_id
+    from Phase 4a's option-chain response), the trading symbol it belongs
+    to - Phase 4d of the options trading module (see docs/architecture.md).
+    Used by execution once, at position-open time, to translate a leg's
+    security_id into a symbol it can then quote/size via the ordinary
+    symbol-keyed GET /quotes/ltp(/batch) and GET /instruments/lot-size."""
+    try:
+        provider = get_provider(exchange)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    symbol = provider.resolve_symbol_by_security_id(security_id)
+    if symbol is None:
+        raise HTTPException(status_code=404, detail=f"unknown security_id '{security_id}' on exchange '{exchange}'")
+    return {"symbol": symbol}
 
 
 @router.get("/instruments/lot-size")

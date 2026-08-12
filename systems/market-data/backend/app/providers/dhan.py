@@ -416,6 +416,17 @@ class DhanProvider(QuoteProvider):
             self.sync_instruments()
         return self._symbol_to_security_id.get(symbol)
 
+    def resolve_feed_target(self, symbol: str) -> Optional[tuple[str, str]]:
+        """(ltp_segment_key, security_id) for subscribing `symbol` on
+        Dhan's live market feed WebSocket (app/providers/dhan_feed.py) -
+        the same segment-key vocabulary ("NSE_EQ", "IDX_I", ...) and
+        security-id lookup get_ltp_batch already uses for the REST LTP
+        endpoint. None if the symbol is unknown."""
+        security_id = self._security_id(symbol)
+        if security_id is None:
+            return None
+        return self._config_for(symbol).ltp_segment_key, security_id
+
     def _config_for(self, symbol: str) -> SegmentConfig:
         """Falls back to this instance's first/default config for a
         symbol with no recorded segment - covers tests (and any caller)

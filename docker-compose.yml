@@ -103,6 +103,17 @@ services:
     ports:
       - "${MARKET_DATA_BACKEND_PORT}:8000"
 
+  market-data-frontend:
+    build:
+      context: ./systems/market-data/frontend
+      args:
+        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+    restart: unless-stopped
+    ports:
+      - "${MARKET_DATA_FRONTEND_PORT}:80"
+    depends_on:
+      - market-data-backend
+
   execution-backend:
     profiles: ["execution"]
     build:

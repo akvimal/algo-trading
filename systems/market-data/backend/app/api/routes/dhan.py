@@ -2,11 +2,19 @@
 instruments.py's POST /instruments/sync + GET /instruments/sync-status
 pair. The actual renewal also runs on a schedule (app/scheduler.py); this
 exists for on-demand renewal and to see the current in-memory state
-(app/providers/dhan.py's renew_access_token/renew_token_status)."""
+(app/providers/dhan.py's renew_access_token/renew_token_status).
+
+Also the live market feed's status + manual subscribe endpoint - the feed
+connection itself runs continuously in a background thread
+(app/providers/dhan_feed.py's start_feed(), called from app.main's
+startup handler), same relationship the scheduled Dhan token renewal has
+to its own manual POST /dhan/renew-token above."""
 
 from fastapi import APIRouter, HTTPException
 
+from app.domain.models import FeedSubscribeRequest
 from app.providers.dhan import renew_access_token, renew_token_status
+from app.providers.dhan_feed import feed_status, subscribe
 
 router = APIRouter()
 
@@ -22,3 +30,21 @@ def renew_token():
 @router.get("/dhan/token-status")
 def token_status():
     return renew_token_status()
+
+
+@router.get("/dhan/feed-status")
+def get_feed_status():
+    return feed_status()
+
+
+@router.post("/dhan/feed/subscribe")
+def subscribe_feed(payload: FeedSubscribeRequest):
+    try:
+        ok = subscribe(payload.exchange, payload.symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not ok:
+        raise HTTPException(
+            status_code=404, detail=f"could not resolve '{payload.symbol}' on exchange '{payload.exchange}' for the live feed"
+        )
+    return feed_status()

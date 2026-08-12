@@ -21,6 +21,13 @@ class BatchQuoteResponse(BaseModel):
     prices: dict[str, float]  # symbol -> ltp; missing symbols were unresolvable/unavailable
 
 
+class FeedSubscribeRequest(BaseModel):
+    """POST /dhan/feed/subscribe body - see app/providers/dhan_feed.py."""
+
+    exchange: str
+    symbol: str
+
+
 class ProviderStatus(BaseModel):
     provider: str
     symbol_count: int

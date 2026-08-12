@@ -1,6 +1,6 @@
 # market-data
 
-Owns provider credentials, instrument-master sync, and live quote lookups - a single place for "which vendor serves which segment," so `execution` (and later `signal-generation`) call one HTTP API instead of each embedding their own broker SDK and credentials.
+Owns provider credentials, instrument-master sync, and live quote lookups - a single place for "which vendor serves which segment," so `execution` (and later `signal-generation`) call one HTTP API instead of each embedding their own broker SDK and credentials. Has its own frontend (`systems/market-data/frontend`) - a small status dashboard polling `GET /health`, `GET /instruments/sync-status`, and `GET /dhan/feed-status` (below) every 5s.
 
 ## Scope right now
 
@@ -11,13 +11,17 @@ Owns provider credentials, instrument-master sync, and live quote lookups - a si
 
 ## Credentials
 
-Needs `DHAN_CLIENT_ID` and `DHAN_ACCESS_TOKEN` (from your Dhan account -> API access). Dhan access tokens are login-generated and expire (observed: ~24h from issuance); if `GET /quotes/ltp` starts returning `502` with "access token" in the message, regenerate the token in Dhan and update `.env`, then `docker compose up -d market-data-backend` to pick it up.
+Needs `DHAN_CLIENT_ID` and `DHAN_ACCESS_TOKEN` (from your Dhan account -> API access). Dhan access tokens are login-generated and expire (observed: ~24h from issuance) - `market-data` renews the token automatically before that happens (`app/providers/dhan.py`'s `renew_access_token`, on a schedule via `app/scheduler.py`, default every `DHAN_TOKEN_RENEW_INTERVAL_HOURS=20`h), so this is normally hands-off. In-memory only, though - a container restart still reverts to whatever's in `.env`. If `GET /quotes/ltp` starts returning `502` with "access token" in the message (or `GET /dhan/token-status` shows a stale `last_renewed_at`), the token has likely gone fully invalid (e.g. regenerated from Dhan Web elsewhere, which invalidates the old one) - regenerate it in Dhan and update `.env`, then `docker compose up -d market-data-backend` to pick it up. **Dev and test must each use their own separate Dhan token** - see `docs/architecture.md`'s market-data section for why sharing one across two auto-renewing stacks breaks both.
 
 ## Rate limiting
 
 Dhan's LTP endpoint is rate-limited to 1 request/second, and it's stricter in practice than a bare 1.0s gap - `DhanProvider` self-throttles to a 2s minimum gap between LTP calls (`MIN_LTP_CALL_INTERVAL_SECONDS`) and fetches all requested symbols in **one** call via `get_ltp_batch` (Dhan supports up to 1000 instruments per LTP request) rather than looping per symbol - a per-symbol loop here was tried first and caused real rate-limit pileups under execution's polling, see `docs/architecture.md`. A short (3s) in-memory quote cache further absorbs repeated lookups within a few seconds.
 
 `charts/intraday` (candles) has its own independent throttle (`MIN_CANDLE_CALL_INTERVAL_SECONDS`, own lock/timestamp, not shared with LTP - no documented Dhan rate limit for this endpoint, so this is a conservative default) and its own cache keyed by `(symbol, interval)` with a TTL equal to the interval's own length, since a completed candle doesn't change until the next one closes. Unlike LTP, there's no true multi-symbol batching for candles - Dhan's endpoint is per-security-id.
+
+## Live market feed
+
+`market-data` also maintains a real, continuous Dhan **live market feed** WebSocket connection (`app/providers/dhan_feed.py`, `wss://api-feed.dhan.co` - see https://docs.dhanhq.co/api/v2/guides/live-market-feed) - not REST polling. Started automatically on startup, runs in a background thread for the life of the process, and reconnects on its own after any disconnect. Subscribes Ticker mode only (LTP + last-trade-time - the cheapest of Dhan's three feed modes, enough to prove the connection is genuinely live) for a small default watchlist (`NIFTY`) plus whatever's added via `POST /dhan/feed/subscribe`. In-memory only, same as everything else here - a restart clears subscriptions back to the default watchlist.
 
 ## Endpoints
 
@@ -30,5 +34,8 @@ Dhan's LTP endpoint is rate-limited to 1 request/second, and it's stricter in pr
 - `GET /instruments/lot-size?exchange=MCX&symbol=GOLDM-04Sep2026-FUT` - `{lot_size}` for a resolved symbol
 - `POST /instruments/sync` - manual resync (also runs daily + once on startup)
 - `GET /instruments/sync-status` - per-provider symbol count + last sync time
+- `POST /dhan/renew-token` / `GET /dhan/token-status` - manual trigger + current state for the automatic access-token renewal above
+- `GET /dhan/feed-status` - live feed connection health + last ticks
+- `POST /dhan/feed/subscribe` - `{exchange, symbol}`, adds one more symbol to the live feed
 
-No database - this system holds no business-critical state, just a cached provider lookup that's cheap to rebuild on restart.
+No database - this system holds no business-critical state, just a cached provider lookup and in-memory feed/token state, both cheap to rebuild on restart.

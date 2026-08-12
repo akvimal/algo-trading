@@ -8,10 +8,16 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.adapters.market_data.client import get_candle_history, get_universe_constituents, resolve_underlying
+from app.adapters.market_data.client import (
+    get_candle_history,
+    get_option_leg_history,
+    get_universe_constituents,
+    resolve_underlying,
+)
 from app.domain import breakout, range_breakout, regime
 from app.domain.backtest import ExitConfig, expand_grid, grid_search, replay
 from app.domain.engine import history_window
+from app.domain.option_backtest import MAX_OPTION_BACKTEST_DAYS, OPTION_HISTORY_INTERVAL, replay_options
 from app.domain.models import (
     BacktestGridRequest,
     BreakoutRuleConfig,
@@ -373,6 +379,9 @@ def _backtest_one_symbol(db: Session, row: db_models.Strategy, rule: RuleConfig,
     as backtest_strategy always has for a plain strategy; the universe
     path catches and skips per-constituent rather than letting one
     unresolvable symbol fail the whole pooled request."""
+    if row.instrument_type == "option":
+        return _backtest_one_symbol_option(db, row, rule, symbol, from_, to)
+
     if isinstance(rule, BreakoutRuleConfig):
         resolved = resolve_underlying(row.segment, symbol)
         if resolved is None:
@@ -445,6 +454,80 @@ def _backtest_one_symbol(db: Session, row: db_models.Strategy, rule: RuleConfig,
         sl_candles,
         row.regime_filter_enabled,
         _regime_checks_for(row),
+    )
+
+
+def _backtest_one_symbol_option(db: Session, row: db_models.Strategy, rule: RuleConfig, symbol: str, from_: date, to: date) -> dict:
+    """Phase 4c of the options trading module (see docs/architecture.md):
+    instrument_type='option' backtest - crossover-rule strategies only,
+    this phase's confirmed scope (breakout/range_breakout replay via
+    functions that don't build a bias_fn the same way, or would need a
+    shared bias_fn-builder factored out first - not done yet). Reuses the
+    exact same entry-signal-timing setup as the crossover tail of
+    _backtest_one_symbol above (indicator/warm-up/candle-fetch), then
+    hands off to app/domain/option_backtest.py's replay_options for the
+    option-leg simulation instead of backtest.py's own replay(). Does NOT
+    apply trailing-stop or the regime filter even if configured on `row` -
+    both are documented as not-yet-extended to the option variant, see
+    option_backtest.py's own module docstring."""
+    if not isinstance(rule, CrossoverRuleConfig):
+        raise HTTPException(status_code=422, detail="option backtesting only supports crossover-rule strategies today")
+    if (to - from_).days > MAX_OPTION_BACKTEST_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"option backtest range too wide ({(to - from_).days} days) - max is {MAX_OPTION_BACKTEST_DAYS}",
+        )
+
+    indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
+    if indicator is None:
+        raise HTTPException(status_code=422, detail=f"no indicator with id '{rule.indicator_id}'")
+    indicator_params = validate_indicator_params(indicator.type, indicator.params).model_dump()
+
+    resolved = resolve_underlying(row.segment, symbol)
+    if resolved is None:
+        raise HTTPException(status_code=502, detail=f"could not resolve underlying '{symbol}' on segment '{row.segment}'")
+
+    bar_count = bars_needed(rule, indicator.type, indicator_params)
+    warmup_from, _ = history_window(bar_count, row.interval)
+    fetch_from = min(from_, warmup_from)
+    candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, row.interval, fetch_from, to)
+
+    # WEEK for intraday/swing (nearest expiry, mirrors signal-processing's
+    # choose_expiry treating anything but 'positional' as "nearest"),
+    # MONTH for positional (more buffer before expiry, matching
+    # choose_expiry's own MIN_POSITIONAL_DAYS_TO_EXPIRY intent - Dhan's
+    # rollingoption has no "at least N days out" concept, so this is an
+    # approximation, not a replay of that exact rule).
+    expiry_flag = "MONTH" if row.horizon == "positional" else "WEEK"
+
+    # Each distinct (option_type, strike) leg is fetched at most once for
+    # the whole [fetch_from, to] range, memoized here - simulate_option_trades
+    # only ever slices this per trade window, never re-fetches.
+    leg_cache: dict[tuple[str, str], Optional[list]] = {}
+
+    def leg_fetcher(option_type: str, strike: str):
+        key = (option_type, strike)
+        if key not in leg_cache:
+            leg_cache[key] = get_option_leg_history(
+                resolved.chart_exchange,
+                resolved.chart_symbol,
+                option_type,
+                strike,
+                expiry_flag,
+                0,
+                OPTION_HISTORY_INTERVAL,
+                fetch_from,
+                to,
+            )
+        return leg_cache[key]
+
+    return replay_options(
+        lambda window: evaluate(rule, indicator.type, indicator_params, window),
+        bars_needed(rule, indicator.type, indicator_params) + 1,
+        candles,
+        expiry_flag,
+        _exit_config_for(row),
+        leg_fetcher,
     )
 
 

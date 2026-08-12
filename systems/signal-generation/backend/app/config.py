@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     # to it over HTTP, same as execution does for quotes.
     market_data_base_url: str = "http://market-data-backend:8000"
     market_data_timeout_seconds: float = 25.0
+    # GET /options/leg-history can internally chunk into several throttled
+    # (3s-apart) Dhan calls server-side for a wide date range (Phase 4c's
+    # option backtesting, MAX_OPTION_BACKTEST_DAYS=180 -> up to 6 chunks) -
+    # a longer timeout than the general market_data_timeout_seconds above,
+    # not shared with it, since every other market-data call here is a
+    # single fast request.
+    option_history_timeout_seconds: float = 60.0
 
     # signal-processing is where a signal actually gets resolved/queued -
     # the engine posts to it exactly like n8n does for webhook providers.

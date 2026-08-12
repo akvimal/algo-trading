@@ -36,7 +36,15 @@ from zoneinfo import ZoneInfo
 import requests
 
 from app.config import settings
-from app.domain.models import Candle, OptionChain, OptionChainStrike, OptionGreeks, OptionLegQuote, ResolvedUnderlying
+from app.domain.models import (
+    Candle,
+    OptionChain,
+    OptionChainStrike,
+    OptionGreeks,
+    OptionLegCandle,
+    OptionLegQuote,
+    ResolvedUnderlying,
+)
 from app.domain.moneyness import classify_moneyness, infer_strike_step
 from app.providers.base import QuoteProvider
 
@@ -48,6 +56,7 @@ CANDLE_URL = "https://api.dhan.co/v2/charts/intraday"
 RENEW_TOKEN_URL = "https://api.dhan.co/v2/RenewToken"
 OPTION_CHAIN_URL = "https://api.dhan.co/v2/optionchain"
 OPTION_EXPIRY_LIST_URL = "https://api.dhan.co/v2/optionchain/expirylist"
+ROLLING_OPTION_URL = "https://api.dhan.co/v2/charts/rollingoption"
 
 # Dhan's charts/intraday only *natively* supports these interval values
 # (minutes) - notably 25, not 30, and no daily granularity (that's a
@@ -160,6 +169,35 @@ MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS = 3.0
 # A few seconds is enough to absorb a caller polling faster than the
 # chain actually changes, same reasoning as QUOTE_CACHE_TTL_SECONDS above.
 OPTION_CHAIN_CACHE_TTL_SECONDS = 3.0
+
+# Dhan doesn't separately document a rate limit for charts/rollingoption -
+# same conservative default as the option-chain family above, own
+# lock/timestamp (a distinct endpoint, no reason to serialize behind
+# option-chain calls). No response caching here (unlike option chain) -
+# a historical range isn't a single value that goes stale on a fixed TTL,
+# same reasoning as get_candle_history.
+MIN_OPTION_HISTORY_CALL_INTERVAL_SECONDS = 3.0
+# Dhan documents a hard 30-day-per-call limit on this endpoint - a wider
+# caller-requested range is served by chunking into consecutive <=30-day
+# slices and concatenating, same spirit as this file's other range-vs-
+# single-call distinctions.
+OPTION_HISTORY_MAX_DAYS_PER_CALL = 30
+
+# rollingoption's exchangeSegment/instrument describe where the OPTION
+# itself trades, not the underlying's own segment (contrast
+# resolve_feed_target's ltp_segment_key, e.g. "IDX_I"/"NSE_EQ" - those are
+# the UNDERLYING's segment, wrong for this endpoint). Confirmed via Dhan's
+# own docs example (exchangeSegment="NSE_FNO", instrument="OPTIDX" for a
+# NIFTY/index request) and annexure (instrument enum includes OPTIDX/
+# OPTSTK/OPTFUT, but the only MCX exchange-segment value Dhan documents at
+# all is MCX_COMM - no MCX derivatives segment). This endpoint's own docs
+# ("both Index Options and Stock Options data") and independent
+# confirmation ("for all NSE & BSE instruments") only ever mention NSE/BSE
+# - MCX (FUTCOM underlyings) is assumed unsupported here, unlike Phase
+# 4a/4b's option-chain/live-resolution paths which do cover MCX. Reconfirm
+# once live Dhan access resumes - see docs/architecture.md Phase 4c.
+_ROLLING_OPTION_INSTRUMENT_BY_CANDLE_INSTRUMENT = {"INDEX": "OPTIDX", "EQUITY": "OPTSTK"}
+ROLLING_OPTION_EXCHANGE_SEGMENT = "NSE_FNO"
 
 # Shared, in-memory access-token state - genuinely global (not per
 # DhanProvider instance) since router.py's two instances (dhan-nse,
@@ -910,3 +948,114 @@ class DhanProvider(QuoteProvider):
         )
         self._store_option_chain(symbol, expiry, chain)
         return chain
+
+    def _rolling_option_instrument(self, underlying_symbol: str) -> Optional[str]:
+        """rollingoption's `instrument` value for `underlying_symbol`'s own
+        type (OPTIDX/OPTSTK) - None if this underlying's type isn't
+        covered (MCX/FUTCOM, or unknown) - see
+        _ROLLING_OPTION_INSTRUMENT_BY_CANDLE_INSTRUMENT's own comment for
+        why MCX is excluded here even though Phase 4a's option chain
+        covers it."""
+        if underlying_symbol not in self._symbol_to_config:
+            return None
+        return _ROLLING_OPTION_INSTRUMENT_BY_CANDLE_INSTRUMENT.get(self._config_for(underlying_symbol).candle_instrument)
+
+    def get_option_leg_history(
+        self,
+        underlying_symbol: str,
+        option_type: str,
+        strike: str,
+        expiry_flag: str,
+        expiry_code: int,
+        interval: str,
+        from_date: date,
+        to_date: date,
+    ) -> Optional[list[OptionLegCandle]]:
+        """Historical premium for ONE option leg, tracked relative to spot
+        (`strike` e.g. "ATM"/"ATM+2") via Dhan's rolling/expired-options
+        endpoint (POST /charts/rollingoption) - backtesting data source
+        for Phase 4c (see docs/architecture.md), NOT the live Phase 4a/4b
+        path (that's get_option_chain/get_expiry_list, a real chain
+        snapshot keyed by actual strike price). None if `underlying_symbol`
+        doesn't resolve on this provider, or its type isn't covered by
+        this endpoint (MCX today - see _rolling_option_instrument).
+        Chunks [from_date, to_date] into <=OPTION_HISTORY_MAX_DAYS_PER_CALL
+        slices (Dhan's own documented per-call limit) and concatenates,
+        oldest-first - NOT cached, same reasoning as get_candle_history."""
+        if not self._symbol_to_security_id:
+            self.sync_instruments()
+        security_id = self._symbol_to_security_id.get(underlying_symbol)
+        instrument = self._rolling_option_instrument(underlying_symbol)
+        if security_id is None or instrument is None:
+            return None
+
+        access_token = current_access_token()
+        if not settings.dhan_client_id or not access_token:
+            raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
+
+        drv_option_type = "CALL" if option_type == "CE" else "PUT"
+
+        candles: list[OptionLegCandle] = []
+        chunk_start = from_date
+        while chunk_start <= to_date:
+            chunk_end = min(chunk_start + timedelta(days=OPTION_HISTORY_MAX_DAYS_PER_CALL - 1), to_date)
+
+            with self._option_chain_lock:
+                wait = MIN_OPTION_HISTORY_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_option_chain_call_at)
+                if wait > MAX_THROTTLE_WAIT_SECONDS:
+                    raise RuntimeError(f"Dhan option-history queue is backed up ({wait:.1f}s wait) - try again shortly")
+                if wait > 0:
+                    time.sleep(wait)
+                self._last_option_chain_call_at = time.monotonic()
+
+            resp = requests.post(
+                ROLLING_OPTION_URL,
+                headers=self._option_chain_headers(access_token),
+                json={
+                    "securityId": int(security_id),
+                    "exchangeSegment": ROLLING_OPTION_EXCHANGE_SEGMENT,
+                    "instrument": instrument,
+                    "expiryFlag": expiry_flag,
+                    "expiryCode": expiry_code,
+                    "strike": strike,
+                    "drvOptionType": drv_option_type,
+                    "requiredData": ["open", "high", "low", "close"],
+                    "fromDate": chunk_start.isoformat(),
+                    "toDate": chunk_end.isoformat(),
+                    "interval": interval,
+                },
+                timeout=30,
+            )
+            if resp.status_code == 401:
+                raise RuntimeError("Dhan API rejected the access token (401) - it may need to be regenerated")
+            if resp.status_code == 429:
+                raise RuntimeError("Dhan API rate limit hit (429) on charts/rollingoption - retry shortly")
+            try:
+                resp.raise_for_status()
+            except requests.exceptions.HTTPError as exc:
+                raise RuntimeError(f"Dhan API error ({resp.status_code}): {resp.text[:200]}") from exc
+
+            leg = (resp.json().get("data") or {}).get("ce" if option_type == "CE" else "pe") or {}
+            timestamps = leg.get("timestamp") or []
+            opens, highs, lows, closes = leg.get("open", []), leg.get("high", []), leg.get("low", []), leg.get("close", [])
+            tz = ZoneInfo(settings.timezone)
+            candles.extend(
+                OptionLegCandle(
+                    symbol=underlying_symbol,
+                    option_type=option_type,
+                    strike=strike,
+                    expiry_flag=expiry_flag,
+                    expiry_code=expiry_code,
+                    interval=interval,
+                    timestamp=datetime.fromtimestamp(ts, tz=tz).isoformat(),
+                    open=float(opens[i]),
+                    high=float(highs[i]),
+                    low=float(lows[i]),
+                    close=float(closes[i]),
+                )
+                for i, ts in enumerate(timestamps)
+            )
+
+            chunk_start = chunk_end + timedelta(days=1)
+
+        return candles

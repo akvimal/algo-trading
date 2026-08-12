@@ -24,6 +24,7 @@ RULE = RangeBreakoutRuleConfig(breakout_period=4)
 @dataclass
 class FakeStrategy:
     id: str = "strategy-1"
+    instrument_type: str = "spot"
     segment: str = "NSE"
     underlying: str = "NIFTYBANK"
     interval: str = "5min"

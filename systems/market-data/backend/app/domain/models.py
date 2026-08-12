@@ -97,6 +97,28 @@ class OptionChain(BaseModel):
     strikes: list[OptionChainStrike]  # sorted ascending by strike
 
 
+class OptionLegCandle(BaseModel):
+    """GET /options/leg-history - one completed bar of a single option
+    leg's historical premium, tracked *relative to spot* (e.g. always the
+    ATM strike, or always 2 strikes OTM) rather than a fixed strike price -
+    see DhanProvider.get_option_leg_history. Phase 4c (backtesting) only;
+    unrelated to OptionChainStrike/OptionLegQuote above (Phase 4a's live
+    chain snapshot, keyed by an actual strike price, not a rolling
+    strike-offset label)."""
+
+    symbol: str
+    option_type: str  # "CE" | "PE"
+    strike: str  # e.g. "ATM", "ATM+2", "ATM-2" - Dhan resolves the real strike server-side per bar
+    expiry_flag: str  # "WEEK" | "MONTH"
+    expiry_code: int
+    interval: str
+    timestamp: str  # ISO-8601, the bar's start time
+    open: float
+    high: float
+    low: float
+    close: float
+
+
 class ResolvedUnderlying(BaseModel):
     """What GET /instruments/resolve returns for a logical underlying
     (e.g. "GOLDM", "NIFTY") - see DhanProvider.resolve_underlying.

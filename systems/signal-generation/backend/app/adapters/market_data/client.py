@@ -98,3 +98,42 @@ def get_candle_history(exchange: str, symbol: str, interval: str, from_date: dat
     return [
         CandleClose(timestamp=c["timestamp"], close=c["close"], high=c["high"], low=c["low"]) for c in resp.json()
     ]
+
+
+def get_option_leg_history(
+    exchange: str,
+    symbol: str,
+    option_type: str,
+    strike: str,
+    expiry_flag: str,
+    expiry_code: int,
+    interval: str,
+    from_date: date,
+    to_date: date,
+) -> Optional[list[CandleClose]]:
+    """One option leg's historical premium, tracked relative to spot (e.g.
+    always the ATM strike) - Phase 4c's backtesting data source (see
+    docs/architecture.md's app/domain/option_backtest.py). None if
+    unresolvable (unknown underlying, or market-data has no option-history
+    support for this exchange - MCX today)."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/options/leg-history",
+        params={
+            "exchange": exchange,
+            "symbol": symbol,
+            "option_type": option_type,
+            "strike": strike,
+            "expiry_flag": expiry_flag,
+            "expiry_code": expiry_code,
+            "interval": interval,
+            "from": from_date.isoformat(),
+            "to": to_date.isoformat(),
+        },
+        timeout=settings.option_history_timeout_seconds,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return [
+        CandleClose(timestamp=c["timestamp"], close=c["close"], high=c["high"], low=c["low"]) for c in resp.json()
+    ]

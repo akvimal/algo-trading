@@ -48,6 +48,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   end_of_data: "Still open (end of range)",
   initial_stop_loss: "Initial stop-loss",
   reversal_exit: "Reversal exit",
+  combined_stop_loss: "Combined stop-loss",
+  combined_target: "Combined target",
 };
 
 function toggleRegimeCheck(checks: RegimeCheckName[], name: RegimeCheckName): RegimeCheckName[] {

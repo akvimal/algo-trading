@@ -11,6 +11,7 @@ import {
   type Indicator,
   type InstrumentType,
   type Interval,
+  type OptionPositionStyle,
   type ProviderSignal,
   type RegimeCheckName,
   type Segment,
@@ -394,6 +395,8 @@ function StrategyManager() {
   const [slPercent, setSlPercent] = useState("");
   const [targetPercent, setTargetPercent] = useState("");
   const [trailingEnabled, setTrailingEnabled] = useState(false);
+  // instrument_type='option' only - see OptionPositionStyle in api.ts.
+  const [optionPositionStyle, setOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [segment, setSegment] = useState<Segment>("NSE");
   const [squareOffTime, setSquareOffTime] = useState(() => defaultSquareOffTime("intraday", "NSE") ?? "");
   // Tracks whether the user has hand-edited square-off time, so the
@@ -460,6 +463,7 @@ function StrategyManager() {
   const [editSlPercent, setEditSlPercent] = useState("");
   const [editTargetPercent, setEditTargetPercent] = useState("");
   const [editTrailingEnabled, setEditTrailingEnabled] = useState(false);
+  const [editOptionPositionStyle, setEditOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
   const [editSquareOffTime, setEditSquareOffTime] = useState("");
   const [editActiveFromTime, setEditActiveFromTime] = useState("");
@@ -672,6 +676,7 @@ function StrategyManager() {
         stop_loss_percent: slMethod === "percent" && slPercent ? Number(slPercent) : undefined,
         target_percent: targetPercent ? Number(targetPercent) : undefined,
         trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
+        option_position_style: instrumentType === "option" ? optionPositionStyle : undefined,
         segment,
         square_off_time: horizon === "intraday" && squareOffTime ? `${squareOffTime}:00` : undefined,
         underlying: createIsInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
@@ -692,6 +697,7 @@ function StrategyManager() {
       setSlPercent("");
       setTargetPercent("");
       setTrailingEnabled(false);
+      setOptionPositionStyle("spread");
       setSegment("NSE");
       setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
       setSquareOffTimeTouched(false);
@@ -734,6 +740,7 @@ function StrategyManager() {
     setEditSlPercent(s.stop_loss_percent != null ? String(s.stop_loss_percent) : "");
     setEditTargetPercent(s.target_percent != null ? String(s.target_percent) : "");
     setEditTrailingEnabled(s.trailing_stop_enabled);
+    setEditOptionPositionStyle(s.option_position_style);
     setEditSegment(s.segment);
     setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
     setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
@@ -795,6 +802,7 @@ function StrategyManager() {
         stop_loss_percent: editSlMethod === "percent" && editSlPercent ? Number(editSlPercent) : undefined,
         target_percent: editTargetPercent ? Number(editTargetPercent) : undefined,
         trailing_stop_enabled: editSlMethod ? editTrailingEnabled : undefined,
+        option_position_style: editInstrumentType === "option" ? editOptionPositionStyle : undefined,
         segment: editSegment,
         square_off_time: editHorizon === "intraday" && editSquareOffTime ? `${editSquareOffTime}:00` : undefined,
         rule_config: ruleConfig,
@@ -928,6 +936,15 @@ function StrategyManager() {
               <option value="option">Option</option>
             </select>
           </label>
+          {instrumentType === "option" && (
+            <label>
+              Option style
+              <select value={optionPositionStyle} onChange={(e) => setOptionPositionStyle(e.target.value as OptionPositionStyle)}>
+                <option value="spread">Spread (bull call / bear put)</option>
+                <option value="naked">Naked (single long call/put)</option>
+              </select>
+            </label>
+          )}
           <label>
             Stop-loss <span className="optional">(optional)</span>
             <select value={slMethod} onChange={(e) => setSlMethod(e.target.value as StopLossMethod | "")}>
@@ -1298,6 +1315,16 @@ function StrategyManager() {
                     <option value="future">Future</option>
                     <option value="option">Option</option>
                   </select>
+                  {editInstrumentType === "option" && (
+                    <select
+                      value={editOptionPositionStyle}
+                      onChange={(e) => setEditOptionPositionStyle(e.target.value as OptionPositionStyle)}
+                      className="cell-input"
+                    >
+                      <option value="spread">Spread</option>
+                      <option value="naked">Naked</option>
+                    </select>
+                  )}
                 </td>
                 <td>
                   <select
@@ -1596,7 +1623,10 @@ function StrategyManager() {
                 </td>
                 <td className="muted">{s.source_type === "in_house" ? "In-house" : s.source_type}</td>
                 <td>{s.horizon}</td>
-                <td>{s.instrument_type}</td>
+                <td>
+                  {s.instrument_type}
+                  {s.instrument_type === "option" && <span className="muted"> ({s.option_position_style})</span>}
+                </td>
                 <td>{s.interval ?? "-"}</td>
                 <td>{formatStopLoss(s)}</td>
                 <td>{formatTarget(s)}</td>

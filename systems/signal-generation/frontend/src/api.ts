@@ -10,6 +10,11 @@ export type StopLossMethod = "previous_candle" | "percent";
 // matches Dhan's actual supported intraday-candle intervals (no "daily",
 // and 25min not 30min - Dhan's charts/intraday API only supports 1/5/15/25/60)
 export type StopLossInterval = "1min" | "5min" | "15min" | "25min" | "60min";
+// instrument_type='option' only - which fixed template signal-processing's
+// choose_strategy builds: 'spread' (bull_call_spread/bear_put_spread,
+// 2 legs) or 'naked' (naked_call/naked_put, single BUY leg only, no
+// short leg). Harmlessly ignored for spot/future strategies.
+export type OptionPositionStyle = "spread" | "naked";
 // Which market this strategy trades in - distinct from `exchange` (still
 // fixed to "NSE", the only one actually wired up end-to-end). Only drives
 // the square_off_time default; MCX/CRYPTO can be recorded as intent even
@@ -153,6 +158,8 @@ export type Strategy = {
   stop_loss_percent: number | null;
   target_percent: number | null;
   trailing_stop_enabled: boolean;
+  // instrument_type='option' only - see OptionPositionStyle above.
+  option_position_style: OptionPositionStyle;
   segment: Segment;
   // Required for horizon='intraday' only (auto-defaulted server-side from
   // horizon+segment when omitted on create - see defaultSquareOffTime
@@ -198,6 +205,7 @@ export type StrategyCreate = {
   stop_loss_percent?: number;
   target_percent?: number;
   trailing_stop_enabled?: boolean;
+  option_position_style?: OptionPositionStyle;
   segment?: Segment;
   // Optional - the backend auto-fills it from horizon+segment when
   // horizon='intraday'; required explicitly for other horizons.
@@ -230,6 +238,7 @@ export type StrategyEdit = {
   stop_loss_percent?: number;
   target_percent?: number;
   trailing_stop_enabled?: boolean;
+  option_position_style?: OptionPositionStyle;
   segment?: Segment;
   square_off_time?: string;
   underlying?: string;

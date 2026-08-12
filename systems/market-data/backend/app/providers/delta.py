@@ -186,13 +186,45 @@ class DeltaProvider(QuoteProvider):
         )
 
     def get_lot_size(self, symbol: str) -> Optional[int]:
-        """Always 1 - Delta perpetuals size in whole contracts directly,
-        no separate lot-multiplier concept the way NSE/MCX F&O has."""
+        """Always 1 - Delta perpetuals AND options both size in whole
+        contracts directly, no separate lot-multiplier concept the way
+        NSE/MCX F&O has. An option's own symbol is never in
+        _symbol_to_product_id (that dict is only populated by
+        sync_instruments()'s perpetuals-only sync - option data is fetched
+        live per-underlying-asset, see _fetch_option_rows, never persisted
+        into a sync-time dict) - checked via _OPTION_SYMBOL_RE first, same
+        shape-detection get_ltp_batch uses, before falling back to the
+        perpetual lookup."""
+        if _OPTION_SYMBOL_RE.match(symbol):
+            return 1
         if not self._symbol_to_product_id:
             self.sync_instruments()
         if symbol not in self._symbol_to_product_id:
             return None
         return 1
+
+    def resolve_symbol_by_security_id(self, security_id: str) -> Optional[str]:
+        """Crypto module Phase 4 (see docs/architecture.md) - execution's
+        option_position_manager.py calls this once per leg, at position-
+        open time, to translate a resolved order's security_id (Delta's
+        own product_id, a stringified int - see OptionLegQuote.security_id)
+        into a tradeable symbol. Unlike DhanProvider's version (a reverse
+        lookup into a sync-time-populated dict), this is a single direct
+        GET /v2/products/{id} call - confirmed live it resolves BOTH
+        perpetuals and options by numeric product_id (e.g. id 27 ->
+        "BTCUSD", a real option id -> "P-BTC-85000-280826"), so no local
+        product_id->symbol map needs building/maintaining (option data
+        isn't part of sync_instruments()'s perpetuals-only sync at all -
+        see _fetch_option_rows). None if `security_id` isn't a real
+        product_id, or the request fails to resolve."""
+        resp = requests.get(f"{settings.delta_base_url}/v2/products/{security_id}", timeout=15)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("success"):
+            return None
+        return (data.get("result") or {}).get("symbol")
 
     def _cached_quote(self, symbol: str) -> Optional[float]:
         with self._quote_cache_lock:
@@ -216,29 +248,14 @@ class DeltaProvider(QuoteProvider):
             raise ValueError(f"no LTP available for '{symbol}' - unknown symbol or Delta omitted it")
         return result[symbol]
 
-    def get_ltp_batch(self, symbols: list[str]) -> dict[str, float]:
-        """Delta's /v2/tickers ignores a `symbols=` filter (confirmed
-        live - it returns every product regardless), so the batching
-        strategy is one contract_types=perpetual_futures call (~220 rows
-        today) filtered to the requested symbols in memory - still just
-        one provider call regardless of how many symbols are asked for,
-        same goal DhanProvider.get_ltp_batch has via a different
-        mechanism."""
-        if not symbols:
-            return {}
-
-        result: dict[str, float] = {}
-        pending = set()
-        for symbol in symbols:
-            cached = self._cached_quote(symbol)
-            if cached is not None:
-                result[symbol] = cached
-            else:
-                pending.add(symbol)
-
-        if not pending:
-            return result
-
+    def _fetch_perpetual_quotes(self, pending: set[str]) -> dict[str, float]:
+        """The original get_ltp_batch body, unchanged - Delta's /v2/tickers
+        ignores a `symbols=` filter (confirmed live - it returns every
+        product regardless), so the batching strategy is one
+        contract_types=perpetual_futures call (~220 rows today) filtered
+        to the requested symbols in memory - still just one provider call
+        regardless of how many symbols are asked for, same goal
+        DhanProvider.get_ltp_batch has via a different mechanism."""
         with self._ticker_lock:
             wait = MIN_TICKER_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_ticker_call_at)
             if wait > MAX_THROTTLE_WAIT_SECONDS:
@@ -258,6 +275,62 @@ class DeltaProvider(QuoteProvider):
             symbol = row.get("symbol")
             if symbol in pending and row.get("close") is not None:
                 fresh[symbol] = float(row["close"])
+        return fresh
+
+    def _fetch_option_quotes(self, pending: set[str]) -> dict[str, float]:
+        """Crypto module Phase 4 (see docs/architecture.md) - an option's
+        own symbol never appears in the perpetual-only ticker call above,
+        so option legs need their own path. An option symbol already
+        encodes its underlying asset (_OPTION_SYMBOL_RE's 2nd group, e.g.
+        "BTC" from "P-BTC-85000-280826") - grouping requested option
+        symbols by that and reusing the already-cached
+        _fetch_option_rows(underlying_asset) (Phase 2) avoids a new Delta
+        endpoint entirely, same "one bulk call covers everything" pattern
+        get_option_chain already established, just consumed for LTP
+        instead of the chain."""
+        underlying_assets: set[str] = set()
+        for symbol in pending:
+            match = _OPTION_SYMBOL_RE.match(symbol)
+            if match:
+                underlying_assets.add(match.group(2))
+
+        fresh: dict[str, float] = {}
+        for underlying_asset in underlying_assets:
+            for row in self._fetch_option_rows(underlying_asset):
+                symbol = row.get("symbol")
+                if symbol in pending and row.get("close") is not None:
+                    fresh[symbol] = float(row["close"])
+        return fresh
+
+    def get_ltp_batch(self, symbols: list[str]) -> dict[str, float]:
+        """Batches a mix of perpetual and option symbols - see
+        _fetch_perpetual_quotes/_fetch_option_quotes for how each half is
+        actually fetched. A pending symbol matching neither shape (unknown
+        symbol) is simply absent from the result, same as an unresolvable
+        one always was."""
+        if not symbols:
+            return {}
+
+        result: dict[str, float] = {}
+        pending = set()
+        for symbol in symbols:
+            cached = self._cached_quote(symbol)
+            if cached is not None:
+                result[symbol] = cached
+            else:
+                pending.add(symbol)
+
+        if not pending:
+            return result
+
+        pending_options = {s for s in pending if _OPTION_SYMBOL_RE.match(s)}
+        pending_perpetuals = pending - pending_options
+
+        fresh: dict[str, float] = {}
+        if pending_perpetuals:
+            fresh.update(self._fetch_perpetual_quotes(pending_perpetuals))
+        if pending_options:
+            fresh.update(self._fetch_option_quotes(pending_options))
 
         self._store_quotes(fresh)
         result.update(fresh)

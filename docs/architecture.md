@@ -154,7 +154,7 @@ NSE (cash equity, indices, index futures) and MCX (commodity futures) are wired 
 
 Dhan's `charts/intraday` only natively serves a fixed set of granularities (`DHAN_CANDLE_INTERVAL_MINUTES` — 1/5/15/25/60min). Any other `"Nmin"` interval (3min, 2min, 10min, 20min, 30min, ...) is served by **local aggregation** instead: `DhanProvider` fetches native 1min bars for the requested range and buckets them into N-minute bars itself (`aggregate_candles`, extracted into the provider-agnostic `app/domain/candle_aggregation.py` once `DeltaProvider` needed the identical algorithm against its own, different native set — `app/providers/dhan.py`'s `_aggregate_candles`/`_interval_minutes` are now thin delegating wrappers, kept for call-site/test-import stability), aligned to clock-time multiples of N since midnight — the same alignment Dhan's own native bars are observed to use (e.g. real 5min bars land on `:00/:05/:10`, never `:02/:07`). A bucket is only emitted once it holds a full complement of N one-minute bars — a short bucket (session open not aligned to N, or the trailing bucket still forming) is dropped, extending the same "completed bars only" rule the 1-minute fetch already applies. This is transparent to callers: `get_previous_candle`/`get_candle_history` accept any `"Nmin"` interval string, native or aggregated, and `Strategy.interval` (signal-generation) is no longer limited to Dhan's native set — this incidentally fixed a latent gap where `"30min"` was already an accepted `Strategy.interval` value with no actual working path before local aggregation existed.
 
-## CRYPTO segment via Delta Exchange India (Phases 1-3 of the crypto module)
+## CRYPTO segment via Delta Exchange India (Phases 1-4 of the crypto module)
 
 The crypto module is planned as a phased roadmap, same reasoning as the options module (§ above) —
 this is Phase 1 only: `market-data`'s foundation (instrument sync, historical candles, quotes,
@@ -262,9 +262,36 @@ Live-verified end to end against the real Delta option chain (dev stack, no mock
 `bull_call_spread` (real strikes/expiry/`product_id`s off the live BTCUSD chain), a `SELL` signal
 resolved a real `bear_put_spread`, both published correctly onto `orders.resolved`.
 
-Execution (Phase 4, reusing `option_position_manager.py`'s Phase 4d combined-SL group design) is
-still planned, not built — a CRYPTO option order resolves and publishes correctly now, but nothing
-yet opens a position from it.
+**Execution (Phase 4)** — `option_position_manager.py` (Phase 4d) turned out to already be fully
+exchange-agnostic too (confirmed by generalizing it for the naked call/put option style, landed in
+the same session — see § above — before this phase's own work; the leg-count generalization needed
+zero further changes for CRYPTO). Three real gaps were found and fixed, all in `market-data`, all
+the same shape as the DB-constraint gap above — an interface CRYPTO was assumed to already satisfy,
+but one provider-specific code path never got extended:
+1. `GET /instruments/resolve-by-security-id` called `provider.resolve_symbol_by_security_id(...)`
+   directly, no `getattr` guard the way `options.py`'s routes already have — `DeltaProvider` had no
+   such method at all (an unhandled 500, not a clean 404). Fixed both the missing method
+   (`DeltaProvider.resolve_symbol_by_security_id` — a single `GET /v2/products/{id}` call,
+   confirmed live it resolves **both** perpetuals and options by numeric `product_id`, so no local
+   reverse-lookup map needs building) and the route's duck-typing.
+2. `DeltaProvider.get_ltp_batch` hardcoded `contract_types=perpetual_futures` — an option's own
+   symbol never appeared in the result. Fixed by partitioning a batch's symbols into option-shaped
+   (via the existing `_OPTION_SYMBOL_RE`) vs perpetual-shaped; option symbols are grouped by their
+   own encoded underlying asset and served via the already-cached `_fetch_option_rows` (Phase 2) —
+   no new Delta endpoint needed, same "one bulk call" pattern this file already uses twice.
+3. `DeltaProvider.get_lot_size` checked only `_symbol_to_product_id` (perpetuals-only, populated by
+   `sync_instruments()`) — an option's own symbol was never in it, so lot size always came back
+   `None` for any option leg (only found live, after fixing 1-2, when a real position-open still
+   failed at the lot-size step). Fixed the same way as `get_ltp_batch`: shape-detect via
+   `_OPTION_SYMBOL_RE` first, return `1` directly (Delta options, like perpetuals, have no separate
+   lot-multiplier concept) — no `sync_instruments()` call needed for an option symbol at all.
+
+Live-verified the full lifecycle end to end on the dev stack, both templates: a `bull_call_spread`
+and a `naked_call`, each opened as a real `OPEN` position (`GET /option-groups?with_live_pnl=true`
+showing correct `net_debit`/`quantity`/live mark-to-market), then closed via
+`POST /option-groups/{id}/square-off` at a fresh live quote — confirming `resolve_symbol_by_security_id`
+and the option-aware `get_ltp_batch`/`get_lot_size` all work for CRYPTO at every lifecycle stage, not
+just at open time.
 
 ## MCX/NSE-index market-data support
 
@@ -406,18 +433,18 @@ algo-trading/
     - ~~**Phase 4b:** strike + strategy selection~~ Done — `signal-processing`'s `choose_strategy` (`app/domain/resolution/strategy.py`) picks a **fixed set of bias→template multi-leg strategies** (bullish → bull call spread, bearish → bear put spread — exactly the two named when this was decided, see "Open questions" below), using Phase 4a's chain data to pick the actual strikes within each template's legs. Populates the `strategy: {type, legs: []}` field `resolved-order.schema.json` has reserved and left null all along — see § "Strike + strategy selection (Phase 4b)" below.
     - ~~**Phase 4c:** backtesting single/multi-leg option strategies, intraday and positional~~ Done — `signal-generation`'s `app/domain/option_backtest.py`, wired into the existing `POST /strategies/{id}/backtest` (crossover-rule strategies only so far). Dhan's `POST /charts/rollingoption` (minute-level historical option data, up to 5 years, keyed by strike *relative to spot* like `ATM`/`ATM+10`) is the data source, avoiding a synthetic Black-Scholes pricing model. See § "Backtesting option strategies (Phase 4c)" below.
     - ~~**Phase 4d:** `execution` multi-leg position support~~ Done — an `option_group_id` linking 2 `Position` rows (one per leg) to a new `execution.option_position_groups` row owning the combined P&L and combined stop-loss, since the base schema is one-symbol-per-row. Backend/API only, no grouped frontend view yet. See § "Making an option order tradeable (Phase 4d)" below.
-12. **Phase 4.5 → the crypto module (in progress):** Crypto via Delta Exchange India, split into its own phased roadmap once started, same reasoning as the options module:
-    - ~~**Phase 1:** `market-data` foundation~~ Done — `DeltaProvider`/`delta_feed.py`, instrument sync/candles/quotes/live feed for perpetual futures, `exchange`/`segment="CRYPTO"` widened end to end. See § "CRYPTO segment via Delta Exchange India (Phases 1-3 of the crypto module)" above.
+12. ~~**Phase 4.5 → the crypto module:**~~ Done. Crypto via Delta Exchange India, split into its own phased roadmap once started, same reasoning as the options module:
+    - ~~**Phase 1:** `market-data` foundation~~ Done — `DeltaProvider`/`delta_feed.py`, instrument sync/candles/quotes/live feed for perpetual futures, `exchange`/`segment="CRYPTO"` widened end to end. See § "CRYPTO segment via Delta Exchange India (Phases 1-4 of the crypto module)" above.
     - ~~**Phase 2:** option-chain data~~ Done — `DeltaProvider.get_expiry_list`/`get_option_chain`, reusing `GET /options/expiries`/`GET /options/chain` unchanged (already provider-agnostic). Delta's `GET /v2/tickers?contract_types=call_options,put_options&underlying_asset_symbols=` returns full Greeks/OI/IV per contract across every live expiry in one call, no separate throttled endpoint needed the way Dhan's option chain required. See § above.
     - ~~**Phase 3:** strike + strategy selection for CRYPTO~~ Done — `signal-processing`'s Phase 4b `choose_strategy`/`option_templates.py` needed zero exchange-specific changes, only a DB `CHECK` constraint fix (see § above) and test coverage. Live-verified against the real Delta option chain (both `bull_call_spread` and `bear_put_spread`).
-    - **Phase 4 (planned):** `execution` support for CRYPTO option spreads, reusing `option_position_manager.py` (Phase 4d)'s combined-SL group design.
+    - ~~**Phase 4:** `execution` support for CRYPTO option spreads~~ Done — `option_position_manager.py` (Phase 4d) needed zero further changes; three gaps found and fixed in `market-data` instead (`resolve_symbol_by_security_id` missing on `DeltaProvider` plus a missing route duck-type guard, `get_ltp_batch` and `get_lot_size` both perpetual-only). Live-verified full open→mark-to-market→close lifecycle for both `bull_call_spread` and the naked call/put style (see § above and § "Naked call/put option style" above).
 13. **Phase 5:** live broker adapter(s) for `execution` - real-money execution, a distinct concern from the paper-trading phases above.
 14. **Phase 6 (optional):** move off "local only" — VPS/Traefik/TLS, secrets management, CI image builds.
 
 ## Open questions (not blocking current phase)
 
 - ~~Options-strategy rule inputs~~ Decided: a **fixed set of bias→template rules** to start (bullish→bull call spread, bearish→bear put spread, etc.), not a general rule engine — see Phase 4b. Re-confirmed when Phase 4a shipped: a more dynamic OI/IV/Greeks-driven strategy *selector* (choosing between several candidate strategies, not just picking strikes within one fixed template) was explicitly considered and deferred — Phase 4a's chain data feeds strike selection within the fixed template first; revisit the dynamic selector only once that simpler version is proven in use.
-- ~~MCX and crypto (Delta Exchange) quote providers~~ MCX done as of Phase 3 (instrument sync, active-month contract resolution, general historical candles — see § "MCX/NSE-index market-data support"). Crypto (Delta Exchange India) Phases 1-3 done — see § "CRYPTO segment via Delta Exchange India (Phases 1-3 of the crypto module)" — execution (Phase 4) still planned.
+- ~~MCX and crypto (Delta Exchange) quote providers~~ MCX done as of Phase 3 (instrument sync, active-month contract resolution, general historical candles — see § "MCX/NSE-index market-data support"). Crypto (Delta Exchange India) fully done, Phases 1-4 — see § "CRYPTO segment via Delta Exchange India (Phases 1-4 of the crypto module)".
 - ~~What "backtesting" actually means operationally for an in-house Strategy~~ Resolved as of Phase 3: a **lightweight signal replay** (`POST /strategies/{id}/backtest`), not a full stop-loss/sizing simulation — reruns the exact same `rules.evaluate()` function the live engine calls over historical candles, reports where signals would have fired plus a naive hypothetical P&L. Never auto-promotes `backtesting` → `live`; that stays a manual `PATCH` after reviewing the report. See § "The in-house indicator engine".
 - Webhook auth — add a shared-secret/HMAC check once anything here is internet-reachable; today `strategy_id` in a query param is not a secret, and the webhook routes have no auth of their own.
 - TradingView provider — no route exists yet; adding one is the same pattern as Chartink (`add-signal-provider` skill).

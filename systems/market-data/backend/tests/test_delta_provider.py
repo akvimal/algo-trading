@@ -9,6 +9,7 @@ import time
 from datetime import date
 
 import responses
+from responses import matchers
 
 from app.config import settings
 from app.providers.delta import DeltaProvider
@@ -190,6 +191,87 @@ def test_get_ltp_batch_fails_fast_when_throttle_queue_too_deep():
         assert "backed up" in str(exc)
 
 
+@responses.activate
+def test_get_ltp_batch_mixes_perpetual_and_option_symbols():
+    # Crypto module Phase 4 - an execution exit-monitor sweep can batch a
+    # perpetual position and an option leg together in one call. Two
+    # distinct underlying-tickers requests should fire: one perpetual-only
+    # (unchanged path), one option-only (reuses _fetch_option_rows).
+    responses.add(
+        responses.GET, _tickers_url(),
+        json={"success": True, "result": [{"symbol": "BTCUSD", "close": 63498.5}]},
+        status=200,
+        match=[matchers.query_param_matcher({"contract_types": "perpetual_futures"})],
+    )
+    responses.add(
+        responses.GET, _tickers_url(),
+        json={"success": True, "result": [_option_ticker("C-BTC-63600-130826", 146107, "call_options", 45.5, 63500.0)]},
+        status=200,
+        match=[matchers.query_param_matcher({"contract_types": "call_options,put_options", "underlying_asset_symbols": "BTC"})],
+    )
+
+    provider = DeltaProvider()
+    result = provider.get_ltp_batch(["BTCUSD", "C-BTC-63600-130826"])
+
+    assert result == {"BTCUSD": 63498.5, "C-BTC-63600-130826": 45.5}
+    assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_get_ltp_batch_option_only_skips_perpetual_call():
+    responses.add(
+        responses.GET, _tickers_url(),
+        json={"success": True, "result": [_option_ticker("P-BTC-63200-130826", 146095, "put_options", 30.0, 63500.0)]},
+        status=200,
+        match=[matchers.query_param_matcher({"contract_types": "call_options,put_options", "underlying_asset_symbols": "BTC"})],
+    )
+
+    provider = DeltaProvider()
+    result = provider.get_ltp_batch(["P-BTC-63200-130826"])
+
+    assert result == {"P-BTC-63200-130826": 30.0}
+    assert len(responses.calls) == 1  # no perpetual-side call at all
+
+
+# --- resolve_symbol_by_security_id --------------------------------------------------------------
+
+
+def _product_by_id_url(product_id) -> str:
+    return f"{settings.delta_base_url}/v2/products/{product_id}"
+
+
+@responses.activate
+def test_resolve_symbol_by_security_id_resolves_perpetual():
+    responses.add(
+        responses.GET, _product_by_id_url(27),
+        json={"success": True, "result": {"id": 27, "symbol": "BTCUSD", "contract_type": "perpetual_futures"}},
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.resolve_symbol_by_security_id("27") == "BTCUSD"
+
+
+@responses.activate
+def test_resolve_symbol_by_security_id_resolves_option():
+    responses.add(
+        responses.GET, _product_by_id_url(146107),
+        json={"success": True, "result": {"id": 146107, "symbol": "C-BTC-63600-130826", "contract_type": "call_options"}},
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.resolve_symbol_by_security_id("146107") == "C-BTC-63600-130826"
+
+
+@responses.activate
+def test_resolve_symbol_by_security_id_unknown_returns_none():
+    responses.add(responses.GET, _product_by_id_url(999999999), json={"success": False}, status=404)
+
+    provider = DeltaProvider()
+    assert provider.resolve_symbol_by_security_id("999999999") is None
+
+
 # --- get_candle_history / get_previous_candle ---------------------------------------------------
 
 
@@ -309,6 +391,14 @@ def test_get_lot_size_unknown_symbol_returns_none():
 
     provider = DeltaProvider()
     assert provider.get_lot_size("NOPE") is None
+
+
+def test_get_lot_size_always_one_for_option_symbol_no_sync_needed():
+    # An option's own symbol is never in _symbol_to_product_id (only
+    # perpetuals get synced) - shape-detected via _OPTION_SYMBOL_RE instead,
+    # no sync_instruments() call (and thus no HTTP call) needed at all.
+    provider = DeltaProvider()
+    assert provider.get_lot_size("C-BTC-63600-130826") == 1
 
 
 # --- get_expiry_list / get_option_chain (Phase 2 of the crypto module) -------------------------

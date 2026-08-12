@@ -1,0 +1,55 @@
+name: CI
+
+# Status-only - runs on every push/PR for visibility (green/red check),
+# not wired up as a required/blocking check anywhere. Solo-dev repo, no
+# PR-review gate: see CLAUDE.md.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend-tests:
+    name: pytest (${{ matrix.system }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        system: [signal-generation, signal-processing, execution, market-data]
+    defaults:
+      run:
+        working-directory: systems/${{ matrix.system }}/backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: systems/${{ matrix.system }}/backend/requirements-dev.txt
+
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q
+
+  frontend-build:
+    name: build (${{ matrix.system }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        system: [signal-generation, signal-processing, execution]
+    defaults:
+      run:
+        working-directory: systems/${{ matrix.system }}/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: systems/${{ matrix.system }}/frontend/package-lock.json
+
+      - run: npm ci
+      # tsc -b && vite build - type-checks then builds, see CLAUDE.md
+      - run: npm run build

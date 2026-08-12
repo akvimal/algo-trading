@@ -235,3 +235,107 @@ def test_resolve_rejects_when_signal_generation_unreachable():
 
     with pytest.raises(ResolutionError, match="could not reach"):
         resolve(_signal())
+
+
+# --- instrument_type='option' (Phase 4b of the options trading module) -----------------------
+
+
+def _expiries_url() -> str:
+    return f"{settings.market_data_base_url}/options/expiries"
+
+
+def _chain_url() -> str:
+    return f"{settings.market_data_base_url}/options/chain"
+
+
+def _option_strategy_json(**overrides) -> dict:
+    defaults = dict(
+        id=STRATEGY_ID,
+        status="live",
+        horizon="intraday",
+        instrument_type="option",
+        segment="NSE",
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+_FAKE_CHAIN = {
+    "underlying_symbol": "NIFTY",
+    "underlying_exchange": "NSE",
+    "expiry": "2026-08-14",
+    "underlying_last_price": 24000.0,
+    "strikes": [
+        {
+            "strike": 23900.0,
+            "ce": {"security_id": "ce-23900", "moneyness": "ITM", "oi": 5000},
+            "pe": {"security_id": "pe-23900", "moneyness": "OTM", "oi": 5000},
+        },
+        {
+            "strike": 24000.0,
+            "ce": {"security_id": "ce-24000", "moneyness": "ATM", "oi": 5000},
+            "pe": {"security_id": "pe-24000", "moneyness": "ATM", "oi": 5000},
+        },
+        {
+            "strike": 24100.0,
+            "ce": {"security_id": "ce-24100", "moneyness": "OTM", "oi": 5000},
+            "pe": {"security_id": "pe-24100", "moneyness": "ITM", "oi": 5000},
+        },
+    ],
+}
+
+
+@responses.activate
+def test_resolve_option_strategy_bull_call_spread_for_buy_signal():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14", "2026-08-21"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.instrument_type == "option"
+    assert resolved.strategy == {
+        "type": "bull_call_spread",
+        "legs": [
+            {"action": "BUY", "option_type": "CE", "strike": 24000.0, "expiry": "2026-08-14", "security_id": "ce-24000"},
+            {"action": "SELL", "option_type": "CE", "strike": 24100.0, "expiry": "2026-08-14", "security_id": "ce-24100"},
+        ],
+    }
+
+
+@responses.activate
+def test_resolve_option_strategy_bear_put_spread_for_sell_signal():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="SELL"))
+
+    assert resolved.strategy["type"] == "bear_put_spread"
+    assert resolved.strategy["legs"][0]["option_type"] == "PE"
+
+
+@responses.activate
+def test_resolve_option_rejects_mcx_exchange():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(segment="MCX"), status=200)
+
+    with pytest.raises(ResolutionError, match="only supported on NSE"):
+        resolve(_signal(symbol="GOLDM", exchange="MCX"))
+
+
+@responses.activate
+def test_resolve_option_rejects_when_market_data_unreachable():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), body=requests.exceptions.ConnectionError("refused"))
+
+    with pytest.raises(ResolutionError, match="could not resolve option expiries"):
+        resolve(_signal(symbol="NIFTY"))
+
+
+@responses.activate
+def test_resolve_option_rejects_unresolvable_underlying():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"detail": "not found"}, status=404)
+
+    with pytest.raises(ResolutionError, match="could not resolve option expiries"):
+        resolve(_signal(symbol="NOTREAL"))

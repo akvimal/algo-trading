@@ -64,6 +64,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_STREAM: orders.resolved
       SIGNAL_GENERATION_BASE_URL: http://signal-generation-backend:8000
+      # Option-strategy resolution only (Phase 4b of the options trading
+      # module) - see app/adapters/market_data/client.py.
+      MARKET_DATA_BASE_URL: http://market-data-backend:8000
     ports:
       - "${SIGNAL_PROCESSING_BACKEND_PORT}:8000"
     depends_on:
@@ -72,6 +75,8 @@ services:
       redis:
         condition: service_healthy
       signal-generation-backend:
+        condition: service_started
+      market-data-backend:
         condition: service_started
 
   signal-processing-frontend:

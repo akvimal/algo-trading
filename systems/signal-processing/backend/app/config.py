@@ -10,5 +10,10 @@ class Settings(BaseSettings):
     signal_generation_base_url: str = "http://signal-generation-backend:8000"
     signal_generation_timeout_seconds: float = 5.0
 
+    # Option-strategy resolution only (Phase 4b of the options trading
+    # module - see docs/architecture.md) - app/adapters/market_data/client.py.
+    market_data_base_url: str = "http://market-data-backend:8000"
+    market_data_timeout_seconds: float = 5.0
+
 
 settings = Settings()

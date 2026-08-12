@@ -29,10 +29,29 @@
     },
     "strategy": {
       "type": ["object", "null"],
-      "description": "Option-strategy legs (spread/straddle/etc) - unrelated to strategy_id above. Populated once option-strategy selection logic exists; null for spot/future orders.",
+      "description": "Option-strategy legs (spread/straddle/etc) - unrelated to strategy_id above. Populated by signal-processing's choose_strategy (Phase 4b of the options trading module, see docs/architecture.md) for instrument_type='option' orders; null for spot/future orders. Not yet actionable by execution - see docs/architecture.md Phase 4d.",
       "properties": {
-        "type": { "type": "string" },
-        "legs": { "type": "array", "items": { "type": "object" } }
+        "type": {
+          "type": "string",
+          "description": "Which fixed template produced these legs, e.g. 'bull_call_spread'/'bear_put_spread' - a plain string, not an enum yet, so a new template doesn't need a contract change."
+        },
+        "legs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["action", "option_type", "strike", "expiry", "security_id"],
+            "properties": {
+              "action": { "type": "string", "enum": ["BUY", "SELL"] },
+              "option_type": { "type": "string", "enum": ["CE", "PE"] },
+              "strike": { "type": "number" },
+              "expiry": { "type": "string", "format": "date" },
+              "security_id": {
+                "type": "string",
+                "description": "The option contract's own Dhan security ID (from market-data's option-chain response) - not yet resolvable to a trading symbol/lot size by execution, see docs/architecture.md Phase 4d."
+              }
+            }
+          }
+        }
       }
     },
     "price": {

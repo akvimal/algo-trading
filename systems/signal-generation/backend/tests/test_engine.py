@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from uuid import uuid4
 
-from app.domain.engine import _target_symbols, history_window
+from app.domain.engine import _is_within_active_window, _target_symbols, history_window
 
 
 def test_history_window_ends_today_and_covers_at_least_min_days():
@@ -56,3 +56,27 @@ def test_target_symbols_empty_universe_constituents_returns_empty_list():
     strategy = FakeStrategy(underlying="NIFTYBANK", underlying_type="universe")
     result = _target_symbols(strategy, get_universe_constituents=lambda key: [])
     assert result == []
+
+
+# --- _is_within_active_window: run_live_tick's skip-outside-window optimization --------------
+
+
+def test_is_within_active_window_no_window_always_true():
+    assert _is_within_active_window(time(3, 0), None, None) is True
+
+
+def test_is_within_active_window_inside_window_true():
+    assert _is_within_active_window(time(10, 0), time(9, 15), time(11, 0)) is True
+
+
+def test_is_within_active_window_before_window_false():
+    assert _is_within_active_window(time(9, 0), time(9, 15), time(11, 0)) is False
+
+
+def test_is_within_active_window_after_window_false():
+    assert _is_within_active_window(time(11, 30), time(9, 15), time(11, 0)) is False
+
+
+def test_is_within_active_window_on_boundaries_true():
+    assert _is_within_active_window(time(9, 15), time(9, 15), time(11, 0)) is True
+    assert _is_within_active_window(time(11, 0), time(9, 15), time(11, 0)) is True

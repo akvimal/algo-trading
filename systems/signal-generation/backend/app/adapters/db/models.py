@@ -48,6 +48,10 @@ class Strategy(Base):
     regime_filter_checks = Column(
         JSONB, nullable=False, default=lambda: ["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]
     )
+    # Optional per-strategy signal-acceptance window - see
+    # infra/postgres/init/03-signal-generation.sql for the full comment.
+    active_from_time = Column(Time)
+    active_to_time = Column(Time)
     # Passed through unchanged on resolved-order to execution - see
     # DuplicateSignalPolicy/CounterSignalPolicy in app/domain/models.py.
     duplicate_signal_policy = Column(Text, nullable=False, default="add_position")

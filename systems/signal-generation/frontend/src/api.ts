@@ -174,6 +174,14 @@ export type Strategy = {
   regime_filter_checks: RegimeCheckName[];
   duplicate_signal_policy: DuplicateSignalPolicy;
   counter_signal_policy: CounterSignalPolicy;
+  // Optional per-strategy signal-acceptance window (e.g. 09:15-11:00) -
+  // both-or-neither, every source_type. Enforced by signal-processing's
+  // resolve() against the signal's own timestamp; active_to_time also
+  // bounds how long a position stays open (folded into the resolved
+  // order's square_off_time, the earlier of the two) - see
+  // docs/architecture.md.
+  active_from_time: string | null; // "HH:MM:SS"
+  active_to_time: string | null; // "HH:MM:SS"
   status: StrategyStatus;
   created_at: string;
   updated_at: string;
@@ -202,6 +210,9 @@ export type StrategyCreate = {
   regime_filter_checks?: RegimeCheckName[];
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
+  // Both-or-neither - see Strategy's own comment above.
+  active_from_time?: string;
+  active_to_time?: string;
 };
 
 // source_type/exchange aren't here - not editable after creation, see
@@ -228,6 +239,8 @@ export type StrategyEdit = {
   regime_filter_checks?: RegimeCheckName[];
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
+  active_from_time?: string;
+  active_to_time?: string;
 };
 
 // A simulated paper trade from POST /strategies/{id}/backtest - entry on

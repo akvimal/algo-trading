@@ -13,8 +13,9 @@ execution's _quotes_by_exchange."""
 
 import logging
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Optional, Protocol
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -56,6 +57,20 @@ def history_window(bar_count: int, interval: str) -> tuple[date, date]:
     bars_per_day = max(1, (6.25 * 60) // minutes)  # ~6h15m NSE session as a rough yardstick
     days_needed = max(_MIN_HISTORY_DAYS, min(_MAX_HISTORY_DAYS, int(bar_count / bars_per_day) + 2))
     return today - timedelta(days=days_needed), today
+
+
+def _is_within_active_window(now_time: time, active_from_time: Optional[time], active_to_time: Optional[time]) -> bool:
+    """True if there's no window (both None - no restriction) or now_time
+    falls within [active_from_time, active_to_time]. Pure efficiency
+    optimization for run_live_tick - skips wasted market-data calls for a
+    strategy that resolve() (signal-processing) would just reject anyway;
+    NOT the authoritative check, which is resolve()'s own
+    is_within_active_window (app/domain/resolution/pipeline.py there) -
+    that one also covers external-provider signals this engine never
+    sees."""
+    if active_from_time is None or active_to_time is None:
+        return True
+    return active_from_time <= now_time <= active_to_time
 
 
 def _target_symbols(strategy: db_models.Strategy, get_universe_constituents: GetUniverseConstituents) -> list[str]:
@@ -355,10 +370,14 @@ def run_live_tick(
         .all()
     )
 
+    now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).time()
+
     checked = 0
     signaled = 0
     failed = 0
     for strategy in strategies:
+        if not _is_within_active_window(now_ist, strategy.active_from_time, strategy.active_to_time):
+            continue
         for symbol in _target_symbols(strategy, get_universe_constituents):
             checked += 1
             try:

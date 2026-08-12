@@ -22,6 +22,7 @@ from app.domain.models import (
     StrategyCreate,
     StrategyOut,
     StrategyUpdate,
+    validate_active_window_fields,
     validate_in_house_fields,
     validate_indicator_params,
     validate_rule_config,
@@ -57,6 +58,8 @@ def _to_out(row: db_models.Strategy) -> StrategyOut:
         regime_filter_checks=row.regime_filter_checks,
         duplicate_signal_policy=row.duplicate_signal_policy,
         counter_signal_policy=row.counter_signal_policy,
+        active_from_time=row.active_from_time,
+        active_to_time=row.active_to_time,
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -144,6 +147,8 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         regime_filter_checks=payload.regime_filter_checks,
         duplicate_signal_policy=payload.duplicate_signal_policy,
         counter_signal_policy=payload.counter_signal_policy,
+        active_from_time=payload.active_from_time,
+        active_to_time=payload.active_to_time,
         status="draft",
     )
     db.add(row)
@@ -252,6 +257,10 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.duplicate_signal_policy = payload.duplicate_signal_policy
     if payload.counter_signal_policy is not None:
         row.counter_signal_policy = payload.counter_signal_policy
+    if payload.active_from_time is not None:
+        row.active_from_time = payload.active_from_time
+    if payload.active_to_time is not None:
+        row.active_to_time = payload.active_to_time
 
     try:
         validate_stop_loss_fields(
@@ -265,6 +274,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         # against whichever source_type it already has.
         validate_in_house_fields(row.source_type, row.underlying, row.rule_config, row.interval)
         validate_underlying_type_fields(row.underlying_type, row.segment, row.instrument_type)
+        validate_active_window_fields(row.active_from_time, row.active_to_time)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _check_referenced_indicator_exists(db, row.rule_config)

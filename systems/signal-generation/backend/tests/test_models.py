@@ -305,3 +305,61 @@ def test_strategy_update_signal_conflict_policy_fields_optional():
     u = StrategyUpdate()
     assert u.duplicate_signal_policy is None
     assert u.counter_signal_policy is None
+
+
+# --- active_from_time/active_to_time (per-strategy signal-acceptance window) -----------------
+
+
+def test_strategy_create_active_window_unset_by_default():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="spot", square_off_time="15:00:00",
+    )
+    assert s.active_from_time is None
+    assert s.active_to_time is None
+
+
+def test_strategy_create_accepts_active_window():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="spot", square_off_time="15:00:00",
+        active_from_time="09:15:00", active_to_time="11:00:00",
+    )
+    assert s.active_from_time.isoformat() == "09:15:00"
+    assert s.active_to_time.isoformat() == "11:00:00"
+
+
+def test_strategy_create_rejects_active_window_missing_to():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="spot",
+            square_off_time="15:00:00", active_from_time="09:15:00",
+        )
+
+
+def test_strategy_create_rejects_active_window_missing_from():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="spot",
+            square_off_time="15:00:00", active_to_time="11:00:00",
+        )
+
+
+def test_strategy_create_rejects_active_window_to_before_from():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="spot",
+            square_off_time="15:00:00", active_from_time="11:00:00", active_to_time="09:15:00",
+        )
+
+
+def test_strategy_create_rejects_active_window_equal_from_and_to():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="spot",
+            square_off_time="15:00:00", active_from_time="09:15:00", active_to_time="09:15:00",
+        )
+
+
+def test_strategy_update_active_window_fields_optional():
+    u = StrategyUpdate()
+    assert u.active_from_time is None
+    assert u.active_to_time is None

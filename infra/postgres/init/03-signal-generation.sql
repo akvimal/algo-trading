@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- signal's direction when regime_filter_enabled - defaults to all 5,
     -- matching classify_regime's own fixed "regime" label exactly.
     regime_filter_checks JSONB NOT NULL DEFAULT '["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]',
+    -- Optional per-strategy time-of-day window (e.g. 09:15-11:00) during
+    -- which this strategy accepts signals - both-or-neither, enforced by
+    -- signal-processing's resolve() against the signal's own timestamp
+    -- (not wall-clock time at resolution), for every source_type, not
+    -- just in_house. active_to_time also bounds how long a position this
+    -- strategy opens can stay open: resolve() folds it into the resolved
+    -- order's square_off_time (the earlier of the two), so execution's
+    -- existing square-off machinery force-closes at the window's end with
+    -- no execution-side changes - see docs/architecture.md. NULL/NULL
+    -- (default) means no restriction, unchanged from today's behavior.
+    active_from_time TIME,
+    active_to_time   TIME,
     -- Signal-conflict policy - passed through unchanged on resolved-order
     -- to execution's position_manager._resolve_signal_conflicts.
     -- duplicate_signal_policy: what to do when this symbol already has an
@@ -135,6 +147,10 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     ),
     CONSTRAINT universe_requires_nse_spot CHECK (
         underlying_type != 'universe' OR (segment = 'NSE' AND instrument_type = 'spot')
+    ),
+    CONSTRAINT active_window_consistent CHECK (
+        (active_from_time IS NULL) = (active_to_time IS NULL)
+        AND (active_to_time IS NULL OR active_to_time > active_from_time)
     )
 );
 

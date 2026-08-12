@@ -397,6 +397,11 @@ function StrategyManager() {
   // Tracks whether the user has hand-edited square-off time, so the
   // horizon/segment auto-default effect below stops overwriting it.
   const [squareOffTimeTouched, setSquareOffTimeTouched] = useState(false);
+  // Optional per-strategy signal-acceptance window (e.g. 09:15-11:00) -
+  // both-or-neither, every source_type, not gated behind in-house. See
+  // Strategy's own comment in api.ts.
+  const [activeFromTime, setActiveFromTime] = useState("");
+  const [activeToTime, setActiveToTime] = useState("");
   // in_house only - see validate_in_house_fields on the backend. Which
   // indicator the rule uses - the signal SMA length lives on the
   // indicator itself (RsiParams.sma_period), not here.
@@ -455,6 +460,8 @@ function StrategyManager() {
   const [editTrailingEnabled, setEditTrailingEnabled] = useState(false);
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
   const [editSquareOffTime, setEditSquareOffTime] = useState("");
+  const [editActiveFromTime, setEditActiveFromTime] = useState("");
+  const [editActiveToTime, setEditActiveToTime] = useState("");
   // in_house only - which indicator the rule references, freely editable
   // (the backend already supports this via PATCH; underlying stays
   // locked - swapping the traded symbol is a bigger change than
@@ -672,6 +679,8 @@ function StrategyManager() {
         regime_filter_checks: createIsInHouse ? regimeFilterChecks : undefined,
         duplicate_signal_policy: dupPolicy,
         counter_signal_policy: counterPolicy,
+        active_from_time: activeFromTime && activeToTime ? `${activeFromTime}:00` : undefined,
+        active_to_time: activeFromTime && activeToTime ? `${activeToTime}:00` : undefined,
       });
       setName("");
       setSourceKind("external");
@@ -684,6 +693,8 @@ function StrategyManager() {
       setSegment("NSE");
       setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
       setSquareOffTimeTouched(false);
+      setActiveFromTime("");
+      setActiveToTime("");
       setUnderlying("");
       setUnderlyingType("symbol");
       setSelectedUniverse("");
@@ -723,6 +734,8 @@ function StrategyManager() {
     setEditTrailingEnabled(s.trailing_stop_enabled);
     setEditSegment(s.segment);
     setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
+    setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
+    setEditActiveToTime(s.active_to_time ? s.active_to_time.slice(0, 5) : "");
     if (s.rule_config?.type === "breakout") {
       setEditHtfInterval(s.rule_config.htf_interval);
       setEditHtfBreakoutPeriod(String(s.rule_config.htf_breakout_period));
@@ -787,6 +800,8 @@ function StrategyManager() {
         regime_filter_checks: editingIsInHouse ? editRegimeFilterChecks : undefined,
         duplicate_signal_policy: editDupPolicy,
         counter_signal_policy: editCounterPolicy,
+        active_from_time: editActiveFromTime && editActiveToTime ? `${editActiveFromTime}:00` : undefined,
+        active_to_time: editActiveFromTime && editActiveToTime ? `${editActiveToTime}:00` : undefined,
       });
       setStrategies((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setEditingId(null);
@@ -863,10 +878,10 @@ function StrategyManager() {
 
   const nonDefaultConfig = horizon !== "intraday" || instrumentType !== "spot";
   // Name, Status, Source, Horizon, Instrument, Interval, Stop-loss,
-  // Target, Segment, Underlying/Rule, Square-off, Webhooks, actions -
-  // matches the <thead> below exactly (all columns always present now,
-  // one unified table for every source type).
-  const colCount = 13;
+  // Target, Segment, Underlying/Rule, Square-off, Active window,
+  // Webhooks, actions - matches the <thead> below exactly (all columns
+  // always present now, one unified table for every source type).
+  const colCount = 14;
 
   return (
     <>
@@ -1162,6 +1177,14 @@ function StrategyManager() {
               />
             </label>
           )}
+          <label>
+            Active from <span className="optional">(optional)</span>
+            <input type="time" value={activeFromTime} onChange={(e) => setActiveFromTime(e.target.value)} />
+          </label>
+          <label>
+            Active to <span className="optional">(optional)</span>
+            <input type="time" value={activeToTime} onChange={(e) => setActiveToTime(e.target.value)} />
+          </label>
           <button
             type="submit"
             disabled={
@@ -1172,7 +1195,9 @@ function StrategyManager() {
               (createIsInHouse && ruleType !== "breakout" && !signalInterval) ||
               (createIsInHouse && underlyingType === "symbol" && !underlying.trim()) ||
               (createIsInHouse && underlyingType === "universe" && !selectedUniverse) ||
-              (createIsInHouse && !isBreakout && !isRangeBreakout && !selectedIndicatorId)
+              (createIsInHouse && !isBreakout && !isRangeBreakout && !selectedIndicatorId) ||
+              (!!activeFromTime !== !!activeToTime) ||
+              (activeFromTime !== "" && activeToTime !== "" && activeToTime <= activeFromTime)
             }
           >
             {creating ? "Creating..." : "Create strategy"}
@@ -1230,6 +1255,7 @@ function StrategyManager() {
             <th>Segment</th>
             <th>Underlying / Rule</th>
             <th>Square-off</th>
+            <th>Active window</th>
             <th>Webhooks</th>
             <th></th>
           </tr>
@@ -1513,13 +1539,32 @@ function StrategyManager() {
                     <span className="muted">n/a</span>
                   )}
                 </td>
+                <td className="stack-cell">
+                  <input
+                    type="time"
+                    value={editActiveFromTime}
+                    onChange={(e) => setEditActiveFromTime(e.target.value)}
+                    className="cell-input"
+                  />
+                  <input
+                    type="time"
+                    value={editActiveToTime}
+                    onChange={(e) => setEditActiveToTime(e.target.value)}
+                    className="cell-input"
+                  />
+                </td>
                 <td />
                 <td className="edit-actions">
                   <button
                     type="button"
                     className="icon-btn"
                     onClick={() => handleSaveEdit(s.id)}
-                    disabled={saving || !editName.trim()}
+                    disabled={
+                      saving ||
+                      !editName.trim() ||
+                      !!editActiveFromTime !== !!editActiveToTime ||
+                      (editActiveFromTime !== "" && editActiveToTime !== "" && editActiveToTime <= editActiveFromTime)
+                    }
                     title="Save changes"
                     aria-label="Save changes"
                   >
@@ -1564,6 +1609,11 @@ function StrategyManager() {
                   )}
                 </td>
                 <td>{s.square_off_time ? s.square_off_time.slice(0, 5) : "-"}</td>
+                <td className="muted">
+                  {s.active_from_time && s.active_to_time
+                    ? `${s.active_from_time.slice(0, 5)}–${s.active_to_time.slice(0, 5)}`
+                    : "-"}
+                </td>
                 <td onClick={(e) => e.stopPropagation()}>
                   <WebhookLinks strategyId={s.id} sourceType={s.source_type} />
                 </td>

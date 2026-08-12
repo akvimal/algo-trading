@@ -256,6 +256,19 @@ def validate_underlying_type_fields(underlying_type: str, segment: str, instrume
         raise ValueError("underlying_type='universe' requires segment='NSE' and instrument_type='spot'")
 
 
+def validate_active_window_fields(active_from_time: Optional[time], active_to_time: Optional[time]) -> None:
+    """Shared consistency rule for the optional signal-acceptance window,
+    used by both StrategyCreate (all fields always present) and the PATCH
+    route handler (validated against the merged post-update row, same
+    pattern as validate_stop_loss_fields). Both-or-neither; no overnight
+    wraparound support - active_to_time must be strictly after
+    active_from_time."""
+    if (active_from_time is None) != (active_to_time is None):
+        raise ValueError("active_from_time and active_to_time must both be set, or both left unset")
+    if active_from_time is not None and active_to_time is not None and active_to_time <= active_from_time:
+        raise ValueError("active_to_time must be after active_from_time")
+
+
 def validate_stop_loss_fields(
     method: Optional[str],
     interval: Optional[str],
@@ -320,6 +333,11 @@ class StrategyCreate(BaseModel):
     # see the DuplicateSignalPolicy/CounterSignalPolicy alias comments above.
     duplicate_signal_policy: DuplicateSignalPolicy = "add_position"
     counter_signal_policy: CounterSignalPolicy = "skip"
+    # Optional per-strategy signal-acceptance window (e.g. 09:15-11:00),
+    # every source_type - see infra/postgres/init/03-signal-generation.sql
+    # and validate_active_window_fields.
+    active_from_time: Optional[time] = None
+    active_to_time: Optional[time] = None
 
     @model_validator(mode="after")
     def _check_stop_loss_consistency(self) -> "StrategyCreate":
@@ -336,6 +354,11 @@ class StrategyCreate(BaseModel):
     @model_validator(mode="after")
     def _check_underlying_type_consistency(self) -> "StrategyCreate":
         validate_underlying_type_fields(self.underlying_type, self.segment, self.instrument_type)
+        return self
+
+    @model_validator(mode="after")
+    def _check_active_window_consistency(self) -> "StrategyCreate":
+        validate_active_window_fields(self.active_from_time, self.active_to_time)
         return self
 
     @model_validator(mode="after")
@@ -394,6 +417,8 @@ class StrategyUpdate(BaseModel):
     regime_filter_checks: Optional[list[RegimeCheckName]] = None
     duplicate_signal_policy: Optional[DuplicateSignalPolicy] = None
     counter_signal_policy: Optional[CounterSignalPolicy] = None
+    active_from_time: Optional[time] = None
+    active_to_time: Optional[time] = None
 
 
 class BacktestGridRequest(BaseModel):
@@ -430,6 +455,8 @@ class StrategyOut(BaseModel):
     regime_filter_checks: list[RegimeCheckName] = Field(default_factory=lambda: list(_ALL_REGIME_CHECK_NAMES))
     duplicate_signal_policy: DuplicateSignalPolicy = "add_position"
     counter_signal_policy: CounterSignalPolicy = "skip"
+    active_from_time: Optional[time] = None
+    active_to_time: Optional[time] = None
     status: Status
     created_at: datetime
     updated_at: datetime

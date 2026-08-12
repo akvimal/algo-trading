@@ -39,7 +39,11 @@ class Strategy(Base):
     # 'symbol' (default, unchanged behavior) or 'universe' - see
     # UnderlyingType/validate_underlying_type_fields in app/domain/models.py.
     underlying_type = Column(Text, nullable=False, default="symbol")
-    rule_config = Column(JSONB)
+    # none_as_null=True: a Python None must become SQL NULL here, not the
+    # JSON literal 'null' (SQLAlchemy's JSON/JSONB default) - the
+    # in_house_fields_consistent CHECK below tests "rule_config IS NULL",
+    # which a JSON null does not satisfy.
+    rule_config = Column(JSONB(none_as_null=True))
     regime_filter_enabled = Column(Boolean, nullable=False, default=False)
     regime_filter_checks = Column(
         JSONB, nullable=False, default=lambda: ["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]

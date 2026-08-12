@@ -276,6 +276,15 @@ tbody tr:last-child td {
   text-decoration: underline;
 }
 
+.inline-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin: 0.75rem 0;
+}
+
 .hint {
   display: none;
   font-size: 0.82rem !important;

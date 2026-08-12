@@ -20,11 +20,25 @@ def test_strategy_create_defaults_exchange_to_nse():
     assert s.exchange == "NSE"
 
 
-def test_strategy_create_rejects_unknown_source_type():
+def test_strategy_create_accepts_arbitrary_external_source_type():
+    # source_type is free-form (any external provider name) - only
+    # 'in_house' is a reserved/special value. Not in a fixed enum, so an
+    # unrecognized provider name like this must be accepted, not rejected.
+    s = StrategyCreate(
+        name="x",
+        source_type="not-a-real-provider",
+        horizon="intraday",
+        instrument_type="spot",
+        square_off_time="15:00:00",
+    )
+    assert s.source_type == "not-a-real-provider"
+
+
+def test_strategy_create_rejects_empty_source_type():
     with pytest.raises(ValidationError):
         StrategyCreate(
             name="x",
-            source_type="not-a-real-provider",
+            source_type="",
             horizon="intraday",
             instrument_type="spot",
             square_off_time="15:00:00",

@@ -24,7 +24,12 @@ CREATE SCHEMA IF NOT EXISTS signal_generation;
 CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name             TEXT NOT NULL,
-    source_type      TEXT NOT NULL CHECK (source_type IN ('chartink', 'tradingview', 'in_house')),
+    -- 'in_house' is the one reserved value everything else compares
+    -- against (see in_house_fields_consistent below and every backend
+    -- source_type check) - anything else names an external webhook
+    -- provider (chartink, tradingview, or any new one), free-form so a
+    -- new provider needs no schema/code change here.
+    source_type      TEXT NOT NULL CHECK (source_type <> ''),
     exchange         TEXT NOT NULL CHECK (exchange IN ('NSE')),
     horizon          TEXT NOT NULL CHECK (horizon IN ('intraday', 'swing', 'positional')),
     instrument_type  TEXT NOT NULL CHECK (instrument_type IN ('spot', 'future', 'option')),

@@ -38,7 +38,7 @@ import { chartinkWebhookUrls, executionUrl, n8nUrl, processingUrl } from "./link
 
 const POLL_INTERVAL_MS = 5000;
 
-type TabId = "chartink" | "tradingview" | "in-house";
+type TabId = "strategies" | "indicators";
 
 const EXIT_REASON_LABELS: Record<string, string> = {
   stop_loss: "Stop-loss",
@@ -189,7 +189,19 @@ function formatTarget(s: Strategy): string {
   return s.target_percent != null ? `${s.target_percent}%` : "-";
 }
 
-function WebhookLinks({ strategyId }: { strategyId: string }) {
+function WebhookLinks({ strategyId, sourceType }: { strategyId: string; sourceType: SourceType }) {
+  // In-house strategies never get a webhook - they run off this system's
+  // own scheduled engine, not an inbound provider payload - so this isn't
+  // "not wired up yet" like an unconfigured external provider, it's N/A.
+  if (sourceType === "in_house") {
+    return <span className="muted">n/a - runs on the in-house engine</span>;
+  }
+  // Chartink is the only provider with a real n8n workflow today - any
+  // other external source name is valid to record (see the "External
+  // source name" field), but has nothing to actually copy yet.
+  if (sourceType.toLowerCase() !== "chartink") {
+    return <span className="muted">no webhook wired up for "{sourceType}" yet</span>;
+  }
   const { buy, sell } = chartinkWebhookUrls(strategyId);
   return (
     <div className="webhook-links">
@@ -199,13 +211,177 @@ function WebhookLinks({ strategyId }: { strategyId: string }) {
   );
 }
 
-function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType; showWebhooks: boolean }) {
+function IndicatorsTab() {
+  const [indicators, setIndicators] = useState<Indicator[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [newIndicatorName, setNewIndicatorName] = useState("");
+  const [newIndicatorPeriod, setNewIndicatorPeriod] = useState("14");
+  const [newIndicatorSmaPeriod, setNewIndicatorSmaPeriod] = useState("9");
+  const [creatingIndicator, setCreatingIndicator] = useState(false);
+  const [deletingIndicatorId, setDeletingIndicatorId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const data = await fetchIndicators();
+        if (!cancelled) setIndicators(data);
+      } catch {
+        // keep showing the last known indicators rather than clearing on a blip
+      }
+    }
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  async function handleCreateIndicator(e: React.FormEvent) {
+    e.preventDefault();
+    setCreatingIndicator(true);
+    try {
+      const created = await createIndicator({
+        name: newIndicatorName,
+        type: "rsi",
+        params: { period: Number(newIndicatorPeriod), sma_period: Number(newIndicatorSmaPeriod) },
+      });
+      setIndicators((prev) => [created, ...prev]);
+      setNewIndicatorName("");
+      setNewIndicatorPeriod("14");
+      setNewIndicatorSmaPeriod("9");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create indicator");
+    } finally {
+      setCreatingIndicator(false);
+    }
+  }
+
+  async function handleDeleteIndicator(indicator: Indicator) {
+    const confirmed = window.confirm(
+      `Delete indicator "${indicator.name}"? Any strategy still referencing it will skip on its next engine tick instead of crashing, but won't produce signals until fixed.`,
+    );
+    if (!confirmed) return;
+    setDeletingIndicatorId(indicator.id);
+    try {
+      await deleteIndicator(indicator.id);
+      setIndicators((prev) => prev.filter((i) => i.id !== indicator.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete indicator");
+    } finally {
+      setDeletingIndicatorId(null);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2>Indicators</h2>
+      <p className="hint">
+        Reusable indicator definitions - define one (e.g. "RSI 14") once, reference it from any
+        number of in-house strategies.
+      </p>
+      {error && <p className="error">{error}</p>}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Params</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {indicators.length === 0 && (
+            <tr>
+              <td colSpan={4} className="empty">
+                No indicators yet - create one below.
+              </td>
+            </tr>
+          )}
+          {indicators.map((ind) => (
+            <tr key={ind.id}>
+              <td className="symbol">{ind.name}</td>
+              <td>{ind.type.toUpperCase()}</td>
+              <td>{Object.entries(ind.params).map(([k, v]) => `${k}=${v}`).join(", ")}</td>
+              <td className="edit-actions">
+                <button
+                  type="button"
+                  className="icon-btn danger"
+                  onClick={() => handleDeleteIndicator(ind)}
+                  disabled={deletingIndicatorId === ind.id}
+                  title={`Delete indicator "${ind.name}"`}
+                  aria-label={`Delete indicator "${ind.name}"`}
+                >
+                  <TrashIcon />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <form className="strategy-form" onSubmit={handleCreateIndicator}>
+        <label>
+          Name
+          <input
+            value={newIndicatorName}
+            onChange={(e) => setNewIndicatorName(e.target.value)}
+            required
+            placeholder="e.g. RSI 14"
+          />
+        </label>
+        <label>
+          Type
+          <select value="rsi" disabled>
+            <option value="rsi">RSI</option>
+          </select>
+        </label>
+        <label>
+          RSI period
+          <input
+            type="number"
+            min="2"
+            step="1"
+            value={newIndicatorPeriod}
+            onChange={(e) => setNewIndicatorPeriod(e.target.value)}
+            required
+          />
+        </label>
+        <label>
+          Signal SMA period
+          <input
+            type="number"
+            min="2"
+            step="1"
+            value={newIndicatorSmaPeriod}
+            onChange={(e) => setNewIndicatorSmaPeriod(e.target.value)}
+            required
+          />
+        </label>
+        <button type="submit" disabled={creatingIndicator || !newIndicatorName.trim()}>
+          {creatingIndicator ? "Creating..." : "Create indicator"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function StrategyManager() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [signals, setSignals] = useState<ProviderSignal[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // All/In-house/External filter over the fetched list - there's one
+  // unified tab now, so this replaces the old per-tab server-side filter.
+  const [sourceFilter, setSourceFilter] = useState<"all" | "in_house" | "external">("all");
 
   const [name, setName] = useState("");
+  // 'in_house' vs 'external' - what used to be a fixed prop per tab is
+  // now a field in the create form itself. externalSourceName is only
+  // used when sourceKind==='external' - any provider name, not a fixed
+  // list (see the backend's SourceType - free-form except 'in_house').
+  const [sourceKind, setSourceKind] = useState<"in_house" | "external">("external");
+  const [externalSourceName, setExternalSourceName] = useState("");
   const [horizon, setHorizon] = useState<Horizon>("intraday");
   const [instrumentType, setInstrumentType] = useState<InstrumentType>("spot");
   // Not named setInterval - that would shadow the global timer function
@@ -260,15 +436,12 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
 
   // Indicators are their own entity, shared across all in_house
   // strategies - fetched once here (only meaningful on the in_house tab).
+  // Read-only here (used by the create form's indicator picker and
+  // ruleSummary below) - full CRUD lives in IndicatorsTab now.
   const [indicators, setIndicators] = useState<Indicator[]>([]);
   // NSE index-constituent universe keys (e.g. "NIFTYBANK") - fetched once,
   // shared across all in_house strategies, same lifecycle as indicators.
   const [universes, setUniverses] = useState<string[]>([]);
-  const [newIndicatorName, setNewIndicatorName] = useState("");
-  const [newIndicatorPeriod, setNewIndicatorPeriod] = useState("14");
-  const [newIndicatorSmaPeriod, setNewIndicatorSmaPeriod] = useState("9");
-  const [creatingIndicator, setCreatingIndicator] = useState(false);
-  const [deletingIndicatorId, setDeletingIndicatorId] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -336,7 +509,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
     let cancelled = false;
     async function poll() {
       try {
-        const data = await fetchStrategies(sourceType);
+        const data = await fetchStrategies();
         if (!cancelled) {
           setStrategies(data);
           setError(null);
@@ -351,7 +524,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
       cancelled = true;
       clearInterval(id);
     };
-  }, [sourceType]);
+  }, []);
 
   useEffect(() => {
     setBacktestResult(null);
@@ -361,7 +534,6 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   }, [selected]);
 
   useEffect(() => {
-    if (sourceType !== "in_house") return;
     let cancelled = false;
     async function poll() {
       try {
@@ -377,10 +549,9 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
       cancelled = true;
       clearInterval(id);
     };
-  }, [sourceType]);
+  }, []);
 
   useEffect(() => {
-    if (sourceType !== "in_house") return;
     let cancelled = false;
     fetchUniverses()
       .then((data) => {
@@ -392,7 +563,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
     return () => {
       cancelled = true;
     };
-  }, [sourceType]);
+  }, []);
 
   useEffect(() => {
     if (!selected) {
@@ -416,8 +587,14 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
     };
   }, [selected]);
 
-  const isInHouse = sourceType === "in_house";
+  const createIsInHouse = sourceKind === "in_house";
   const selectedStrategy = strategies.find((s) => s.id === selected);
+  const selectedIsInHouse = selectedStrategy?.source_type === "in_house";
+  const filteredStrategies = strategies.filter((s) => {
+    if (sourceFilter === "all") return true;
+    const strategyIsInHouse = s.source_type === "in_house";
+    return sourceFilter === "in_house" ? strategyIsInHouse : !strategyIsInHouse;
+  });
   const selectedRuleConfig = selectedStrategy?.rule_config;
   const selectedIndicator =
     selectedRuleConfig?.type === "crossover" ? indicators.find((i) => i.id === selectedRuleConfig.indicator_id) : undefined;
@@ -448,15 +625,15 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
     return ` - ${indicator.name} crosses its own SMA(${smaPeriod})${regimeSuffix}`;
   }
 
-  const isBreakout = isInHouse && ruleType === "breakout";
-  const isRangeBreakout = isInHouse && ruleType === "range_breakout";
+  const isBreakout = createIsInHouse && ruleType === "breakout";
+  const isRangeBreakout = createIsInHouse && ruleType === "range_breakout";
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (horizon === "intraday" && !squareOffTime) return; // required for intraday - submit is disabled without it, this is just a guard
     setCreating(true);
     try {
-      const ruleConfig = isInHouse
+      const ruleConfig = createIsInHouse
         ? isBreakout
           ? {
               type: "breakout" as const,
@@ -473,13 +650,14 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
         : undefined;
       const created = await createStrategy({
         name,
-        source_type: sourceType,
+        source_type: createIsInHouse ? "in_house" : externalSourceName.trim(),
         horizon,
         instrument_type: instrumentType,
-        // A breakout strategy's `interval` is derived from its own
-        // ltf_interval (the backend requires them to match), not the
-        // general Interval field below (crossover/webhook only).
-        interval: isBreakout ? ltfInterval : signalInterval || undefined,
+        // Interval is signal-filter criteria - only meaningful (and
+        // required, see validate_in_house_fields on the backend) for an
+        // in-house rule. A breakout strategy's interval is derived from
+        // its own ltf_interval (the backend requires them to match).
+        interval: createIsInHouse ? (isBreakout ? ltfInterval : signalInterval || undefined) : undefined,
         stop_loss_method: slMethod || undefined,
         stop_loss_interval: slMethod === "previous_candle" ? slInterval || undefined : undefined,
         stop_loss_percent: slMethod === "percent" && slPercent ? Number(slPercent) : undefined,
@@ -487,15 +665,17 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
         trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
         segment,
         square_off_time: horizon === "intraday" ? `${squareOffTime}:00` : undefined,
-        underlying: isInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
-        underlying_type: isInHouse ? underlyingType : undefined,
+        underlying: createIsInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
+        underlying_type: createIsInHouse ? underlyingType : undefined,
         rule_config: ruleConfig,
-        regime_filter_enabled: isInHouse ? regimeFilterEnabled : undefined,
-        regime_filter_checks: isInHouse ? regimeFilterChecks : undefined,
+        regime_filter_enabled: createIsInHouse ? regimeFilterEnabled : undefined,
+        regime_filter_checks: createIsInHouse ? regimeFilterChecks : undefined,
         duplicate_signal_policy: dupPolicy,
         counter_signal_policy: counterPolicy,
       });
       setName("");
+      setSourceKind("external");
+      setExternalSourceName("");
       setSlMethod("");
       setSlInterval("");
       setSlPercent("");
@@ -517,42 +697,6 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
       setError(err instanceof Error ? err.message : "Failed to create strategy");
     } finally {
       setCreating(false);
-    }
-  }
-
-  async function handleCreateIndicator(e: React.FormEvent) {
-    e.preventDefault();
-    setCreatingIndicator(true);
-    try {
-      const created = await createIndicator({
-        name: newIndicatorName,
-        type: "rsi",
-        params: { period: Number(newIndicatorPeriod), sma_period: Number(newIndicatorSmaPeriod) },
-      });
-      setIndicators((prev) => [created, ...prev]);
-      setNewIndicatorName("");
-      setNewIndicatorPeriod("14");
-      setNewIndicatorSmaPeriod("9");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create indicator");
-    } finally {
-      setCreatingIndicator(false);
-    }
-  }
-
-  async function handleDeleteIndicator(indicator: Indicator) {
-    const confirmed = window.confirm(
-      `Delete indicator "${indicator.name}"? Any strategy still referencing it will skip on its next engine tick instead of crashing, but won't produce signals until fixed.`,
-    );
-    if (!confirmed) return;
-    setDeletingIndicatorId(indicator.id);
-    try {
-      await deleteIndicator(indicator.id);
-      setIndicators((prev) => prev.filter((i) => i.id !== indicator.id));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete indicator");
-    } finally {
-      setDeletingIndicatorId(null);
     }
   }
 
@@ -605,6 +749,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
     setSaving(true);
     try {
       const editingStrategy = strategies.find((s) => s.id === id);
+      const editingIsInHouse = editingStrategy?.source_type === "in_house";
       const editingIsBreakout = editingStrategy?.rule_config?.type === "breakout";
       const editingIsRangeBreakout = editingStrategy?.rule_config?.type === "range_breakout";
       const ruleConfig = editingIsBreakout
@@ -619,7 +764,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
           }
         : editingIsRangeBreakout
           ? { type: "range_breakout" as const, breakout_period: Number(editRangeBreakoutPeriod) }
-          : isInHouse && editIndicatorId
+          : editingIsInHouse && editIndicatorId
             ? { type: "crossover" as const, indicator_id: editIndicatorId }
             : undefined;
       const updated = await updateStrategy(id, {
@@ -638,8 +783,8 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
         segment: editSegment,
         square_off_time: editHorizon === "intraday" && editSquareOffTime ? `${editSquareOffTime}:00` : undefined,
         rule_config: ruleConfig,
-        regime_filter_enabled: isInHouse ? editRegimeFilterEnabled : undefined,
-        regime_filter_checks: isInHouse ? editRegimeFilterChecks : undefined,
+        regime_filter_enabled: editingIsInHouse ? editRegimeFilterEnabled : undefined,
+        regime_filter_checks: editingIsInHouse ? editRegimeFilterChecks : undefined,
         duplicate_signal_policy: editDupPolicy,
         counter_signal_policy: editCounterPolicy,
       });
@@ -717,103 +862,35 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   }
 
   const nonDefaultConfig = horizon !== "intraday" || instrumentType !== "spot";
-  const colCount = (showWebhooks ? 11 : 10) + (isInHouse ? 1 : 0);
+  // Name, Status, Source, Horizon, Instrument, Interval, Stop-loss,
+  // Target, Segment, Underlying/Rule, Square-off, Webhooks, actions -
+  // matches the <thead> below exactly (all columns always present now,
+  // one unified table for every source type).
+  const colCount = 13;
 
   return (
     <>
-      {isInHouse && (
-        <section className="panel">
-          <h2>Indicators</h2>
-          <p className="hint">
-            Reusable indicator definitions - define one (e.g. "RSI 14") once, reference it from any
-            number of strategies below.
-          </p>
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Params</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {indicators.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="empty">
-                    No indicators yet - create one below.
-                  </td>
-                </tr>
-              )}
-              {indicators.map((ind) => (
-                <tr key={ind.id}>
-                  <td className="symbol">{ind.name}</td>
-                  <td>{ind.type.toUpperCase()}</td>
-                  <td>{Object.entries(ind.params).map(([k, v]) => `${k}=${v}`).join(", ")}</td>
-                  <td className="edit-actions">
-                    <button
-                      type="button"
-                      className="icon-btn danger"
-                      onClick={() => handleDeleteIndicator(ind)}
-                      disabled={deletingIndicatorId === ind.id}
-                      title={`Delete indicator "${ind.name}"`}
-                      aria-label={`Delete indicator "${ind.name}"`}
-                    >
-                      <TrashIcon />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <form className="strategy-form" onSubmit={handleCreateIndicator}>
-            <label>
-              Name
-              <input
-                value={newIndicatorName}
-                onChange={(e) => setNewIndicatorName(e.target.value)}
-                required
-                placeholder="e.g. RSI 14"
-              />
-            </label>
-            <label>
-              Type
-              <select value="rsi" disabled>
-                <option value="rsi">RSI</option>
-              </select>
-            </label>
-            <label>
-              RSI period
-              <input
-                type="number"
-                min="2"
-                step="1"
-                value={newIndicatorPeriod}
-                onChange={(e) => setNewIndicatorPeriod(e.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Signal SMA period
-              <input
-                type="number"
-                min="2"
-                step="1"
-                value={newIndicatorSmaPeriod}
-                onChange={(e) => setNewIndicatorSmaPeriod(e.target.value)}
-                required
-              />
-            </label>
-            <button type="submit" disabled={creatingIndicator || !newIndicatorName.trim()}>
-              {creatingIndicator ? "Creating..." : "Create indicator"}
-            </button>
-          </form>
-        </section>
-      )}
-
       <section className="panel">
         <h2>New strategy</h2>
         <form className="strategy-form" onSubmit={handleCreate}>
+          <label>
+            Source
+            <select value={sourceKind} onChange={(e) => setSourceKind(e.target.value as "in_house" | "external")}>
+              <option value="external">External (webhook)</option>
+              <option value="in_house">In-house</option>
+            </select>
+          </label>
+          {sourceKind === "external" && (
+            <label>
+              External source name
+              <input
+                value={externalSourceName}
+                onChange={(e) => setExternalSourceName(e.target.value)}
+                required
+                placeholder="e.g. chartink, tradingview"
+              />
+            </label>
+          )}
           <label>
             Name
             <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Bullish Breakout v1" />
@@ -832,19 +909,6 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
               <option value="spot">Spot</option>
               <option value="future">Future</option>
               <option value="option">Option</option>
-            </select>
-          </label>
-          <label>
-            Interval <span className="optional">(optional)</span>
-            <select value={signalInterval} onChange={(e) => setSignalInterval(e.target.value as Interval | "")}>
-              <option value="">&mdash;</option>
-              <option value="1min">1 min</option>
-              <option value="3min">3 min</option>
-              <option value="5min">5 min</option>
-              <option value="15min">15 min</option>
-              <option value="30min">30 min</option>
-              <option value="60min">60 min</option>
-              <option value="daily">Daily</option>
             </select>
           </label>
           <label>
@@ -922,8 +986,23 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
               <option value="close_and_flip">Close and flip</option>
             </select>
           </label>
-          {isInHouse && (
+          {createIsInHouse && (
             <>
+              {ruleType !== "breakout" && (
+                <label>
+                  Interval
+                  <select value={signalInterval} onChange={(e) => setSignalInterval(e.target.value as Interval | "")} required>
+                    <option value="">&mdash;</option>
+                    <option value="1min">1 min</option>
+                    <option value="3min">3 min</option>
+                    <option value="5min">5 min</option>
+                    <option value="15min">15 min</option>
+                    <option value="30min">30 min</option>
+                    <option value="60min">60 min</option>
+                    <option value="daily">Daily</option>
+                  </select>
+                </label>
+              )}
               <label>
                 Underlying type
                 <select value={underlyingType} onChange={(e) => setUnderlyingType(e.target.value as UnderlyingType)}>
@@ -1089,9 +1168,11 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
               creating ||
               !name.trim() ||
               (horizon === "intraday" && !squareOffTime) ||
-              (isInHouse && underlyingType === "symbol" && !underlying.trim()) ||
-              (isInHouse && underlyingType === "universe" && !selectedUniverse) ||
-              (isInHouse && !isBreakout && !isRangeBreakout && !selectedIndicatorId)
+              (!createIsInHouse && !externalSourceName.trim()) ||
+              (createIsInHouse && ruleType !== "breakout" && !signalInterval) ||
+              (createIsInHouse && underlyingType === "symbol" && !underlying.trim()) ||
+              (createIsInHouse && underlyingType === "universe" && !selectedUniverse) ||
+              (createIsInHouse && !isBreakout && !isRangeBreakout && !selectedIndicatorId)
             }
           >
             {creating ? "Creating..." : "Create strategy"}
@@ -1126,32 +1207,42 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
 
       {error && <p className="error">{error}</p>}
 
+      <label className="inline-filter">
+        Show
+        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as "all" | "in_house" | "external")}>
+          <option value="all">All</option>
+          <option value="in_house">In-house</option>
+          <option value="external">External</option>
+        </select>
+      </label>
+
       <table>
         <thead>
           <tr>
             <th>Name</th>
             <th>Status</th>
+            <th>Source</th>
             <th>Horizon</th>
             <th>Instrument</th>
             <th>Interval</th>
             <th>Stop-loss</th>
             <th>Target</th>
             <th>Segment</th>
-            {isInHouse && <th>Underlying / Rule</th>}
+            <th>Underlying / Rule</th>
             <th>Square-off</th>
-            {showWebhooks && <th>Webhooks</th>}
+            <th>Webhooks</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {strategies.length === 0 && (
+          {filteredStrategies.length === 0 && (
             <tr>
               <td colSpan={colCount} className="empty">
-                No strategies yet - create one above.
+                {strategies.length === 0 ? "No strategies yet - create one above." : "No strategies match this filter."}
               </td>
             </tr>
           )}
-          {strategies.map((s) =>
+          {filteredStrategies.map((s) =>
             editingId === s.id ? (
               <tr key={s.id} className="editing-row" onClick={(e) => e.stopPropagation()}>
                 <td>
@@ -1160,6 +1251,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                 <td>
                   <span className={`status-pill status-${s.status}`}>{s.status}</span>
                 </td>
+                <td className="muted">{s.source_type === "in_house" ? "In-house" : s.source_type}</td>
                 <td>
                   <select value={editHorizon} onChange={(e) => setEditHorizon(e.target.value as Horizon)} className="cell-input">
                     <option value="intraday">Intraday</option>
@@ -1286,8 +1378,10 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                     </select>
                   </div>
                 </td>
-                {isInHouse && (
-                  <td>
+                <td>
+                  {s.source_type !== "in_house" ? (
+                    <span className="muted">-</span>
+                  ) : (
                     <div className="stack-cell">
                       <span className="muted">{s.underlying}</span>
                       {s.rule_config?.type === "breakout" ? (
@@ -1405,8 +1499,8 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                         </div>
                       )}
                     </div>
-                  </td>
-                )}
+                  )}
+                </td>
                 <td>
                   {editHorizon === "intraday" ? (
                     <input
@@ -1419,7 +1513,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                     <span className="muted">n/a</span>
                   )}
                 </td>
-                {showWebhooks && <td />}
+                <td />
                 <td className="edit-actions">
                   <button
                     type="button"
@@ -1452,24 +1546,27 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                     {s.status === "live" ? "Pause" : "Activate"}
                   </button>
                 </td>
+                <td className="muted">{s.source_type === "in_house" ? "In-house" : s.source_type}</td>
                 <td>{s.horizon}</td>
                 <td>{s.instrument_type}</td>
                 <td>{s.interval ?? "-"}</td>
                 <td>{formatStopLoss(s)}</td>
                 <td>{formatTarget(s)}</td>
                 <td>{s.segment}</td>
-                {isInHouse && (
-                  <td className="muted">
-                    {s.underlying}
-                    {ruleSummary(s)}
-                  </td>
-                )}
+                <td className="muted">
+                  {s.source_type === "in_house" ? (
+                    <>
+                      {s.underlying}
+                      {ruleSummary(s)}
+                    </>
+                  ) : (
+                    "-"
+                  )}
+                </td>
                 <td>{s.square_off_time ? s.square_off_time.slice(0, 5) : "-"}</td>
-                {showWebhooks && (
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <WebhookLinks strategyId={s.id} />
-                  </td>
-                )}
+                <td onClick={(e) => e.stopPropagation()}>
+                  <WebhookLinks strategyId={s.id} sourceType={s.source_type} />
+                </td>
                 <td className="edit-actions" onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
@@ -1496,7 +1593,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
         </tbody>
       </table>
 
-      {selected && isInHouse && (
+      {selected && selectedIsInHouse && (
         <section className="panel">
           <h2>Backtest</h2>
           <p className="hint">
@@ -1737,15 +1834,25 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   );
 }
 
-function ChartinkTab() {
+function StrategiesTab() {
   return (
     <>
-      <InfoDisclosure summary="How Chartink webhooks work here">
+      <InfoDisclosure summary="How strategy webhooks work here">
         <p>
-          One n8n workflow per direction handles <em>every</em> Chartink strategy - each strategy just gets its
-          own <code>?strategy_id=</code> query param on the same two URLs. Create a strategy below, copy its
-          webhook URLs, and use them as the webhook in a Chartink scan alert (buy-condition scans use the buy
-          URL, sell-condition scans use the sell URL).
+          Every strategy - in-house or external - gets its own <code>?strategy_id=</code> query param.
+          For an <strong>external</strong> source, name the provider (e.g. "chartink", "tradingview", or
+          anything else) below; today only Chartink has a real n8n workflow wired up (one workflow per
+          direction handles <em>every</em> Chartink strategy via that query param) - copy its buy/sell
+          webhook URLs into a Chartink scan alert once created. Any other provider name is recorded but
+          has no webhook wired up yet - adding one follows the same pattern (a new n8n workflow
+          normalizing that provider's alert payload into the canonical signal shape, see the{" "}
+          <code>add-signal-provider</code> Claude Code skill or <code>infra/n8n/workflows/README.md</code>).
+        </p>
+        <p>
+          An <strong>in-house</strong> strategy instead runs off this system's own indicator/price-action
+          engine - a periodic job checks every <strong>live</strong> in-house strategy for a fresh signal on
+          its underlying and posts it into the same pipeline external providers use. Select a strategy below
+          and use its Backtest panel to replay the rule against history before promoting it to live.
         </p>
         <p>
           <a href={n8nUrl} target="_blank" rel="noreferrer">
@@ -1754,53 +1861,13 @@ function ChartinkTab() {
           if you need to edit the intake workflows themselves.
         </p>
       </InfoDisclosure>
-      <StrategyManager sourceType="chartink" showWebhooks />
-    </>
-  );
-}
-
-function TradingViewTab() {
-  return (
-    <section className="panel placeholder-panel">
-      <h2>Not configured</h2>
-      <p>
-        No TradingView webhook is wired up in this repo yet. Adding one follows the same pattern as Chartink -
-        a new n8n workflow normalizing TradingView's alert payload into the canonical signal shape
-        (<code>docs/contracts/signal-ingest.schema.json</code>, including <code>strategy_id</code> from a query
-        param), with no changes needed to signal-processing.
-      </p>
-      <p>
-        Use the <code>add-signal-provider</code> Claude Code skill, or see{" "}
-        <code>infra/n8n/workflows/README.md</code> for the pattern to copy.
-      </p>
-    </section>
-  );
-}
-
-function InHouseTab() {
-  return (
-    <>
-      <section className="panel placeholder-panel">
-        <h2>Indicator-based crossover engine</h2>
-        <p>
-          Indicators are their own reusable definitions (below) - define "RSI 14" once, reference it
-          from any number of strategies. A strategy's rule names which indicator it uses and how to
-          decide from it - today the only rule is "crosses its own SMA," which works for any single-
-          value indicator, not just RSI. A periodic job checks every <strong>live</strong> in-house
-          strategy for a fresh crossover on its underlying (MCX commodity futures like GOLDM/CRUDEOILM
-          chart their own active-month contract; NSE indices like NIFTY/BANKNIFTY chart the index spot
-          but trade the active-month future) and posts it into the same pipeline Chartink uses. Select
-          a strategy below and use its Backtest panel to replay the rule against history before
-          promoting it to live.
-        </p>
-      </section>
-      <StrategyManager sourceType="in_house" showWebhooks={false} />
+      <StrategyManager />
     </>
   );
 }
 
 export default function App() {
-  const [tab, setTab] = useState<TabId>("chartink");
+  const [tab, setTab] = useState<TabId>("strategies");
 
   return (
     <main>
@@ -1810,20 +1877,16 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        <button className={tab === "chartink" ? "active" : ""} onClick={() => setTab("chartink")}>
-          Chartink
+        <button className={tab === "strategies" ? "active" : ""} onClick={() => setTab("strategies")}>
+          Strategies
         </button>
-        <button className={tab === "tradingview" ? "active" : ""} onClick={() => setTab("tradingview")}>
-          TradingView
-        </button>
-        <button className={tab === "in-house" ? "active" : ""} onClick={() => setTab("in-house")}>
-          In-house
+        <button className={tab === "indicators" ? "active" : ""} onClick={() => setTab("indicators")}>
+          Indicators
         </button>
       </nav>
 
-      {tab === "chartink" && <ChartinkTab />}
-      {tab === "tradingview" && <TradingViewTab />}
-      {tab === "in-house" && <InHouseTab />}
+      {tab === "strategies" && <StrategiesTab />}
+      {tab === "indicators" && <IndicatorsTab />}
     </main>
   );
 }

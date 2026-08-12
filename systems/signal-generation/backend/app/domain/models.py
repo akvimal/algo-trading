@@ -15,9 +15,18 @@ docs/architecture.md."""
 from datetime import datetime, time
 from typing import Literal, Optional, Union
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
-SourceType = Literal["chartink", "tradingview", "in_house"]
+# 'in_house' is the one reserved value every other backend check compares
+# against (app/domain/engine.py, app/api/routes/strategies.py,
+# validate_in_house_fields below) - anything else names an external
+# webhook provider (e.g. "chartink", "tradingview", or any new one) and
+# is otherwise opaque to this system. Free-form rather than a fixed enum
+# so a new provider doesn't need a code change here - see
+# app/App.tsx's "External source name" field on the frontend.
+SourceType = Annotated[str, Field(min_length=1)]
 Horizon = Literal["intraday", "swing", "positional"]
 InstrumentType = Literal["spot", "future", "option"]
 Status = Literal["draft", "backtesting", "live", "paused"]

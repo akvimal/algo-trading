@@ -1,4 +1,7 @@
-export type SourceType = "chartink" | "tradingview" | "in_house";
+// Free-form: only "in_house" is reserved/special (see backend
+// app/domain/models.py's SourceType) - anything else names an external
+// webhook provider (chartink, tradingview, or any new one).
+export type SourceType = string;
 export type Horizon = "intraday" | "swing" | "positional";
 export type InstrumentType = "spot" | "future" | "option";
 export type StrategyStatus = "draft" | "backtesting" | "live" | "paused";

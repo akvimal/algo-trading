@@ -1,0 +1,27 @@
+# env / secrets
+.env
+.env.test
+docker-compose.override.yml
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# n8n / db data (bind-mounted volumes, if ever mounted to a local folder)
+infra/n8n/data/
+infra/postgres/data/
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

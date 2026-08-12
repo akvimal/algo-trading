@@ -1,0 +1,58 @@
+import pytest
+from pydantic import ValidationError
+
+from app.domain.models import IndicatorCreate, IndicatorUpdate, RsiParams, validate_indicator_params
+
+
+def test_validate_indicator_params_accepts_valid_rsi():
+    params = validate_indicator_params("rsi", {"period": 14, "sma_period": 9})
+    assert isinstance(params, RsiParams)
+    assert params.period == 14
+    assert params.sma_period == 9
+
+
+def test_validate_indicator_params_rejects_non_positive_period():
+    with pytest.raises(ValidationError):
+        validate_indicator_params("rsi", {"period": 1, "sma_period": 9})
+
+
+def test_validate_indicator_params_rejects_missing_period():
+    with pytest.raises(ValidationError):
+        validate_indicator_params("rsi", {"sma_period": 9})
+
+
+def test_validate_indicator_params_rejects_missing_sma_period():
+    with pytest.raises(ValidationError):
+        validate_indicator_params("rsi", {"period": 14})
+
+
+def test_indicator_create_valid():
+    ind = IndicatorCreate(name="RSI 14", type="rsi", params={"period": 14, "sma_period": 9})
+    assert ind.name == "RSI 14"
+    assert ind.type == "rsi"
+
+
+def test_indicator_create_rejects_unknown_type():
+    with pytest.raises(ValidationError):
+        IndicatorCreate(name="MACD", type="macd", params={})
+
+
+def test_indicator_create_rejects_params_mismatched_with_type():
+    with pytest.raises(ValidationError):
+        IndicatorCreate(name="RSI", type="rsi", params={"fast": 12, "slow": 26})
+
+
+def test_indicator_create_rejects_empty_name():
+    with pytest.raises(ValidationError):
+        IndicatorCreate(name="", type="rsi", params={"period": 14})
+
+
+def test_indicator_update_all_fields_optional():
+    upd = IndicatorUpdate()
+    assert upd.name is None
+    assert upd.params is None
+
+
+def test_indicator_update_rejects_empty_name():
+    with pytest.raises(ValidationError):
+        IndicatorUpdate(name="")

@@ -1,0 +1,15 @@
+# Copy to docker-compose.override.yml for local dev conveniences
+# (live-reload mounts, exposed debug ports, etc). Compose picks this up
+# automatically alongside docker-compose.yml - it's gitignored so each
+# dev can tweak it freely.
+
+services:
+  signal-processing-backend:
+    volumes:
+      - ./systems/signal-processing/backend/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# For frontend live-reload, it's usually simpler to just run it outside
+# docker during development:
+#   cd systems/signal-processing/frontend && npm install && npm run dev
+# and point VITE_API_BASE_URL at http://localhost:8000 in a local .env.

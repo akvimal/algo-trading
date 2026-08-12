@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://algo-trading.local/contracts/resolved-order.schema.json",
+  "title": "ResolvedOrder",
+  "description": "What the signal-processing backend publishes to the Redis stream 'orders.resolved' for the execution system to consume. This is the seam between signal-processing and execution - treat changes as an API version bump. No quantity field on purpose: execution computes its own position size from settings.capital_per_trade / risk_per_trade_pct / price at open time, rather than signal-generation/signal-processing deciding capital exposure - see docs/architecture.md. stop_loss_method/stop_loss_interval/stop_loss_percent/target_percent/trailing_stop_enabled/square_off_time/duplicate_signal_policy/counter_signal_policy are passed through unchanged from the resolved Strategy (signal-generation) - execution uses them to compute stop_loss_price/target_price, size/monitor the position, and resolve same-symbol signal conflicts, but never calls signal-generation directly to get them. square_off_time is required only for horizon='intraday' (enforced on Strategy) - null for swing/positional, since square-off doesn't apply there; everything else in that group is always optional.",
+  "type": "object",
+  "required": ["signal_id", "strategy_id", "symbol", "exchange", "action", "horizon", "instrument_type", "price", "resolved_at", "status", "segment"],
+  "additionalProperties": false,
+  "properties": {
+    "signal_id": { "type": "string", "format": "uuid" },
+    "strategy_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Which signal-generation Strategy produced this order - carried through from signal-ingest unchanged. Not to be confused with the 'strategy' field below (option-strategy legs, e.g. bull_call_spread)."
+    },
+    "symbol": { "type": "string", "minLength": 1 },
+    "exchange": {
+      "type": "string",
+      "enum": ["NSE", "MCX"],
+      "description": "Carried through from signal-ingest unchanged - tells execution which quote provider owns this position's CMP."
+    },
+    "action": { "type": "string", "enum": ["BUY", "SELL"] },
+    "horizon": { "type": "string", "enum": ["intraday", "swing", "positional"] },
+    "instrument_type": { "type": "string", "enum": ["spot", "future", "option"] },
+    "segment": {
+      "type": "string",
+      "enum": ["NSE", "MCX", "CRYPTO"],
+      "description": "From the resolved Strategy (signal-generation.strategies.segment, always set, defaults NSE) - tells execution which execution.accounts row (one per segment) to size against and credit/debit on close. Not the same axis as exchange, which stays fixed 'NSE' today."
+    },
+    "strategy": {
+      "type": ["object", "null"],
+      "description": "Option-strategy legs (spread/straddle/etc) - unrelated to strategy_id above. Populated once option-strategy selection logic exists; null for spot/future orders.",
+      "properties": {
+        "type": { "type": "string" },
+        "legs": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "price": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Price at signal trigger time, carried through unchanged - execution uses this directly as the paper-trade entry price."
+    },
+    "resolved_at": { "type": "string", "format": "date-time" },
+    "status": { "type": "string", "enum": ["pending", "sent", "rejected"] },
+    "stop_loss_method": {
+      "type": ["string", "null"],
+      "enum": ["previous_candle", "percent", null],
+      "description": "From the resolved Strategy. null means no stop-loss configured - execution falls back to plain capital_per_trade sizing with no stop/target monitoring."
+    },
+    "stop_loss_interval": {
+      "type": ["string", "null"],
+      "enum": ["1min", "5min", "15min", "25min", "60min", null],
+      "description": "Only set when stop_loss_method='previous_candle' - the candle interval execution asks market-data's GET /candles/previous for."
+    },
+    "stop_loss_percent": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 100,
+      "description": "Only set when stop_loss_method='percent'."
+    },
+    "target_percent": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 100,
+      "description": "Independent of stop_loss_method - always a flat % from entry price. null means no target configured."
+    },
+    "trailing_stop_enabled": {
+      "type": "boolean",
+      "description": "Only meaningful when stop_loss_method is set. No trailing variant for target."
+    },
+    "square_off_time": {
+      "type": ["string", "null"],
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d$",
+      "description": "Required for horizon='intraday' only (enforced on Strategy, execution has no platform-wide default) - null for swing/positional, since square-off doesn't apply there. When present, stored on the position at open time; a periodic job (not a single daily cron trigger, since this can differ per position) closes it once local time passes that stored value."
+    },
+    "duplicate_signal_policy": {
+      "type": "string",
+      "enum": ["skip", "add_position"],
+      "description": "From the resolved Strategy. Governs what happens when this symbol already has an OPEN position in the SAME direction as this order: 'skip' rejects the new order, 'add_position' opens an independent additional position (pyramiding)."
+    },
+    "counter_signal_policy": {
+      "type": "string",
+      "enum": ["skip", "close_and_flip"],
+      "description": "From the resolved Strategy. Governs what happens when this symbol already has an OPEN position in the OPPOSITE direction from this order: 'skip' leaves it open and untouched (this order is evaluated independently), 'close_and_flip' closes it (exit_reason='counter_signal') before this order is opened - takes effect synchronously at signal-intake time, ahead of that position's own stop-loss/target/square-off."
+    }
+  }
+}

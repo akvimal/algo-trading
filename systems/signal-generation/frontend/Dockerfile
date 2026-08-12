@@ -1,0 +1,17 @@
+FROM node:20-alpine AS build
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+ARG VITE_SIGNAL_GENERATION_PORT=8003
+ARG VITE_SIGNAL_PROCESSING_PORT=8000
+ENV VITE_SIGNAL_GENERATION_PORT=$VITE_SIGNAL_GENERATION_PORT
+ENV VITE_SIGNAL_PROCESSING_PORT=$VITE_SIGNAL_PROCESSING_PORT
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80

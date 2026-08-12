@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://algo-trading.local/contracts/signal-ingest.schema.json",
+  "title": "SignalIngest",
+  "description": "Canonical shape that every n8n provider workflow normalizes into before calling POST /signals on the signal-processing backend. Provider-specific payloads (Chartink, TradingView, ...) never reach the backend directly.",
+  "type": "object",
+  "required": ["symbol", "action", "price", "source", "exchange", "strategy_id"],
+  "additionalProperties": false,
+  "properties": {
+    "strategy_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Which signal-generation Strategy this signal belongs to - carries the ?strategy_id= query param from the provider webhook URL through. signal-processing resolves horizon/instrument_type by looking this up (GET /strategies/{id} on signal-generation) rather than guessing."
+    },
+    "symbol": {
+      "type": "string",
+      "description": "Exchange trading symbol, e.g. RELIANCE, NIFTY.",
+      "minLength": 1
+    },
+    "action": {
+      "type": "string",
+      "enum": ["BUY", "SELL"]
+    },
+    "exchange": {
+      "type": "string",
+      "enum": ["NSE", "MCX"],
+      "description": "Which exchange/segment this symbol trades on - determines which quote provider execution uses for CMP at square-off. NSE and MCX are wired up (via Dhan); widen this enum (CRYPTO, ...) as new segments/providers are added."
+    },
+    "price": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Price at signal trigger time."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601. If the provider doesn't send one, the n8n workflow stamps received time."
+    },
+    "source": {
+      "type": "string",
+      "description": "Provider identifier, e.g. 'chartink', 'tradingview'.",
+      "minLength": 1
+    },
+    "source_meta": {
+      "type": "object",
+      "description": "Provider-specific passthrough metadata for traceability (e.g. Chartink scan_name). Not used by resolution logic.",
+      "additionalProperties": true
+    }
+  }
+}

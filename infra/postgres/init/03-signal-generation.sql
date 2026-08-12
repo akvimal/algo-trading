@@ -1,0 +1,150 @@
+-- Runs automatically on first container start (docker-entrypoint-initdb.d).
+
+CREATE SCHEMA IF NOT EXISTS signal_generation;
+
+-- A Strategy is the unit of configuration for a signal source - either an
+-- external webhook provider (chartink, tradingview) or, eventually, an
+-- in-house indicator/price-action engine. Its id doubles as the
+-- ?strategy_id= value given to the provider (or generated internally),
+-- and its horizon/instrument_type are what signal-processing resolves a
+-- signal to - see docs/architecture.md.
+--
+-- Deliberately no quantity/capital column here - position sizing math
+-- (the capital cap, risk %) is still execution's job
+-- (execution.settings.capital_per_trade/risk_per_trade_pct). Stop-loss and
+-- target ARE here though: unlike a flat capital figure, stop distance
+-- genuinely varies by strategy/scan/timeframe, so the *method* belongs
+-- with what produces the signal - execution just consumes the resulting
+-- stop_loss_price/target_price (passed through resolved-order) to size
+-- and monitor the position. See docs/architecture.md.
+--
+-- New strategies start as 'draft' regardless of source_type: creating one
+-- and getting webhook URLs does not start trading - you flip it to 'live'
+-- explicitly once you've verified the provider is wired up correctly.
+CREATE TABLE IF NOT EXISTS signal_generation.strategies (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name             TEXT NOT NULL,
+    source_type      TEXT NOT NULL CHECK (source_type IN ('chartink', 'tradingview', 'in_house')),
+    exchange         TEXT NOT NULL CHECK (exchange IN ('NSE')),
+    horizon          TEXT NOT NULL CHECK (horizon IN ('intraday', 'swing', 'positional')),
+    instrument_type  TEXT NOT NULL CHECK (instrument_type IN ('spot', 'future', 'option')),
+    -- Signal/candle cadence. Optional: for external providers it's purely
+    -- descriptive (we don't control when Chartink actually fires - this
+    -- just documents the expected cadence for future staleness checks);
+    -- for an in-house strategy it will drive the engine's own check
+    -- interval and backtest granularity once that's built - see
+    -- docs/architecture.md.
+    interval         TEXT CHECK (interval IN ('1min', '3min', '5min', '15min', '30min', '60min', 'daily')),
+    -- Stop-loss: either the low/high of the previous completed candle at
+    -- stop_loss_interval, or a flat % from entry price. The two are
+    -- mutually exclusive - exactly one of stop_loss_interval/
+    -- stop_loss_percent is set, matching whichever stop_loss_method was
+    -- chosen. trailing_stop_enabled only means something once a
+    -- stop_loss_method is set. Interval values (1/5/15/25/60min, no
+    -- 'daily', no '30min') match Dhan's charts/intraday API exactly -
+    -- see market-data's DhanProvider.get_previous_candle.
+    stop_loss_method    TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent')),
+    stop_loss_interval  TEXT CHECK (stop_loss_interval IN ('1min', '5min', '15min', '25min', '60min')),
+    stop_loss_percent   NUMERIC CHECK (stop_loss_percent > 0 AND stop_loss_percent < 100),
+    -- Target (take-profit): always a flat % from entry price, independent
+    -- of the stop-loss method. No trailing variant for target.
+    target_percent      NUMERIC CHECK (target_percent > 0 AND target_percent < 100),
+    trailing_stop_enabled BOOLEAN NOT NULL DEFAULT false,
+    CONSTRAINT stop_loss_fields_consistent CHECK (
+        (stop_loss_method IS NULL AND stop_loss_interval IS NULL AND stop_loss_percent IS NULL
+            AND trailing_stop_enabled = false)
+        OR (stop_loss_method = 'previous_candle' AND stop_loss_interval IS NOT NULL AND stop_loss_percent IS NULL)
+        OR (stop_loss_method = 'percent' AND stop_loss_percent IS NOT NULL AND stop_loss_interval IS NULL)
+    ),
+    -- Which market this strategy trades in - distinct from `exchange`
+    -- above (still fixed to NSE, the only one actually wired up
+    -- end-to-end). Only drives the square_off_time default below; MCX/
+    -- CRYPTO can be recorded as intent even though nothing downstream
+    -- trades them yet - see docs/architecture.md.
+    segment          TEXT NOT NULL DEFAULT 'NSE' CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    -- Required for horizon='intraday' only - square-off doesn't apply to
+    -- swing/positional strategies (positions aren't closed same-day), so
+    -- this stays NULL for them. Auto-defaulted server-side from
+    -- (horizon, segment) when omitted on an intraday strategy - 15:00 for
+    -- NSE, 22:00 for MCX, 17:25 for CRYPTO. execution has no
+    -- platform-wide fallback of its own.
+    square_off_time  TIME,
+    -- in_house only - the logical underlying to watch (e.g. "GOLDM",
+    -- "NIFTY") and a typed JSON rule config (CrossoverRuleConfig today -
+    -- {"type": "crossover", "indicator_id": ..., "signal_source": "sma_of_indicator", "signal_period": ...}).
+    -- Names WHICH indicator (signal_generation.indicators below) and HOW
+    -- to decide from it - deliberately NOT the indicator's own params
+    -- (period etc.), which live on the referenced Indicator row instead,
+    -- so one indicator definition can be reused by many strategies. JSONB
+    -- (not dedicated columns) so a second rule type is new code, not a
+    -- migration. Note: `exchange` above stays fixed 'NSE' even for an
+    -- in_house MCX strategy - the actual traded exchange for a signal
+    -- this engine posts comes from market-data's GET /instruments/resolve
+    -- response (trade_exchange), not this column; `segment` is the field
+    -- that carries real MCX/NSE intent here.
+    underlying       TEXT,
+    rule_config      JSONB,
+    -- in_house only (harmlessly ignored for webhook strategies) - gates a
+    -- crossover signal on a single-timeframe market regime classification
+    -- (UPTREND/DOWNTREND/RANGE/TRANSITION from swing structure, Efficiency
+    -- Ratio, ADX/DMI, ATR-normalized EMA slope - see
+    -- app/domain/regime.py) computed on this strategy's own `interval`,
+    -- not a separate higher timeframe. Default false preserves today's
+    -- behavior exactly. See docs/architecture.md.
+    regime_filter_enabled BOOLEAN NOT NULL DEFAULT false,
+    -- Which of the 5 sub-conditions classify_regime combines
+    -- (structure/efficiency_ratio/adx/dmi_direction/ema_slope, see
+    -- app/domain/regime.py's REGIME_CHECK_NAMES) must agree to confirm a
+    -- signal's direction when regime_filter_enabled - defaults to all 5,
+    -- matching classify_regime's own fixed "regime" label exactly.
+    regime_filter_checks JSONB NOT NULL DEFAULT '["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]',
+    -- Signal-conflict policy - passed through unchanged on resolved-order
+    -- to execution's position_manager._resolve_signal_conflicts.
+    -- duplicate_signal_policy: what to do when this symbol already has an
+    -- OPEN position in the SAME direction as an incoming signal - 'skip'
+    -- rejects the new order, 'add_position' pyramids (opens an
+    -- independent additional position). counter_signal_policy: what to do
+    -- when an OPPOSITE-direction signal arrives - 'skip' leaves the
+    -- existing position untouched, 'close_and_flip' closes it (ahead of
+    -- its own stop-loss/target/square-off) before the new one opens.
+    -- Defaults match the platform-wide behavior these replaced (see
+    -- infra/postgres/init/02-execution.sql).
+    duplicate_signal_policy TEXT NOT NULL DEFAULT 'add_position' CHECK (duplicate_signal_policy IN ('skip', 'add_position')),
+    counter_signal_policy   TEXT NOT NULL DEFAULT 'skip' CHECK (counter_signal_policy IN ('skip', 'close_and_flip')),
+    status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'backtesting', 'live', 'paused')),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT square_off_time_required_for_intraday CHECK (horizon != 'intraday' OR square_off_time IS NOT NULL),
+    CONSTRAINT in_house_fields_consistent CHECK (
+        (source_type = 'in_house' AND underlying IS NOT NULL AND rule_config IS NOT NULL AND interval IS NOT NULL)
+        OR (source_type != 'in_house' AND underlying IS NULL AND rule_config IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategies_status ON signal_generation.strategies (status);
+
+-- A reusable indicator definition (e.g. "RSI 14") - any number of
+-- Strategy rows can reference one via rule_config's indicator_id (no DB
+-- FK - that field is inside a JSONB blob, not a plain column; existence
+-- is checked at the API layer instead, see app/api/routes/strategies.py).
+-- params is JSONB (not dedicated columns) for the same reason rule_config
+-- is: a second indicator type is new code, not a migration.
+CREATE TABLE IF NOT EXISTS signal_generation.indicators (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    type        TEXT NOT NULL CHECK (type IN ('rsi')),
+    params      JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Runtime bookkeeping for the in-house engine's periodic tick - which
+-- completed candle a strategy last acted on, so the poll loop (running
+-- far more often than any one strategy's own interval) doesn't re-signal
+-- on the same bar every tick. Deliberately separate from the strategies
+-- table above: this is mutable engine state, not user-configured intent.
+CREATE TABLE IF NOT EXISTS signal_generation.engine_runs (
+    strategy_id            UUID PRIMARY KEY REFERENCES signal_generation.strategies (id) ON DELETE CASCADE,
+    last_signal_candle_ts  TIMESTAMPTZ,
+    last_checked_at        TIMESTAMPTZ
+);

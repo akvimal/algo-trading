@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>algo-trading</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1216;
+    --surface: #171b21;
+    --border: #262c35;
+    --text: #e6e9ee;
+    --text-dim: #8b93a1;
+    --accent: #4c8bf5;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  nav {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.75rem 1rem 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  nav button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  nav button.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  .frame-wrap {
+    flex: 1;
+    position: relative;
+  }
+  iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: none;
+  }
+  iframe.active {
+    display: block;
+  }
+  .placeholder {
+    display: none;
+    position: absolute;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .placeholder.active {
+    display: flex;
+  }
+</style>
+</head>
+<body>
+  <nav id="tabs"></nav>
+  <div class="frame-wrap" id="frame-wrap"></div>
+
+  <script>
+    // Edit here if you changed the corresponding *_FRONTEND_PORT in .env
+    const TABS = [
+      { id: "signal-generation", label: "Signal Generation", port: 8082, built: true },
+      { id: "signal-processing", label: "Signal Processing", port: 8080, built: true },
+      { id: "execution", label: "Execution", port: 8081, built: true },
+    ];
+
+    const tabsEl = document.getElementById("tabs");
+    const frameWrap = document.getElementById("frame-wrap");
+
+    TABS.forEach((tab, i) => {
+      const btn = document.createElement("button");
+      btn.textContent = tab.label;
+      btn.className = i === 0 ? "active" : "";
+      btn.dataset.tab = tab.id;
+      btn.onclick = () => activate(tab.id);
+      tabsEl.appendChild(btn);
+
+      if (tab.built) {
+        const iframe = document.createElement("iframe");
+        iframe.src = `http://${location.hostname}:${tab.port}`;
+        iframe.id = `frame-${tab.id}`;
+        iframe.className = i === 0 ? "active" : "";
+        // Without this, navigator.clipboard.writeText() in the iframed
+        // frontend fails silently (e.g. the "copy webhook URL" buttons).
+        iframe.allow = "clipboard-write";
+        frameWrap.appendChild(iframe);
+      } else {
+        const placeholder = document.createElement("div");
+        placeholder.className = `placeholder${i === 0 ? " active" : ""}`;
+        placeholder.id = `frame-${tab.id}`;
+        placeholder.innerHTML =
+          `<strong>${tab.label}</strong><span>Not built yet - see systems/${tab.id}/README.md</span>`;
+        frameWrap.appendChild(placeholder);
+      }
+    });
+
+    function activate(id) {
+      document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === id));
+      document
+        .querySelectorAll(".frame-wrap > *")
+        .forEach((el) => el.classList.toggle("active", el.id === `frame-${id}`));
+    }
+  </script>
+</body>
+</html>

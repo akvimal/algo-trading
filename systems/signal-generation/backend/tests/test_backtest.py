@@ -1,0 +1,444 @@
+from datetime import datetime, time, timedelta
+
+import pytest
+
+from app.domain import regime as regime_module
+from app.domain.backtest import (
+    MAX_GRID_COMBINATIONS,
+    ExitConfig,
+    expand_grid,
+    grid_search,
+    replay,
+    simulate_trades,
+)
+from app.domain.models import CrossoverRuleConfig
+from app.domain.rules import CandleClose, evaluate
+
+RULE = CrossoverRuleConfig(indicator_id="11111111-1111-1111-1111-111111111111")
+RSI_PARAMS = {"period": 2, "sma_period": 2}
+
+# Same fixture as test_rules.py's hand-traced bearish-crossover case: the
+# first 5 bars produce no signal, the 6th does (bearish, entry price=15).
+_ENTRY_CLOSES = [10, 11, 10, 13, 20, 15]
+
+_BASE_TS = datetime(2026, 8, 12, 9, 15)
+
+
+def _ts(minute_offset: int) -> str:
+    """Real, parseable ISO timestamps (not bare "t0" tags) - simulate_trades
+    calls datetime.fromisoformat internally (square-off/previous-candle
+    lookups), so every fixture needs genuinely parseable timestamps."""
+    return (_BASE_TS + timedelta(minutes=minute_offset)).isoformat()
+
+
+def _bar(minute_offset: int, close: float, high: float | None = None, low: float | None = None) -> CandleClose:
+    return CandleClose(timestamp=_ts(minute_offset), close=close, high=high if high is not None else close, low=low if low is not None else close)
+
+
+def _flat_candles(closes: list[float]) -> list[CandleClose]:
+    """high=low=close - fine for fixtures that only exercise indicator/rule
+    math (test_rules.py already covers that RSI math itself is correct),
+    not backtest.py's intrabar SL/target logic."""
+    return [_bar(i, c) for i, c in enumerate(closes)]
+
+
+def _entry_fixture() -> list[CandleClose]:
+    return _flat_candles(_ENTRY_CLOSES)
+
+
+# --- expand_grid: cartesian product + validation -------------------------------------------
+
+
+def test_expand_grid_cartesian_product_merged_onto_base_params():
+    base = {"period": 14, "sma_period": 9}
+    combos = expand_grid(base, {"period": [7, 21]})
+    assert combos == [{"period": 7, "sma_period": 9}, {"period": 21, "sma_period": 9}]
+
+
+def test_expand_grid_multiple_params_full_cartesian_product():
+    base = {"period": 14, "sma_period": 9}
+    combos = expand_grid(base, {"period": [7, 21], "sma_period": [5, 10]})
+    assert combos == [
+        {"period": 7, "sma_period": 5},
+        {"period": 7, "sma_period": 10},
+        {"period": 21, "sma_period": 5},
+        {"period": 21, "sma_period": 10},
+    ]
+
+
+def test_expand_grid_unknown_param_name_raises():
+    with pytest.raises(ValueError, match="unknown indicator param"):
+        expand_grid({"period": 14, "sma_period": 9}, {"macd_fast": [12, 26]})
+
+
+def test_expand_grid_empty_value_list_raises():
+    with pytest.raises(ValueError, match="at least one candidate value"):
+        expand_grid({"period": 14, "sma_period": 9}, {"period": []})
+
+
+def test_expand_grid_too_many_combinations_raises():
+    base = {"period": 14, "sma_period": 9}
+    too_many = {"period": list(range(1, MAX_GRID_COMBINATIONS + 2))}
+    with pytest.raises(ValueError, match="max is"):
+        expand_grid(base, too_many)
+
+
+# --- replay: shape + the "no exit config" case -----------------------------------------------
+
+
+def test_replay_finds_the_single_known_signal_and_reports_end_of_data():
+    # No exit_config -> no SL/target/square-off, and there's no opposite
+    # signal after the only one - the trade stays open through the last
+    # available bar, reported as "end_of_data".
+    result = replay(RULE, "rsi", RSI_PARAMS, _entry_fixture())
+
+    assert result["trade_count"] == 1
+    trade = result["trades"][0]
+    assert trade["entry_time"] == _ts(5)
+    assert trade["direction"] == "bearish"
+    assert trade["entry_price"] == 15.0
+    assert trade["exit_reason"] == "end_of_data"
+    assert trade["exit_price"] == 15.0  # last candle's own close (itself)
+    assert result["hypothetical_pnl"] == 0.0
+
+
+def test_replay_too_few_candles_finds_nothing():
+    candles = _flat_candles([10, 11, 12])
+    result = replay(RULE, "rsi", RSI_PARAMS, candles)
+    assert result == {"trade_count": 0, "hypothetical_pnl": 0.0, "trades": []}
+
+
+# --- simulate_trades: stop-loss / target / square-off / trailing -----------------------------
+
+
+def test_simulate_trades_stop_loss_percent_hit():
+    candles = _entry_fixture()
+    # bearish entry@15, 10% stop = 15*1.10 = 16.5 - this bar's high spikes past it.
+    candles.append(_bar(6, 18.0, high=20.0, low=17.0))
+
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0))
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_price == pytest.approx(16.5)
+    assert trade.pnl == pytest.approx(15.0 - 16.5)
+
+
+def test_simulate_trades_target_percent_hit():
+    candles = _entry_fixture()
+    # bearish entry@15, 10% target = 15*0.90 = 13.5 - this bar's low dips past it.
+    candles.append(_bar(6, 13.0, high=15.5, low=12.0))
+
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(target_percent=10.0))
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.exit_reason == "target"
+    assert trade.exit_price == pytest.approx(13.5)
+    assert trade.pnl == pytest.approx(15.0 - 13.5)
+
+
+def test_simulate_trades_stop_loss_takes_priority_over_target_on_same_bar():
+    candles = _entry_fixture()
+    # A single wide bar spans both the 10% stop (16.5) and 10% target (13.5).
+    candles.append(_bar(6, 15.0, high=20.0, low=10.0))
+
+    trades = simulate_trades(
+        RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, target_percent=10.0)
+    )
+
+    assert trades[0].exit_reason == "stop_loss"
+
+
+def test_simulate_trades_neither_sl_nor_target_hit_keeps_scanning():
+    candles = _entry_fixture()
+    # Stays comfortably inside both the 10% stop (16.5) and target (13.5).
+    candles.append(_bar(6, 15.0, high=15.5, low=14.5))
+
+    trades = simulate_trades(
+        RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, target_percent=10.0)
+    )
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "end_of_data"  # ran out of bars, never hit either level
+
+
+def test_simulate_trades_square_off_closes_at_bar_close():
+    candles = _entry_fixture()
+    candles[-1] = CandleClose(timestamp="2026-08-12T14:57:00", close=15.0, high=15.0, low=15.0)
+    candles.append(CandleClose(timestamp="2026-08-12T15:03:00", close=14.2, high=14.5, low=14.0))
+
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(square_off_time=time(15, 0)))
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.exit_reason == "square_off"
+    assert trade.exit_price == 14.2  # square-off closes at CMP (the bar's close), not a level
+
+
+def test_simulate_trades_entry_at_or_after_square_off_time_never_opens():
+    candles = _entry_fixture()
+    candles[-1] = CandleClose(timestamp="2026-08-12T15:05:00", close=15.0, high=15.0, low=15.0)
+
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(square_off_time=time(15, 0)))
+
+    assert trades == []  # would have been rejected outside the intraday window, same as execution
+
+
+def test_simulate_trades_previous_candle_stop_loss():
+    candles = _entry_fixture()  # entry at _ts(5)
+    # sl_candles: a separate (lower) interval series - its last completed
+    # bar strictly before the entry timestamp sets the bearish stop at
+    # that bar's HIGH (16.0); the bar AFTER entry must be ignored even
+    # though its high is higher still.
+    sl_candles = [
+        _bar(3, 12.0, high=13.0, low=9.0),
+        _bar(4, 13.0, high=16.0, low=9.5),
+        _bar(6, 17.0, high=18.0, low=16.0),
+    ]
+    candles.append(_bar(6, 17.0, high=17.5, low=16.5))  # crosses 16.0
+
+    trades = simulate_trades(
+        RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="previous_candle"), sl_candles=sl_candles
+    )
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "stop_loss"
+    assert trades[0].exit_price == pytest.approx(16.0)
+
+
+def test_simulate_trades_previous_candle_stop_loss_missing_series_disables_sl():
+    candles = _entry_fixture()
+    candles.append(_bar(6, 18.0, high=20.0, low=17.0))  # would hit a percent-style stop, if one were configured
+
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="previous_candle"), sl_candles=None)
+
+    # No sl_candles supplied - stop-loss silently doesn't apply (no crash,
+    # no stop_loss exit) - falls through to whatever else would close the
+    # trade instead (here, an opposite RSI signal on that same bar).
+    assert trades[0].exit_reason != "stop_loss"
+
+
+def test_simulate_trades_trailing_stop_ratchets_and_never_loosens():
+    candles = _entry_fixture()  # bearish entry@15, initial 10% stop = 16.5
+    # Price only ever moves favorably (down) for this short - the trailing
+    # stop should ratchet down bar over bar, never back up.
+    candles.append(_bar(6, 14.0, high=14.5, low=13.5))
+    candles.append(_bar(7, 12.0, high=12.5, low=11.5))
+    # Final bar's high (13.9) would NOT have hit the ORIGINAL 16.5 stop,
+    # but should hit the ratcheted-down stop from bar t7 (12*1.10=13.2).
+    candles.append(_bar(8, 13.5, high=13.9, low=13.0))
+
+    trades = simulate_trades(
+        RULE,
+        "rsi",
+        RSI_PARAMS,
+        candles,
+        ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, trailing_stop_enabled=True),
+    )
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_price == pytest.approx(12.0 * 1.10)  # ratcheted stop from bar 7's close, not the original 16.5
+
+
+def test_simulate_trades_single_signal_stays_open_to_end_of_data():
+    # Sanity check that the base fixture alone only ever opens one trade
+    # (no premature/duplicate entries while it's conceptually still open).
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture())
+    assert len(trades) == 1
+
+
+# --- simulate_trades: regime_filter_enabled wiring ---------------------------------------------
+#
+# These monkeypatch regime.classify_regime rather than engineering real
+# price action that produces both a known RSI crossover AND a known
+# regime simultaneously - classify_regime's own correctness against real
+# price patterns is already covered exhaustively in test_regime.py. What
+# matters here is only that simulate_trades calls it correctly and skips/
+# allows entries accordingly - the exact same wiring app/domain/engine.py
+# uses live.
+
+
+def _fake_regime(label: str):
+    """Builds fake but INTERNALLY CONSISTENT raw regime sub-values for a
+    label - direction_confirmed recomputes from the raw values (structure/
+    er/adx/plus_di/minus_di/ema_slope), not the label itself, so the fake
+    must actually satisfy every one of the 5 sub-checks for "bullish"/
+    "bearish" to behave as that label implies. "range"/"transition" use
+    values that fail every directional check."""
+    if label == "uptrend":
+        structure, plus_di, minus_di, slope = "HH_HL", 20.0, 10.0, 1.0
+    elif label == "downtrend":
+        structure, plus_di, minus_di, slope = "LH_LL", 10.0, 20.0, -1.0
+    else:  # range / transition
+        structure, plus_di, minus_di, slope = "MIXED", 15.0, 15.0, 0.0
+    er = 0.5 if label in ("uptrend", "downtrend") else 0.1
+    adx = 30.0 if label in ("uptrend", "downtrend") else 5.0
+
+    def _classify(window, *args, **kwargs):
+        return regime_module.RegimeResult(label, 100, structure, er, adx, plus_di, minus_di, slope)
+
+    return _classify
+
+
+def test_simulate_trades_regime_filter_blocks_entry_when_regime_disagrees(monkeypatch):
+    # The known fixture signal is bearish (see _entry_fixture) - "uptrend"
+    # only confirms bullish, so this entry must never open.
+    monkeypatch.setattr(regime_module, "classify_regime", _fake_regime("uptrend"))
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    assert trades == []
+
+
+def test_simulate_trades_regime_filter_allows_entry_when_regime_agrees(monkeypatch):
+    monkeypatch.setattr(regime_module, "classify_regime", _fake_regime("downtrend"))
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    assert len(trades) == 1
+    assert trades[0].direction == "bearish"
+
+
+@pytest.mark.parametrize("hostile_regime", ["range", "transition"])
+def test_simulate_trades_regime_filter_blocks_on_range_and_transition(monkeypatch, hostile_regime):
+    monkeypatch.setattr(regime_module, "classify_regime", _fake_regime(hostile_regime))
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    assert trades == []
+
+
+def test_simulate_trades_regime_checks_selective_subset(monkeypatch):
+    # bearish entry (see _entry_fixture) - structure/ER/DMI/slope all say
+    # bearish, but ADX (10) is below the trend threshold (20). Requiring
+    # all 5 (the default) blocks it; requiring only the checks that DO
+    # pass lets it through.
+    def _mostly_bearish(window, *args, **kwargs):
+        return regime_module.RegimeResult("n/a", 0, "LH_LL", 0.5, 10.0, 10.0, 20.0, -1.0)
+
+    monkeypatch.setattr(regime_module, "classify_regime", _mostly_bearish)
+
+    blocked = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    assert blocked == []
+
+    allowed = simulate_trades(
+        RULE,
+        "rsi",
+        RSI_PARAMS,
+        _entry_fixture(),
+        regime_filter_enabled=True,
+        regime_checks=frozenset({"structure", "efficiency_ratio", "dmi_direction", "ema_slope"}),
+    )
+    assert len(allowed) == 1
+    assert allowed[0].direction == "bearish"
+
+
+def test_simulate_trades_regime_filter_disabled_by_default_never_calls_classify_regime(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError("classify_regime must not be called when regime_filter_enabled=False")
+
+    monkeypatch.setattr(regime_module, "classify_regime", _boom)
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture())  # regime_filter_enabled defaults to False
+    assert len(trades) == 1
+
+
+def test_simulate_trades_matches_naive_pairing_when_no_exit_config():
+    """Regression-equivalence check: with no SL/target/square-off
+    configured, simulate_trades' walk-forward chaining must reproduce the
+    OLD next-opposite-signal pairing exactly (enter on a signal, exit +
+    flip on the next opposite one) for every PAIRED signal. RSI's own
+    correctness is already covered by test_rules.py - this only proves
+    the new engine's chaining behavior matches the old algorithm,
+    reimplemented here verbatim as an oracle. One deliberate difference:
+    the old pair_pnl left a final unpaired signal contributing nothing;
+    simulate_trades instead marks it "end_of_data" against the last
+    available close (a real improvement, not a bug) - folded into the
+    oracle below rather than avoided."""
+    closes = [10, 11, 10, 13, 20, 15, 12, 9, 14, 22, 18, 11, 16, 24, 19, 13, 21, 27]
+    candles = _flat_candles(closes)
+
+    min_bars = 5  # bars_needed(RULE, "rsi", RSI_PARAMS) + 1, per the hand-traced fixture above
+    naive_signals = []
+    for i in range(min_bars, len(candles) + 1):
+        window = candles[:i]
+        bias = evaluate(RULE, "rsi", RSI_PARAMS, window)
+        if bias is not None:
+            naive_signals.append((bias, window[-1].close))
+    assert len(naive_signals) >= 2  # the fixture must actually exercise chaining to be a meaningful check
+
+    expected_pnl = 0.0
+    open_sig = None
+    for direction, price in naive_signals:
+        if open_sig is None:
+            open_sig = (direction, price)
+            continue
+        open_dir, open_price = open_sig
+        if direction == open_dir:
+            continue
+        expected_pnl += (price - open_price) if open_dir == "bullish" else (open_price - price)
+        open_sig = (direction, price)
+    if open_sig is not None:
+        open_dir, open_price = open_sig
+        last_close = candles[-1].close
+        expected_pnl += (last_close - open_price) if open_dir == "bullish" else (open_price - last_close)
+
+    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles)
+    actual_pnl = sum(t.pnl for t in trades)
+
+    assert actual_pnl == pytest.approx(expected_pnl)
+
+
+# --- grid_search: runs replay per combination, sorted best-first ---------------------------
+
+
+def test_grid_search_reports_one_row_per_combination_sorted_by_pnl_desc():
+    # Swept across two period candidates so both windows still find the
+    # one known signal - just checking the shape/sort here.
+    candles = _entry_fixture()
+    base = {"period": 2, "sma_period": 2}
+    combos = expand_grid(base, {"period": [2, 3]})
+
+    result = grid_search(RULE, "rsi", combos, candles)
+
+    assert result["combinations_tested"] == 2
+    assert len(result["results"]) == 2
+    assert all("error" not in row for row in result["results"])
+    pnls = [row["hypothetical_pnl"] for row in result["results"]]
+    assert pnls == sorted(pnls, reverse=True)  # best first
+
+
+def test_grid_search_invalid_combination_reported_as_error_not_dropped():
+    candles = _entry_fixture()
+    base = {"period": 2, "sma_period": 2}
+    # period=1 violates RsiParams's Field(gt=1) - must surface as an error
+    # row, not silently vanish or crash the whole grid.
+    combos = expand_grid(base, {"period": [1, 2]})
+
+    result = grid_search(RULE, "rsi", combos, candles)
+
+    assert result["combinations_tested"] == 2
+    errored = [row for row in result["results"] if "error" in row]
+    ok = [row for row in result["results"] if "error" not in row]
+    assert len(errored) == 1
+    assert errored[0]["params"]["period"] == 1
+    assert len(ok) == 1
+
+
+def test_grid_search_all_invalid_still_returns_every_row_as_errors():
+    candles = _entry_fixture()
+    combos = expand_grid({"period": 2, "sma_period": 2}, {"period": [0, 1]})
+
+    result = grid_search(RULE, "rsi", combos, candles)
+
+    assert result["combinations_tested"] == 2
+    assert all("error" in row for row in result["results"])
+
+
+def test_grid_search_applies_the_same_exit_config_to_every_combination():
+    candles = _entry_fixture()
+    candles.append(_bar(6, 18.0, high=20.0, low=17.0))  # hits a 10% stop from entry@15
+    combos = expand_grid({"period": 2, "sma_period": 2}, {"period": [2, 3]})
+
+    result = grid_search(RULE, "rsi", combos, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0))
+
+    assert result["combinations_tested"] == 2
+    assert all(row["trade_count"] == 1 for row in result["results"])
+    assert all(row["hypothetical_pnl"] == pytest.approx(15.0 - 16.5) for row in result["results"])

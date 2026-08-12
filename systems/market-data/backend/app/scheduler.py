@@ -40,17 +40,25 @@ def start_scheduler() -> None:
         id="instrument-sync-daily",
         replace_existing=True,
     )
-    _scheduler.add_job(
-        _renew_dhan_token,
-        IntervalTrigger(hours=settings.dhan_token_renew_interval_hours),
-        id="dhan-token-renew",
-        replace_existing=True,
-    )
+    # dhan_token_renew_interval_hours=0 disables this entirely (both the
+    # periodic job and the on-boot run below) - dev and test share one
+    # physical Dhan account/token, so only one stack should ever renew it
+    # automatically; the other would otherwise periodically invalidate
+    # whichever token the first is currently using. See config.py/
+    # docs/architecture.md.
+    if settings.dhan_token_renew_interval_hours > 0:
+        _scheduler.add_job(
+            _renew_dhan_token,
+            IntervalTrigger(hours=settings.dhan_token_renew_interval_hours),
+            id="dhan-token-renew",
+            replace_existing=True,
+        )
     _scheduler.start()
     # Run once immediately in the background so quotes work without
     # waiting for the next scheduled run (e.g. right after a restart).
     _scheduler.add_job(_sync_all, id="instrument-sync-initial", replace_existing=True)
-    # Same reasoning - extends the .env-seeded token's life right away
-    # instead of waiting a full dhan_token_renew_interval_hours, minimizing
-    # the window where a soon-to-expire seed token could lapse first.
-    _scheduler.add_job(_renew_dhan_token, id="dhan-token-renew-initial", replace_existing=True)
+    if settings.dhan_token_renew_interval_hours > 0:
+        # Same reasoning - extends the .env-seeded token's life right away
+        # instead of waiting a full dhan_token_renew_interval_hours, minimizing
+        # the window where a soon-to-expire seed token could lapse first.
+        _scheduler.add_job(_renew_dhan_token, id="dhan-token-renew-initial", replace_existing=True)

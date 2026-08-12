@@ -95,6 +95,11 @@ services:
     environment:
       DHAN_CLIENT_ID: ${DHAN_CLIENT_ID}
       DHAN_ACCESS_TOKEN: ${DHAN_ACCESS_TOKEN}
+      # Default 20 (auto-renew every 20h). Set to 0 only if this stack ever
+      # shares its DHAN_ACCESS_TOKEN with another auto-renewing stack -
+      # dev/test each use their own separate token instead, so both stay
+      # at the default. See app/config.py/app/scheduler.py.
+      DHAN_TOKEN_RENEW_INTERVAL_HOURS: ${DHAN_TOKEN_RENEW_INTERVAL_HOURS:-20}
     ports:
       - "${MARKET_DATA_BACKEND_PORT}:8000"
 

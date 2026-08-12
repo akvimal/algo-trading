@@ -5,9 +5,11 @@ import {
   FeedStatus,
   Health,
   ProviderStatus,
+  fetchDeltaFeedStatus,
   fetchFeedStatus,
   fetchHealth,
   fetchSyncStatus,
+  subscribeDeltaFeed,
   subscribeFeed,
   triggerSync,
 } from "./api";
@@ -153,10 +155,23 @@ function DataFreshnessPanel() {
   );
 }
 
-function LiveFeedPanel() {
+type LiveFeedPanelProps = {
+  title: string;
+  fetchStatus: () => Promise<FeedStatus>;
+  subscribe: (exchange: Exchange, symbol: string) => Promise<FeedStatus>;
+  exchangeOptions: Exchange[];
+  symbolPlaceholder: string;
+};
+
+// Parameterized over which provider's feed it talks to - Dhan and Delta
+// (app/providers/dhan_feed.py / delta_feed.py) expose the identical
+// FeedStatus shape on separate /dhan/... and /delta/... routes, so this
+// is the same panel rendered twice below rather than two near-duplicate
+// components.
+function LiveFeedPanel({ title, fetchStatus, subscribe, exchangeOptions, symbolPlaceholder }: LiveFeedPanelProps) {
   const [status, setStatus] = useState<FeedStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [exchange, setExchange] = useState<Exchange>("NSE");
+  const [exchange, setExchange] = useState<Exchange>(exchangeOptions[0]);
   const [symbol, setSymbol] = useState("");
   const [subscribing, setSubscribing] = useState(false);
 
@@ -164,7 +179,7 @@ function LiveFeedPanel() {
     let cancelled = false;
     async function poll() {
       try {
-        const data = await fetchFeedStatus();
+        const data = await fetchStatus();
         if (!cancelled) setStatus(data);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to fetch feed status");
@@ -176,14 +191,14 @@ function LiveFeedPanel() {
       cancelled = true;
       clearInterval(id);
     };
-  }, []);
+  }, [fetchStatus]);
 
   async function handleSubscribe(e: React.FormEvent) {
     e.preventDefault();
     if (!symbol.trim()) return;
     setSubscribing(true);
     try {
-      const data = await subscribeFeed(exchange, symbol.trim());
+      const data = await subscribe(exchange, symbol.trim());
       setStatus(data);
       setError(null);
       setSymbol("");
@@ -200,7 +215,7 @@ function LiveFeedPanel() {
     <section className="panel">
       <h2>
         <span className={`dot ${status?.connected ? "good" : "bad"}`} />
-        Live feed
+        {title}
       </h2>
       {error && <p className="error">{error}</p>}
       <p className="status-line">
@@ -232,7 +247,8 @@ function LiveFeedPanel() {
               <tr key={key}>
                 <td>{key}</td>
                 <td className="num">{tick.price}</td>
-                <td>{relativeTime(tick.ltt)}</td>
+                {/* ltt (Dhan's own trade timestamp) falls back to received_at for Delta's ticks, which don't carry one */}
+                <td>{relativeTime(tick.ltt ?? tick.received_at)}</td>
               </tr>
             ))}
           </tbody>
@@ -240,10 +256,13 @@ function LiveFeedPanel() {
       )}
       <form className="subscribe-form" onSubmit={handleSubscribe}>
         <select value={exchange} onChange={(e) => setExchange(e.target.value as Exchange)}>
-          <option value="NSE">NSE</option>
-          <option value="MCX">MCX</option>
+          {exchangeOptions.map((ex) => (
+            <option key={ex} value={ex}>
+              {ex}
+            </option>
+          ))}
         </select>
-        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="e.g. RELIANCE" />
+        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder={symbolPlaceholder} />
         <button type="submit" disabled={subscribing || !symbol.trim()}>
           {subscribing ? "Adding..." : "Subscribe"}
         </button>
@@ -262,7 +281,20 @@ export default function App() {
       <div className="panel-grid">
         <HealthPanel />
         <DataFreshnessPanel />
-        <LiveFeedPanel />
+        <LiveFeedPanel
+          title="Dhan live feed"
+          fetchStatus={fetchFeedStatus}
+          subscribe={subscribeFeed}
+          exchangeOptions={["NSE", "MCX"]}
+          symbolPlaceholder="e.g. RELIANCE"
+        />
+        <LiveFeedPanel
+          title="Delta live feed"
+          fetchStatus={fetchDeltaFeedStatus}
+          subscribe={subscribeDeltaFeed}
+          exchangeOptions={["CRYPTO"]}
+          symbolPlaceholder="e.g. BTCUSD"
+        />
       </div>
     </main>
   );

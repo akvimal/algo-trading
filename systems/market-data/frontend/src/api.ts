@@ -1,9 +1,7 @@
 // Which market a symbol trades on - the same open-ended union used
 // platform-wide (Strategy.segment/Account.segment in the other frontends),
-// not a Dhan-specific enum. Only NSE/MCX are actually wired up to a real
-// provider today (see ProviderStatus below) - CRYPTO (Delta Exchange) is a
-// documented future extension point (docs/architecture.md), not yet
-// implemented, and this type deliberately doesn't hardcode it out.
+// not a Dhan-specific enum. NSE/MCX (Dhan) and CRYPTO (Delta Exchange
+// India) are all wired up to a real provider - see ProviderStatus below.
 export type Exchange = "NSE" | "MCX" | "CRYPTO";
 
 // Build-time port (docker-compose.yml's build arg) so a port-shifted
@@ -31,8 +29,8 @@ export async function fetchHealth(): Promise<Health> {
 
 // Mirrors the backend's ProviderStatus (app/domain/models.py) - one row
 // per registered QuoteProvider (app/providers/router.py's all_providers())
-// - "dhan-nse"/"dhan-mcx" today, a future "delta-crypto" for free once
-// that provider exists, no frontend change needed.
+// - "dhan-nse"/"dhan-mcx"/"delta-india" today, shown automatically with
+// no frontend change needed when a new one is registered.
 export type ProviderStatus = {
   provider: string;
   symbol_count: number;
@@ -49,12 +47,14 @@ export async function triggerSync(): Promise<ProviderStatus[]> {
   return asJson(res, "POST /instruments/sync");
 }
 
-// One entry per subscribed symbol on Dhan's live market feed WebSocket
-// (app/providers/dhan_feed.py) - Ticker mode only (LTP + last-trade-time),
-// keyed "EXCHANGE:SYMBOL" to match the backend's feed_status() shape.
+// One entry per subscribed symbol on a provider's live market feed
+// WebSocket (app/providers/dhan_feed.py / delta_feed.py) - keyed
+// "EXCHANGE:SYMBOL" to match the backend's feed_status() shape. `ltt`
+// (last-trade-time) is Dhan-only - Delta's own ticks don't carry a
+// separate trade timestamp, just `received_at`, so it's optional here.
 export type FeedTick = {
   price: number;
-  ltt: string; // ISO-8601, the tick's own last-trade-time
+  ltt?: string; // ISO-8601, the tick's own last-trade-time (Dhan only)
   received_at: string; // ISO-8601, when this backend process received it
 };
 
@@ -79,4 +79,21 @@ export async function subscribeFeed(exchange: Exchange, symbol: string): Promise
     body: JSON.stringify({ exchange, symbol }),
   });
   return asJson(res, "POST /dhan/feed/subscribe");
+}
+
+// Delta Exchange India's own live feed (app/providers/delta_feed.py) -
+// same shape, separate endpoints (kept on its own /delta/... path rather
+// than a shared one, see docs/architecture.md).
+export async function fetchDeltaFeedStatus(): Promise<FeedStatus> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/delta/feed-status`);
+  return asJson(res, "GET /delta/feed-status");
+}
+
+export async function subscribeDeltaFeed(exchange: Exchange, symbol: string): Promise<FeedStatus> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/delta/feed/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ exchange, symbol }),
+  });
+  return asJson(res, "POST /delta/feed/subscribe");
 }

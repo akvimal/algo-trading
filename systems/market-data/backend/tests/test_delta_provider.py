@@ -14,8 +14,14 @@ from app.config import settings
 from app.providers.delta import DeltaProvider
 
 
-def _product(symbol: str, product_id: int, state: str = "live") -> dict:
-    return {"id": product_id, "symbol": symbol, "contract_type": "perpetual_futures", "state": state}
+def _product(symbol: str, product_id: int, state: str = "live", underlying_asset: str = "BTC") -> dict:
+    return {
+        "id": product_id,
+        "symbol": symbol,
+        "contract_type": "perpetual_futures",
+        "state": state,
+        "underlying_asset": {"symbol": underlying_asset},
+    }
 
 
 def _products_url() -> str:
@@ -24,6 +30,40 @@ def _products_url() -> str:
 
 def _tickers_url() -> str:
     return f"{settings.delta_base_url}/v2/tickers"
+
+
+def _option_ticker(symbol: str, product_id: int, contract_type: str, close: float, spot: float, **overrides) -> dict:
+    row = {
+        "symbol": symbol,
+        "product_id": product_id,
+        "contract_type": contract_type,
+        "close": close,
+        "spot_price": spot,
+        "oi_contracts": "5000",
+        "volume": 12.34,
+        "greeks": {"delta": 0.5, "theta": -10.0, "gamma": 0.001, "vega": 5.0, "rho": 1.2},
+        "quotes": {"mark_iv": "0.25", "best_bid": "10", "best_ask": "12"},
+    }
+    row.update(overrides)
+    return row
+
+
+def _fake_chain_tickers() -> list[dict]:
+    """3 strikes (23950/24000/24050) at expiry 2026-08-15, spot=24000
+    (ATM in the middle), plus one extra pair at a second expiry
+    (2026-08-21) to exercise multi-expiry filtering - same
+    "trimmed to a couple of strikes" convention as
+    test_dhan_option_chain.py's own FAKE_CHAIN_RESPONSE."""
+    return [
+        _option_ticker("C-BTC-23950-150826", 1, "call_options", 120.5, 24000.0),
+        _option_ticker("P-BTC-23950-150826", 2, "put_options", 65.0, 24000.0),
+        _option_ticker("C-BTC-24000-150826", 3, "call_options", 90.0, 24000.0),
+        _option_ticker("P-BTC-24000-150826", 4, "put_options", 88.0, 24000.0),
+        _option_ticker("C-BTC-24050-150826", 5, "call_options", 65.0, 24000.0),
+        _option_ticker("P-BTC-24050-150826", 6, "put_options", 118.0, 24000.0),
+        _option_ticker("C-BTC-24000-210826", 7, "call_options", 150.0, 24000.0),
+        _option_ticker("P-BTC-24000-210826", 8, "put_options", 140.0, 24000.0),
+    ]
 
 
 def _candles_url() -> str:
@@ -269,3 +309,132 @@ def test_get_lot_size_unknown_symbol_returns_none():
 
     provider = DeltaProvider()
     assert provider.get_lot_size("NOPE") is None
+
+
+# --- get_expiry_list / get_option_chain (Phase 2 of the crypto module) -------------------------
+
+
+def _provider_with_btcusd() -> DeltaProvider:
+    provider = DeltaProvider()
+    provider._symbol_to_product_id = {"BTCUSD": 27}
+    provider._symbol_to_state = {"BTCUSD": "live"}
+    provider._symbol_to_underlying_asset = {"BTCUSD": "BTC"}
+    return provider
+
+
+@responses.activate
+def test_get_expiry_list_returns_distinct_dates_sorted():
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+
+    provider = _provider_with_btcusd()
+    expiries = provider.get_expiry_list("BTCUSD")
+
+    assert expiries == ["2026-08-15", "2026-08-21"]
+    sent = responses.calls[0].request.params
+    assert sent["contract_types"] == "call_options,put_options"
+    assert sent["underlying_asset_symbols"] == "BTC"
+
+
+@responses.activate
+def test_get_expiry_list_unknown_symbol_returns_none():
+    responses.add(responses.GET, _products_url(), json={"success": True, "result": [], "meta": {"after": None}}, status=200)
+
+    provider = DeltaProvider()
+    assert provider.get_expiry_list("NOPE") is None
+
+
+@responses.activate
+def test_get_option_chain_parses_strikes_and_moneyness():
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+
+    provider = _provider_with_btcusd()
+    chain = provider.get_option_chain("BTCUSD", "2026-08-15")
+
+    assert chain is not None
+    assert chain.underlying_symbol == "BTCUSD"
+    assert chain.underlying_exchange == "CRYPTO"
+    assert chain.underlying_last_price == 24000.0
+    assert [s.strike for s in chain.strikes] == [23950.0, 24000.0, 24050.0]  # only this expiry's strikes
+
+    atm = chain.strikes[1]
+    assert atm.ce.moneyness == "ATM"
+    assert atm.pe.moneyness == "ATM"
+    itm_call_strike = chain.strikes[0]  # 23950 < spot -> ITM call, OTM put
+    assert itm_call_strike.ce.moneyness == "ITM"
+    assert itm_call_strike.pe.moneyness == "OTM"
+    otm_call_strike = chain.strikes[2]  # 24050 > spot -> OTM call, ITM put
+    assert otm_call_strike.ce.moneyness == "OTM"
+    assert otm_call_strike.pe.moneyness == "ITM"
+
+    assert atm.ce.security_id == "3"
+    assert atm.ce.oi == 5000
+    assert atm.ce.previous_oi is None  # Delta has no previous-OI figure
+    assert atm.ce.volume == 12.34
+    assert atm.ce.implied_volatility == 0.25
+    assert atm.ce.top_bid_price == 10.0
+    assert atm.ce.top_ask_price == 12.0
+    assert atm.ce.greeks.rho == 1.2  # Dhan's chain never sets this - Delta does
+
+
+@responses.activate
+def test_get_option_chain_filters_to_requested_expiry_only():
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+
+    provider = _provider_with_btcusd()
+    chain = provider.get_option_chain("BTCUSD", "2026-08-21")
+
+    assert [s.strike for s in chain.strikes] == [24000.0]
+
+
+@responses.activate
+def test_get_option_chain_and_expiry_list_share_one_cached_call():
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+
+    provider = _provider_with_btcusd()
+    provider.get_expiry_list("BTCUSD")
+    provider.get_option_chain("BTCUSD", "2026-08-15")
+    provider.get_option_chain("BTCUSD", "2026-08-21")
+
+    assert len(responses.calls) == 1  # one fetch, reused for every call above
+
+
+@responses.activate
+def test_get_option_chain_unknown_symbol_returns_none():
+    responses.add(responses.GET, _products_url(), json={"success": True, "result": [], "meta": {"after": None}}, status=200)
+
+    provider = DeltaProvider()
+    assert provider.get_option_chain("NOPE", "2026-08-15") is None
+
+
+@responses.activate
+def test_get_option_chain_resolvable_underlying_no_rows_returns_none():
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": []}, status=200)
+
+    provider = _provider_with_btcusd()
+    assert provider.get_option_chain("BTCUSD", "2026-08-15") is None
+
+
+@responses.activate
+def test_get_option_chain_empty_at_requested_expiry_still_returns_chain_with_spot():
+    # Underlying has live options, just none at this specific date -
+    # still a resolvable market (unlike the "no rows at all" case above).
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+
+    provider = _provider_with_btcusd()
+    chain = provider.get_option_chain("BTCUSD", "2099-01-01")
+
+    assert chain is not None
+    assert chain.strikes == []
+    assert chain.underlying_last_price == 24000.0
+
+
+@responses.activate
+def test_get_option_chain_fails_fast_when_throttle_queue_too_deep():
+    provider = _provider_with_btcusd()
+    provider._last_option_call_at = time.monotonic() + 5.0
+
+    try:
+        provider.get_option_chain("BTCUSD", "2026-08-15")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "backed up" in str(exc)

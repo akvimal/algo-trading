@@ -52,32 +52,41 @@ class Candle(BaseModel):
 
 
 class OptionGreeks(BaseModel):
-    """Dhan's option-chain response doesn't include rho - only these four."""
+    """Dhan's option-chain response doesn't include rho - only the first
+    four. Delta Exchange's does (Phase 2 of the crypto module, see
+    docs/architecture.md) - rho stays unset (None) for Dhan-sourced legs."""
 
     delta: float
     theta: float
     gamma: float
     vega: float
+    rho: Optional[float] = None
 
 
 class OptionLegQuote(BaseModel):
-    """One CE or PE leg at one strike - see DhanProvider.get_option_chain.
+    """One CE or PE leg at one strike - see DhanProvider.get_option_chain
+    and DeltaProvider.get_option_chain (Phase 2 of the crypto module).
     Trimmed from Dhan's raw response to what strike/strategy selection
-    (Phase 4b, not built yet - see docs/architecture.md) will actually
-    need; average_price/previous_close_price/previous_volume/bid-ask
-    *quantity* are dropped, easy to add back if a later phase needs them."""
+    (Phase 4b) actually needs; average_price/previous_close_price/
+    previous_volume/bid-ask *quantity* are dropped, easy to add back if a
+    later phase needs them. previous_oi is Optional (Dhan always sends
+    it; Delta's ticker response has no previous-OI figure at all, only a
+    dollar-denominated 6h change, not a contract-count delta) and volume
+    is float (Dhan's is a whole share/contract count; Delta's is
+    asset-denominated, e.g. 0.04 BTC) - both widenings, backward
+    compatible with Dhan's existing construction."""
 
     security_id: str
     last_price: float
     oi: int
-    previous_oi: int
-    volume: int
+    previous_oi: Optional[int] = None
+    volume: float
     implied_volatility: float
     top_bid_price: float
     top_ask_price: float
     greeks: OptionGreeks
     # Computed by app/domain/moneyness.py at fetch time - not something
-    # Dhan's response itself carries.
+    # either provider's response itself carries.
     moneyness: Literal["ITM", "ATM", "OTM"]
 
 

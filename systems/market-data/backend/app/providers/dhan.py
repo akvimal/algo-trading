@@ -25,7 +25,6 @@ other three are Dhan's documented exchangeSegment values.
 import csv
 import io
 import logging
-import re
 import threading
 import time
 from dataclasses import dataclass
@@ -36,6 +35,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from app.config import settings
+from app.domain.candle_aggregation import aggregate_candles, resolve_interval_minutes
 from app.domain.models import (
     Candle,
     OptionChain,
@@ -72,64 +72,17 @@ DHAN_CANDLE_INTERVAL_MINUTES = {"1min": 1, "5min": 5, "15min": 15, "25min": 25, 
 
 
 def _interval_minutes(interval: str) -> int:
-    """Resolves any interval string to its length in minutes - a native
-    Dhan granularity (dict lookup) or a general "Nmin" shape for local
-    aggregation (see _aggregate_candles). Raises ValueError for anything
-    else (e.g. "daily", which these intraday endpoints don't serve at
-    all - see get_candle_history's docstring)."""
-    if interval in DHAN_CANDLE_INTERVAL_MINUTES:
-        return DHAN_CANDLE_INTERVAL_MINUTES[interval]
-    match = re.fullmatch(r"(\d+)min", interval)
-    if not match or int(match.group(1)) <= 0:
-        raise ValueError(
-            f"unsupported candle interval '{interval}' - must be one of "
-            f"{list(DHAN_CANDLE_INTERVAL_MINUTES)} (native) or any 'Nmin' shape (locally aggregated from 1min bars)"
-        )
-    return int(match.group(1))
+    """Dhan's own native-interval dict, delegated to the shared
+    provider-agnostic resolver (app/domain/candle_aggregation.py) - see
+    there for why this got extracted (app/providers/delta.py needs the
+    exact same logic against its own, different native set)."""
+    return resolve_interval_minutes(interval, DHAN_CANDLE_INTERVAL_MINUTES)
 
 
 def _aggregate_candles(one_min_candles: list[Candle], interval: str, minutes: int) -> list[Candle]:
-    """Buckets native, already-completed 1-minute candles into `minutes`-
-    wide bars, aligned to clock-time multiples of `minutes` since
-    midnight - matching Dhan's own observed alignment for native
-    intervals (e.g. real 5min bars land on :00/:05/:10, never :02/:07).
-    Only emits a bucket once it holds a full complement of `minutes` one-
-    minute bars; a short bucket (session open not aligned to N, or the
-    tail end still forming) is dropped rather than emitted early -
-    extending the same "completed bars only" rule _fetch_native_candles
-    already applies at the 1-minute level up to the aggregate level.
-    `one_min_candles` must be oldest-first (as returned by
-    _fetch_native_candles) so the returned list is too."""
-    buckets: dict[datetime, list[Candle]] = {}
-    order: list[datetime] = []
-    for candle in one_min_candles:
-        ts = datetime.fromisoformat(candle.timestamp)
-        bucket_start_minutes = ((ts.hour * 60 + ts.minute) // minutes) * minutes
-        bucket_start = ts.replace(hour=bucket_start_minutes // 60, minute=bucket_start_minutes % 60, second=0, microsecond=0)
-        if bucket_start not in buckets:
-            buckets[bucket_start] = []
-            order.append(bucket_start)
-        buckets[bucket_start].append(candle)
-
-    result = []
-    for bucket_start in order:
-        members = buckets[bucket_start]
-        if len(members) != minutes:
-            continue
-        result.append(
-            Candle(
-                exchange=members[0].exchange,
-                symbol=members[0].symbol,
-                interval=interval,
-                open=members[0].open,
-                high=max(c.high for c in members),
-                low=min(c.low for c in members),
-                close=members[-1].close,
-                timestamp=bucket_start.isoformat(),
-                provider=members[0].provider,
-            )
-        )
-    return result
+    """Delegates to the shared aggregate_candles - see
+    app/domain/candle_aggregation.py."""
+    return aggregate_candles(one_min_candles, interval, minutes)
 
 # Dhan doesn't publish a specific rate limit for charts/intraday (unlike
 # marketfeed/ltp's documented-and-empirically-confirmed 1 req/sec) - this

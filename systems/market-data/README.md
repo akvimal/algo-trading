@@ -9,7 +9,7 @@ Owns provider credentials, instrument-master sync, and live quote lookups - a si
 - **Underlying resolution**: `GET /instruments/resolve?segment=&underlying=` - given a logical underlying (`GOLDM`, `NIFTY`, ...), resolves what to chart indicators on and what to actually trade. Equal for commodities (no continuous spot - chart and trade the same active-month future); different for indices (chart the continuous index spot, trade the active-month index future). `GET /instruments/lot-size?exchange=&symbol=` - lot size for an already-resolved trading symbol (1 for cash equity/index spot, a real multiplier for futures), used by `execution` to size futures positions in whole lots.
 - **Option chain (Phase 4a of the options trading module - see `docs/architecture.md`)**: `GET /options/expiries?exchange=&symbol=` and `GET /options/chain?exchange=&symbol=&expiry=` - OI, IV, top bid/ask, and Greeks (delta/theta/gamma/vega) per strike, plus an ITM/ATM/OTM `moneyness` label computed from the chain itself (Dhan doesn't send one). Live/current data only.
 - **Option leg history (Phase 4c)**: `GET /options/leg-history?exchange=&symbol=&option_type=&strike=&expiry_flag=&expiry_code=&interval=&from=&to=` - historical premium for one leg, tracked *relative to spot* (`strike` e.g. `"ATM"`/`"ATM+2"`, Dhan resolves the real strike server-side per bar) via Dhan's `POST /charts/rollingoption` - signal-generation's option-strategy backtesting data source. NSE/BSE only (assumed - no MCX derivatives segment is documented for this Dhan endpoint, unlike the option chain above).
-- Crypto (Delta Exchange) remains a documented extension point in `app/providers/router.py`, not implemented.
+- **CRYPTO (Delta Exchange India), Phase 1 of the crypto module - see `docs/architecture.md`.** `DeltaProvider` (`app/providers/delta.py`) covers perpetual futures only so far (option chain/strategy/execution are later phases) - `GET /quotes/ltp?exchange=CRYPTO&symbol=BTCUSD`, `GET /candles/history?exchange=CRYPTO&...`, `GET /instruments/resolve?segment=CRYPTO&underlying=BTCUSD` all work the same way they do for NSE/MCX. Every endpoint Delta India exposes for this is **public** - no API key/secret needed anywhere in this integration, unlike Dhan.
 
 ## Credentials
 
@@ -26,6 +26,8 @@ Dhan's LTP endpoint is rate-limited to 1 request/second, and it's stricter in pr
 ## Live market feed
 
 `market-data` also maintains a real, continuous Dhan **live market feed** WebSocket connection (`app/providers/dhan_feed.py`, `wss://api-feed.dhan.co` - see https://docs.dhanhq.co/api/v2/guides/live-market-feed) - not REST polling. Started automatically on startup, runs in a background thread for the life of the process, and reconnects on its own after any disconnect. Subscribes Ticker mode only (LTP + last-trade-time - the cheapest of Dhan's three feed modes, enough to prove the connection is genuinely live) for a small default watchlist (`NIFTY`) plus whatever's added via `POST /dhan/feed/subscribe`. In-memory only, same as everything else here - a restart clears subscriptions back to the default watchlist.
+
+A second, independent live feed does the same for Delta Exchange India (`app/providers/delta_feed.py`, `wss://socket.india.delta.exchange`) - plain JSON text frames (not Dhan's binary protocol), subscribing the public `v2/ticker` channel directly by symbol (no security-id resolution needed, unlike Dhan). Default watchlist `BTCUSD`; extend via `POST /delta/feed/subscribe`. Same reconnect/backoff shape as Dhan's feed, kept on its own `/delta/...` route path rather than a shared one.
 
 ## Endpoints
 
@@ -44,5 +46,7 @@ Dhan's LTP endpoint is rate-limited to 1 request/second, and it's stricter in pr
 - `GET /options/expiries?exchange=NSE&symbol=NIFTY` - `{expiries: [...]}`, active option expiry dates for an underlying
 - `GET /options/chain?exchange=NSE&symbol=NIFTY&expiry=2026-08-14` - full option chain (OI/IV/Greeks/moneyness per strike)
 - `GET /options/leg-history?exchange=NSE&symbol=NIFTY&option_type=CE&strike=ATM&expiry_flag=WEEK&expiry_code=0&interval=5&from=2026-07-01&to=2026-08-01` - historical premium for one leg, tracked relative to spot
+- `GET /delta/feed-status` - Delta live feed connection health + last ticks
+- `POST /delta/feed/subscribe` - `{exchange: "CRYPTO", symbol}`, adds one more symbol to the Delta live feed
 
 No database - this system holds no business-critical state, just a cached provider lookup and in-memory feed/token state, both cheap to rebuild on restart.

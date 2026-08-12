@@ -14,7 +14,7 @@ class SignalIngest(BaseModel):
 
     strategy_id: str
     symbol: str
-    exchange: Literal["NSE", "MCX"]
+    exchange: Literal["NSE", "MCX", "CRYPTO"]
     action: Literal["BUY", "SELL"]
     price: float = Field(gt=0)
     timestamp: Optional[datetime] = None

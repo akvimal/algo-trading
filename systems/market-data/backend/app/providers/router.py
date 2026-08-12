@@ -1,4 +1,5 @@
 from app.providers.base import QuoteProvider
+from app.providers.delta import DeltaProvider
 from app.providers.dhan import (
     MCX_FUTCOM,
     MCX_OPTFUT,
@@ -16,11 +17,12 @@ from app.providers.dhan import (
 # all_providers() below dedupes by name, so these must not collide.
 _dhan_nse = DhanProvider([NSE_EQ, NSE_INDEX, NSE_FUTIDX, NSE_OPTIDX, NSE_OPTSTK], name="dhan-nse")
 _dhan_mcx = DhanProvider([MCX_FUTCOM, MCX_OPTFUT], name="dhan-mcx")
+_delta_india = DeltaProvider(name="delta-india")
 
 _PROVIDERS: dict[str, QuoteProvider] = {
     "NSE": _dhan_nse,
     "MCX": _dhan_mcx,
-    # "CRYPTO": ...,  Delta Exchange, not wired up yet
+    "CRYPTO": _delta_india,
 }
 
 

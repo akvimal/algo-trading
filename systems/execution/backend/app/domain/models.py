@@ -20,7 +20,7 @@ class ResolvedOrder(BaseModel):
     signal_id: str
     strategy_id: str
     symbol: str
-    exchange: Literal["NSE", "MCX"]
+    exchange: Literal["NSE", "MCX", "CRYPTO"]
     action: Literal["BUY", "SELL"]
     horizon: Literal["intraday", "swing", "positional"]
     instrument_type: Literal["spot", "future", "option"]

@@ -30,7 +30,7 @@ A **Strategy** (`signal-generation`, `signal_generation.strategies` table) is wh
 
 Deliberately **no position-size/capital field on Strategy** — see § "Why position sizing lives in execution, not signal-generation" below. Stop-loss and target ARE here, though (`stop_loss_method`, `stop_loss_interval`, `stop_loss_percent`, `target_percent`, `trailing_stop_enabled`), which reads at first as a contradiction of "no risk fields" — it isn't, see the explanation in that section: the *method* varies by strategy, the sizing *arithmetic* still doesn't live here. `square_off_time` is here too, on the same reasoning — and it's **required for `horizon='intraday'`**, execution has no platform-wide default (this was tried first and dropped - see § "Why the square-off scheduler lives in execution, not a separate orchestrator"). It stays `null` for `swing`/`positional` strategies — square-off doesn't apply to a position that isn't closed same-day, so there's nothing to default or require; the frontend hides the input entirely for those horizons. Execution still owns the actual scheduling (a periodic job checking each position's own stored time, not signal-generation deciding when anything closes).
 
-`segment` (`NSE`/`MCX`/`CRYPTO`, default `NSE`) is a separate field from `exchange` — `exchange` is still hard-fixed to `"NSE"` (the only one actually wired up end-to-end in execution/market-data), while `segment` just records which market the strategy is *meant* for, so `square_off_time` can be defaulted sensibly: `default_square_off_time(horizon, segment)` returns `15:00` for NSE, `22:00` for MCX, `17:25` for CRYPTO, but only when `horizon='intraday'` — any other horizon returns `None` and `square_off_time` simply stays unset, no error. This runs server-side (a `StrategyCreate` model-validator), so it applies the same way whether a strategy is created from the frontend or a raw API call; the frontend additionally pre-fills the square-off input with the same suggestion as a UX convenience, and only shows that input at all when Horizon is Intraday. Picking `MCX`/`CRYPTO` today is recording intent, not enabling trading — `is_supported()` in execution still only accepts `intraday`+`spot` regardless of segment.
+`segment` (`NSE`/`MCX`/`CRYPTO`, default `NSE`) is conceptually a separate axis from `exchange`, though the two always co-occur 1:1 in practice (NSE segment↔NSE exchange, MCX↔MCX, CRYPTO↔CRYPTO — one provider per segment, see `market-data`'s `router.py`), so `segment` just records which market the strategy is *meant* for, letting `square_off_time` be defaulted sensibly: `default_square_off_time(horizon, segment)` returns `15:00` for NSE, `22:00` for MCX, `17:25` for CRYPTO, but only when `horizon='intraday'` — any other horizon returns `None` and `square_off_time` simply stays unset, no error. This runs server-side (a `StrategyCreate` model-validator), so it applies the same way whether a strategy is created from the frontend or a raw API call; the frontend additionally pre-fills the square-off input with the same suggestion as a UX convenience, and only shows that input at all when Horizon is Intraday. `is_supported()` in execution still only accepts `intraday`+`spot`/`future` regardless of segment — CRYPTO's own market-data foundation (Phase 1 of the crypto module, below) makes a CRYPTO signal resolvable/chartable, not yet independently gated any differently from NSE/MCX at the execution layer.
 
 A Strategy also carries an optional **active window** (`active_from_time`/`active_to_time`, e.g. `09:15`–`11:00`) — both-or-neither, `None`/`None` by default (no restriction, existing strategies unaffected), available to every `source_type`, not just `in_house`. It's enforced entirely in `signal-processing`'s `resolve()` (see below), not here — signal-generation just stores and validates the pair (`validate_active_window_fields`: both set or neither, `active_to_time` strictly after `active_from_time`, no overnight wraparound). `run_live_tick`'s per-tick strategy fetch additionally skips a `live`/`in_house` strategy currently outside its own window before spending any market-data calls on it — a pure efficiency optimization mirroring the authoritative check, not a second source of truth for it.
 
@@ -123,9 +123,67 @@ Several things confirmed only by testing against the live API, not the docs. The
 
 Candle fetching (`get_previous_candle`, backing `GET /candles/previous`) is deliberately narrow: the single most recently *completed* candle for a symbol/interval, not a historical range — built for the stop-loss method above. It has its own independent throttle (separate lock/timestamp from LTP — different Dhan endpoint, no reason to serialize one behind the other) and its own cache keyed by `(symbol, interval)` with a TTL equal to the interval's own length, since a completed candle doesn't change until the next one closes. Unlike LTP there's no true multi-symbol batching here — Dhan's `charts/intraday` endpoint is per-security-id — so a caller needing several symbols (e.g. execution's exit-monitor job trailing several `previous_candle` positions) calls it once per distinct symbol, relying on the cache to bound repeat calls across polling ticks. `GET /candles/history` (§ below) reuses the same endpoint and cache-free path for a general multi-bar range instead of one cached value.
 
-NSE (cash equity, indices, index futures) and MCX (commodity futures) are wired up via Dhan. Crypto (Delta Exchange) is still a documented extension point in `systems/market-data/backend/app/providers/router.py`, not implemented.
+NSE (cash equity, indices, index futures) and MCX (commodity futures) are wired up via Dhan; CRYPTO via Delta Exchange India, see below.
 
-Dhan's `charts/intraday` only natively serves a fixed set of granularities (`DHAN_CANDLE_INTERVAL_MINUTES` — 1/5/15/25/60min). Any other `"Nmin"` interval (3min, 2min, 10min, 20min, 30min, ...) is served by **local aggregation** instead: `DhanProvider` fetches native 1min bars for the requested range and buckets them into N-minute bars itself (`_aggregate_candles` in `app/providers/dhan.py`), aligned to clock-time multiples of N since midnight — the same alignment Dhan's own native bars are observed to use (e.g. real 5min bars land on `:00/:05/:10`, never `:02/:07`). A bucket is only emitted once it holds a full complement of N one-minute bars — a short bucket (session open not aligned to N, or the trailing bucket still forming) is dropped, extending the same "completed bars only" rule the 1-minute fetch already applies. This is transparent to callers: `get_previous_candle`/`get_candle_history` accept any `"Nmin"` interval string, native or aggregated, and `Strategy.interval` (signal-generation) is no longer limited to Dhan's native set — this incidentally fixed a latent gap where `"30min"` was already an accepted `Strategy.interval` value with no actual working path before local aggregation existed.
+Dhan's `charts/intraday` only natively serves a fixed set of granularities (`DHAN_CANDLE_INTERVAL_MINUTES` — 1/5/15/25/60min). Any other `"Nmin"` interval (3min, 2min, 10min, 20min, 30min, ...) is served by **local aggregation** instead: `DhanProvider` fetches native 1min bars for the requested range and buckets them into N-minute bars itself (`aggregate_candles`, extracted into the provider-agnostic `app/domain/candle_aggregation.py` once `DeltaProvider` needed the identical algorithm against its own, different native set — `app/providers/dhan.py`'s `_aggregate_candles`/`_interval_minutes` are now thin delegating wrappers, kept for call-site/test-import stability), aligned to clock-time multiples of N since midnight — the same alignment Dhan's own native bars are observed to use (e.g. real 5min bars land on `:00/:05/:10`, never `:02/:07`). A bucket is only emitted once it holds a full complement of N one-minute bars — a short bucket (session open not aligned to N, or the trailing bucket still forming) is dropped, extending the same "completed bars only" rule the 1-minute fetch already applies. This is transparent to callers: `get_previous_candle`/`get_candle_history` accept any `"Nmin"` interval string, native or aggregated, and `Strategy.interval` (signal-generation) is no longer limited to Dhan's native set — this incidentally fixed a latent gap where `"30min"` was already an accepted `Strategy.interval` value with no actual working path before local aggregation existed.
+
+## CRYPTO segment via Delta Exchange India (Phase 1 of the crypto module)
+
+The crypto module is planned as a phased roadmap, same reasoning as the options module (§ above) —
+this is Phase 1 only: `market-data`'s foundation (instrument sync, historical candles, quotes,
+live feed) plus the minimum contract widening needed for a CRYPTO signal to flow through the
+existing pipeline unchanged otherwise. Option chain, option-strategy resolution, and option
+execution for CRYPTO are separate, later phases, not built yet.
+
+**A genuinely simpler integration than Dhan's, on two axes.** First, every endpoint `DeltaProvider`
+(`app/providers/delta.py`) calls — `GET /v2/products`, `GET /v2/history/candles`, `GET /v2/tickers`
+— is **public**; Delta's HMAC-signed auth scheme only gates order placement/wallet/positions,
+none of which this paper-trading-only platform ever calls, so there's no credential, no token
+renewal, nothing in `.env` at all for this module (contrast Dhan's `DHAN_CLIENT_ID`/
+`DHAN_ACCESS_TOKEN`/renewal scheduler). Second, a crypto perpetual future has **no expiry or
+rollover at all** — unlike an NSE index (spot vs. active-month future) or an MCX commodity
+(monthly rollover), `resolve_underlying`'s `chart_symbol`/`trade_symbol` are just the perpetual's
+own symbol (e.g. `"BTCUSD"`), permanently, so `DeltaProvider` needs none of `DhanProvider`'s
+active-contract-resolution machinery (`resolve_active_contract`, `_underlying_to_contracts`, ...).
+`get_lot_size` always returns `1` for the same reason spot equity does — Delta perpetuals size in
+whole contracts directly, no separate lot-multiplier concept.
+
+Base URL/response shapes were confirmed directly against the live API (`https://api.india.delta.exchange`)
+rather than `docs.delta.exchange` alone (a JS-rendered SPA that a plain fetch summarizes poorly) —
+worth re-checking if Delta's API ever changes shape, same spirit as this doc's other
+empirically-confirmed-not-just-documented Dhan notes. Two behaviors worth flagging since they're
+easy to get wrong from the docs alone: `GET /v2/history/candles` returns results **newest-first**
+(the opposite of this codebase's oldest-first `Candle` convention — `DeltaProvider` reverses
+before returning) and `GET /v2/tickers?symbols=A,B` **silently ignores the `symbols` filter**
+(confirmed live — it returns every product regardless) — `get_ltp_batch` instead fetches
+`?contract_types=perpetual_futures` once (~220 rows) and filters to the requested symbols in
+memory, keeping the same "one provider call regardless of N symbols" property `DhanProvider.get_ltp_batch`
+has, just via a different mechanism. `sync_instruments()` follows Delta's cursor-based
+`meta.after` pagination (not page numbers) until a page comes back empty.
+
+**Live feed** (`app/providers/delta_feed.py`, `wss://socket.india.delta.exchange`) is plain JSON
+text frames — confirmed live: `{"type":"subscribe","payload":{"channels":[{"name":"v2/ticker","symbols":[...]}]}}`
+subscribes directly by symbol, no security-id resolution step the way Dhan's binary protocol
+needs (`resolve_feed_target`). Meaningfully simpler to maintain as a result — no `struct.unpack`,
+no numeric-segment-code table. Same reconnect/exponential-backoff shape as `dhan_feed.py`
+(`_backoff_delay`, doubling per consecutive failure up to `RECONNECT_DELAY_MAX_SECONDS`), same
+`GET /delta/feed-status`/`POST /delta/feed/subscribe` route shape as Dhan's — kept on its own
+`/delta/...` path rather than generalizing both providers onto one shared route now, avoiding any
+change to Dhan's already-working routes for a speculative abstraction.
+
+**Contract widening**: `SignalIngest.exchange`/`ResolvedOrder.exchange` (both systems' Pydantic
+mirrors, both `docs/contracts/*.schema.json`) widened from `["NSE","MCX"]` to include `"CRYPTO"` —
+without this a resolved CRYPTO signal couldn't flow through the pipeline at all, even though
+`segment` already accepted `"CRYPTO"` everywhere (accounts, square-off defaults) well ahead of
+there being a real provider behind it. `exchange="CRYPTO"` (not a Delta-specific code) is used
+directly, since segment and exchange already always co-occur 1:1 for every existing segment too.
+
+**Sizing/currency simplification, worth stating explicitly**: Delta quotes in USD; every other
+segment's `capital_per_trade`/`current_balance` is implicitly INR. There's no FX conversion
+anywhere in this integration — since this is paper trading only (no real capital ever at risk,
+platform-wide), the `CRYPTO` account row's `capital_per_trade` is just treated as a raw number of
+USD-equivalent units for sizing purposes, the same way every other segment's number is implicitly
+INR. Not a bug to fix later, a deliberate simplification given nothing here is real money.
 
 ## MCX/NSE-index market-data support
 
@@ -267,14 +325,18 @@ algo-trading/
     - ~~**Phase 4b:** strike + strategy selection~~ Done — `signal-processing`'s `choose_strategy` (`app/domain/resolution/strategy.py`) picks a **fixed set of bias→template multi-leg strategies** (bullish → bull call spread, bearish → bear put spread — exactly the two named when this was decided, see "Open questions" below), using Phase 4a's chain data to pick the actual strikes within each template's legs. Populates the `strategy: {type, legs: []}` field `resolved-order.schema.json` has reserved and left null all along — see § "Strike + strategy selection (Phase 4b)" below.
     - ~~**Phase 4c:** backtesting single/multi-leg option strategies, intraday and positional~~ Done — `signal-generation`'s `app/domain/option_backtest.py`, wired into the existing `POST /strategies/{id}/backtest` (crossover-rule strategies only so far). Dhan's `POST /charts/rollingoption` (minute-level historical option data, up to 5 years, keyed by strike *relative to spot* like `ATM`/`ATM+10`) is the data source, avoiding a synthetic Black-Scholes pricing model. See § "Backtesting option strategies (Phase 4c)" below.
     - ~~**Phase 4d:** `execution` multi-leg position support~~ Done — an `option_group_id` linking 2 `Position` rows (one per leg) to a new `execution.option_position_groups` row owning the combined P&L and combined stop-loss, since the base schema is one-symbol-per-row. Backend/API only, no grouped frontend view yet. See § "Making an option order tradeable (Phase 4d)" below.
-12. **Phase 4.5 (planned):** Crypto via Delta Exchange (BTC/ETH/SOL) - same shape as Phase 3/4 (new market-data provider, new segment/account, the same RSI engine and bias-template resolver reused as-is), once the MCX path is proven end to end.
+12. **Phase 4.5 → the crypto module (in progress):** Crypto via Delta Exchange India, split into its own phased roadmap once started, same reasoning as the options module:
+    - ~~**Phase 1:** `market-data` foundation~~ Done — `DeltaProvider`/`delta_feed.py`, instrument sync/candles/quotes/live feed for perpetual futures, `exchange`/`segment="CRYPTO"` widened end to end. See § "CRYPTO segment via Delta Exchange India (Phase 1 of the crypto module)" above.
+    - **Phase 2 (planned):** option-chain data — Delta's `GET /v2/tickers?contract_types=call_options,put_options&underlying_asset_symbols=` already returns full Greeks/OI/IV per contract in one call, no separate throttled endpoint needed the way Dhan's option chain required.
+    - **Phase 3 (planned):** strike + strategy selection for CRYPTO, reusing signal-processing's fixed bias→template approach (Phase 4b) the same way it now works for NSE/MCX.
+    - **Phase 4 (planned):** `execution` support for CRYPTO option spreads, reusing `option_position_manager.py` (Phase 4d)'s combined-SL group design.
 13. **Phase 5:** live broker adapter(s) for `execution` - real-money execution, a distinct concern from the paper-trading phases above.
 14. **Phase 6 (optional):** move off "local only" — VPS/Traefik/TLS, secrets management, CI image builds.
 
 ## Open questions (not blocking current phase)
 
 - ~~Options-strategy rule inputs~~ Decided: a **fixed set of bias→template rules** to start (bullish→bull call spread, bearish→bear put spread, etc.), not a general rule engine — see Phase 4b. Re-confirmed when Phase 4a shipped: a more dynamic OI/IV/Greeks-driven strategy *selector* (choosing between several candidate strategies, not just picking strikes within one fixed template) was explicitly considered and deferred — Phase 4a's chain data feeds strike selection within the fixed template first; revisit the dynamic selector only once that simpler version is proven in use.
-- ~~MCX and crypto (Delta Exchange) quote providers~~ MCX done as of Phase 3 (instrument sync, active-month contract resolution, general historical candles — see § "MCX/NSE-index market-data support"). Delta Exchange/crypto remains Phase 4.5, reusing the same `SegmentConfig` shape once needed.
+- ~~MCX and crypto (Delta Exchange) quote providers~~ MCX done as of Phase 3 (instrument sync, active-month contract resolution, general historical candles — see § "MCX/NSE-index market-data support"). Crypto (Delta Exchange India) Phase 1 done — see § "CRYPTO segment via Delta Exchange India (Phase 1 of the crypto module)" — option chain/strategy/execution (Phases 2-4) still planned.
 - ~~What "backtesting" actually means operationally for an in-house Strategy~~ Resolved as of Phase 3: a **lightweight signal replay** (`POST /strategies/{id}/backtest`), not a full stop-loss/sizing simulation — reruns the exact same `rules.evaluate()` function the live engine calls over historical candles, reports where signals would have fired plus a naive hypothetical P&L. Never auto-promotes `backtesting` → `live`; that stays a manual `PATCH` after reviewing the report. See § "The in-house indicator engine".
 - Webhook auth — add a shared-secret/HMAC check once anything here is internet-reachable; today `strategy_id` in a query param is not a secret, and the webhook routes have no auth of their own.
 - TradingView provider — no route exists yet; adding one is the same pattern as Chartink (`add-signal-provider` skill).

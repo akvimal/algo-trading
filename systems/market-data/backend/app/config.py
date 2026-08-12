@@ -21,5 +21,11 @@ class Settings(BaseSettings):
     # docs/architecture.md.
     dhan_token_renew_interval_hours: int = 20
 
+    # Delta Exchange India (CRYPTO segment) - see app/providers/delta.py.
+    # Every endpoint this provider calls is public (no api-key/secret
+    # needed at all), unlike Dhan - see docs/architecture.md.
+    delta_base_url: str = "https://api.india.delta.exchange"
+    delta_ws_url: str = "wss://socket.india.delta.exchange"
+
 
 settings = Settings()

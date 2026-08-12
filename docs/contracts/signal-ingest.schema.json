@@ -23,8 +23,8 @@
     },
     "exchange": {
       "type": "string",
-      "enum": ["NSE", "MCX"],
-      "description": "Which exchange/segment this symbol trades on - determines which quote provider execution uses for CMP at square-off. NSE and MCX are wired up (via Dhan); widen this enum (CRYPTO, ...) as new segments/providers are added."
+      "enum": ["NSE", "MCX", "CRYPTO"],
+      "description": "Which exchange/segment this symbol trades on - determines which quote provider execution uses for CMP at square-off. NSE and MCX are wired up via Dhan, CRYPTO via Delta Exchange India (market-data's DeltaProvider) - see docs/architecture.md."
     },
     "price": {
       "type": "number",

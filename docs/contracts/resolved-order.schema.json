@@ -16,8 +16,8 @@
     "symbol": { "type": "string", "minLength": 1 },
     "exchange": {
       "type": "string",
-      "enum": ["NSE", "MCX"],
-      "description": "Carried through from signal-ingest unchanged - tells execution which quote provider owns this position's CMP."
+      "enum": ["NSE", "MCX", "CRYPTO"],
+      "description": "Carried through from signal-ingest unchanged - tells execution which quote provider owns this position's CMP. 'CRYPTO' is Delta Exchange India (market-data's DeltaProvider) - see docs/architecture.md."
     },
     "action": { "type": "string", "enum": ["BUY", "SELL"] },
     "horizon": { "type": "string", "enum": ["intraday", "swing", "positional"] },
@@ -25,7 +25,7 @@
     "segment": {
       "type": "string",
       "enum": ["NSE", "MCX", "CRYPTO"],
-      "description": "From the resolved Strategy (signal-generation.strategies.segment, always set, defaults NSE) - tells execution which execution.accounts row (one per segment) to size against and credit/debit on close. Not the same axis as exchange, which stays fixed 'NSE' today."
+      "description": "From the resolved Strategy (signal-generation.strategies.segment, always set, defaults NSE) - tells execution which execution.accounts row (one per segment) to size against and credit/debit on close. A different axis from exchange in principle, but each segment maps to exactly one exchange today (NSE<->NSE, MCX<->MCX, CRYPTO<->CRYPTO), so they always co-occur 1:1."
     },
     "strategy": {
       "type": ["object", "null"],

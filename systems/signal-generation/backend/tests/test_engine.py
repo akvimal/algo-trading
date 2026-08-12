@@ -1,6 +1,8 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import uuid4
 
-from app.domain.engine import history_window
+from app.domain.engine import _target_symbols, history_window
 
 
 def test_history_window_ends_today_and_covers_at_least_min_days():
@@ -13,3 +15,44 @@ def test_history_window_ends_today_and_covers_at_least_min_days():
 def test_history_window_caps_at_max_days_for_large_bar_counts():
     from_date, to_date = history_window(bar_count=100000, interval="1min")
     assert (to_date - from_date).days <= 30
+
+
+# --- _target_symbols: expanding a Strategy into what the engine actually checks -------------
+
+
+@dataclass
+class FakeStrategy:
+    """Stands in for db_models.Strategy - _target_symbols only reads
+    .id/.underlying/.underlying_type."""
+
+    underlying: str
+    underlying_type: str = "symbol"
+    id: str = ""
+
+    def __post_init__(self):
+        if not self.id:
+            self.id = str(uuid4())
+
+
+def test_target_symbols_symbol_scoped_returns_just_its_own_underlying():
+    strategy = FakeStrategy(underlying="RELIANCE", underlying_type="symbol")
+    result = _target_symbols(strategy, get_universe_constituents=lambda key: ["SHOULD", "NOT", "BE", "CALLED"])
+    assert result == ["RELIANCE"]
+
+
+def test_target_symbols_universe_scoped_returns_constituents():
+    strategy = FakeStrategy(underlying="NIFTYBANK", underlying_type="universe")
+    result = _target_symbols(strategy, get_universe_constituents=lambda key: ["HDFCBANK", "ICICIBANK"] if key == "NIFTYBANK" else None)
+    assert result == ["HDFCBANK", "ICICIBANK"]
+
+
+def test_target_symbols_unresolvable_universe_returns_empty_list():
+    strategy = FakeStrategy(underlying="NOT_A_REAL_INDEX", underlying_type="universe")
+    result = _target_symbols(strategy, get_universe_constituents=lambda key: None)
+    assert result == []
+
+
+def test_target_symbols_empty_universe_constituents_returns_empty_list():
+    strategy = FakeStrategy(underlying="NIFTYBANK", underlying_type="universe")
+    result = _target_symbols(strategy, get_universe_constituents=lambda key: [])
+    assert result == []

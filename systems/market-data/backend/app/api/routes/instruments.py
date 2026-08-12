@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.domain.models import ProviderStatus, ResolvedUnderlying
+from app.providers import nse_indices
 from app.providers.router import all_providers, get_provider
 
 router = APIRouter()
@@ -48,3 +49,22 @@ def get_lot_size(exchange: str, symbol: str):
     if lot_size is None:
         raise HTTPException(status_code=404, detail=f"unknown symbol '{symbol}' on exchange '{exchange}'")
     return {"lot_size": lot_size}
+
+
+@router.get("/instruments/universes")
+def list_universes():
+    """Available NSE index-constituent universe keys (e.g. "NIFTYBANK") -
+    used by signal-generation's frontend to populate a universe picker
+    when scoping a Strategy to a whole index instead of one symbol."""
+    return {"universes": nse_indices.list_universes()}
+
+
+@router.get("/instruments/universe/constituents")
+def universe_constituents(key: str):
+    """The symbol list for one universe key - used by signal-generation's
+    in-house engine to expand a universe-scoped Strategy into its member
+    symbols each tick."""
+    constituents = nse_indices.get_constituents(key)
+    if constituents is None:
+        raise HTTPException(status_code=404, detail=f"unknown universe '{key}'")
+    return {"key": key.upper(), "constituents": constituents}

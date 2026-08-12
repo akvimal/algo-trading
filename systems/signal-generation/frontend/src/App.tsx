@@ -19,6 +19,7 @@ import {
   type StopLossMethod,
   type Strategy,
   type StrategyStatus,
+  type UnderlyingType,
   backtestStrategy,
   backtestStrategyGrid,
   createIndicator,
@@ -29,6 +30,7 @@ import {
   fetchIndicators,
   fetchSignalsForStrategy,
   fetchStrategies,
+  fetchUniverses,
   updateStrategy,
 } from "./api";
 import { chartinkWebhookUrls, executionUrl, n8nUrl, processingUrl } from "./links";
@@ -222,12 +224,18 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   // indicator the rule uses - the signal SMA length lives on the
   // indicator itself (RsiParams.sma_period), not here.
   const [underlying, setUnderlying] = useState("");
+  // 'symbol' (default): underlying is one traded symbol, as before.
+  // 'universe': underlying instead picks an NSE index-constituent group
+  // (see universes state below) - only valid for segment='NSE' +
+  // instrument_type='spot'.
+  const [underlyingType, setUnderlyingType] = useState<UnderlyingType>("symbol");
+  const [selectedUniverse, setSelectedUniverse] = useState("");
   const [selectedIndicatorId, setSelectedIndicatorId] = useState("");
   // in_house only - which rule shape this strategy uses. Not editable
   // after creation (same pattern as source_type/exchange) - switching
   // shapes changes what stop_loss_method/interval even mean for the
   // strategy, see the backend's _breakout_stop_loss_fields.
-  const [ruleType, setRuleType] = useState<"crossover" | "breakout">("crossover");
+  const [ruleType, setRuleType] = useState<"crossover" | "breakout" | "range_breakout">("crossover");
   // Breakout rule fields (in_house only, ruleType==="breakout") - see the
   // backend's BreakoutRuleConfig / app/domain/breakout.py.
   const [htfInterval, setHtfInterval] = useState<Interval>("15min");
@@ -236,6 +244,9 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   const [ltfBreakoutPeriod, setLtfBreakoutPeriod] = useState("10");
   const [emaFilterEnabled, setEmaFilterEnabled] = useState(false);
   const [emaPeriod, setEmaPeriod] = useState("20");
+  // Range-breakout rule field (in_house only, ruleType==="range_breakout") -
+  // see the backend's RangeBreakoutRuleConfig / app/domain/range_breakout.py.
+  const [rangeBreakoutPeriod, setRangeBreakoutPeriod] = useState("5");
   // in_house only - gates a crossover signal on the single-timeframe
   // market regime classifier (see the backend's app/domain/regime.py).
   const [regimeFilterEnabled, setRegimeFilterEnabled] = useState(false);
@@ -249,6 +260,9 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   // Indicators are their own entity, shared across all in_house
   // strategies - fetched once here (only meaningful on the in_house tab).
   const [indicators, setIndicators] = useState<Indicator[]>([]);
+  // NSE index-constituent universe keys (e.g. "NIFTYBANK") - fetched once,
+  // shared across all in_house strategies, same lifecycle as indicators.
+  const [universes, setUniverses] = useState<string[]>([]);
   const [newIndicatorName, setNewIndicatorName] = useState("");
   const [newIndicatorPeriod, setNewIndicatorPeriod] = useState("14");
   const [newIndicatorSmaPeriod, setNewIndicatorSmaPeriod] = useState("9");
@@ -281,6 +295,8 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   const [editLtfBreakoutPeriod, setEditLtfBreakoutPeriod] = useState("10");
   const [editEmaFilterEnabled, setEditEmaFilterEnabled] = useState(false);
   const [editEmaPeriod, setEditEmaPeriod] = useState("20");
+  // Range-breakout rule field - editable, same as the breakout fields above.
+  const [editRangeBreakoutPeriod, setEditRangeBreakoutPeriod] = useState("5");
   const [editRegimeFilterEnabled, setEditRegimeFilterEnabled] = useState(false);
   const [editRegimeFilterChecks, setEditRegimeFilterChecks] = useState<RegimeCheckName[]>(ALL_REGIME_CHECKS);
   const [editDupPolicy, setEditDupPolicy] = useState<DuplicateSignalPolicy>("add_position");
@@ -363,6 +379,21 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   }, [sourceType]);
 
   useEffect(() => {
+    if (sourceType !== "in_house") return;
+    let cancelled = false;
+    fetchUniverses()
+      .then((data) => {
+        if (!cancelled) setUniverses(data);
+      })
+      .catch(() => {
+        // keep the picker empty rather than blocking the tab on a market-data blip
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceType]);
+
+  useEffect(() => {
     if (!selected) {
       setSignals([]);
       return;
@@ -390,6 +421,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   const selectedIndicator =
     selectedRuleConfig?.type === "crossover" ? indicators.find((i) => i.id === selectedRuleConfig.indicator_id) : undefined;
   const selectedIsBreakout = selectedRuleConfig?.type === "breakout";
+  const selectedIsRangeBreakout = selectedRuleConfig?.type === "range_breakout";
 
   function ruleSummary(s: Strategy): string {
     const ruleConfig = s.rule_config;
@@ -404,6 +436,10 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
       return ` - ${ruleConfig.htf_interval}(N=${ruleConfig.htf_breakout_period}) -> ${ruleConfig.ltf_interval}(N=${ruleConfig.ltf_breakout_period})${emaSuffix}${regimeSuffix}`;
     }
 
+    if (ruleConfig.type === "range_breakout") {
+      return ` - close beyond last ${ruleConfig.breakout_period} candles' high/low${regimeSuffix}`;
+    }
+
     const indicator = indicators.find((i) => i.id === ruleConfig.indicator_id);
     if (!indicator) return ` - unknown indicator (${ruleConfig.indicator_id.slice(0, 8)}...)${regimeSuffix}`;
     // sma_period lives on the indicator itself now, not the rule.
@@ -412,6 +448,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
   }
 
   const isBreakout = isInHouse && ruleType === "breakout";
+  const isRangeBreakout = isInHouse && ruleType === "range_breakout";
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -429,7 +466,9 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
               ema_filter_enabled: emaFilterEnabled,
               ema_period: Number(emaPeriod),
             }
-          : { type: "crossover" as const, indicator_id: selectedIndicatorId }
+          : isRangeBreakout
+            ? { type: "range_breakout" as const, breakout_period: Number(rangeBreakoutPeriod) }
+            : { type: "crossover" as const, indicator_id: selectedIndicatorId }
         : undefined;
       const created = await createStrategy({
         name,
@@ -447,7 +486,8 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
         trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
         segment,
         square_off_time: horizon === "intraday" ? `${squareOffTime}:00` : undefined,
-        underlying: isInHouse ? underlying || undefined : undefined,
+        underlying: isInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
+        underlying_type: isInHouse ? underlyingType : undefined,
         rule_config: ruleConfig,
         regime_filter_enabled: isInHouse ? regimeFilterEnabled : undefined,
         regime_filter_checks: isInHouse ? regimeFilterChecks : undefined,
@@ -464,6 +504,8 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
       setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
       setSquareOffTimeTouched(false);
       setUnderlying("");
+      setUnderlyingType("symbol");
+      setSelectedUniverse("");
       setSelectedIndicatorId("");
       setRegimeFilterEnabled(false);
       setRegimeFilterChecks(ALL_REGIME_CHECKS);
@@ -543,6 +585,8 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
       setEditLtfBreakoutPeriod(String(s.rule_config.ltf_breakout_period));
       setEditEmaFilterEnabled(s.rule_config.ema_filter_enabled);
       setEditEmaPeriod(String(s.rule_config.ema_period));
+    } else if (s.rule_config?.type === "range_breakout") {
+      setEditRangeBreakoutPeriod(String(s.rule_config.breakout_period));
     } else {
       setEditIndicatorId(s.rule_config?.indicator_id ?? "");
     }
@@ -561,6 +605,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
     try {
       const editingStrategy = strategies.find((s) => s.id === id);
       const editingIsBreakout = editingStrategy?.rule_config?.type === "breakout";
+      const editingIsRangeBreakout = editingStrategy?.rule_config?.type === "range_breakout";
       const ruleConfig = editingIsBreakout
         ? {
             type: "breakout" as const,
@@ -571,9 +616,11 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
             ema_filter_enabled: editEmaFilterEnabled,
             ema_period: Number(editEmaPeriod),
           }
-        : isInHouse && editIndicatorId
-          ? { type: "crossover" as const, indicator_id: editIndicatorId }
-          : undefined;
+        : editingIsRangeBreakout
+          ? { type: "range_breakout" as const, breakout_period: Number(editRangeBreakoutPeriod) }
+          : isInHouse && editIndicatorId
+            ? { type: "crossover" as const, indicator_id: editIndicatorId }
+            : undefined;
       const updated = await updateStrategy(id, {
         name: editName,
         horizon: editHorizon,
@@ -877,19 +924,44 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
           {isInHouse && (
             <>
               <label>
-                Underlying
-                <input
-                  value={underlying}
-                  onChange={(e) => setUnderlying(e.target.value.toUpperCase())}
-                  required
-                  placeholder="e.g. GOLDM, NIFTY"
-                />
+                Underlying type
+                <select value={underlyingType} onChange={(e) => setUnderlyingType(e.target.value as UnderlyingType)}>
+                  <option value="symbol">Single symbol</option>
+                  <option value="universe">Universe (NSE index constituents)</option>
+                </select>
               </label>
+              {underlyingType === "universe" ? (
+                <label>
+                  Universe
+                  <select value={selectedUniverse} onChange={(e) => setSelectedUniverse(e.target.value)} required>
+                    <option value="">&mdash;</option>
+                    {universes.map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label>
+                  Underlying
+                  <input
+                    value={underlying}
+                    onChange={(e) => setUnderlying(e.target.value.toUpperCase())}
+                    required
+                    placeholder="e.g. GOLDM, NIFTY"
+                  />
+                </label>
+              )}
               <label>
                 Rule type
-                <select value={ruleType} onChange={(e) => setRuleType(e.target.value as "crossover" | "breakout")}>
+                <select
+                  value={ruleType}
+                  onChange={(e) => setRuleType(e.target.value as "crossover" | "breakout" | "range_breakout")}
+                >
                   <option value="crossover">Crossover (indicator)</option>
                   <option value="breakout">Breakout (multi-timeframe)</option>
+                  <option value="range_breakout">Range breakout (single timeframe)</option>
                 </select>
               </label>
               {isBreakout ? (
@@ -949,6 +1021,16 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                     </label>
                   )}
                 </>
+              ) : isRangeBreakout ? (
+                <label>
+                  Breakout N (candles)
+                  <input
+                    type="number"
+                    min="2"
+                    value={rangeBreakoutPeriod}
+                    onChange={(e) => setRangeBreakoutPeriod(e.target.value)}
+                  />
+                </label>
               ) : (
                 <label>
                   Indicator
@@ -1006,8 +1088,9 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
               creating ||
               !name.trim() ||
               (horizon === "intraday" && !squareOffTime) ||
-              (isInHouse && !underlying.trim()) ||
-              (isInHouse && !isBreakout && !selectedIndicatorId)
+              (isInHouse && underlyingType === "symbol" && !underlying.trim()) ||
+              (isInHouse && underlyingType === "universe" && !selectedUniverse) ||
+              (isInHouse && !isBreakout && !isRangeBreakout && !selectedIndicatorId)
             }
           >
             {creating ? "Creating..." : "Create strategy"}
@@ -1274,6 +1357,16 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                             />
                           )}
                         </>
+                      ) : s.rule_config?.type === "range_breakout" ? (
+                        <input
+                          type="number"
+                          min="2"
+                          value={editRangeBreakoutPeriod}
+                          onChange={(e) => setEditRangeBreakoutPeriod(e.target.value)}
+                          className="cell-input"
+                          style={{ width: "3.5rem" }}
+                          title="Breakout N (candles)"
+                        />
                       ) : (
                         <select
                           value={editIndicatorId}
@@ -1475,8 +1568,8 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
             </>
           )}
 
-          {selectedIsBreakout ? (
-            <p className="hint">Grid search isn't supported for breakout-rule strategies yet.</p>
+          {selectedIsBreakout || selectedIsRangeBreakout ? (
+            <p className="hint">Grid search isn't supported for breakout/range-breakout-rule strategies yet.</p>
           ) : (
             <>
               <h3>Grid search indicator params</h3>

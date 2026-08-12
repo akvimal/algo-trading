@@ -177,6 +177,40 @@ def test_resolve_underlying_returns_none_when_unresolvable():
     assert provider.resolve_underlying("NOPE") is None
 
 
+@responses.activate
+def test_resolve_underlying_equity_charts_and_trades_itself():
+    # A plain NSE cash equity has no separate "underlying" concept at all
+    # (no future to roll into, no index spot/derivative split) - the
+    # symbol itself is both what's charted and what's traded. Needed for
+    # a universe-scoped in-house strategy (e.g. every Nifty Bank
+    # constituent) to actually resolve at all, not just NIFTY/BANKNIFTY/
+    # GOLDM-style underlyings.
+    csv_body = HEADER + "NSE,E,2885,EQUITY,0,RELIANCE,1.0,Reliance Industries,,,,10.0,NA,ES,EQ,RELIANCE INDUSTRIES LTD\n"
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=csv_body, status=200)
+
+    provider = DhanProvider([NSE_EQ], name="dhan-nse")
+    resolved = provider.resolve_underlying("RELIANCE")
+
+    assert resolved is not None
+    assert resolved.chart_symbol == resolved.trade_symbol == "RELIANCE"
+    assert resolved.chart_exchange == resolved.trade_exchange == "NSE"
+    assert resolved.lot_size == 1
+    assert resolved.expiry is None
+
+
+@responses.activate
+def test_resolve_underlying_index_with_no_active_future_still_returns_none():
+    # An index symbol with NO matching FUTIDX contract must not fall
+    # through to the equity branch and silently "trade the index" -
+    # index_symbol is set but contract is None, so this must stay
+    # unresolvable, same as before the equity branch was added.
+    csv_body = HEADER + "NSE,I,13,INDEX,0,NIFTY,1.0,Nifty 50,0001-01-01,,XX,0.0500,,INDEX,X,NIFTY\n"
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=csv_body, status=200)
+
+    provider = DhanProvider([NSE_INDEX], name="dhan-nse")  # no NSE_FUTIDX configured - no future can ever resolve
+    assert provider.resolve_underlying("NIFTY") is None
+
+
 # --- get_lot_size -----------------------------------------------------------------------
 
 

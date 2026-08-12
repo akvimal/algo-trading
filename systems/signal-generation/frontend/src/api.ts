@@ -24,6 +24,14 @@ export type Segment = "NSE" | "MCX" | "CRYPTO";
 export type DuplicateSignalPolicy = "skip" | "add_position";
 export type CounterSignalPolicy = "skip" | "close_and_flip";
 
+// in_house only. 'symbol' (default): underlying names one traded symbol,
+// as before. 'universe': underlying instead names an NSE
+// index-constituent group key (e.g. "NIFTYBANK", from fetchUniverses()
+// below) - the engine evaluates this strategy's rule against every
+// constituent independently. Only valid combined with segment='NSE' and
+// instrument_type='spot'.
+export type UnderlyingType = "symbol" | "universe";
+
 // The 5 sub-conditions the backend's app/domain/regime.py classify_regime
 // combines - mirrors regime.REGIME_CHECK_NAMES exactly. When
 // regime_filter_enabled, only the checks named here must agree to confirm
@@ -112,7 +120,18 @@ export type BreakoutRuleConfig = {
   ema_period: number;
 };
 
-export type RuleConfig = CrossoverRuleConfig | BreakoutRuleConfig;
+// A third, minimal rule type - single-timeframe Donchian breakout ("close
+// greater than the last N candles' high", or below their low for a
+// bearish signal), on the strategy's own `interval`. No indicator, no
+// htf/ltf split, no rule-intrinsic exit scheme - the strategy's own
+// generically configured stop-loss/target/square-off applies as-is,
+// unlike BreakoutRuleConfig above. See backend's RangeBreakoutRuleConfig.
+export type RangeBreakoutRuleConfig = {
+  type: "range_breakout";
+  breakout_period: number;
+};
+
+export type RuleConfig = CrossoverRuleConfig | BreakoutRuleConfig | RangeBreakoutRuleConfig;
 
 // No quantity/capital field here on purpose - the actual sizing math
 // (capital cap, risk %) is still execution's job. Stop-loss/target ARE
@@ -140,6 +159,7 @@ export type Strategy = {
   // in_house only - the logical underlying to watch (e.g. "GOLDM",
   // "NIFTY") and its rule config. Null for webhook strategies.
   underlying: string | null;
+  underlying_type: UnderlyingType;
   rule_config: RuleConfig | null;
   // in_house only (harmlessly ignored for webhook strategies) - gates a
   // crossover signal on a single-timeframe market regime classification
@@ -173,6 +193,7 @@ export type StrategyCreate = {
   square_off_time?: string;
   // Required together when source_type='in_house', forbidden otherwise.
   underlying?: string;
+  underlying_type?: UnderlyingType;
   rule_config?: RuleConfig;
   regime_filter_enabled?: boolean;
   regime_filter_checks?: RegimeCheckName[];
@@ -198,6 +219,7 @@ export type StrategyEdit = {
   segment?: Segment;
   square_off_time?: string;
   underlying?: string;
+  underlying_type?: UnderlyingType;
   rule_config?: RuleConfig;
   regime_filter_enabled?: boolean;
   regime_filter_checks?: RegimeCheckName[];
@@ -274,12 +296,16 @@ export type ProviderSignal = {
 // `npm run dev` with no .env still works exactly as before.
 const SIGNAL_GENERATION_PORT = import.meta.env.VITE_SIGNAL_GENERATION_PORT ?? "8003";
 const SIGNAL_PROCESSING_PORT = import.meta.env.VITE_SIGNAL_PROCESSING_PORT ?? "8000";
+const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
 
 // This system's own backend - owns the strategies table.
 const SIGNAL_GENERATION_BASE_URL = `http://${location.hostname}:${SIGNAL_GENERATION_PORT}`;
 // signal-processing's API, read directly from the browser (CORS-enabled)
 // for per-strategy signal activity - a view, not a copy of that data.
 const SIGNAL_PROCESSING_BASE_URL = `http://${location.hostname}:${SIGNAL_PROCESSING_PORT}`;
+// market-data's API, read directly from the browser (CORS-enabled) - just
+// for the universe picker below, same pattern as signal-processing above.
+const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
 
 async function asJson<T>(res: Response, what: string): Promise<T> {
   if (!res.ok) {
@@ -377,4 +403,13 @@ export async function fetchSignalsForStrategy(strategyId: string, limit = 20): P
   const params = new URLSearchParams({ strategy_id: strategyId, limit: String(limit) });
   const res = await fetch(`${SIGNAL_PROCESSING_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals?strategy_id=...");
+}
+
+// NSE index-constituent universe keys (e.g. "NIFTYBANK") - populates the
+// universe picker when underlying_type='universe'. market-data owns this
+// list (see its app/providers/nse_indices.py).
+export async function fetchUniverses(): Promise<string[]> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/universes`);
+  const data = await asJson<{ universes: string[] }>(res, "GET /instruments/universes");
+  return data.universes;
 }

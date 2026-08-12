@@ -8,13 +8,14 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.market_data.client import get_candle_history, resolve_underlying
-from app.domain import breakout, regime
+from app.domain import breakout, range_breakout, regime
 from app.domain.backtest import ExitConfig, expand_grid, grid_search, replay
 from app.domain.engine import history_window
 from app.domain.models import (
     BacktestGridRequest,
     BreakoutRuleConfig,
     CrossoverRuleConfig,
+    RangeBreakoutRuleConfig,
     RuleConfig,
     StopLossInterval,
     StrategyCreate,
@@ -24,8 +25,9 @@ from app.domain.models import (
     validate_indicator_params,
     validate_rule_config,
     validate_stop_loss_fields,
+    validate_underlying_type_fields,
 )
-from app.domain.rules import bars_needed
+from app.domain.rules import bars_needed, evaluate
 
 router = APIRouter()
 
@@ -47,6 +49,7 @@ def _to_out(row: db_models.Strategy) -> StrategyOut:
         segment=row.segment,
         square_off_time=row.square_off_time,
         underlying=row.underlying,
+        underlying_type=row.underlying_type,
         rule_config=row.rule_config,
         regime_filter_enabled=row.regime_filter_enabled,
         regime_filter_checks=row.regime_filter_checks,
@@ -133,6 +136,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         segment=payload.segment,
         square_off_time=payload.square_off_time,
         underlying=payload.underlying,
+        underlying_type=payload.underlying_type,
         rule_config=payload.rule_config,
         regime_filter_enabled=payload.regime_filter_enabled,
         regime_filter_checks=payload.regime_filter_checks,
@@ -234,6 +238,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.square_off_time = payload.square_off_time
     if payload.underlying is not None:
         row.underlying = payload.underlying
+    if payload.underlying_type is not None:
+        row.underlying_type = payload.underlying_type
     if payload.rule_config is not None:
         row.rule_config = payload.rule_config
     if payload.regime_filter_enabled is not None:
@@ -256,6 +262,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         # re-validates the merged row's underlying/rule_config/interval
         # against whichever source_type it already has.
         validate_in_house_fields(row.source_type, row.underlying, row.rule_config, row.interval)
+        validate_underlying_type_fields(row.underlying_type, row.segment, row.instrument_type)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _check_referenced_indicator_exists(db, row.rule_config)
@@ -380,6 +387,30 @@ def backtest_strategy(
         )
         return breakout.replay_breakout(rule, htf_candles, ltf_candles, row.square_off_time)
 
+    if isinstance(rule, RangeBreakoutRuleConfig):
+        resolved = resolve_underlying(row.segment, row.underlying)
+        if resolved is None:
+            raise HTTPException(
+                status_code=502, detail=f"could not resolve underlying '{row.underlying}' on segment '{row.segment}'"
+            )
+        warmup_from, _ = history_window(range_breakout.range_breakout_warmup(rule), row.interval)
+        fetch_from = min(from_, warmup_from)
+        candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, row.interval, fetch_from, to)
+        sl_candles = _sl_candles_for(row, resolved, candles, fetch_from, to)
+        return replay(
+            lambda window: range_breakout.evaluate_range_breakout(rule, window),
+            # The rule's own tight minimum (matches evaluate_range_breakout's
+            # own len(candles) > breakout_period guard) - NOT
+            # range_breakout_warmup's more generous fetch-width padding
+            # (used above for how far back to fetch, a separate concern).
+            rule.breakout_period + 1,
+            candles,
+            _exit_config_for(row),
+            sl_candles,
+            row.regime_filter_enabled,
+            _regime_checks_for(row),
+        )
+
     if not isinstance(rule, CrossoverRuleConfig):
         raise HTTPException(status_code=422, detail=f"no backtest support for rule type {type(rule).__name__}")  # pragma: no cover
     indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
@@ -406,9 +437,12 @@ def backtest_strategy(
     candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, row.interval, fetch_from, to)
     sl_candles = _sl_candles_for(row, resolved, candles, fetch_from, to)
     return replay(
-        rule,
-        indicator.type,
-        indicator_params,
+        lambda window: evaluate(rule, indicator.type, indicator_params, window),
+        # Matches what simulate_trades computed internally before this was
+        # generalized - the rule's own warm-up only, NOT bar_count above
+        # (which may be regime-inflated for the *fetch* width - a separate
+        # concern from how many bars the rule itself needs before scanning).
+        bars_needed(rule, indicator.type, indicator_params) + 1,
         candles,
         _exit_config_for(row),
         sl_candles,

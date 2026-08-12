@@ -44,6 +44,16 @@ Segment = Literal["NSE", "MCX", "CRYPTO"]
 # it (ahead of its own stop-loss/target/square-off) before the new one opens.
 DuplicateSignalPolicy = Literal["skip", "add_position"]
 CounterSignalPolicy = Literal["skip", "close_and_flip"]
+# in_house only. 'symbol': underlying names one traded symbol, as today.
+# 'universe': underlying instead names an NSE index-constituent group
+# (e.g. "NIFTYBANK", resolved via market-data's GET
+# /instruments/universe/constituents) - the engine evaluates this
+# strategy's rule against every constituent independently, each with its
+# own dedupe state (see signal_generation.engine_runs). Universes are NSE
+# cash-equity index membership lists only, so this is only valid combined
+# with segment='NSE' and instrument_type='spot' - see
+# validate_underlying_type_fields.
+UnderlyingType = Literal["symbol", "universe"]
 
 # The 5 sub-conditions app/domain/regime.py's classify_regime combines -
 # mirrors regime.REGIME_CHECK_NAMES exactly. When regime_filter_enabled,
@@ -170,7 +180,27 @@ class BreakoutRuleConfig(BaseModel):
     ema_period: int = Field(default=20, gt=1)
 
 
-RuleConfig = Union[CrossoverRuleConfig, BreakoutRuleConfig]
+class RangeBreakoutRuleConfig(BaseModel):
+    """A third, minimal rule type: a single-timeframe Donchian breakout -
+    "close greater than the last N candles' high" (or below their low, for
+    a bearish signal), on the strategy's own `interval`. No indicator, no
+    higher/lower timeframe split, no rule-intrinsic exit scheme - unlike
+    BreakoutRuleConfig (which needs its own bespoke stop-loss/reversal-exit
+    handling for the live-enforcement-gap reasons documented in
+    app/domain/breakout.py), this behaves like CrossoverRuleConfig for
+    everything except how bias is computed: the strategy's own generically
+    configured stop_loss_method/target_percent/square_off_time apply as-is.
+    See app/domain/range_breakout.py, which reuses breakout.py's
+    compute_donchian_high/low directly rather than duplicating that math.
+    Named 'range_breakout', not 'breakout' - that type string already
+    means the multi-timeframe rule above, in the DB and in existing
+    strategies' stored rule_config."""
+
+    type: Literal["range_breakout"] = "range_breakout"
+    breakout_period: int = Field(gt=1)
+
+
+RuleConfig = Union[CrossoverRuleConfig, BreakoutRuleConfig, RangeBreakoutRuleConfig]
 _rule_config_adapter = TypeAdapter(RuleConfig)
 
 
@@ -208,6 +238,13 @@ def validate_in_house_fields(
             raise ValueError("underlying only applies to source_type='in_house'")
         if rule_config is not None:
             raise ValueError("rule_config only applies to source_type='in_house'")
+
+
+def validate_underlying_type_fields(underlying_type: str, segment: str, instrument_type: str) -> None:
+    """underlying_type='universe' only makes sense for NSE cash-equity
+    index membership lists - no MCX/futures universe concept exists."""
+    if underlying_type == "universe" and (segment != "NSE" or instrument_type != "spot"):
+        raise ValueError("underlying_type='universe' requires segment='NSE' and instrument_type='spot'")
 
 
 def validate_stop_loss_fields(
@@ -257,6 +294,11 @@ class StrategyCreate(BaseModel):
     # "NIFTY") and the rule config (which indicator + how to decide from
     # it) to evaluate against it. See validate_in_house_fields.
     underlying: Optional[str] = Field(default=None, min_length=1)
+    # in_house only - 'symbol' (default) means `underlying` names one
+    # traded symbol as before; 'universe' means it names an NSE
+    # index-constituent group instead. See UnderlyingType/
+    # validate_underlying_type_fields above.
+    underlying_type: UnderlyingType = "symbol"
     rule_config: Optional[dict] = None
     # in_house only (harmlessly ignored for webhook strategies) - see
     # app/domain/regime.py and docs/architecture.md.
@@ -280,6 +322,11 @@ class StrategyCreate(BaseModel):
     @model_validator(mode="after")
     def _check_in_house_consistency(self) -> "StrategyCreate":
         validate_in_house_fields(self.source_type, self.underlying, self.rule_config, self.interval)
+        return self
+
+    @model_validator(mode="after")
+    def _check_underlying_type_consistency(self) -> "StrategyCreate":
+        validate_underlying_type_fields(self.underlying_type, self.segment, self.instrument_type)
         return self
 
     @model_validator(mode="after")
@@ -328,6 +375,7 @@ class StrategyUpdate(BaseModel):
     segment: Optional[Segment] = None
     square_off_time: Optional[time] = None
     underlying: Optional[str] = Field(default=None, min_length=1)
+    underlying_type: Optional[UnderlyingType] = None
     rule_config: Optional[dict] = None
     regime_filter_enabled: Optional[bool] = None
     # Not provided = leave the row's existing value alone (same PATCH
@@ -367,6 +415,7 @@ class StrategyOut(BaseModel):
     segment: Segment
     square_off_time: Optional[time] = None
     underlying: Optional[str] = None
+    underlying_type: UnderlyingType = "symbol"
     rule_config: Optional[dict] = None
     regime_filter_enabled: bool = False
     regime_filter_checks: list[RegimeCheckName] = Field(default_factory=lambda: list(_ALL_REGIME_CHECK_NAMES))

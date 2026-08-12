@@ -233,6 +233,60 @@ def test_strategy_create_rejects_unknown_counter_signal_policy():
         )
 
 
+def _in_house_kwargs(**overrides):
+    defaults = dict(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot",
+        square_off_time="15:00:00", interval="5min", underlying="NIFTYBANK",
+        rule_config={"type": "range_breakout", "breakout_period": 5},
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def test_strategy_create_defaults_underlying_type_to_symbol():
+    s = StrategyCreate(**_in_house_kwargs(underlying="RELIANCE"))
+    assert s.underlying_type == "symbol"
+
+
+def test_strategy_create_accepts_universe_underlying_type_on_nse_spot():
+    s = StrategyCreate(**_in_house_kwargs(underlying_type="universe"))
+    assert s.underlying_type == "universe"
+    assert s.underlying == "NIFTYBANK"
+
+
+def test_strategy_create_rejects_universe_underlying_type_on_mcx():
+    with pytest.raises(ValidationError, match="requires segment='NSE'"):
+        StrategyCreate(**_in_house_kwargs(underlying_type="universe", segment="MCX"))
+
+
+def test_strategy_create_rejects_universe_underlying_type_on_future():
+    with pytest.raises(ValidationError, match="requires segment='NSE'"):
+        StrategyCreate(**_in_house_kwargs(underlying_type="universe", instrument_type="future"))
+
+
+def test_strategy_create_rejects_unknown_underlying_type():
+    with pytest.raises(ValidationError):
+        StrategyCreate(**_in_house_kwargs(underlying_type="watchlist"))
+
+
+def test_strategy_update_underlying_type_optional():
+    u = StrategyUpdate()
+    assert u.underlying_type is None
+
+
+# --- RangeBreakoutRuleConfig -----------------------------------------------------------------
+
+
+def test_strategy_create_accepts_range_breakout_rule():
+    s = StrategyCreate(**_in_house_kwargs())
+    assert s.rule_config == {"type": "range_breakout", "breakout_period": 5}
+
+
+def test_strategy_create_rejects_range_breakout_period_not_greater_than_one():
+    with pytest.raises(ValidationError):
+        StrategyCreate(**_in_house_kwargs(rule_config={"type": "range_breakout", "breakout_period": 1}))
+
+
 def test_strategy_update_signal_conflict_policy_fields_optional():
     u = StrategyUpdate()
     assert u.duplicate_signal_policy is None

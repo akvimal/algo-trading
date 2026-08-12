@@ -11,7 +11,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.adapters.db.session import SessionLocal
-from app.adapters.market_data.client import get_candle_history, get_ltp, resolve_underlying
+from app.adapters.market_data.client import (
+    get_candle_history,
+    get_ltp,
+    get_universe_constituents,
+    resolve_underlying,
+)
 from app.adapters.signal_processing.client import post_signal
 from app.config import settings
 from app.domain.engine import run_live_tick
@@ -24,7 +29,9 @@ _ENGINE_TICK_JOB_ID = "engine-tick"
 
 def run_engine_tick() -> dict:
     with SessionLocal() as db:
-        result = run_live_tick(db, resolve_underlying, get_candle_history, get_ltp, post_signal)
+        result = run_live_tick(
+            db, resolve_underlying, get_candle_history, get_ltp, get_universe_constituents, post_signal
+        )
     if result["signaled"] or result["failed"]:
         logger.info("engine tick: %s", result)
     return result

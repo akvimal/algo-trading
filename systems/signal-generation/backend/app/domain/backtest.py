@@ -20,13 +20,21 @@ docs/architecture.md."""
 import itertools
 from dataclasses import dataclass
 from datetime import datetime, time
-from typing import Optional
+from typing import Callable, Optional
 
 from pydantic import ValidationError
 
 from app.domain import regime
 from app.domain.models import RuleConfig, validate_indicator_params
 from app.domain.rules import Bias, CandleClose, SimulatedTrade, bars_needed, evaluate
+
+# What simulate_trades/_simulate_one_trade actually need to compute a bias
+# from a candle window - decoupled from HOW that bias is derived (an
+# indicator's crossover, a Donchian breakout, anything else) so this exit
+# engine (SL/target/trailing/square-off/opposite-signal/end-of-data) is
+# reusable by any rule type, not just indicator-based ones. See
+# app/domain/range_breakout.py for a non-indicator caller.
+BiasFn = Callable[[list[CandleClose]], Optional[Bias]]
 
 # A cap on total combinations, not on any one param's value list - keeps a
 # single grid-search request bounded (each combination re-runs a full
@@ -126,9 +134,7 @@ def _simulate_one_trade(
     candles: list[CandleClose],
     entry_index: int,
     direction: Bias,
-    rule: RuleConfig,
-    indicator_type: str,
-    indicator_params: dict,
+    bias_fn: BiasFn,
     exit_config: ExitConfig,
     sl_candles: Optional[list[CandleClose]],
 ) -> tuple[SimulatedTrade, int]:
@@ -185,7 +191,7 @@ def _simulate_one_trade(
                 if more_favorable:
                     stop_loss_price = candidate
 
-        opposite = evaluate(rule, indicator_type, indicator_params, candles[: j + 1])
+        opposite = bias_fn(candles[: j + 1])
         if opposite is not None and opposite != direction:
             return _close(entry_candle, direction, entry_price, bar, bar.close, "opposite_signal"), j
 
@@ -194,25 +200,32 @@ def _simulate_one_trade(
 
 
 def simulate_trades(
-    rule: RuleConfig,
-    indicator_type: str,
-    indicator_params: dict,
+    bias_fn: BiasFn,
+    min_bars: int,
     candles: list[CandleClose],
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
     regime_filter_enabled: bool = False,
     regime_checks: frozenset = regime.ALL_REGIME_CHECKS,
 ) -> list[SimulatedTrade]:
-    """`candles` must be oldest-first, completed bars only, covering the
-    full range to backtest - including whatever warm-up bars the
-    indicator needs before the range actually of interest (callers
-    should fetch a slightly wider range than they report on, same as the
-    live engine does via engine.history_window). `sl_candles` (a
-    separately-fetched series at the strategy's own stop_loss_interval)
-    is only used for stop_loss_method='previous_candle'; ignored
-    otherwise (callers should pass the same series as `candles` when the
-    two intervals match, to skip a second market-data fetch - see
-    app/api/routes/strategies.py).
+    """The generic exit engine (SL/target/trailing/square-off/
+    opposite-signal/end-of-data) - `bias_fn` is however a specific rule
+    type decides "bullish"/"bearish"/None from a candle window (an
+    indicator crossover, a Donchian breakout, ...); this function knows
+    nothing about how that decision is made. `min_bars` is that rule's
+    own warm-up requirement (e.g. bars_needed(...) + 1 for a crossover
+    rule - the caller computes this, this function just uses it as the
+    scan's starting index).
+
+    `candles` must be oldest-first, completed bars only, covering the
+    full range to backtest - including whatever warm-up bars the rule
+    needs before the range actually of interest (callers should fetch a
+    slightly wider range than they report on, same as the live engine
+    does via engine.history_window). `sl_candles` (a separately-fetched
+    series at the strategy's own stop_loss_interval) is only used for
+    stop_loss_method='previous_candle'; ignored otherwise (callers should
+    pass the same series as `candles` when the two intervals match, to
+    skip a second market-data fetch - see app/api/routes/strategies.py).
 
     Only one simulated trade is open at a time: while one is open, no bar
     is scanned for a fresh entry (mirrors a Strategy's
@@ -231,13 +244,12 @@ def simulate_trades(
     applies, single-timeframe (the same `candles`/interval, no separate
     higher-timeframe fetch)."""
     exit_config = exit_config or ExitConfig()
-    min_bars = bars_needed(rule, indicator_type, indicator_params) + 1
     trades: list[SimulatedTrade] = []
     n = len(candles)
     i = min_bars
     while i <= n:
         window = candles[:i]
-        direction = evaluate(rule, indicator_type, indicator_params, window)
+        direction = bias_fn(window)
         if direction is None:
             i += 1
             continue
@@ -255,9 +267,7 @@ def simulate_trades(
                 i += 1
                 continue  # would be rejected outside the intraday window, same as execution
 
-        trade, exit_index = _simulate_one_trade(
-            candles, entry_index, direction, rule, indicator_type, indicator_params, exit_config, sl_candles
-        )
+        trade, exit_index = _simulate_one_trade(candles, entry_index, direction, bias_fn, exit_config, sl_candles)
         trades.append(trade)
         if exit_index >= n - 1:
             break  # consumed through the last available candle - nothing left to scan
@@ -267,9 +277,8 @@ def simulate_trades(
 
 
 def replay(
-    rule: RuleConfig,
-    indicator_type: str,
-    indicator_params: dict,
+    bias_fn: BiasFn,
+    min_bars: int,
     candles: list[CandleClose],
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
@@ -280,7 +289,7 @@ def replay(
     result. See simulate_trades' own docstring for what "hypothetical_pnl"
     does and doesn't account for."""
     trades = simulate_trades(
-        rule, indicator_type, indicator_params, candles, exit_config, sl_candles, regime_filter_enabled, regime_checks
+        bias_fn, min_bars, candles, exit_config, sl_candles, regime_filter_enabled, regime_checks
     )
     return {
         "trade_count": len(trades),
@@ -354,7 +363,13 @@ def grid_search(
             results.append({"params": candidate_params, "error": message})
             continue
         outcome = replay(
-            rule, indicator_type, validated, candles, exit_config, sl_candles, regime_filter_enabled, regime_checks
+            lambda window, p=validated: evaluate(rule, indicator_type, p, window),
+            bars_needed(rule, indicator_type, validated) + 1,
+            candles,
+            exit_config,
+            sl_candles,
+            regime_filter_enabled,
+            regime_checks,
         )
         results.append(
             {

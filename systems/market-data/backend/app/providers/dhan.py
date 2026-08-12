@@ -379,6 +379,27 @@ class DhanProvider(QuoteProvider):
                 lot_size=self._symbol_to_lot_size.get(contract.trading_symbol, 1),
                 expiry=contract.expiry_date.isoformat(),
             )
+
+        # A directly-tradeable instrument with no separate underlying/
+        # rollover concept at all - e.g. an NSE cash equity (NSE_EQ),
+        # where the "underlying" IS the traded symbol itself, unlike a
+        # future (resolved via `contract` above) or an index (charted
+        # separately from what's traded). Checked last so it can never
+        # shadow the index/futures resolutions above - only NSE_EQ rows
+        # (underlying_of=None, candle_instrument="EQUITY") match; an
+        # index row with no active future found still correctly resolves
+        # to nothing rather than silently trading the index itself.
+        if underlying in self._symbol_to_config:
+            config = self._config_for(underlying)
+            if config.underlying_of is None and config.candle_instrument == "EQUITY":
+                return ResolvedUnderlying(
+                    chart_symbol=underlying,
+                    chart_exchange=config.exchange,
+                    trade_symbol=underlying,
+                    trade_exchange=config.exchange,
+                    lot_size=self._symbol_to_lot_size.get(underlying, 1),
+                    expiry=None,
+                )
         return None
 
     def get_lot_size(self, symbol: str) -> Optional[int]:

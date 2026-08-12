@@ -61,6 +61,25 @@ def get_ltp(exchange: str, symbol: str) -> Optional[float]:
     return resp.json()["ltp"]
 
 
+def get_universe_constituents(key: str) -> Optional[list[str]]:
+    """The member symbol list for an NSE index-constituent universe (e.g.
+    "NIFTYBANK") - used to expand a universe-scoped Strategy into its
+    target symbols each tick (see app/domain/engine.py's
+    _target_symbols). None if unknown or unavailable - callers skip the
+    strategy for this tick rather than guess at a partial/stale list."""
+    try:
+        resp = requests.get(
+            f"{settings.market_data_base_url}/instruments/universe/constituents",
+            params={"key": key},
+            timeout=settings.market_data_timeout_seconds,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    return resp.json()["constituents"]
+
+
 def get_candle_history(exchange: str, symbol: str, interval: str, from_date: date, to_date: date) -> list[CandleClose]:
     """Oldest-first, completed bars only - ready to feed straight into
     evaluate_rsi_sma_crossover (or any future rule)."""

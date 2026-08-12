@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- response (trade_exchange), not this column; `segment` is the field
     -- that carries real MCX/NSE intent here.
     underlying       TEXT,
+    -- 'symbol' (default): underlying names one traded symbol, as before.
+    -- 'universe': underlying instead names an NSE index-constituent
+    -- group key (e.g. 'NIFTYBANK', resolved via market-data's GET
+    -- /instruments/universe/constituents) - the engine evaluates this
+    -- strategy's rule against every constituent independently, each
+    -- with its own row in engine_runs below. Universes are NSE
+    -- cash-equity index membership lists only - see the
+    -- universe_requires_nse_spot constraint.
+    underlying_type  TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe')),
     rule_config      JSONB,
     -- in_house only (harmlessly ignored for webhook strategies) - gates a
     -- crossover signal on a single-timeframe market regime classification
@@ -118,6 +127,9 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     CONSTRAINT in_house_fields_consistent CHECK (
         (source_type = 'in_house' AND underlying IS NOT NULL AND rule_config IS NOT NULL AND interval IS NOT NULL)
         OR (source_type != 'in_house' AND underlying IS NULL AND rule_config IS NULL)
+    ),
+    CONSTRAINT universe_requires_nse_spot CHECK (
+        underlying_type != 'universe' OR (segment = 'NSE' AND instrument_type = 'spot')
     )
 );
 
@@ -143,8 +155,15 @@ CREATE TABLE IF NOT EXISTS signal_generation.indicators (
 -- far more often than any one strategy's own interval) doesn't re-signal
 -- on the same bar every tick. Deliberately separate from the strategies
 -- table above: this is mutable engine state, not user-configured intent.
+-- Keyed by (strategy_id, symbol), not just strategy_id: a
+-- universe-scoped strategy (underlying_type='universe') checks many
+-- symbols independently each tick and needs its own dedupe state per
+-- constituent, not one shared state for the whole strategy. A plain
+-- symbol-scoped strategy just gets one row, keyed by its one symbol.
 CREATE TABLE IF NOT EXISTS signal_generation.engine_runs (
-    strategy_id            UUID PRIMARY KEY REFERENCES signal_generation.strategies (id) ON DELETE CASCADE,
+    strategy_id            UUID NOT NULL REFERENCES signal_generation.strategies (id) ON DELETE CASCADE,
+    symbol                 TEXT NOT NULL,
     last_signal_candle_ts  TIMESTAMPTZ,
-    last_checked_at        TIMESTAMPTZ
+    last_checked_at        TIMESTAMPTZ,
+    PRIMARY KEY (strategy_id, symbol)
 );

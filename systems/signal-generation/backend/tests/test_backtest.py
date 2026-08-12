@@ -11,11 +11,24 @@ from app.domain.backtest import (
     replay,
     simulate_trades,
 )
-from app.domain.models import CrossoverRuleConfig
-from app.domain.rules import CandleClose, evaluate
+from app.domain.models import CrossoverRuleConfig, RangeBreakoutRuleConfig
+from app.domain.range_breakout import evaluate_range_breakout
+from app.domain.rules import CandleClose, bars_needed, evaluate
 
 RULE = CrossoverRuleConfig(indicator_id="11111111-1111-1111-1111-111111111111")
 RSI_PARAMS = {"period": 2, "sma_period": 2}
+
+
+def _bias_fn(window: list[CandleClose]):
+    """simulate_trades/replay took (rule, indicator_type, indicator_params)
+    directly before being generalized to accept any bias_fn - this closure
+    reproduces the exact same crossover bias computation these tests
+    already relied on, so every existing call site below only needs its
+    first three positional args collapsed into (_bias_fn, _MIN_BARS)."""
+    return evaluate(RULE, "rsi", RSI_PARAMS, window)
+
+
+_MIN_BARS = bars_needed(RULE, "rsi", RSI_PARAMS) + 1
 
 # Same fixture as test_rules.py's hand-traced bearish-crossover case: the
 # first 5 bars produce no signal, the 6th does (bearish, entry price=15).
@@ -90,7 +103,7 @@ def test_replay_finds_the_single_known_signal_and_reports_end_of_data():
     # No exit_config -> no SL/target/square-off, and there's no opposite
     # signal after the only one - the trade stays open through the last
     # available bar, reported as "end_of_data".
-    result = replay(RULE, "rsi", RSI_PARAMS, _entry_fixture())
+    result = replay(_bias_fn, _MIN_BARS, _entry_fixture())
 
     assert result["trade_count"] == 1
     trade = result["trades"][0]
@@ -104,7 +117,7 @@ def test_replay_finds_the_single_known_signal_and_reports_end_of_data():
 
 def test_replay_too_few_candles_finds_nothing():
     candles = _flat_candles([10, 11, 12])
-    result = replay(RULE, "rsi", RSI_PARAMS, candles)
+    result = replay(_bias_fn, _MIN_BARS, candles)
     assert result == {"trade_count": 0, "hypothetical_pnl": 0.0, "trades": []}
 
 
@@ -116,7 +129,7 @@ def test_simulate_trades_stop_loss_percent_hit():
     # bearish entry@15, 10% stop = 15*1.10 = 16.5 - this bar's high spikes past it.
     candles.append(_bar(6, 18.0, high=20.0, low=17.0))
 
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0))
+    trades = simulate_trades(_bias_fn, _MIN_BARS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0))
 
     assert len(trades) == 1
     trade = trades[0]
@@ -130,7 +143,7 @@ def test_simulate_trades_target_percent_hit():
     # bearish entry@15, 10% target = 15*0.90 = 13.5 - this bar's low dips past it.
     candles.append(_bar(6, 13.0, high=15.5, low=12.0))
 
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(target_percent=10.0))
+    trades = simulate_trades(_bias_fn, _MIN_BARS, candles, ExitConfig(target_percent=10.0))
 
     assert len(trades) == 1
     trade = trades[0]
@@ -145,7 +158,7 @@ def test_simulate_trades_stop_loss_takes_priority_over_target_on_same_bar():
     candles.append(_bar(6, 15.0, high=20.0, low=10.0))
 
     trades = simulate_trades(
-        RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, target_percent=10.0)
+        _bias_fn, _MIN_BARS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, target_percent=10.0)
     )
 
     assert trades[0].exit_reason == "stop_loss"
@@ -157,7 +170,7 @@ def test_simulate_trades_neither_sl_nor_target_hit_keeps_scanning():
     candles.append(_bar(6, 15.0, high=15.5, low=14.5))
 
     trades = simulate_trades(
-        RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, target_percent=10.0)
+        _bias_fn, _MIN_BARS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, target_percent=10.0)
     )
 
     assert len(trades) == 1
@@ -169,7 +182,7 @@ def test_simulate_trades_square_off_closes_at_bar_close():
     candles[-1] = CandleClose(timestamp="2026-08-12T14:57:00", close=15.0, high=15.0, low=15.0)
     candles.append(CandleClose(timestamp="2026-08-12T15:03:00", close=14.2, high=14.5, low=14.0))
 
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(square_off_time=time(15, 0)))
+    trades = simulate_trades(_bias_fn, _MIN_BARS, candles, ExitConfig(square_off_time=time(15, 0)))
 
     assert len(trades) == 1
     trade = trades[0]
@@ -181,7 +194,7 @@ def test_simulate_trades_entry_at_or_after_square_off_time_never_opens():
     candles = _entry_fixture()
     candles[-1] = CandleClose(timestamp="2026-08-12T15:05:00", close=15.0, high=15.0, low=15.0)
 
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(square_off_time=time(15, 0)))
+    trades = simulate_trades(_bias_fn, _MIN_BARS, candles, ExitConfig(square_off_time=time(15, 0)))
 
     assert trades == []  # would have been rejected outside the intraday window, same as execution
 
@@ -200,7 +213,7 @@ def test_simulate_trades_previous_candle_stop_loss():
     candles.append(_bar(6, 17.0, high=17.5, low=16.5))  # crosses 16.0
 
     trades = simulate_trades(
-        RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="previous_candle"), sl_candles=sl_candles
+        _bias_fn, _MIN_BARS, candles, ExitConfig(stop_loss_method="previous_candle"), sl_candles=sl_candles
     )
 
     assert len(trades) == 1
@@ -212,7 +225,7 @@ def test_simulate_trades_previous_candle_stop_loss_missing_series_disables_sl():
     candles = _entry_fixture()
     candles.append(_bar(6, 18.0, high=20.0, low=17.0))  # would hit a percent-style stop, if one were configured
 
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles, ExitConfig(stop_loss_method="previous_candle"), sl_candles=None)
+    trades = simulate_trades(_bias_fn, _MIN_BARS, candles, ExitConfig(stop_loss_method="previous_candle"), sl_candles=None)
 
     # No sl_candles supplied - stop-loss silently doesn't apply (no crash,
     # no stop_loss exit) - falls through to whatever else would close the
@@ -231,9 +244,8 @@ def test_simulate_trades_trailing_stop_ratchets_and_never_loosens():
     candles.append(_bar(8, 13.5, high=13.9, low=13.0))
 
     trades = simulate_trades(
-        RULE,
-        "rsi",
-        RSI_PARAMS,
+        _bias_fn,
+        _MIN_BARS,
         candles,
         ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0, trailing_stop_enabled=True),
     )
@@ -247,7 +259,7 @@ def test_simulate_trades_trailing_stop_ratchets_and_never_loosens():
 def test_simulate_trades_single_signal_stays_open_to_end_of_data():
     # Sanity check that the base fixture alone only ever opens one trade
     # (no premature/duplicate entries while it's conceptually still open).
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture())
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture())
     assert len(trades) == 1
 
 
@@ -288,13 +300,13 @@ def test_simulate_trades_regime_filter_blocks_entry_when_regime_disagrees(monkey
     # The known fixture signal is bearish (see _entry_fixture) - "uptrend"
     # only confirms bullish, so this entry must never open.
     monkeypatch.setattr(regime_module, "classify_regime", _fake_regime("uptrend"))
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
     assert trades == []
 
 
 def test_simulate_trades_regime_filter_allows_entry_when_regime_agrees(monkeypatch):
     monkeypatch.setattr(regime_module, "classify_regime", _fake_regime("downtrend"))
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
     assert len(trades) == 1
     assert trades[0].direction == "bearish"
 
@@ -302,7 +314,7 @@ def test_simulate_trades_regime_filter_allows_entry_when_regime_agrees(monkeypat
 @pytest.mark.parametrize("hostile_regime", ["range", "transition"])
 def test_simulate_trades_regime_filter_blocks_on_range_and_transition(monkeypatch, hostile_regime):
     monkeypatch.setattr(regime_module, "classify_regime", _fake_regime(hostile_regime))
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
     assert trades == []
 
 
@@ -316,13 +328,12 @@ def test_simulate_trades_regime_checks_selective_subset(monkeypatch):
 
     monkeypatch.setattr(regime_module, "classify_regime", _mostly_bearish)
 
-    blocked = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture(), regime_filter_enabled=True)
+    blocked = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
     assert blocked == []
 
     allowed = simulate_trades(
-        RULE,
-        "rsi",
-        RSI_PARAMS,
+        _bias_fn,
+        _MIN_BARS,
         _entry_fixture(),
         regime_filter_enabled=True,
         regime_checks=frozenset({"structure", "efficiency_ratio", "dmi_direction", "ema_slope"}),
@@ -336,7 +347,7 @@ def test_simulate_trades_regime_filter_disabled_by_default_never_calls_classify_
         raise AssertionError("classify_regime must not be called when regime_filter_enabled=False")
 
     monkeypatch.setattr(regime_module, "classify_regime", _boom)
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, _entry_fixture())  # regime_filter_enabled defaults to False
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture())  # regime_filter_enabled defaults to False
     assert len(trades) == 1
 
 
@@ -380,7 +391,7 @@ def test_simulate_trades_matches_naive_pairing_when_no_exit_config():
         last_close = candles[-1].close
         expected_pnl += (last_close - open_price) if open_dir == "bullish" else (open_price - last_close)
 
-    trades = simulate_trades(RULE, "rsi", RSI_PARAMS, candles)
+    trades = simulate_trades(_bias_fn, _MIN_BARS, candles)
     actual_pnl = sum(t.pnl for t in trades)
 
     assert actual_pnl == pytest.approx(expected_pnl)
@@ -442,3 +453,76 @@ def test_grid_search_applies_the_same_exit_config_to_every_combination():
     assert result["combinations_tested"] == 2
     assert all(row["trade_count"] == 1 for row in result["results"])
     assert all(row["hypothetical_pnl"] == pytest.approx(15.0 - 16.5) for row in result["results"])
+
+
+# --- range_breakout through the generalized (bias_fn) exit engine ----------------------------
+# Confirms simulate_trades/replay's generalization actually works end-to-end for a rule with no
+# indicator at all, not just crossover - same SL/target/square-off/opposite-signal/end-of-data
+# exits, exercised via a range_breakout bias_fn instead of evaluate(rule, indicator_type, ...).
+
+RANGE_RULE = RangeBreakoutRuleConfig(breakout_period=4)
+
+
+def _range_bias_fn(window):
+    return evaluate_range_breakout(RANGE_RULE, window)
+
+
+_RANGE_MIN_BARS = RANGE_RULE.breakout_period + 1  # matches routes.py's backtest_strategy, not the more generous range_breakout_warmup (fetch-width padding, a separate concern)
+
+
+def _range_entry_fixture() -> list[CandleClose]:
+    # Flat range (10,10,10,10) then a clean bullish breakout to 15 - entry@15.
+    return _flat_candles([10, 10, 10, 10, 15])
+
+
+def test_replay_range_breakout_finds_the_breakout_and_reports_end_of_data():
+    result = replay(_range_bias_fn, _RANGE_MIN_BARS, _range_entry_fixture())
+
+    assert result["trade_count"] == 1
+    trade = result["trades"][0]
+    assert trade["direction"] == "bullish"
+    assert trade["entry_price"] == 15.0
+    assert trade["exit_reason"] == "end_of_data"
+
+
+def test_simulate_trades_range_breakout_stop_loss_percent_hit():
+    candles = _range_entry_fixture()
+    candles.append(_bar(5, 13.0, high=13.5, low=13.0))  # breaches a 10% stop from entry@15 (13.5)
+
+    trades = simulate_trades(
+        _range_bias_fn, _RANGE_MIN_BARS, candles, ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0)
+    )
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "stop_loss"
+
+
+def test_simulate_trades_range_breakout_target_percent_hit():
+    candles = _range_entry_fixture()
+    candles.append(_bar(5, 17.0, high=17.0, low=16.5))  # reaches a 10% target from entry@15 (16.5)
+
+    trades = simulate_trades(_range_bias_fn, _RANGE_MIN_BARS, candles, ExitConfig(target_percent=10.0))
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "target"
+
+
+def test_simulate_trades_range_breakout_square_off_closes_at_bar_close():
+    candles = _range_entry_fixture()
+    candles[-1] = CandleClose(timestamp="2026-08-12T14:57:00", close=15.0, high=15.0, low=15.0)
+    candles.append(CandleClose(timestamp="2026-08-12T15:03:00", close=14.2, high=14.5, low=14.0))
+
+    trades = simulate_trades(_range_bias_fn, _RANGE_MIN_BARS, candles, ExitConfig(square_off_time=time(15, 0)))
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "square_off"
+    assert trades[0].exit_price == 14.2
+
+
+def test_simulate_trades_range_breakout_bearish_breakdown():
+    candles = _flat_candles([10, 10, 10, 10, 5])  # breaks below the range low instead
+    trades = simulate_trades(_range_bias_fn, _RANGE_MIN_BARS, candles)
+
+    assert len(trades) == 1
+    assert trades[0].direction == "bearish"
+    assert trades[0].entry_price == 5.0

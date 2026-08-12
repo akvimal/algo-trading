@@ -4,6 +4,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
+from app.providers import nse_indices
 from app.providers.router import all_providers
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,11 @@ def _sync_all() -> None:
             provider.sync_instruments()
         except Exception:
             logger.exception("scheduled instrument sync failed for provider %s", provider.name)
+
+    try:
+        nse_indices.sync_universes()
+    except Exception:
+        logger.exception("scheduled NSE index universe sync failed")
 
 
 def start_scheduler() -> None:

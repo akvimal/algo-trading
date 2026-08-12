@@ -36,6 +36,9 @@ class Strategy(Base):
     # - a typed JSON blob (CrossoverRuleConfig today) so a new rule type
     # is new code, not a schema migration.
     underlying = Column(Text)
+    # 'symbol' (default, unchanged behavior) or 'universe' - see
+    # UnderlyingType/validate_underlying_type_fields in app/domain/models.py.
+    underlying_type = Column(Text, nullable=False, default="symbol")
     rule_config = Column(JSONB)
     regime_filter_enabled = Column(Boolean, nullable=False, default=False)
     regime_filter_checks = Column(
@@ -68,11 +71,15 @@ class Indicator(Base):
 
 class EngineRun(Base):
     """Runtime bookkeeping for the in-house engine's periodic tick - see
-    infra/postgres/init/03-signal-generation.sql."""
+    infra/postgres/init/03-signal-generation.sql. Keyed by (strategy_id,
+    symbol), not just strategy_id - a universe-scoped strategy checks many
+    symbols independently each tick and needs its own dedupe state per
+    constituent, not one shared state for the whole strategy."""
 
     __tablename__ = "engine_runs"
     __table_args__ = {"schema": SCHEMA}
 
     strategy_id = Column(UUID(as_uuid=True), primary_key=True)
+    symbol = Column(Text, primary_key=True)
     last_signal_candle_ts = Column(TIMESTAMP(timezone=True))
     last_checked_at = Column(TIMESTAMP(timezone=True))

@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- CRYPTO can be recorded as intent even though nothing downstream
     -- trades them yet - see docs/architecture.md.
     segment          TEXT NOT NULL DEFAULT 'NSE' CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    -- instrument_type='option' only - which fixed template choose_strategy
+    -- (signal-processing) builds: 'spread' (bull_call_spread/bear_put_spread,
+    -- Phase 4b) or 'naked' (naked_call/naked_put - single BUY leg, no short
+    -- leg). Harmlessly ignored for spot/future strategies, same convention
+    -- as regime_filter_enabled being ignored for non-in_house strategies.
+    option_position_style TEXT NOT NULL DEFAULT 'spread' CHECK (option_position_style IN ('spread', 'naked')),
     -- Required for horizon='intraday' only - square-off doesn't apply to
     -- swing/positional strategies (positions aren't closed same-day), so
     -- this stays NULL for them. Auto-defaulted server-side from

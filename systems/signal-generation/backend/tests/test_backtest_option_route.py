@@ -44,6 +44,7 @@ class FakeStrategy:
     stop_loss_percent: Optional[float] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
+    option_position_style: str = "spread"
     square_off_time: Optional[time] = None
 
 
@@ -143,6 +144,21 @@ def test_backtest_one_symbol_option_rejects_range_over_max_days(monkeypatch):
         strategies_route._backtest_one_symbol(FakeDb(), FakeStrategy(), RULE, "NIFTY", BASE.date(), too_wide_to)
     assert exc_info.value.status_code == 422
     assert "too wide" in exc_info.value.detail
+
+
+def test_backtest_one_symbol_option_rejects_naked_style(monkeypatch):
+    # option_backtest.py's legs_for_direction is hardcoded to a long+short
+    # pair - backtesting a naked strategy would silently report wrong
+    # numbers, so this is an explicit 422, not a fallthrough to the spread
+    # simulation.
+    _patch_common(monkeypatch, {})
+
+    with pytest.raises(HTTPException) as exc_info:
+        strategies_route._backtest_one_symbol(
+            FakeDb(), FakeStrategy(option_position_style="naked"), RULE, "NIFTY", BASE.date(), BASE.date()
+        )
+    assert exc_info.value.status_code == 422
+    assert "naked" in exc_info.value.detail
 
 
 def test_backtest_one_symbol_option_skips_trade_when_legs_unresolvable(monkeypatch):

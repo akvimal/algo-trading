@@ -1,9 +1,11 @@
 """Multi-leg option position lifecycle (Phase 4d of the options trading
-module - see docs/architecture.md): opens a 2-leg spread
-(bull_call_spread/bear_put_spread, signal-processing's fixed templates,
-Phase 4b) as one execution.option_position_groups row plus 2 leg
+module - see docs/architecture.md): opens a 1- or 2-leg option order
+(signal-processing's fixed templates - bull_call_spread/bear_put_spread
+for option_position_style='spread', naked_call/naked_put for 'naked') as
+one execution.option_position_groups row plus 1 or 2 leg
 execution.positions rows, sized against and monitored via a COMBINED
-net-debit premium rather than either leg's own price.
+net-debit premium rather than either leg's own price. A naked (1-leg)
+group is not a special case mathematically - see the trick below.
 
 Deliberately a sibling to position_manager.py, not a modification of it -
 position_manager.is_supported/open_position stay completely untouched
@@ -18,10 +20,17 @@ Key trick, same one Phase 4c's option_backtest.py (signal-generation)
 already established: a debit spread's combined premium (long leg price -
 short leg price) behaves exactly like a single "BUY" position's price -
 it rises as the position's own thesis plays out, regardless of which
-template (bull_call_spread or bear_put_spread) produced it. So every
-combined SL/target/pnl calculation below reuses position_manager's
-existing BUY-direction formulas unchanged; the group's own `action`
-field still records the REAL original signal direction for reporting."""
+template (bull_call_spread or bear_put_spread) produced it. A naked
+position is the same identity with the short leg's price fixed at 0 (no
+short leg at all) - combined premium = long leg's own price, so it's
+still a "BUY" position throughout, no separate naked-specific math
+anywhere below. Every group in this module always has exactly one BUY
+leg (`legs_by_group()`'s 'BUY' key) and an OPTIONAL SELL leg (present for
+'spread', absent for 'naked') - every function below treats the SELL leg
+as Optional accordingly. So every combined SL/target/pnl calculation
+reuses position_manager's existing BUY-direction formulas unchanged; the
+group's own `action` field still records the REAL original signal
+direction for reporting."""
 
 import logging
 import uuid
@@ -123,18 +132,29 @@ def open_option_group(
         return row
 
     legs = (order.strategy or {}).get("legs") or []
-    if len(legs) != 2:
-        row = _reject_group(db, order, signal_id, f"expected exactly 2 option legs, got {len(legs)}")
+    if len(legs) not in (1, 2):
+        row = _reject_group(db, order, signal_id, f"expected 1 (naked) or 2 (spread) option legs, got {len(legs)}")
         db.commit()
         return row
 
-    buy_legs = [leg for leg in legs if leg["action"] == "BUY"]
-    sell_legs = [leg for leg in legs if leg["action"] == "SELL"]
-    if len(buy_legs) != 1 or len(sell_legs) != 1:
-        row = _reject_group(db, order, signal_id, "expected exactly one BUY leg and one SELL leg")
-        db.commit()
-        return row
-    long_leg_dict, short_leg_dict = buy_legs[0], sell_legs[0]
+    short_leg_dict: Optional[dict] = None
+    if len(legs) == 1:
+        if legs[0]["action"] != "BUY":
+            # No margin/undefined-risk handling anywhere in this platform -
+            # a naked SELL (writing/selling an uncovered option) is never a
+            # valid template here, only naked BUY (long call/put).
+            row = _reject_group(db, order, signal_id, "a single-leg (naked) option order must be a BUY leg")
+            db.commit()
+            return row
+        long_leg_dict = legs[0]
+    else:
+        buy_legs = [leg for leg in legs if leg["action"] == "BUY"]
+        sell_legs = [leg for leg in legs if leg["action"] == "SELL"]
+        if len(buy_legs) != 1 or len(sell_legs) != 1:
+            row = _reject_group(db, order, signal_id, "expected exactly one BUY leg and one SELL leg")
+            db.commit()
+            return row
+        long_leg_dict, short_leg_dict = buy_legs[0], sell_legs[0]
 
     if order.square_off_time is None:
         row = _reject_group(db, order, signal_id, "intraday option order is missing square_off_time (contract violation)")
@@ -171,16 +191,17 @@ def open_option_group(
         return row
 
     long_symbol = resolve_symbol_by_security_id(order.exchange, long_leg_dict["security_id"])
-    short_symbol = resolve_symbol_by_security_id(order.exchange, short_leg_dict["security_id"])
-    if long_symbol is None or short_symbol is None:
+    short_symbol = resolve_symbol_by_security_id(order.exchange, short_leg_dict["security_id"]) if short_leg_dict else None
+    if long_symbol is None or (short_leg_dict and short_symbol is None):
         row = _reject_group(db, order, signal_id, "could not resolve one or both option legs' security_id to a trading symbol")
         db.commit()
         return row
 
-    quotes = get_ltp_batch(order.exchange, [long_symbol, short_symbol])
+    symbols_to_quote = [long_symbol] + ([short_symbol] if short_symbol else [])
+    quotes = get_ltp_batch(order.exchange, symbols_to_quote)
     long_premium = quotes.get(long_symbol)
-    short_premium = quotes.get(short_symbol)
-    if long_premium is None or short_premium is None:
+    short_premium = quotes.get(short_symbol) if short_symbol else 0.0
+    if long_premium is None or (short_symbol and short_premium is None):
         row = _reject_group(db, order, signal_id, "could not fetch a live quote for one or both option legs")
         db.commit()
         return row
@@ -206,8 +227,7 @@ def open_option_group(
             closed = (
                 grp_legs is not None
                 and "BUY" in grp_legs
-                and "SELL" in grp_legs
-                and _close_group_at_cmp(grp, grp_legs["BUY"], grp_legs["SELL"], get_ltp_batch, account, "counter_signal")
+                and _close_group_at_cmp(grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, account, "counter_signal")
             )
             if not closed:
                 row = _reject_group(
@@ -270,7 +290,10 @@ def open_option_group(
     )
     db.add(group)
 
-    for leg_dict, symbol, premium in ((long_leg_dict, long_symbol, long_premium), (short_leg_dict, short_symbol, short_premium)):
+    legs_to_write = [(long_leg_dict, long_symbol, long_premium)]
+    if short_leg_dict:
+        legs_to_write.append((short_leg_dict, short_symbol, short_premium))
+    for leg_dict, symbol, premium in legs_to_write:
         db.add(
             db_models.Position(
                 signal_id=signal_id,
@@ -292,23 +315,27 @@ def open_option_group(
     return group
 
 
-def _close_group_at_cmp(group, long_leg, short_leg, get_ltp_batch: GetLtpBatch, account, exit_reason: str) -> bool:
-    """Pure logic (no DB query/commit) - closes `group` and its 2 already-
-    fetched legs at current market prices, mutating them in place. Returns
-    False (leaves everything unchanged) if either leg's live quote is
-    unavailable, mirroring square_off_all_open's per-position graceful
-    degradation. Shared by counter-signal closes, manual square-off, and
-    bulk square-off-all - each caller fetches `long_leg`/`short_leg` via
+def _close_group_at_cmp(group, long_leg, short_leg: Optional[object], get_ltp_batch: GetLtpBatch, account, exit_reason: str) -> bool:
+    """Pure logic (no DB query/commit) - closes `group` and its 1-2 already-
+    fetched legs at current market prices, mutating them in place. `short_leg`
+    is None for a naked (1-leg) group - contributes 0 to the combined price,
+    same identity the module docstring establishes. Returns False (leaves
+    everything unchanged) if either leg's live quote is unavailable,
+    mirroring square_off_all_open's per-position graceful degradation.
+    Shared by counter-signal closes, manual square-off, and bulk
+    square-off-all - each caller fetches `long_leg`/`short_leg` via
     legs_by_group first, same pure/impure split _evaluate_exits itself
     uses."""
-    quotes = get_ltp_batch(group.exchange, [long_leg.symbol, short_leg.symbol])
+    symbols = [long_leg.symbol] + ([short_leg.symbol] if short_leg else [])
+    quotes = get_ltp_batch(group.exchange, symbols)
     long_cmp = quotes.get(long_leg.symbol)
-    short_cmp = quotes.get(short_leg.symbol)
-    if long_cmp is None or short_cmp is None:
+    short_cmp = quotes.get(short_leg.symbol) if short_leg else 0.0
+    if long_cmp is None or (short_leg and short_cmp is None):
         return False
 
     now = datetime.now(dt_timezone.utc)
-    for pos, cmp_price in ((long_leg, long_cmp), (short_leg, short_cmp)):
+    legs_to_close = [(long_leg, long_cmp)] + ([(short_leg, short_cmp)] if short_leg else [])
+    for pos, cmp_price in legs_to_close:
         pos.exit_price = cmp_price
         pos.exit_time = now
         pos.pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
@@ -335,12 +362,12 @@ def compute_group_unrealized_pnl(groups: list, legs: dict, get_ltp_batch: GetLtp
     result: dict = {}
     for group in open_groups:
         group_legs = legs.get(group.id)
-        if not group_legs or "BUY" not in group_legs or "SELL" not in group_legs:
+        if not group_legs or "BUY" not in group_legs:
             continue
-        long_leg, short_leg = group_legs["BUY"], group_legs["SELL"]
+        long_leg, short_leg = group_legs["BUY"], group_legs.get("SELL")
         long_cmp = quotes.get((long_leg.exchange, long_leg.symbol))
-        short_cmp = quotes.get((short_leg.exchange, short_leg.symbol))
-        if long_cmp is None or short_cmp is None:
+        short_cmp = quotes.get((short_leg.exchange, short_leg.symbol)) if short_leg else 0.0
+        if long_cmp is None or (short_leg and short_cmp is None):
             continue
         combined_price = long_cmp - short_cmp
         unrealized = (combined_price - float(group.net_debit)) * float(group.quantity)
@@ -360,8 +387,7 @@ def square_off_all_open_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -
         if (
             group_legs is not None
             and "BUY" in group_legs
-            and "SELL" in group_legs
-            and _close_group_at_cmp(group, group_legs["BUY"], group_legs["SELL"], get_ltp_batch, accounts.get(group.segment), "square_off")
+            and _close_group_at_cmp(group, group_legs["BUY"], group_legs.get("SELL"), get_ltp_batch, accounts.get(group.segment), "square_off")
         ):
             closed += 1
         else:
@@ -382,8 +408,7 @@ def square_off_option_group(db: Session, group_id: uuid.UUID, get_ltp_batch: Get
     if (
         group_legs is None
         or "BUY" not in group_legs
-        or "SELL" not in group_legs
-        or not _close_group_at_cmp(group, group_legs["BUY"], group_legs["SELL"], get_ltp_batch, account, "manual")
+        or not _close_group_at_cmp(group, group_legs["BUY"], group_legs.get("SELL"), get_ltp_batch, account, "manual")
     ):
         return {"status": "quote_unavailable"}
     db.commit()
@@ -405,17 +430,18 @@ def _evaluate_option_group_square_off_due(groups: list, legs: dict, get_ltp_batc
 
     for group in due:
         group_legs = legs.get(group.id)
-        if not group_legs or "BUY" not in group_legs or "SELL" not in group_legs:
+        if not group_legs or "BUY" not in group_legs:
             failed += 1
             continue
-        long_leg, short_leg = group_legs["BUY"], group_legs["SELL"]
+        long_leg, short_leg = group_legs["BUY"], group_legs.get("SELL")
         long_cmp = quotes.get((long_leg.exchange, long_leg.symbol))
-        short_cmp = quotes.get((short_leg.exchange, short_leg.symbol))
-        if long_cmp is None or short_cmp is None:
+        short_cmp = quotes.get((short_leg.exchange, short_leg.symbol)) if short_leg else 0.0
+        if long_cmp is None or (short_leg and short_cmp is None):
             failed += 1
             continue
 
-        for pos, cmp_price in ((long_leg, long_cmp), (short_leg, short_cmp)):
+        legs_to_close = [(long_leg, long_cmp)] + ([(short_leg, short_cmp)] if short_leg else [])
+        for pos, cmp_price in legs_to_close:
             pos.exit_price = cmp_price
             pos.exit_time = now
             pos.pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
@@ -461,12 +487,12 @@ def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtp
 
     for group in groups:
         group_legs = legs.get(group.id)
-        if not group_legs or "BUY" not in group_legs or "SELL" not in group_legs:
+        if not group_legs or "BUY" not in group_legs:
             continue
-        long_leg, short_leg = group_legs["BUY"], group_legs["SELL"]
+        long_leg, short_leg = group_legs["BUY"], group_legs.get("SELL")
         long_cmp = quotes.get((long_leg.exchange, long_leg.symbol))
-        short_cmp = quotes.get((short_leg.exchange, short_leg.symbol))
-        if long_cmp is None or short_cmp is None:
+        short_cmp = quotes.get((short_leg.exchange, short_leg.symbol)) if short_leg else 0.0
+        if long_cmp is None or (short_leg and short_cmp is None):
             continue
 
         combined_price = long_cmp - short_cmp
@@ -476,7 +502,8 @@ def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtp
             continue
 
         reason = "combined_stop_loss" if sl_hit else "combined_target"
-        for pos, cmp_price in ((long_leg, long_cmp), (short_leg, short_cmp)):
+        legs_to_close = [(long_leg, long_cmp)] + ([(short_leg, short_cmp)] if short_leg else [])
+        for pos, cmp_price in legs_to_close:
             pos.exit_price = cmp_price
             pos.exit_time = now
             pos.pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))

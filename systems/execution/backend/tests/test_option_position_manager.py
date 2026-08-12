@@ -81,6 +81,12 @@ def _legs(net_debit_entry: tuple[float, float] = (30.0, 10.0), quantity: float =
     return long_leg, short_leg
 
 
+def _naked_leg(entry_price: float = 30.0, quantity: float = 75) -> FakePosition:
+    """A naked (option_position_style='naked') group's sole leg - no
+    short leg at all, distinct from _legs()'s always-BUY+SELL pair."""
+    return FakePosition(id="long", status="OPEN", exchange="NSE", symbol="NIFTY-CE", action="BUY", entry_price=entry_price, quantity=quantity)
+
+
 def _group(net_debit: float = 20.0, quantity: float = 75, **overrides) -> FakeGroup:
     defaults = dict(
         id="group-1", segment="NSE", exchange="NSE", underlying_symbol="NIFTY", action="BUY",
@@ -124,6 +130,23 @@ def test_close_group_at_cmp_returns_false_when_quote_unavailable():
     assert long_leg.status == "OPEN"
 
 
+def test_close_group_at_cmp_naked_group_has_no_short_leg():
+    # net_debit for a naked group is just the long leg's own entry price
+    # (no short leg to net against) - combined_price degenerates to the
+    # long leg's own CMP, same identity the module docstring establishes.
+    group = _group(net_debit=30.0, quantity=75)
+    long_leg = _naked_leg(entry_price=30.0)
+    accounts = _accounts()
+
+    closed = _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"NIFTY-CE": 45.0}, accounts["NSE"], "manual")
+
+    assert closed is True
+    assert group.pnl == (45.0 - 30.0) * 75
+    assert group.status == "CLOSED"
+    assert long_leg.pnl == (45.0 - 30.0) * 75
+    assert accounts["NSE"].current_balance == 1_000_000.0 + (45.0 - 30.0) * 75
+
+
 # --- _evaluate_option_group_exits ----------------------------------------------------------------
 
 
@@ -163,6 +186,19 @@ def test_evaluate_option_group_exits_leaves_open_when_neither_hit():
     assert group.status == "OPEN"
 
 
+def test_evaluate_option_group_exits_naked_group_closes_on_stop_loss():
+    group = _group(net_debit=30.0, combined_stop_loss_price=27.0)
+    long_leg = _naked_leg(entry_price=30.0)
+    legs = {"group-1": {"BUY": long_leg}}  # no 'SELL' key at all
+
+    result = _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 25.0}, _accounts())
+
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert group.status == "CLOSED"
+    assert group.exit_reason == "combined_stop_loss"
+    assert long_leg.status == "CLOSED"
+
+
 def test_evaluate_option_group_exits_skips_group_with_missing_legs():
     group = _group(combined_stop_loss_price=10.0)
 
@@ -187,6 +223,18 @@ def test_evaluate_option_group_square_off_due_closes_groups_past_their_time():
     assert result == {"closed": 1, "failed": 0, "checked": 1}
     assert group.status == "CLOSED"
     assert group.exit_reason == "square_off"
+
+
+def test_evaluate_option_group_square_off_due_closes_naked_group():
+    group = _group(net_debit=30.0, square_off_time=time(15, 0))
+    long_leg = _naked_leg(entry_price=30.0)
+    legs = {"group-1": {"BUY": long_leg}}
+
+    result = _evaluate_option_group_square_off_due([group], legs, lambda ex, syms: {"NIFTY-CE": 32.0}, time(15, 30), _accounts())
+
+    assert result == {"closed": 1, "failed": 0, "checked": 1}
+    assert group.status == "CLOSED"
+    assert group.pnl == (32.0 - 30.0) * 75
 
 
 def test_evaluate_option_group_square_off_due_ignores_groups_not_yet_due():
@@ -228,6 +276,18 @@ def test_compute_group_unrealized_pnl_only_reports_open_groups():
     combined_price, unrealized = result["group-1"]
     assert combined_price == 25.0  # 35-10
     assert unrealized == (25.0 - 20.0) * 75  # (combined - net_debit) * quantity
+
+
+def test_compute_group_unrealized_pnl_naked_group_uses_long_leg_price_directly():
+    group = _group(net_debit=30.0)
+    long_leg = _naked_leg(entry_price=30.0)
+    legs = {"group-1": {"BUY": long_leg}}
+
+    result = compute_group_unrealized_pnl([group], legs, lambda ex, syms: {"NIFTY-CE": 38.0})
+
+    combined_price, unrealized = result["group-1"]
+    assert combined_price == 38.0
+    assert unrealized == (38.0 - 30.0) * 75
 
 
 # --- _resolve_signal_conflicts reused against option groups ---------------------------------------

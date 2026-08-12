@@ -4,10 +4,12 @@ dict passed in is already-fetched (app/adapters/market_data/client.py's
 get_option_chain), same shape market-data's OptionChain model returns
 (underlying_last_price, expiry, strikes: [{strike, ce, pe}], each leg
 carrying oi/moneyness/security_id/greeks/...). Not a general rule engine:
-exactly the two templates already decided on (bullish -> bull call
-spread, bearish -> bear put spread) - see
-app/domain/resolution/strategy.py for where signal bias picks between
-them."""
+exactly two template FAMILIES, chosen per-strategy via
+Strategy.option_position_style (signal-generation) - 'spread' (bullish ->
+bull call spread, bearish -> bear put spread) or 'naked' (bullish -> naked
+call, bearish -> naked put, single BUY leg only) - see
+app/domain/resolution/strategy.py for where signal bias and
+option_position_style together pick between them."""
 
 from datetime import date
 from typing import Literal, Optional
@@ -103,3 +105,26 @@ def bear_put_spread(chain: dict) -> list[dict]:
         _leg(strikes, atm_index, "pe", "BUY", chain["expiry"]),
         _leg(strikes, short_index, "pe", "SELL", chain["expiry"]),
     ]
+
+
+def naked_call(chain: dict) -> list[dict]:
+    """BUY the ATM call outright - no short leg. Single-leg counterpart to
+    bull_call_spread (option_position_style='naked', see
+    app/domain/resolution/strategy.py) - no SPREAD_WIDTH_STRIKES/
+    MIN_SHORT_LEG_OI concerns since there's no short leg to place. Raises
+    ValueError if the chain has no ATM call."""
+    strikes = chain["strikes"]
+    atm_index = _find_atm_index(strikes, "ce")
+    if atm_index is None:
+        raise ValueError("no ATM call strike found in chain")
+    return [_leg(strikes, atm_index, "ce", "BUY", chain["expiry"])]
+
+
+def naked_put(chain: dict) -> list[dict]:
+    """BUY the ATM put outright - no short leg. Single-leg counterpart to
+    bear_put_spread. Raises ValueError if the chain has no ATM put."""
+    strikes = chain["strikes"]
+    atm_index = _find_atm_index(strikes, "pe")
+    if atm_index is None:
+        raise ValueError("no ATM put strike found in chain")
+    return [_leg(strikes, atm_index, "pe", "BUY", chain["expiry"])]

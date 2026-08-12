@@ -29,6 +29,12 @@ from pydantic import BaseModel, Field, TypeAdapter, model_validator
 SourceType = Annotated[str, Field(min_length=1)]
 Horizon = Literal["intraday", "swing", "positional"]
 InstrumentType = Literal["spot", "future", "option"]
+# instrument_type='option' only - which fixed template signal-processing's
+# choose_strategy builds: 'spread' (bull_call_spread/bear_put_spread, Phase
+# 4b) or 'naked' (naked_call/naked_put - single BUY leg, no short leg, no
+# margin/undefined-risk handling anywhere in this platform so "naked SELL"
+# is never a valid template). Harmlessly ignored for spot/future strategies.
+OptionPositionStyle = Literal["spread", "naked"]
 Status = Literal["draft", "backtesting", "live", "paused"]
 Interval = Literal["1min", "3min", "5min", "15min", "30min", "60min", "daily"]
 StopLossMethod = Literal["previous_candle", "percent"]
@@ -311,6 +317,8 @@ class StrategyCreate(BaseModel):
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: bool = False
+    # instrument_type='option' only - see OptionPositionStyle above.
+    option_position_style: OptionPositionStyle = "spread"
     segment: Segment = "NSE"
     # Only meaningful for horizon='intraday' - square-off doesn't apply to
     # swing/positional strategies (positions aren't closed same-day), so
@@ -409,6 +417,7 @@ class StrategyUpdate(BaseModel):
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: Optional[bool] = None
+    option_position_style: Optional[OptionPositionStyle] = None
     segment: Optional[Segment] = None
     square_off_time: Optional[time] = None
     underlying: Optional[str] = Field(default=None, min_length=1)
@@ -451,6 +460,7 @@ class StrategyOut(BaseModel):
     stop_loss_percent: Optional[float] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
+    option_position_style: OptionPositionStyle = "spread"
     segment: Segment
     square_off_time: Optional[time] = None
     underlying: Optional[str] = None

@@ -455,6 +455,61 @@ def test_resolve_option_strategy_for_crypto_sell_signal_uses_bear_put_spread():
 
 
 @responses.activate
+def test_resolve_option_strategy_naked_call_for_buy_signal():
+    # option_position_style='naked' -> single BUY leg, no short leg -
+    # signal-processing has no exchange-specific logic either way, so an
+    # NSE fixture is enough to exercise the branch (see
+    # test_resolve_option_strategy_for_crypto_uses_delta_chain above for
+    # the exchange-agnostic confirmation).
+    responses.add(
+        responses.GET, _strategy_url(), json=_option_strategy_json(option_position_style="naked"), status=200
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.strategy == {
+        "type": "naked_call",
+        "legs": [
+            {"action": "BUY", "option_type": "CE", "strike": 24000.0, "expiry": "2026-08-14", "security_id": "ce-24000"},
+        ],
+    }
+
+
+@responses.activate
+def test_resolve_option_strategy_naked_put_for_sell_signal():
+    responses.add(
+        responses.GET, _strategy_url(), json=_option_strategy_json(option_position_style="naked"), status=200
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="SELL"))
+
+    assert resolved.strategy["type"] == "naked_put"
+    assert len(resolved.strategy["legs"]) == 1
+    assert resolved.strategy["legs"][0]["option_type"] == "PE"
+
+
+@responses.activate
+def test_resolve_option_strategy_defaults_to_spread_when_style_unset():
+    # Backward compatibility: a strategy fetched before option_position_style
+    # existed (or one that never set it) has no such key in the JSON at
+    # all - resolve() must default to 'spread', not crash/None.
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.strategy["type"] == "bull_call_spread"
+
+
+@responses.activate
 def test_resolve_option_rejects_when_market_data_unreachable():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
     responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)

@@ -55,6 +55,7 @@ def _to_out(row: db_models.Strategy) -> StrategyOut:
         stop_loss_percent=float(row.stop_loss_percent) if row.stop_loss_percent is not None else None,
         target_percent=float(row.target_percent) if row.target_percent is not None else None,
         trailing_stop_enabled=row.trailing_stop_enabled,
+        option_position_style=row.option_position_style,
         segment=row.segment,
         square_off_time=row.square_off_time,
         underlying=row.underlying,
@@ -144,6 +145,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         stop_loss_percent=stop_loss_percent,
         target_percent=payload.target_percent,
         trailing_stop_enabled=trailing_stop_enabled,
+        option_position_style=payload.option_position_style,
         segment=payload.segment,
         square_off_time=payload.square_off_time,
         underlying=payload.underlying,
@@ -245,6 +247,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.target_percent = payload.target_percent
     if payload.trailing_stop_enabled is not None:
         row.trailing_stop_enabled = payload.trailing_stop_enabled
+    if payload.option_position_style is not None:
+        row.option_position_style = payload.option_position_style
     if payload.segment is not None:
         row.segment = payload.segment
     if payload.square_off_time is not None:
@@ -472,6 +476,13 @@ def _backtest_one_symbol_option(db: Session, row: db_models.Strategy, rule: Rule
     option_backtest.py's own module docstring."""
     if not isinstance(rule, CrossoverRuleConfig):
         raise HTTPException(status_code=422, detail="option backtesting only supports crossover-rule strategies today")
+    if row.option_position_style == "naked":
+        # option_backtest.py's legs_for_direction is hardcoded to a
+        # long+short pair (Phase 4c never anticipated a single-leg
+        # style) - silently backtesting a naked strategy as a spread
+        # would report wrong numbers, so this rejects explicitly rather
+        # than a follow-up phase, not built yet.
+        raise HTTPException(status_code=422, detail="backtesting a naked option strategy isn't supported yet")
     if (to - from_).days > MAX_OPTION_BACKTEST_DAYS:
         raise HTTPException(
             status_code=422,

@@ -8,7 +8,14 @@ from datetime import date
 
 import pytest
 
-from app.domain.resolution.option_templates import MIN_SHORT_LEG_OI, bear_put_spread, bull_call_spread, choose_expiry
+from app.domain.resolution.option_templates import (
+    MIN_SHORT_LEG_OI,
+    bear_put_spread,
+    bull_call_spread,
+    choose_expiry,
+    naked_call,
+    naked_put,
+)
 
 
 def _leg(security_id: str, moneyness: str, oi: int) -> dict:
@@ -137,3 +144,42 @@ def test_bear_put_spread_raises_when_no_atm_strike():
 
     with pytest.raises(ValueError, match="no ATM put"):
         bear_put_spread(chain)
+
+
+# --- naked_call / naked_put (option_position_style='naked') -----------------------------------
+
+
+def test_naked_call_picks_only_atm_long_leg():
+    chain = _make_chain(_default_strikes())
+
+    legs = naked_call(chain)
+
+    assert legs == [
+        {"action": "BUY", "option_type": "CE", "strike": 24000.0, "expiry": "2026-08-14", "security_id": "ce-24000"},
+    ]
+
+
+def test_naked_call_raises_when_no_atm_strike():
+    strikes = [s for s in _default_strikes() if s["strike"] != 24000.0]
+    chain = _make_chain(strikes)
+
+    with pytest.raises(ValueError, match="no ATM call"):
+        naked_call(chain)
+
+
+def test_naked_put_picks_only_atm_long_leg():
+    chain = _make_chain(_default_strikes())
+
+    legs = naked_put(chain)
+
+    assert legs == [
+        {"action": "BUY", "option_type": "PE", "strike": 24000.0, "expiry": "2026-08-14", "security_id": "pe-24000"},
+    ]
+
+
+def test_naked_put_raises_when_no_atm_strike():
+    strikes = [s for s in _default_strikes() if s["strike"] != 24000.0]
+    chain = _make_chain(strikes)
+
+    with pytest.raises(ValueError, match="no ATM put"):
+        naked_put(chain)

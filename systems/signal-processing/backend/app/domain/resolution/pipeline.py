@@ -41,7 +41,7 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
     horizon = strategy["horizon"]
     instrument_type = strategy["instrument_type"]
 
-    option_strategy = choose_strategy(signal, horizon, instrument_type)
+    option_strategy = choose_strategy(signal, horizon, instrument_type, strategy.get("option_position_style", "spread"))
 
     square_off_time = strategy.get("square_off_time")
     if square_off_time and active_to:

@@ -6,22 +6,32 @@ import requests
 from app.adapters.market_data.client import get_expiry_list, get_option_chain, resolve_underlying
 from app.domain.models import SignalIngest
 from app.domain.resolution.errors import ResolutionError
-from app.domain.resolution.option_templates import bear_put_spread, bull_call_spread, choose_expiry
+from app.domain.resolution.option_templates import (
+    bear_put_spread,
+    bull_call_spread,
+    choose_expiry,
+    naked_call,
+    naked_put,
+)
 
 
-def choose_strategy(signal: SignalIngest, horizon: str, instrument_type: str) -> Optional[dict]:
-    """Pick an option strategy (spread, straddle, naked leg, ...) - NOT to
-    be confused with signal-generation's Strategy entity (signal.strategy_id),
+def choose_strategy(signal: SignalIngest, horizon: str, instrument_type: str, option_position_style: str = "spread") -> Optional[dict]:
+    """Pick an option strategy (spread, naked leg, ...) - NOT to be
+    confused with signal-generation's Strategy entity (signal.strategy_id),
     which is a different concept (which signal source/config produced this
-    signal). This function decides option *legs*, given horizon/instrument_type
-    already resolved from that Strategy.
+    signal). This function decides option *legs*, given horizon/
+    instrument_type/option_position_style already resolved from that
+    Strategy.
 
     Only relevant once instrument_type == "option" - None (not an
     option strategy) otherwise. A fixed bias->template rule set for now,
-    not a general strategy-selection engine - bullish (BUY) signals get a
-    bull call spread, bearish (SELL) a bear put spread, see
-    app/domain/resolution/option_templates.py - see docs/architecture.md
-    Phase 4b for why. Raises ResolutionError (not a silent None) if any
+    not a general strategy-selection engine - option_position_style picks
+    the template FAMILY ('spread', the default, or 'naked'), signal bias
+    picks the direction within it: bullish (BUY) -> bull_call_spread or
+    naked_call, bearish (SELL) -> bear_put_spread or naked_put. See
+    app/domain/resolution/option_templates.py, docs/architecture.md Phase
+    4b for the spread templates and the "naked call/put option style"
+    section for naked. Raises ResolutionError (not a silent None) if any
     step can't resolve - a signal that can't get real legs shouldn't
     resolve as instrument_type='option' with nothing to trade, same
     "persisted as rejected, nothing published" handling resolve() already
@@ -71,6 +81,10 @@ def choose_strategy(signal: SignalIngest, horizon: str, instrument_type: str) ->
         raise ResolutionError(f"could not resolve option chain for '{resolved.chart_symbol}' ({expiry})")
 
     try:
+        if option_position_style == "naked":
+            if signal.action == "BUY":
+                return {"type": "naked_call", "legs": naked_call(chain)}
+            return {"type": "naked_put", "legs": naked_put(chain)}
         if signal.action == "BUY":
             return {"type": "bull_call_spread", "legs": bull_call_spread(chain)}
         return {"type": "bear_put_spread", "legs": bear_put_spread(chain)}

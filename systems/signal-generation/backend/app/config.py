@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     option_history_timeout_seconds: float = 60.0
 
     # signal-processing is where a signal actually gets resolved/queued -
-    # the engine posts to it exactly like n8n does for webhook providers.
+    # the engine posts to it via the exact same POST /signals contract
+    # every webhook provider's intake route also uses.
     signal_processing_base_url: str = "http://signal-processing-backend:8000"
     signal_processing_timeout_seconds: float = 10.0
 

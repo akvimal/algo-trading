@@ -1,5 +1,4 @@
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -7,88 +6,15 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.adapters.queue.publisher import publish_resolved_order
+from app.domain.intake.core import create_signal_from_ingest
 from app.domain.models import SignalIngest
-from app.domain.resolution.errors import ResolutionError
-from app.domain.resolution.pipeline import resolve
 
 router = APIRouter()
 
 
 @router.post("/signals", status_code=202)
 def create_signal(signal: SignalIngest, db: Session = Depends(get_db)):
-    signal_row = db_models.Signal(
-        strategy_id=uuid.UUID(signal.strategy_id),
-        symbol=signal.symbol,
-        exchange=signal.exchange,
-        action=signal.action,
-        price=signal.price,
-        source=signal.source,
-        source_meta=signal.source_meta,
-        signal_ts=signal.timestamp or datetime.now(timezone.utc),
-    )
-    db.add(signal_row)
-    db.flush()  # assign signal_row.id before it's referenced below
-
-    try:
-        resolved = resolve(signal)
-    except ResolutionError as exc:
-        order_row = db_models.ResolvedOrder(
-            signal_id=signal_row.id,
-            strategy_id=uuid.UUID(signal.strategy_id),
-            symbol=signal.symbol,
-            exchange=signal.exchange,
-            action=signal.action,
-            price=signal.price,
-            status="rejected",
-            rejection_reason=exc.reason,
-        )
-        db.add(order_row)
-        db.commit()
-        return {"signal_id": str(signal_row.id), "status": "rejected", "reason": exc.reason}
-
-    order_row = db_models.ResolvedOrder(
-        signal_id=signal_row.id,
-        strategy_id=uuid.UUID(signal.strategy_id),
-        symbol=signal.symbol,
-        exchange=signal.exchange,
-        action=signal.action,
-        horizon=resolved.horizon,
-        instrument_type=resolved.instrument_type,
-        strategy=resolved.strategy,
-        price=signal.price,
-        status="pending",
-    )
-    db.add(order_row)
-    db.commit()
-    db.refresh(order_row)
-
-    publish_resolved_order(
-        {
-            "signal_id": str(signal_row.id),
-            "strategy_id": signal.strategy_id,
-            "symbol": signal.symbol,
-            "exchange": signal.exchange,
-            "action": signal.action,
-            "horizon": resolved.horizon,
-            "instrument_type": resolved.instrument_type,
-            "segment": resolved.segment,
-            "strategy": resolved.strategy,
-            "price": signal.price,
-            "resolved_at": order_row.resolved_at.isoformat(),
-            "status": order_row.status,
-            "stop_loss_method": resolved.stop_loss_method,
-            "stop_loss_interval": resolved.stop_loss_interval,
-            "stop_loss_percent": resolved.stop_loss_percent,
-            "target_percent": resolved.target_percent,
-            "trailing_stop_enabled": resolved.trailing_stop_enabled,
-            "square_off_time": resolved.square_off_time.isoformat() if resolved.square_off_time else None,
-            "duplicate_signal_policy": resolved.duplicate_signal_policy,
-            "counter_signal_policy": resolved.counter_signal_policy,
-        }
-    )
-
-    return {"signal_id": str(signal_row.id), "status": "accepted"}
+    return create_signal_from_ingest(db, signal)
 
 
 @router.get("/signals")

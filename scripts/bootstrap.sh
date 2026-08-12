@@ -17,10 +17,12 @@ docker compose up -d
 
 cat <<EOF
 
-n8n:                        http://localhost:${N8N_PORT}
 signal-processing API docs: http://localhost:${SIGNAL_PROCESSING_BACKEND_PORT}/docs
 signal-processing frontend: http://localhost:${SIGNAL_PROCESSING_FRONTEND_PORT}
 
-Next: open n8n, import infra/n8n/workflows/chartink-{buy,sell}-intake.json,
-and activate both workflows. Then try:  make test-signal
+Chartink intake webhooks live directly on signal-processing now (no n8n):
+  http://localhost:${SIGNAL_PROCESSING_BACKEND_PORT}/webhook/chartink-buy?strategy_id=<id>
+  http://localhost:${SIGNAL_PROCESSING_BACKEND_PORT}/webhook/chartink-sell?strategy_id=<id>
+Copy a strategy's actual URLs from the signal-generation frontend once you've created one.
+Try it now:  make test-signal
 EOF

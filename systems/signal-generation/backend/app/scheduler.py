@@ -1,5 +1,5 @@
-"""The in-house engine's periodic tick - self-contained in this service
-(not n8n), same reasoning as execution's square-off/exit-monitor jobs
+"""The in-house engine's periodic tick - self-contained in this service,
+same reasoning as execution's square-off/exit-monitor jobs
 (see execution/backend/app/scheduler.py, docs/architecture.md). Runs
 much more often than any one strategy's own `interval` - run_live_tick's
 per-strategy last_signal_candle_ts check (not this poll cadence) is what

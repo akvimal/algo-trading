@@ -34,26 +34,6 @@ services:
       timeout: 5s
       retries: 10
 
-  n8n:
-    image: n8nio/n8n:latest
-    restart: unless-stopped
-    environment:
-      N8N_BASIC_AUTH_ACTIVE: "true"
-      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD}
-      WEBHOOK_URL: ${N8N_WEBHOOK_URL}
-      GENERIC_TIMEZONE: Asia/Kolkata
-      # Reachable from inside n8n's own container network as http://signal-processing-backend:8000
-      SIGNAL_PROCESSING_BACKEND_URL: http://signal-processing-backend:8000
-    ports:
-      - "${N8N_PORT}:5678"
-    volumes:
-      - n8n-data:/home/node/.n8n
-      - ./infra/n8n/workflows:/workflows:ro
-    depends_on:
-      signal-processing-backend:
-        condition: service_started
-
   signal-processing-backend:
     build:
       context: ./systems/signal-processing/backend
@@ -203,4 +183,3 @@ services:
 volumes:
   pg-data:
   redis-data:
-  n8n-data:

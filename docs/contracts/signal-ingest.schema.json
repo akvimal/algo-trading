@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://algo-trading.local/contracts/signal-ingest.schema.json",
   "title": "SignalIngest",
-  "description": "Canonical shape that every n8n provider workflow normalizes into before calling POST /signals on the signal-processing backend. Provider-specific payloads (Chartink, TradingView, ...) never reach the backend directly.",
+  "description": "Canonical shape every provider intake route (signal-processing's app/api/routes/webhooks.py, e.g. parse_chartink_alert) normalizes a provider payload into before calling POST /signals internally. Provider-specific payloads (Chartink, TradingView, ...) never reach the resolution pipeline directly.",
   "type": "object",
   "required": ["symbol", "action", "price", "source", "exchange", "strategy_id"],
   "additionalProperties": false,
@@ -34,7 +34,7 @@
     "timestamp": {
       "type": "string",
       "format": "date-time",
-      "description": "ISO-8601. If the provider doesn't send one, the n8n workflow stamps received time."
+      "description": "ISO-8601. If the provider doesn't send one, signal-processing stamps received time."
     },
     "source": {
       "type": "string",

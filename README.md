@@ -9,7 +9,7 @@ Full architecture writeup: [`docs/architecture.md`](docs/architecture.md).
 | system | status |
 |---|---|
 | `signal-generation` | owns the **Strategy** entity (name, source, horizon/instrument/interval, webhook URLs, draft/live/paused) - create one, get webhook URLs, activate it. Chartink wired up; TradingView and in-house engine integration not yet done, see [`systems/signal-generation/README.md`](systems/signal-generation/README.md) |
-| `signal-processing` | Chartink webhook intake via n8n (`?strategy_id=`), resolves each signal by looking up its Strategy (no more guessing), Postgres persistence, Redis publish |
+| `signal-processing` | Chartink webhook intake (`?strategy_id=`, `app/api/routes/webhooks.py`), resolves each signal by looking up its Strategy (no more guessing), Postgres persistence, Redis publish |
 | `execution` | paper trading, intraday spot only — Redis consumer, capital-based position sizing, configurable square-off scheduler, CMP via market-data |
 | `market-data` | Dhan/NSE quote lookups + instrument-master sync; MCX and crypto routed but not implemented |
 
@@ -17,15 +17,14 @@ Full architecture writeup: [`docs/architecture.md`](docs/architecture.md).
 
 ```bash
 cp .env.example .env        # then edit passwords/ports, and DHAN_CLIENT_ID/DHAN_ACCESS_TOKEN if using execution
-make bootstrap                # builds images and starts signal-generation + signal-processing + market-data + n8n
+make bootstrap                # builds images and starts signal-generation + signal-processing + market-data
 docker compose --profile execution up -d --build   # also bring up execution (paper trading)
 ```
 
 Once running:
 
 - **shell** (tab nav across all frontends): http://localhost:8090
-- **n8n**: http://localhost:5678 (login from `.env`) — import the workflows in `infra/n8n/workflows/` and point them at your real Chartink scans.
-- **signal-generation**: http://localhost:8082 (frontend), http://localhost:8003/docs (API) — create a Strategy here first to get webhook URLs
+- **signal-generation**: http://localhost:8082 (frontend), http://localhost:8003/docs (API) — create a Strategy here first to get webhook URLs (point your real Chartink scans at them directly, no separate workflow tool to configure)
 - **signal-processing**: http://localhost:8080 (frontend), http://localhost:8000/docs (API)
 - **execution**: http://localhost:8081 (frontend), http://localhost:8002/docs (API) — needs the `execution` profile
 - **market-data**: http://localhost:8001/docs (API) — needs `DHAN_CLIENT_ID`/`DHAN_ACCESS_TOKEN` in `.env` for real quotes
@@ -51,7 +50,7 @@ Test stack URLs mirror the dev ones 1000 higher (shell 9090, signal-generation f
 
 ```
 docs/            architecture notes + versioned JSON contracts between systems
-infra/           postgres init SQL, redis config, n8n workflow exports
+infra/           postgres init SQL, redis config
 systems/         one folder per system: signal-generation, signal-processing, execution, market-data
 shell/           static tab bar + iframes onto each frontend, not a system of its own
 shared/          cross-system libs (python + ts), used sparingly and explicitly

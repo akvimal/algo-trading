@@ -1,7 +1,7 @@
 """Thin HTTP client to signal-processing - the in-house engine posts a
-signal exactly the way n8n does for webhook providers (POST /signals),
-so it goes through the exact same resolution/publish pipeline. See
-docs/architecture.md."""
+signal via the exact same POST /signals contract every webhook provider's
+intake route also uses, so it goes through the exact same resolution/
+publish pipeline. See docs/architecture.md."""
 
 import requests
 

@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simulates a Chartink webhook call against the local n8n instance, using
-# Chartink's real payload shape (comma-separated stocks/trigger_prices).
-# Useful for testing the intake pipeline before you have a live Chartink
-# scan wired up.
+# Simulates a Chartink webhook call against signal-processing's own
+# /webhook/chartink-{buy,sell} route, using Chartink's real payload shape
+# (comma-separated stocks/trigger_prices). Useful for testing the intake
+# pipeline before you have a live Chartink scan wired up.
 #
 # Usage: simulate-chartink-alert.sh [buy|sell] [strategy_id]
 # If strategy_id is omitted, a throwaway "smoke-test" strategy is created
 # (and activated) via signal-generation so this still works as a
 # zero-argument smoke test (`make test-signal`).
-#
-# Requires: the matching workflow (chartink-buy-intake.json or
-# chartink-sell-intake.json) already imported AND activated in n8n.
 
 cd "$(dirname "$0")/.."
 [ -f .env ] && { set -a; source .env; set +a; }
 
 DIRECTION="${1:-buy}"      # buy | sell
 STRATEGY_ID="${2:-}"
-N8N_PORT="${N8N_PORT:-5678}"
 BACKEND_PORT="${SIGNAL_PROCESSING_BACKEND_PORT:-8000}"
 GENERATION_PORT="${SIGNAL_GENERATION_BACKEND_PORT:-8003}"
 
@@ -39,7 +35,7 @@ if [[ -z "$STRATEGY_ID" ]]; then
   echo "Created + activated strategy ${STRATEGY_ID}" >&2
 fi
 
-curl -sS -X POST "http://localhost:${N8N_PORT}/webhook/chartink-${DIRECTION}?strategy_id=${STRATEGY_ID}" \
+curl -sS -X POST "http://localhost:${BACKEND_PORT}/webhook/chartink-${DIRECTION}?strategy_id=${STRATEGY_ID}" \
   -H "Content-Type: application/json" \
   -d '{
         "stocks": "RELIANCE,TCS",

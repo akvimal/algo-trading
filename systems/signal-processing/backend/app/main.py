@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, ingest, signals
+from app.api.routes import health, ingest, signals, webhooks
 
 app = FastAPI(title="signal-processing")
 
@@ -17,3 +17,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(ingest.router)
 app.include_router(signals.router)
+app.include_router(webhooks.router)

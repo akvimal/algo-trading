@@ -1,5 +1,5 @@
-"""Two independent periodic jobs, self-contained in this service (not
-n8n) so neither depends on a second service being up at a safety-critical
+"""Two independent periodic jobs, self-contained in this service so
+neither depends on a second service being up at a safety-critical
 moment - see docs/architecture.md.
 
 square-off used to be a single daily CronTrigger fired at

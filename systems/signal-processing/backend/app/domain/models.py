@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field
 
 
 class SignalIngest(BaseModel):
-    """Matches docs/contracts/signal-ingest.schema.json - what n8n posts
-    to POST /signals after provider-specific normalization."""
+    """Matches docs/contracts/signal-ingest.schema.json - the canonical
+    shape every provider intake route (app/api/routes/webhooks.py)
+    normalizes into before calling create_signal_from_ingest."""
 
     strategy_id: str
     symbol: str
@@ -22,7 +23,7 @@ class SignalIngest(BaseModel):
 
 
 class RawIngest(BaseModel):
-    """What n8n posts to POST /ingest/raw before normalization."""
+    """Payload accepted by POST /ingest/raw before normalization."""
 
     provider: str
     raw_payload: dict

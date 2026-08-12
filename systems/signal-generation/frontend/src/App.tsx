@@ -34,7 +34,7 @@ import {
   fetchUniverses,
   updateStrategy,
 } from "./api";
-import { chartinkWebhookUrls, executionUrl, n8nUrl, processingUrl } from "./links";
+import { chartinkWebhookUrls, executionUrl, processingUrl } from "./links";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -198,7 +198,7 @@ function WebhookLinks({ strategyId, sourceType }: { strategyId: string; sourceTy
   if (sourceType === "in_house") {
     return <span className="muted">n/a - runs on the in-house engine</span>;
   }
-  // Chartink is the only provider with a real n8n workflow today - any
+  // Chartink is the only provider with a real webhook route today - any
   // other external source name is valid to record (see the "External
   // source name" field), but has nothing to actually copy yet.
   if (sourceType.toLowerCase() !== "chartink") {
@@ -1894,24 +1894,18 @@ function StrategiesTab() {
         <p>
           Every strategy - in-house or external - gets its own <code>?strategy_id=</code> query param.
           For an <strong>external</strong> source, name the provider (e.g. "chartink", "tradingview", or
-          anything else) below; today only Chartink has a real n8n workflow wired up (one workflow per
-          direction handles <em>every</em> Chartink strategy via that query param) - copy its buy/sell
-          webhook URLs into a Chartink scan alert once created. Any other provider name is recorded but
-          has no webhook wired up yet - adding one follows the same pattern (a new n8n workflow
-          normalizing that provider's alert payload into the canonical signal shape, see the{" "}
-          <code>add-signal-provider</code> Claude Code skill or <code>infra/n8n/workflows/README.md</code>).
+          anything else) below; today only Chartink has a real webhook route wired up on signal-processing
+          (one route per direction handles <em>every</em> Chartink strategy via that query param) - copy
+          its buy/sell webhook URLs into a Chartink scan alert once created. Any other provider name is
+          recorded but has no webhook wired up yet - adding one follows the same pattern (a new
+          parse function normalizing that provider's alert payload into the canonical signal shape, see
+          the <code>add-signal-provider</code> Claude Code skill).
         </p>
         <p>
           An <strong>in-house</strong> strategy instead runs off this system's own indicator/price-action
           engine - a periodic job checks every <strong>live</strong> in-house strategy for a fresh signal on
           its underlying and posts it into the same pipeline external providers use. Select a strategy below
           and use its Backtest panel to replay the rule against history before promoting it to live.
-        </p>
-        <p>
-          <a href={n8nUrl} target="_blank" rel="noreferrer">
-            Open n8n &rarr;
-          </a>{" "}
-          if you need to edit the intake workflows themselves.
         </p>
       </InfoDisclosure>
       <StrategyManager />

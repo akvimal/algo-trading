@@ -3,7 +3,8 @@
 
 CREATE SCHEMA IF NOT EXISTS signal_processing;
 
--- Raw provider payloads, archived by n8n before normalization.
+-- Raw provider payloads, archived by signal-processing's own webhook
+-- intake routes before normalization.
 -- Kept indefinitely so a provider format change can be debugged/replayed
 -- against real historical payloads.
 CREATE TABLE IF NOT EXISTS signal_processing.raw_signal_payloads (

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import candles, health, instruments, quotes
+from app.api.routes import candles, dhan, health, instruments, quotes
 from app.scheduler import start_scheduler
 
 app = FastAPI(title="market-data")
@@ -17,6 +17,7 @@ app.include_router(health.router)
 app.include_router(quotes.router)
 app.include_router(instruments.router)
 app.include_router(candles.router)
+app.include_router(dhan.router)
 
 
 @app.on_event("startup")

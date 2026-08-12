@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 INSTRUMENT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 LTP_URL = "https://api.dhan.co/v2/marketfeed/ltp"
 CANDLE_URL = "https://api.dhan.co/v2/charts/intraday"
+RENEW_TOKEN_URL = "https://api.dhan.co/v2/RenewToken"
 
 # Dhan's charts/intraday only *natively* supports these interval values
 # (minutes) - notably 25, not 30, and no daily granularity (that's a
@@ -148,6 +149,86 @@ QUOTE_CACHE_TTL_SECONDS = 3.0
 # queue - callers already treat a failed quote as "unavailable, try again
 # later" rather than something to block indefinitely on.
 MAX_THROTTLE_WAIT_SECONDS = 4.0
+
+# Shared, in-memory access-token state - genuinely global (not per
+# DhanProvider instance) since router.py's two instances (dhan-nse,
+# dhan-mcx) share one Dhan account/token. In-memory only, no persistence:
+# a container restart reverts to DHAN_ACCESS_TOKEN from the environment,
+# same as before this existed - see docs/architecture.md.
+_token_lock = threading.Lock()
+_renewed_token: Optional[str] = None  # None until the first successful renewal
+_last_renewed_at: Optional[datetime] = None
+_last_renewal_response: Optional[dict] = None  # raw Dhan response, for the status endpoint
+
+
+def current_access_token() -> str:
+    """The token every DhanProvider request should use - the last
+    successfully renewed one if there's been one, else whatever's in
+    DHAN_ACCESS_TOKEN (the .env seed value, or a test's monkeypatched
+    settings.dhan_access_token - existing tests never call
+    renew_access_token(), so this always falls through to settings for
+    them, unmodified)."""
+    with _token_lock:
+        return _renewed_token if _renewed_token is not None else settings.dhan_access_token
+
+
+def renew_token_status() -> dict:
+    with _token_lock:
+        return {
+            "renewed": _renewed_token is not None,
+            "last_renewed_at": _last_renewed_at.isoformat() if _last_renewed_at else None,
+            "expiry_time": (_last_renewal_response or {}).get("expiryTime"),
+            "dhan_client_name": (_last_renewal_response or {}).get("dhanClientName"),
+        }
+
+
+def renew_access_token() -> dict:
+    """Calls Dhan's RenewToken (https://docs.dhanhq.co/api/v2/authentication/renew-token)
+    with the current active token; updates the shared token every
+    DhanProvider instance's requests read from via current_access_token().
+    Only renews an already-active token - Dhan rejects renewing an
+    expired one (401), which is why the scheduled job (app/scheduler.py)
+    runs well before the 24h validity window closes."""
+    token = current_access_token()
+    if not settings.dhan_client_id or not token:
+        raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
+
+    resp = requests.get(
+        RENEW_TOKEN_URL,
+        # Note: this endpoint's client-id header is "dhanClientId", not
+        # "client-id" like the LTP/candle endpoints below use - Dhan's own
+        # API is inconsistent about this between endpoints.
+        headers={"Accept": "application/json", "access-token": token, "dhanClientId": settings.dhan_client_id},
+        timeout=15,
+    )
+    if resp.status_code == 401:
+        raise RuntimeError(
+            "Dhan rejected the renewal request (401) - the current token may already be expired; "
+            "generate a new one from Dhan Web"
+        )
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        raise RuntimeError(f"Dhan token renewal failed ({resp.status_code}): {resp.text[:200]}") from exc
+
+    data = resp.json()
+    new_token = data.get("accessToken")
+    if not new_token:
+        # Dhan doesn't always signal a rejected renewal via a non-200
+        # status - e.g. an already-expired token has been observed to
+        # come back as a 200 with an errorType/errorCode/errorMessage
+        # body instead of accessToken, same shape other Dhan endpoints
+        # use for a real error. Treat a response with no accessToken as
+        # a failure either way, rather than raising an unhandled KeyError.
+        raise RuntimeError(f"Dhan token renewal did not return an accessToken: {resp.text[:200]}")
+
+    global _renewed_token, _last_renewed_at, _last_renewal_response
+    with _token_lock:
+        _renewed_token = new_token
+        _last_renewed_at = datetime.now(timezone.utc)
+        _last_renewal_response = data
+    logger.info("Dhan access token renewed, new expiry %s", data.get("expiryTime"))
+    return data
 
 
 @dataclass(frozen=True)
@@ -455,7 +536,8 @@ class DhanProvider(QuoteProvider):
         if not pending:
             return result  # everything was cached (or unknown)
 
-        if not settings.dhan_client_id or not settings.dhan_access_token:
+        access_token = current_access_token()
+        if not settings.dhan_client_id or not access_token:
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
         with self._lock:
@@ -475,7 +557,7 @@ class DhanProvider(QuoteProvider):
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "access-token": settings.dhan_access_token,
+                "access-token": access_token,
                 "client-id": settings.dhan_client_id,
             },
             json=body,
@@ -545,7 +627,8 @@ class DhanProvider(QuoteProvider):
             logger.warning("unknown symbol '%s' (%s) - instrument master may need a sync", symbol, self.name)
             return []
 
-        if not settings.dhan_client_id or not settings.dhan_access_token:
+        access_token = current_access_token()
+        if not settings.dhan_client_id or not access_token:
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
         with self._candle_lock:
@@ -565,7 +648,7 @@ class DhanProvider(QuoteProvider):
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "access-token": settings.dhan_access_token,
+                "access-token": access_token,
                 "client-id": settings.dhan_client_id,
             },
             json={

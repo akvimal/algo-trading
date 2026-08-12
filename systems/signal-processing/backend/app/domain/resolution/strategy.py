@@ -3,7 +3,7 @@ from typing import Optional
 
 import requests
 
-from app.adapters.market_data.client import get_expiry_list, get_option_chain
+from app.adapters.market_data.client import get_expiry_list, get_option_chain, resolve_underlying
 from app.domain.models import SignalIngest
 from app.domain.resolution.errors import ResolutionError
 from app.domain.resolution.option_templates import bear_put_spread, bull_call_spread, choose_expiry
@@ -25,32 +25,43 @@ def choose_strategy(signal: SignalIngest, horizon: str, instrument_type: str) ->
     step can't resolve - a signal that can't get real legs shouldn't
     resolve as instrument_type='option' with nothing to trade, same
     "persisted as rejected, nothing published" handling resolve() already
-    gives every other ResolutionError. Options are NSE-only today,
-    matching market-data's Phase 4a chain support.
+    gives every other ResolutionError.
+
+    Works for both NSE and MCX (SignalIngest.exchange's only two values) -
+    the option chain is always referenced against resolve_underlying(...)
+    .chart_symbol, not signal.symbol directly, since that's the only thing
+    correct in all three underlying shapes: an NSE index option chains off
+    the index spot, an NSE equity option off the equity itself (chart_symbol
+    == trade_symbol there), and an MCX commodity option off its active-month
+    futures contract (MCX has no separate spot, so chart_symbol ==
+    trade_symbol there too, but neither equals the bare underlying name
+    signal.symbol carries, e.g. "GOLDM" vs "GOLDM-04Sep2026-FUT").
     """
     if instrument_type != "option":
         return None
-    if signal.exchange != "NSE":
-        raise ResolutionError(f"options are only supported on NSE (signal exchange={signal.exchange})")
+
+    resolved = resolve_underlying(signal.exchange, signal.symbol)
+    if resolved is None:
+        raise ResolutionError(f"could not resolve underlying '{signal.symbol}' on {signal.exchange} for options")
 
     try:
-        expiries = get_expiry_list(signal.exchange, signal.symbol)
+        expiries = get_expiry_list(resolved.chart_exchange, resolved.chart_symbol)
     except requests.RequestException as exc:
-        raise ResolutionError(f"could not resolve option expiries for '{signal.symbol}': {exc}") from exc
+        raise ResolutionError(f"could not resolve option expiries for '{resolved.chart_symbol}': {exc}") from exc
     if not expiries:
-        raise ResolutionError(f"could not resolve option expiries for '{signal.symbol}'")
+        raise ResolutionError(f"could not resolve option expiries for '{resolved.chart_symbol}'")
 
     today = signal.timestamp.date() if signal.timestamp else date.today()
     expiry = choose_expiry(expiries, horizon, today)
     if expiry is None:
-        raise ResolutionError(f"could not choose an option expiry for '{signal.symbol}'")
+        raise ResolutionError(f"could not choose an option expiry for '{resolved.chart_symbol}'")
 
     try:
-        chain = get_option_chain(signal.exchange, signal.symbol, expiry)
+        chain = get_option_chain(resolved.chart_exchange, resolved.chart_symbol, expiry)
     except requests.RequestException as exc:
-        raise ResolutionError(f"could not resolve option chain for '{signal.symbol}' ({expiry}): {exc}") from exc
+        raise ResolutionError(f"could not resolve option chain for '{resolved.chart_symbol}' ({expiry}): {exc}") from exc
     if chain is None:
-        raise ResolutionError(f"could not resolve option chain for '{signal.symbol}' ({expiry})")
+        raise ResolutionError(f"could not resolve option chain for '{resolved.chart_symbol}' ({expiry})")
 
     try:
         if signal.action == "BUY":

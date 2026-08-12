@@ -240,12 +240,28 @@ def test_resolve_rejects_when_signal_generation_unreachable():
 # --- instrument_type='option' (Phase 4b of the options trading module) -----------------------
 
 
+def _resolve_url() -> str:
+    return f"{settings.market_data_base_url}/instruments/resolve"
+
+
 def _expiries_url() -> str:
     return f"{settings.market_data_base_url}/options/expiries"
 
 
 def _chain_url() -> str:
     return f"{settings.market_data_base_url}/options/chain"
+
+
+def _resolved_underlying_json(**overrides) -> dict:
+    defaults = dict(
+        chart_symbol="NIFTY",
+        chart_exchange="NSE",
+        trade_symbol="NIFTY-FUT",
+        trade_exchange="NSE",
+        lot_size=50,
+    )
+    defaults.update(overrides)
+    return defaults
 
 
 def _option_strategy_json(**overrides) -> dict:
@@ -288,6 +304,7 @@ _FAKE_CHAIN = {
 @responses.activate
 def test_resolve_option_strategy_bull_call_spread_for_buy_signal():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
     responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14", "2026-08-21"]}, status=200)
     responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
 
@@ -306,6 +323,7 @@ def test_resolve_option_strategy_bull_call_spread_for_buy_signal():
 @responses.activate
 def test_resolve_option_strategy_bear_put_spread_for_sell_signal():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
     responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
     responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
 
@@ -316,16 +334,44 @@ def test_resolve_option_strategy_bear_put_spread_for_sell_signal():
 
 
 @responses.activate
-def test_resolve_option_rejects_mcx_exchange():
+def test_resolve_option_strategy_for_mcx_uses_resolved_futures_contract():
+    # MCX has no separate spot instrument - the option chain must be looked
+    # up against the active-month futures contract symbol (chart_symbol),
+    # never the bare underlying name ("GOLDM") the signal itself carries.
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(segment="MCX"), status=200)
+    responses.add(
+        responses.GET,
+        _resolve_url(),
+        json=_resolved_underlying_json(
+            chart_symbol="GOLDM-04Sep2026-FUT",
+            chart_exchange="MCX",
+            trade_symbol="GOLDM-04Sep2026-FUT",
+            trade_exchange="MCX",
+            lot_size=100,
+        ),
+        status=200,
+    )
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(
+        responses.GET,
+        _chain_url(),
+        json={**_FAKE_CHAIN, "underlying_symbol": "GOLDM-04Sep2026-FUT", "underlying_exchange": "MCX"},
+        status=200,
+    )
 
-    with pytest.raises(ResolutionError, match="only supported on NSE"):
-        resolve(_signal(symbol="GOLDM", exchange="MCX"))
+    resolved = resolve(_signal(symbol="GOLDM", exchange="MCX", action="BUY"))
+
+    assert resolved.strategy["type"] == "bull_call_spread"
+    # calls[0] = strategy fetch, [1] = resolve_underlying, [2] = expiries, [3] = chain
+    assert responses.calls[2].request.params["symbol"] == "GOLDM-04Sep2026-FUT"
+    assert responses.calls[2].request.params["exchange"] == "MCX"
+    assert responses.calls[3].request.params["symbol"] == "GOLDM-04Sep2026-FUT"
 
 
 @responses.activate
 def test_resolve_option_rejects_when_market_data_unreachable():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
     responses.add(responses.GET, _expiries_url(), body=requests.exceptions.ConnectionError("refused"))
 
     with pytest.raises(ResolutionError, match="could not resolve option expiries"):
@@ -335,7 +381,17 @@ def test_resolve_option_rejects_when_market_data_unreachable():
 @responses.activate
 def test_resolve_option_rejects_unresolvable_underlying():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json={"detail": "not found"}, status=404)
+
+    with pytest.raises(ResolutionError, match="could not resolve underlying"):
+        resolve(_signal(symbol="NOTREAL"))
+
+
+@responses.activate
+def test_resolve_option_rejects_unresolvable_expiries():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
     responses.add(responses.GET, _expiries_url(), json={"detail": "not found"}, status=404)
 
     with pytest.raises(ResolutionError, match="could not resolve option expiries"):
-        resolve(_signal(symbol="NOTREAL"))
+        resolve(_signal(symbol="NIFTY"))

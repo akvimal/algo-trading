@@ -4,6 +4,15 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
+// This frontend's own dev port is 8080; a second local stack (e.g.
+// .env.test) shifts every port by the same fixed offset (dev+1000) - see
+// CLAUDE.md's "Two isolated local container groups". Comparing our own
+// actual port to that dev reference tells us which stack we're in, shown
+// in the tab title so dev/test (identical UI otherwise) can't be
+// confused for each other.
+const DEV_PORT = 8080;
+document.title = `signal-processing [${(Number(location.port) || DEV_PORT) === DEV_PORT ? "DEV" : "TEST"}]`;
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />

@@ -80,7 +80,25 @@
   <div class="frame-wrap" id="frame-wrap"></div>
 
   <script>
-    // Edit here if you changed the corresponding *_FRONTEND_PORT in .env
+    // Ports below are DEV's *_FRONTEND_PORT values (see .env) - edit here
+    // if you changed those. A second local stack (e.g. .env.test, see
+    // CLAUDE.md's "Two isolated local container groups") shifts every
+    // port by the same fixed offset (dev+1000), so this shell - one
+    // static file, no per-stack build step - derives the real ports at
+    // runtime from its OWN port rather than hardcoding a single stack's
+    // values twice: shell itself is on 8090 for dev / 9090 for test, so
+    // comparing that to its own dev reference (8090) gives the same
+    // offset to apply to every tab below. This is what makes test's
+    // shell (:9090) actually show test's frontends instead of silently
+    // iframing dev's - a real bug this offset math replaces.
+    const SHELL_DEV_PORT = 8090;
+    const PORT_OFFSET = (Number(location.port) || SHELL_DEV_PORT) - SHELL_DEV_PORT;
+
+    // Same offset that fixed the iframe ports above also tells us which
+    // stack this is - visible in the browser tab so dev/test (identical
+    // UI otherwise) can't be confused for each other again.
+    document.title = `algo-trading [${PORT_OFFSET === 0 ? "DEV" : "TEST"}]`;
+
     const TABS = [
       { id: "signal-generation", label: "Signal Generation", port: 8082, built: true },
       { id: "signal-processing", label: "Signal Processing", port: 8080, built: true },
@@ -100,7 +118,7 @@
 
       if (tab.built) {
         const iframe = document.createElement("iframe");
-        iframe.src = `http://${location.hostname}:${tab.port}`;
+        iframe.src = `http://${location.hostname}:${tab.port + PORT_OFFSET}`;
         iframe.id = `frame-${tab.id}`;
         iframe.className = i === 0 ? "active" : "";
         // Without this, navigator.clipboard.writeText() in the iframed

@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import date
 from typing import Optional, get_args
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.adapters.market_data.client import get_candle_history, resolve_underlying
+from app.adapters.market_data.client import get_candle_history, get_universe_constituents, resolve_underlying
 from app.domain import breakout, range_breakout, regime
 from app.domain.backtest import ExitConfig, expand_grid, grid_search, replay
 from app.domain.engine import history_window
@@ -29,6 +30,7 @@ from app.domain.models import (
 )
 from app.domain.rules import bars_needed, evaluate
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -351,31 +353,20 @@ def _sl_candles_for(row: db_models.Strategy, resolved, candles: list, fetch_from
     return get_candle_history(resolved.chart_exchange, resolved.chart_symbol, row.stop_loss_interval, fetch_from, to)
 
 
-@router.post("/strategies/{strategy_id}/backtest")
-def backtest_strategy(
-    strategy_id: str,
-    from_: date = Query(alias="from"),
-    to: date = date.today(),
-    db: Session = Depends(get_db),
-):
-    """Lightweight signal replay over [from_, to] - reuses the exact same
-    rule the live engine tick runs (app/domain/rules.py), so a backtest
-    and live behavior can never silently disagree. Simulates the
-    strategy's own stop-loss/target/square-off configuration (whatever is
-    unset simply doesn't create that exit condition) - see
-    app/domain/backtest.py's simulate_trades for exactly how. Only
-    meaningful for an in_house strategy; does not require
-    status='backtesting' (you can backtest a live or draft strategy too),
-    and never changes the strategy's status - promote it manually via
-    PATCH after reviewing the report."""
-    row, rule = _load_strategy_and_rule(db, strategy_id)
-
+def _backtest_one_symbol(db: Session, row: db_models.Strategy, rule: RuleConfig, symbol: str, from_: date, to: date) -> dict:
+    """The actual single-symbol backtest, shared by the plain (one
+    underlying) and universe (many constituents, see
+    _backtest_universe) paths - `symbol` is the traded symbol to run
+    against, not necessarily row.underlying itself (a universe strategy
+    passes each constituent through here in turn). Raises HTTPException
+    (502 unresolvable, 422 unsupported rule/missing indicator) exactly
+    as backtest_strategy always has for a plain strategy; the universe
+    path catches and skips per-constituent rather than letting one
+    unresolvable symbol fail the whole pooled request."""
     if isinstance(rule, BreakoutRuleConfig):
-        resolved = resolve_underlying(row.segment, row.underlying)
+        resolved = resolve_underlying(row.segment, symbol)
         if resolved is None:
-            raise HTTPException(
-                status_code=502, detail=f"could not resolve underlying '{row.underlying}' on segment '{row.segment}'"
-            )
+            raise HTTPException(status_code=502, detail=f"could not resolve underlying '{symbol}' on segment '{row.segment}'")
         htf_bars, ltf_bars = breakout.breakout_warmup(rule)
         htf_warmup_from, _ = history_window(htf_bars, rule.htf_interval)
         ltf_warmup_from, _ = history_window(ltf_bars, rule.ltf_interval)
@@ -388,11 +379,9 @@ def backtest_strategy(
         return breakout.replay_breakout(rule, htf_candles, ltf_candles, row.square_off_time)
 
     if isinstance(rule, RangeBreakoutRuleConfig):
-        resolved = resolve_underlying(row.segment, row.underlying)
+        resolved = resolve_underlying(row.segment, symbol)
         if resolved is None:
-            raise HTTPException(
-                status_code=502, detail=f"could not resolve underlying '{row.underlying}' on segment '{row.segment}'"
-            )
+            raise HTTPException(status_code=502, detail=f"could not resolve underlying '{symbol}' on segment '{row.segment}'")
         warmup_from, _ = history_window(range_breakout.range_breakout_warmup(rule), row.interval)
         fetch_from = min(from_, warmup_from)
         candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, row.interval, fetch_from, to)
@@ -418,11 +407,9 @@ def backtest_strategy(
         raise HTTPException(status_code=422, detail=f"no indicator with id '{rule.indicator_id}'")
     indicator_params = validate_indicator_params(indicator.type, indicator.params).model_dump()
 
-    resolved = resolve_underlying(row.segment, row.underlying)
+    resolved = resolve_underlying(row.segment, symbol)
     if resolved is None:
-        raise HTTPException(
-            status_code=502, detail=f"could not resolve underlying '{row.underlying}' on segment '{row.segment}'"
-        )
+        raise HTTPException(status_code=502, detail=f"could not resolve underlying '{symbol}' on segment '{row.segment}'")
 
     # Fetch a bit further back than `from_` so the indicator (and, if
     # enabled, the regime classifier) is already warmed up right at the
@@ -449,6 +436,64 @@ def backtest_strategy(
         row.regime_filter_enabled,
         _regime_checks_for(row),
     )
+
+
+def _backtest_universe(db: Session, row: db_models.Strategy, rule: RuleConfig, from_: date, to: date) -> dict:
+    """Pooled backtest for a universe-scoped strategy: runs
+    _backtest_one_symbol independently against every constituent and
+    combines the results - total trade_count/hypothetical_pnl across all
+    of them (the headline numbers), plus a by_symbol breakdown for
+    drill-down. A constituent that fails to resolve (delisted, not in
+    market-data's cache, ...) is logged and skipped rather than failing
+    the whole pooled request - same "one failure doesn't abort the
+    batch" defensiveness as the live engine's own per-constituent loop
+    (see app/domain/engine.py's run_live_tick)."""
+    constituents = get_universe_constituents(row.underlying)
+    if not constituents:
+        raise HTTPException(status_code=502, detail=f"could not resolve universe '{row.underlying}'")
+
+    by_symbol: dict[str, dict] = {}
+    skipped: list[str] = []
+    for symbol in constituents:
+        try:
+            by_symbol[symbol] = _backtest_one_symbol(db, row, rule, symbol, from_, to)
+        except HTTPException:
+            logger.warning("skipping unresolvable universe constituent %s (strategy %s)", symbol, row.id)
+            skipped.append(symbol)
+
+    return {
+        "pooled": True,
+        "trade_count": sum(r["trade_count"] for r in by_symbol.values()),
+        "hypothetical_pnl": sum(r["hypothetical_pnl"] for r in by_symbol.values()),
+        "constituents_tested": len(by_symbol),
+        "constituents_skipped": len(skipped),
+        "by_symbol": by_symbol,
+    }
+
+
+@router.post("/strategies/{strategy_id}/backtest")
+def backtest_strategy(
+    strategy_id: str,
+    from_: date = Query(alias="from"),
+    to: date = date.today(),
+    db: Session = Depends(get_db),
+):
+    """Lightweight signal replay over [from_, to] - reuses the exact same
+    rule the live engine tick runs (app/domain/rules.py), so a backtest
+    and live behavior can never silently disagree. Simulates the
+    strategy's own stop-loss/target/square-off configuration (whatever is
+    unset simply doesn't create that exit condition) - see
+    app/domain/backtest.py's simulate_trades for exactly how. Only
+    meaningful for an in_house strategy; does not require
+    status='backtesting' (you can backtest a live or draft strategy too),
+    and never changes the strategy's status - promote it manually via
+    PATCH after reviewing the report. underlying_type='universe' pools
+    the same backtest across every constituent - see _backtest_universe."""
+    row, rule = _load_strategy_and_rule(db, strategy_id)
+
+    if row.underlying_type == "universe":
+        return _backtest_universe(db, row, rule, from_, to)
+    return _backtest_one_symbol(db, row, rule, row.underlying, from_, to)
 
 
 @router.post("/strategies/{strategy_id}/backtest/grid")

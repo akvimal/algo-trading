@@ -257,6 +257,22 @@ export type BacktestResult = {
   trades: BacktestTrade[];
 };
 
+// POST /strategies/{id}/backtest for a universe-scoped strategy - the
+// same backtest run independently against every constituent and pooled:
+// trade_count/hypothetical_pnl are totals across all of them,
+// constituents_skipped counts ones that failed to resolve (delisted,
+// not in market-data's cache, ...) rather than failing the whole
+// request, by_symbol has the full per-constituent BacktestResult for
+// drill-down. `pooled: true` distinguishes this from a plain BacktestResult.
+export type UniverseBacktestResult = {
+  pooled: true;
+  trade_count: number;
+  hypothetical_pnl: number;
+  constituents_tested: number;
+  constituents_skipped: number;
+  by_symbol: Record<string, BacktestResult>;
+};
+
 // One row per param combination tried by POST /strategies/{id}/backtest/grid -
 // `error` is present instead of trade_count/hypothetical_pnl when that
 // combination fails its own param validation (e.g. period=1) rather than
@@ -375,7 +391,11 @@ export async function deleteStrategy(id: string): Promise<void> {
   }
 }
 
-export async function backtestStrategy(id: string, from: string, to: string): Promise<BacktestResult> {
+export async function backtestStrategy(
+  id: string,
+  from: string,
+  to: string,
+): Promise<BacktestResult | UniverseBacktestResult> {
   const params = new URLSearchParams({ from, to });
   const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies/${id}/backtest?${params}`, { method: "POST" });
   return asJson(res, "POST /strategies/{id}/backtest");

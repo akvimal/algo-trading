@@ -20,6 +20,7 @@ import {
   type Strategy,
   type StrategyStatus,
   type UnderlyingType,
+  type UniverseBacktestResult,
   backtestStrategy,
   backtestStrategyGrid,
   createIndicator,
@@ -309,7 +310,7 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
     return d.toISOString().slice(0, 10);
   });
   const [backtestTo, setBacktestTo] = useState(() => new Date().toISOString().slice(0, 10));
-  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | UniverseBacktestResult | null>(null);
   const [backtesting, setBacktesting] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
@@ -1527,43 +1528,81 @@ function StrategyManager({ sourceType, showWebhooks }: { sourceType: SourceType;
                   hypothetical P&amp;L {backtestResult.hypothetical_pnl >= 0 ? "+" : ""}
                   {backtestResult.hypothetical_pnl.toFixed(2)}
                 </span>
+                {"pooled" in backtestResult && (
+                  <span className="muted">
+                    {" "}
+                    - pooled across {backtestResult.constituents_tested} constituent(s)
+                    {backtestResult.constituents_skipped > 0 &&
+                      `, ${backtestResult.constituents_skipped} skipped (unresolvable)`}
+                  </span>
+                )}
               </p>
-              {backtestResult.trades.length > 0 && (
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Entry</th>
-                        <th>Dir</th>
-                        <th>Entry px</th>
-                        <th>Exit</th>
-                        <th>Exit px</th>
-                        <th>Reason</th>
-                        <th>P&amp;L</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {backtestResult.trades.map((trade, i) => (
-                        <tr key={i}>
-                          <td>{new Date(trade.entry_time).toLocaleString()}</td>
-                          <td>
-                            <span className={`badge ${trade.direction === "bullish" ? "badge-buy" : "badge-sell"}`}>
-                              {trade.direction}
-                            </span>
-                          </td>
-                          <td className="num">{trade.entry_price.toFixed(2)}</td>
-                          <td>{new Date(trade.exit_time).toLocaleString()}</td>
-                          <td className="num">{trade.exit_price.toFixed(2)}</td>
-                          <td>{exitReasonLabel(trade.exit_reason)}</td>
-                          <td className={`num ${trade.pnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
-                            {trade.pnl >= 0 ? "+" : ""}
-                            {trade.pnl.toFixed(2)}
-                          </td>
+              {"pooled" in backtestResult ? (
+                Object.keys(backtestResult.by_symbol).length > 0 && (
+                  <div className="table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Symbol</th>
+                          <th>Trades</th>
+                          <th>Hypothetical P&amp;L</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {Object.entries(backtestResult.by_symbol)
+                          .sort(([, a], [, b]) => b.hypothetical_pnl - a.hypothetical_pnl)
+                          .map(([symbol, r]) => (
+                            <tr key={symbol}>
+                              <td className="symbol">{symbol}</td>
+                              <td className="num">{r.trade_count}</td>
+                              <td className={`num ${r.hypothetical_pnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+                                {r.hypothetical_pnl >= 0 ? "+" : ""}
+                                {r.hypothetical_pnl.toFixed(2)}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : (
+                backtestResult.trades.length > 0 && (
+                  <div className="table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Entry</th>
+                          <th>Dir</th>
+                          <th>Entry px</th>
+                          <th>Exit</th>
+                          <th>Exit px</th>
+                          <th>Reason</th>
+                          <th>P&amp;L</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {backtestResult.trades.map((trade, i) => (
+                          <tr key={i}>
+                            <td>{new Date(trade.entry_time).toLocaleString()}</td>
+                            <td>
+                              <span className={`badge ${trade.direction === "bullish" ? "badge-buy" : "badge-sell"}`}>
+                                {trade.direction}
+                              </span>
+                            </td>
+                            <td className="num">{trade.entry_price.toFixed(2)}</td>
+                            <td>{new Date(trade.exit_time).toLocaleString()}</td>
+                            <td className="num">{trade.exit_price.toFixed(2)}</td>
+                            <td>{exitReasonLabel(trade.exit_reason)}</td>
+                            <td className={`num ${trade.pnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+                              {trade.pnl >= 0 ? "+" : ""}
+                              {trade.pnl.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
               )}
             </>
           )}

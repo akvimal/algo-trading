@@ -162,6 +162,20 @@ export default function ManualTab() {
     );
   }
 
+  // An "open" instance whose last square-off attempt errored (typically
+  // 404 - the position/group behind it was already deleted server-side,
+  // e.g. via execution's "Clear positions" reset) can never resolve
+  // itself: square-off will keep failing forever, and it's not "pending"
+  // so Cancel doesn't apply either. This drops the stale local entry
+  // without any further API call - same "local view only" reasoning as
+  // cancelPendingInstance, not a "previous trade" either since it never
+  // recorded a real exit.
+  function clearErroredInstance(rowId: string, instanceId: string) {
+    setRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, orders: r.orders.filter((o) => o.id !== instanceId) } : r)),
+    );
+  }
+
   async function placeOrder(row: ManualRow) {
     const symbol = row.symbol.trim().toUpperCase();
     if (!symbol) return;
@@ -595,6 +609,16 @@ export default function ManualTab() {
                             >
                               Square off
                             </button>
+                            {instance.error && (
+                              <button
+                                type="button"
+                                className="tiny secondary"
+                                title="Drop this stale entry from the list (e.g. its position was already deleted server-side) - doesn't call the backend"
+                                onClick={() => clearErroredInstance(row.id, instance.id)}
+                              >
+                                Clear
+                              </button>
+                            )}
                           </>
                         )}
                         {instance.state === "pending" && (

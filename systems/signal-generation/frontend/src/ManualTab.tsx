@@ -415,7 +415,11 @@ export default function ManualTab() {
     const qty = row.draftQuantity ? Number(row.draftQuantity) : undefined;
     const price = row.draftTriggerPrice ? Number(row.draftTriggerPrice) : row.lastKnownLtp;
     if (!qty || !price) return "-";
-    return (qty * price).toFixed(2);
+    // CRYPTO prices are raw USD (Delta Exchange India) - every other
+    // segment quotes in raw INR (Dhan) - label it so this doesn't read as
+    // INR by default, same fix as execution's balance-rejection messages.
+    const unit = row.segment === "CRYPTO" ? "USD" : "INR";
+    return `${(qty * price).toFixed(2)} ${unit}`;
   };
 
   return (

@@ -36,6 +36,8 @@ class Account(Base):
     current_balance = Column(Numeric, nullable=False)  # debited/credited by realized P&L on close
     capital_per_trade = Column(Numeric, nullable=False)
     risk_per_trade_pct = Column(Numeric, nullable=False)
+    # CRYPTO only, harmlessly unused for NSE/MCX - see app/domain/models.py's AccountOut.leverage.
+    leverage = Column(Numeric, nullable=False, default=1)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

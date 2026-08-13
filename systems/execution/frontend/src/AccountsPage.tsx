@@ -8,7 +8,9 @@ const POLL_INTERVAL_MS = 5000;
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [drafts, setDrafts] = useState<Record<string, { capital: number | ""; risk: number | "" }>>({});
+  const [drafts, setDrafts] = useState<Record<string, { capital: number | ""; risk: number | ""; leverage: number | "" }>>(
+    {},
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [resetting, setResetting] = useState<string | null>(null);
@@ -54,7 +56,8 @@ export default function AccountsPage() {
         setDrafts((prev) => {
           const next = { ...prev };
           for (const a of data) {
-            if (!(a.segment in next)) next[a.segment] = { capital: a.capital_per_trade, risk: a.risk_per_trade_pct };
+            if (!(a.segment in next))
+              next[a.segment] = { capital: a.capital_per_trade, risk: a.risk_per_trade_pct, leverage: a.leverage };
           }
           return next;
         });
@@ -74,11 +77,15 @@ export default function AccountsPage() {
 
   async function handleSave(segment: Account["segment"]) {
     const draft = drafts[segment];
-    if (!draft || draft.capital === "" || draft.risk === "") return;
+    if (!draft || draft.capital === "" || draft.risk === "" || draft.leverage === "") return;
     setSaving(segment);
     setMessage(null);
     try {
-      const updated = await updateAccount(segment, { capital_per_trade: draft.capital, risk_per_trade_pct: draft.risk });
+      const updated = await updateAccount(segment, {
+        capital_per_trade: draft.capital,
+        risk_per_trade_pct: draft.risk,
+        leverage: draft.leverage,
+      });
       setAccounts((prev) => prev.map((a) => (a.segment === segment ? updated : a)));
       setMessage(`${segment} account saved.`);
     } catch (err) {
@@ -148,13 +155,14 @@ export default function AccountsPage() {
               <th>Balance</th>
               <th>Capital per trade (&#8377;)</th>
               <th>Risk per trade (%)</th>
+              <th>Leverage (CRYPTO only)</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {SEGMENTS.map((segment) => {
               const account = accounts.find((a) => a.segment === segment);
-              const draft = drafts[segment] ?? { capital: "", risk: "" };
+              const draft = drafts[segment] ?? { capital: "", risk: "", leverage: "" };
               const delta = account ? account.current_balance - account.starting_balance : null;
               return (
                 <tr key={segment}>
@@ -191,6 +199,24 @@ export default function AccountsPage() {
                         }))
                       }
                     />
+                  </td>
+                  <td>
+                    {segment === "CRYPTO" ? (
+                      <input
+                        type="number"
+                        min="1"
+                        step="0.5"
+                        value={draft.leverage}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
+                          }))
+                        }
+                      />
+                    ) : (
+                      "-"
+                    )}
                   </td>
                   <td>
                     <button type="button" className="tiny" onClick={() => handleSave(segment)} disabled={saving === segment}>

@@ -17,6 +17,7 @@ def _to_out(row: db_models.Account) -> dict:
         "current_balance": float(row.current_balance),
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
+        "leverage": float(row.leverage),
         "updated_at": row.updated_at.isoformat(),
     }
 
@@ -31,8 +32,8 @@ def list_accounts(db: Session = Depends(get_db)):
 
 @router.put("/accounts/{segment}")
 def update_account(segment: str, update: AccountUpdate, db: Session = Depends(get_db)):
-    """Only capital_per_trade/risk_per_trade_pct are editable here - use
-    POST /accounts/{segment}/reset to touch current_balance, a
+    """Only capital_per_trade/risk_per_trade_pct/leverage are editable
+    here - use POST /accounts/{segment}/reset to touch current_balance, a
     deliberately separate action so it's never a side effect of a sizing
     tweak."""
     row = db.get(db_models.Account, segment.upper())
@@ -42,6 +43,8 @@ def update_account(segment: str, update: AccountUpdate, db: Session = Depends(ge
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
         row.risk_per_trade_pct = update.risk_per_trade_pct
+    if update.leverage is not None:
+        row.leverage = update.leverage
     db.commit()
     db.refresh(row)
     return _to_out(row)

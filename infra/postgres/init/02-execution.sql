@@ -42,12 +42,19 @@ INSERT INTO execution.settings (id) VALUES (1)
 -- entry_price) shares; risk_amount = that same effective capital *
 -- risk_per_trade_pct / 100 for stop-loss-sized positions. See
 -- position_manager.open_position.
+-- leverage: CRYPTO only (Delta Exchange India trades perpetual futures on
+-- margin) - a margin multiplier applied to effective_capital before sizing,
+-- so the same capital affords proportionally more quantity. Defaults to 1
+-- (no leverage, current behavior unchanged) and is harmlessly present but
+-- unused for NSE/MCX, same "shared table, segment-scoped meaning" pattern
+-- as several Strategy option_* fields. See position_manager.open_position.
 CREATE TABLE IF NOT EXISTS execution.accounts (
     segment             TEXT PRIMARY KEY CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     starting_balance    NUMERIC NOT NULL CHECK (starting_balance > 0),
     current_balance     NUMERIC NOT NULL,
     capital_per_trade   NUMERIC NOT NULL CHECK (capital_per_trade > 0),
     risk_per_trade_pct  NUMERIC NOT NULL CHECK (risk_per_trade_pct > 0 AND risk_per_trade_pct <= 100),
+    leverage            NUMERIC NOT NULL DEFAULT 1 CHECK (leverage > 0),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

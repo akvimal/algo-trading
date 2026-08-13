@@ -41,6 +41,10 @@ export type Account = {
   current_balance: number;
   capital_per_trade: number;
   risk_per_trade_pct: number;
+  // CRYPTO only - a margin multiplier applied before sizing (Delta
+  // Exchange India trades perpetual futures on margin). Defaults to 1 -
+  // present but unused for NSE/MCX.
+  leverage: number;
   updated_at: string;
 };
 
@@ -100,7 +104,7 @@ export async function fetchAccounts(): Promise<Account[]> {
 
 export async function updateAccount(
   segment: Account["segment"],
-  update: Pick<Account, "capital_per_trade" | "risk_per_trade_pct">,
+  update: Pick<Account, "capital_per_trade" | "risk_per_trade_pct" | "leverage">,
 ): Promise<Account> {
   const res = await fetch(`${API_BASE}/accounts/${segment}`, {
     method: "PUT",

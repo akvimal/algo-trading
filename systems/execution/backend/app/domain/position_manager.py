@@ -262,6 +262,13 @@ def open_position(
             db.commit()
             return row
         effective_capital = effective_capital / settings.usdinr_rate
+        # Delta Exchange India trades perpetual futures on margin -
+        # account.leverage (default 1, GET/PUT /accounts/CRYPTO) scales the
+        # USD-equivalent margin into buying power, so the same capital
+        # affords proportionally more quantity. entry_price/stop_loss_price/
+        # target_price are unaffected (PnL is still (exit-entry)*quantity
+        # regardless of how much margin backed that quantity).
+        effective_capital = effective_capital * float(account.leverage)
     if effective_capital < order.price:
         row = _reject(
             db,

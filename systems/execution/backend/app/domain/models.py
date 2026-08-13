@@ -77,6 +77,11 @@ class AccountOut(BaseModel):
     current_balance: float
     capital_per_trade: float
     risk_per_trade_pct: float
+    # CRYPTO only - a margin multiplier applied to effective_capital before
+    # sizing (Delta Exchange India trades perpetual futures on margin).
+    # Defaults to 1 (no leverage) - harmlessly present but unused for
+    # NSE/MCX. See position_manager.open_position.
+    leverage: float
     updated_at: datetime
 
 
@@ -87,3 +92,4 @@ class AccountUpdate(BaseModel):
 
     capital_per_trade: Optional[float] = Field(default=None, gt=0)
     risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
+    leverage: Optional[float] = Field(default=None, gt=0)

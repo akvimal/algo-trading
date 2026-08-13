@@ -5,6 +5,7 @@ from app.domain.models import (
     StrategyCreate,
     StrategyUpdate,
     default_square_off_time,
+    validate_contract_day_filter_fields,
     validate_stop_loss_fields,
 )
 
@@ -262,6 +263,62 @@ def test_strategy_create_rejects_unknown_duplicate_signal_policy():
             name="x", source_type="chartink", horizon="intraday", instrument_type="spot", square_off_time="15:00:00",
             duplicate_signal_policy="always_new",
         )
+
+
+def test_strategy_create_defaults_contract_day_filter_to_any():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="option", square_off_time="15:00:00",
+    )
+    assert s.contract_day_filter == "any"
+
+
+def test_strategy_create_accepts_expiry_day_filter_for_future():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="future", square_off_time="15:00:00",
+        contract_day_filter="expiry",
+    )
+    assert s.contract_day_filter == "expiry"
+
+
+def test_strategy_create_accepts_start_day_filter_for_option():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="option", square_off_time="15:00:00",
+        contract_day_filter="start",
+    )
+    assert s.contract_day_filter == "start"
+
+
+def test_strategy_create_rejects_start_day_filter_for_future():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="future", square_off_time="15:00:00",
+            contract_day_filter="start",
+        )
+
+
+def test_strategy_create_rejects_unknown_contract_day_filter():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="option", square_off_time="15:00:00",
+            contract_day_filter="mid_cycle",
+        )
+
+
+def test_validate_contract_day_filter_fields_rejects_start_for_future():
+    with pytest.raises(ValueError):
+        validate_contract_day_filter_fields("start", "future")
+
+
+def test_validate_contract_day_filter_fields_accepts_start_for_option():
+    validate_contract_day_filter_fields("start", "option")
+
+
+def test_validate_contract_day_filter_fields_accepts_expiry_for_future():
+    validate_contract_day_filter_fields("expiry", "future")
+
+
+def test_validate_contract_day_filter_fields_accepts_any_for_future():
+    validate_contract_day_filter_fields("any", "future")
 
 
 def test_strategy_create_rejects_unknown_counter_signal_policy():

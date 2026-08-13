@@ -12,12 +12,26 @@ from app.domain.rules import CandleClose
 
 
 class ResolvedUnderlying:
-    def __init__(self, chart_symbol: str, chart_exchange: str, trade_symbol: str, trade_exchange: str, lot_size: int):
+    def __init__(
+        self,
+        chart_symbol: str,
+        chart_exchange: str,
+        trade_symbol: str,
+        trade_exchange: str,
+        lot_size: int,
+        expiry: Optional[str] = None,
+    ):
         self.chart_symbol = chart_symbol
         self.chart_exchange = chart_exchange
         self.trade_symbol = trade_symbol
         self.trade_exchange = trade_exchange
         self.lot_size = lot_size
+        # ISO date - the trade contract's expiry, None for instruments
+        # with no expiry (cash equity, crypto perpetuals). market-data's
+        # own GET /instruments/resolve already returns this - previously
+        # silently dropped here since nothing needed it until the
+        # contract_day_filter feature.
+        self.expiry = expiry
 
 
 def resolve_underlying(segment: str, underlying: str) -> Optional[ResolvedUnderlying]:
@@ -36,6 +50,7 @@ def resolve_underlying(segment: str, underlying: str) -> Optional[ResolvedUnderl
         trade_symbol=data["trade_symbol"],
         trade_exchange=data["trade_exchange"],
         lot_size=data["lot_size"],
+        expiry=data.get("expiry"),
     )
 
 

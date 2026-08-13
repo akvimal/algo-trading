@@ -213,6 +213,48 @@ needs threading through more places than the obvious ones" surprise this session
 repeatedly (DB `CHECK` constraints for the crypto module, provider methods for CRYPTO options) —
 here the extra place was a hand-maintained publish-payload dict, not a schema.
 
+**Contract day filter: restricting signals to a contract's start/expiry day** —
+`Strategy.contract_day_filter` (signal-generation, `'any'` default, or `'start'`/`'expiry'`)
+restricts a strategy's signals to a specific day in the underlying future/option contract's
+lifecycle, for strategies where the user only wants to open a position right as a contract begins
+trading or right as it's about to expire — `instrument_type in ('future', 'option')` only,
+harmlessly ignored for `'spot'` (no expiry concept at all there). Enforcement lives in **two
+different systems**, because futures and options get their contract resolved at two different
+points in the pipeline: a future is already fully resolved (symbol + expiry known) **inside
+signal-generation's own `engine.py`**, before a signal is ever posted — no external webhook
+provider produces futures signals (Chartink is NSE-cash-equity-only), so `_run_one`/
+`_run_one_breakout`/`_run_one_range_breakout` each call the new pure helper
+`_matches_contract_day_filter(instrument_type, segment, contract_day_filter, resolved.expiry,
+today)` immediately after `resolve_underlying(...)` and simply skip posting the signal that tick if
+it doesn't match (same "return False, no signal" shape every other ineligible-tick case in that
+file already uses) — `resolved.expiry` was a genuine pre-existing gap closed for this: market-data's
+`GET /instruments/resolve` already returned `expiry`, but signal-generation's own
+`app/adapters/market_data/client.py` silently dropped it since nothing had needed it before.
+Options, by contrast, only get their expiry chosen later, inside **signal-processing's
+`choose_strategy`** (`app/domain/resolution/strategy.py`) — the check runs there instead, right
+after `choose_expiry` resolves and before the (now conditionally skipped) `get_option_chain` call,
+raising `ResolutionError` on a mismatch (persisted as `rejected`, same handling every other
+resolution failure in that function already gets) rather than a silent skip, since by that point a
+real signal already exists and needs a recorded outcome. Execution never needs to know about this
+field at all — it's a pure pre-publish eligibility gate, resolved entirely before an order is ever
+built, so `resolved-order.schema.json` is untouched.
+
+`'expiry'` means the same thing for both instrument types (today is the contract's own expiry day)
+and is exact, cheap data for either — signal-generation already has `resolved.expiry` from
+`resolve_underlying`, and signal-processing already has the chosen `expiry` from `choose_expiry`.
+`'start'` is a harder case: it means "today is the day after the *previous* contract's expiry" —
+computable for options from `get_expiry_list`'s live, sorted expiry list (`sorted_expiries[idx - 1]`
+relative to the chosen expiry's own index, when that index isn't already `0`), but **not reliably
+computable for futures at all**, and dropped there entirely (`validate_contract_day_filter_fields`
+rejects `contract_day_filter='start'` outright for `instrument_type='future'`, an explicit
+validation error rather than a silently-dead filter) — Dhan's synced instrument master only ever
+lists the currently-active and upcoming contracts, never one that already expired, so there's no
+stored "previous contract" for a future to compute day-after from without adding new persistent
+contract-transition tracking, which was explicitly ruled out of scope. Not enforced at all for
+`segment`/`exchange='CRYPTO'` (the user's own stated exception — daily option expiry there makes
+the start/expiry distinction meaningless; configuring the field for a CRYPTO strategy is harmless,
+just never checked).
+
 Candle fetching (`get_previous_candle`, backing `GET /candles/previous`) is deliberately narrow: the single most recently *completed* candle for a symbol/interval, not a historical range — built for the stop-loss method above. It has its own independent throttle (separate lock/timestamp from LTP — different Dhan endpoint, no reason to serialize one behind the other) and its own cache keyed by `(symbol, interval)` with a TTL equal to the interval's own length, since a completed candle doesn't change until the next one closes. Unlike LTP there's no true multi-symbol batching here — Dhan's `charts/intraday` endpoint is per-security-id — so a caller needing several symbols (e.g. execution's exit-monitor job trailing several `previous_candle` positions) calls it once per distinct symbol, relying on the cache to bound repeat calls across polling ticks. `GET /candles/history` (§ below) reuses the same endpoint and cache-free path for a general multi-bar range instead of one cached value.
 
 NSE (cash equity, indices, index futures) and MCX (commodity futures) are wired up via Dhan; CRYPTO via Delta Exchange India, see below.

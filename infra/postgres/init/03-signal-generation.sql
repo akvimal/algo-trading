@@ -157,6 +157,20 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- infra/postgres/init/02-execution.sql).
     duplicate_signal_policy TEXT NOT NULL DEFAULT 'skip' CHECK (duplicate_signal_policy IN ('skip', 'add_position')),
     counter_signal_policy   TEXT NOT NULL DEFAULT 'close_and_flip' CHECK (counter_signal_policy IN ('skip', 'close_and_flip')),
+    -- instrument_type in ('future', 'option') only - restricts signals to
+    -- a specific day in the contract's lifecycle. 'any' (default): no
+    -- restriction, today's behavior unchanged. 'expiry': only the
+    -- contract's own expiry day. 'start': only the day the CURRENT
+    -- expiry/contract became the relevant one - option only, computed
+    -- from market-data's live expiry list (day after the previous
+    -- expiry); not reliably computable for futures (Dhan's instrument
+    -- master never lists an already-expired contract to compute
+    -- day-after from), so 'start'+'future' is rejected at create/update
+    -- time - see validate_contract_day_filter_fields. Never enforced for
+    -- segment='CRYPTO' (daily option expiry makes the distinction
+    -- meaningless there) - harmlessly ignored for 'spot' too (no expiry
+    -- concept at all).
+    contract_day_filter TEXT NOT NULL DEFAULT 'any' CHECK (contract_day_filter IN ('any', 'start', 'expiry')),
     status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'backtesting', 'live', 'paused')),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -560,6 +560,116 @@ def test_resolve_option_strategy_passes_through_individual_sl_scope():
 
 
 @responses.activate
+def test_resolve_option_strategy_resolves_when_today_is_expiry_day():
+    responses.add(
+        responses.GET, _strategy_url(), json=_option_strategy_json(contract_day_filter="expiry"), status=200
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+    # intraday always picks the nearest expiry (2026-08-14) - today matches it.
+    signal = _signal(symbol="NIFTY", action="BUY", timestamp=datetime(2026, 8, 14, 5, 0, tzinfo=timezone.utc))
+
+    resolved = resolve(signal)
+
+    assert resolved.strategy["type"] == "bull_call_spread"
+
+
+@responses.activate
+def test_resolve_option_strategy_rejects_when_today_is_not_expiry_day():
+    responses.add(
+        responses.GET, _strategy_url(), json=_option_strategy_json(contract_day_filter="expiry"), status=200
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    signal = _signal(symbol="NIFTY", action="BUY", timestamp=datetime(2026, 8, 13, 5, 0, tzinfo=timezone.utc))
+
+    with pytest.raises(ResolutionError, match="contract_day_filter='expiry'"):
+        resolve(signal)
+
+
+@responses.activate
+def test_resolve_option_strategy_resolves_when_today_is_start_day():
+    # positional + only "2026-08-14" qualifying (< 7 days out from
+    # 2026-08-15) falls back to it anyway (choose_expiry's
+    # "no qualifying expiry -> furthest available" rule) - but with a
+    # second, later expiry present, MIN_POSITIONAL_DAYS_TO_EXPIRY=7 pushes
+    # the pick to "2026-08-21" (idx=1), whose previous list entry is
+    # "2026-08-14" - so the contract "started" the day after, 2026-08-15.
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json=_option_strategy_json(horizon="positional", contract_day_filter="start"),
+        status=200,
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14", "2026-08-21"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json={**_FAKE_CHAIN, "expiry": "2026-08-21"}, status=200)
+    signal = _signal(symbol="NIFTY", action="BUY", timestamp=datetime(2026, 8, 15, 5, 0, tzinfo=timezone.utc))
+
+    resolved = resolve(signal)
+
+    assert resolved.strategy["type"] == "bull_call_spread"
+
+
+@responses.activate
+def test_resolve_option_strategy_rejects_when_today_is_not_start_day():
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json=_option_strategy_json(horizon="positional", contract_day_filter="start"),
+        status=200,
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14", "2026-08-21"]}, status=200)
+    signal = _signal(symbol="NIFTY", action="BUY", timestamp=datetime(2026, 8, 16, 5, 0, tzinfo=timezone.utc))
+
+    with pytest.raises(ResolutionError, match="contract_day_filter='start'"):
+        resolve(signal)
+
+
+@responses.activate
+def test_resolve_option_strategy_rejects_start_when_no_earlier_expiry_known():
+    # Only one live expiry - the chosen one is always idx 0, so there's no
+    # "previous" entry in the list to compute day-after from.
+    responses.add(
+        responses.GET, _strategy_url(), json=_option_strategy_json(contract_day_filter="start"), status=200
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    signal = _signal(symbol="NIFTY", action="BUY", timestamp=datetime(2026, 8, 15, 5, 0, tzinfo=timezone.utc))
+
+    with pytest.raises(ResolutionError, match="no earlier expiry known"):
+        resolve(signal)
+
+
+@responses.activate
+def test_resolve_option_strategy_crypto_bypasses_day_filter():
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json=_option_strategy_json(segment="CRYPTO", contract_day_filter="expiry"),
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        _resolve_url(),
+        json=_resolved_underlying_json(
+            chart_symbol="BTCUSD", chart_exchange="CRYPTO", trade_symbol="BTCUSD", trade_exchange="CRYPTO", lot_size=1
+        ),
+        status=200,
+    )
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-15"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json={**_FAKE_CHAIN, "underlying_symbol": "BTCUSD"}, status=200)
+    # Today is nowhere near the chosen expiry - would fail if enforced.
+    signal = _signal(symbol="BTCUSD", exchange="CRYPTO", action="BUY", timestamp=datetime(2026, 1, 1, 5, 0, tzinfo=timezone.utc))
+
+    resolved = resolve(signal)
+
+    assert resolved.strategy["type"] == "bull_call_spread"
+
+
+@responses.activate
 def test_resolve_option_rejects_when_market_data_unreachable():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
     responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)

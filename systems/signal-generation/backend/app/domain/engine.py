@@ -33,6 +33,7 @@ class ResolvedUnderlyingLike(Protocol):
     trade_symbol: str
     trade_exchange: str
     lot_size: int
+    expiry: Optional[str]
 
 
 ResolveUnderlying = Callable[[str, str], Optional[ResolvedUnderlyingLike]]
@@ -73,6 +74,24 @@ def _is_within_active_window(now_time: time, active_from_time: Optional[time], a
     return active_from_time <= now_time <= active_to_time
 
 
+def _matches_contract_day_filter(
+    instrument_type: str, segment: str, contract_day_filter: str, expiry: Optional[str], today: date
+) -> bool:
+    """True if this future should be allowed to fire today, given
+    Strategy.contract_day_filter. Only meaningful for instrument_type=
+    'future' + contract_day_filter='expiry' - 'start' is rejected at
+    Strategy-config time for futures (see validate_contract_day_filter_fields,
+    not reliably computable), 'any' never restricts, spot has no expiry
+    concept, and segment='CRYPTO' is always excluded (daily option expiry
+    makes the distinction meaningless there - this only ever applies to
+    futures anyway, which don't exist for CRYPTO today). Options are
+    checked separately, in signal-processing's choose_strategy, where the
+    live expiry list actually lives."""
+    if instrument_type != "future" or contract_day_filter != "expiry" or segment == "CRYPTO":
+        return True
+    return expiry is not None and today.isoformat() == expiry
+
+
 def _target_symbols(strategy: db_models.Strategy, get_universe_constituents: GetUniverseConstituents) -> list[str]:
     """A plain symbol-scoped strategy checks exactly its own underlying,
     same as before universes existed. A universe-scoped strategy
@@ -97,6 +116,7 @@ def _run_one_breakout(
     strategy: db_models.Strategy,
     rule: BreakoutRuleConfig,
     symbol: str,
+    today: date,
     resolve_underlying: ResolveUnderlying,
     get_candle_history: GetCandleHistory,
     get_ltp: GetLtp,
@@ -120,6 +140,8 @@ def _run_one_breakout(
         logger.warning(
             "could not resolve underlying %s (segment=%s) for strategy %s", symbol, strategy.segment, strategy.id
         )
+        return False
+    if not _matches_contract_day_filter(strategy.instrument_type, strategy.segment, strategy.contract_day_filter, resolved.expiry, today):
         return False
 
     htf_bars, ltf_bars = breakout.breakout_warmup(rule)
@@ -184,6 +206,7 @@ def _run_one_range_breakout(
     strategy: db_models.Strategy,
     rule: RangeBreakoutRuleConfig,
     symbol: str,
+    today: date,
     resolve_underlying: ResolveUnderlying,
     get_candle_history: GetCandleHistory,
     get_ltp: GetLtp,
@@ -199,6 +222,10 @@ def _run_one_range_breakout(
         logger.warning(
             "could not resolve underlying %s (segment=%s) for strategy %s", symbol, strategy.segment, strategy.id
         )
+        return False
+    if not _matches_contract_day_filter(
+        strategy.instrument_type, strategy.segment, strategy.contract_day_filter, resolved.expiry, today
+    ):
         return False
 
     bar_count = range_breakout.range_breakout_warmup(rule)
@@ -261,6 +288,7 @@ def _run_one(
     db: Session,
     strategy: db_models.Strategy,
     symbol: str,
+    today: date,
     resolve_underlying: ResolveUnderlying,
     get_candle_history: GetCandleHistory,
     get_ltp: GetLtp,
@@ -268,14 +296,16 @@ def _run_one(
 ) -> bool:
     """Returns True if a fresh signal was posted. `symbol` is the one
     target this call checks - see _run_one_breakout's docstring, same
-    convention."""
+    convention. `today` is the tick's own local date (run_live_tick's
+    today_ist) - threaded down for contract_day_filter, not re-derived
+    per call so every strategy checked in the same tick agrees on "today"."""
     rule = validate_rule_config(strategy.rule_config)
 
     if isinstance(rule, BreakoutRuleConfig):
-        return _run_one_breakout(db, strategy, rule, symbol, resolve_underlying, get_candle_history, get_ltp, post_signal)
+        return _run_one_breakout(db, strategy, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal)
     if isinstance(rule, RangeBreakoutRuleConfig):
         return _run_one_range_breakout(
-            db, strategy, rule, symbol, resolve_underlying, get_candle_history, get_ltp, post_signal
+            db, strategy, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal
         )
 
     indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
@@ -292,6 +322,8 @@ def _run_one(
         logger.warning(
             "could not resolve underlying %s (segment=%s) for strategy %s", symbol, strategy.segment, strategy.id
         )
+        return False
+    if not _matches_contract_day_filter(strategy.instrument_type, strategy.segment, strategy.contract_day_filter, resolved.expiry, today):
         return False
 
     bar_count = bars_needed(rule, indicator.type, indicator_params)
@@ -370,7 +402,9 @@ def run_live_tick(
         .all()
     )
 
-    now_ist = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).time()
+    now_ist_dt = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+    now_ist = now_ist_dt.time()
+    today_ist = now_ist_dt.date()
 
     checked = 0
     signaled = 0
@@ -381,7 +415,7 @@ def run_live_tick(
         for symbol in _target_symbols(strategy, get_universe_constituents):
             checked += 1
             try:
-                if _run_one(db, strategy, symbol, resolve_underlying, get_candle_history, get_ltp, post_signal):
+                if _run_one(db, strategy, symbol, today_ist, resolve_underlying, get_candle_history, get_ltp, post_signal):
                     signaled += 1
             except Exception:
                 logger.exception("engine tick failed for strategy %s (%s)", strategy.id, symbol)

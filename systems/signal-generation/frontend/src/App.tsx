@@ -4,6 +4,7 @@ import {
   ALL_REGIME_CHECKS,
   REGIME_CHECK_LABELS,
   type BacktestResult,
+  type ContractDayFilter,
   type CounterSignalPolicy,
   type DuplicateSignalPolicy,
   type GridBacktestResult,
@@ -401,6 +402,8 @@ function StrategyManager() {
   const [optionPositionStyle, setOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [optionStrikeMoneyness, setOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [optionSlScope, setOptionSlScope] = useState<OptionSlScope>("combined");
+  // instrument_type in ('future', 'option') only - see ContractDayFilter in api.ts.
+  const [contractDayFilter, setContractDayFilter] = useState<ContractDayFilter>("any");
   const [segment, setSegment] = useState<Segment>("NSE");
   const [squareOffTime, setSquareOffTime] = useState(() => defaultSquareOffTime("intraday", "NSE") ?? "");
   // Tracks whether the user has hand-edited square-off time, so the
@@ -470,6 +473,7 @@ function StrategyManager() {
   const [editOptionPositionStyle, setEditOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [editOptionStrikeMoneyness, setEditOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [editOptionSlScope, setEditOptionSlScope] = useState<OptionSlScope>("combined");
+  const [editContractDayFilter, setEditContractDayFilter] = useState<ContractDayFilter>("any");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
   const [editSquareOffTime, setEditSquareOffTime] = useState("");
   const [editActiveFromTime, setEditActiveFromTime] = useState("");
@@ -685,6 +689,8 @@ function StrategyManager() {
         option_position_style: instrumentType === "option" ? optionPositionStyle : undefined,
         option_strike_moneyness: instrumentType === "option" ? optionStrikeMoneyness : undefined,
         option_sl_scope: instrumentType === "option" ? optionSlScope : undefined,
+        contract_day_filter:
+          instrumentType === "future" || instrumentType === "option" ? contractDayFilter : undefined,
         segment,
         square_off_time: horizon === "intraday" && squareOffTime ? `${squareOffTime}:00` : undefined,
         underlying: createIsInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
@@ -708,6 +714,7 @@ function StrategyManager() {
       setOptionPositionStyle("spread");
       setOptionStrikeMoneyness("ATM");
       setOptionSlScope("combined");
+      setContractDayFilter("any");
       setSegment("NSE");
       setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
       setSquareOffTimeTouched(false);
@@ -753,6 +760,7 @@ function StrategyManager() {
     setEditOptionPositionStyle(s.option_position_style);
     setEditOptionStrikeMoneyness(s.option_strike_moneyness);
     setEditOptionSlScope(s.option_sl_scope);
+    setEditContractDayFilter(s.contract_day_filter);
     setEditSegment(s.segment);
     setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
     setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
@@ -817,6 +825,8 @@ function StrategyManager() {
         option_position_style: editInstrumentType === "option" ? editOptionPositionStyle : undefined,
         option_strike_moneyness: editInstrumentType === "option" ? editOptionStrikeMoneyness : undefined,
         option_sl_scope: editInstrumentType === "option" ? editOptionSlScope : undefined,
+        contract_day_filter:
+          editInstrumentType === "future" || editInstrumentType === "option" ? editContractDayFilter : undefined,
         segment: editSegment,
         square_off_time: editHorizon === "intraday" && editSquareOffTime ? `${editSquareOffTime}:00` : undefined,
         rule_config: ruleConfig,
@@ -944,7 +954,14 @@ function StrategyManager() {
           </label>
           <label>
             Instrument
-            <select value={instrumentType} onChange={(e) => setInstrumentType(e.target.value as InstrumentType)}>
+            <select
+              value={instrumentType}
+              onChange={(e) => {
+                const next = e.target.value as InstrumentType;
+                setInstrumentType(next);
+                if (next === "future" && contractDayFilter === "start") setContractDayFilter("any");
+              }}
+            >
               <option value="spot">Spot</option>
               <option value="future">Future</option>
               <option value="option">Option</option>
@@ -980,6 +997,16 @@ function StrategyManager() {
               <select value={optionSlScope} onChange={(e) => setOptionSlScope(e.target.value as OptionSlScope)}>
                 <option value="combined">Combined (net debit)</option>
                 <option value="individual">Individual (per leg)</option>
+              </select>
+            </label>
+          )}
+          {(instrumentType === "future" || instrumentType === "option") && (
+            <label>
+              Contract day
+              <select value={contractDayFilter} onChange={(e) => setContractDayFilter(e.target.value as ContractDayFilter)}>
+                <option value="any">Any day</option>
+                {instrumentType === "option" && <option value="start">Contract start day</option>}
+                <option value="expiry">Expiry day</option>
               </select>
             </label>
           )}
@@ -1346,7 +1373,11 @@ function StrategyManager() {
                 <td>
                   <select
                     value={editInstrumentType}
-                    onChange={(e) => setEditInstrumentType(e.target.value as InstrumentType)}
+                    onChange={(e) => {
+                      const next = e.target.value as InstrumentType;
+                      setEditInstrumentType(next);
+                      if (next === "future" && editContractDayFilter === "start") setEditContractDayFilter("any");
+                    }}
                     className="cell-input"
                   >
                     <option value="spot">Spot</option>
@@ -1384,6 +1415,17 @@ function StrategyManager() {
                     >
                       <option value="combined">Combined</option>
                       <option value="individual">Individual</option>
+                    </select>
+                  )}
+                  {(editInstrumentType === "future" || editInstrumentType === "option") && (
+                    <select
+                      value={editContractDayFilter}
+                      onChange={(e) => setEditContractDayFilter(e.target.value as ContractDayFilter)}
+                      className="cell-input"
+                    >
+                      <option value="any">Any day</option>
+                      {editInstrumentType === "option" && <option value="start">Start day</option>}
+                      <option value="expiry">Expiry day</option>
                     </select>
                   )}
                 </td>
@@ -1691,8 +1733,12 @@ function StrategyManager() {
                       {" "}
                       ({s.option_position_style}
                       {s.option_strike_moneyness !== "ATM" ? `, ${s.option_strike_moneyness}` : ""}
-                      {s.option_sl_scope !== "combined" ? `, ${s.option_sl_scope} SL` : ""})
+                      {s.option_sl_scope !== "combined" ? `, ${s.option_sl_scope} SL` : ""}
+                      {s.contract_day_filter !== "any" ? `, ${s.contract_day_filter} day` : ""})
                     </span>
+                  )}
+                  {s.instrument_type === "future" && s.contract_day_filter !== "any" && (
+                    <span className="muted"> ({s.contract_day_filter} day)</span>
                   )}
                 </td>
                 <td>{s.interval ?? "-"}</td>

@@ -27,6 +27,17 @@ export type OptionStrikeMoneyness = "ITM2" | "ITM1" | "ATM" | "OTM1" | "OTM2";
 // tripped - this only changes the trigger condition. Mathematically
 // identical to 'combined' for a naked (1-leg) position.
 export type OptionSlScope = "combined" | "individual";
+// instrument_type in ('future', 'option') only - restricts signal
+// eligibility to a specific day in the underlying contract's lifecycle.
+// 'any' (default) never restricts. 'expiry' requires today to be the
+// resolved contract's own expiry day - works for both future and option.
+// 'start' requires today to be the day after the *previous* contract's
+// expiry - option only, rejected by the backend for instrument_type=
+// 'future' (not reliably computable there - Dhan's instrument master never
+// retains an already-expired contract to compute day-after from). Never
+// enforced for segment/exchange='CRYPTO' (daily expiry makes the
+// distinction meaningless there).
+export type ContractDayFilter = "any" | "start" | "expiry";
 // Which market this strategy trades in - distinct from `exchange` (still
 // fixed to "NSE", the only one actually wired up end-to-end). Only drives
 // the square_off_time default; MCX/CRYPTO can be recorded as intent even
@@ -174,6 +185,7 @@ export type Strategy = {
   option_position_style: OptionPositionStyle;
   option_strike_moneyness: OptionStrikeMoneyness;
   option_sl_scope: OptionSlScope;
+  contract_day_filter: ContractDayFilter;
   segment: Segment;
   // Required for horizon='intraday' only (auto-defaulted server-side from
   // horizon+segment when omitted on create - see defaultSquareOffTime
@@ -222,6 +234,7 @@ export type StrategyCreate = {
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
+  contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   // Optional - the backend auto-fills it from horizon+segment when
   // horizon='intraday'; required explicitly for other horizons.
@@ -257,6 +270,7 @@ export type StrategyEdit = {
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
+  contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   square_off_time?: string;
   underlying?: string;

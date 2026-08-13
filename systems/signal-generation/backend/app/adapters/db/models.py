@@ -34,6 +34,8 @@ class Strategy(Base):
     option_strike_moneyness = Column(Text, nullable=False, default="ATM")
     # instrument_type='option' only - combined vs per-leg SL/target, see OptionSlScope in app/domain/models.py.
     option_sl_scope = Column(Text, nullable=False, default="combined")
+    # instrument_type in ('future', 'option') only - see ContractDayFilter in app/domain/models.py.
+    contract_day_filter = Column(Text, nullable=False, default="any")
     segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO - drives the square_off_time default
     square_off_time = Column(Time)  # required for horizon='intraday' only - null for swing/positional
     # in_house only - see validate_in_house_fields. underlying: the

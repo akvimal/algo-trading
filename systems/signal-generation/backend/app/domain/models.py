@@ -51,6 +51,18 @@ OptionStrikeMoneyness = Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"]
 # 'combined' for a naked (1-leg) position. Harmlessly ignored for
 # spot/future strategies.
 OptionSlScope = Literal["combined", "individual"]
+# instrument_type in ('future', 'option') only - restricts signals to a
+# specific day in the contract's lifecycle. 'any' (default): no
+# restriction. 'expiry': only the contract's own expiry day - works for
+# both future and option (Dhan's synced data / market-data's live expiry
+# list both give this directly). 'start': only the day the current
+# expiry/contract became the relevant one - OPTION ONLY, computed from
+# the live expiry list (day after the previous expiry); not reliably
+# computable for futures (see validate_contract_day_filter_fields) so
+# 'start'+'future' is rejected, not silently unenforceable. Never
+# enforced for segment='CRYPTO' (daily option expiry makes the
+# distinction meaningless there). Harmlessly ignored for 'spot'.
+ContractDayFilter = Literal["any", "start", "expiry"]
 Status = Literal["draft", "backtesting", "live", "paused"]
 Interval = Literal["1min", "3min", "5min", "15min", "30min", "60min", "daily"]
 StopLossMethod = Literal["previous_candle", "percent"]
@@ -283,6 +295,16 @@ def validate_underlying_type_fields(underlying_type: str, segment: str, instrume
         raise ValueError("underlying_type='universe' requires segment='NSE' and instrument_type='spot'")
 
 
+def validate_contract_day_filter_fields(contract_day_filter: str, instrument_type: str) -> None:
+    """'start' is only reliably computable for options (market-data's
+    live expiry list gives an exact previous-expiry to compute day-after
+    from) - futures have no equivalent data (Dhan's instrument master
+    never lists an already-expired contract), so this combination is
+    rejected outright rather than silently never firing."""
+    if contract_day_filter == "start" and instrument_type != "option":
+        raise ValueError("contract_day_filter='start' requires instrument_type='option' - not reliably computable for futures")
+
+
 def validate_active_window_fields(active_from_time: Optional[time], active_to_time: Optional[time]) -> None:
     """Shared consistency rule for the optional signal-acceptance window,
     used by both StrategyCreate (all fields always present) and the PATCH
@@ -337,6 +359,7 @@ class StrategyCreate(BaseModel):
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"
+    contract_day_filter: ContractDayFilter = "any"
     segment: Segment = "NSE"
     # Only meaningful for horizon='intraday' - square-off doesn't apply to
     # swing/positional strategies (positions aren't closed same-day), so
@@ -385,6 +408,11 @@ class StrategyCreate(BaseModel):
     @model_validator(mode="after")
     def _check_underlying_type_consistency(self) -> "StrategyCreate":
         validate_underlying_type_fields(self.underlying_type, self.segment, self.instrument_type)
+        return self
+
+    @model_validator(mode="after")
+    def _check_contract_day_filter_consistency(self) -> "StrategyCreate":
+        validate_contract_day_filter_fields(self.contract_day_filter, self.instrument_type)
         return self
 
     @model_validator(mode="after")
@@ -438,6 +466,7 @@ class StrategyUpdate(BaseModel):
     option_position_style: Optional[OptionPositionStyle] = None
     option_strike_moneyness: Optional[OptionStrikeMoneyness] = None
     option_sl_scope: Optional[OptionSlScope] = None
+    contract_day_filter: Optional[ContractDayFilter] = None
     segment: Optional[Segment] = None
     square_off_time: Optional[time] = None
     underlying: Optional[str] = Field(default=None, min_length=1)
@@ -483,6 +512,7 @@ class StrategyOut(BaseModel):
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"
+    contract_day_filter: ContractDayFilter = "any"
     segment: Segment
     square_off_time: Optional[time] = None
     underlying: Optional[str] = None

@@ -47,6 +47,7 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         instrument_type,
         strategy.get("option_position_style", "spread"),
         strategy.get("option_strike_moneyness", "ATM"),
+        strategy.get("contract_day_filter", "any"),
     )
 
     square_off_time = strategy.get("square_off_time")

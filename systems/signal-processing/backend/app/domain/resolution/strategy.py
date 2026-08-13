@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import requests
@@ -21,6 +21,7 @@ def choose_strategy(
     instrument_type: str,
     option_position_style: str = "spread",
     option_strike_moneyness: str = "ATM",
+    contract_day_filter: str = "any",
 ) -> Optional[dict]:
     """Pick an option strategy (spread, naked leg, ...) - NOT to be
     confused with signal-generation's Strategy entity (signal.strategy_id),
@@ -46,6 +47,19 @@ def choose_strategy(
     resolve as instrument_type='option' with nothing to trade, same
     "persisted as rejected, nothing published" handling resolve() already
     gives every other ResolutionError.
+
+    contract_day_filter ('any' default, 'start', or 'expiry' - see
+    ContractDayFilter in signal-generation's app/domain/models.py) restricts
+    which day this signal is allowed to resolve on, relative to the chosen
+    expiry: 'expiry' requires today == expiry itself, 'start' requires today
+    == the day after the *previous* expiry in the chain's own sorted expiry
+    list. Not enforced for exchange='CRYPTO' (daily expiry makes the
+    distinction meaningless there - see docs/architecture.md). A mismatch
+    raises ResolutionError, same "persisted as rejected" handling as every
+    other check in this function - unlike the futures-side enforcement
+    (signal-generation's engine.py), which skips silently before a signal is
+    ever posted, here a real signal already exists and needs a recorded
+    outcome.
 
     Works for NSE, MCX, and CRYPTO (SignalIngest.exchange's three values) -
     the option chain is always referenced against resolve_underlying(...)
@@ -82,6 +96,25 @@ def choose_strategy(
     expiry = choose_expiry(expiries, horizon, today)
     if expiry is None:
         raise ResolutionError(f"could not choose an option expiry for '{resolved.chart_symbol}'")
+
+    if signal.exchange != "CRYPTO" and contract_day_filter != "any":
+        sorted_expiries = sorted(expiries)
+        if contract_day_filter == "expiry":
+            if today.isoformat() != expiry:
+                raise ResolutionError(
+                    f"today ({today.isoformat()}) is not the chosen expiry's own day ({expiry}) - contract_day_filter='expiry'"
+                )
+        else:  # "start"
+            idx = sorted_expiries.index(expiry)
+            if idx == 0:
+                raise ResolutionError(
+                    "could not determine contract_day_filter='start' - no earlier expiry known to compute it from"
+                )
+            start_date = date.fromisoformat(sorted_expiries[idx - 1]) + timedelta(days=1)
+            if today != start_date:
+                raise ResolutionError(
+                    f"today ({today.isoformat()}) is not the chosen expiry's start day ({start_date.isoformat()}) - contract_day_filter='start'"
+                )
 
     try:
         chain = get_option_chain(resolved.chart_exchange, resolved.chart_symbol, expiry)

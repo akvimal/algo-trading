@@ -29,6 +29,7 @@ from app.domain.models import (
     StrategyOut,
     StrategyUpdate,
     validate_active_window_fields,
+    validate_contract_day_filter_fields,
     validate_in_house_fields,
     validate_indicator_params,
     validate_rule_config,
@@ -58,6 +59,7 @@ def _to_out(row: db_models.Strategy) -> StrategyOut:
         option_position_style=row.option_position_style,
         option_strike_moneyness=row.option_strike_moneyness,
         option_sl_scope=row.option_sl_scope,
+        contract_day_filter=row.contract_day_filter,
         segment=row.segment,
         square_off_time=row.square_off_time,
         underlying=row.underlying,
@@ -150,6 +152,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         option_position_style=payload.option_position_style,
         option_strike_moneyness=payload.option_strike_moneyness,
         option_sl_scope=payload.option_sl_scope,
+        contract_day_filter=payload.contract_day_filter,
         segment=payload.segment,
         square_off_time=payload.square_off_time,
         underlying=payload.underlying,
@@ -257,6 +260,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.option_strike_moneyness = payload.option_strike_moneyness
     if payload.option_sl_scope is not None:
         row.option_sl_scope = payload.option_sl_scope
+    if payload.contract_day_filter is not None:
+        row.contract_day_filter = payload.contract_day_filter
     if payload.segment is not None:
         row.segment = payload.segment
     if payload.square_off_time is not None:
@@ -292,6 +297,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         # against whichever source_type it already has.
         validate_in_house_fields(row.source_type, row.underlying, row.rule_config, row.interval)
         validate_underlying_type_fields(row.underlying_type, row.segment, row.instrument_type)
+        validate_contract_day_filter_fields(row.contract_day_filter, row.instrument_type)
         validate_active_window_fields(row.active_from_time, row.active_to_time)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -18,6 +18,8 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("/settings")
 def update_settings(update: ExecutionSettingsUpdate, db: Session = Depends(get_db)):
     row = db.get(db_models.Settings, 1)
+    if update.usdinr_rate is not None:
+        row.usdinr_rate = update.usdinr_rate
     db.commit()
     db.refresh(row)
 
@@ -25,4 +27,4 @@ def update_settings(update: ExecutionSettingsUpdate, db: Session = Depends(get_d
     # run on a fixed interval and read current settings/position data
     # fresh each run (see app/scheduler.py).
 
-    return {"timezone": row.timezone}
+    return load_settings(db).model_dump(mode="json")

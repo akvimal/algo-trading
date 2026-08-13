@@ -22,6 +22,8 @@ class Settings(Base):
 
     id = Column(SmallInteger, primary_key=True, default=1)
     timezone = Column(Text, nullable=False)
+    # CRYPTO only, nullable - see ExecutionSettings.usdinr_rate in app/domain/models.py.
+    usdinr_rate = Column(Numeric, nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

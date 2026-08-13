@@ -249,6 +249,10 @@ export type Strategy = {
   option_position_style: OptionPositionStyle;
   option_strike_moneyness: OptionStrikeMoneyness;
   option_sl_scope: OptionSlScope;
+  // instrument_type='option' only, nullable. When set, execution trades
+  // exactly this many lots instead of auto-sizing off capital/risk% -
+  // takes precedence over stop-loss-based sizing entirely.
+  option_fixed_lots: number | null;
   contract_day_filter: ContractDayFilter;
   segment: Segment;
   // Required for horizon='intraday' only (auto-defaulted server-side from
@@ -293,6 +297,7 @@ export type StrategyCreate = {
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
+  option_fixed_lots?: number;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   // Optional - the backend auto-fills it from horizon+segment when
@@ -326,6 +331,7 @@ export type StrategyEdit = {
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
+  option_fixed_lots?: number;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   square_off_time?: string;

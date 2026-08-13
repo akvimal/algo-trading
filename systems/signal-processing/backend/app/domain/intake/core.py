@@ -100,6 +100,7 @@ def create_signal_from_ingest(db: Session, signal: SignalIngest) -> dict:
             "duplicate_signal_policy": resolved.duplicate_signal_policy,
             "counter_signal_policy": resolved.counter_signal_policy,
             "option_sl_scope": resolved.option_sl_scope,
+            "option_fixed_lots": resolved.option_fixed_lots,
         }
     )
 

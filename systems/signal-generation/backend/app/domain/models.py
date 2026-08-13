@@ -195,6 +195,14 @@ class StrategyCreate(BaseModel):
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"
+    # instrument_type='option' only, harmlessly ignored otherwise (same
+    # convention as the other option_* fields above). When set, execution
+    # trades exactly this many lots instead of auto-sizing off capital/risk%
+    # - takes precedence over stop-loss-based sizing entirely, even when a
+    # stop-loss is also configured. See docs/architecture.md § "Why position
+    # sizing lives in execution, not signal-generation" for why this is a
+    # deliberate, narrow exception.
+    option_fixed_lots: Optional[int] = Field(default=None, gt=0)
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment = "NSE"
     # Only meaningful for horizon='intraday' - square-off doesn't apply to
@@ -286,6 +294,7 @@ class StrategyUpdate(BaseModel):
     option_position_style: Optional[OptionPositionStyle] = None
     option_strike_moneyness: Optional[OptionStrikeMoneyness] = None
     option_sl_scope: Optional[OptionSlScope] = None
+    option_fixed_lots: Optional[int] = Field(default=None, gt=0)
     contract_day_filter: Optional[ContractDayFilter] = None
     segment: Optional[Segment] = None
     square_off_time: Optional[time] = None
@@ -321,6 +330,7 @@ class StrategyOut(BaseModel):
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"
+    option_fixed_lots: Optional[int] = None
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment
     square_off_time: Optional[time] = None

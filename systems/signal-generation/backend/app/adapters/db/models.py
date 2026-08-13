@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Numeric, Text, Time, func
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, Numeric, Text, Time, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -59,6 +59,8 @@ class Strategy(Base):
     option_strike_moneyness = Column(Text, nullable=False, default="ATM")
     # instrument_type='option' only - combined vs per-leg SL/target, see OptionSlScope in app/domain/models.py.
     option_sl_scope = Column(Text, nullable=False, default="combined")
+    # instrument_type='option' only, nullable - see option_fixed_lots in app/domain/models.py.
+    option_fixed_lots = Column(Integer, nullable=True)
     # instrument_type in ('future', 'option') only - see ContractDayFilter in app/domain/models.py.
     contract_day_filter = Column(Text, nullable=False, default="any")
     segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO - drives the square_off_time default

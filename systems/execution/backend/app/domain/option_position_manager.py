@@ -239,11 +239,34 @@ def open_option_group(
                 return row
 
     effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
-    if effective_capital < net_debit * lot_size:
+    if order.segment == "CRYPTO":
+        # Same reasoning as position_manager.open_position - net_debit
+        # (from Delta Exchange India) is raw USD, capital_per_trade/
+        # current_balance are INR - convert the capital figure, never the
+        # premiums, so long_premium/short_premium/net_debit stay in
+        # native USD (still correctly comparable against future raw-USD
+        # LTP fetches for exit-monitoring). settings.usdinr_rate is a
+        # manually configured rate (GET/PUT /settings), not a live feed -
+        # see docs/architecture.md.
+        if settings.usdinr_rate is None:
+            row = _reject_group(
+                db, order, signal_id, "no USDINR rate configured - set one in Settings to size a CRYPTO option position"
+            )
+            db.commit()
+            return row
+        effective_capital = effective_capital / settings.usdinr_rate
+    # option_fixed_lots (Strategy-level, options only) overrides auto-sizing
+    # below entirely, but the balance check still runs against its real
+    # cost, not a 1-lot minimum - a fixed count that's genuinely
+    # unaffordable against current_balance still rejects cleanly, same
+    # "paper trading still respects the simulated balance" reasoning every
+    # other rejection case here already has.
+    required_lots = order.option_fixed_lots if order.option_fixed_lots is not None else 1
+    if effective_capital < net_debit * lot_size * required_lots:
         row = _reject_group(
             db, order, signal_id,
             f"insufficient account balance ({account.current_balance} left in {order.segment} account, "
-            f"need at least {net_debit * lot_size} for 1 lot)",
+            f"need at least {net_debit * lot_size * required_lots} for {required_lots} lot(s))",
         )
         db.commit()
         return row
@@ -280,7 +303,14 @@ def open_option_group(
     sizing_price = long_premium if sl_scope == "individual" else net_debit
     sizing_stop_loss_price = long_stop_loss_price if sl_scope == "individual" else combined_stop_loss_price
 
-    if sizing_stop_loss_price is not None:
+    if order.option_fixed_lots is not None:
+        # Strategy-level override (options only) - trades exactly this many
+        # lots instead of auto-sizing off capital/risk% - takes precedence
+        # over stop-loss-based sizing entirely, even when a stop-loss is
+        # also configured. The stop-loss price above is still computed and
+        # stored as normal; only its role in SIZING is bypassed here.
+        quantity = order.option_fixed_lots * lot_size
+    elif sizing_stop_loss_price is not None:
         stop_distance = abs(sizing_price - sizing_stop_loss_price)
         if stop_distance <= 0:
             row = _reject_group(

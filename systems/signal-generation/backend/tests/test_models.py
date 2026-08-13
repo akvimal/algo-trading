@@ -271,6 +271,29 @@ def test_strategy_create_rejects_unknown_option_sl_scope():
         )
 
 
+def test_strategy_create_defaults_option_fixed_lots_to_none():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="option", rule_id=RULE_ID, square_off_time="15:00:00",
+    )
+    assert s.option_fixed_lots is None
+
+
+def test_strategy_create_accepts_explicit_option_fixed_lots():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="option", rule_id=RULE_ID, square_off_time="15:00:00",
+        option_fixed_lots=5,
+    )
+    assert s.option_fixed_lots == 5
+
+
+def test_strategy_create_rejects_non_positive_option_fixed_lots():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="option", rule_id=RULE_ID, square_off_time="15:00:00",
+            option_fixed_lots=0,
+        )
+
+
 def test_strategy_create_rejects_unknown_duplicate_signal_policy():
     with pytest.raises(ValidationError):
         StrategyCreate(

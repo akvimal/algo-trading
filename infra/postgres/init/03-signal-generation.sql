@@ -173,6 +173,11 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- the whole group together, never just one leg). Harmlessly ignored
     -- for spot/future strategies.
     option_sl_scope TEXT NOT NULL DEFAULT 'combined' CHECK (option_sl_scope IN ('combined', 'individual')),
+    -- instrument_type='option' only, nullable. When set, execution trades
+    -- exactly this many lots instead of auto-sizing off capital/risk% -
+    -- takes precedence over stop-loss-based sizing entirely. Harmlessly
+    -- ignored for spot/future strategies.
+    option_fixed_lots INTEGER CHECK (option_fixed_lots > 0),
     -- Required for horizon='intraday' only - square-off doesn't apply to
     -- swing/positional strategies (positions aren't closed same-day), so
     -- this stays NULL for them. Auto-defaulted server-side from

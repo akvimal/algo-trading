@@ -41,6 +41,7 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> Stra
         option_position_style=row.option_position_style,
         option_strike_moneyness=row.option_strike_moneyness,
         option_sl_scope=row.option_sl_scope,
+        option_fixed_lots=row.option_fixed_lots,
         contract_day_filter=row.contract_day_filter,
         segment=row.segment,
         square_off_time=row.square_off_time,
@@ -128,6 +129,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         option_position_style=payload.option_position_style,
         option_strike_moneyness=payload.option_strike_moneyness,
         option_sl_scope=payload.option_sl_scope,
+        option_fixed_lots=payload.option_fixed_lots,
         contract_day_filter=payload.contract_day_filter,
         segment=payload.segment,
         square_off_time=payload.square_off_time,
@@ -239,6 +241,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.option_strike_moneyness = payload.option_strike_moneyness
     if payload.option_sl_scope is not None:
         row.option_sl_scope = payload.option_sl_scope
+    if payload.option_fixed_lots is not None:
+        row.option_fixed_lots = payload.option_fixed_lots
     if payload.contract_day_filter is not None:
         row.contract_day_filter = payload.contract_day_filter
     if payload.segment is not None:

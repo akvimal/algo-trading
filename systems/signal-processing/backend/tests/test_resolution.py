@@ -560,6 +560,51 @@ def test_resolve_option_strategy_passes_through_individual_sl_scope():
 
 
 @responses.activate
+def test_resolve_option_strategy_defaults_fixed_lots_to_none():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.option_fixed_lots is None
+
+
+@responses.activate
+def test_resolve_option_strategy_passes_through_fixed_lots():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(option_fixed_lots=5), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.option_fixed_lots == 5
+
+
+@responses.activate
+def test_resolve_spot_strategy_fixed_lots_always_none():
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json={
+            "id": STRATEGY_ID,
+            "status": "live",
+            "horizon": "intraday",
+            "instrument_type": "spot",
+            "segment": "NSE",
+            "option_fixed_lots": 5,  # present on the strategy dict but irrelevant - instrument_type='spot'
+        },
+        status=200,
+    )
+
+    resolved = resolve(_signal())
+
+    assert resolved.option_fixed_lots is None
+
+
+@responses.activate
 def test_resolve_option_strategy_resolves_when_today_is_expiry_day():
     responses.add(
         responses.GET, _strategy_url(), json=_option_strategy_json(contract_day_filter="expiry"), status=200

@@ -50,3 +50,4 @@ class ResolvedOrderDraft(BaseModel):
     counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
     # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.
     option_sl_scope: Optional[Literal["combined", "individual"]] = None
+    option_fixed_lots: Optional[int] = None

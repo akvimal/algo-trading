@@ -44,6 +44,16 @@ export type Account = {
   updated_at: string;
 };
 
+export type Settings = {
+  timezone: string;
+  // CRYPTO only - a manually configured INR-per-USD rate used to convert
+  // capital_per_trade/current_balance into USD-equivalent before sizing a
+  // CRYPTO position (Delta Exchange India prices everything in raw USD).
+  // null until set - CRYPTO positions reject cleanly rather than sizing
+  // against an unconverted number until then.
+  usdinr_rate: number | null;
+};
+
 export type SquareOffResult = {
   closed: number;
   failed: number;
@@ -103,6 +113,20 @@ export async function updateAccount(
 export async function resetAccount(segment: Account["segment"]): Promise<Account> {
   const res = await fetch(`${API_BASE}/accounts/${segment}/reset`, { method: "POST" });
   return asJson(res, `POST /accounts/${segment}/reset`);
+}
+
+export async function fetchSettings(): Promise<Settings> {
+  const res = await fetch(`${API_BASE}/settings`);
+  return asJson(res, "GET /settings");
+}
+
+export async function updateSettings(update: { usdinr_rate: number }): Promise<Settings> {
+  const res = await fetch(`${API_BASE}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  return asJson(res, "PUT /settings");
 }
 
 export async function squareOffNow(): Promise<SquareOffResult> {

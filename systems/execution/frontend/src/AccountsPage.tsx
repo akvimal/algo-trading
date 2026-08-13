@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { type Account, fetchAccounts, resetAccount, updateAccount } from "./api";
+import { type Account, type Settings, fetchAccounts, fetchSettings, resetAccount, updateAccount, updateSettings } from "./api";
 import Nav from "./Nav";
 import { SEGMENTS, formatPct } from "./format";
 
@@ -13,6 +13,35 @@ export default function AccountsPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [resetting, setResetting] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [usdinrDraft, setUsdinrDraft] = useState<number | "">("");
+  const [savingUsdinr, setSavingUsdinr] = useState(false);
+  const [usdinrMessage, setUsdinrMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchSettings()
+      .then((s) => {
+        setSettings(s);
+        setUsdinrDraft(s.usdinr_rate ?? "");
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load settings"));
+  }, []);
+
+  async function handleSaveUsdinr() {
+    if (usdinrDraft === "") return;
+    setSavingUsdinr(true);
+    setUsdinrMessage(null);
+    try {
+      const updated = await updateSettings({ usdinr_rate: usdinrDraft });
+      setSettings(updated);
+      setUsdinrMessage("USDINR rate saved.");
+    } catch (err) {
+      setUsdinrMessage(err instanceof Error ? err.message : "Failed to save USDINR rate");
+    } finally {
+      setSavingUsdinr(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +118,27 @@ export default function AccountsPage() {
 
       {error && <p className="error">Could not reach the backend: {error}</p>}
       {message && <p className="action-message">{message}</p>}
+
+      <div className="settings-row">
+        <label>
+          USDINR rate (&#8377; per $1, CRYPTO sizing only)
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            placeholder="Not set"
+            value={usdinrDraft}
+            onChange={(e) => setUsdinrDraft(e.target.value === "" ? "" : Number(e.target.value))}
+          />
+        </label>
+        <button type="button" className="secondary tiny" onClick={handleSaveUsdinr} disabled={savingUsdinr || usdinrDraft === ""}>
+          {savingUsdinr ? "Saving..." : "Save"}
+        </button>
+      </div>
+      {usdinrMessage && <p className="action-message">{usdinrMessage}</p>}
+      {settings && settings.usdinr_rate == null && (
+        <p className="subtitle">No USDINR rate set - CRYPTO positions will reject until one is configured.</p>
+      )}
 
       <div className="table-scroll">
         <table>

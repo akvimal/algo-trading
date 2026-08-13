@@ -46,14 +46,24 @@ class ResolvedOrder(BaseModel):
     counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
     # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.
     option_sl_scope: Optional[Literal["combined", "individual"]] = None
+    option_fixed_lots: Optional[int] = None
 
 
 class ExecutionSettings(BaseModel):
     timezone: str
+    # CRYPTO only - a manually configured INR-per-USD rate used to convert
+    # capital_per_trade/current_balance (INR) into USD-equivalent before
+    # sizing a CRYPTO position (Delta Exchange India prices everything in
+    # raw USD) - see docs/architecture.md. None until an admin sets one
+    # via PUT /settings - CRYPTO positions reject cleanly rather than
+    # sizing against an unconverted number until then.
+    usdinr_rate: Optional[float] = None
 
 
 class ExecutionSettingsUpdate(BaseModel):
     """PUT /settings - all fields optional, only what's provided changes."""
+
+    usdinr_rate: Optional[float] = Field(default=None, gt=0)
 
 
 class AccountOut(BaseModel):

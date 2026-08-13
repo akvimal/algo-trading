@@ -19,6 +19,10 @@ CREATE SCHEMA IF NOT EXISTS execution;
 CREATE TABLE IF NOT EXISTS execution.settings (
     id                      SMALLINT PRIMARY KEY DEFAULT 1,
     timezone                TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+    -- CRYPTO only, nullable - manually configured INR-per-USD rate used to
+    -- convert capital_per_trade/current_balance into USD-equivalent before
+    -- sizing a CRYPTO position. See docs/architecture.md.
+    usdinr_rate             NUMERIC CHECK (usdinr_rate > 0),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT settings_single_row CHECK (id = 1)
 );

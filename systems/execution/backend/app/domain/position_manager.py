@@ -116,7 +116,9 @@ def _resolve_signal_conflicts(open_positions: list, order: ResolvedOrder) -> tup
 
 def load_settings(db: Session) -> ExecutionSettings:
     row = db.get(db_models.Settings, 1)
-    return ExecutionSettings(timezone=row.timezone)
+    return ExecutionSettings(
+        timezone=row.timezone, usdinr_rate=float(row.usdinr_rate) if row.usdinr_rate is not None else None
+    )
 
 
 def load_account(db: Session, segment: str) -> Optional[db_models.Account]:
@@ -243,6 +245,23 @@ def open_position(
     # opening a position it can't afford. See docs/architecture.md
     # § 'Why paper-trading accounts are per-segment, not per-strategy'.
     effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
+    if order.segment == "CRYPTO":
+        # capital_per_trade/current_balance are INR-denominated like every
+        # other segment, but order.price (from Delta Exchange India) is
+        # raw USD - convert the capital figure into USD-equivalent before
+        # comparing/sizing against it, rather than the price into INR, so
+        # entry_price/stop_loss_price/target_price stored below stay in
+        # native USD (still correctly comparable against future raw-USD
+        # LTP fetches for exit-monitoring). settings.usdinr_rate is a
+        # manually configured rate (GET/PUT /settings) rather than a live
+        # feed - NSE's own currency-futures segment (which this would
+        # otherwise source from) had no unexpired contract to quote as of
+        # when this was built. See docs/architecture.md.
+        if settings.usdinr_rate is None:
+            row = _reject(db, order, signal_id, "no USDINR rate configured - set one in Settings to size a CRYPTO position")
+            db.commit()
+            return row
+        effective_capital = effective_capital / settings.usdinr_rate
     if effective_capital < order.price:
         row = _reject(
             db,

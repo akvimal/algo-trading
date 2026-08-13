@@ -12,7 +12,12 @@ import redis
 from redis.exceptions import ResponseError
 
 from app.adapters.db.session import SessionLocal
-from app.adapters.quotes.client import get_lot_size, get_ltp_batch, get_previous_candle, resolve_symbol_by_security_id
+from app.adapters.quotes.client import (
+    get_lot_size,
+    get_ltp_batch,
+    get_previous_candle,
+    resolve_symbol_by_security_id,
+)
 from app.config import settings
 from app.domain.models import ResolvedOrder
 from app.domain.option_position_manager import open_option_group
@@ -40,7 +45,9 @@ def _process_message(message_id: str, fields: dict) -> None:
             # docs/architecture.md) - completely separate open path from
             # spot/future below, so position_manager.is_supported/
             # open_position never need to know about options at all.
-            open_option_group(order, exec_settings, db, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size)
+            open_option_group(
+                order, exec_settings, db, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size
+            )
         else:
             open_position(order, exec_settings, db, get_previous_candle, get_lot_size)
     _client.xack(settings.redis_stream, settings.redis_consumer_group, message_id)

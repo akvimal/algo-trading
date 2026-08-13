@@ -1541,6 +1541,8 @@ function StrategyManager() {
   const [optionPositionStyle, setOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [optionStrikeMoneyness, setOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [optionSlScope, setOptionSlScope] = useState<OptionSlScope>("combined");
+  // instrument_type='option' only, optional - see option_fixed_lots in api.ts.
+  const [optionFixedLots, setOptionFixedLots] = useState("");
   // instrument_type in ('future', 'option') only - see ContractDayFilter in api.ts.
   const [contractDayFilter, setContractDayFilter] = useState<ContractDayFilter>("any");
   const [segment, setSegment] = useState<Segment>("NSE");
@@ -1577,6 +1579,7 @@ function StrategyManager() {
   const [editOptionPositionStyle, setEditOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [editOptionStrikeMoneyness, setEditOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [editOptionSlScope, setEditOptionSlScope] = useState<OptionSlScope>("combined");
+  const [editOptionFixedLots, setEditOptionFixedLots] = useState("");
   const [editContractDayFilter, setEditContractDayFilter] = useState<ContractDayFilter>("any");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
   const [editSquareOffTime, setEditSquareOffTime] = useState("");
@@ -1706,6 +1709,7 @@ function StrategyManager() {
         option_position_style: instrumentType === "option" ? optionPositionStyle : undefined,
         option_strike_moneyness: instrumentType === "option" ? optionStrikeMoneyness : undefined,
         option_sl_scope: instrumentType === "option" ? optionSlScope : undefined,
+        option_fixed_lots: instrumentType === "option" && optionFixedLots ? Number(optionFixedLots) : undefined,
         contract_day_filter:
           instrumentType === "future" || instrumentType === "option" ? contractDayFilter : undefined,
         segment,
@@ -1729,6 +1733,7 @@ function StrategyManager() {
       setOptionPositionStyle("spread");
       setOptionStrikeMoneyness("ATM");
       setOptionSlScope("combined");
+      setOptionFixedLots("");
       setContractDayFilter("any");
       setSegment("NSE");
       setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
@@ -1771,6 +1776,7 @@ function StrategyManager() {
     setEditOptionPositionStyle(s.option_position_style);
     setEditOptionStrikeMoneyness(s.option_strike_moneyness);
     setEditOptionSlScope(s.option_sl_scope);
+    setEditOptionFixedLots(s.option_fixed_lots != null ? String(s.option_fixed_lots) : "");
     setEditContractDayFilter(s.contract_day_filter);
     setEditSegment(s.segment);
     setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
@@ -1804,6 +1810,8 @@ function StrategyManager() {
         option_position_style: editInstrumentType === "option" ? editOptionPositionStyle : undefined,
         option_strike_moneyness: editInstrumentType === "option" ? editOptionStrikeMoneyness : undefined,
         option_sl_scope: editInstrumentType === "option" ? editOptionSlScope : undefined,
+        option_fixed_lots:
+          editInstrumentType === "option" && editOptionFixedLots ? Number(editOptionFixedLots) : undefined,
         contract_day_filter:
           editInstrumentType === "future" || editInstrumentType === "option" ? editContractDayFilter : undefined,
         segment: editSegment,
@@ -1961,6 +1969,19 @@ function StrategyManager() {
                 <option value="combined">Combined (net debit)</option>
                 <option value="individual">Individual (per leg)</option>
               </select>
+            </label>
+          )}
+          {instrumentType === "option" && (
+            <label>
+              Fixed lots (optional)
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Auto (capital/risk-based)"
+                value={optionFixedLots}
+                onChange={(e) => setOptionFixedLots(e.target.value)}
+              />
             </label>
           )}
           {(instrumentType === "future" || instrumentType === "option") && (
@@ -2258,6 +2279,17 @@ function StrategyManager() {
                       <option value="individual">Individual</option>
                     </select>
                   )}
+                  {editInstrumentType === "option" && (
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      placeholder="Fixed lots (auto)"
+                      value={editOptionFixedLots}
+                      onChange={(e) => setEditOptionFixedLots(e.target.value)}
+                      className="cell-input"
+                    />
+                  )}
                   {(editInstrumentType === "future" || editInstrumentType === "option") && (
                     <select
                       value={editContractDayFilter}
@@ -2474,6 +2506,7 @@ function StrategyManager() {
                       ({s.option_position_style}
                       {s.option_strike_moneyness !== "ATM" ? `, ${s.option_strike_moneyness}` : ""}
                       {s.option_sl_scope !== "combined" ? `, ${s.option_sl_scope} SL` : ""}
+                      {s.option_fixed_lots != null ? `, ${s.option_fixed_lots} lots fixed` : ""}
                       {s.contract_day_filter !== "any" ? `, ${s.contract_day_filter} day` : ""})
                     </span>
                   )}

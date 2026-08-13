@@ -81,4 +81,8 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         # NOT passed into choose_strategy - it only affects how execution
         # monitors/closes an already-resolved group, not which legs get built.
         option_sl_scope=strategy.get("option_sl_scope", "combined") if instrument_type == "option" else None,
+        # instrument_type='option' only - takes precedence over stop-loss-
+        # based sizing entirely in execution when set. See
+        # docs/contracts/resolved-order.schema.json.
+        option_fixed_lots=strategy.get("option_fixed_lots") if instrument_type == "option" else None,
     )

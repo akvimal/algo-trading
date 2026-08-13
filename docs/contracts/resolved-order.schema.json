@@ -106,6 +106,11 @@
       "type": ["string", "null"],
       "enum": ["combined", "individual", null],
       "description": "instrument_type='option' only, from the resolved Strategy - null for spot/future orders. 'combined' (default): one SL/target threshold on the combined (net debit) premium, the original Phase 4d design. 'individual': each leg gets its own SL/target computed from its own entry premium - whichever leg's own threshold trips first still closes the WHOLE group together (same atomic close as 'combined'), it only changes what triggers the close, never leaves one leg open while the other closes. Mathematically identical to 'combined' for a naked (1-leg) position - no separate handling needed there."
+    },
+    "option_fixed_lots": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "instrument_type='option' only, from the resolved Strategy - null for spot/future orders and for option orders that didn't set it. When set, execution trades exactly this many lots instead of auto-sizing off capital_per_trade/risk_per_trade_pct - takes precedence over stop-loss-based (risk-%) sizing entirely, even when a stop-loss is also configured. The stop-loss price itself is still computed and stored as normal; only its role in sizing is bypassed. See docs/architecture.md."
     }
   }
 }

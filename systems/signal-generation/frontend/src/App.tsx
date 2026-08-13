@@ -1525,12 +1525,6 @@ function StrategyManager() {
   const [sourceFilter, setSourceFilter] = useState<"all" | "in_house" | "external">("all");
 
   const [name, setName] = useState("");
-  // 'in_house' vs 'external' - what used to be a fixed prop per tab is
-  // now a field in the create form itself. externalSourceName is only
-  // used when sourceKind==='external' - any provider name, not a fixed
-  // list (see the backend's SourceType - free-form except 'in_house').
-  const [sourceKind, setSourceKind] = useState<"in_house" | "external">("in_house");
-  const [externalSourceName, setExternalSourceName] = useState("");
   const [horizon, setHorizon] = useState<Horizon>("intraday");
   const [instrumentType, setInstrumentType] = useState<InstrumentType>("spot");
   const [ruleId, setRuleId] = useState("");
@@ -1679,27 +1673,31 @@ function StrategyManager() {
     };
   }, [selected]);
 
-  const createIsInHouse = sourceKind === "in_house";
   const filteredStrategies = strategies.filter((s) => {
     if (sourceFilter === "all") return true;
     const strategyIsInHouse = s.source_type === "in_house";
     return sourceFilter === "in_house" ? strategyIsInHouse : !strategyIsInHouse;
   });
-  // Rules matching whichever source_type the create form currently has
-  // selected - an external strategy can only point at a Rule with the
-  // SAME provider name (see the backend's validate_rule_link_consistency).
-  const createRuleOptions = rules.filter(
-    (r) => r.source_type === (createIsInHouse ? "in_house" : externalSourceName.trim()),
+  // No separate Source selection in the create form - a Strategy's
+  // source_type is just whatever its picked Rule's own source_type is
+  // (validate_rule_link_consistency requires them to match anyway, so
+  // asking the user to independently choose/retype it was redundant).
+  // Sorted in-house-first, then alphabetically by rule name.
+  const createRuleOptions = [...rules].sort((a, b) =>
+    a.source_type === b.source_type ? a.name.localeCompare(b.name) : a.source_type === "in_house" ? -1 : 1,
   );
+  const createSelectedRule = createRuleOptions.find((r) => r.id === ruleId);
+  const createIsInHouse = createSelectedRule?.source_type === "in_house";
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (horizon === "intraday" && !squareOffTime && !activeToTime) return; // required for intraday unless an active-to time is set - submit is disabled without it, this is just a guard
+    if (!createSelectedRule) return; // submit is disabled without a picked rule - defensive guard
     setCreating(true);
     try {
       const created = await createStrategy({
         name,
-        source_type: createIsInHouse ? "in_house" : externalSourceName.trim(),
+        source_type: createSelectedRule.source_type,
         horizon,
         instrument_type: instrumentType,
         rule_id: ruleId,
@@ -1724,8 +1722,6 @@ function StrategyManager() {
         active_to_time: activeFromTime && activeToTime ? `${activeToTime}:00` : undefined,
       });
       setName("");
-      setSourceKind("in_house");
-      setExternalSourceName("");
       setRuleId("");
       setSlMethod("");
       setSlInterval("");
@@ -1909,24 +1905,6 @@ function StrategyManager() {
         </summary>
         <form className="strategy-form" onSubmit={handleCreate}>
           <label>
-            Source
-            <select value={sourceKind} onChange={(e) => setSourceKind(e.target.value as "in_house" | "external")}>
-              <option value="external">External (webhook)</option>
-              <option value="in_house">In-house</option>
-            </select>
-          </label>
-          {sourceKind === "external" && (
-            <label>
-              External source name
-              <input
-                value={externalSourceName}
-                onChange={(e) => setExternalSourceName(e.target.value)}
-                required
-                placeholder="e.g. chartink, tradingview"
-              />
-            </label>
-          )}
-          <label>
             Name
             <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Bullish Breakout v1" />
           </label>
@@ -2090,16 +2068,13 @@ function StrategyManager() {
               <option value="">&mdash;</option>
               {createRuleOptions.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.name}
+                  {r.name} ({r.source_type === "in_house" ? "in-house" : r.source_type})
                 </option>
               ))}
             </select>
           </label>
-          {createRuleOptions.length === 0 && (createIsInHouse || externalSourceName.trim()) && (
-            <p className="hint">
-              No {createIsInHouse ? "in-house" : `"${externalSourceName.trim()}"`} rules yet - create one on the
-              Rules tab first.
-            </p>
+          {createRuleOptions.length === 0 && (
+            <p className="hint">No rules yet - create one on the Rules tab first (in-house or external/webhook).</p>
           )}
           {createIsInHouse && (
             <>
@@ -2156,7 +2131,6 @@ function StrategyManager() {
               creating ||
               !name.trim() ||
               (horizon === "intraday" && !squareOffTime && !activeToTime) ||
-              (!createIsInHouse && !externalSourceName.trim()) ||
               !ruleId ||
               (!!activeFromTime !== !!activeToTime) ||
               (activeFromTime !== "" && activeToTime !== "" && activeToTime <= activeFromTime)
@@ -2692,21 +2666,22 @@ function StrategiesTab() {
     <>
       <InfoDisclosure summary="How strategy webhooks work here">
         <p>
-          Every strategy - in-house or external - gets its own <code>?strategy_id=</code> query param.
-          For an <strong>external</strong> source, name the provider (e.g. "chartink", "tradingview", or
-          anything else) below; today only Chartink has a real webhook route wired up on signal-processing
-          (one route per direction handles <em>every</em> Chartink strategy via that query param) - copy
-          its buy/sell webhook URLs into a Chartink scan alert once created. Any other provider name is
-          recorded but has no webhook wired up yet - adding one follows the same pattern (a new
-          parse function normalizing that provider's alert payload into the canonical signal shape, see
-          the <code>add-signal-provider</code> Claude Code skill).
+          Every strategy - in-house or external - gets its own <code>?strategy_id=</code> query param. There's no
+          separate Source field here anymore: a strategy just picks a saved <strong>Rule</strong> (see the Rules
+          tab), and inherits that Rule's own source directly - an external Rule already names its provider (e.g.
+          "chartink", "tradingview", or anything else) when it's created, so a strategy pointed at it is external
+          too, with no need to retype the name. Today only Chartink has a real webhook route wired up on
+          signal-processing (one route per direction handles <em>every</em> Chartink strategy via that query
+          param) - copy its buy/sell webhook URLs (the clipboard icons in the Webhooks column below) into a
+          Chartink scan alert once created. Any other provider name is recorded but has no webhook wired up yet -
+          adding one follows the same pattern (a new parse function normalizing that provider's alert payload
+          into the canonical signal shape, see the <code>add-signal-provider</code> Claude Code skill).
         </p>
         <p>
-          Every strategy - in-house or external alike - picks a saved <strong>Rule</strong> (see the Rules tab)
-          that decides when it fires. An in-house strategy's rule runs off this system's own indicator/
-          price-action engine - a periodic job checks every <strong>live</strong> in-house strategy for a fresh
-          signal on its rule's underlying and posts it into the same pipeline external providers use. Backtest a
-          rule from the Rules tab before pointing a strategy at it.
+          An in-house strategy's rule runs off this system's own indicator/price-action engine - a periodic job
+          checks every <strong>live</strong> in-house strategy for a fresh signal on its rule's underlying and
+          posts it into the same pipeline external providers use. Backtest a rule from the Rules tab before
+          pointing a strategy at it.
         </p>
       </InfoDisclosure>
       <StrategyManager />

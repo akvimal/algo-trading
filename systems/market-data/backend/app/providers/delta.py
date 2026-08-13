@@ -55,7 +55,18 @@ QUOTE_CACHE_TTL_SECONDS = 3.0
 # batching does (a different query shape - contract_types=call_options,
 # put_options - so no reason to serialize behind spot/perpetual quoting).
 MIN_OPTION_CALL_INTERVAL_SECONDS = 1.0
-OPTION_CHAIN_CACHE_TTL_SECONDS = 3.0
+# 30s, not a QUOTE_CACHE_TTL_SECONDS-style few-second value: this backs
+# BOTH get_expiry_list and get_option_chain (see _fetch_option_rows),
+# called synchronously from signal-processing's option-strategy
+# resolution on every incoming signal - a short TTL meant a near-guaranteed
+# cache miss (and therefore a full throttle-wait + live Delta round trip)
+# on every single resolution, which could exceed the caller's own
+# request timeout under any throttle contention. Expiry lists and strike
+# structure don't meaningfully change within 30s; only OI/last-traded-price
+# fields inside a cached chain go stale, and those aren't what position
+# entry price is sourced from (execution fetches a fresh LTP at open time
+# instead - see docs/architecture.md).
+OPTION_CHAIN_CACHE_TTL_SECONDS = 30.0
 
 # Delta's own option symbol format, confirmed live: "C-BTC-61600-150826"
 # (Call, BTC, strike 61600, expiry 15-Aug-2026) / "P-..." for puts. This

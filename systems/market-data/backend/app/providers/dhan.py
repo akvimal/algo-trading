@@ -119,9 +119,21 @@ MAX_THROTTLE_WAIT_SECONDS = 4.0
 # empirically-derived): 1 unique request per 3 seconds. Own lock/timestamp
 # - a different Dhan endpoint, no reason to serialize behind LTP/candle.
 MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS = 3.0
-# A few seconds is enough to absorb a caller polling faster than the
-# chain actually changes, same reasoning as QUOTE_CACHE_TTL_SECONDS above.
-OPTION_CHAIN_CACHE_TTL_SECONDS = 3.0
+# 30s, not a QUOTE_CACHE_TTL_SECONDS-style few-second value: get_option_chain
+# is called synchronously from signal-processing's option-strategy
+# resolution on every incoming signal - a short TTL meant a near-guaranteed
+# cache miss (and therefore a full throttle-wait + live Dhan round trip) on
+# every single resolution, which could exceed the caller's own request
+# timeout under any throttle contention (MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS
+# above already costs up to 3s of queueing on its own). Strike structure
+# doesn't meaningfully change within 30s; only OI/last-traded-price/greeks
+# inside a cached chain go stale, and those aren't what position entry
+# price is sourced from (execution fetches a fresh LTP at open time
+# instead - see docs/architecture.md). get_expiry_list has no equivalent
+# cache (Dhan serves it from a separate dedicated endpoint, not this
+# chain) - it relies on the caller's own timeout headroom instead, see
+# signal-processing's market_data_timeout_seconds.
+OPTION_CHAIN_CACHE_TTL_SECONDS = 30.0
 
 # Dhan doesn't separately document a rate limit for charts/rollingoption -
 # same conservative default as the option-chain family above, own

@@ -13,7 +13,16 @@ class Settings(BaseSettings):
     # Option-strategy resolution only (Phase 4b of the options trading
     # module - see docs/architecture.md) - app/adapters/market_data/client.py.
     market_data_base_url: str = "http://market-data-backend:8000"
-    market_data_timeout_seconds: float = 5.0
+    # 10s, not the more typical 5s a plain LTP/candle call would use:
+    # market-data's own provider-side option-chain/expiry throttle can
+    # legitimately queue a request for up to ~4s (MAX_THROTTLE_WAIT_SECONDS
+    # in dhan.py/delta.py) before it even starts the live provider call, so
+    # a tighter budget here risked timing out on nothing but that internal
+    # queueing - not a sign anything was actually down. Found live: two
+    # real BTCUSD signals got rejected with "could not resolve option
+    # expiries ... Read timed out (read timeout=5.0)" even though the same
+    # call succeeded in ~2.3s moments later on retry.
+    market_data_timeout_seconds: float = 10.0
 
 
 settings = Settings()

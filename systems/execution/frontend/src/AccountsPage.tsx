@@ -8,9 +8,9 @@ const POLL_INTERVAL_MS = 5000;
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [drafts, setDrafts] = useState<Record<string, { capital: number | ""; risk: number | ""; leverage: number | "" }>>(
-    {},
-  );
+  const [drafts, setDrafts] = useState<
+    Record<string, { capital: number | ""; risk: number | ""; leverage: number | ""; squareOffTime: string }>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [resetting, setResetting] = useState<string | null>(null);
@@ -57,7 +57,12 @@ export default function AccountsPage() {
           const next = { ...prev };
           for (const a of data) {
             if (!(a.segment in next))
-              next[a.segment] = { capital: a.capital_per_trade, risk: a.risk_per_trade_pct, leverage: a.leverage };
+              next[a.segment] = {
+                capital: a.capital_per_trade,
+                risk: a.risk_per_trade_pct,
+                leverage: a.leverage,
+                squareOffTime: a.square_off_time ? a.square_off_time.slice(0, 5) : "",
+              };
           }
           return next;
         });
@@ -85,6 +90,7 @@ export default function AccountsPage() {
         capital_per_trade: draft.capital,
         risk_per_trade_pct: draft.risk,
         leverage: draft.leverage,
+        square_off_time: draft.squareOffTime ? `${draft.squareOffTime}:00` : null,
       });
       setAccounts((prev) => prev.map((a) => (a.segment === segment ? updated : a)));
       setMessage(`${segment} account saved.`);
@@ -156,13 +162,14 @@ export default function AccountsPage() {
               <th>Capital per trade (&#8377;)</th>
               <th>Risk per trade (%)</th>
               <th>Leverage (CRYPTO only)</th>
+              <th>Square-off (blank = never)</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {SEGMENTS.map((segment) => {
               const account = accounts.find((a) => a.segment === segment);
-              const draft = drafts[segment] ?? { capital: "", risk: "", leverage: "" };
+              const draft = drafts[segment] ?? { capital: "", risk: "", leverage: "", squareOffTime: "" };
               const delta = account ? account.current_balance - account.starting_balance : null;
               return (
                 <tr key={segment}>
@@ -217,6 +224,18 @@ export default function AccountsPage() {
                     ) : (
                       "-"
                     )}
+                  </td>
+                  <td>
+                    <input
+                      type="time"
+                      value={draft.squareOffTime}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [segment]: { ...draft, squareOffTime: e.target.value },
+                        }))
+                      }
+                    />
                   </td>
                   <td>
                     <button type="button" className="tiny" onClick={() => handleSave(segment)} disabled={saving === segment}>

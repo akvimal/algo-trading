@@ -38,6 +38,8 @@ class Account(Base):
     risk_per_trade_pct = Column(Numeric, nullable=False)
     # CRYPTO only, harmlessly unused for NSE/MCX - see app/domain/models.py's AccountOut.leverage.
     leverage = Column(Numeric, nullable=False, default=1)
+    # NULL means never force-closed (CRYPTO's default) - see app/domain/models.py's AccountOut.square_off_time.
+    square_off_time = Column(Time, nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

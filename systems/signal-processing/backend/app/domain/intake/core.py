@@ -96,7 +96,6 @@ def create_signal_from_ingest(db: Session, signal: SignalIngest) -> dict:
             "stop_loss_percent": resolved.stop_loss_percent,
             "target_percent": resolved.target_percent,
             "trailing_stop_enabled": resolved.trailing_stop_enabled,
-            "square_off_time": resolved.square_off_time.isoformat() if resolved.square_off_time else None,
             "duplicate_signal_policy": resolved.duplicate_signal_policy,
             "counter_signal_policy": resolved.counter_signal_policy,
             "option_sl_scope": resolved.option_sl_scope,

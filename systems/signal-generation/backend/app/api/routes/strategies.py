@@ -41,7 +41,6 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> Stra
         option_fixed_lots=row.option_fixed_lots,
         contract_day_filter=row.contract_day_filter,
         segment=row.segment,
-        square_off_time=row.square_off_time,
         duplicate_signal_policy=row.duplicate_signal_policy,
         counter_signal_policy=row.counter_signal_policy,
         active_from_time=row.active_from_time,
@@ -126,7 +125,6 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         option_fixed_lots=payload.option_fixed_lots,
         contract_day_filter=payload.contract_day_filter,
         segment=payload.segment,
-        square_off_time=payload.square_off_time,
         duplicate_signal_policy=payload.duplicate_signal_policy,
         counter_signal_policy=payload.counter_signal_policy,
         active_from_time=payload.active_from_time,
@@ -249,8 +247,6 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.contract_day_filter = payload.contract_day_filter
     if payload.segment is not None:
         row.segment = payload.segment
-    if payload.square_off_time is not None:
-        row.square_off_time = payload.square_off_time
     if payload.duplicate_signal_policy is not None:
         row.duplicate_signal_policy = payload.duplicate_signal_policy
     if payload.counter_signal_policy is not None:

@@ -104,7 +104,6 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
         payload.price,
         payload.quantity,
         payload.stop_loss_price,
-        payload.square_off_time,
         settings,
         db,
         get_lot_size,

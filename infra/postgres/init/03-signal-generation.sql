@@ -146,9 +146,8 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- (which market the rule's condition/universe watches - see
     -- rules.segment above; the two aren't required to match, e.g. an NSE
     -- spot scan could in principle back an option strategy on the same
-    -- underlying). Only drives the square_off_time default below; MCX/
-    -- CRYPTO can be recorded as intent even though nothing downstream
-    -- trades them yet - see docs/architecture.md.
+    -- underlying). MCX/CRYPTO can be recorded as intent even though
+    -- nothing downstream trades them yet - see docs/architecture.md.
     segment          TEXT NOT NULL DEFAULT 'NSE' CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     -- instrument_type='option' only - which fixed template choose_strategy
     -- (signal-processing) builds: 'spread' (bull_call_spread/bear_put_spread,
@@ -174,23 +173,14 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- takes precedence over stop-loss-based sizing entirely. Harmlessly
     -- ignored for spot/future strategies.
     option_fixed_lots INTEGER CHECK (option_fixed_lots > 0),
-    -- Required for horizon='intraday' only - square-off doesn't apply to
-    -- swing/positional strategies (positions aren't closed same-day), so
-    -- this stays NULL for them. Auto-defaulted server-side from
-    -- (horizon, segment) when omitted on an intraday strategy - 15:00 for
-    -- NSE, 22:00 for MCX, 17:25 for CRYPTO. execution has no
-    -- platform-wide fallback of its own.
-    square_off_time  TIME,
     -- Optional per-strategy time-of-day window (e.g. 09:15-11:00) during
     -- which this strategy accepts signals - both-or-neither, enforced by
     -- signal-processing's resolve() against the signal's own timestamp
     -- (not wall-clock time at resolution), for every source_type, not
-    -- just in_house. active_to_time also bounds how long a position this
-    -- strategy opens can stay open: resolve() folds it into the resolved
-    -- order's square_off_time (the earlier of the two), so execution's
-    -- existing square-off machinery force-closes at the window's end with
-    -- no execution-side changes - see docs/architecture.md. NULL/NULL
-    -- (default) means no restriction, unchanged from today's behavior.
+    -- just in_house. No longer interacts with square-off in any way -
+    -- square-off is a per-segment execution.accounts setting now, not a
+    -- Strategy field, so there's nothing here to fold it into - see
+    -- docs/architecture.md. NULL/NULL (default) means no restriction.
     active_from_time TIME,
     active_to_time   TIME,
     -- Signal-conflict policy - passed through unchanged on resolved-order
@@ -223,7 +213,6 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'backtesting', 'live', 'paused')),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT square_off_time_required_for_intraday CHECK (horizon != 'intraday' OR square_off_time IS NOT NULL),
     CONSTRAINT active_window_consistent CHECK (
         (active_from_time IS NULL) = (active_to_time IS NULL)
         AND (active_to_time IS NULL OR active_to_time > active_from_time)

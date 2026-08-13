@@ -61,8 +61,7 @@ class Strategy(Base):
     option_fixed_lots = Column(Integer, nullable=True)
     # instrument_type in ('future', 'option') only - see ContractDayFilter in app/domain/models.py.
     contract_day_filter = Column(Text, nullable=False, default="any")
-    segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO - drives the square_off_time default
-    square_off_time = Column(Time)  # required for horizon='intraday' only - null for swing/positional
+    segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO
     # Optional per-strategy signal-acceptance window - see
     # infra/postgres/init/03-signal-generation.sql for the full comment.
     active_from_time = Column(Time)

@@ -30,8 +30,9 @@ export type Position = {
   // opposite-direction signal arrived and its Strategy's
   // counter_signal_policy='close_and_flip'.
   exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | null;
-  // The square-off time this position's Strategy set (required there) -
-  // null only for REJECTED rows that never got this far.
+  // This position's segment's own square-off time (Account.square_off_time
+  // below), copied at open time - null means never force-closed (e.g.
+  // CRYPTO), same as null for REJECTED rows that never got this far.
   square_off_time: string | null; // "HH:MM:SS"
 };
 
@@ -45,6 +46,10 @@ export type Account = {
   // Exchange India trades perpetual futures on margin). Defaults to 1 -
   // present but unused for NSE/MCX.
   leverage: number;
+  // The one segment-wide square-off cutoff - any intraday position still
+  // OPEN past this local time-of-day gets forcefully closed. null means
+  // never force-closed (CRYPTO's default - crypto trades 24/7).
+  square_off_time: string | null; // "HH:MM:SS"
   updated_at: string;
 };
 
@@ -104,7 +109,7 @@ export async function fetchAccounts(): Promise<Account[]> {
 
 export async function updateAccount(
   segment: Account["segment"],
-  update: Pick<Account, "capital_per_trade" | "risk_per_trade_pct" | "leverage">,
+  update: Pick<Account, "capital_per_trade" | "risk_per_trade_pct" | "leverage" | "square_off_time">,
 ): Promise<Account> {
   const res = await fetch(`${API_BASE}/accounts/${segment}`, {
     method: "PUT",

@@ -3,15 +3,16 @@ neither depends on a second service being up at a safety-critical
 moment - see docs/architecture.md.
 
 square-off used to be a single daily CronTrigger fired at
-execution.settings.square_off_time. Now that a Strategy can override
-square_off_time per-strategy (signal-generation), a single fire time no
-longer covers every position - square_off_due_positions instead checks,
-every square_off_poll_seconds, whether local time has passed EACH OPEN
-position's own stored square_off_time (resolved and stored once at open
-time - see position_manager.open_position). This also means settings/
-strategy changes never need an explicit reschedule anymore: both jobs run
-on a fixed interval and read current settings/position data fresh each
-run.
+execution.settings.square_off_time. Now that square_off_time is
+per-segment (execution.accounts.square_off_time, possibly NULL - e.g.
+CRYPTO never squares off), a single fire time no longer covers every
+position - square_off_due_positions instead checks, every
+square_off_poll_seconds, whether local time has passed EACH OPEN
+position's own stored square_off_time (copied from its segment's account
+row once at open time - see position_manager.open_position). This also
+means account/settings changes never need an explicit reschedule
+anymore: both jobs run on a fixed interval and read current
+settings/position data fresh each run.
 
 The exit-monitor job (stop-loss/target/trailing) runs the same way, on
 its own independent interval - see position_manager.check_exits.

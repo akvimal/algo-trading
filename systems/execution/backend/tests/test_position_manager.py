@@ -119,6 +119,15 @@ def test_is_within_intraday_window_after_square_off():
     assert is_within_intraday_window(now, time(15, 0), "Asia/Kolkata") is False
 
 
+def test_is_within_intraday_window_none_never_rejects():
+    # square_off_time is now the SEGMENT's own account.square_off_time
+    # (execution.accounts), not a per-Strategy value - None means that
+    # segment never force-closes (CRYPTO's default) - always within
+    # window regardless of time of day.
+    now = datetime(2026, 8, 11, 23, 59, tzinfo=timezone.utc)
+    assert is_within_intraday_window(now, None, "Asia/Kolkata") is True
+
+
 def test_compute_unrealized_pnl_marks_open_positions_only():
     positions = [
         FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY", entry_price=2500, quantity=10),

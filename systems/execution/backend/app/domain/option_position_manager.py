@@ -156,19 +156,6 @@ def open_option_group(
             return row
         long_leg_dict, short_leg_dict = buy_legs[0], sell_legs[0]
 
-    if order.square_off_time is None:
-        row = _reject_group(db, order, signal_id, "intraday option order is missing square_off_time (contract violation)")
-        db.commit()
-        return row
-
-    now = datetime.now(dt_timezone.utc)
-    if not is_within_intraday_window(now, order.square_off_time, settings.timezone):
-        row = _reject_group(
-            db, order, signal_id, f"received outside intraday window (square-off is {order.square_off_time})"
-        )
-        db.commit()
-        return row
-
     if order.stop_loss_method == "previous_candle":
         row = _reject_group(
             db, order, signal_id,
@@ -180,6 +167,17 @@ def open_option_group(
     account = load_account(db, order.segment)
     if account is None:
         row = _reject_group(db, order, signal_id, f"no paper-trading account configured for segment {order.segment}")
+        db.commit()
+        return row
+
+    # square_off_time is the SEGMENT's own configured cutoff now
+    # (execution.accounts.square_off_time), not a per-Strategy value -
+    # None (e.g. CRYPTO) means this segment never force-closes.
+    now = datetime.now(dt_timezone.utc)
+    if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
+        row = _reject_group(
+            db, order, signal_id, f"received outside intraday window (square-off is {account.square_off_time})"
+        )
         db.commit()
         return row
 
@@ -342,7 +340,7 @@ def open_option_group(
         combined_target_price=combined_target_price,
         sl_scope=sl_scope,
         status="OPEN",
-        square_off_time=order.square_off_time,
+        square_off_time=account.square_off_time,
     )
     db.add(group)
 
@@ -363,7 +361,7 @@ def open_option_group(
                 quantity=quantity,
                 entry_price=premium,
                 status="OPEN",
-                square_off_time=order.square_off_time,
+                square_off_time=account.square_off_time,
                 option_group_id=group_id,
                 # Only set in sl_scope='individual' - combined mode leaves
                 # these NULL, same as today, monitored via the group's own

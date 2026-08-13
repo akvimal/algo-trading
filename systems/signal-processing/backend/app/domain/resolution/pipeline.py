@@ -50,16 +50,6 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         strategy.get("contract_day_filter", "any"),
     )
 
-    square_off_time = strategy.get("square_off_time")
-    if square_off_time and active_to:
-        # active_to_time also bounds how long a position this strategy
-        # opens can stay open - take the earlier of the two so execution's
-        # existing square-off machinery (open_position's late-entry
-        # rejection, square_off_due_positions' periodic close) enforces it
-        # with no execution-side changes at all. Never pushes square-off
-        # *later* than the strategy's own configured value.
-        square_off_time = min(time.fromisoformat(square_off_time), time.fromisoformat(active_to))
-
     return ResolvedOrderDraft(
         horizon=horizon,
         instrument_type=instrument_type,
@@ -73,7 +63,6 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         stop_loss_percent=strategy.get("stop_loss_percent"),
         target_percent=strategy.get("target_percent"),
         trailing_stop_enabled=strategy.get("trailing_stop_enabled", False),
-        square_off_time=square_off_time,
         duplicate_signal_policy=strategy.get("duplicate_signal_policy", "skip"),
         counter_signal_policy=strategy.get("counter_signal_policy", "close_and_flip"),
         # instrument_type='option' only - None for spot/future, mirrors how

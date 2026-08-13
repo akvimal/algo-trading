@@ -33,7 +33,6 @@ import {
   createIndicator,
   createRule,
   createStrategy,
-  defaultSquareOffTime,
   deleteIndicator,
   deleteRule,
   deleteStrategy,
@@ -1556,10 +1555,6 @@ function StrategyManager() {
   // instrument_type in ('future', 'option') only - see ContractDayFilter in api.ts.
   const [contractDayFilter, setContractDayFilter] = useState<ContractDayFilter>("any");
   const [segment, setSegment] = useState<Segment>("NSE");
-  const [squareOffTime, setSquareOffTime] = useState(() => defaultSquareOffTime("intraday", "NSE") ?? "");
-  // Tracks whether the user has hand-edited square-off time, so the
-  // horizon/segment auto-default effect below stops overwriting it.
-  const [squareOffTimeTouched, setSquareOffTimeTouched] = useState(false);
   // Optional per-strategy signal-acceptance window (e.g. 09:15-11:00) -
   // both-or-neither, every source_type, not gated behind in-house. See
   // Strategy's own comment in api.ts.
@@ -1585,7 +1580,6 @@ function StrategyManager() {
   const [editOptionFixedLots, setEditOptionFixedLots] = useState("");
   const [editContractDayFilter, setEditContractDayFilter] = useState<ContractDayFilter>("any");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
-  const [editSquareOffTime, setEditSquareOffTime] = useState("");
   const [editActiveFromTime, setEditActiveFromTime] = useState("");
   const [editActiveToTime, setEditActiveToTime] = useState("");
   const [editDupPolicy, setEditDupPolicy] = useState<DuplicateSignalPolicy>("skip");
@@ -1604,15 +1598,6 @@ function StrategyManager() {
   const [sendingSignal, setSendingSignal] = useState(false);
   const [sendSignalError, setSendSignalError] = useState<string | null>(null);
   const [sendSignalNotice, setSendSignalNotice] = useState<string | null>(null);
-
-  // Suggests a square-off time whenever horizon/segment change in the
-  // create form - only while the user hasn't hand-edited the field
-  // themselves. Mirrors the backend's own default_square_off_time, which
-  // is what actually gets enforced if this is left blank.
-  useEffect(() => {
-    if (squareOffTimeTouched) return;
-    setSquareOffTime(defaultSquareOffTime(horizon, segment) ?? "");
-  }, [horizon, segment, squareOffTimeTouched]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1690,7 +1675,6 @@ function StrategyManager() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (horizon === "intraday" && !squareOffTime && !activeToTime) return; // required for intraday unless an active-to time is set - submit is disabled without it, this is just a guard
     if (createIsInHouse && !ruleId) return; // submit is disabled without a picked rule - defensive guard
     if (!createIsInHouse && !externalSourceName.trim()) return; // submit is disabled without a source name - defensive guard
     setCreating(true);
@@ -1713,7 +1697,6 @@ function StrategyManager() {
         contract_day_filter:
           instrumentType === "future" || instrumentType === "option" ? contractDayFilter : undefined,
         segment,
-        square_off_time: horizon === "intraday" && squareOffTime ? `${squareOffTime}:00` : undefined,
         duplicate_signal_policy: dupPolicy,
         counter_signal_policy: counterPolicy,
         active_from_time: activeFromTime && activeToTime ? `${activeFromTime}:00` : undefined,
@@ -1734,8 +1717,6 @@ function StrategyManager() {
       setOptionFixedLots("");
       setContractDayFilter("any");
       setSegment("NSE");
-      setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
-      setSquareOffTimeTouched(false);
       setActiveFromTime("");
       setActiveToTime("");
       setDupPolicy("skip");
@@ -1775,7 +1756,6 @@ function StrategyManager() {
     setEditOptionFixedLots(s.option_fixed_lots != null ? String(s.option_fixed_lots) : "");
     setEditContractDayFilter(s.contract_day_filter);
     setEditSegment(s.segment);
-    setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
     setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
     setEditActiveToTime(s.active_to_time ? s.active_to_time.slice(0, 5) : "");
     setEditDupPolicy(s.duplicate_signal_policy);
@@ -1807,7 +1787,6 @@ function StrategyManager() {
         contract_day_filter:
           editInstrumentType === "future" || editInstrumentType === "option" ? editContractDayFilter : undefined,
         segment: editSegment,
-        square_off_time: editHorizon === "intraday" && editSquareOffTime ? `${editSquareOffTime}:00` : undefined,
         duplicate_signal_policy: editDupPolicy,
         counter_signal_policy: editCounterPolicy,
         active_from_time: editActiveFromTime && editActiveToTime ? `${editActiveFromTime}:00` : undefined,
@@ -1884,10 +1863,10 @@ function StrategyManager() {
 
   const nonDefaultConfig = horizon !== "intraday" || instrumentType !== "spot";
   // Name, Status, Source, Horizon, Instrument, Stop-loss, Target, Segment,
-  // Rule, Square-off, Active window, Webhooks, actions - matches the
-  // <thead> below exactly (all columns always present now, one unified
-  // table for every source type).
-  const colCount = 13;
+  // Rule, Active window, Webhooks, actions - matches the <thead> below
+  // exactly (all columns always present now, one unified table for every
+  // source type).
+  const colCount = 12;
 
   return (
     <>
@@ -2091,21 +2070,6 @@ function StrategyManager() {
           {createIsInHouse && (
             <p className="hint">Regime filters (optional) are configured on the Rule itself - see the Rules tab.</p>
           )}
-          {horizon === "intraday" && (
-            <label>
-              Square-off time
-              {activeToTime && <span className="optional">(optional - active-to time caps it either way)</span>}
-              <input
-                type="time"
-                value={squareOffTime}
-                onChange={(e) => {
-                  setSquareOffTime(e.target.value);
-                  setSquareOffTimeTouched(true);
-                }}
-                required={!activeToTime}
-              />
-            </label>
-          )}
           <label>
             Active from <span className="optional">(optional)</span>
             <input type="time" value={activeFromTime} onChange={(e) => setActiveFromTime(e.target.value)} />
@@ -2119,7 +2083,6 @@ function StrategyManager() {
             disabled={
               creating ||
               !name.trim() ||
-              (horizon === "intraday" && !squareOffTime && !activeToTime) ||
               (createIsInHouse && !ruleId) ||
               (!createIsInHouse && !externalSourceName.trim()) ||
               (!!activeFromTime !== !!activeToTime) ||
@@ -2150,9 +2113,8 @@ function StrategyManager() {
           &mdash; same limitation as Rule. Delete and recreate the strategy if you need to remove it entirely.
         </p>
         <p className="hint">
-          Square-off time only applies to intraday strategies - it appears (and is required) once Horizon is
-          Intraday, auto-filled from Segment (15:00 NSE, 22:00 MCX, 17:25 Crypto) but still overridable. Swing/
-          positional strategies don't square off same-day, so there's nothing to set.
+          Square-off is configured per-segment now, not per-strategy - see execution's Accounts/Settings page.
+          Any intraday position still open past that segment's square-off time gets forcefully closed there.
         </p>
       </details>
 
@@ -2179,7 +2141,6 @@ function StrategyManager() {
             <th>Target</th>
             <th>Segment</th>
             <th>Rule</th>
-            <th>Square-off</th>
             <th>Active window</th>
             <th>Webhooks</th>
             <th></th>
@@ -2387,18 +2348,6 @@ function StrategyManager() {
                     <span className="muted">-</span>
                   )}
                 </td>
-                <td>
-                  {editHorizon === "intraday" ? (
-                    <input
-                      type="time"
-                      value={editSquareOffTime}
-                      onChange={(e) => setEditSquareOffTime(e.target.value)}
-                      className="cell-input"
-                    />
-                  ) : (
-                    <span className="muted">n/a</span>
-                  )}
-                </td>
                 <td className="stack-cell">
                   <input
                     type="time"
@@ -2473,7 +2422,6 @@ function StrategyManager() {
                 <td>{formatTarget(s)}</td>
                 <td>{s.segment}</td>
                 <td className="muted">{s.rule?.name ?? "-"}</td>
-                <td>{s.square_off_time ? s.square_off_time.slice(0, 5) : "-"}</td>
                 <td className="muted">
                   {s.active_from_time && s.active_to_time
                     ? `${s.active_from_time.slice(0, 5)}–${s.active_to_time.slice(0, 5)}`

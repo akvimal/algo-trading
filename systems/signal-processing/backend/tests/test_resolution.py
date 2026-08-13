@@ -180,55 +180,6 @@ def test_resolve_ignores_unset_active_window():
     assert resolved.horizon == "intraday"
 
 
-@responses.activate
-def test_resolve_folds_active_to_time_into_square_off_time_when_earlier():
-    responses.add(
-        responses.GET,
-        _strategy_url(),
-        json={
-            "id": STRATEGY_ID,
-            "status": "live",
-            "horizon": "intraday",
-            "instrument_type": "spot",
-            "segment": "NSE",
-            "square_off_time": "15:00:00",
-            "active_from_time": "09:15:00",
-            "active_to_time": "11:00:00",
-        },
-        status=200,
-    )
-    # 05:00 UTC = 10:30 IST - inside the window.
-    signal = _signal(timestamp=datetime(2026, 8, 12, 5, 0, tzinfo=timezone.utc))
-
-    resolved = resolve(signal)
-
-    assert resolved.square_off_time.isoformat() == "11:00:00"
-
-
-@responses.activate
-def test_resolve_never_pushes_square_off_time_later_than_configured():
-    responses.add(
-        responses.GET,
-        _strategy_url(),
-        json={
-            "id": STRATEGY_ID,
-            "status": "live",
-            "horizon": "intraday",
-            "instrument_type": "spot",
-            "segment": "NSE",
-            "square_off_time": "15:00:00",
-            "active_from_time": "09:15:00",
-            "active_to_time": "16:00:00",
-        },
-        status=200,
-    )
-    # 05:00 UTC = 10:30 IST - inside the window.
-    signal = _signal(timestamp=datetime(2026, 8, 12, 5, 0, tzinfo=timezone.utc))
-
-    resolved = resolve(signal)
-
-    assert resolved.square_off_time.isoformat() == "15:00:00"
-
 
 @responses.activate
 def test_resolve_rejects_when_signal_generation_unreachable():

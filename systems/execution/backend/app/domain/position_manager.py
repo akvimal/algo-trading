@@ -87,7 +87,13 @@ def is_supported(horizon: str, instrument_type: str) -> bool:
     return horizon == "intraday" and instrument_type in ("spot", "future")
 
 
-def is_within_intraday_window(now: datetime, square_off_time: time, tz_name: str) -> bool:
+def is_within_intraday_window(now: datetime, square_off_time: Optional[time], tz_name: str) -> bool:
+    """square_off_time is the position's SEGMENT's own configured cutoff
+    (execution.accounts.square_off_time) now, not a per-Strategy value -
+    None means that segment never force-closes (CRYPTO's default, since
+    crypto trades 24/7) - always within window in that case."""
+    if square_off_time is None:
+        return True
     local_now = now.astimezone(ZoneInfo(tz_name))
     return local_now.time() < square_off_time
 
@@ -233,26 +239,21 @@ def open_position(
         db.commit()
         return row
 
-    if order.square_off_time is None:
-        # Shouldn't happen - signal-generation requires square_off_time
-        # for horizon='intraday' (the only horizon that reaches here,
-        # given is_supported() above). Defends against a malformed
-        # message rather than crashing on None comparisons below.
-        row = _reject(db, order, signal_id, "intraday spot order is missing square_off_time (contract violation)")
-        db.commit()
-        return row
-
-    now = datetime.now(dt_timezone.utc)
-    if not is_within_intraday_window(now, order.square_off_time, settings.timezone):
-        row = _reject(
-            db, order, signal_id, f"received outside intraday window (square-off is {order.square_off_time})"
-        )
-        db.commit()
-        return row
-
     account = load_account(db, order.segment)
     if account is None:
         row = _reject(db, order, signal_id, f"no paper-trading account configured for segment {order.segment}")
+        db.commit()
+        return row
+
+    # square_off_time is the SEGMENT's own configured cutoff now
+    # (execution.accounts.square_off_time), not a per-Strategy value -
+    # None (e.g. CRYPTO) means this segment never force-closes, so a
+    # signal is always within window regardless of time of day.
+    now = datetime.now(dt_timezone.utc)
+    if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
+        row = _reject(
+            db, order, signal_id, f"received outside intraday window (square-off is {account.square_off_time})"
+        )
         db.commit()
         return row
 
@@ -384,7 +385,7 @@ def open_position(
         stop_loss_method=order.stop_loss_method,
         stop_loss_interval=order.stop_loss_interval,
         stop_loss_percent=order.stop_loss_percent,
-        square_off_time=order.square_off_time,
+        square_off_time=account.square_off_time,
     )
     db.add(row)
     db.commit()
@@ -399,7 +400,6 @@ def open_manual_position(
     price: float,
     quantity: Optional[float],
     stop_loss_price: Optional[float],
-    square_off_time: time,
     settings: ExecutionSettings,
     db: Session,
     get_lot_size: GetLotSize,
@@ -415,7 +415,9 @@ def open_manual_position(
     is always intraday" (the only value is_supported() ever accepts
     anyway); and `quantity`, if given, bypasses auto-sizing entirely - same
     precedence pattern already used for Strategy.option_fixed_lots in
-    open_option_group."""
+    open_option_group. square_off_time is no longer a caller-supplied
+    parameter - like open_position, it's looked up from the segment's own
+    account row below."""
     signal_id = uuid.uuid4()
 
     if not is_supported("intraday", instrument_type):
@@ -426,20 +428,20 @@ def open_manual_position(
         db.commit()
         return row
 
-    now = datetime.now(dt_timezone.utc)
-    if not is_within_intraday_window(now, square_off_time, settings.timezone):
-        row = _reject_manual(
-            db, signal_id, symbol, segment, segment, action, instrument_type, price,
-            f"received outside intraday window (square-off is {square_off_time})",
-        )
-        db.commit()
-        return row
-
     account = load_account(db, segment)
     if account is None:
         row = _reject_manual(
             db, signal_id, symbol, segment, segment, action, instrument_type, price,
             f"no paper-trading account configured for segment {segment}",
+        )
+        db.commit()
+        return row
+
+    now = datetime.now(dt_timezone.utc)
+    if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
+        row = _reject_manual(
+            db, signal_id, symbol, segment, segment, action, instrument_type, price,
+            f"received outside intraday window (square-off is {account.square_off_time})",
         )
         db.commit()
         return row
@@ -537,7 +539,7 @@ def open_manual_position(
         status="OPEN",
         stop_loss_price=stop_loss_price,
         initial_stop_loss_price=stop_loss_price,
-        square_off_time=square_off_time,
+        square_off_time=account.square_off_time,
     )
     db.add(row)
     db.commit()

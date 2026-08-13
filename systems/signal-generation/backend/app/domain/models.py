@@ -89,23 +89,6 @@ StopLossInterval = Literal["1min", "5min", "15min", "25min", "60min"]
 DuplicateSignalPolicy = Literal["skip", "add_position"]
 CounterSignalPolicy = Literal["skip", "close_and_flip"]
 
-# Square-off time defaults by (horizon=='intraday', segment) - MCX runs
-# later than NSE cash equity, crypto's cutoff is a fixed business rule
-# rather than a real market-close (crypto trades 24/7). No default exists
-# for non-intraday horizons - square_off_time must be given explicitly there.
-DEFAULT_SQUARE_OFF_TIME_BY_SEGMENT: dict[str, time] = {
-    "NSE": time(15, 0),
-    "MCX": time(22, 0),
-    "CRYPTO": time(17, 25),
-}
-
-
-def default_square_off_time(horizon: str, segment: str) -> Optional[time]:
-    if horizon != "intraday":
-        return None
-    return DEFAULT_SQUARE_OFF_TIME_BY_SEGMENT.get(segment)
-
-
 def validate_strategy_rule_requirement(source_type: str, rule_id: Optional[str]) -> None:
     """Rule is in-house-only now (external/webhook strategies carry no
     condition of their own - the provider decides when a signal fires, not
@@ -196,12 +179,7 @@ class StrategyCreate(BaseModel):
     option_fixed_lots: Optional[int] = Field(default=None, gt=0)
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment = "NSE"
-    # Only meaningful for horizon='intraday' - square-off doesn't apply to
-    # swing/positional strategies (positions aren't closed same-day), so
-    # this stays null for them. Auto-defaulted from (horizon, segment)
-    # when omitted on an intraday strategy - see default_square_off_time.
-    square_off_time: Optional[time] = None
-    # Every source_type carries these, same as stop_loss_*/square_off_time -
+    # Every source_type carries these, same as stop_loss_* above -
     # see the DuplicateSignalPolicy/CounterSignalPolicy alias comments above.
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
@@ -231,19 +209,6 @@ class StrategyCreate(BaseModel):
     @model_validator(mode="after")
     def _check_active_window_consistency(self) -> "StrategyCreate":
         validate_active_window_fields(self.active_from_time, self.active_to_time)
-        return self
-
-    @model_validator(mode="after")
-    def _fill_square_off_time_default(self) -> "StrategyCreate":
-        if self.horizon != "intraday":
-            return self
-        if self.square_off_time is None:
-            default = default_square_off_time(self.horizon, self.segment)
-            if default is None:
-                raise ValueError(
-                    "square_off_time is required (no default exists for this horizon/segment combination)"
-                )
-            self.square_off_time = default
         return self
 
 
@@ -288,7 +253,6 @@ class StrategyUpdate(BaseModel):
     option_fixed_lots: Optional[int] = Field(default=None, gt=0)
     contract_day_filter: Optional[ContractDayFilter] = None
     segment: Optional[Segment] = None
-    square_off_time: Optional[time] = None
     duplicate_signal_policy: Optional[DuplicateSignalPolicy] = None
     counter_signal_policy: Optional[CounterSignalPolicy] = None
     active_from_time: Optional[time] = None
@@ -319,7 +283,6 @@ class StrategyOut(BaseModel):
     option_fixed_lots: Optional[int] = None
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment
-    square_off_time: Optional[time] = None
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
     active_from_time: Optional[time] = None

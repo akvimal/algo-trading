@@ -5,7 +5,6 @@ import {
   type OptionStrikeMoneyness,
   type Segment,
   createManualPosition,
-  defaultSquareOffTime,
   fetchExecPositions,
   fetchLtp,
   fetchOptionGroups,
@@ -212,7 +211,6 @@ export default function ManualTab() {
         });
         updateOrderInstance(row.id, instanceId, { state: "open", signalId: result.signal_id, entryPrice: resolvedPrice });
       } else {
-        const squareOffTime = defaultSquareOffTime("intraday", row.segment) ?? "15:00";
         const created = await createManualPosition({
           segment: row.segment,
           symbol,
@@ -221,7 +219,6 @@ export default function ManualTab() {
           price: resolvedPrice,
           quantity,
           stop_loss_price: stopLoss,
-          square_off_time: `${squareOffTime}:00`,
         });
         if (created.status === "REJECTED") {
           setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, orders: r.orders.filter((o) => o.id !== instanceId), rowError: created.rejection_reason ?? "order rejected" } : r)));

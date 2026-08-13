@@ -30,10 +30,12 @@ class Settings(BaseSettings):
     exit_monitor_poll_seconds: int = 30
 
     # How often the square-off job checks each OPEN position's own
-    # stored square_off_time against local time. Replaced a single daily
-    # CronTrigger fired at one global time - a Strategy can now override
-    # square_off_time per-strategy, so this has to be a periodic check
-    # across potentially-distinct times instead of one fixed fire time.
+    # stored square_off_time (copied from its segment's execution.accounts
+    # row at open time) against local time. Replaced a single daily
+    # CronTrigger fired at one global time - different segments can
+    # configure different times (or none at all, e.g. CRYPTO), so this
+    # has to be a periodic check across potentially-distinct times
+    # instead of one fixed fire time.
     square_off_poll_seconds: int = 30
 
 

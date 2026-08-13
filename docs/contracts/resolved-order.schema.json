@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://algo-trading.local/contracts/resolved-order.schema.json",
   "title": "ResolvedOrder",
-  "description": "What the signal-processing backend publishes to the Redis stream 'orders.resolved' for the execution system to consume. This is the seam between signal-processing and execution - treat changes as an API version bump. No quantity field on purpose: execution computes its own position size from settings.capital_per_trade / risk_per_trade_pct / price at open time, rather than signal-generation/signal-processing deciding capital exposure - see docs/architecture.md. stop_loss_method/stop_loss_interval/stop_loss_percent/target_percent/trailing_stop_enabled/square_off_time/duplicate_signal_policy/counter_signal_policy are passed through unchanged from the resolved Strategy (signal-generation) - execution uses them to compute stop_loss_price/target_price, size/monitor the position, and resolve same-symbol signal conflicts, but never calls signal-generation directly to get them. square_off_time is required only for horizon='intraday' (enforced on Strategy) - null for swing/positional, since square-off doesn't apply there; everything else in that group is always optional.",
+  "description": "What the signal-processing backend publishes to the Redis stream 'orders.resolved' for the execution system to consume. This is the seam between signal-processing and execution - treat changes as an API version bump. No quantity field on purpose: execution computes its own position size from settings.capital_per_trade / risk_per_trade_pct / price at open time, rather than signal-generation/signal-processing deciding capital exposure - see docs/architecture.md. stop_loss_method/stop_loss_interval/stop_loss_percent/target_percent/trailing_stop_enabled/duplicate_signal_policy/counter_signal_policy are passed through unchanged from the resolved Strategy (signal-generation) - execution uses them to compute stop_loss_price/target_price, size/monitor the position, and resolve same-symbol signal conflicts, but never calls signal-generation directly to get them. No square_off_time field here on purpose either - square-off is a per-segment setting owned entirely by execution (execution.accounts.square_off_time, editable via PUT /accounts/{segment}), not a per-Strategy one, so execution never needs signal-processing to hand it one - see docs/architecture.md.",
   "type": "object",
   "required": ["signal_id", "strategy_id", "symbol", "exchange", "action", "horizon", "instrument_type", "price", "resolved_at", "status", "segment"],
   "additionalProperties": false,
@@ -86,11 +86,6 @@
     "trailing_stop_enabled": {
       "type": "boolean",
       "description": "Only meaningful when stop_loss_method is set. No trailing variant for target."
-    },
-    "square_off_time": {
-      "type": ["string", "null"],
-      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d$",
-      "description": "Required for horizon='intraday' only (enforced on Strategy, execution has no platform-wide default) - null for swing/positional, since square-off doesn't apply there. When present, stored on the position at open time; a periodic job (not a single daily cron trigger, since this can differ per position) closes it once local time passes that stored value."
     },
     "duplicate_signal_policy": {
       "type": "string",

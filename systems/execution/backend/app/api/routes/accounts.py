@@ -18,6 +18,7 @@ def _to_out(row: db_models.Account) -> dict:
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "leverage": float(row.leverage),
+        "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "updated_at": row.updated_at.isoformat(),
     }
 
@@ -32,10 +33,15 @@ def list_accounts(db: Session = Depends(get_db)):
 
 @router.put("/accounts/{segment}")
 def update_account(segment: str, update: AccountUpdate, db: Session = Depends(get_db)):
-    """Only capital_per_trade/risk_per_trade_pct/leverage are editable
-    here - use POST /accounts/{segment}/reset to touch current_balance, a
-    deliberately separate action so it's never a side effect of a sizing
-    tweak."""
+    """capital_per_trade/risk_per_trade_pct/leverage/square_off_time are
+    editable here - use POST /accounts/{segment}/reset to touch
+    current_balance, a deliberately separate action so it's never a side
+    effect of a sizing tweak. square_off_time is the one field where
+    `null` is itself a meaningful value (never force-close, e.g. CRYPTO),
+    not just "leave unchanged" - model_fields_set distinguishes an
+    explicit {"square_off_time": null} from the key being omitted
+    entirely, same pattern signal-generation's update_strategy uses for
+    option_fixed_lots."""
     row = db.get(db_models.Account, segment.upper())
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
@@ -45,6 +51,8 @@ def update_account(segment: str, update: AccountUpdate, db: Session = Depends(ge
         row.risk_per_trade_pct = update.risk_per_trade_pct
     if update.leverage is not None:
         row.leverage = update.leverage
+    if "square_off_time" in update.model_fields_set:
+        row.square_off_time = update.square_off_time
     db.commit()
     db.refresh(row)
     return _to_out(row)

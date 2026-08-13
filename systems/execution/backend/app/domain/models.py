@@ -34,11 +34,6 @@ class ResolvedOrder(BaseModel):
     stop_loss_percent: Optional[float] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
-    # Required for horizon='intraday' only (enforced on Strategy) - null
-    # for swing/positional, since square-off doesn't apply there.
-    # open_position() defensively rejects if this is missing for an
-    # otherwise-supported (intraday+spot) order - see there.
-    square_off_time: Optional[time] = None
     # Per-strategy signal-conflict policy, also passed through unchanged
     # from the resolved Strategy - see _resolve_signal_conflicts in
     # position_manager.py.
@@ -82,6 +77,12 @@ class AccountOut(BaseModel):
     # Defaults to 1 (no leverage) - harmlessly present but unused for
     # NSE/MCX. See position_manager.open_position.
     leverage: float
+    # The one segment-wide square-off cutoff - any intraday position still
+    # OPEN past this local time-of-day gets forcefully closed. NULL means
+    # never force-closed (CRYPTO's default - crypto trades 24/7). Used to
+    # be a per-Strategy field; moved here since it's a market-hours
+    # concept, not a per-strategy one - see docs/architecture.md.
+    square_off_time: Optional[time] = None
     updated_at: datetime
 
 
@@ -93,6 +94,12 @@ class AccountUpdate(BaseModel):
     capital_per_trade: Optional[float] = Field(default=None, gt=0)
     risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
     leverage: Optional[float] = Field(default=None, gt=0)
+    # Explicitly settable back to null (never force-close) - unlike most
+    # other fields here, None is a real, meaningful value for this one, not
+    # just "leave unchanged." Route layer uses model_fields_set (same
+    # pattern Strategy.option_fixed_lots' PATCH handler already uses) to
+    # distinguish "omitted" from "explicitly cleared."
+    square_off_time: Optional[time] = None
 
 
 class ManualPositionCreate(BaseModel):
@@ -109,7 +116,6 @@ class ManualPositionCreate(BaseModel):
     # as Strategy.option_fixed_lots in open_option_group.
     quantity: Optional[float] = Field(default=None, gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
-    square_off_time: time
 
 
 class StopLossUpdate(BaseModel):

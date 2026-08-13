@@ -1,7 +1,7 @@
 """Pydantic mirror of docs/contracts/*.schema.json - the two are the same
 contract in two forms. If you change one, change the other."""
 
-from datetime import datetime, time
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -43,9 +43,6 @@ class ResolvedOrderDraft(BaseModel):
     stop_loss_percent: Optional[float] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
-    # Required for horizon='intraday' only (enforced on Strategy) - null
-    # for swing/positional, since square-off doesn't apply there.
-    square_off_time: Optional[time] = None
     duplicate_signal_policy: Literal["skip", "add_position"] = "skip"
     counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
     # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.

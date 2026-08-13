@@ -3,12 +3,12 @@
 CREATE SCHEMA IF NOT EXISTS execution;
 
 -- Single-row config, editable via the frontend (PUT /settings).
--- No square_off_time here - every Strategy is required to set its own
--- (signal_generation.strategies.square_off_time, passed through
--- resolved-order), no platform-wide default. Each position stores the
--- time its Strategy gave it (positions.square_off_time below); a
--- periodic job closes each position once local time passes ITS OWN
--- stored value.
+-- No square_off_time here either - it's per-SEGMENT now
+-- (execution.accounts.square_off_time below), not platform-wide and not
+-- per-Strategy (Strategy carried its own square_off_time until this was
+-- moved - see docs/architecture.md). Each position stores its segment's
+-- time at open time (positions.square_off_time below); a periodic job
+-- closes each position once local time passes ITS OWN stored value.
 -- capital_per_trade/risk_per_trade_pct used to live here but moved onto
 -- execution.accounts (one per segment) below - see docs/architecture.md
 -- § 'Why paper-trading accounts are per-segment, not per-strategy'.
@@ -48,6 +48,17 @@ INSERT INTO execution.settings (id) VALUES (1)
 -- (no leverage, current behavior unchanged) and is harmlessly present but
 -- unused for NSE/MCX, same "shared table, segment-scoped meaning" pattern
 -- as several Strategy option_* fields. See position_manager.open_position.
+-- square_off_time: the one segment-wide cutoff - any intraday position
+-- (spot/future/option) still OPEN past this local time-of-day gets
+-- forcefully closed by the periodic square-off job (position_manager.
+-- square_off_due_positions/option_position_manager.square_off_due_option_groups).
+-- Used to be a per-Strategy field (required for horizon='intraday',
+-- auto-defaulted per segment) - moved here since it's genuinely a
+-- market-hours concept, not a per-strategy one. NULL means "never force-
+-- closed" - CRYPTO's default, since crypto trades 24/7 and 17:25 was only
+-- ever a fixed business-rule guess, not a real market close. Editable via
+-- PUT /accounts/{segment}, shown in AccountsPage.tsx. See
+-- docs/architecture.md.
 CREATE TABLE IF NOT EXISTS execution.accounts (
     segment             TEXT PRIMARY KEY CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     starting_balance    NUMERIC NOT NULL CHECK (starting_balance > 0),
@@ -55,14 +66,15 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     capital_per_trade   NUMERIC NOT NULL CHECK (capital_per_trade > 0),
     risk_per_trade_pct  NUMERIC NOT NULL CHECK (risk_per_trade_pct > 0 AND risk_per_trade_pct <= 100),
     leverage            NUMERIC NOT NULL DEFAULT 1 CHECK (leverage > 0),
+    square_off_time     TIME,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-INSERT INTO execution.accounts (segment, starting_balance, current_balance, capital_per_trade, risk_per_trade_pct)
+INSERT INTO execution.accounts (segment, starting_balance, current_balance, capital_per_trade, risk_per_trade_pct, square_off_time)
 VALUES
-    ('NSE', 200000, 200000, 50000, 1.0),
-    ('MCX', 200000, 200000, 50000, 1.0),
-    ('CRYPTO', 200000, 200000, 50000, 1.0)
+    ('NSE', 200000, 200000, 50000, 1.0, '15:00:00'),
+    ('MCX', 200000, 200000, 50000, 1.0, '22:00:00'),
+    ('CRYPTO', 200000, 200000, 50000, 1.0, NULL)
 ON CONFLICT (segment) DO NOTHING;
 
 -- One row per paper position, one row per resolved signal regardless of
@@ -117,9 +129,11 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '5min', '15min', '25min', '60min')),
     stop_loss_percent       NUMERIC,
     exit_reason             TEXT CHECK (exit_reason IN ('square_off', 'stop_loss', 'target', 'manual', 'counter_signal')),
-    -- The square-off time this position's Strategy set (required there) -
-    -- copied at open time, never changed afterward. NULL only for
-    -- REJECTED rows that never got this far. See position_manager.open_position.
+    -- This position's segment's own square-off time (execution.accounts.
+    -- square_off_time) - copied at open time, never changed afterward.
+    -- NULL means never force-closed (e.g. CRYPTO) - not a "not yet
+    -- reached this far" marker like it is for REJECTED rows, which also
+    -- leave it NULL. See position_manager.open_position.
     square_off_time  TIME,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );

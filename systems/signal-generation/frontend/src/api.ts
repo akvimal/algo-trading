@@ -42,8 +42,8 @@ export type ContractDayFilter = "any" | "start" | "expiry";
 // fixed to "NSE", the only one actually wired up end-to-end), and distinct
 // from a linked Rule's own `segment` (which market the rule's
 // condition/universe watches - see Rule below; the two aren't required to
-// match). Only drives the square_off_time default; MCX/CRYPTO can be
-// recorded as intent even though nothing downstream trades them yet.
+// match). MCX/CRYPTO can be recorded as intent even though nothing
+// downstream trades them yet.
 export type Segment = "NSE" | "MCX" | "CRYPTO";
 
 // Signal-conflict policy, per-strategy - passed through unchanged on
@@ -65,20 +65,6 @@ export type CounterSignalPolicy = "skip" | "close_and_flip";
 // any linked Strategy's instrument_type (a universe scan can back a spot,
 // future, or option strategy alike).
 export type UnderlyingType = "symbol" | "universe";
-
-// Mirrors the backend's default_square_off_time (app/domain/models.py) -
-// used here to preview/pre-fill the suggested value client-side; the
-// backend re-derives and enforces this itself, this is just UX.
-const DEFAULT_SQUARE_OFF_TIME: Record<Segment, string> = {
-  NSE: "15:00",
-  MCX: "22:00",
-  CRYPTO: "17:25",
-};
-
-export function defaultSquareOffTime(horizon: Horizon, segment: Segment): string | null {
-  if (horizon !== "intraday") return null;
-  return DEFAULT_SQUARE_OFF_TIME[segment] ?? null;
-}
 
 // Indicators are their own entity (backend: signal_generation.indicators)
 // so one definition (e.g. "RSI 14") can be reused by any number of
@@ -276,19 +262,13 @@ export type Strategy = {
   option_fixed_lots: number | null;
   contract_day_filter: ContractDayFilter;
   segment: Segment;
-  // Required for horizon='intraday' only (auto-defaulted server-side from
-  // horizon+segment when omitted on create - see defaultSquareOffTime
-  // above); null for swing/positional, since square-off doesn't apply
-  // there. execution has no platform-wide default.
-  square_off_time: string | null; // "HH:MM:SS"
   duplicate_signal_policy: DuplicateSignalPolicy;
   counter_signal_policy: CounterSignalPolicy;
   // Optional per-strategy signal-acceptance window (e.g. 09:15-11:00) -
   // both-or-neither, every source_type. Enforced by signal-processing's
-  // resolve() against the signal's own timestamp; active_to_time also
-  // bounds how long a position stays open (folded into the resolved
-  // order's square_off_time, the earlier of the two) - see
-  // docs/architecture.md.
+  // resolve() against the signal's own timestamp - purely gates whether a
+  // signal is accepted, unrelated to square-off (a per-segment execution
+  // setting now, not a Strategy field - see docs/architecture.md).
   active_from_time: string | null; // "HH:MM:SS"
   active_to_time: string | null; // "HH:MM:SS"
   status: StrategyStatus;
@@ -314,9 +294,6 @@ export type StrategyCreate = {
   option_fixed_lots?: number;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
-  // Optional - the backend auto-fills it from horizon+segment when
-  // horizon='intraday'; required explicitly for other horizons.
-  square_off_time?: string;
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
   // Both-or-neither - see Strategy's own comment above.
@@ -351,7 +328,6 @@ export type StrategyEdit = {
   option_fixed_lots?: number | null;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
-  square_off_time?: string;
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
   active_from_time?: string;
@@ -756,7 +732,6 @@ export async function createManualPosition(payload: {
   price: number;
   quantity?: number;
   stop_loss_price?: number;
-  square_off_time: string;
 }): Promise<ManualPosition> {
   const res = await fetch(`${EXECUTION_BASE_URL}/positions/manual`, {
     method: "POST",

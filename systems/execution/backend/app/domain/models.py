@@ -42,7 +42,7 @@ class ResolvedOrder(BaseModel):
     # Per-strategy signal-conflict policy, also passed through unchanged
     # from the resolved Strategy - see _resolve_signal_conflicts in
     # position_manager.py.
-    duplicate_signal_policy: Literal["skip", "add_position"] = "add_position"
+    duplicate_signal_policy: Literal["skip", "add_position"] = "skip"
     counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
     # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.
     option_sl_scope: Optional[Literal["combined", "individual"]] = None

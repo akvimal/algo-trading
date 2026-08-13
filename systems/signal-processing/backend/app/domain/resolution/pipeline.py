@@ -73,7 +73,7 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         target_percent=strategy.get("target_percent"),
         trailing_stop_enabled=strategy.get("trailing_stop_enabled", False),
         square_off_time=square_off_time,
-        duplicate_signal_policy=strategy.get("duplicate_signal_policy", "add_position"),
+        duplicate_signal_policy=strategy.get("duplicate_signal_policy", "skip"),
         counter_signal_policy=strategy.get("counter_signal_policy", "close_and_flip"),
         # instrument_type='option' only - None for spot/future, mirrors how
         # `strategy` (the legs dict) itself is None for non-option orders.

@@ -362,7 +362,7 @@ class StrategyCreate(BaseModel):
     regime_filter_checks: list[RegimeCheckName] = Field(default_factory=lambda: list(_ALL_REGIME_CHECK_NAMES))
     # Every source_type carries these, same as stop_loss_*/square_off_time -
     # see the DuplicateSignalPolicy/CounterSignalPolicy alias comments above.
-    duplicate_signal_policy: DuplicateSignalPolicy = "add_position"
+    duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
     # Optional per-strategy signal-acceptance window (e.g. 09:15-11:00),
     # every source_type - see infra/postgres/init/03-signal-generation.sql
@@ -490,7 +490,7 @@ class StrategyOut(BaseModel):
     rule_config: Optional[dict] = None
     regime_filter_enabled: bool = False
     regime_filter_checks: list[RegimeCheckName] = Field(default_factory=lambda: list(_ALL_REGIME_CHECK_NAMES))
-    duplicate_signal_policy: DuplicateSignalPolicy = "add_position"
+    duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
     active_from_time: Optional[time] = None
     active_to_time: Optional[time] = None

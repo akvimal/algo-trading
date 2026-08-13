@@ -54,7 +54,7 @@ def test_resolve_uses_live_strategy_config():
     assert resolved.strategy is None  # spot -> no option-strategy legs
     # Not present in the fetched Strategy dict above - defaults apply, same
     # as trailing_stop_enabled's own missing-key default.
-    assert resolved.duplicate_signal_policy == "add_position"
+    assert resolved.duplicate_signal_policy == "skip"
     assert resolved.counter_signal_policy == "close_and_flip"
     assert resolved.option_sl_scope is None  # instrument_type='spot' -> always None, never defaulted
 

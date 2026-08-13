@@ -444,7 +444,7 @@ function StrategyManager() {
   // Which of the 5 sub-conditions must agree - defaults to all 5,
   // matching the backend's own default.
   const [regimeFilterChecks, setRegimeFilterChecks] = useState<RegimeCheckName[]>(ALL_REGIME_CHECKS);
-  const [dupPolicy, setDupPolicy] = useState<DuplicateSignalPolicy>("add_position");
+  const [dupPolicy, setDupPolicy] = useState<DuplicateSignalPolicy>("skip");
   const [counterPolicy, setCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [creating, setCreating] = useState(false);
 
@@ -492,7 +492,7 @@ function StrategyManager() {
   const [editRangeBreakoutPeriod, setEditRangeBreakoutPeriod] = useState("5");
   const [editRegimeFilterEnabled, setEditRegimeFilterEnabled] = useState(false);
   const [editRegimeFilterChecks, setEditRegimeFilterChecks] = useState<RegimeCheckName[]>(ALL_REGIME_CHECKS);
-  const [editDupPolicy, setEditDupPolicy] = useState<DuplicateSignalPolicy>("add_position");
+  const [editDupPolicy, setEditDupPolicy] = useState<DuplicateSignalPolicy>("skip");
   const [editCounterPolicy, setEditCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [saving, setSaving] = useState(false);
 
@@ -719,8 +719,8 @@ function StrategyManager() {
       setSelectedIndicatorId("");
       setRegimeFilterEnabled(false);
       setRegimeFilterChecks(ALL_REGIME_CHECKS);
-      setDupPolicy("add_position");
-      setCounterPolicy("skip");
+      setDupPolicy("skip");
+      setCounterPolicy("close_and_flip");
       setStrategies((prev) => [created, ...prev]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create strategy");

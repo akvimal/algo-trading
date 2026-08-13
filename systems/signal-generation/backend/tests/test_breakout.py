@@ -10,7 +10,7 @@ from app.domain.breakout import (
     replay_breakout,
     simulate_breakout_trades,
 )
-from app.domain.models import BreakoutRuleConfig
+from app.domain.rule import BreakoutRuleConfig
 from app.domain.rules import CandleClose
 
 BASE = datetime(2026, 8, 12, 9, 15)

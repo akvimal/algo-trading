@@ -13,7 +13,7 @@ rose above -> bullish crossover on the last bar.
 """
 
 from app.domain.indicators import compute_rsi, compute_sma
-from app.domain.models import CrossoverRuleConfig
+from app.domain.rule import CrossoverRuleConfig
 from app.domain.rules import CandleClose, bars_needed, evaluate, evaluate_crossover
 
 RULE = CrossoverRuleConfig(indicator_id="11111111-1111-1111-1111-111111111111")

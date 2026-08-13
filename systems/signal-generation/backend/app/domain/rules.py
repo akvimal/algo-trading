@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 from app.domain.indicators import compute_indicator, compute_indicator_signal, indicator_warmup
-from app.domain.models import CrossoverRuleConfig, RuleConfig
+from app.domain.rule import CrossoverRuleConfig, RuleConfig
 
 Bias = Literal["bullish", "bearish"]
 

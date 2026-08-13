@@ -1,6 +1,7 @@
 """The live tick for the in-house indicator engine - queries every
-`live`/`in_house` Strategy, resolves its underlying via market-data,
-fetches enough recent history, evaluates its rule, and posts a fresh
+`live`/`in_house` Strategy (joined to its linked Rule, see
+app/domain/rule.py), resolves the rule's underlying via market-data,
+fetches enough recent history, evaluates the rule, and posts a fresh
 signal to signal-processing if one just fired. Reuses the exact same
 evaluate_* functions backtest.py replays over history (rules.py), so
 live and backtest can never silently disagree about what counts as a
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.domain import breakout, range_breakout, regime
-from app.domain.models import BreakoutRuleConfig, RangeBreakoutRuleConfig, validate_indicator_params, validate_rule_config
+from app.domain.rule import BreakoutRuleConfig, RangeBreakoutRuleConfig, validate_indicator_params, validate_rule_config
 from app.domain.rules import CandleClose, bars_needed, evaluate
 
 logger = logging.getLogger(__name__)
@@ -92,28 +93,29 @@ def _matches_contract_day_filter(
     return expiry is not None and today.isoformat() == expiry
 
 
-def _target_symbols(strategy: db_models.Strategy, get_universe_constituents: GetUniverseConstituents) -> list[str]:
-    """A plain symbol-scoped strategy checks exactly its own underlying,
-    same as before universes existed. A universe-scoped strategy
+def _target_symbols(rule_row: db_models.Rule, get_universe_constituents: GetUniverseConstituents) -> list[str]:
+    """A plain symbol-scoped rule checks exactly its own underlying, same
+    as before universes existed. A universe-scoped rule
     (underlying_type='universe') instead checks every constituent of the
     named NSE index independently - each gets its own engine_runs dedupe
-    row (keyed by (strategy_id, symbol)) and its own resolve/candle-fetch/
-    evaluate/post_signal pass, via the exact same per-symbol functions
-    below. An unresolvable universe (market-data unreachable, unknown
-    key) is logged and skipped for this tick, same defensive shape as an
-    unresolvable plain underlying."""
-    if strategy.underlying_type == "universe":
-        constituents = get_universe_constituents(strategy.underlying)
+    row (keyed by (strategy_id, symbol) - see EngineRun's own docstring)
+    and its own resolve/candle-fetch/evaluate/post_signal pass, via the
+    exact same per-symbol functions below. An unresolvable universe
+    (market-data unreachable, unknown key) is logged and skipped for this
+    tick, same defensive shape as an unresolvable plain underlying."""
+    if rule_row.underlying_type == "universe":
+        constituents = get_universe_constituents(rule_row.underlying)
         if not constituents:
-            logger.warning("could not resolve universe %s for strategy %s", strategy.underlying, strategy.id)
+            logger.warning("could not resolve universe %s for rule %s", rule_row.underlying, rule_row.id)
             return []
         return constituents
-    return [strategy.underlying]
+    return [rule_row.underlying]
 
 
 def _run_one_breakout(
     db: Session,
     strategy: db_models.Strategy,
+    rule_row: db_models.Rule,
     rule: BreakoutRuleConfig,
     symbol: str,
     today: date,
@@ -128,12 +130,13 @@ def _run_one_breakout(
     execution has no mechanism to enforce it on a real position. The
     initial stop-loss IS enforced live, via execution's existing
     `previous_candle` method - app/api/routes/strategies.py auto-sets
-    Strategy.stop_loss_interval to this rule's own htf_interval at create
-    time for exactly that reason, so nothing extra needs to happen here.
+    Strategy.stop_loss_interval to this rule's own htf_interval whenever a
+    strategy links to a breakout rule, for exactly that reason, so nothing
+    extra needs to happen here.
 
-    `symbol` is the one target this call checks - strategy.underlying
-    itself for a plain symbol-scoped strategy, or one constituent of
-    strategy.underlying's universe (see _target_symbols) - callers loop
+    `symbol` is the one target this call checks - rule_row.underlying
+    itself for a plain symbol-scoped rule, or one constituent of
+    rule_row.underlying's universe (see _target_symbols) - callers loop
     over every target symbol, calling this once per symbol."""
     resolved = resolve_underlying(strategy.segment, symbol)
     if resolved is None:
@@ -189,7 +192,7 @@ def _run_one_breakout(
             "source": "in_house",
             "source_meta": {
                 "underlying": symbol,
-                "universe": strategy.underlying if strategy.underlying_type == "universe" else None,
+                "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
                 "rule": "breakout",
                 "htf_interval": rule.htf_interval,
                 "ltf_interval": rule.ltf_interval,
@@ -204,6 +207,7 @@ def _run_one_breakout(
 def _run_one_range_breakout(
     db: Session,
     strategy: db_models.Strategy,
+    rule_row: db_models.Rule,
     rule: RangeBreakoutRuleConfig,
     symbol: str,
     today: date,
@@ -232,8 +236,8 @@ def _run_one_range_breakout(
     if strategy.regime_filter_enabled:
         bar_count = max(bar_count, regime.regime_warmup(regime.DEFAULT_REGIME_PARAMS))
     bar_count *= _HISTORY_MULTIPLIER
-    from_date, to_date = history_window(bar_count, strategy.interval)
-    candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, strategy.interval, from_date, to_date)
+    from_date, to_date = history_window(bar_count, rule_row.interval)
+    candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule_row.interval, from_date, to_date)
     if not candles:
         return False
 
@@ -274,7 +278,7 @@ def _run_one_range_breakout(
             "source": "in_house",
             "source_meta": {
                 "underlying": symbol,
-                "universe": strategy.underlying if strategy.underlying_type == "universe" else None,
+                "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
                 "rule": "range_breakout",
                 "chart_symbol": resolved.chart_symbol,
             },
@@ -287,6 +291,7 @@ def _run_one_range_breakout(
 def _run_one(
     db: Session,
     strategy: db_models.Strategy,
+    rule_row: db_models.Rule,
     symbol: str,
     today: date,
     resolve_underlying: ResolveUnderlying,
@@ -299,21 +304,21 @@ def _run_one(
     convention. `today` is the tick's own local date (run_live_tick's
     today_ist) - threaded down for contract_day_filter, not re-derived
     per call so every strategy checked in the same tick agrees on "today"."""
-    rule = validate_rule_config(strategy.rule_config)
+    rule = validate_rule_config(rule_row.rule_config)
 
     if isinstance(rule, BreakoutRuleConfig):
-        return _run_one_breakout(db, strategy, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal)
+        return _run_one_breakout(db, strategy, rule_row, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal)
     if isinstance(rule, RangeBreakoutRuleConfig):
         return _run_one_range_breakout(
-            db, strategy, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal
+            db, strategy, rule_row, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal
         )
 
     indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
     if indicator is None:
-        # Defensive: the route layer checks this exists at create/update
-        # time (see app/api/routes/strategies.py), this only covers an
-        # indicator deleted *after* a strategy already referenced it.
-        logger.warning("indicator %s referenced by strategy %s no longer exists", rule.indicator_id, strategy.id)
+        # Defensive: the route layer checks this exists at Rule
+        # create/update time (see app/api/routes/rules.py), this only
+        # covers an indicator deleted *after* a rule already referenced it.
+        logger.warning("indicator %s referenced by rule %s no longer exists", rule.indicator_id, rule_row.id)
         return False
     indicator_params = validate_indicator_params(indicator.type, indicator.params).model_dump()
 
@@ -330,8 +335,8 @@ def _run_one(
     if strategy.regime_filter_enabled:
         bar_count = max(bar_count, regime.regime_warmup(regime.DEFAULT_REGIME_PARAMS))
     bar_count *= _HISTORY_MULTIPLIER
-    from_date, to_date = history_window(bar_count, strategy.interval)
-    candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, strategy.interval, from_date, to_date)
+    from_date, to_date = history_window(bar_count, rule_row.interval)
+    candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule_row.interval, from_date, to_date)
     if not candles:
         return False
 
@@ -378,7 +383,7 @@ def _run_one(
             "source": "in_house",
             "source_meta": {
                 "underlying": symbol,
-                "universe": strategy.underlying if strategy.underlying_type == "universe" else None,
+                "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
                 "indicator": indicator.name,
                 "chart_symbol": resolved.chart_symbol,
             },
@@ -396,8 +401,9 @@ def run_live_tick(
     get_universe_constituents: GetUniverseConstituents,
     post_signal: PostSignal,
 ) -> dict:
-    strategies = (
-        db.query(db_models.Strategy)
+    strategy_rule_pairs = (
+        db.query(db_models.Strategy, db_models.Rule)
+        .join(db_models.Rule, db_models.Strategy.rule_id == db_models.Rule.id)
         .filter(db_models.Strategy.status == "live", db_models.Strategy.source_type == "in_house")
         .all()
     )
@@ -409,13 +415,13 @@ def run_live_tick(
     checked = 0
     signaled = 0
     failed = 0
-    for strategy in strategies:
+    for strategy, rule_row in strategy_rule_pairs:
         if not _is_within_active_window(now_ist, strategy.active_from_time, strategy.active_to_time):
             continue
-        for symbol in _target_symbols(strategy, get_universe_constituents):
+        for symbol in _target_symbols(rule_row, get_universe_constituents):
             checked += 1
             try:
-                if _run_one(db, strategy, symbol, today_ist, resolve_underlying, get_candle_history, get_ltp, post_signal):
+                if _run_one(db, strategy, rule_row, symbol, today_ist, resolve_underlying, get_candle_history, get_ltp, post_signal):
                     signaled += 1
             except Exception:
                 logger.exception("engine tick failed for strategy %s (%s)", strategy.id, symbol)

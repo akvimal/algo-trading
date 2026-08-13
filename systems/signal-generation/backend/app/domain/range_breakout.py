@@ -12,7 +12,7 @@ duplicating that math."""
 from typing import Optional
 
 from app.domain.breakout import compute_donchian_high, compute_donchian_low
-from app.domain.models import RangeBreakoutRuleConfig
+from app.domain.rule import RangeBreakoutRuleConfig
 from app.domain.rules import Bias, CandleClose
 
 

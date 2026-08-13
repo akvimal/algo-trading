@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from app.domain.models import RangeBreakoutRuleConfig
+from app.domain.rule import RangeBreakoutRuleConfig
 from app.domain.range_breakout import (
     evaluate_range_breakout,
     evaluate_range_breakout_live,

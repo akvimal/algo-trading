@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Optional
 
-from app.domain.models import BreakoutRuleConfig
+from app.domain.rule import BreakoutRuleConfig
 from app.domain.regime import compute_ema
 from app.domain.rules import Bias, CandleClose, SimulatedTrade
 

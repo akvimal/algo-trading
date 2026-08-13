@@ -2,12 +2,91 @@
 
 CREATE SCHEMA IF NOT EXISTS signal_generation;
 
+-- A Rule is a saved, reusable, independently-backtestable definition of
+-- *when a signal should fire* - separated out from Strategy (below), which
+-- only decides what happens once it does (instrument/segment to trade,
+-- stop-loss/target, option shape, conflict policies). One Rule can back
+-- many Strategies (e.g. the same crossover backing both a spot Strategy
+-- and an option-spread Strategy on the same underlying) - see
+-- docs/architecture.md's "Rules module" section.
+--
+-- source_type mirrors Strategy's own field exactly: 'in_house' is the one
+-- reserved value (an evaluable condition our own engine checks); anything
+-- else names an external webhook provider (chartink, tradingview, ...)
+-- whose scan we never evaluate ourselves - the Rule row there is purely a
+-- saved reference (name/description/provider_rule_name), matched against
+-- Strategy.source_type at link time (see app/domain/models.py's
+-- validate_rule_link_consistency), not evaluated.
+CREATE TABLE IF NOT EXISTS signal_generation.rules (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name               TEXT NOT NULL,
+    description        TEXT,
+    source_type        TEXT NOT NULL CHECK (source_type <> ''),
+    -- source_type != 'in_house' only - the scan's own name on the
+    -- provider's side, if `name` above renames it locally. NULL means
+    -- `name` itself is also the provider's own name.
+    provider_rule_name TEXT,
+    -- Which market this rule's condition/universe is evaluated against -
+    -- distinct from a linked Strategy's own `segment` (what gets traded
+    -- when it fires - see strategies.segment below). Only NSE is actually
+    -- exercised today; MCX/CRYPTO recorded as intent, same convention
+    -- strategies.segment already uses.
+    segment            TEXT NOT NULL DEFAULT 'NSE' CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    -- in_house only - the logical underlying to watch (e.g. "GOLDM",
+    -- "NIFTY") and a typed JSON rule config (CrossoverRuleConfig today -
+    -- {"type": "crossover", "indicator_id": ...} - or BreakoutRuleConfig/
+    -- RangeBreakoutRuleConfig). Names WHICH indicator (signal_generation.
+    -- indicators below) and HOW to decide from it - deliberately NOT the
+    -- indicator's own params (period etc.), which live on the referenced
+    -- Indicator row instead, so one indicator definition can be reused by
+    -- many rules. JSONB (not dedicated columns) so a second rule type is
+    -- new code, not a migration.
+    underlying         TEXT,
+    -- 'symbol' (default): underlying names one traded symbol. 'universe':
+    -- underlying instead names an index-constituent group key (e.g.
+    -- 'NIFTYBANK', resolved via market-data's GET
+    -- /instruments/universe/constituents) - the engine evaluates this
+    -- rule against every constituent independently. Universes are NSE
+    -- cash-equity index membership lists only - see universe_requires_nse
+    -- below. Not coupled to instrument_type (that's a Strategy concern
+    -- now) - a universe scan can back a spot, future, or option Strategy.
+    underlying_type    TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe')),
+    -- Signal/candle cadence. in_house only - see in_house_fields_consistent
+    -- below.
+    interval           TEXT CHECK (interval IN ('1min', '3min', '5min', '15min', '30min', '60min', 'daily')),
+    rule_config        JSONB,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT in_house_fields_consistent CHECK (
+        (source_type = 'in_house' AND underlying IS NOT NULL AND rule_config IS NOT NULL AND interval IS NOT NULL)
+        OR (source_type != 'in_house' AND underlying IS NULL AND rule_config IS NULL)
+    ),
+    CONSTRAINT universe_requires_nse CHECK (
+        underlying_type != 'universe' OR segment = 'NSE'
+    )
+);
+
+-- A reusable indicator definition (e.g. "RSI 14") - any number of Rule
+-- rows can reference one via rule_config's indicator_id (no DB FK - that
+-- field is inside a JSONB blob, not a plain column; existence is checked
+-- at the API layer instead, see app/api/routes/rules.py). params is
+-- JSONB (not dedicated columns) for the same reason rule_config is: a
+-- second indicator type is new code, not a migration.
+CREATE TABLE IF NOT EXISTS signal_generation.indicators (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    type        TEXT NOT NULL CHECK (type IN ('rsi')),
+    params      JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- A Strategy is the unit of configuration for a signal source - either an
--- external webhook provider (chartink, tradingview) or, eventually, an
--- in-house indicator/price-action engine. Its id doubles as the
--- ?strategy_id= value given to the provider (or generated internally),
--- and its horizon/instrument_type are what signal-processing resolves a
--- signal to - see docs/architecture.md.
+-- external webhook provider (chartink, tradingview) or an in-house
+-- engine, via whichever Rule it points to (rule_id below) - see
+-- docs/architecture.md. Its id doubles as the ?strategy_id= value given
+-- to the provider (or generated internally), and its horizon/
+-- instrument_type are what signal-processing resolves a signal to.
 --
 -- Deliberately no quantity/capital column here - position sizing math
 -- (the capital cap, risk %) is still execution's job
@@ -25,21 +104,24 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name             TEXT NOT NULL,
     -- 'in_house' is the one reserved value everything else compares
-    -- against (see in_house_fields_consistent below and every backend
-    -- source_type check) - anything else names an external webhook
-    -- provider (chartink, tradingview, or any new one), free-form so a
-    -- new provider needs no schema/code change here.
+    -- against (see every backend source_type check) - anything else names
+    -- an external webhook provider (chartink, tradingview, or any new
+    -- one), free-form so a new provider needs no schema/code change here.
+    -- Must equal the linked Rule's own source_type (rule_id below) -
+    -- enforced app-level at create/update time, not a DB constraint
+    -- (cross-table) - see validate_rule_link_consistency.
     source_type      TEXT NOT NULL CHECK (source_type <> ''),
     exchange         TEXT NOT NULL CHECK (exchange IN ('NSE')),
     horizon          TEXT NOT NULL CHECK (horizon IN ('intraday', 'swing', 'positional')),
     instrument_type  TEXT NOT NULL CHECK (instrument_type IN ('spot', 'future', 'option')),
-    -- Signal/candle cadence. Optional: for external providers it's purely
-    -- descriptive (we don't control when Chartink actually fires - this
-    -- just documents the expected cadence for future staleness checks);
-    -- for an in-house strategy it will drive the engine's own check
-    -- interval and backtest granularity once that's built - see
-    -- docs/architecture.md.
-    interval         TEXT CHECK (interval IN ('1min', '3min', '5min', '15min', '30min', '60min', 'daily')),
+    -- Which saved Rule (above) decides when this strategy's signals fire.
+    -- Required for every strategy, in-house or external - an external
+    -- strategy's Rule carries no evaluable condition tree, purely a saved
+    -- reference to the provider's own scan name/description. Not
+    -- ON DELETE CASCADE: a Rule with strategies still pointing at it
+    -- shouldn't silently vanish - see app/api/routes/rules.py's delete
+    -- guard.
+    rule_id          UUID NOT NULL REFERENCES signal_generation.rules (id),
     -- Stop-loss: either the low/high of the previous completed candle at
     -- stop_loss_interval, or a flat % from entry price. The two are
     -- mutually exclusive - exactly one of stop_loss_interval/
@@ -63,7 +145,11 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     ),
     -- Which market this strategy trades in - distinct from `exchange`
     -- above (still fixed to NSE, the only one actually wired up
-    -- end-to-end). Only drives the square_off_time default below; MCX/
+    -- end-to-end), and distinct from the linked Rule's own `segment`
+    -- (which market the rule's condition/universe watches - see
+    -- rules.segment above; the two aren't required to match, e.g. an NSE
+    -- spot scan could in principle back an option strategy on the same
+    -- underlying). Only drives the square_off_time default below; MCX/
     -- CRYPTO can be recorded as intent even though nothing downstream
     -- trades them yet - see docs/architecture.md.
     segment          TEXT NOT NULL DEFAULT 'NSE' CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
@@ -94,35 +180,11 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- NSE, 22:00 for MCX, 17:25 for CRYPTO. execution has no
     -- platform-wide fallback of its own.
     square_off_time  TIME,
-    -- in_house only - the logical underlying to watch (e.g. "GOLDM",
-    -- "NIFTY") and a typed JSON rule config (CrossoverRuleConfig today -
-    -- {"type": "crossover", "indicator_id": ..., "signal_source": "sma_of_indicator", "signal_period": ...}).
-    -- Names WHICH indicator (signal_generation.indicators below) and HOW
-    -- to decide from it - deliberately NOT the indicator's own params
-    -- (period etc.), which live on the referenced Indicator row instead,
-    -- so one indicator definition can be reused by many strategies. JSONB
-    -- (not dedicated columns) so a second rule type is new code, not a
-    -- migration. Note: `exchange` above stays fixed 'NSE' even for an
-    -- in_house MCX strategy - the actual traded exchange for a signal
-    -- this engine posts comes from market-data's GET /instruments/resolve
-    -- response (trade_exchange), not this column; `segment` is the field
-    -- that carries real MCX/NSE intent here.
-    underlying       TEXT,
-    -- 'symbol' (default): underlying names one traded symbol, as before.
-    -- 'universe': underlying instead names an NSE index-constituent
-    -- group key (e.g. 'NIFTYBANK', resolved via market-data's GET
-    -- /instruments/universe/constituents) - the engine evaluates this
-    -- strategy's rule against every constituent independently, each
-    -- with its own row in engine_runs below. Universes are NSE
-    -- cash-equity index membership lists only - see the
-    -- universe_requires_nse_spot constraint.
-    underlying_type  TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe')),
-    rule_config      JSONB,
     -- in_house only (harmlessly ignored for webhook strategies) - gates a
     -- crossover signal on a single-timeframe market regime classification
     -- (UPTREND/DOWNTREND/RANGE/TRANSITION from swing structure, Efficiency
     -- Ratio, ADX/DMI, ATR-normalized EMA slope - see
-    -- app/domain/regime.py) computed on this strategy's own `interval`,
+    -- app/domain/regime.py) computed on the linked Rule's own `interval`,
     -- not a separate higher timeframe. Default false preserves today's
     -- behavior exactly. See docs/architecture.md.
     regime_filter_enabled BOOLEAN NOT NULL DEFAULT false,
@@ -175,13 +237,6 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT square_off_time_required_for_intraday CHECK (horizon != 'intraday' OR square_off_time IS NOT NULL),
-    CONSTRAINT in_house_fields_consistent CHECK (
-        (source_type = 'in_house' AND underlying IS NOT NULL AND rule_config IS NOT NULL AND interval IS NOT NULL)
-        OR (source_type != 'in_house' AND underlying IS NULL AND rule_config IS NULL)
-    ),
-    CONSTRAINT universe_requires_nse_spot CHECK (
-        underlying_type != 'universe' OR (segment = 'NSE' AND instrument_type = 'spot')
-    ),
     CONSTRAINT active_window_consistent CHECK (
         (active_from_time IS NULL) = (active_to_time IS NULL)
         AND (active_to_time IS NULL OR active_to_time > active_from_time)
@@ -189,32 +244,21 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategies_status ON signal_generation.strategies (status);
-
--- A reusable indicator definition (e.g. "RSI 14") - any number of
--- Strategy rows can reference one via rule_config's indicator_id (no DB
--- FK - that field is inside a JSONB blob, not a plain column; existence
--- is checked at the API layer instead, see app/api/routes/strategies.py).
--- params is JSONB (not dedicated columns) for the same reason rule_config
--- is: a second indicator type is new code, not a migration.
-CREATE TABLE IF NOT EXISTS signal_generation.indicators (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        TEXT NOT NULL,
-    type        TEXT NOT NULL CHECK (type IN ('rsi')),
-    params      JSONB NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+CREATE INDEX IF NOT EXISTS idx_strategies_rule_id ON signal_generation.strategies (rule_id);
 
 -- Runtime bookkeeping for the in-house engine's periodic tick - which
 -- completed candle a strategy last acted on, so the poll loop (running
 -- far more often than any one strategy's own interval) doesn't re-signal
 -- on the same bar every tick. Deliberately separate from the strategies
 -- table above: this is mutable engine state, not user-configured intent.
--- Keyed by (strategy_id, symbol), not just strategy_id: a
--- universe-scoped strategy (underlying_type='universe') checks many
--- symbols independently each tick and needs its own dedupe state per
+-- Keyed by (strategy_id, symbol), not rule_id - two Strategies can share
+-- the same Rule (e.g. a spot strategy and an option strategy on the same
+-- crossover), and each needs its own independent dedupe/position state,
+-- not one shared state for both. Keyed by (strategy_id, symbol), not just
+-- strategy_id: a universe-scoped rule (underlying_type='universe') checks
+-- many symbols independently each tick and needs its own dedupe state per
 -- constituent, not one shared state for the whole strategy. A plain
--- symbol-scoped strategy just gets one row, keyed by its one symbol.
+-- symbol-scoped rule just gets one row, keyed by its one symbol.
 CREATE TABLE IF NOT EXISTS signal_generation.engine_runs (
     strategy_id            UUID NOT NULL REFERENCES signal_generation.strategies (id) ON DELETE CASCADE,
     symbol                 TEXT NOT NULL,

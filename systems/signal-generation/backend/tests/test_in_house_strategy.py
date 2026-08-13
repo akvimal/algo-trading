@@ -1,12 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from app.domain.models import (
+from app.domain.rule import (
     BreakoutRuleConfig,
     CrossoverRuleConfig,
-    StrategyCreate,
-    validate_in_house_fields,
+    RuleCreate,
     validate_rule_config,
+    validate_rule_in_house_fields,
 )
 
 INDICATOR_ID = "11111111-1111-1111-1111-111111111111"
@@ -24,8 +24,6 @@ def _in_house(**overrides) -> dict:
     defaults = dict(
         name="GOLDM RSI",
         source_type="in_house",
-        horizon="intraday",
-        instrument_type="future",
         segment="MCX",
         underlying="GOLDM",
         rule_config=RULE_CONFIG,
@@ -99,91 +97,108 @@ def test_validate_rule_config_still_resolves_crossover_correctly_alongside_break
     assert isinstance(breakout, BreakoutRuleConfig)
 
 
-# --- validate_in_house_fields ---------------------------------------------------------------
+# --- validate_rule_in_house_fields -----------------------------------------------------------
 
 
-def test_validate_in_house_fields_accepts_complete_config():
-    validate_in_house_fields("in_house", "GOLDM", RULE_CONFIG, "5min")  # no raise
+def test_validate_rule_in_house_fields_accepts_complete_config():
+    validate_rule_in_house_fields("in_house", "GOLDM", RULE_CONFIG, "5min")  # no raise
 
 
-def test_validate_in_house_fields_requires_underlying():
+def test_validate_rule_in_house_fields_requires_underlying():
     with pytest.raises(ValueError, match="requires underlying"):
-        validate_in_house_fields("in_house", None, RULE_CONFIG, "5min")
+        validate_rule_in_house_fields("in_house", None, RULE_CONFIG, "5min")
 
 
-def test_validate_in_house_fields_requires_rule_config():
+def test_validate_rule_in_house_fields_requires_rule_config():
     with pytest.raises(ValueError, match="requires rule_config"):
-        validate_in_house_fields("in_house", "GOLDM", None, "5min")
+        validate_rule_in_house_fields("in_house", "GOLDM", None, "5min")
 
 
-def test_validate_in_house_fields_requires_interval():
+def test_validate_rule_in_house_fields_requires_interval():
     with pytest.raises(ValueError, match="requires interval"):
-        validate_in_house_fields("in_house", "GOLDM", RULE_CONFIG, None)
+        validate_rule_in_house_fields("in_house", "GOLDM", RULE_CONFIG, None)
 
 
-def test_validate_in_house_fields_forbids_underlying_for_webhook_source():
+def test_validate_rule_in_house_fields_forbids_underlying_for_webhook_source():
     with pytest.raises(ValueError, match="only applies to source_type='in_house'"):
-        validate_in_house_fields("chartink", "GOLDM", None, None)
+        validate_rule_in_house_fields("chartink", "GOLDM", None, None)
 
 
-def test_validate_in_house_fields_forbids_rule_config_for_webhook_source():
+def test_validate_rule_in_house_fields_forbids_rule_config_for_webhook_source():
     with pytest.raises(ValueError, match="only applies to source_type='in_house'"):
-        validate_in_house_fields("chartink", None, RULE_CONFIG, None)
+        validate_rule_in_house_fields("chartink", None, RULE_CONFIG, None)
 
 
-def test_validate_in_house_fields_webhook_source_with_nothing_set_is_fine():
-    validate_in_house_fields("chartink", None, None, None)  # no raise
+def test_validate_rule_in_house_fields_webhook_source_with_nothing_set_is_fine():
+    validate_rule_in_house_fields("chartink", None, None, None)  # no raise
 
 
-# --- StrategyCreate integration --------------------------------------------------------------
+# --- RuleCreate integration --------------------------------------------------------------
 
 
-def test_strategy_create_in_house_valid():
-    s = StrategyCreate(**_in_house())
-    assert s.underlying == "GOLDM"
-    assert s.rule_config == RULE_CONFIG
-    assert s.segment == "MCX"
+def test_rule_create_in_house_valid():
+    r = RuleCreate(**_in_house())
+    assert r.underlying == "GOLDM"
+    assert r.rule_config == RULE_CONFIG
+    assert r.segment == "MCX"
 
 
-def test_strategy_create_in_house_missing_underlying_rejected():
+def test_rule_create_in_house_missing_underlying_rejected():
     with pytest.raises(ValidationError, match="requires underlying"):
-        StrategyCreate(**_in_house(underlying=None))
+        RuleCreate(**_in_house(underlying=None))
 
 
-def test_strategy_create_in_house_missing_rule_config_rejected():
+def test_rule_create_in_house_missing_rule_config_rejected():
     with pytest.raises(ValidationError, match="requires rule_config"):
-        StrategyCreate(**_in_house(rule_config=None))
+        RuleCreate(**_in_house(rule_config=None))
 
 
-def test_strategy_create_in_house_missing_interval_rejected():
+def test_rule_create_in_house_missing_interval_rejected():
     with pytest.raises(ValidationError, match="requires interval"):
-        StrategyCreate(**_in_house(interval=None))
+        RuleCreate(**_in_house(interval=None))
 
 
-def test_strategy_create_in_house_bad_rule_type_rejected():
+def test_rule_create_in_house_bad_rule_type_rejected():
     with pytest.raises(ValidationError):
-        StrategyCreate(**_in_house(rule_config={"type": "unknown_rule"}))
+        RuleCreate(**_in_house(rule_config={"type": "unknown_rule"}))
 
 
-def test_strategy_create_chartink_with_underlying_rejected():
+def test_rule_create_chartink_with_underlying_rejected():
     with pytest.raises(ValidationError, match="only applies to source_type='in_house'"):
-        StrategyCreate(
-            name="x",
-            source_type="chartink",
-            horizon="intraday",
-            instrument_type="spot",
-            square_off_time="15:00:00",
-            underlying="GOLDM",
-        )
+        RuleCreate(name="x", source_type="chartink", underlying="GOLDM")
 
 
-def test_strategy_create_chartink_without_in_house_fields_still_works():
-    s = StrategyCreate(
-        name="x",
-        source_type="chartink",
-        horizon="intraday",
-        instrument_type="spot",
-        square_off_time="15:00:00",
-    )
-    assert s.underlying is None
-    assert s.rule_config is None
+def test_rule_create_chartink_without_in_house_fields_still_works():
+    r = RuleCreate(name="x", source_type="chartink")
+    assert r.underlying is None
+    assert r.rule_config is None
+
+
+def test_rule_create_chartink_with_provider_rule_name_works():
+    r = RuleCreate(name="My renamed scan", source_type="chartink", provider_rule_name="Original scan name")
+    assert r.provider_rule_name == "Original scan name"
+
+
+def test_rule_create_in_house_with_provider_rule_name_rejected():
+    with pytest.raises(ValidationError, match="provider_rule_name only applies to source_type != 'in_house'"):
+        RuleCreate(**_in_house(provider_rule_name="Original scan name"))
+
+
+def test_rule_create_breakout_requires_interval_equal_ltf_interval():
+    with pytest.raises(ValidationError, match="interval must equal rule_config.ltf_interval"):
+        RuleCreate(**_in_house(rule_config=BREAKOUT_RULE_CONFIG, interval="5min"))
+
+
+def test_rule_create_breakout_with_matching_interval_is_fine():
+    r = RuleCreate(**_in_house(rule_config=BREAKOUT_RULE_CONFIG, interval="3min"))
+    assert r.interval == "3min"
+
+
+def test_rule_create_universe_requires_nse_segment():
+    with pytest.raises(ValidationError, match="requires segment='NSE'"):
+        RuleCreate(**_in_house(segment="MCX", underlying_type="universe"))
+
+
+def test_rule_create_universe_with_nse_segment_is_fine():
+    r = RuleCreate(**_in_house(segment="NSE", underlying_type="universe", underlying="NIFTYBANK"))
+    assert r.underlying_type == "universe"

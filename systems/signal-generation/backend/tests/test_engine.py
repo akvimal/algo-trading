@@ -22,12 +22,12 @@ def test_history_window_caps_at_max_days_for_large_bar_counts():
     assert (to_date - from_date).days <= 30
 
 
-# --- _target_symbols: expanding a Strategy into what the engine actually checks -------------
+# --- _target_symbols: expanding a Rule into what the engine actually checks -------------
 
 
 @dataclass
-class FakeStrategy:
-    """Stands in for db_models.Strategy - _target_symbols only reads
+class FakeRule:
+    """Stands in for db_models.Rule - _target_symbols only reads
     .id/.underlying/.underlying_type."""
 
     underlying: str
@@ -40,26 +40,26 @@ class FakeStrategy:
 
 
 def test_target_symbols_symbol_scoped_returns_just_its_own_underlying():
-    strategy = FakeStrategy(underlying="RELIANCE", underlying_type="symbol")
-    result = _target_symbols(strategy, get_universe_constituents=lambda key: ["SHOULD", "NOT", "BE", "CALLED"])
+    rule_row = FakeRule(underlying="RELIANCE", underlying_type="symbol")
+    result = _target_symbols(rule_row, get_universe_constituents=lambda key: ["SHOULD", "NOT", "BE", "CALLED"])
     assert result == ["RELIANCE"]
 
 
 def test_target_symbols_universe_scoped_returns_constituents():
-    strategy = FakeStrategy(underlying="NIFTYBANK", underlying_type="universe")
-    result = _target_symbols(strategy, get_universe_constituents=lambda key: ["HDFCBANK", "ICICIBANK"] if key == "NIFTYBANK" else None)
+    rule_row = FakeRule(underlying="NIFTYBANK", underlying_type="universe")
+    result = _target_symbols(rule_row, get_universe_constituents=lambda key: ["HDFCBANK", "ICICIBANK"] if key == "NIFTYBANK" else None)
     assert result == ["HDFCBANK", "ICICIBANK"]
 
 
 def test_target_symbols_unresolvable_universe_returns_empty_list():
-    strategy = FakeStrategy(underlying="NOT_A_REAL_INDEX", underlying_type="universe")
-    result = _target_symbols(strategy, get_universe_constituents=lambda key: None)
+    rule_row = FakeRule(underlying="NOT_A_REAL_INDEX", underlying_type="universe")
+    result = _target_symbols(rule_row, get_universe_constituents=lambda key: None)
     assert result == []
 
 
 def test_target_symbols_empty_universe_constituents_returns_empty_list():
-    strategy = FakeStrategy(underlying="NIFTYBANK", underlying_type="universe")
-    result = _target_symbols(strategy, get_universe_constituents=lambda key: [])
+    rule_row = FakeRule(underlying="NIFTYBANK", underlying_type="universe")
+    result = _target_symbols(rule_row, get_universe_constituents=lambda key: [])
     assert result == []
 
 

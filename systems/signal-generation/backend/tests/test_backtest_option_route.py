@@ -1,22 +1,21 @@
 """Route-level tests for _backtest_one_symbol/_backtest_one_symbol_option
-(app/api/routes/strategies.py) - Phase 4c's instrument_type='option'
-branch. Same "plain fakes over a real Session" convention as
+(app/api/routes/rules.py) - Phase 4c's instrument_type='option' branch.
+Same "plain fakes over a real Session" convention as
 test_backtest_universe_route.py; unlike that file, a real (fake) db.get
-IS exercised here since crossover-rule option strategies still need their
+IS exercised here since crossover-rule option backtests still need their
 referenced Indicator resolved."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
-from typing import Optional
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 
-import app.api.routes.strategies as strategies_route
+import app.api.routes.rules as rules_route
 from app.adapters.db import models as db_models
 from app.adapters.market_data.client import ResolvedUnderlying
-from app.domain.models import CrossoverRuleConfig, RangeBreakoutRuleConfig
 from app.domain.option_backtest import MAX_OPTION_BACKTEST_DAYS
+from app.domain.rule import CrossoverRuleConfig, RangeBreakoutRuleConfig, RuleBacktestRequest
 from app.domain.rules import CandleClose
 
 INDICATOR_ID = "11111111-1111-1111-1111-111111111111"
@@ -30,23 +29,12 @@ _ENTRY_CLOSES = [10, 11, 10, 13, 20, 15]
 
 
 @dataclass
-class FakeStrategy:
-    id: str = "strategy-1"
-    instrument_type: str = "option"
-    horizon: str = "intraday"
+class FakeRule:
+    id: str = "rule-1"
     segment: str = "NSE"
     underlying: str = "NIFTY"
+    underlying_type: str = "symbol"
     interval: str = "5min"
-    regime_filter_enabled: bool = False
-    regime_filter_checks: list = field(default_factory=list)
-    stop_loss_method: Optional[str] = None
-    stop_loss_interval: Optional[str] = None
-    stop_loss_percent: Optional[float] = None
-    target_percent: Optional[float] = None
-    trailing_stop_enabled: bool = False
-    option_position_style: str = "spread"
-    option_strike_moneyness: str = "ATM"
-    square_off_time: Optional[time] = None
 
 
 @dataclass
@@ -78,13 +66,13 @@ def _flat_leg(closes: list[float]) -> list[CandleClose]:
 
 def _patch_common(monkeypatch, leg_series: dict[tuple[str, str], list[CandleClose]]):
     monkeypatch.setattr(
-        strategies_route, "resolve_underlying", lambda segment, symbol: ResolvedUnderlying(symbol, "NSE", symbol, "NSE", 1)
+        rules_route, "resolve_underlying", lambda segment, symbol: ResolvedUnderlying(symbol, "NSE", symbol, "NSE", 1)
     )
     monkeypatch.setattr(
-        strategies_route, "get_candle_history", lambda exchange, symbol, interval, from_date, to_date: list(_UNDERLYING_CANDLES)
+        rules_route, "get_candle_history", lambda exchange, symbol, interval, from_date, to_date: list(_UNDERLYING_CANDLES)
     )
     monkeypatch.setattr(
-        strategies_route,
+        rules_route,
         "get_option_leg_history",
         lambda exchange, symbol, option_type, strike, expiry_flag, expiry_code, interval, from_date, to_date: leg_series.get(
             (option_type, strike)
@@ -100,7 +88,8 @@ def test_backtest_one_symbol_option_produces_combined_premium_trades(monkeypatch
     }
     _patch_common(monkeypatch, leg_series)
 
-    result = strategies_route._backtest_one_symbol(FakeDb(), FakeStrategy(), RULE, "NIFTY", BASE.date(), BASE.date())
+    payload = RuleBacktestRequest(instrument_type="option")
+    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
 
     assert result["trade_count"] == 1
     trade = result["trades"][0]
@@ -119,9 +108,8 @@ def test_backtest_one_symbol_option_positional_horizon_uses_month_expiry(monkeyp
     }
     _patch_common(monkeypatch, leg_series)
 
-    result = strategies_route._backtest_one_symbol(
-        FakeDb(), FakeStrategy(horizon="positional"), RULE, "NIFTY", BASE.date(), BASE.date()
-    )
+    payload = RuleBacktestRequest(instrument_type="option", horizon="positional")
+    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
 
     assert result["trades"][0]["legs"]["expiry_flag"] == "MONTH"
 
@@ -129,9 +117,10 @@ def test_backtest_one_symbol_option_positional_horizon_uses_month_expiry(monkeyp
 def test_backtest_one_symbol_option_rejects_non_crossover_rule(monkeypatch):
     _patch_common(monkeypatch, {})
 
+    payload = RuleBacktestRequest(instrument_type="option")
     with pytest.raises(HTTPException) as exc_info:
-        strategies_route._backtest_one_symbol(
-            FakeDb(), FakeStrategy(), RangeBreakoutRuleConfig(breakout_period=4), "NIFTY", BASE.date(), BASE.date()
+        rules_route._backtest_one_symbol(
+            FakeDb(), FakeRule(), RangeBreakoutRuleConfig(breakout_period=4), payload, "NIFTY", BASE.date(), BASE.date()
         )
     assert exc_info.value.status_code == 422
     assert "crossover" in exc_info.value.detail
@@ -140,9 +129,10 @@ def test_backtest_one_symbol_option_rejects_non_crossover_rule(monkeypatch):
 def test_backtest_one_symbol_option_rejects_range_over_max_days(monkeypatch):
     _patch_common(monkeypatch, {})
 
+    payload = RuleBacktestRequest(instrument_type="option")
     too_wide_to = BASE.date() + timedelta(days=MAX_OPTION_BACKTEST_DAYS + 1)
     with pytest.raises(HTTPException) as exc_info:
-        strategies_route._backtest_one_symbol(FakeDb(), FakeStrategy(), RULE, "NIFTY", BASE.date(), too_wide_to)
+        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), too_wide_to)
     assert exc_info.value.status_code == 422
     assert "too wide" in exc_info.value.detail
 
@@ -154,24 +144,22 @@ def test_backtest_one_symbol_option_rejects_naked_style(monkeypatch):
     # simulation.
     _patch_common(monkeypatch, {})
 
+    payload = RuleBacktestRequest(instrument_type="option", option_position_style="naked")
     with pytest.raises(HTTPException) as exc_info:
-        strategies_route._backtest_one_symbol(
-            FakeDb(), FakeStrategy(option_position_style="naked"), RULE, "NIFTY", BASE.date(), BASE.date()
-        )
+        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
     assert exc_info.value.status_code == 422
     assert "naked" in exc_info.value.detail
 
 
 def test_backtest_one_symbol_option_rejects_non_atm_moneyness(monkeypatch):
     # Same reasoning as the naked guard - legs_for_direction is also
-    # hardcoded to ATM, so a non-ATM primary-leg strategy would silently
-    # backtest against the wrong strike, not just the wrong leg count.
+    # hardcoded to ATM, so a non-ATM primary-leg backtest would silently
+    # run against the wrong strike, not just the wrong leg count.
     _patch_common(monkeypatch, {})
 
+    payload = RuleBacktestRequest(instrument_type="option", option_strike_moneyness="OTM1")
     with pytest.raises(HTTPException) as exc_info:
-        strategies_route._backtest_one_symbol(
-            FakeDb(), FakeStrategy(option_strike_moneyness="OTM1"), RULE, "NIFTY", BASE.date(), BASE.date()
-        )
+        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
     assert exc_info.value.status_code == 422
     assert "option_strike_moneyness" in exc_info.value.detail
 
@@ -179,7 +167,8 @@ def test_backtest_one_symbol_option_rejects_non_atm_moneyness(monkeypatch):
 def test_backtest_one_symbol_option_skips_trade_when_legs_unresolvable(monkeypatch):
     _patch_common(monkeypatch, {})  # leg_series empty -> get_option_leg_history always returns None
 
-    result = strategies_route._backtest_one_symbol(FakeDb(), FakeStrategy(), RULE, "NIFTY", BASE.date(), BASE.date())
+    payload = RuleBacktestRequest(instrument_type="option")
+    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
 
     assert result["trade_count"] == 0
     assert result["trades"] == []

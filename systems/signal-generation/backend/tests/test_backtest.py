@@ -11,7 +11,7 @@ from app.domain.backtest import (
     replay,
     simulate_trades,
 )
-from app.domain.models import CrossoverRuleConfig, RangeBreakoutRuleConfig
+from app.domain.rule import CrossoverRuleConfig, RangeBreakoutRuleConfig
 from app.domain.range_breakout import evaluate_range_breakout
 from app.domain.rules import CandleClose, bars_needed, evaluate
 

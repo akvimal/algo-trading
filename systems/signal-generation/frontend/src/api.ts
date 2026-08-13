@@ -39,9 +39,11 @@ export type OptionSlScope = "combined" | "individual";
 // distinction meaningless there).
 export type ContractDayFilter = "any" | "start" | "expiry";
 // Which market this strategy trades in - distinct from `exchange` (still
-// fixed to "NSE", the only one actually wired up end-to-end). Only drives
-// the square_off_time default; MCX/CRYPTO can be recorded as intent even
-// though nothing downstream trades them yet.
+// fixed to "NSE", the only one actually wired up end-to-end), and distinct
+// from a linked Rule's own `segment` (which market the rule's
+// condition/universe watches - see Rule below; the two aren't required to
+// match). Only drives the square_off_time default; MCX/CRYPTO can be
+// recorded as intent even though nothing downstream trades them yet.
 export type Segment = "NSE" | "MCX" | "CRYPTO";
 
 // Signal-conflict policy, per-strategy - passed through unchanged on
@@ -55,12 +57,13 @@ export type Segment = "NSE" | "MCX" | "CRYPTO";
 export type DuplicateSignalPolicy = "skip" | "add_position";
 export type CounterSignalPolicy = "skip" | "close_and_flip";
 
-// in_house only. 'symbol' (default): underlying names one traded symbol,
-// as before. 'universe': underlying instead names an NSE
+// A Rule's own scanning scope. 'symbol' (default): underlying names one
+// traded symbol. 'universe': underlying instead names an NSE
 // index-constituent group key (e.g. "NIFTYBANK", from fetchUniverses()
-// below) - the engine evaluates this strategy's rule against every
-// constituent independently. Only valid combined with segment='NSE' and
-// instrument_type='spot'.
+// below) - the engine evaluates the rule against every constituent
+// independently. Only valid combined with segment='NSE' - not coupled to
+// any linked Strategy's instrument_type (a universe scan can back a spot,
+// future, or option strategy alike).
 export type UnderlyingType = "symbol" | "universe";
 
 // The 5 sub-conditions the backend's app/domain/regime.py classify_regime
@@ -93,7 +96,7 @@ export function defaultSquareOffTime(horizon: Horizon, segment: Segment): string
 
 // Indicators are their own entity (backend: signal_generation.indicators)
 // so one definition (e.g. "RSI 14") can be reused by any number of
-// strategies - see docs/architecture.md. Only "rsi" exists today.
+// rules - see docs/architecture.md. Only "rsi" exists today.
 export type IndicatorType = "rsi";
 
 // sma_period is RSI's own signal line (SMA of RSI) - bundled into the
@@ -122,11 +125,11 @@ export type IndicatorUpdate = {
   params?: IndicatorParams;
 };
 
-// Names WHICH indicator a strategy uses; "crosses its own signal line"
-// needs no parameters of its own since the signal line is the indicator's
-// own concern (e.g. RsiParams.sma_period). A typed JSON blob (not
-// dedicated columns) so a second rule type later is new code, not a
-// migration. See backend's CrossoverRuleConfig.
+// Names WHICH indicator a rule uses; "crosses its own signal line" needs
+// no parameters of its own since the signal line is the indicator's own
+// concern (e.g. RsiParams.sma_period). A typed JSON blob (not dedicated
+// columns) so a second rule type later is new code, not a migration. See
+// backend's CrossoverRuleConfig.
 export type CrossoverRuleConfig = {
   type: "crossover";
   indicator_id: string;
@@ -153,16 +156,74 @@ export type BreakoutRuleConfig = {
 
 // A third, minimal rule type - single-timeframe Donchian breakout ("close
 // greater than the last N candles' high", or below their low for a
-// bearish signal), on the strategy's own `interval`. No indicator, no
-// htf/ltf split, no rule-intrinsic exit scheme - the strategy's own
-// generically configured stop-loss/target/square-off applies as-is,
-// unlike BreakoutRuleConfig above. See backend's RangeBreakoutRuleConfig.
+// bearish signal), on the rule's own `interval`. No indicator, no htf/ltf
+// split, no rule-intrinsic exit scheme - whatever exit config the linked
+// Strategy (or a backtest request) supplies applies as-is, unlike
+// BreakoutRuleConfig above. See backend's RangeBreakoutRuleConfig.
 export type RangeBreakoutRuleConfig = {
   type: "range_breakout";
   breakout_period: number;
 };
 
 export type RuleConfig = CrossoverRuleConfig | BreakoutRuleConfig | RangeBreakoutRuleConfig;
+
+// A saved, reusable, independently-backtestable definition of *when a
+// signal should fire* - a Strategy just picks one (Strategy.rule_id
+// below). One Rule can back many Strategies (e.g. the same crossover
+// backing both a spot strategy and an option-spread strategy on the same
+// underlying) - see docs/architecture.md's "Rules module" section.
+export type Rule = {
+  id: string;
+  name: string;
+  description: string | null;
+  source_type: SourceType;
+  // source_type != 'in_house' only - the scan's own name on the
+  // provider's side, if `name` renames it locally.
+  provider_rule_name: string | null;
+  segment: Segment;
+  // in_house only - the logical underlying to watch (e.g. "GOLDM",
+  // "NIFTY") and its rule config. Null for external (webhook) rules.
+  underlying: string | null;
+  underlying_type: UnderlyingType;
+  interval: Interval | null;
+  rule_config: RuleConfig | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RuleCreate = {
+  name: string;
+  description?: string;
+  source_type: SourceType;
+  provider_rule_name?: string;
+  segment?: Segment;
+  underlying?: string;
+  underlying_type?: UnderlyingType;
+  interval?: Interval;
+  rule_config?: RuleConfig;
+};
+
+// source_type isn't here - not editable after creation (see backend's
+// RuleUpdate docstring) - delete+recreate if it's genuinely wrong.
+export type RuleUpdate = {
+  name?: string;
+  description?: string;
+  provider_rule_name?: string;
+  segment?: Segment;
+  underlying?: string;
+  underlying_type?: UnderlyingType;
+  interval?: Interval;
+  rule_config?: RuleConfig;
+};
+
+// Lightweight embed on Strategy (see below) - which rule backs it, without
+// an extra fetch per row in the strategy table.
+export type RuleSummary = {
+  id: string;
+  name: string;
+  source_type: SourceType;
+  segment: Segment;
+};
 
 // No quantity/capital field here on purpose - the actual sizing math
 // (capital cap, risk %) is still execution's job. Stop-loss/target ARE
@@ -175,7 +236,10 @@ export type Strategy = {
   exchange: string;
   horizon: Horizon;
   instrument_type: InstrumentType;
-  interval: Interval | null;
+  // Which saved Rule decides when this strategy's signals fire - required
+  // for every strategy, in-house or external. See Rule above.
+  rule_id: string;
+  rule: RuleSummary | null;
   stop_loss_method: StopLossMethod | null;
   stop_loss_interval: StopLossInterval | null;
   stop_loss_percent: number | null;
@@ -192,11 +256,6 @@ export type Strategy = {
   // above); null for swing/positional, since square-off doesn't apply
   // there. execution has no platform-wide default.
   square_off_time: string | null; // "HH:MM:SS"
-  // in_house only - the logical underlying to watch (e.g. "GOLDM",
-  // "NIFTY") and its rule config. Null for webhook strategies.
-  underlying: string | null;
-  underlying_type: UnderlyingType;
-  rule_config: RuleConfig | null;
   // in_house only (harmlessly ignored for webhook strategies) - gates a
   // crossover signal on a single-timeframe market regime classification
   // (see the backend's app/domain/regime.py). Default false preserves
@@ -225,7 +284,7 @@ export type StrategyCreate = {
   source_type: SourceType;
   horizon: Horizon;
   instrument_type: InstrumentType;
-  interval?: Interval;
+  rule_id: string;
   stop_loss_method?: StopLossMethod;
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
@@ -239,10 +298,6 @@ export type StrategyCreate = {
   // Optional - the backend auto-fills it from horizon+segment when
   // horizon='intraday'; required explicitly for other horizons.
   square_off_time?: string;
-  // Required together when source_type='in_house', forbidden otherwise.
-  underlying?: string;
-  underlying_type?: UnderlyingType;
-  rule_config?: RuleConfig;
   regime_filter_enabled?: boolean;
   regime_filter_checks?: RegimeCheckName[];
   duplicate_signal_policy?: DuplicateSignalPolicy;
@@ -255,13 +310,14 @@ export type StrategyCreate = {
 // source_type/exchange aren't here - not editable after creation, see
 // the backend's StrategyUpdate docstring. Same for stop_loss_method: it
 // can be set/switched via PATCH but never cleared back to null (see
-// backend docstring) - same limitation `interval` already has.
+// backend docstring) - same limitation `rule_id` (switching from in-house
+// to external) already has.
 export type StrategyEdit = {
   name?: string;
   status?: StrategyStatus;
   horizon?: Horizon;
   instrument_type?: InstrumentType;
-  interval?: Interval | null;
+  rule_id?: string;
   stop_loss_method?: StopLossMethod;
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
@@ -273,9 +329,6 @@ export type StrategyEdit = {
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   square_off_time?: string;
-  underlying?: string;
-  underlying_type?: UnderlyingType;
-  rule_config?: RuleConfig;
   regime_filter_enabled?: boolean;
   regime_filter_checks?: RegimeCheckName[];
   duplicate_signal_policy?: DuplicateSignalPolicy;
@@ -284,8 +337,8 @@ export type StrategyEdit = {
   active_to_time?: string;
 };
 
-// A simulated paper trade from POST /strategies/{id}/backtest - entry on
-// a fresh signal, closed the same way execution's real position would be
+// A simulated paper trade from POST /rules/{id}/backtest - entry on a
+// fresh signal, closed the same way execution's real position would be
 // (stop-loss/target hit, square-off, or, with nothing more specific
 // configured/triggered, the next opposite-direction signal). See the
 // backend's app/domain/backtest.py simulate_trades for exactly how.
@@ -314,8 +367,8 @@ export type BacktestResult = {
   trades: BacktestTrade[];
 };
 
-// POST /strategies/{id}/backtest for a universe-scoped strategy - the
-// same backtest run independently against every constituent and pooled:
+// POST /rules/{id}/backtest for a universe-scoped rule - the same
+// backtest run independently against every constituent and pooled:
 // trade_count/hypothetical_pnl are totals across all of them,
 // constituents_skipped counts ones that failed to resolve (delisted,
 // not in market-data's cache, ...) rather than failing the whole
@@ -330,7 +383,7 @@ export type UniverseBacktestResult = {
   by_symbol: Record<string, BacktestResult>;
 };
 
-// One row per param combination tried by POST /strategies/{id}/backtest/grid -
+// One row per param combination tried by POST /rules/{id}/backtest/grid -
 // `error` is present instead of trade_count/hypothetical_pnl when that
 // combination fails its own param validation (e.g. period=1) rather than
 // being silently dropped. Rows arrive pre-sorted best (highest pnl) first.
@@ -344,6 +397,34 @@ export type GridBacktestRow = {
 export type GridBacktestResult = {
   combinations_tested: number;
   results: GridBacktestRow[];
+};
+
+// Optional per-run overrides for POST /rules/{id}/backtest - a Rule alone
+// carries no exit config/instrument_type/horizon (all Strategy-owned
+// trading concepts, see Rule above); omitting the exit-config fields
+// reproduces the backend's bare ExitConfig() defaults: opposite-signal/
+// end-of-data exits only, no stop-loss/target.
+export type RuleBacktestRequest = {
+  instrument_type?: InstrumentType;
+  horizon?: Horizon; // instrument_type='option' only - WEEK vs MONTH expiry choice
+  stop_loss_method?: StopLossMethod;
+  stop_loss_interval?: StopLossInterval;
+  stop_loss_percent?: number;
+  target_percent?: number;
+  trailing_stop_enabled?: boolean;
+  square_off_time?: string;
+  option_position_style?: OptionPositionStyle;
+  option_strike_moneyness?: OptionStrikeMoneyness;
+};
+
+export type RuleBacktestGridRequest = {
+  param_grid: Record<string, number[]>;
+  stop_loss_method?: StopLossMethod;
+  stop_loss_interval?: StopLossInterval;
+  stop_loss_percent?: number;
+  target_percent?: number;
+  trailing_stop_enabled?: boolean;
+  square_off_time?: string;
 };
 
 export type ProviderSignal = {
@@ -371,7 +452,7 @@ const SIGNAL_GENERATION_PORT = import.meta.env.VITE_SIGNAL_GENERATION_PORT ?? "8
 const SIGNAL_PROCESSING_PORT = import.meta.env.VITE_SIGNAL_PROCESSING_PORT ?? "8000";
 const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
 
-// This system's own backend - owns the strategies table.
+// This system's own backend - owns the strategies/rules tables.
 const SIGNAL_GENERATION_BASE_URL = `http://${location.hostname}:${SIGNAL_GENERATION_PORT}`;
 // signal-processing's API, read directly from the browser (CORS-enabled)
 // for per-strategy signal activity - a view, not a copy of that data.
@@ -417,6 +498,71 @@ export async function deleteIndicator(id: string): Promise<void> {
   }
 }
 
+export async function fetchRules(sourceType?: SourceType): Promise<Rule[]> {
+  const params = sourceType ? `?source_type=${sourceType}` : "";
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules${params}`);
+  return asJson(res, "GET /rules");
+}
+
+export async function createRule(payload: RuleCreate): Promise<Rule> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "POST /rules");
+}
+
+export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PATCH /rules/{id}");
+}
+
+export async function deleteRule(id: string): Promise<void> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`DELETE /rules/{id} failed: ${res.status}`);
+  }
+}
+
+export async function backtestRule(
+  id: string,
+  from: string,
+  to: string,
+  overrides: RuleBacktestRequest = {},
+): Promise<BacktestResult | UniverseBacktestResult> {
+  const params = new URLSearchParams({ from, to });
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}/backtest?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(overrides),
+  });
+  return asJson(res, "POST /rules/{id}/backtest");
+}
+
+// Sweeps the rule's referenced indicator's params (e.g. RSI's period/
+// sma_period) over candidate value lists and reports naive P&L per
+// combination - does NOT mutate the underlying Indicator, see api docstring.
+export async function backtestRuleGrid(
+  id: string,
+  from: string,
+  to: string,
+  paramGrid: Record<string, number[]>,
+  overrides: Omit<RuleBacktestGridRequest, "param_grid"> = {},
+): Promise<GridBacktestResult> {
+  const params = new URLSearchParams({ from, to });
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...overrides, param_grid: paramGrid }),
+  });
+  return asJson(res, "POST /rules/{id}/backtest/grid");
+}
+
 export async function fetchStrategies(sourceType?: SourceType): Promise<Strategy[]> {
   const params = sourceType ? `?source_type=${sourceType}` : "";
   const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies${params}`);
@@ -446,34 +592,6 @@ export async function deleteStrategy(id: string): Promise<void> {
   if (!res.ok) {
     throw new Error(`DELETE /strategies/{id} failed: ${res.status}`);
   }
-}
-
-export async function backtestStrategy(
-  id: string,
-  from: string,
-  to: string,
-): Promise<BacktestResult | UniverseBacktestResult> {
-  const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies/${id}/backtest?${params}`, { method: "POST" });
-  return asJson(res, "POST /strategies/{id}/backtest");
-}
-
-// Sweeps the strategy's referenced indicator's params (e.g. RSI's period/
-// sma_period) over candidate value lists and reports naive P&L per
-// combination - does NOT mutate the underlying Indicator, see api docstring.
-export async function backtestStrategyGrid(
-  id: string,
-  from: string,
-  to: string,
-  paramGrid: Record<string, number[]>,
-): Promise<GridBacktestResult> {
-  const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies/${id}/backtest/grid?${params}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ param_grid: paramGrid }),
-  });
-  return asJson(res, "POST /strategies/{id}/backtest/grid");
 }
 
 export async function fetchSignalsForStrategy(strategyId: string, limit = 20): Promise<ProviderSignal[]> {

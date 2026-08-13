@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.domain.models import IndicatorCreate, IndicatorOut, IndicatorUpdate, validate_indicator_params
+from app.domain.rule import IndicatorCreate, IndicatorOut, IndicatorUpdate, validate_indicator_params
 
 router = APIRouter()
 

@@ -25,7 +25,7 @@ from typing import Callable, Optional
 from pydantic import ValidationError
 
 from app.domain import regime
-from app.domain.models import RuleConfig, validate_indicator_params
+from app.domain.rule import RuleConfig, validate_indicator_params
 from app.domain.rules import Bias, CandleClose, SimulatedTrade, bars_needed, evaluate
 
 # What simulate_trades/_simulate_one_trade actually need to compute a bias

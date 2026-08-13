@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.domain.models import IndicatorCreate, IndicatorUpdate, RsiParams, validate_indicator_params
+from app.domain.rule import IndicatorCreate, IndicatorUpdate, RsiParams, validate_indicator_params
 
 
 def test_validate_indicator_params_accepts_valid_rsi():

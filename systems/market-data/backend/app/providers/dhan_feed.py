@@ -93,6 +93,7 @@ def parse_disconnect(data: bytes) -> dict:
 
 
 _lock = threading.Lock()
+_feed_thread_started = False
 _connected = False
 _connected_at: Optional[datetime] = None
 _last_message_at: Optional[datetime] = None
@@ -252,9 +253,21 @@ def _run_forever_loop() -> None:
 
 def start_feed() -> None:
     """Starts the background thread maintaining the live feed connection -
-    no-op if Dhan credentials aren't configured. Call once from app.main's
-    startup handler, alongside app.scheduler.start_scheduler()."""
+    no-op if Dhan credentials aren't configured. No longer called
+    unconditionally from app.main's startup handler (its reconnect-on-
+    every-restart behavior was hammering Dhan's own account-wide rate
+    limit, which also blocks the plain REST quote API - reproduced live)
+    - now a deliberate opt-in via POST /dhan/feed/subscribe instead.
+    Idempotent - a second call while the thread's already running is a
+    no-op rather than spawning a duplicate connection (which would make
+    the exact rate-limit problem this change addresses worse, not
+    better)."""
+    global _feed_thread_started
     if not settings.dhan_client_id or not settings.dhan_access_token:
         logger.info("Dhan live feed not started - DHAN_CLIENT_ID/DHAN_ACCESS_TOKEN not configured")
         return
+    with _lock:
+        if _feed_thread_started:
+            return
+        _feed_thread_started = True
     threading.Thread(target=_run_forever_loop, daemon=True, name="dhan-live-feed").start()

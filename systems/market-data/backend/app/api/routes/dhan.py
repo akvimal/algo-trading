@@ -4,17 +4,20 @@ pair. The actual renewal also runs on a schedule (app/scheduler.py); this
 exists for on-demand renewal and to see the current in-memory state
 (app/providers/dhan.py's renew_access_token/renew_token_status).
 
-Also the live market feed's status + manual subscribe endpoint - the feed
-connection itself runs continuously in a background thread
-(app/providers/dhan_feed.py's start_feed(), called from app.main's
-startup handler), same relationship the scheduled Dhan token renewal has
-to its own manual POST /dhan/renew-token above."""
+Also the live market feed's status + manual subscribe endpoint - unlike
+Delta's own feed, the Dhan feed is no longer auto-started on boot (its
+reconnect-on-every-restart behavior was hammering Dhan's own account-wide
+rate limit, which also blocks the plain REST quote API - reproduced live),
+so POST /dhan/feed/subscribe below now calls start_feed() itself before
+subscribing (idempotent - a no-op if the background thread's already
+running) rather than relying on app.main's startup handler to have started
+it already."""
 
 from fastapi import APIRouter, HTTPException
 
 from app.domain.models import FeedSubscribeRequest
 from app.providers.dhan import renew_access_token, renew_token_status
-from app.providers.dhan_feed import feed_status, subscribe
+from app.providers.dhan_feed import feed_status, start_feed, subscribe
 
 router = APIRouter()
 
@@ -39,6 +42,7 @@ def get_feed_status():
 
 @router.post("/dhan/feed/subscribe")
 def subscribe_feed(payload: FeedSubscribeRequest):
+    start_feed()
     try:
         ok = subscribe(payload.exchange, payload.symbol)
     except ValueError as exc:

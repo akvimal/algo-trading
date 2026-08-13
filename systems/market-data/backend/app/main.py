@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import candles, delta, dhan, health, instruments, options, quotes
 from app.providers.delta_feed import start_feed as start_delta_feed
-from app.providers.dhan_feed import start_feed as start_dhan_feed
 from app.scheduler import start_scheduler
 
 app = FastAPI(title="market-data")
@@ -27,5 +26,13 @@ app.include_router(options.router)
 @app.on_event("startup")
 def _startup() -> None:
     start_scheduler()
-    start_dhan_feed()
+    # Dhan's live feed is no longer auto-started on boot - its
+    # reconnect-on-every-restart behavior was hammering Dhan's own
+    # account-wide rate limit (keyed by DHAN_CLIENT_ID, shared with the
+    # REST quote API - a 429 block here also broke plain LTP calls,
+    # reproduced live) every time this service gets rebuilt/restarted,
+    # which happens often during normal development. Still available via
+    # POST /dhan/feed/subscribe if a live tick feed is actually needed for
+    # a session - that's a deliberate, one-off opt-in now instead of an
+    # unconditional one on every boot.
     start_delta_feed()

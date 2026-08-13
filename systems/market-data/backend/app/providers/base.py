@@ -43,10 +43,12 @@ class QuoteProvider(ABC):
         if `underlying` isn't resolvable on this provider."""
 
     @abstractmethod
-    def get_lot_size(self, symbol: str) -> Optional[int]:
+    def get_lot_size(self, symbol: str) -> Optional[float]:
         """Lot size for an already-resolved trading symbol (1 for
-        instruments with no lot concept, e.g. NSE cash equity) - None if
-        the symbol is unknown. Used by execution to size futures
+        instruments with no lot concept, e.g. NSE cash equity; a real
+        fractional multiplier for Delta Exchange India CRYPTO perpetuals,
+        e.g. BTCUSD=0.001 - see DeltaProvider.get_lot_size) - None if the
+        symbol is unknown. Used by execution to size futures/CRYPTO
         positions in whole lots."""
 
     @abstractmethod

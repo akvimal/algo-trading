@@ -65,12 +65,15 @@ def resolve_symbol_by_security_id(exchange: str, security_id: str) -> Optional[s
     return resp.json()["symbol"]
 
 
-def get_lot_size(exchange: str, symbol: str) -> Optional[int]:
+def get_lot_size(exchange: str, symbol: str) -> Optional[float]:
     """Lot size for an already-resolved trading symbol (see market-data's
     GET /instruments/lot-size) - None if unknown, not an error. Only
     called for instrument_type='future' orders (see
     position_manager.open_position) - the NSE-spot path never pays this
-    extra call."""
+    extra call. int for NSE/MCX F&O; a real fraction for Delta Exchange
+    India CRYPTO perpetuals (e.g. BTCUSD=0.001) - previously truncated to
+    int() here, which silently zeroed every CRYPTO future's lot size and
+    crashed sizing with a division by zero (reproduced live)."""
     resp = requests.get(
         f"{settings.market_data_base_url}/instruments/lot-size",
         params={"exchange": exchange, "symbol": symbol},
@@ -79,4 +82,4 @@ def get_lot_size(exchange: str, symbol: str) -> Optional[int]:
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
-    return int(resp.json()["lot_size"])
+    return float(resp.json()["lot_size"])

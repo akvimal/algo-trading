@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from typing import Optional
 
+import pytest
+
 from app.domain.position_manager import (
     _apply_realized_pnl,
     _evaluate_exits,
@@ -97,6 +99,15 @@ def test_compute_quantity_floors_to_minimum_one_lot_when_capital_too_small():
     # Even 1 lot (65 units * 24500) can't be afforded by this capital -
     # still floors to 1 lot (65 units), same "always opens" rule as spot.
     assert compute_quantity(capital_per_trade=1000, price=24500.0, lot_size=65) == 65
+
+
+def test_compute_quantity_fractional_lot_size_for_crypto():
+    # Delta Exchange India CRYPTO perpetuals have a real fractional
+    # contract_value (BTCUSD=0.001 BTC/lot, confirmed live against
+    # /v2/products - see market-data's DeltaProvider.get_lot_size) -
+    # capital=1000 USD @ price=63000 -> floor(1000/(63000*0.001))=15 lots
+    # -> 15 * 0.001 = 0.015 BTC total, not 15 whole BTC.
+    assert compute_quantity(capital_per_trade=1000, price=63000.0, lot_size=0.001) == pytest.approx(0.015)
 
 
 def test_is_supported_intraday_spot_or_future():
@@ -245,6 +256,31 @@ def test_compute_risk_based_quantity_floors_to_minimum_one_lot():
         capital_per_trade=1000, risk_per_trade_pct=0.1, entry_price=24500.0, stop_loss_price=24400.0, lot_size=65
     )
     assert qty == 65  # 1 whole lot, not 0
+
+
+def test_compute_risk_based_quantity_fractional_lot_size_for_crypto():
+    # BTCUSD, lot_size=0.001 - risk-based lots = floor(1000/(500*0.001)) = 2000 lots;
+    # capital cap lots = floor(compute_quantity(50000, 63000, 0.001)/0.001) = floor(0.793/0.001*0.001)... -
+    # capital binds: floor(50000/(63000*0.001))=793 lots -> 793*0.001=0.793 BTC.
+    qty = compute_risk_based_quantity(
+        capital_per_trade=50000, risk_per_trade_pct=2.0, entry_price=63000.0, stop_loss_price=62500.0, lot_size=0.001
+    )
+    assert qty == pytest.approx(0.793)
+
+
+def test_compute_risk_based_quantity_capital_cap_not_off_by_one_lot_for_fractional_lot_size():
+    # Regression test (contract-guardian caught this live): capital_capped_lots
+    # used to be computed as compute_quantity(...) // lot_size - a multiply-
+    # then-divide round trip that's exact for whole-number lot_size but
+    # silently under-counts by 1 lot for many fractional (capital, price,
+    # lot_size) combinations, since float division has no tolerance for the
+    # representation error the earlier multiply introduced. capital=11,
+    # price=1000, lot_size=0.001 is exactly such a combination - the old code
+    # returned 0.01 (10 lots) instead of the correct 0.011 (11 lots).
+    qty = compute_risk_based_quantity(
+        capital_per_trade=11, risk_per_trade_pct=100.0, entry_price=1000.0, stop_loss_price=999.0, lot_size=0.001
+    )
+    assert qty == pytest.approx(0.011)
 
 
 # --- account balance bookkeeping (_apply_realized_pnl) --------------------------------------

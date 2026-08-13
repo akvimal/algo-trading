@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 GetLtpBatch = Callable[[str, list[str]], dict[str, float]]  # (exchange, symbols) -> {symbol: price}
 GetPreviousCandle = Callable[[str, str, str], Optional[dict]]  # (exchange, symbol, interval) -> candle dict or None
-GetLotSize = Callable[[str, str], Optional[int]]  # (exchange, symbol) -> lot size, or None if unknown
+GetLotSize = Callable[[str, str], Optional[float]]  # (exchange, symbol) -> lot size, or None if unknown
 
 
 def compute_pnl(action: str, entry_price: float, exit_price: float, quantity: float) -> float:
@@ -32,15 +32,19 @@ def compute_pnl(action: str, entry_price: float, exit_price: float, quantity: fl
     return (entry_price - exit_price) * quantity  # SELL = intraday short
 
 
-def compute_quantity(capital_per_trade: float, price: float, lot_size: int = 1) -> int:
+def compute_quantity(capital_per_trade: float, price: float, lot_size: float = 1) -> float:
     """Whole LOTS, returned as total units (lots * lot_size) - lot_size=1
     for instruments with no lot concept (NSE cash equity, and MCX
     commodity futures - Dhan's own lot-size convention there is already
-    1) and a real multiplier for others (e.g. NIFTY futures=65,
-    BANKNIFTY futures=30). Floors to a minimum of 1 lot even if
-    capital_per_trade can't strictly afford it - a position always opens
-    rather than being rejected for undersized capital. See
-    docs/architecture.md."""
+    1), a real integer multiplier for NSE/MCX F&O (e.g. NIFTY futures=65,
+    BANKNIFTY futures=30), and a real fractional multiplier for Delta
+    Exchange India CRYPTO perpetuals (e.g. BTCUSD=0.001 - see
+    market-data's DeltaProvider.get_lot_size). `lots` itself always stays
+    a whole number (you can't buy a fractional NUMBER of lots) even
+    though the returned total-units quantity is fractional for CRYPTO.
+    Floors to a minimum of 1 lot even if capital_per_trade can't strictly
+    afford it - a position always opens rather than being rejected for
+    undersized capital. See docs/architecture.md."""
     lots = max(1, int(capital_per_trade // (price * lot_size)))
     return lots * lot_size
 
@@ -58,8 +62,8 @@ def compute_target_percent_price(action: str, entry_price: float, target_percent
 
 
 def compute_risk_based_quantity(
-    capital_per_trade: float, risk_per_trade_pct: float, entry_price: float, stop_loss_price: float, lot_size: int = 1
-) -> int:
+    capital_per_trade: float, risk_per_trade_pct: float, entry_price: float, stop_loss_price: float, lot_size: float = 1
+) -> float:
     """quantity = min(risk_amount / stop_distance, the existing
     capital_per_trade value cap), in whole LOTS - risk-based sizing never
     bypasses the capital ceiling, it can only size smaller than it. Same
@@ -71,7 +75,14 @@ def compute_risk_based_quantity(
     stop_distance = abs(entry_price - stop_loss_price)
     risk_amount = capital_per_trade * risk_per_trade_pct / 100
     risk_based_lots = int(risk_amount // (stop_distance * lot_size))
-    capital_capped_lots = compute_quantity(capital_per_trade, entry_price, lot_size) // lot_size
+    # Computed directly from capital/price/lot_size, NOT by calling
+    # compute_quantity() and dividing back out by lot_size - that
+    # multiply-then-divide round trip is exact for whole-number lot_size
+    # (NSE/MCX F&O) but silently under-counts by 1 lot for many (capital,
+    # price, lot_size) combinations once lot_size is a real CRYPTO
+    # fraction (e.g. 0.001), since float division has no tolerance for
+    # the representation error the earlier multiply introduced.
+    capital_capped_lots = max(1, int(capital_per_trade // (entry_price * lot_size)))
     lots = max(1, min(risk_based_lots, capital_capped_lots))
     return lots * lot_size
 
@@ -303,21 +314,17 @@ def open_position(
         # target_price are unaffected (PnL is still (exit-entry)*quantity
         # regardless of how much margin backed that quantity).
         effective_capital = effective_capital * float(account.leverage)
-    if effective_capital < order.price:
-        capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
-        row = _reject(
-            db,
-            order,
-            signal_id,
-            f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
-            f"need at least {order.price} for 1 share)",
-        )
-        db.commit()
-        return row
 
     # Only futures carry a lot concept - spot (NSE cash equity) keeps
     # lot_size=1 with no extra network call, so that path's latency is
-    # unchanged from before this lookup existed.
+    # unchanged from before this lookup existed. Resolved BEFORE the
+    # balance check below so that check compares against the cost of the
+    # smallest tradeable unit (1 lot), not 1 full underlying unit - for
+    # CRYPTO futures lot_size is a real fraction (e.g. BTCUSD=0.001), so
+    # checking against the unadjusted order.price would reject capital
+    # that can actually afford dozens of real lots (reproduced live:
+    # $555 available was rejected as insufficient for "1 share" at
+    # order.price=$63,890, when 1 real BTCUSD lot only costs ~$63.89).
     lot_size = 1
     if order.instrument_type == "future":
         resolved_lot_size = get_lot_size(order.exchange, order.symbol)
@@ -326,6 +333,18 @@ def open_position(
             db.commit()
             return row
         lot_size = resolved_lot_size
+
+    if effective_capital < order.price * lot_size:
+        capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
+        row = _reject(
+            db,
+            order,
+            signal_id,
+            f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
+            f"need at least {order.price * lot_size} for 1 lot)",
+        )
+        db.commit()
+        return row
 
     stop_loss_price: Optional[float] = None
     target_price: Optional[float] = None
@@ -493,22 +512,32 @@ def open_manual_position(
 
     capital_unit = "USD" if segment == "CRYPTO" else "INR"
     if quantity is not None:
-        required_cost = price * quantity
+        # `quantity` here is the number of LOTS, not raw underlying units -
+        # lot_size=1 for spot (no-op multiply, quantity stays raw BTC/share
+        # units as before), a real multiplier for future (matches how the
+        # auto-sized path below already interprets it via compute_quantity,
+        # and Delta Exchange India's own "Lot" input on their real trading
+        # UI - e.g. BTCUSD lot_size=0.001, so quantity=1 means 1 lot =
+        # 0.001 BTC, not 1 whole BTC).
+        required_cost = price * lot_size * quantity
         if effective_capital < required_cost:
             row = _reject_manual(
                 db, signal_id, symbol, segment, segment, action, instrument_type, price,
                 f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
-                f"need at least {required_cost} for {quantity})",
+                f"need at least {required_cost} for {quantity} lot(s))",
             )
             db.commit()
             return row
-        final_quantity = quantity
+        final_quantity = quantity * lot_size
     else:
-        if effective_capital < price:
+        # Compare against 1 LOT's cost, not 1 full underlying unit - same
+        # fix as open_position, needed for CRYPTO futures whose lot_size
+        # is a real fraction (e.g. BTCUSD=0.001).
+        if effective_capital < price * lot_size:
             row = _reject_manual(
                 db, signal_id, symbol, segment, segment, action, instrument_type, price,
                 f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
-                f"need at least {price} for 1 share)",
+                f"need at least {price * lot_size} for 1 lot)",
             )
             db.commit()
             return row

@@ -15,13 +15,16 @@ from app.config import settings
 from app.providers.delta import DeltaProvider
 
 
-def _product(symbol: str, product_id: int, state: str = "live", underlying_asset: str = "BTC") -> dict:
+def _product(
+    symbol: str, product_id: int, state: str = "live", underlying_asset: str = "BTC", contract_value: str = "1"
+) -> dict:
     return {
         "id": product_id,
         "symbol": symbol,
         "contract_type": "perpetual_futures",
         "state": state,
         "underlying_asset": {"symbol": underlying_asset},
+        "contract_value": contract_value,
     }
 
 
@@ -346,6 +349,21 @@ def test_resolve_underlying_no_rollover_chart_equals_trade_symbol():
 
 
 @responses.activate
+def test_resolve_underlying_lot_size_is_real_contract_value():
+    responses.add(
+        responses.GET, _products_url(),
+        json={"success": True, "result": [_product("BTCUSD", 27, contract_value="0.001")], "meta": {"after": None}},
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    resolved = provider.resolve_underlying("BTCUSD")
+
+    assert resolved is not None
+    assert resolved.lot_size == 0.001
+
+
+@responses.activate
 def test_resolve_underlying_unknown_symbol_returns_none():
     responses.add(
         responses.GET, _products_url(),
@@ -370,7 +388,7 @@ def test_resolve_underlying_non_live_symbol_returns_none():
 
 
 @responses.activate
-def test_get_lot_size_always_one_for_known_symbol():
+def test_get_lot_size_falls_back_to_one_when_contract_value_missing():
     responses.add(
         responses.GET, _products_url(),
         json={"success": True, "result": [_product("BTCUSD", 27)], "meta": {"after": None}},
@@ -379,6 +397,47 @@ def test_get_lot_size_always_one_for_known_symbol():
 
     provider = DeltaProvider()
     assert provider.get_lot_size("BTCUSD") == 1
+
+
+@responses.activate
+def test_get_lot_size_returns_real_contract_value():
+    # Confirmed live against Delta's own /v2/products: BTCUSD's real
+    # contract_value is 0.001 BTC/lot, not the old hardcoded 1 - a $63,900
+    # BTC position sized as "quantity=1" (1 whole BTC) was ~1000x Delta's
+    # own "1 lot" notional, which is what motivated this fix.
+    responses.add(
+        responses.GET, _products_url(),
+        json={"success": True, "result": [_product("BTCUSD", 27, contract_value="0.001")], "meta": {"after": None}},
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.get_lot_size("BTCUSD") == 0.001
+
+
+@responses.activate
+def test_get_lot_size_varies_per_symbol():
+    # Confirmed live: contract_value is NOT a platform-wide CRYPTO
+    # constant - e.g. ETHUSD=0.01, DOGEUSD=100 - each symbol's own value
+    # from the product row, not a blanket conversion factor.
+    responses.add(
+        responses.GET, _products_url(),
+        json={
+            "success": True,
+            "result": [
+                _product("BTCUSD", 27, contract_value="0.001"),
+                _product("ETHUSD", 28, underlying_asset="ETH", contract_value="0.01"),
+                _product("DOGEUSD", 29, underlying_asset="DOGE", contract_value="100"),
+            ],
+            "meta": {"after": None},
+        },
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.get_lot_size("BTCUSD") == 0.001
+    assert provider.get_lot_size("ETHUSD") == 0.01
+    assert provider.get_lot_size("DOGEUSD") == 100.0
 
 
 @responses.activate
@@ -399,6 +458,53 @@ def test_get_lot_size_always_one_for_option_symbol_no_sync_needed():
     # no sync_instruments() call (and thus no HTTP call) needed at all.
     provider = DeltaProvider()
     assert provider.get_lot_size("C-BTC-63600-130826") == 1
+
+
+# --- list_live_symbols (backs the CRYPTO symbol picker on the Manual tab) ----------------------
+
+
+@responses.activate
+def test_list_live_symbols_excludes_non_live():
+    responses.add(
+        responses.GET, _products_url(),
+        json={
+            "success": True,
+            "result": [_product("BTCUSD", 27), _product("XYZUSD", 99, state="expired")],
+            "meta": {"after": None},
+        },
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.list_live_symbols() == ["BTCUSD"]
+
+
+@responses.activate
+def test_list_live_symbols_sorted():
+    responses.add(
+        responses.GET, _products_url(),
+        json={
+            "success": True,
+            "result": [_product("ETHUSD", 3136), _product("BTCUSD", 27)],
+            "meta": {"after": None},
+        },
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.list_live_symbols() == ["BTCUSD", "ETHUSD"]
+
+
+def test_list_live_symbols_syncs_if_never_synced():
+    with responses.RequestsMock() as rsps:
+        rsps.add(
+            responses.GET, _products_url(),
+            json={"success": True, "result": [_product("BTCUSD", 27)], "meta": {"after": None}},
+            status=200,
+        )
+        provider = DeltaProvider()
+        assert provider.list_live_symbols() == ["BTCUSD"]
+        assert len(rsps.calls) == 1
 
 
 # --- get_expiry_list / get_option_chain (Phase 2 of the crypto module) -------------------------

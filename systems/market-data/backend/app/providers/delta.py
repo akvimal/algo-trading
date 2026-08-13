@@ -108,6 +108,14 @@ class DeltaProvider(QuoteProvider):
         # pass, used by get_expiry_list/get_option_chain (Phase 2 of the
         # crypto module, see docs/architecture.md).
         self._symbol_to_underlying_asset: dict[str, str] = {}
+        # Delta's real per-contract multiplier in underlying-asset units
+        # (e.g. BTCUSD -> 0.001 BTC/lot, ETHUSD -> 0.01 ETH/lot) - varies
+        # wildly by symbol (confirmed live against /v2/products, values
+        # from 0.001 to 10000 across the product list), so this is NOT a
+        # platform-wide constant the way NSE/MCX's own lot sizes are
+        # per-instrument but at least always >= 1. get_lot_size() below
+        # returns this instead of a hardcoded 1 for perpetuals.
+        self._symbol_to_contract_value: dict[str, float] = {}
         self._last_synced_at: Optional[datetime] = None
 
         self._quote_cache: dict[str, tuple[float, float]] = {}
@@ -143,6 +151,7 @@ class DeltaProvider(QuoteProvider):
         symbol_to_id: dict[str, int] = {}
         symbol_to_state: dict[str, str] = {}
         symbol_to_underlying_asset: dict[str, str] = {}
+        symbol_to_contract_value: dict[str, float] = {}
 
         cursor: Optional[str] = None
         while True:
@@ -161,6 +170,9 @@ class DeltaProvider(QuoteProvider):
                 underlying_symbol = (row.get("underlying_asset") or {}).get("symbol")
                 if underlying_symbol:
                     symbol_to_underlying_asset[row["symbol"]] = underlying_symbol
+                contract_value = row.get("contract_value")
+                if contract_value is not None:
+                    symbol_to_contract_value[row["symbol"]] = float(contract_value)
             cursor = (data.get("meta") or {}).get("after")
             if not cursor:
                 break
@@ -169,10 +181,22 @@ class DeltaProvider(QuoteProvider):
             self._symbol_to_product_id = symbol_to_id
             self._symbol_to_state = symbol_to_state
             self._symbol_to_underlying_asset = symbol_to_underlying_asset
+            self._symbol_to_contract_value = symbol_to_contract_value
             self._last_synced_at = datetime.now(timezone.utc)
 
         logger.info("Delta instrument sync complete (%s): %d symbols", self.name, len(symbol_to_id))
         return self.status()
+
+    def list_live_symbols(self) -> list[str]:
+        """Every currently-live perpetual future symbol (e.g. "BTCUSD",
+        "ETHUSD") - not part of the QuoteProvider abstract base (Delta-only
+        concern, backs a CRYPTO-specific symbol picker on the frontend
+        rather than a generic cross-provider one - NSE/MCX symbols are
+        already well-known and typed directly). Sorted for a stable,
+        readable dropdown order."""
+        if not self._symbol_to_product_id:
+            self.sync_instruments()
+        return sorted(sym for sym, state in self._symbol_to_state.items() if state == "live")
 
     def _underlying_asset_symbol(self, symbol: str) -> Optional[str]:
         if not self._symbol_to_product_id:
@@ -192,27 +216,34 @@ class DeltaProvider(QuoteProvider):
             chart_exchange="CRYPTO",
             trade_symbol=underlying,
             trade_exchange="CRYPTO",
-            lot_size=1,
+            lot_size=self._symbol_to_contract_value.get(underlying, 1.0),
             expiry=None,
         )
 
-    def get_lot_size(self, symbol: str) -> Optional[int]:
-        """Always 1 - Delta perpetuals AND options both size in whole
-        contracts directly, no separate lot-multiplier concept the way
-        NSE/MCX F&O has. An option's own symbol is never in
-        _symbol_to_product_id (that dict is only populated by
-        sync_instruments()'s perpetuals-only sync - option data is fetched
-        live per-underlying-asset, see _fetch_option_rows, never persisted
-        into a sync-time dict) - checked via _OPTION_SYMBOL_RE first, same
-        shape-detection get_ltp_batch uses, before falling back to the
-        perpetual lookup."""
+    def get_lot_size(self, symbol: str) -> Optional[float]:
+        """Options still return 1 - naked/spread legs are priced and sized
+        directly per Delta's own option premium quotes, no separate
+        contract_value concept observed there (unlike perpetuals - see
+        below). An option's own symbol is never in _symbol_to_product_id
+        (that dict is only populated by sync_instruments()'s
+        perpetuals-only sync - option data is fetched live per-underlying-
+        asset, see _fetch_option_rows, never persisted into a sync-time
+        dict) - checked via _OPTION_SYMBOL_RE first, same shape-detection
+        get_ltp_batch uses, before falling back to the perpetual lookup.
+
+        Perpetuals return Delta's real contract_value (confirmed live
+        against /v2/products - e.g. BTCUSD=0.001, ETHUSD=0.01, varies per
+        symbol, some as large as 10000) instead of a hardcoded 1 - a
+        "quantity" from compute_quantity/compute_risk_based_quantity
+        (execution) is lots * this value, in underlying-asset units, same
+        as Delta's own "Funds req." calculation."""
         if _OPTION_SYMBOL_RE.match(symbol):
             return 1
         if not self._symbol_to_product_id:
             self.sync_instruments()
         if symbol not in self._symbol_to_product_id:
             return None
-        return 1
+        return self._symbol_to_contract_value.get(symbol, 1.0)
 
     def resolve_symbol_by_security_id(self, security_id: str) -> Optional[str]:
         """Crypto module Phase 4 (see docs/architecture.md) - execution's

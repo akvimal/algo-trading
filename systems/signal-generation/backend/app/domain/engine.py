@@ -34,7 +34,7 @@ class ResolvedUnderlyingLike(Protocol):
     chart_exchange: str
     trade_symbol: str
     trade_exchange: str
-    lot_size: int
+    lot_size: float  # int for NSE/MCX F&O; a real fraction for Delta CRYPTO perpetuals (e.g. BTCUSD=0.001)
     expiry: Optional[str]
 
 

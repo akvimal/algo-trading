@@ -629,6 +629,16 @@ export async function fetchUniverses(): Promise<string[]> {
   return data.universes;
 }
 
+// Every live Delta Exchange India perpetual future symbol (e.g. "BTCUSD") -
+// backs the CRYPTO symbol picker on the Manual tab, so a real, currently-
+// tradeable symbol is chosen instead of typed free-hand. CRYPTO-only -
+// NSE/MCX symbols stay a free-text input, see ManualTab.tsx.
+export async function fetchCryptoSymbols(): Promise<string[]> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/crypto-symbols`);
+  const data = await asJson<{ symbols: string[] }>(res, "GET /instruments/crypto-symbols");
+  return data.symbols;
+}
+
 // Current market price for a symbol - used by the manual test-signal form
 // (App.tsx's handleSendSignal) when the price field is left blank, same
 // direct-from-browser pattern as fetchUniverses above.
@@ -636,6 +646,17 @@ export async function fetchLtp(exchange: string, symbol: string): Promise<number
   const res = await fetch(`${MARKET_DATA_BASE_URL}/quotes/ltp?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ ltp: number }>(res, `GET /quotes/ltp (${exchange}/${symbol})`);
   return data.ltp;
+}
+
+// Real per-symbol lot multiplier (1 for instruments with no lot concept;
+// a real fraction for Delta Exchange India CRYPTO perpetuals, e.g.
+// BTCUSD=0.001) - used by the Manual tab's order-value preview and
+// "Lots" quantity field for CRYPTO futures, matching execution's own
+// lot-based sizing (see docs/architecture.md).
+export async function fetchLotSize(exchange: string, symbol: string): Promise<number> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/lot-size?${new URLSearchParams({ exchange, symbol })}`);
+  const data = await asJson<{ lot_size: number }>(res, `GET /instruments/lot-size (${exchange}/${symbol})`);
+  return data.lot_size;
 }
 
 // ---------------------------------------------------------------------

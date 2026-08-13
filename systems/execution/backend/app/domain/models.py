@@ -113,7 +113,10 @@ class ManualPositionCreate(BaseModel):
     instrument_type: Literal["spot", "future"]
     price: float = Field(gt=0)
     # Bypasses auto-sizing entirely when given - same precedence pattern
-    # as Strategy.option_fixed_lots in open_option_group.
+    # as Strategy.option_fixed_lots in open_option_group. Number of LOTS,
+    # not raw underlying units - a no-op distinction for spot (lot_size is
+    # always 1 there) but real for future (e.g. CRYPTO BTCUSD lot_size=
+    # 0.001) - see open_manual_position's own comment at the multiply.
     quantity: Optional[float] = Field(default=None, gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
 

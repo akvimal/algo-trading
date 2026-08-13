@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.domain.models import ProviderStatus, ResolvedUnderlying
 from app.providers import nse_indices
+from app.providers.delta import DeltaProvider
 from app.providers.router import all_providers, get_provider
 
 router = APIRouter()
@@ -80,6 +81,20 @@ def get_lot_size(exchange: str, symbol: str):
     if lot_size is None:
         raise HTTPException(status_code=404, detail=f"unknown symbol '{symbol}' on exchange '{exchange}'")
     return {"lot_size": lot_size}
+
+
+@router.get("/instruments/crypto-symbols")
+def list_crypto_symbols():
+    """Every live Delta Exchange India perpetual future symbol (e.g.
+    "BTCUSD") - backs the CRYPTO symbol picker on signal-generation's
+    Manual tab, so a real, currently-tradeable symbol is chosen instead
+    of typed free-hand. CRYPTO-only (see DeltaProvider.list_live_symbols'
+    own docstring for why this isn't a generic cross-provider endpoint) -
+    _PROVIDERS["CRYPTO"] is always a DeltaProvider by construction
+    (see providers/router.py)."""
+    provider = get_provider("CRYPTO")
+    assert isinstance(provider, DeltaProvider)
+    return {"symbols": provider.list_live_symbols()}
 
 
 @router.get("/instruments/universes")

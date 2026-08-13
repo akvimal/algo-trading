@@ -5,7 +5,9 @@ import {
   type OptionStrikeMoneyness,
   type Segment,
   createManualPosition,
+  fetchCryptoSymbols,
   fetchExecPositions,
+  fetchLotSize,
   fetchLtp,
   fetchOptionGroups,
   findOrCreateManualStrategy,
@@ -125,6 +127,47 @@ export default function ManualTab() {
   useEffect(() => {
     saveRows(rows);
   }, [rows]);
+
+  // Backs the CRYPTO symbol dropdown below - fetched once, not per-row,
+  // since it's the same live symbol list for every row. Fails silently
+  // (stays []) rather than blocking the form - a row's Symbol field just
+  // falls back to free text if this hasn't loaded yet.
+  const [cryptoSymbols, setCryptoSymbols] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchCryptoSymbols()
+      .then((symbols) => {
+        if (!cancelled) setCryptoSymbols(symbols);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Real per-symbol lot multiplier for CRYPTO futures (e.g. BTCUSD=0.001)
+  // - fetched lazily per symbol as rows reference one, cached by symbol
+  // since it's static (not a live-updating value like price). Backs the
+  // "Lots" quantity field and order-value preview below, matching
+  // execution's own lot-based sizing (see position_manager.py's
+  // open_manual_position).
+  const [lotSizeCache, setLotSizeCache] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const missing = rows
+      .filter((r) => r.segment === "CRYPTO" && r.instrumentType === "future" && r.symbol && !(r.symbol in lotSizeCache))
+      .map((r) => r.symbol);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    Promise.all(missing.map((sym) => fetchLotSize("CRYPTO", sym).then((lot) => [sym, lot] as const).catch(() => null)))
+      .then((results) => {
+        if (cancelled) return;
+        const updates = Object.fromEntries(results.filter((r): r is readonly [string, number] => r !== null));
+        if (Object.keys(updates).length > 0) setLotSizeCache((prev) => ({ ...prev, ...updates }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rows, lotSizeCache]);
 
   function updateRow(id: string, patch: Partial<ManualRow>) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -415,11 +458,16 @@ export default function ManualTab() {
     const qty = row.draftQuantity ? Number(row.draftQuantity) : undefined;
     const price = row.draftTriggerPrice ? Number(row.draftTriggerPrice) : row.lastKnownLtp;
     if (!qty || !price) return "-";
+    // For CRYPTO futures, `qty` is a LOT count, not raw underlying units -
+    // matches execution's own open_manual_position (quantity * lot_size).
+    // Every other case (spot, or lot_size not loaded yet) is a no-op
+    // multiply by 1.
+    const lotSize = row.segment === "CRYPTO" && row.instrumentType === "future" ? (lotSizeCache[row.symbol] ?? 1) : 1;
     // CRYPTO prices are raw USD (Delta Exchange India) - every other
     // segment quotes in raw INR (Dhan) - label it so this doesn't read as
     // INR by default, same fix as execution's balance-rejection messages.
     const unit = row.segment === "CRYPTO" ? "USD" : "INR";
-    return `${(qty * price).toFixed(2)} ${unit}`;
+    return `${(qty * lotSize * price).toFixed(2)} ${unit}`;
   };
 
   return (
@@ -462,11 +510,24 @@ export default function ManualTab() {
             </label>
             <label>
               Symbol
-              <input
-                value={row.symbol}
-                onChange={(e) => updateRow(row.id, { symbol: e.target.value.toUpperCase() })}
-                placeholder="e.g. BTCUSD, TCS"
-              />
+              {row.segment === "CRYPTO" && cryptoSymbols.length > 0 ? (
+                <select value={row.symbol} onChange={(e) => updateRow(row.id, { symbol: e.target.value })}>
+                  <option value="" disabled>
+                    Select a symbol
+                  </option>
+                  {cryptoSymbols.map((sym) => (
+                    <option key={sym} value={sym}>
+                      {sym}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={row.symbol}
+                  onChange={(e) => updateRow(row.id, { symbol: e.target.value.toUpperCase() })}
+                  placeholder="e.g. BTCUSD, TCS"
+                />
+              )}
             </label>
             <label>
               Action

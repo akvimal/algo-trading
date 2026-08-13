@@ -118,18 +118,36 @@ Several things confirmed only by testing against the live API, not the docs. The
 **Naked call/put option style** — `Strategy.option_position_style` (signal-generation, `'spread'`
 default or `'naked'`) picks which template FAMILY `choose_strategy` builds within Phase 4b's same
 bias→direction logic: `'spread'` is unchanged (bull call spread / bear put spread); `'naked'` picks
-`naked_call`/`naked_put` (`app/domain/resolution/option_templates.py`) — a single BUY leg at the ATM
-strike, no short leg at all, no `SPREAD_WIDTH_STRIKES`/`MIN_SHORT_LEG_OI` liquidity nudge (nothing to
-place OTM). Available for every segment (NSE/MCX/CRYPTO), not crypto-specific, even though it landed
-alongside the crypto module's Phase 4 — `choose_strategy` was already exchange-agnostic, so this is a
-pure template addition. `resolved-order.schema.json` needed no change (`strategy.legs` already had no
-`minItems`; `strategy.type` was already a free-text string) — only signal-generation's `Strategy`
-gained the new field, threaded through opaquely via `fetch_strategy()`'s already-untyped dict. This
-platform has no margin/undefined-risk handling anywhere, so "naked" here always means a single BUY
-leg (long call/long put) — never a written/sold naked option. Full backtest parity is a known,
-explicit gap: `option_backtest.py`'s `legs_for_direction` is still hardcoded to a long+short pair, so
-`POST /strategies/{id}/backtest` returns a `422` for an `option_position_style='naked'` strategy
-rather than silently reporting spread-shaped numbers for a naked position.
+`naked_call`/`naked_put` (`app/domain/resolution/option_templates.py`) — a single BUY leg (at
+whatever strike `option_strike_moneyness` resolves to, see below), no short leg at all, no
+`MIN_SHORT_LEG_OI` liquidity nudge (nothing to place OTM). Available for every segment
+(NSE/MCX/CRYPTO), not crypto-specific, even though it landed alongside the crypto module's Phase 4 —
+`choose_strategy` was already exchange-agnostic, so this is a pure template addition.
+`resolved-order.schema.json` needed no change (`strategy.legs` already had no `minItems`;
+`strategy.type` was already a free-text string) — only signal-generation's `Strategy` gained the new
+field, threaded through opaquely via `fetch_strategy()`'s already-untyped dict. This platform has no
+margin/undefined-risk handling anywhere, so "naked" here always means a single BUY leg (long
+call/long put) — never a written/sold naked option. Full backtest parity is a known, explicit gap:
+`option_backtest.py`'s `legs_for_direction` is still hardcoded to a long+short ATM pair, so
+`POST /strategies/{id}/backtest` returns a `422` for either an `option_position_style='naked'`
+strategy or an `option_strike_moneyness` other than `'ATM'`, rather than silently reporting
+wrong-strike/wrong-leg-count numbers.
+
+**Configurable primary-leg moneyness** — `Strategy.option_strike_moneyness` (signal-generation,
+`'ATM'` default, or `'ITM2'`/`'ITM1'`/`'OTM1'`/`'OTM2'`) picks which strike the primary (long) leg
+actually uses, within either `option_position_style`. `option_templates.py`'s
+`_find_primary_leg_index` (replacing the old always-literally-ATM `_find_atm_index` call at every
+template's call site) finds ATM first, then shifts by a signed strike-count offset
+(`_MONEYNESS_OFFSETS`) in that leg's own OTM direction — `+1` for calls, `-1` for puts, the exact
+same `direction` convention `_pick_short_leg_index` already used for the short leg, since
+`classify_moneyness` (`market-data`) establishes a call is OTM *above* spot and a put OTM *below*
+it. Out-of-range requests (e.g. `ITM2` on a chain with only one strike below ATM) clamp to whatever's
+furthest available, same "ideal but not always achievable" philosophy `_pick_short_leg_index`
+already has, rather than failing. For a spread, the short leg's own `SPREAD_WIDTH_STRIKES` offset is
+computed relative to wherever the *shifted* primary leg landed, not relative to ATM itself — picking
+`OTM1` doesn't just move the long leg, it moves the whole spread one strike further out. Scope
+confirmed narrowly with the user before building: only the primary leg is configurable; the spread's
+own `SPREAD_WIDTH_STRIKES` distance stays fixed, not separately configurable.
 
 **Backtesting option strategies (Phase 4c)** — `signal-generation`'s spot/future backtest engine (`app/domain/backtest.py`'s `simulate_trades`/`replay`, wired into `POST /strategies/{id}/backtest`) used to ignore `instrument_type` entirely — an `instrument_type='option'` in-house strategy silently backtested as if it traded the underlying's own spot price, which is misleading (the real P&L driver is the option legs' premium). `app/api/routes/strategies.py`'s `_backtest_one_symbol` now branches to a new `_backtest_one_symbol_option` whenever `row.instrument_type == 'option'` — **crossover-rule strategies only** for now (matches `/backtest/grid`'s existing crossover-only scope; breakout replays via a wholly separate function with no `bias_fn` at all, and range-breakout would need a shared `bias_fn`-builder factored out first — both left for later). The new `app/domain/option_backtest.py` reuses `simulate_trades` **unchanged** (run with no SL/target configured, only square_off/opposite-signal/end-of-data closing) to find candidate entry windows on the underlying exactly like a spot backtest would, then re-simulates each window against a **synthetic combined-premium series** (`combined_series`: `close = long.close - short.close`, `high`/`low` built from the worst/best-case joint leg extremes) instead of the underlying's own price — `legs_for_direction` picks the same bull-call-spread/bear-put-spread legs Phase 4b's live path does (`SPREAD_WIDTH_STRIKES` duplicated as a constant, not imported — no cross-system imports — and without Phase 4b's live OI-liquidity nudge, a documented simplification). The key trick that keeps this small: a debit spread's combined premium behaves exactly like a single "bullish" instrument price regardless of which template was used (algebraically `combined_pnl(t) = combined_price(t) - combined_entry`, identical in shape to a single long position's P&L) — so `simulate_option_trades` reuses `backtest.py`'s own `_stop_loss_percent_price`/`_target_percent_price`/`_pnl` completely unchanged, always called with `direction="bullish"` against the synthetic series; the *reported* trade direction is still the original bullish/bearish signal. Historical option premium comes from Dhan's `POST /charts/rollingoption` (`DhanProvider.get_option_leg_history`, exposed as `GET /options/leg-history`) — strikes are requested *relative to spot* (`"ATM"`, `"ATM+2"`, ...) so, unlike Phase 4a/4b, no local chain/moneyness lookup is needed; Dhan resolves the real strike server-side per historical bar. Each of the (at most 4, typically 2) distinct `(option_type, strike)` leg series a backtest needs is fetched **once** for the whole `[from, to]` range and memoized (`leg_fetcher` in `_backtest_one_symbol_option`), then sliced per trade window — not re-fetched per trade. `expiry_flag` is `"WEEK"` for intraday/swing, `"MONTH"` for positional (an approximation of Phase 4b's `choose_expiry` intent — Dhan's rolling endpoint has no "at least N days out" concept). `MAX_OPTION_BACKTEST_DAYS` (180) caps a single request's total Dhan call volume (≈12 calls in the worst case, at the same conservative 3s-apart throttle Phase 4a's option-chain calls use). **Several documented assumptions, unverifiable until live Dhan access resumes** (see `docs/architecture.md`'s git history / the Phase 4c plan for the full research trail): rollingoption's `exchangeSegment`/`instrument` fields describe *where the option trades* (`NSE_FNO` + `OPTIDX`/`OPTSTK`), a different vocabulary from Phase 4a's `UnderlyingSeg`, which describes the *underlying's own* segment — confirmed from Dhan's docs/annexure and the `dhan-oss/DhanHQ-py` client source, but exact `expiryCode` semantics beyond "0-3, refer to instruments page" aren't spelled out anywhere; this endpoint is assumed **NSE/BSE-only** (no MCX derivatives segment is documented at all) — an MCX option strategy gets a clean `get_option_leg_history` → `None` rather than silently-wrong data, unlike live MCX option *trading* (Phase 4b), which does work; and the endpoint is assumed to be a genuinely continuous/rolling series across real contract rollovers (per its own naming and "5 years of history" claim), which is why there's no separate "expiry" exit reason. Trailing-stop and the regime filter aren't extended to the option variant in this pass either.
 

@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- leg). Harmlessly ignored for spot/future strategies, same convention
     -- as regime_filter_enabled being ignored for non-in_house strategies.
     option_position_style TEXT NOT NULL DEFAULT 'spread' CHECK (option_position_style IN ('spread', 'naked')),
+    -- instrument_type='option' only - which strike the primary (long) leg
+    -- uses, ITM2/ITM1/ATM/OTM1/OTM2 relative to spot (see signal-processing's
+    -- option_templates.py _MONEYNESS_OFFSETS). Harmlessly ignored for
+    -- spot/future strategies. A spread's short leg still sits
+    -- SPREAD_WIDTH_STRIKES further out from wherever this lands, not from
+    -- ATM itself.
+    option_strike_moneyness TEXT NOT NULL DEFAULT 'ATM' CHECK (option_strike_moneyness IN ('ITM2', 'ITM1', 'ATM', 'OTM1', 'OTM2')),
     -- Required for horizon='intraday' only - square-off doesn't apply to
     -- swing/positional strategies (positions aren't closed same-day), so
     -- this stays NULL for them. Auto-defaulted server-side from

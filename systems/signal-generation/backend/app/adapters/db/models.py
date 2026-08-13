@@ -30,6 +30,8 @@ class Strategy(Base):
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
     # instrument_type='option' only - 'spread' or 'naked', see OptionPositionStyle in app/domain/models.py.
     option_position_style = Column(Text, nullable=False, default="spread")
+    # instrument_type='option' only - primary leg's strike, see OptionStrikeMoneyness in app/domain/models.py.
+    option_strike_moneyness = Column(Text, nullable=False, default="ATM")
     segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO - drives the square_off_time default
     square_off_time = Column(Time)  # required for horizon='intraday' only - null for swing/positional
     # in_house only - see validate_in_house_fields. underlying: the

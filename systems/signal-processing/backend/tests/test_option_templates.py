@@ -10,6 +10,7 @@ import pytest
 
 from app.domain.resolution.option_templates import (
     MIN_SHORT_LEG_OI,
+    _find_primary_leg_index,
     bear_put_spread,
     bull_call_spread,
     choose_expiry,
@@ -183,3 +184,99 @@ def test_naked_put_raises_when_no_atm_strike():
 
     with pytest.raises(ValueError, match="no ATM put"):
         naked_put(chain)
+
+
+# --- _find_primary_leg_index / option_strike_moneyness --------------------------------------------
+
+
+def test_find_primary_leg_index_call_offsets_match_default_strikes():
+    strikes = _default_strikes()  # ATM at index 2, exactly 2 strikes on each side
+    assert _find_primary_leg_index(strikes, "ce", "ITM2") == 0
+    assert _find_primary_leg_index(strikes, "ce", "ITM1") == 1
+    assert _find_primary_leg_index(strikes, "ce", "ATM") == 2
+    assert _find_primary_leg_index(strikes, "ce", "OTM1") == 3
+    assert _find_primary_leg_index(strikes, "ce", "OTM2") == 4
+
+
+def test_find_primary_leg_index_put_offsets_are_mirrored():
+    # For a put, OTM is the LOWER strike (lower index) - the opposite
+    # direction from a call, same convention _pick_short_leg_index's own
+    # direction=-1 for "pe" already encodes.
+    strikes = _default_strikes()
+    assert _find_primary_leg_index(strikes, "pe", "ITM2") == 4
+    assert _find_primary_leg_index(strikes, "pe", "ITM1") == 3
+    assert _find_primary_leg_index(strikes, "pe", "ATM") == 2
+    assert _find_primary_leg_index(strikes, "pe", "OTM1") == 1
+    assert _find_primary_leg_index(strikes, "pe", "OTM2") == 0
+
+
+def test_find_primary_leg_index_clamps_when_chain_too_narrow():
+    # Only 1 strike on either side of ATM (index 1) - ITM2/OTM2 clamp to
+    # the edge rather than going out of range.
+    strikes = _default_strikes()[1:4]  # ITM1(0), ATM(1), OTM1(2) after reindexing
+    assert _find_primary_leg_index(strikes, "ce", "ITM2") == 0
+    assert _find_primary_leg_index(strikes, "ce", "OTM2") == 2
+
+
+def test_find_primary_leg_index_returns_none_without_atm():
+    strikes = [s for s in _default_strikes() if s["strike"] != 24000.0]
+    assert _find_primary_leg_index(strikes, "ce", "OTM1") is None
+
+
+def _wide_strikes() -> list[dict]:
+    """9 strikes, ATM at index 4 - wide enough to place a non-ATM primary
+    leg (up to +/-2) AND still have room for the spread's own
+    SPREAD_WIDTH_STRIKES=2 beyond THAT, with no clamping on either move."""
+    base = 23800.0
+    return [
+        {
+            "strike": base + i * 50,
+            "ce": _leg(f"ce-{int(base + i * 50)}", "ATM" if i == 4 else ("ITM" if i < 4 else "OTM"), 5000),
+            "pe": _leg(f"pe-{int(base + i * 50)}", "ATM" if i == 4 else ("ITM" if i > 4 else "OTM"), 5000),
+        }
+        for i in range(9)
+    ]
+
+
+def test_bull_call_spread_with_otm1_moneyness_shifts_both_legs():
+    chain = _make_chain(_wide_strikes())
+
+    legs = bull_call_spread(chain, moneyness="OTM1")
+
+    # Primary leg: ATM(index 4, 24000) + 1 -> index 5 (24050).
+    # Short leg: primary(5) + SPREAD_WIDTH_STRIKES(2) -> index 7 (24150) -
+    # NOT index 6 (24100), which is what it would be if the short leg were
+    # still computed relative to the original ATM index instead.
+    assert legs[0]["strike"] == 24050.0
+    assert legs[1]["strike"] == 24150.0
+
+
+def test_bear_put_spread_with_itm1_moneyness_shifts_both_legs():
+    chain = _make_chain(_wide_strikes())
+
+    legs = bear_put_spread(chain, moneyness="ITM1")
+
+    # Primary leg (PE, ITM1): ATM(index 4) - direction(-1)*offset(-1) -> index 5 (24050).
+    # Short leg: further OTM (lower index) by 2 from index 5 -> index 3 (23950).
+    assert legs[0]["strike"] == 24050.0
+    assert legs[1]["strike"] == 23950.0
+
+
+def test_naked_call_with_moneyness_picks_shifted_strike_only():
+    chain = _make_chain(_wide_strikes())
+
+    legs = naked_call(chain, moneyness="ITM2")
+
+    assert legs == [
+        {"action": "BUY", "option_type": "CE", "strike": 23900.0, "expiry": "2026-08-14", "security_id": "ce-23900"},
+    ]
+
+
+def test_naked_put_with_moneyness_picks_shifted_strike_only():
+    chain = _make_chain(_wide_strikes())
+
+    legs = naked_put(chain, moneyness="OTM2")
+
+    assert legs == [
+        {"action": "BUY", "option_type": "PE", "strike": 23900.0, "expiry": "2026-08-14", "security_id": "pe-23900"},
+    ]

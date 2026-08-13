@@ -15,23 +15,33 @@ from app.domain.resolution.option_templates import (
 )
 
 
-def choose_strategy(signal: SignalIngest, horizon: str, instrument_type: str, option_position_style: str = "spread") -> Optional[dict]:
+def choose_strategy(
+    signal: SignalIngest,
+    horizon: str,
+    instrument_type: str,
+    option_position_style: str = "spread",
+    option_strike_moneyness: str = "ATM",
+) -> Optional[dict]:
     """Pick an option strategy (spread, naked leg, ...) - NOT to be
     confused with signal-generation's Strategy entity (signal.strategy_id),
     which is a different concept (which signal source/config produced this
     signal). This function decides option *legs*, given horizon/
-    instrument_type/option_position_style already resolved from that
-    Strategy.
+    instrument_type/option_position_style/option_strike_moneyness already
+    resolved from that Strategy.
 
     Only relevant once instrument_type == "option" - None (not an
     option strategy) otherwise. A fixed bias->template rule set for now,
     not a general strategy-selection engine - option_position_style picks
     the template FAMILY ('spread', the default, or 'naked'), signal bias
     picks the direction within it: bullish (BUY) -> bull_call_spread or
-    naked_call, bearish (SELL) -> bear_put_spread or naked_put. See
-    app/domain/resolution/option_templates.py, docs/architecture.md Phase
-    4b for the spread templates and the "naked call/put option style"
-    section for naked. Raises ResolutionError (not a silent None) if any
+    naked_call, bearish (SELL) -> bear_put_spread or naked_put.
+    option_strike_moneyness ('ATM' default) then picks which strike the
+    primary/long leg within that template actually uses -
+    ITM2/ITM1/ATM/OTM1/OTM2, see option_templates.py's
+    _MONEYNESS_OFFSETS. See app/domain/resolution/option_templates.py,
+    docs/architecture.md Phase 4b for the spread templates and the "naked
+    call/put option style" section for naked/moneyness. Raises
+    ResolutionError (not a silent None) if any
     step can't resolve - a signal that can't get real legs shouldn't
     resolve as instrument_type='option' with nothing to trade, same
     "persisted as rejected, nothing published" handling resolve() already
@@ -83,10 +93,10 @@ def choose_strategy(signal: SignalIngest, horizon: str, instrument_type: str, op
     try:
         if option_position_style == "naked":
             if signal.action == "BUY":
-                return {"type": "naked_call", "legs": naked_call(chain)}
-            return {"type": "naked_put", "legs": naked_put(chain)}
+                return {"type": "naked_call", "legs": naked_call(chain, option_strike_moneyness)}
+            return {"type": "naked_put", "legs": naked_put(chain, option_strike_moneyness)}
         if signal.action == "BUY":
-            return {"type": "bull_call_spread", "legs": bull_call_spread(chain)}
-        return {"type": "bear_put_spread", "legs": bear_put_spread(chain)}
+            return {"type": "bull_call_spread", "legs": bull_call_spread(chain, option_strike_moneyness)}
+        return {"type": "bear_put_spread", "legs": bear_put_spread(chain, option_strike_moneyness)}
     except ValueError as exc:
         raise ResolutionError(f"could not build an option strategy for '{signal.symbol}': {exc}") from exc

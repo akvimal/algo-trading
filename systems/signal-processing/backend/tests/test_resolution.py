@@ -510,6 +510,24 @@ def test_resolve_option_strategy_defaults_to_spread_when_style_unset():
 
 
 @responses.activate
+def test_resolve_option_strategy_passes_through_non_atm_moneyness():
+    # option_strike_moneyness threads all the way from the fetched
+    # Strategy dict through pipeline.py -> choose_strategy -> the
+    # template - confirmed here by the primary leg landing on 24100
+    # (OTM1, one strike above ATM=24000), not the literal ATM strike.
+    responses.add(
+        responses.GET, _strategy_url(), json=_option_strategy_json(option_strike_moneyness="OTM1"), status=200
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.strategy["legs"][0]["strike"] == 24100.0
+
+
+@responses.activate
 def test_resolve_option_rejects_when_market_data_unreachable():
     responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
     responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)

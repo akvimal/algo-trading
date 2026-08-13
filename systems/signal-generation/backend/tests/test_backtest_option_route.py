@@ -45,6 +45,7 @@ class FakeStrategy:
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
     option_position_style: str = "spread"
+    option_strike_moneyness: str = "ATM"
     square_off_time: Optional[time] = None
 
 
@@ -159,6 +160,20 @@ def test_backtest_one_symbol_option_rejects_naked_style(monkeypatch):
         )
     assert exc_info.value.status_code == 422
     assert "naked" in exc_info.value.detail
+
+
+def test_backtest_one_symbol_option_rejects_non_atm_moneyness(monkeypatch):
+    # Same reasoning as the naked guard - legs_for_direction is also
+    # hardcoded to ATM, so a non-ATM primary-leg strategy would silently
+    # backtest against the wrong strike, not just the wrong leg count.
+    _patch_common(monkeypatch, {})
+
+    with pytest.raises(HTTPException) as exc_info:
+        strategies_route._backtest_one_symbol(
+            FakeDb(), FakeStrategy(option_strike_moneyness="OTM1"), RULE, "NIFTY", BASE.date(), BASE.date()
+        )
+    assert exc_info.value.status_code == 422
+    assert "option_strike_moneyness" in exc_info.value.detail
 
 
 def test_backtest_one_symbol_option_skips_trade_when_legs_unresolvable(monkeypatch):

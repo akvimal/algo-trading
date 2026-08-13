@@ -15,6 +15,11 @@ export type StopLossInterval = "1min" | "5min" | "15min" | "25min" | "60min";
 // 2 legs) or 'naked' (naked_call/naked_put, single BUY leg only, no
 // short leg). Harmlessly ignored for spot/future strategies.
 export type OptionPositionStyle = "spread" | "naked";
+// instrument_type='option' only - which strike the primary (long) leg
+// uses, relative to spot. 'ATM' default reproduces pre-this-field
+// behavior exactly. A spread's short leg still sits a fixed distance
+// further out from wherever this lands, not from ATM itself.
+export type OptionStrikeMoneyness = "ITM2" | "ITM1" | "ATM" | "OTM1" | "OTM2";
 // Which market this strategy trades in - distinct from `exchange` (still
 // fixed to "NSE", the only one actually wired up end-to-end). Only drives
 // the square_off_time default; MCX/CRYPTO can be recorded as intent even
@@ -160,6 +165,7 @@ export type Strategy = {
   trailing_stop_enabled: boolean;
   // instrument_type='option' only - see OptionPositionStyle above.
   option_position_style: OptionPositionStyle;
+  option_strike_moneyness: OptionStrikeMoneyness;
   segment: Segment;
   // Required for horizon='intraday' only (auto-defaulted server-side from
   // horizon+segment when omitted on create - see defaultSquareOffTime
@@ -206,6 +212,7 @@ export type StrategyCreate = {
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
+  option_strike_moneyness?: OptionStrikeMoneyness;
   segment?: Segment;
   // Optional - the backend auto-fills it from horizon+segment when
   // horizon='intraday'; required explicitly for other horizons.
@@ -239,6 +246,7 @@ export type StrategyEdit = {
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
+  option_strike_moneyness?: OptionStrikeMoneyness;
   segment?: Segment;
   square_off_time?: string;
   underlying?: string;

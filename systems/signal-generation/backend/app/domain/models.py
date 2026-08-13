@@ -35,6 +35,13 @@ InstrumentType = Literal["spot", "future", "option"]
 # margin/undefined-risk handling anywhere in this platform so "naked SELL"
 # is never a valid template). Harmlessly ignored for spot/future strategies.
 OptionPositionStyle = Literal["spread", "naked"]
+# instrument_type='option' only - which strike the primary (long) leg
+# uses, relative to spot - see signal-processing's option_templates.py
+# _MONEYNESS_OFFSETS. 'ATM' default reproduces pre-this-field behavior
+# exactly. A spread's short leg still sits SPREAD_WIDTH_STRIKES further
+# out from wherever this lands, not from ATM itself - not independently
+# configurable. Harmlessly ignored for spot/future strategies.
+OptionStrikeMoneyness = Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"]
 Status = Literal["draft", "backtesting", "live", "paused"]
 Interval = Literal["1min", "3min", "5min", "15min", "30min", "60min", "daily"]
 StopLossMethod = Literal["previous_candle", "percent"]
@@ -319,6 +326,7 @@ class StrategyCreate(BaseModel):
     trailing_stop_enabled: bool = False
     # instrument_type='option' only - see OptionPositionStyle above.
     option_position_style: OptionPositionStyle = "spread"
+    option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     segment: Segment = "NSE"
     # Only meaningful for horizon='intraday' - square-off doesn't apply to
     # swing/positional strategies (positions aren't closed same-day), so
@@ -418,6 +426,7 @@ class StrategyUpdate(BaseModel):
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: Optional[bool] = None
     option_position_style: Optional[OptionPositionStyle] = None
+    option_strike_moneyness: Optional[OptionStrikeMoneyness] = None
     segment: Optional[Segment] = None
     square_off_time: Optional[time] = None
     underlying: Optional[str] = Field(default=None, min_length=1)
@@ -461,6 +470,7 @@ class StrategyOut(BaseModel):
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
     option_position_style: OptionPositionStyle = "spread"
+    option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     segment: Segment
     square_off_time: Optional[time] = None
     underlying: Optional[str] = None

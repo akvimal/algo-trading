@@ -12,6 +12,7 @@ import {
   type InstrumentType,
   type Interval,
   type OptionPositionStyle,
+  type OptionStrikeMoneyness,
   type ProviderSignal,
   type RegimeCheckName,
   type Segment,
@@ -397,6 +398,7 @@ function StrategyManager() {
   const [trailingEnabled, setTrailingEnabled] = useState(false);
   // instrument_type='option' only - see OptionPositionStyle in api.ts.
   const [optionPositionStyle, setOptionPositionStyle] = useState<OptionPositionStyle>("spread");
+  const [optionStrikeMoneyness, setOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [segment, setSegment] = useState<Segment>("NSE");
   const [squareOffTime, setSquareOffTime] = useState(() => defaultSquareOffTime("intraday", "NSE") ?? "");
   // Tracks whether the user has hand-edited square-off time, so the
@@ -464,6 +466,7 @@ function StrategyManager() {
   const [editTargetPercent, setEditTargetPercent] = useState("");
   const [editTrailingEnabled, setEditTrailingEnabled] = useState(false);
   const [editOptionPositionStyle, setEditOptionPositionStyle] = useState<OptionPositionStyle>("spread");
+  const [editOptionStrikeMoneyness, setEditOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
   const [editSquareOffTime, setEditSquareOffTime] = useState("");
   const [editActiveFromTime, setEditActiveFromTime] = useState("");
@@ -677,6 +680,7 @@ function StrategyManager() {
         target_percent: targetPercent ? Number(targetPercent) : undefined,
         trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
         option_position_style: instrumentType === "option" ? optionPositionStyle : undefined,
+        option_strike_moneyness: instrumentType === "option" ? optionStrikeMoneyness : undefined,
         segment,
         square_off_time: horizon === "intraday" && squareOffTime ? `${squareOffTime}:00` : undefined,
         underlying: createIsInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
@@ -698,6 +702,7 @@ function StrategyManager() {
       setTargetPercent("");
       setTrailingEnabled(false);
       setOptionPositionStyle("spread");
+      setOptionStrikeMoneyness("ATM");
       setSegment("NSE");
       setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
       setSquareOffTimeTouched(false);
@@ -741,6 +746,7 @@ function StrategyManager() {
     setEditTargetPercent(s.target_percent != null ? String(s.target_percent) : "");
     setEditTrailingEnabled(s.trailing_stop_enabled);
     setEditOptionPositionStyle(s.option_position_style);
+    setEditOptionStrikeMoneyness(s.option_strike_moneyness);
     setEditSegment(s.segment);
     setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
     setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
@@ -803,6 +809,7 @@ function StrategyManager() {
         target_percent: editTargetPercent ? Number(editTargetPercent) : undefined,
         trailing_stop_enabled: editSlMethod ? editTrailingEnabled : undefined,
         option_position_style: editInstrumentType === "option" ? editOptionPositionStyle : undefined,
+        option_strike_moneyness: editInstrumentType === "option" ? editOptionStrikeMoneyness : undefined,
         segment: editSegment,
         square_off_time: editHorizon === "intraday" && editSquareOffTime ? `${editSquareOffTime}:00` : undefined,
         rule_config: ruleConfig,
@@ -942,6 +949,21 @@ function StrategyManager() {
               <select value={optionPositionStyle} onChange={(e) => setOptionPositionStyle(e.target.value as OptionPositionStyle)}>
                 <option value="spread">Spread (bull call / bear put)</option>
                 <option value="naked">Naked (single long call/put)</option>
+              </select>
+            </label>
+          )}
+          {instrumentType === "option" && (
+            <label>
+              Primary leg strike
+              <select
+                value={optionStrikeMoneyness}
+                onChange={(e) => setOptionStrikeMoneyness(e.target.value as OptionStrikeMoneyness)}
+              >
+                <option value="ITM2">ITM2</option>
+                <option value="ITM1">ITM1</option>
+                <option value="ATM">ATM</option>
+                <option value="OTM1">OTM1</option>
+                <option value="OTM2">OTM2</option>
               </select>
             </label>
           )}
@@ -1325,6 +1347,19 @@ function StrategyManager() {
                       <option value="naked">Naked</option>
                     </select>
                   )}
+                  {editInstrumentType === "option" && (
+                    <select
+                      value={editOptionStrikeMoneyness}
+                      onChange={(e) => setEditOptionStrikeMoneyness(e.target.value as OptionStrikeMoneyness)}
+                      className="cell-input"
+                    >
+                      <option value="ITM2">ITM2</option>
+                      <option value="ITM1">ITM1</option>
+                      <option value="ATM">ATM</option>
+                      <option value="OTM1">OTM1</option>
+                      <option value="OTM2">OTM2</option>
+                    </select>
+                  )}
                 </td>
                 <td>
                   <select
@@ -1625,7 +1660,13 @@ function StrategyManager() {
                 <td>{s.horizon}</td>
                 <td>
                   {s.instrument_type}
-                  {s.instrument_type === "option" && <span className="muted"> ({s.option_position_style})</span>}
+                  {s.instrument_type === "option" && (
+                    <span className="muted">
+                      {" "}
+                      ({s.option_position_style}
+                      {s.option_strike_moneyness !== "ATM" ? `, ${s.option_strike_moneyness}` : ""})
+                    </span>
+                  )}
                 </td>
                 <td>{s.interval ?? "-"}</td>
                 <td>{formatStopLoss(s)}</td>

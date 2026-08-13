@@ -56,6 +56,7 @@ def _to_out(row: db_models.Strategy) -> StrategyOut:
         target_percent=float(row.target_percent) if row.target_percent is not None else None,
         trailing_stop_enabled=row.trailing_stop_enabled,
         option_position_style=row.option_position_style,
+        option_strike_moneyness=row.option_strike_moneyness,
         segment=row.segment,
         square_off_time=row.square_off_time,
         underlying=row.underlying,
@@ -146,6 +147,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         target_percent=payload.target_percent,
         trailing_stop_enabled=trailing_stop_enabled,
         option_position_style=payload.option_position_style,
+        option_strike_moneyness=payload.option_strike_moneyness,
         segment=payload.segment,
         square_off_time=payload.square_off_time,
         underlying=payload.underlying,
@@ -249,6 +251,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.trailing_stop_enabled = payload.trailing_stop_enabled
     if payload.option_position_style is not None:
         row.option_position_style = payload.option_position_style
+    if payload.option_strike_moneyness is not None:
+        row.option_strike_moneyness = payload.option_strike_moneyness
     if payload.segment is not None:
         row.segment = payload.segment
     if payload.square_off_time is not None:
@@ -483,6 +487,14 @@ def _backtest_one_symbol_option(db: Session, row: db_models.Strategy, rule: Rule
         # would report wrong numbers, so this rejects explicitly rather
         # than a follow-up phase, not built yet.
         raise HTTPException(status_code=422, detail="backtesting a naked option strategy isn't supported yet")
+    if row.option_strike_moneyness != "ATM":
+        # Same reasoning as the naked guard above - legs_for_direction is
+        # also hardcoded to ATM ("ATM"/f"ATM+{SPREAD_WIDTH_STRIKES}"), so a
+        # non-ATM primary-leg strategy would silently backtest against the
+        # wrong strike entirely, not just the wrong leg count.
+        raise HTTPException(
+            status_code=422, detail="backtesting a non-ATM option_strike_moneyness strategy isn't supported yet"
+        )
     if (to - from_).days > MAX_OPTION_BACKTEST_DAYS:
         raise HTTPException(
             status_code=422,

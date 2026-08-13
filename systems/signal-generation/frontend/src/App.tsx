@@ -385,7 +385,7 @@ function StrategyManager() {
   // now a field in the create form itself. externalSourceName is only
   // used when sourceKind==='external' - any provider name, not a fixed
   // list (see the backend's SourceType - free-form except 'in_house').
-  const [sourceKind, setSourceKind] = useState<"in_house" | "external">("external");
+  const [sourceKind, setSourceKind] = useState<"in_house" | "external">("in_house");
   const [externalSourceName, setExternalSourceName] = useState("");
   const [horizon, setHorizon] = useState<Horizon>("intraday");
   const [instrumentType, setInstrumentType] = useState<InstrumentType>("spot");
@@ -698,7 +698,7 @@ function StrategyManager() {
         active_to_time: activeFromTime && activeToTime ? `${activeToTime}:00` : undefined,
       });
       setName("");
-      setSourceKind("external");
+      setSourceKind("in_house");
       setExternalSourceName("");
       setSlMethod("");
       setSlInterval("");

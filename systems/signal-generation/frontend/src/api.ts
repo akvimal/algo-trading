@@ -600,6 +600,30 @@ export async function fetchSignalsForStrategy(strategyId: string, limit = 20): P
   return asJson(res, "GET /signals?strategy_id=...");
 }
 
+// Manually induces a signal for a strategy - a thin wrapper around
+// signal-processing's own generic POST /signals (the exact same ingest
+// path a real webhook/in-house-engine signal goes through, no bypass of
+// resolution/conflict-policy logic). `exchange` comes from the strategy's
+// own `segment` (see Strategy.rule's own segment vs a Strategy's segment
+// distinction in api.ts - this uses the STRATEGY's, since that's what
+// determines the actual trade). source='manual' tags it so it's always
+// visibly distinguishable from a real provider/engine signal in the
+// signals list.
+export async function sendManualSignal(payload: {
+  strategy_id: string;
+  symbol: string;
+  exchange: Segment;
+  action: "BUY" | "SELL";
+  price: number;
+}): Promise<{ signal_id: string; status: string }> {
+  const res = await fetch(`${SIGNAL_PROCESSING_BASE_URL}/signals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, source: "manual", source_meta: {} }),
+  });
+  return asJson(res, "POST /signals");
+}
+
 // NSE index-constituent universe keys (e.g. "NIFTYBANK") - populates the
 // universe picker when underlying_type='universe'. market-data owns this
 // list (see its app/providers/nse_indices.py).

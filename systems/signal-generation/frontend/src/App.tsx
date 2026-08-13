@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import {
   ALL_REGIME_CHECKS,
@@ -40,6 +40,7 @@ import {
   fetchRules,
   fetchSignalsForStrategy,
   fetchStrategies,
+  sendManualSignal,
   fetchUniverses,
   updateRule,
   updateStrategy,
@@ -112,6 +113,15 @@ function XIcon() {
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="18" y1="6" x2="6" y2="18" />
       <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
     </svg>
   );
 }
@@ -1578,6 +1588,19 @@ function StrategyManager() {
   const [editCounterPolicy, setEditCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [saving, setSaving] = useState(false);
 
+  // Manual test-signal mini-form - which strategy row it's open for (null
+  // = closed), reusing that strategy's own `segment` as the signal's
+  // `exchange` rather than asking for it again. See sendManualSignal in
+  // api.ts - a thin wrapper around signal-processing's own generic
+  // POST /signals, the exact same ingest path a real signal takes.
+  const [sendSignalId, setSendSignalId] = useState<string | null>(null);
+  const [signalSymbol, setSignalSymbol] = useState("");
+  const [signalAction, setSignalAction] = useState<"BUY" | "SELL">("BUY");
+  const [signalPrice, setSignalPrice] = useState("");
+  const [sendingSignal, setSendingSignal] = useState(false);
+  const [sendSignalError, setSendSignalError] = useState<string | null>(null);
+  const [sendSignalNotice, setSendSignalNotice] = useState<string | null>(null);
+
   // Suggests a square-off time whenever horizon/segment change in the
   // create form - only while the user hasn't hand-edited the field
   // themselves. Mirrors the backend's own default_square_off_time, which
@@ -1812,6 +1835,41 @@ function StrategyManager() {
       setSelected((prev) => (prev === s.id ? null : prev));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete strategy");
+    }
+  }
+
+  function handleToggleSendSignal(s: Strategy) {
+    if (sendSignalId === s.id) {
+      setSendSignalId(null);
+      return;
+    }
+    setSendSignalId(s.id);
+    setSignalSymbol("");
+    setSignalAction("BUY");
+    setSignalPrice("");
+    setSendSignalError(null);
+    setSendSignalNotice(null);
+  }
+
+  async function handleSendSignal(s: Strategy) {
+    setSendingSignal(true);
+    setSendSignalError(null);
+    setSendSignalNotice(null);
+    try {
+      const result = await sendManualSignal({
+        strategy_id: s.id,
+        symbol: signalSymbol.trim().toUpperCase(),
+        exchange: s.segment,
+        action: signalAction,
+        price: Number(signalPrice),
+      });
+      setSendSignalNotice(`Sent (${result.status}) - see "Recent signals" below once it refreshes.`);
+      setSignalSymbol("");
+      setSignalPrice("");
+    } catch (err) {
+      setSendSignalError(err instanceof Error ? err.message : "Failed to send signal");
+    } finally {
+      setSendingSignal(false);
     }
   }
 
@@ -2135,9 +2193,10 @@ function StrategyManager() {
               </td>
             </tr>
           )}
-          {filteredStrategies.map((s) =>
-            editingId === s.id ? (
-              <tr key={s.id} className="editing-row" onClick={(e) => e.stopPropagation()}>
+          {filteredStrategies.map((s) => (
+            <Fragment key={s.id}>
+            {editingId === s.id ? (
+              <tr className="editing-row" onClick={(e) => e.stopPropagation()}>
                 <td>
                   <input value={editName} onChange={(e) => setEditName(e.target.value)} className="cell-input" />
                 </td>
@@ -2390,7 +2449,7 @@ function StrategyManager() {
                 </td>
               </tr>
             ) : (
-              <tr key={s.id} className={s.id === selected ? "selected-row" : ""} onClick={() => setSelected(s.id)}>
+              <tr className={s.id === selected ? "selected-row" : ""} onClick={() => setSelected(s.id)}>
                 <td className="symbol">{s.name}</td>
                 <td>
                   <span className={`status-pill status-${s.status}`}>{s.status}</span>{" "}
@@ -2454,10 +2513,74 @@ function StrategyManager() {
                   >
                     <TrashIcon />
                   </button>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => handleToggleSendSignal(s)}
+                    title={`Send a manual test signal for "${s.name}"`}
+                    aria-label={`Send a manual test signal for "${s.name}"`}
+                  >
+                    <SendIcon />
+                  </button>
                 </td>
               </tr>
-            ),
-          )}
+            )}
+            {sendSignalId === s.id && (
+              <tr className="editing-row" onClick={(e) => e.stopPropagation()}>
+                <td colSpan={colCount}>
+                  <div className="strategy-form">
+                    <label>
+                      Symbol
+                      <input
+                        value={signalSymbol}
+                        onChange={(e) => setSignalSymbol(e.target.value.toUpperCase())}
+                        placeholder="e.g. BTCUSD, TCS, GOLDM-04Sep2026-FUT"
+                        autoFocus
+                      />
+                    </label>
+                    <label>
+                      Action
+                      <select value={signalAction} onChange={(e) => setSignalAction(e.target.value as "BUY" | "SELL")}>
+                        <option value="BUY">BUY</option>
+                        <option value="SELL">SELL</option>
+                      </select>
+                    </label>
+                    <label>
+                      Price
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={signalPrice}
+                        onChange={(e) => setSignalPrice(e.target.value)}
+                        placeholder="e.g. 63500"
+                      />
+                    </label>
+                    <span className="muted">Exchange: {s.segment} (from this strategy's own segment)</span>
+                    <button
+                      type="button"
+                      onClick={() => handleSendSignal(s)}
+                      disabled={sendingSignal || !signalSymbol.trim() || !signalPrice}
+                    >
+                      {sendingSignal ? "Sending..." : "Send test signal"}
+                    </button>
+                    <button type="button" className="secondary" onClick={() => setSendSignalId(null)}>
+                      Close
+                    </button>
+                  </div>
+                  {sendSignalError && <p className="error">{sendSignalError}</p>}
+                  {sendSignalNotice && <p className="hint">{sendSignalNotice}</p>}
+                  <p className="hint">
+                    Posts a real signal via signal-processing's own POST /signals (source="manual") - runs through
+                    the exact same resolution/conflict-policy pipeline a webhook or in-house signal would, including
+                    rejecting cleanly if this strategy isn't live. Type the exact tradable symbol (for futures,
+                    the full contract symbol, not the bare underlying) - nothing here resolves it for you.
+                  </p>
+                </td>
+              </tr>
+            )}
+            </Fragment>
+          ))}
         </tbody>
       </table>
 

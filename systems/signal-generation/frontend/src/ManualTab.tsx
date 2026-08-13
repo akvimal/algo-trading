@@ -152,6 +152,16 @@ export default function ManualTab() {
     );
   }
 
+  // Pending instances are a pure browser-side watch (no backend order
+  // exists yet - see OrderInstance's own comment), so canceling one is
+  // just dropping it from local state, no API call needed. Doesn't touch
+  // history - it never traded, so it's not a "previous trade".
+  function cancelPendingInstance(rowId: string, instanceId: string) {
+    setRows((prev) =>
+      prev.map((r) => (r.id === rowId ? { ...r, orders: r.orders.filter((o) => o.id !== instanceId) } : r)),
+    );
+  }
+
   async function placeOrder(row: ManualRow) {
     const symbol = row.symbol.trim().toUpperCase();
     if (!symbol) return;
@@ -586,6 +596,15 @@ export default function ManualTab() {
                               Square off
                             </button>
                           </>
+                        )}
+                        {instance.state === "pending" && (
+                          <button
+                            type="button"
+                            className="tiny secondary"
+                            onClick={() => cancelPendingInstance(row.id, instance.id)}
+                          >
+                            Cancel
+                          </button>
                         )}
                       </td>
                     </tr>

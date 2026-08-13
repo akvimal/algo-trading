@@ -180,12 +180,19 @@ def square_off_one(position_id: str, quantity: Optional[float] = Query(default=N
 
 @router.delete("/positions")
 def clear_positions(db: Session = Depends(get_db)):
-    """Wipes all positions (OPEN/CLOSED/REJECTED) - a manual reset for
-    testing, not something the pipeline itself ever calls. Settings and
-    the Redis stream/consumer group are untouched. Signals in
+    """Wipes all positions (OPEN/CLOSED/REJECTED) AND all option position
+    groups (execution.option_position_groups) - a manual reset for
+    testing, not something the pipeline itself ever calls. Both in one
+    transaction so an OPEN option group never survives without its own
+    legs - a group whose legs were deleted but which itself wasn't stays
+    OPEN forever (square-off can't quote it, duplicate_signal_policy=skip
+    blocks every future signal on that symbol) since nothing else ever
+    revisits it. Positions deleted first since they FK-reference groups.
+    Settings and the Redis stream/consumer group are untouched. Signals in
     signal-processing and strategies in signal-generation are untouched
     too - each system only ever clears its own schema, see
     docs/architecture.md."""
     positions_deleted = db.query(db_models.Position).delete()
+    option_groups_deleted = db.query(db_models.OptionPositionGroup).delete()
     db.commit()
-    return {"positions_deleted": positions_deleted}
+    return {"positions_deleted": positions_deleted, "option_groups_deleted": option_groups_deleted}

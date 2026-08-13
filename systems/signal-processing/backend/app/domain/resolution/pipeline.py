@@ -27,10 +27,14 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
     live, or the signal arrived outside the strategy's optional active
     window (active_from_time/active_to_time - every source_type, not just
     in_house); the caller persists that as a rejected order and does not
-    publish to the Redis stream."""
+    publish to the Redis stream. Manual test signals (source="manual" -
+    the frontend's "Send test signal"/Manual tab) are exempt from the
+    live-status check only, so a strategy can be exercised end-to-end
+    before being promoted to live - every other source (chartink,
+    in_house) still requires it."""
     strategy = fetch_strategy(signal.strategy_id)
 
-    if strategy["status"] != "live":
+    if strategy["status"] != "live" and signal.source != "manual":
         raise ResolutionError(f"strategy is not live (status={strategy['status']})")
 
     active_from = strategy.get("active_from_time")

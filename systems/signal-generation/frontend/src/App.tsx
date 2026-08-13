@@ -2449,19 +2449,21 @@ function StrategyManager() {
                   >
                     <TrashIcon />
                   </button>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={() => handleToggleSendSignal(s)}
-                    title={`Send a manual test signal for "${s.name}"`}
-                    aria-label={`Send a manual test signal for "${s.name}"`}
-                  >
-                    <SendIcon />
-                  </button>
+                  {s.status !== "live" && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => handleToggleSendSignal(s)}
+                      title={`Send a manual test signal for "${s.name}"`}
+                      aria-label={`Send a manual test signal for "${s.name}"`}
+                    >
+                      <SendIcon />
+                    </button>
+                  )}
                 </td>
               </tr>
             )}
-            {sendSignalId === s.id && (
+            {sendSignalId === s.id && s.status !== "live" && (
               <tr className="editing-row" onClick={(e) => e.stopPropagation()}>
                 <td colSpan={colCount}>
                   <div className="strategy-form">
@@ -2508,10 +2510,13 @@ function StrategyManager() {
                   {sendSignalNotice && <p className="hint">{sendSignalNotice}</p>}
                   <p className="hint">
                     Posts a real signal via signal-processing's own POST /signals (source="manual") - runs through
-                    the exact same resolution/conflict-policy pipeline a webhook or in-house signal would, including
-                    rejecting cleanly if this strategy isn't live. Type the exact tradable symbol (for futures,
-                    the full contract symbol, not the bare underlying) - nothing here resolves it for you. Leave
-                    price blank to fetch the current market price (market-data's GET /quotes/ltp) at send time.
+                    the exact same resolution/conflict-policy pipeline a webhook or in-house signal would, except
+                    it's exempt from the "strategy must be live" check (draft/backtesting/paused all work) so you
+                    can test before activating - every other rejection reason (active window, duplicate/counter
+                    signal policy, unresolvable symbol, ...) still applies exactly as it would for a real signal.
+                    Type the exact tradable symbol (for futures, the full contract symbol, not the bare underlying)
+                    - nothing here resolves it for you. Leave price blank to fetch the current market price
+                    (market-data's GET /quotes/ltp) at send time.
                   </p>
                 </td>
               </tr>

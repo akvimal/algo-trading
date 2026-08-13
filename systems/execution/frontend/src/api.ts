@@ -155,6 +155,7 @@ export async function checkExitsNow(): Promise<CheckExitsResult> {
 
 export type ClearPositionsResult = {
   positions_deleted: number;
+  option_groups_deleted: number;
 };
 
 export async function clearPositions(): Promise<ClearPositionsResult> {

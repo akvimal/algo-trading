@@ -304,11 +304,12 @@ def open_position(
         # regardless of how much margin backed that quantity).
         effective_capital = effective_capital * float(account.leverage)
     if effective_capital < order.price:
+        capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
         row = _reject(
             db,
             order,
             signal_id,
-            f"insufficient account balance ({account.current_balance} left in {order.segment} account, "
+            f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
             f"need at least {order.price} for 1 share)",
         )
         db.commit()
@@ -490,12 +491,13 @@ def open_manual_position(
             return row
         lot_size = resolved_lot_size
 
+    capital_unit = "USD" if segment == "CRYPTO" else "INR"
     if quantity is not None:
         required_cost = price * quantity
         if effective_capital < required_cost:
             row = _reject_manual(
                 db, signal_id, symbol, segment, segment, action, instrument_type, price,
-                f"insufficient account balance ({account.current_balance} left in {segment} account, "
+                f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
                 f"need at least {required_cost} for {quantity})",
             )
             db.commit()
@@ -505,7 +507,7 @@ def open_manual_position(
         if effective_capital < price:
             row = _reject_manual(
                 db, signal_id, symbol, segment, segment, action, instrument_type, price,
-                f"insufficient account balance ({account.current_balance} left in {segment} account, "
+                f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
                 f"need at least {price} for 1 share)",
             )
             db.commit()

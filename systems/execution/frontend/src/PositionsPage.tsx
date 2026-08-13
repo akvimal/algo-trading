@@ -98,15 +98,15 @@ export default function PositionsPage() {
 
   async function handleClearPositions() {
     const confirmed = window.confirm(
-      "Delete every position (OPEN/CLOSED/REJECTED)? This can't be undone. Settings, signals in " +
-        "signal-processing, and strategies in signal-generation are untouched.",
+      "Delete every position (OPEN/CLOSED/REJECTED) and every option position group? This can't be " +
+        "undone. Settings, signals in signal-processing, and strategies in signal-generation are untouched.",
     );
     if (!confirmed) return;
     setClearing(true);
     setActionMessage(null);
     try {
       const result = await clearPositions();
-      setActionMessage(`Cleared ${result.positions_deleted} positions.`);
+      setActionMessage(`Cleared ${result.positions_deleted} positions and ${result.option_groups_deleted} option groups.`);
       setPositions([]);
     } catch (err) {
       setActionMessage(err instanceof Error ? err.message : "Failed to clear positions");

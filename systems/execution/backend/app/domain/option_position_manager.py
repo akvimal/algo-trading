@@ -261,9 +261,10 @@ def open_option_group(
     # other rejection case here already has.
     required_lots = order.option_fixed_lots if order.option_fixed_lots is not None else 1
     if effective_capital < net_debit * lot_size * required_lots:
+        capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
         row = _reject_group(
             db, order, signal_id,
-            f"insufficient account balance ({account.current_balance} left in {order.segment} account, "
+            f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
             f"need at least {net_debit * lot_size * required_lots} for {required_lots} lot(s))",
         )
         db.commit()

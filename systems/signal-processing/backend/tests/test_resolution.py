@@ -101,6 +101,29 @@ def test_resolve_rejects_non_live_strategy():
 
 
 @responses.activate
+def test_resolve_allows_manual_signal_for_non_live_strategy():
+    # source="manual" (the frontend's "Send test signal"/Manual tab) is
+    # exempt from the live-status check specifically so a strategy can be
+    # exercised end-to-end before being promoted to live.
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json={
+            "id": STRATEGY_ID,
+            "status": "draft",
+            "horizon": "intraday",
+            "instrument_type": "spot",
+            "segment": "NSE",
+        },
+        status=200,
+    )
+
+    resolved = resolve(_signal(source="manual"))
+
+    assert resolved.horizon == "intraday"
+
+
+@responses.activate
 def test_resolve_rejects_unknown_strategy():
     responses.add(responses.GET, _strategy_url(), json={"detail": "not found"}, status=404)
 

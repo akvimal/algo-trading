@@ -59,6 +59,7 @@ class OptionPositionGroup(Base):
     net_debit = Column(Numeric)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
+    sl_scope = Column(Text, nullable=False, default="combined")
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
     exit_reason = Column(Text)

@@ -34,6 +34,10 @@ def _leg_dict(pos: db_models.Position) -> dict:
         "exit_price": float(pos.exit_price) if pos.exit_price is not None else None,
         "pnl": float(pos.pnl) if pos.pnl is not None else None,
         "status": pos.status,
+        # Only set when the group's own sl_scope='individual' - null (as
+        # for every other option leg) in 'combined' mode.
+        "stop_loss_price": float(pos.stop_loss_price) if pos.stop_loss_price is not None else None,
+        "target_price": float(pos.target_price) if pos.target_price is not None else None,
     }
 
 
@@ -77,6 +81,7 @@ def list_option_groups(
             "net_debit": float(r.net_debit) if r.net_debit is not None else None,
             "combined_stop_loss_price": float(r.combined_stop_loss_price) if r.combined_stop_loss_price is not None else None,
             "combined_target_price": float(r.combined_target_price) if r.combined_target_price is not None else None,
+            "sl_scope": r.sl_scope,
             "live_combined_price": mtm[r.id][0] if r.id in mtm else None,
             "unrealized_pnl": mtm[r.id][1] if r.id in mtm else None,
             "status": r.status,

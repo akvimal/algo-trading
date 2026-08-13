@@ -20,6 +20,13 @@ export type OptionPositionStyle = "spread" | "naked";
 // behavior exactly. A spread's short leg still sits a fixed distance
 // further out from wherever this lands, not from ATM itself.
 export type OptionStrikeMoneyness = "ITM2" | "ITM1" | "ATM" | "OTM1" | "OTM2";
+// instrument_type='option' only - whether execution monitors one SL/target
+// threshold on the combined (net debit) premium ('combined', default) or
+// each leg's own threshold computed from its own entry premium
+// ('individual'). Either scope still closes the WHOLE group together when
+// tripped - this only changes the trigger condition. Mathematically
+// identical to 'combined' for a naked (1-leg) position.
+export type OptionSlScope = "combined" | "individual";
 // Which market this strategy trades in - distinct from `exchange` (still
 // fixed to "NSE", the only one actually wired up end-to-end). Only drives
 // the square_off_time default; MCX/CRYPTO can be recorded as intent even
@@ -166,6 +173,7 @@ export type Strategy = {
   // instrument_type='option' only - see OptionPositionStyle above.
   option_position_style: OptionPositionStyle;
   option_strike_moneyness: OptionStrikeMoneyness;
+  option_sl_scope: OptionSlScope;
   segment: Segment;
   // Required for horizon='intraday' only (auto-defaulted server-side from
   // horizon+segment when omitted on create - see defaultSquareOffTime
@@ -213,6 +221,7 @@ export type StrategyCreate = {
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
+  option_sl_scope?: OptionSlScope;
   segment?: Segment;
   // Optional - the backend auto-fills it from horizon+segment when
   // horizon='intraday'; required explicitly for other horizons.
@@ -247,6 +256,7 @@ export type StrategyEdit = {
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
+  option_sl_scope?: OptionSlScope;
   segment?: Segment;
   square_off_time?: string;
   underlying?: string;

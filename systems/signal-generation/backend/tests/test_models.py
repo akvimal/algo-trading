@@ -231,6 +231,31 @@ def test_strategy_create_accepts_explicit_signal_conflict_policy():
     assert s.counter_signal_policy == "close_and_flip"
 
 
+def test_strategy_create_defaults_option_fields():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="option", square_off_time="15:00:00",
+    )
+    assert s.option_position_style == "spread"
+    assert s.option_strike_moneyness == "ATM"
+    assert s.option_sl_scope == "combined"
+
+
+def test_strategy_create_accepts_explicit_option_sl_scope():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="option", square_off_time="15:00:00",
+        option_sl_scope="individual",
+    )
+    assert s.option_sl_scope == "individual"
+
+
+def test_strategy_create_rejects_unknown_option_sl_scope():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="chartink", horizon="intraday", instrument_type="option", square_off_time="15:00:00",
+            option_sl_scope="per_leg",
+        )
+
+
 def test_strategy_create_rejects_unknown_duplicate_signal_policy():
     with pytest.raises(ValidationError):
         StrategyCreate(

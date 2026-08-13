@@ -47,4 +47,6 @@ class ResolvedOrderDraft(BaseModel):
     # for swing/positional, since square-off doesn't apply there.
     square_off_time: Optional[time] = None
     duplicate_signal_policy: Literal["skip", "add_position"] = "add_position"
-    counter_signal_policy: Literal["skip", "close_and_flip"] = "skip"
+    counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
+    # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.
+    option_sl_scope: Optional[Literal["combined", "individual"]] = None

@@ -57,6 +57,7 @@ def _to_out(row: db_models.Strategy) -> StrategyOut:
         trailing_stop_enabled=row.trailing_stop_enabled,
         option_position_style=row.option_position_style,
         option_strike_moneyness=row.option_strike_moneyness,
+        option_sl_scope=row.option_sl_scope,
         segment=row.segment,
         square_off_time=row.square_off_time,
         underlying=row.underlying,
@@ -148,6 +149,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         trailing_stop_enabled=trailing_stop_enabled,
         option_position_style=payload.option_position_style,
         option_strike_moneyness=payload.option_strike_moneyness,
+        option_sl_scope=payload.option_sl_scope,
         segment=payload.segment,
         square_off_time=payload.square_off_time,
         underlying=payload.underlying,
@@ -253,6 +255,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.option_position_style = payload.option_position_style
     if payload.option_strike_moneyness is not None:
         row.option_strike_moneyness = payload.option_strike_moneyness
+    if payload.option_sl_scope is not None:
+        row.option_sl_scope = payload.option_sl_scope
     if payload.segment is not None:
         row.segment = payload.segment
     if payload.square_off_time is not None:

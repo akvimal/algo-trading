@@ -166,6 +166,53 @@ conflict-close branch. No DB migration needed — `option_position_groups`/`posi
 leg-count constraint, a group's leg count is already a pure runtime property of however many
 `positions` rows reference it.
 
+**Individual vs. combined SL/target** — `Strategy.option_sl_scope` (signal-generation, `'combined'`
+default or `'individual'`) picks whether a group is monitored against one threshold on the
+**combined** (net debit) premium (the original design, unchanged) or against **each leg's own**
+threshold computed from its own entry premium. Either scope still closes the **whole group
+together** when tripped — this is a different trigger *condition*, never a way to leave one leg
+open while the other closes (confirmed with the user before building; no new unhedged-risk state is
+possible). `option_sl_scope` is a new **top-level field on `ResolvedOrderDraft`/`ResolvedOrder`**
+(`docs/contracts/resolved-order.schema.json` genuinely gained a property this time — unlike
+`option_position_style`/`option_strike_moneyness`, which only ever affected *which legs*
+`choose_strategy` builds and never needed to reach execution, `option_sl_scope` changes how
+execution *monitors* an already-resolved group, so it follows `stop_loss_method`/
+`stop_loss_percent`'s existing passthrough shape instead). `option_position_groups` gained an
+explicit `sl_scope` column (mirrors how `strategy_type` is stored explicitly rather than inferred);
+no new columns were needed on `positions` — `stop_loss_price`/`initial_stop_loss_price`/
+`target_price` already existed there (used by spot/future, always `NULL` for option legs until
+now) and individual mode simply populates them for option leg rows too, for the first time.
+Position sizing risk-anchors on the **primary leg's own** stop distance in individual mode
+(mirrors what a naked position already does unconditionally, since `net_debit` equals the long
+leg's own premium there). Mathematically identical to `'combined'` for a naked (1-leg) position —
+no separate handling needed anywhere.
+
+**A real pre-existing bug was found and fixed along the way**, unrelated to individual mode itself:
+`_evaluate_option_group_exits` set each **leg's** own `exit_reason` to `'combined_stop_loss'`/
+`'combined_target'` — but `positions.exit_reason`'s own `CHECK` constraint only ever allowed
+`'square_off'/'stop_loss'/'target'/'manual'/'counter_signal'`, never a `'combined_'`-prefixed value
+(that vocabulary only exists on `option_position_groups.exit_reason`, a separate column with its
+own separate constraint). A live combined SL/target hit would have failed the DB constraint and
+rolled back — never caught because this path was only ever unit-tested against plain fakes (no
+constraint enforcement) and never actually live-triggered during this session's verification (which
+only exercised open + manual square-off). Fixed by decoupling the two: the **group**'s own
+`exit_reason` keeps its scope-prefixed value (`combined_stop_loss`/`individual_target`/etc.), while
+each **leg**'s `exit_reason` now gets the plain `stop_loss`/`target` value every other position
+already uses, regardless of which scope triggered the close.
+
+**A second gap, found only by live-verifying `option_sl_scope` end to end** (not by code review):
+`signal-processing`'s actual Redis publish payload (`app/domain/intake/core.py`'s
+`create_signal_from_ingest`) builds the `orders.resolved` message as a **separately hand-written
+dict**, field by field — not a serialization of `ResolvedOrderDraft` itself. Adding a field to the
+Pydantic model/contract/tests is not the same as it actually reaching execution; `option_sl_scope`
+was correctly threaded through `ResolvedOrderDraft` and covered by passing unit tests, but the
+publish dict simply never got the new key added, so every group opened as `sl_scope='combined'`
+regardless of what the strategy actually requested — caught only when a live `'individual'` group's
+`GET /option-groups` response showed `combined` instead. This is the same class of "a new field
+needs threading through more places than the obvious ones" surprise this session has hit
+repeatedly (DB `CHECK` constraints for the crypto module, provider methods for CRYPTO options) —
+here the extra place was a hand-maintained publish-payload dict, not a schema.
+
 Candle fetching (`get_previous_candle`, backing `GET /candles/previous`) is deliberately narrow: the single most recently *completed* candle for a symbol/interval, not a historical range — built for the stop-loss method above. It has its own independent throttle (separate lock/timestamp from LTP — different Dhan endpoint, no reason to serialize one behind the other) and its own cache keyed by `(symbol, interval)` with a TTL equal to the interval's own length, since a completed candle doesn't change until the next one closes. Unlike LTP there's no true multi-symbol batching here — Dhan's `charts/intraday` endpoint is per-security-id — so a caller needing several symbols (e.g. execution's exit-monitor job trailing several `previous_candle` positions) calls it once per distinct symbol, relying on the cache to bound repeat calls across polling ticks. `GET /candles/history` (§ below) reuses the same endpoint and cache-free path for a general multi-bar range instead of one cached value.
 
 NSE (cash equity, indices, index futures) and MCX (commodity futures) are wired up via Dhan; CRYPTO via Delta Exchange India, see below.

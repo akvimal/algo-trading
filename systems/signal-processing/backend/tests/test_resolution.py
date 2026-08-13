@@ -56,6 +56,7 @@ def test_resolve_uses_live_strategy_config():
     # as trailing_stop_enabled's own missing-key default.
     assert resolved.duplicate_signal_policy == "add_position"
     assert resolved.counter_signal_policy == "close_and_flip"
+    assert resolved.option_sl_scope is None  # instrument_type='spot' -> always None, never defaulted
 
 
 @responses.activate
@@ -525,6 +526,37 @@ def test_resolve_option_strategy_passes_through_non_atm_moneyness():
     resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
 
     assert resolved.strategy["legs"][0]["strike"] == 24100.0
+
+
+@responses.activate
+def test_resolve_option_strategy_defaults_sl_scope_to_combined():
+    responses.add(responses.GET, _strategy_url(), json=_option_strategy_json(), status=200)
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.option_sl_scope == "combined"
+
+
+@responses.activate
+def test_resolve_option_strategy_passes_through_individual_sl_scope():
+    # option_sl_scope only affects how execution monitors an already-
+    # resolved group, not which legs get built - confirmed here by the
+    # legs staying exactly the same shape (bull_call_spread, ATM/OTM2
+    # strikes from _FAKE_CHAIN) regardless of the sl_scope value.
+    responses.add(
+        responses.GET, _strategy_url(), json=_option_strategy_json(option_sl_scope="individual"), status=200
+    )
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-08-14"]}, status=200)
+    responses.add(responses.GET, _chain_url(), json=_FAKE_CHAIN, status=200)
+
+    resolved = resolve(_signal(symbol="NIFTY", action="BUY"))
+
+    assert resolved.option_sl_scope == "individual"
+    assert resolved.strategy["type"] == "bull_call_spread"
 
 
 @responses.activate

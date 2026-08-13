@@ -80,6 +80,13 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- SPREAD_WIDTH_STRIKES further out from wherever this lands, not from
     -- ATM itself.
     option_strike_moneyness TEXT NOT NULL DEFAULT 'ATM' CHECK (option_strike_moneyness IN ('ITM2', 'ITM1', 'ATM', 'OTM1', 'OTM2')),
+    -- instrument_type='option' only - whether execution monitors one
+    -- SL/target threshold on the combined (net debit) premium ('combined',
+    -- the original design) or each leg's own threshold computed from its
+    -- own entry premium ('individual' - either leg tripping still closes
+    -- the whole group together, never just one leg). Harmlessly ignored
+    -- for spot/future strategies.
+    option_sl_scope TEXT NOT NULL DEFAULT 'combined' CHECK (option_sl_scope IN ('combined', 'individual')),
     -- Required for horizon='intraday' only - square-off doesn't apply to
     -- swing/positional strategies (positions aren't closed same-day), so
     -- this stays NULL for them. Auto-defaulted server-side from

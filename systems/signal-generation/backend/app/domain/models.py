@@ -42,6 +42,15 @@ OptionPositionStyle = Literal["spread", "naked"]
 # out from wherever this lands, not from ATM itself - not independently
 # configurable. Harmlessly ignored for spot/future strategies.
 OptionStrikeMoneyness = Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"]
+# instrument_type='option' only - whether execution monitors one SL/target
+# threshold on the combined (net debit) premium ('combined', the original
+# Phase 4d design) or each leg's own threshold computed from its own entry
+# premium ('individual'). Either scope still closes the WHOLE group
+# together when tripped - this only changes the trigger condition, never
+# leaves one leg open while the other closes. Mathematically identical to
+# 'combined' for a naked (1-leg) position. Harmlessly ignored for
+# spot/future strategies.
+OptionSlScope = Literal["combined", "individual"]
 Status = Literal["draft", "backtesting", "live", "paused"]
 Interval = Literal["1min", "3min", "5min", "15min", "30min", "60min", "daily"]
 StopLossMethod = Literal["previous_candle", "percent"]
@@ -327,6 +336,7 @@ class StrategyCreate(BaseModel):
     # instrument_type='option' only - see OptionPositionStyle above.
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
+    option_sl_scope: OptionSlScope = "combined"
     segment: Segment = "NSE"
     # Only meaningful for horizon='intraday' - square-off doesn't apply to
     # swing/positional strategies (positions aren't closed same-day), so
@@ -427,6 +437,7 @@ class StrategyUpdate(BaseModel):
     trailing_stop_enabled: Optional[bool] = None
     option_position_style: Optional[OptionPositionStyle] = None
     option_strike_moneyness: Optional[OptionStrikeMoneyness] = None
+    option_sl_scope: Optional[OptionSlScope] = None
     segment: Optional[Segment] = None
     square_off_time: Optional[time] = None
     underlying: Optional[str] = Field(default=None, min_length=1)
@@ -471,6 +482,7 @@ class StrategyOut(BaseModel):
     trailing_stop_enabled: bool = False
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
+    option_sl_scope: OptionSlScope = "combined"
     segment: Segment
     square_off_time: Optional[time] = None
     underlying: Optional[str] = None

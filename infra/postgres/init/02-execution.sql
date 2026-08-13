@@ -130,9 +130,16 @@ CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     net_debit                NUMERIC,  -- combined entry premium (long leg - short leg), per unit
     combined_stop_loss_price NUMERIC,
     combined_target_price    NUMERIC,
+    -- 'combined' (default): combined_stop_loss_price/combined_target_price
+    -- above are what's monitored. 'individual': each leg's own
+    -- positions.stop_loss_price/target_price is monitored instead (either
+    -- leg tripping still closes the whole group) - combined_stop_loss_price/
+    -- combined_target_price stay NULL in this mode. See
+    -- docs/contracts/resolved-order.schema.json's option_sl_scope.
+    sl_scope                 TEXT NOT NULL DEFAULT 'combined' CHECK (sl_scope IN ('combined', 'individual')),
     status                   TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'REJECTED')),
     rejection_reason         TEXT,
-    exit_reason              TEXT CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'manual', 'counter_signal')),
+    exit_reason              TEXT CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'individual_stop_loss', 'individual_target', 'manual', 'counter_signal')),
     exit_time                TIMESTAMPTZ,
     pnl                      NUMERIC,
     square_off_time          TIME,

@@ -75,4 +75,9 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         square_off_time=square_off_time,
         duplicate_signal_policy=strategy.get("duplicate_signal_policy", "add_position"),
         counter_signal_policy=strategy.get("counter_signal_policy", "close_and_flip"),
+        # instrument_type='option' only - None for spot/future, mirrors how
+        # `strategy` (the legs dict) itself is None for non-option orders.
+        # NOT passed into choose_strategy - it only affects how execution
+        # monitors/closes an already-resolved group, not which legs get built.
+        option_sl_scope=strategy.get("option_sl_scope", "combined") if instrument_type == "option" else None,
     )

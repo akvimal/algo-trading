@@ -34,6 +34,8 @@ class FakePosition:
     exit_time: Optional[object] = None
     pnl: Optional[float] = None
     exit_reason: Optional[str] = None
+    stop_loss_price: Optional[float] = None
+    target_price: Optional[float] = None
 
 
 @dataclass
@@ -48,6 +50,7 @@ class FakeGroup:
     quantity: float
     combined_stop_loss_price: Optional[float] = None
     combined_target_price: Optional[float] = None
+    sl_scope: str = "combined"
     square_off_time: Optional[time] = None
     exit_time: Optional[object] = None
     exit_reason: Optional[str] = None
@@ -197,6 +200,83 @@ def test_evaluate_option_group_exits_naked_group_closes_on_stop_loss():
     assert group.status == "CLOSED"
     assert group.exit_reason == "combined_stop_loss"
     assert long_leg.status == "CLOSED"
+
+
+def test_evaluate_option_group_exits_combined_mode_leg_exit_reason_is_plain():
+    # Regression check: positions.exit_reason's own CHECK constraint has
+    # no 'combined_*'/'individual_*' variants at all (only
+    # option_position_groups.exit_reason does) - each LEG must get the
+    # plain 'stop_loss'/'target' value every other position already uses,
+    # even though the GROUP's own exit_reason stays 'combined_stop_loss'.
+    group = _group(net_debit=20.0, combined_stop_loss_price=18.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0}, _accounts())
+
+    assert group.exit_reason == "combined_stop_loss"
+    assert long_leg.exit_reason == "stop_loss"
+    assert short_leg.exit_reason == "stop_loss"
+
+
+def test_evaluate_option_group_exits_individual_short_leg_trips_closes_both_legs():
+    group = _group(net_debit=20.0, sl_scope="individual")
+    long_leg, short_leg = _legs(net_debit_entry=(30.0, 10.0))
+    long_leg.stop_loss_price = 20.0  # long's own SL far away, won't trip
+    short_leg.stop_loss_price = 12.0  # SELL SL trips when price rises above this
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    # long barely moves (31, nowhere near its own SL of 20); short rises to
+    # 15, above its own SL of 12 - only the SHORT leg's own threshold trips.
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 31.0, "NIFTY-CE-OTM": 15.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert group.status == "CLOSED"
+    assert group.exit_reason == "individual_stop_loss"
+    # Both legs close together even though only the short leg's own
+    # threshold actually tripped - the confirmed "whole group closes"
+    # design, never a partial/mixed-status group.
+    assert long_leg.status == "CLOSED"
+    assert short_leg.status == "CLOSED"
+    assert long_leg.exit_reason == "stop_loss"
+    assert short_leg.exit_reason == "stop_loss"
+
+
+def test_evaluate_option_group_exits_individual_mode_ignores_combined_price():
+    # combined_stop_loss_price is set here specifically to prove it's
+    # ignored in individual mode: combined_price (25-8=17) would trip a
+    # combined threshold of 25, but neither leg's own threshold does.
+    group = _group(net_debit=20.0, sl_scope="individual", combined_stop_loss_price=25.0)
+    long_leg, short_leg = _legs(net_debit_entry=(30.0, 10.0))
+    long_leg.stop_loss_price = 20.0  # BUY SL trips if cmp<=20 - 25 doesn't trip
+    short_leg.stop_loss_price = 20.0  # SELL SL trips if cmp>=20 - 8 doesn't trip
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 8.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "checked": 1}
+    assert group.status == "OPEN"
+
+
+def test_evaluate_option_group_exits_individual_naked_matches_combined_trigger():
+    # For naked, individual and combined are mathematically identical
+    # (net_debit == the single leg's own premium) - same threshold either
+    # mode would have computed, same trigger behavior.
+    group = _group(net_debit=30.0, sl_scope="individual")
+    long_leg = _naked_leg(entry_price=30.0)
+    long_leg.stop_loss_price = 27.0
+    legs = {"group-1": {"BUY": long_leg}}
+
+    result = _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 25.0}, _accounts())
+
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert group.status == "CLOSED"
+    assert group.exit_reason == "individual_stop_loss"
+    assert long_leg.exit_reason == "stop_loss"
 
 
 def test_evaluate_option_group_exits_skips_group_with_missing_legs():

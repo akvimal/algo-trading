@@ -248,24 +248,49 @@ def open_option_group(
         db.commit()
         return row
 
+    sl_scope = order.option_sl_scope or "combined"
     combined_stop_loss_price: Optional[float] = None
     combined_target_price: Optional[float] = None
-    if order.stop_loss_method == "percent" and order.stop_loss_percent is not None:
-        combined_stop_loss_price = compute_stop_loss_percent_price("BUY", net_debit, order.stop_loss_percent)
-    if order.target_percent is not None:
-        combined_target_price = compute_target_percent_price("BUY", net_debit, order.target_percent)
+    long_stop_loss_price: Optional[float] = None
+    long_target_price: Optional[float] = None
+    short_stop_loss_price: Optional[float] = None
+    short_target_price: Optional[float] = None
 
-    if combined_stop_loss_price is not None:
-        stop_distance = abs(net_debit - combined_stop_loss_price)
+    if order.stop_loss_method == "percent" and order.stop_loss_percent is not None:
+        if sl_scope == "individual":
+            long_stop_loss_price = compute_stop_loss_percent_price("BUY", long_premium, order.stop_loss_percent)
+            if short_leg_dict:
+                short_stop_loss_price = compute_stop_loss_percent_price("SELL", short_premium, order.stop_loss_percent)
+        else:
+            combined_stop_loss_price = compute_stop_loss_percent_price("BUY", net_debit, order.stop_loss_percent)
+
+    if order.target_percent is not None:
+        if sl_scope == "individual":
+            long_target_price = compute_target_percent_price("BUY", long_premium, order.target_percent)
+            if short_leg_dict:
+                short_target_price = compute_target_percent_price("SELL", short_premium, order.target_percent)
+        else:
+            combined_target_price = compute_target_percent_price("BUY", net_debit, order.target_percent)
+
+    # Position sizing risk-anchors on the PRIMARY leg's own stop distance in
+    # individual mode (mirrors what a naked position already does
+    # unconditionally, since net_debit == the long leg's own premium
+    # there) - falls back to plain capital sizing when no SL is configured,
+    # same as combined mode already does.
+    sizing_price = long_premium if sl_scope == "individual" else net_debit
+    sizing_stop_loss_price = long_stop_loss_price if sl_scope == "individual" else combined_stop_loss_price
+
+    if sizing_stop_loss_price is not None:
+        stop_distance = abs(sizing_price - sizing_stop_loss_price)
         if stop_distance <= 0:
             row = _reject_group(
                 db, order, signal_id,
-                f"combined stop-loss price ({combined_stop_loss_price}) equals net debit ({net_debit}) - can't size by risk",
+                f"stop-loss price ({sizing_stop_loss_price}) equals entry price ({sizing_price}) - can't size by risk",
             )
             db.commit()
             return row
         quantity = compute_risk_based_quantity(
-            effective_capital, float(account.risk_per_trade_pct), net_debit, combined_stop_loss_price, lot_size
+            effective_capital, float(account.risk_per_trade_pct), sizing_price, sizing_stop_loss_price, lot_size
         )
     else:
         quantity = compute_quantity(effective_capital, net_debit, lot_size)
@@ -285,15 +310,16 @@ def open_option_group(
         net_debit=net_debit,
         combined_stop_loss_price=combined_stop_loss_price,
         combined_target_price=combined_target_price,
+        sl_scope=sl_scope,
         status="OPEN",
         square_off_time=order.square_off_time,
     )
     db.add(group)
 
-    legs_to_write = [(long_leg_dict, long_symbol, long_premium)]
+    legs_to_write = [(long_leg_dict, long_symbol, long_premium, long_stop_loss_price, long_target_price)]
     if short_leg_dict:
-        legs_to_write.append((short_leg_dict, short_symbol, short_premium))
-    for leg_dict, symbol, premium in legs_to_write:
+        legs_to_write.append((short_leg_dict, short_symbol, short_premium, short_stop_loss_price, short_target_price))
+    for leg_dict, symbol, premium, leg_sl, leg_target in legs_to_write:
         db.add(
             db_models.Position(
                 signal_id=signal_id,
@@ -309,6 +335,12 @@ def open_option_group(
                 status="OPEN",
                 square_off_time=order.square_off_time,
                 option_group_id=group_id,
+                # Only set in sl_scope='individual' - combined mode leaves
+                # these NULL, same as today, monitored via the group's own
+                # combined_stop_loss_price/combined_target_price instead.
+                stop_loss_price=leg_sl,
+                initial_stop_loss_price=leg_sl,
+                target_price=leg_target,
             )
         )
     db.commit()
@@ -472,10 +504,21 @@ def square_off_due_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -> dic
 
 def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtpBatch, accounts_by_segment: dict) -> dict:
     """Pure logic (no DB query/commit) - mirrors position_manager
-    ._evaluate_exits at the group level: combined SL/target only (no
-    trailing, no previous_candle - see module docstring's scope notes).
-    `legs`: group.id -> {'BUY': Position, 'SELL': Position}, pre-queried
-    by the caller (check_option_group_exits)."""
+    ._evaluate_exits at the group level (no trailing, no previous_candle -
+    see module docstring's scope notes). `legs`: group.id -> {'BUY':
+    Position, 'SELL': Position}, pre-queried by the caller
+    (check_option_group_exits).
+
+    sl_scope='combined' (default) checks the group's own combined_stop_loss_price/
+    combined_target_price against the combined (long-short) price, exactly
+    as before. sl_scope='individual' instead checks EACH leg's own
+    stop_loss_price/target_price (set at open time, see open_option_group)
+    against that leg's own fresh quote, action-aware - whichever leg trips
+    first still closes the WHOLE group together, same as combined mode;
+    this only changes what triggers the close, never leaves one leg open.
+    Either mode credits/debits the account off the same real combined P&L
+    (combined_price - net_debit) * quantity - the trigger condition never
+    changes what the position was actually worth at exit."""
     if not groups:
         return {"closed_stop_loss": 0, "closed_target": 0, "checked": 0}
 
@@ -496,24 +539,42 @@ def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtp
             continue
 
         combined_price = long_cmp - short_cmp
-        sl_hit = group.combined_stop_loss_price is not None and combined_price <= float(group.combined_stop_loss_price)
-        target_hit = group.combined_target_price is not None and combined_price >= float(group.combined_target_price)
+        if group.sl_scope == "individual":
+            sl_hit = (
+                (long_leg.stop_loss_price is not None and long_cmp <= float(long_leg.stop_loss_price))
+                or (short_leg is not None and short_leg.stop_loss_price is not None and short_cmp >= float(short_leg.stop_loss_price))
+            )
+            target_hit = (
+                (long_leg.target_price is not None and long_cmp >= float(long_leg.target_price))
+                or (short_leg is not None and short_leg.target_price is not None and short_cmp <= float(short_leg.target_price))
+            )
+        else:
+            sl_hit = group.combined_stop_loss_price is not None and combined_price <= float(group.combined_stop_loss_price)
+            target_hit = group.combined_target_price is not None and combined_price >= float(group.combined_target_price)
         if not (sl_hit or target_hit):
             continue
 
-        reason = "combined_stop_loss" if sl_hit else "combined_target"
+        group_reason_prefix = "individual" if group.sl_scope == "individual" else "combined"
+        group_reason = f"{group_reason_prefix}_stop_loss" if sl_hit else f"{group_reason_prefix}_target"
+        # Leg-level exit_reason is the plain 'stop_loss'/'target' every
+        # other position already uses (positions.exit_reason's own CHECK
+        # constraint doesn't have 'combined_'/'individual_' variants at
+        # all - only the group's own exit_reason does) - same value
+        # regardless of sl_scope, since both legs close as a consequence
+        # of the group's trigger either way, not independently.
+        leg_reason = "stop_loss" if sl_hit else "target"
         legs_to_close = [(long_leg, long_cmp)] + ([(short_leg, short_cmp)] if short_leg else [])
         for pos, cmp_price in legs_to_close:
             pos.exit_price = cmp_price
             pos.exit_time = now
             pos.pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
             pos.status = "CLOSED"
-            pos.exit_reason = reason
+            pos.exit_reason = leg_reason
 
         combined_pnl = (combined_price - float(group.net_debit)) * float(group.quantity)
         group.exit_time = now
         group.status = "CLOSED"
-        group.exit_reason = reason
+        group.exit_reason = group_reason
         _apply_realized_pnl(group, accounts_by_segment.get(group.segment), combined_pnl)
 
         if sl_hit:
@@ -531,6 +592,10 @@ def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
         .filter(
             (db_models.OptionPositionGroup.combined_stop_loss_price.isnot(None))
             | (db_models.OptionPositionGroup.combined_target_price.isnot(None))
+            # sl_scope='individual' groups never set combined_stop_loss_price/
+            # combined_target_price at all (see open_option_group) - would
+            # otherwise never be selected as a candidate here.
+            | (db_models.OptionPositionGroup.sl_scope == "individual")
         )
         .all()
     )

@@ -12,6 +12,7 @@ import {
   type InstrumentType,
   type Interval,
   type OptionPositionStyle,
+  type OptionSlScope,
   type OptionStrikeMoneyness,
   type ProviderSignal,
   type RegimeCheckName,
@@ -399,6 +400,7 @@ function StrategyManager() {
   // instrument_type='option' only - see OptionPositionStyle in api.ts.
   const [optionPositionStyle, setOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [optionStrikeMoneyness, setOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
+  const [optionSlScope, setOptionSlScope] = useState<OptionSlScope>("combined");
   const [segment, setSegment] = useState<Segment>("NSE");
   const [squareOffTime, setSquareOffTime] = useState(() => defaultSquareOffTime("intraday", "NSE") ?? "");
   // Tracks whether the user has hand-edited square-off time, so the
@@ -467,6 +469,7 @@ function StrategyManager() {
   const [editTrailingEnabled, setEditTrailingEnabled] = useState(false);
   const [editOptionPositionStyle, setEditOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [editOptionStrikeMoneyness, setEditOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
+  const [editOptionSlScope, setEditOptionSlScope] = useState<OptionSlScope>("combined");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
   const [editSquareOffTime, setEditSquareOffTime] = useState("");
   const [editActiveFromTime, setEditActiveFromTime] = useState("");
@@ -681,6 +684,7 @@ function StrategyManager() {
         trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
         option_position_style: instrumentType === "option" ? optionPositionStyle : undefined,
         option_strike_moneyness: instrumentType === "option" ? optionStrikeMoneyness : undefined,
+        option_sl_scope: instrumentType === "option" ? optionSlScope : undefined,
         segment,
         square_off_time: horizon === "intraday" && squareOffTime ? `${squareOffTime}:00` : undefined,
         underlying: createIsInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
@@ -703,6 +707,7 @@ function StrategyManager() {
       setTrailingEnabled(false);
       setOptionPositionStyle("spread");
       setOptionStrikeMoneyness("ATM");
+      setOptionSlScope("combined");
       setSegment("NSE");
       setSquareOffTime(defaultSquareOffTime(horizon, "NSE") ?? "");
       setSquareOffTimeTouched(false);
@@ -747,6 +752,7 @@ function StrategyManager() {
     setEditTrailingEnabled(s.trailing_stop_enabled);
     setEditOptionPositionStyle(s.option_position_style);
     setEditOptionStrikeMoneyness(s.option_strike_moneyness);
+    setEditOptionSlScope(s.option_sl_scope);
     setEditSegment(s.segment);
     setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
     setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
@@ -810,6 +816,7 @@ function StrategyManager() {
         trailing_stop_enabled: editSlMethod ? editTrailingEnabled : undefined,
         option_position_style: editInstrumentType === "option" ? editOptionPositionStyle : undefined,
         option_strike_moneyness: editInstrumentType === "option" ? editOptionStrikeMoneyness : undefined,
+        option_sl_scope: editInstrumentType === "option" ? editOptionSlScope : undefined,
         segment: editSegment,
         square_off_time: editHorizon === "intraday" && editSquareOffTime ? `${editSquareOffTime}:00` : undefined,
         rule_config: ruleConfig,
@@ -964,6 +971,15 @@ function StrategyManager() {
                 <option value="ATM">ATM</option>
                 <option value="OTM1">OTM1</option>
                 <option value="OTM2">OTM2</option>
+              </select>
+            </label>
+          )}
+          {instrumentType === "option" && (
+            <label>
+              SL/target scope
+              <select value={optionSlScope} onChange={(e) => setOptionSlScope(e.target.value as OptionSlScope)}>
+                <option value="combined">Combined (net debit)</option>
+                <option value="individual">Individual (per leg)</option>
               </select>
             </label>
           )}
@@ -1360,6 +1376,16 @@ function StrategyManager() {
                       <option value="OTM2">OTM2</option>
                     </select>
                   )}
+                  {editInstrumentType === "option" && (
+                    <select
+                      value={editOptionSlScope}
+                      onChange={(e) => setEditOptionSlScope(e.target.value as OptionSlScope)}
+                      className="cell-input"
+                    >
+                      <option value="combined">Combined</option>
+                      <option value="individual">Individual</option>
+                    </select>
+                  )}
                 </td>
                 <td>
                   <select
@@ -1664,7 +1690,8 @@ function StrategyManager() {
                     <span className="muted">
                       {" "}
                       ({s.option_position_style}
-                      {s.option_strike_moneyness !== "ATM" ? `, ${s.option_strike_moneyness}` : ""})
+                      {s.option_strike_moneyness !== "ATM" ? `, ${s.option_strike_moneyness}` : ""}
+                      {s.option_sl_scope !== "combined" ? `, ${s.option_sl_scope} SL` : ""})
                     </span>
                   )}
                 </td>

@@ -101,6 +101,11 @@
       "type": "string",
       "enum": ["skip", "close_and_flip"],
       "description": "From the resolved Strategy. Governs what happens when this symbol already has an OPEN position in the OPPOSITE direction from this order: 'skip' leaves it open and untouched (this order is evaluated independently), 'close_and_flip' closes it (exit_reason='counter_signal') before this order is opened - takes effect synchronously at signal-intake time, ahead of that position's own stop-loss/target/square-off."
+    },
+    "option_sl_scope": {
+      "type": ["string", "null"],
+      "enum": ["combined", "individual", null],
+      "description": "instrument_type='option' only, from the resolved Strategy - null for spot/future orders. 'combined' (default): one SL/target threshold on the combined (net debit) premium, the original Phase 4d design. 'individual': each leg gets its own SL/target computed from its own entry premium - whichever leg's own threshold trips first still closes the WHOLE group together (same atomic close as 'combined'), it only changes what triggers the close, never leaves one leg open while the other closes. Mathematically identical to 'combined' for a naked (1-leg) position - no separate handling needed there."
     }
   }
 }

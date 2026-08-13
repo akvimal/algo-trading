@@ -99,6 +99,7 @@ def create_signal_from_ingest(db: Session, signal: SignalIngest) -> dict:
             "square_off_time": resolved.square_off_time.isoformat() if resolved.square_off_time else None,
             "duplicate_signal_policy": resolved.duplicate_signal_policy,
             "counter_signal_policy": resolved.counter_signal_policy,
+            "option_sl_scope": resolved.option_sl_scope,
         }
     )
 

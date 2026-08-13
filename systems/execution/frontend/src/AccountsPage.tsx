@@ -5,6 +5,7 @@ import Nav from "./Nav";
 import { SEGMENTS, formatPct } from "./format";
 
 const POLL_INTERVAL_MS = 5000;
+const LEVERAGE_OPTIONS = [1, 10, 25, 50, 100, 150, 200];
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -209,10 +210,7 @@ export default function AccountsPage() {
                   </td>
                   <td>
                     {segment === "CRYPTO" ? (
-                      <input
-                        type="number"
-                        min="1"
-                        step="0.5"
+                      <select
                         value={draft.leverage}
                         onChange={(e) =>
                           setDrafts((prev) => ({
@@ -220,7 +218,16 @@ export default function AccountsPage() {
                             [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
                           }))
                         }
-                      />
+                      >
+                        {/* Delta Exchange India's own BTCUSD leverage tiers - picking one of
+                            these keeps our simulated buying power comparable to what the same
+                            capital would actually get you there, rather than an arbitrary number. */}
+                        {LEVERAGE_OPTIONS.map((lev) => (
+                          <option key={lev} value={lev}>
+                            {lev}x
+                          </option>
+                        ))}
+                      </select>
                     ) : (
                       "-"
                     )}

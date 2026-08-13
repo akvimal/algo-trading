@@ -79,7 +79,9 @@ class Position(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     signal_id = Column(UUID(as_uuid=True), nullable=False)
-    strategy_id = Column(UUID(as_uuid=True), nullable=False)
+    # Nullable: NULL means manually opened (Manual tab), bypassing
+    # signal-generation/signal-processing entirely.
+    strategy_id = Column(UUID(as_uuid=True), nullable=True)
     symbol = Column(Text, nullable=False)
     exchange = Column(Text, nullable=False)
     # Which execution.accounts row this position was sized against and

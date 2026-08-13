@@ -115,6 +115,83 @@ Strategy carries no quantity/capital field on principle (see the section header 
 
 Delta Exchange India trades perpetual futures on margin — its own order screen shows a "Leverage" selector (1x by default) alongside "Funds req." (margin) vs. "Available Margin," where `funds_req = notional / leverage`. This platform previously had no leverage concept at all: sizing always assumed 1x (full notional backed by capital). `execution.accounts.leverage` (`NUMERIC NOT NULL DEFAULT 1`, `GET`/`PUT /accounts/{segment}`, editable on `execution`'s Accounts page — CRYPTO row only in the UI, though the column exists on every segment's row, same "shared table, segment-scoped meaning" convention as several Strategy `option_*` fields) is a margin multiplier applied to `effective_capital` *after* the USDINR conversion above, inside `open_position`'s existing `if order.segment == "CRYPTO":` branch — so the same INR capital affords proportionally more `quantity` at higher leverage, matching Delta's own margin model. Deliberately **does not touch `entry_price`/`stop_loss_price`/`target_price`, and `compute_pnl` needs no change at all** — PnL is `(exit_price - entry_price) * quantity` regardless of how much margin backed that quantity; leverage only changes how much capital was required to open it, not the price math. Scoped to `position_manager.open_position` only (spot/future CRYPTO orders) — `option_position_manager.open_option_group` is untouched, since options are paid for with full premium upfront, not margined the way perpetual futures are, and Delta's own option order screen has no leverage selector.
 
+## The Manual tab: placing paper trades independent of any saved Strategy
+
+`signal-generation`'s frontend has a third tab, "Manual," alongside Strategies/Rules — a lightweight
+order-entry panel for opening real paper positions directly, without first configuring a Strategy.
+It's a genuinely different feature from the per-strategy "send test signal" mini-form (Strategies
+tab, kept as-is): that one still requires an existing Strategy and exercises its own real
+stop-loss method/conflict policy through the normal resolution pipeline; the Manual tab works for
+an arbitrary symbol/segment/action on the spot, walking up to execution with no Strategy at all for
+spot/future, and only a small, auto-managed Strategy for options (see below).
+
+**Spot/future bypasses signal-generation/signal-processing entirely.** `execution` gained
+`POST /positions/manual` (`app/domain/position_manager.py`'s `open_manual_position`, mirroring
+`open_position`'s gates/sizing exactly but taking plain scalar args instead of a `ResolvedOrder` —
+deliberately not that type, since it represents the signal-processing contract and a manual order
+never touches it). `positions.strategy_id` was loosened to nullable for this (no FK exists to
+`signal_generation.strategies`, so it's a pure nullability relaxation) — `NULL` means "manually
+opened." Manual spot/future orders always use `duplicate_signal_policy="add_position"` (a fixed
+platform default here, not a per-order toggle, since there's no Strategy to carry one) so placing a
+second order on a row that already has one open pyramids instead of getting rejected as a
+duplicate — "add again" is just calling this endpoint again, no special-casing needed. An optional
+`quantity` bypasses auto-sizing entirely (same precedence pattern as `Strategy.option_fixed_lots`
+above), and an optional `stop_loss_price` is a raw price the caller supplies directly (no
+percent/candle method — this path has no Strategy to carry one).
+
+**Options still need a real Strategy** — strike/expiry/leg selection lives entirely in
+signal-processing's `choose_strategy`, driven by a Strategy's own `option_position_style`/
+`option_strike_moneyness`. Rather than duplicate that logic in a new ad-hoc resolution endpoint,
+the frontend auto-provisions a small, clearly-named Strategy+Rule pair on demand
+(`findOrCreateManualStrategy`/`findOrCreateManualRule`, `api.ts`) tagged with a reserved
+`source_type="manual"` and a `"[Manual] <segment> <style> <moneyness>"` name — one pair per
+distinct (segment, option_position_style, option_strike_moneyness) combination actually used,
+reused across orders rather than created fresh each time. This is safe by construction, not just by
+convention: the in-house engine's periodic scan explicitly filters `Strategy.source_type ==
+"in_house"` (`app/domain/engine.py`), and no webhook route exists for any other provider name — a
+`source_type="manual"` Strategy/Rule is **provably inert**, it can only ever receive a signal via
+the explicit `POST /signals` call the Manual tab itself makes, never fired automatically. Per-order
+lot count for options reuses `Strategy.option_fixed_lots`, PATCHed onto the shared auto-provisioned
+Strategy immediately before every send (`{"option_fixed_lots": <n or null>}`) — this needed one
+small, deliberately-scoped fix: `PATCH /strategies/{id}` previously only ever *set* fields (`if
+payload.option_fixed_lots is not None`), never cleared one back to `null`, which would have left a
+stale fixed-lot count from an earlier manual order silently applying to a later auto-sized one on
+the same reused Strategy. Now checks `"option_fixed_lots" in payload.model_fields_set` instead —
+Pydantic v2 distinguishes "key present in the request body" from "key absent entirely," so an
+explicit `null` clears it while every other existing caller that omits the key still leaves it
+untouched. Scoped to this one field only; every other `StrategyUpdate` field keeps its existing
+"not None means set" convention.
+
+**Trigger price is a plain browser-side watch, not a persisted pending-order concept.** There's no
+backend support for "wait until price X, then open" anywhere — when the Manual tab's price field is
+left blank, it resolves current LTP and places immediately (same `fetchLtp` pattern the per-strategy
+mini-form already uses); when a price is given, the frontend itself polls `GET /quotes/ltp` on the
+existing 5s interval and fires the real order once live price reaches or crosses that level **from
+either side** (recorded once at placement time whether the market started above or below the
+target) — this one rule handles both a "buy the dip" limit-style entry and a breakout-style entry
+the same way, without a separate limit-vs-stop distinction. Since nothing is persisted server-side,
+a still-pending trigger only survives a page reload because the Manual tab also mirrors its row list
+to `localStorage` — closing the tab or losing power loses any not-yet-triggered order, exactly like
+any other browser-only watch would.
+
+**Partial square-off** — `POST /positions/{id}/square-off` gained an optional `?quantity=` query
+param (every existing caller that omits it, including the bulk/due-based jobs, is byte-for-byte
+unchanged). A smaller quantity than what's held reduces the original row in place (stays `OPEN`)
+and inserts a **new, separate `Position` row** for just the closed portion — its own fresh
+`signal_id` (not the parent's, since `open_position`'s idempotency lookup does
+`filter_by(signal_id=...).one_or_none()` and would break if two rows ever shared one), so each
+partial exit is a durable, independently-queryable record rather than only living in whatever
+called it. Scoped to spot/future for this pass — a multi-leg option group's partial close would
+need to proportionally reduce both legs and spawn matching new rows for each, real added
+bookkeeping complexity `POST /option-groups/{id}/square-off` doesn't take on here; that endpoint
+stays full-close-only.
+
+**Editable stop-loss on an already-open position** is new too (`PUT /positions/{id}/stop-loss`,
+`PUT /option-groups/{id}/stop-loss` for `sl_scope='combined'` groups) — previously SL was only ever
+set once, at open time, from a Strategy's configured method. Generically useful, not manual-only;
+sets `stop_loss_price`/`combined_stop_loss_price` only, never the immutable
+`initial_stop_loss_price` audit column.
+
 ## Why paper-trading accounts are per-segment, not per-strategy
 
 `execution.settings.capital_per_trade`/`risk_per_trade_pct` used to be single global values. As MCX (Phase 3) and Crypto (Phase 4.5) come online alongside NSE, each trading against genuinely different capital/instruments, a single global sizing config stops making sense — but per-*strategy* accounts would be the wrong granularity too: multiple strategies in the same segment (e.g. several NSE Chartink scans) are conceptually trading the same book, so they should share one pool of capital and one P&L history, not each get their own. `execution.accounts` lands in between: one row per `segment` (`NSE`/`MCX`/`CRYPTO`, `segment` as the primary key so "one account per segment" is structural, not just convention), seeded for all three up front — MCX started as intent-only (segment picked an account without unlocking trading) but is now fully tradeable as of Phase 3, see above.

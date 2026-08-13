@@ -132,6 +132,36 @@ header h1 {
   border-style: dashed;
 }
 
+.collapsible-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.collapsible-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-panel > summary h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.collapsible-panel > summary h2::before {
+  content: "\25B8";
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.collapsible-panel[open] > summary h2::before {
+  content: "\25BE";
+}
+
+.collapsible-panel > summary + * {
+  margin-top: 0.8rem;
+}
+
 .info-disclosure summary {
   cursor: pointer;
   color: var(--text-dim);

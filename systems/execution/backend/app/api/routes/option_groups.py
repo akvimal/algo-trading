@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_ltp_batch
+from app.domain.models import StopLossUpdate
 from app.domain.option_position_manager import (
     check_option_group_exits,
     compute_group_unrealized_pnl,
@@ -19,9 +20,37 @@ from app.domain.option_position_manager import (
     square_off_all_open_option_groups,
     square_off_due_option_groups,
     square_off_option_group,
+    update_group_stop_loss,
 )
 
 router = APIRouter()
+
+
+def _group_to_out(row: db_models.OptionPositionGroup, legs: list[dict], live_combined_price: Optional[float] = None, unrealized_pnl: Optional[float] = None) -> dict:
+    return {
+        "id": str(row.id),
+        "signal_id": str(row.signal_id),
+        "strategy_id": str(row.strategy_id),
+        "underlying_symbol": row.underlying_symbol,
+        "exchange": row.exchange,
+        "segment": row.segment,
+        "strategy_type": row.strategy_type,
+        "action": row.action,
+        "horizon": row.horizon,
+        "quantity": float(row.quantity) if row.quantity is not None else None,
+        "net_debit": float(row.net_debit) if row.net_debit is not None else None,
+        "combined_stop_loss_price": float(row.combined_stop_loss_price) if row.combined_stop_loss_price is not None else None,
+        "combined_target_price": float(row.combined_target_price) if row.combined_target_price is not None else None,
+        "sl_scope": row.sl_scope,
+        "live_combined_price": live_combined_price,
+        "unrealized_pnl": unrealized_pnl,
+        "status": row.status,
+        "rejection_reason": row.rejection_reason,
+        "exit_reason": row.exit_reason,
+        "pnl": float(row.pnl) if row.pnl is not None else None,
+        "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
+        "legs": legs,
+    }
 
 
 def _leg_dict(pos: db_models.Position) -> dict:
@@ -67,32 +96,38 @@ def list_option_groups(
     mtm = compute_group_unrealized_pnl(rows, legs, get_ltp_batch) if with_live_pnl else {}
 
     return [
-        {
-            "id": str(r.id),
-            "signal_id": str(r.signal_id),
-            "strategy_id": str(r.strategy_id),
-            "underlying_symbol": r.underlying_symbol,
-            "exchange": r.exchange,
-            "segment": r.segment,
-            "strategy_type": r.strategy_type,
-            "action": r.action,
-            "horizon": r.horizon,
-            "quantity": float(r.quantity) if r.quantity is not None else None,
-            "net_debit": float(r.net_debit) if r.net_debit is not None else None,
-            "combined_stop_loss_price": float(r.combined_stop_loss_price) if r.combined_stop_loss_price is not None else None,
-            "combined_target_price": float(r.combined_target_price) if r.combined_target_price is not None else None,
-            "sl_scope": r.sl_scope,
-            "live_combined_price": mtm[r.id][0] if r.id in mtm else None,
-            "unrealized_pnl": mtm[r.id][1] if r.id in mtm else None,
-            "status": r.status,
-            "rejection_reason": r.rejection_reason,
-            "exit_reason": r.exit_reason,
-            "pnl": float(r.pnl) if r.pnl is not None else None,
-            "square_off_time": r.square_off_time.isoformat() if r.square_off_time is not None else None,
-            "legs": [_leg_dict(pos) for pos in legs.get(r.id, {}).values()],
-        }
+        _group_to_out(
+            r,
+            [_leg_dict(pos) for pos in legs.get(r.id, {}).values()],
+            live_combined_price=mtm[r.id][0] if r.id in mtm else None,
+            unrealized_pnl=mtm[r.id][1] if r.id in mtm else None,
+        )
         for r in rows
     ]
+
+
+@router.put("/option-groups/{group_id}/stop-loss")
+def edit_group_stop_loss(group_id: str, payload: StopLossUpdate, db: Session = Depends(get_db)):
+    """Generically useful, not manual-only - editing combined SL on any
+    already-open option group. 404 if missing, 409 if not OPEN or not
+    sl_scope='combined' (editing an individual leg's own SL isn't
+    supported by this endpoint)."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
+    if row.sl_scope != "combined":
+        raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing SL here")
+
+    row = update_group_stop_loss(db, parsed_id, payload.stop_loss_price)
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
 
 @router.post("/option-groups/square-off")

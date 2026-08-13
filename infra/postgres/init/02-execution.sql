@@ -73,7 +73,11 @@ ON CONFLICT (segment) DO NOTHING;
 CREATE TABLE IF NOT EXISTS execution.positions (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     signal_id        UUID NOT NULL,
-    strategy_id      UUID NOT NULL,
+    -- Nullable: NULL means manually opened (Manual tab), bypassing
+    -- signal-generation/signal-processing entirely - no FK exists to
+    -- signal_generation.strategies (no cross-schema FK, see
+    -- docs/architecture.md), so this is a pure nullability relaxation.
+    strategy_id      UUID,
     symbol           TEXT NOT NULL,
     exchange         TEXT NOT NULL,
     -- Which execution.accounts row this position was sized against and

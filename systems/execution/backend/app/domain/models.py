@@ -93,3 +93,26 @@ class AccountUpdate(BaseModel):
     capital_per_trade: Optional[float] = Field(default=None, gt=0)
     risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
     leverage: Optional[float] = Field(default=None, gt=0)
+
+
+class ManualPositionCreate(BaseModel):
+    """POST /positions/manual - the Manual tab (signal-generation's
+    frontend), spot/future only. Deliberately not a ResolvedOrder - see
+    open_manual_position's docstring."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str
+    action: Literal["BUY", "SELL"]
+    instrument_type: Literal["spot", "future"]
+    price: float = Field(gt=0)
+    # Bypasses auto-sizing entirely when given - same precedence pattern
+    # as Strategy.option_fixed_lots in open_option_group.
+    quantity: Optional[float] = Field(default=None, gt=0)
+    stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    square_off_time: time
+
+
+class StopLossUpdate(BaseModel):
+    """PUT /positions/{id}/stop-loss and PUT /option-groups/{id}/stop-loss."""
+
+    stop_loss_price: float = Field(gt=0)

@@ -47,10 +47,11 @@ import {
   updateStrategy,
 } from "./api";
 import { chartinkWebhookUrls, executionUrl, processingUrl } from "./links";
+import ManualTab from "./ManualTab";
 
 const POLL_INTERVAL_MS = 5000;
 
-type TabId = "strategies" | "rules";
+type TabId = "strategies" | "rules" | "manual";
 
 const EXIT_REASON_LABELS: Record<string, string> = {
   stop_loss: "Stop-loss",
@@ -1902,8 +1903,10 @@ function StrategyManager() {
 
   return (
     <>
-      <section className="panel">
-        <h2>New strategy</h2>
+      <details className="panel collapsible-panel">
+        <summary>
+          <h2>New strategy</h2>
+        </summary>
         <form className="strategy-form" onSubmit={handleCreate}>
           <label>
             Source
@@ -2187,7 +2190,7 @@ function StrategyManager() {
           Intraday, auto-filled from Segment (15:00 NSE, 22:00 MCX, 17:25 Crypto) but still overridable. Swing/
           positional strategies don't square off same-day, so there's nothing to set.
         </p>
-      </section>
+      </details>
 
       {error && <p className="error">{error}</p>}
 
@@ -2728,10 +2731,14 @@ export default function App() {
         <button className={tab === "rules" ? "active" : ""} onClick={() => setTab("rules")}>
           Rules
         </button>
+        <button className={tab === "manual" ? "active" : ""} onClick={() => setTab("manual")}>
+          Manual
+        </button>
       </nav>
 
       {tab === "strategies" && <StrategiesTab />}
       {tab === "rules" && <RulesTab />}
+      {tab === "manual" && <ManualTab />}
     </main>
   );
 }

@@ -10,6 +10,7 @@ import logging
 import uuid
 from datetime import datetime, time
 from datetime import timezone as dt_timezone
+from types import SimpleNamespace
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -165,6 +166,38 @@ def _reject(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str
         horizon=order.horizon,
         instrument_type=order.instrument_type,
         entry_price=order.price,
+        status="REJECTED",
+        rejection_reason=reason,
+    )
+    db.add(row)
+    return row
+
+
+def _reject_manual(
+    db: Session,
+    signal_id: uuid.UUID,
+    symbol: str,
+    exchange: str,
+    segment: str,
+    action: str,
+    instrument_type: str,
+    price: float,
+    reason: str,
+) -> db_models.Position:
+    """Manual-tab equivalent of _reject - no strategy_id at all (None, not
+    a real Strategy), since a manual order never touches signal-generation.
+    quantity is left unset (NULL), same "never sized" convention."""
+    logger.info("rejecting manual order %s: %s", signal_id, reason)
+    row = db_models.Position(
+        signal_id=signal_id,
+        strategy_id=None,
+        symbol=symbol,
+        exchange=exchange,
+        segment=segment,
+        action=action,
+        horizon="intraday",
+        instrument_type=instrument_type,
+        entry_price=price,
         status="REJECTED",
         rejection_reason=reason,
     )
@@ -358,6 +391,171 @@ def open_position(
     return row
 
 
+def open_manual_position(
+    segment: str,
+    symbol: str,
+    action: str,
+    instrument_type: str,
+    price: float,
+    quantity: Optional[float],
+    stop_loss_price: Optional[float],
+    square_off_time: time,
+    settings: ExecutionSettings,
+    db: Session,
+    get_lot_size: GetLotSize,
+) -> db_models.Position:
+    """Manual tab (spot/future only - options go through the real Strategy/
+    resolution pipeline instead, since strike/expiry selection lives there,
+    see docs/architecture.md). Deliberately NOT a ResolvedOrder - that type
+    represents the signal-processing contract, and a manual order never
+    touches it. Mirrors open_position's gates/sizing exactly (read that
+    function alongside this one), with two differences: no Strategy means
+    no stop-loss method/percent-target/horizon to carry, so those are
+    simplified to "caller supplies a raw stop-loss price directly, horizon
+    is always intraday" (the only value is_supported() ever accepts
+    anyway); and `quantity`, if given, bypasses auto-sizing entirely - same
+    precedence pattern already used for Strategy.option_fixed_lots in
+    open_option_group."""
+    signal_id = uuid.uuid4()
+
+    if not is_supported("intraday", instrument_type):
+        row = _reject_manual(
+            db, signal_id, symbol, segment, segment, action, instrument_type, price,
+            f"unsupported instrument_type ({instrument_type}) - only spot/future is handled here",
+        )
+        db.commit()
+        return row
+
+    now = datetime.now(dt_timezone.utc)
+    if not is_within_intraday_window(now, square_off_time, settings.timezone):
+        row = _reject_manual(
+            db, signal_id, symbol, segment, segment, action, instrument_type, price,
+            f"received outside intraday window (square-off is {square_off_time})",
+        )
+        db.commit()
+        return row
+
+    account = load_account(db, segment)
+    if account is None:
+        row = _reject_manual(
+            db, signal_id, symbol, segment, segment, action, instrument_type, price,
+            f"no paper-trading account configured for segment {segment}",
+        )
+        db.commit()
+        return row
+
+    # Manual orders always allow pyramiding ("add again" on the same
+    # instrument while one's already open) - a fixed platform default
+    # rather than a per-order toggle, since there's no Strategy to carry
+    # duplicate_signal_policy. counter_signal_policy stays close_and_flip,
+    # same as everywhere else.
+    conflict_check = SimpleNamespace(action=action, duplicate_signal_policy="add_position", counter_signal_policy="close_and_flip")
+    open_positions = db.query(db_models.Position).filter_by(symbol=symbol, status="OPEN").all()
+    positions_to_close, reject_reason = _resolve_signal_conflicts(open_positions, conflict_check)
+    if reject_reason is not None:
+        row = _reject_manual(db, signal_id, symbol, segment, segment, action, instrument_type, price, reject_reason)
+        db.commit()
+        return row
+
+    for pos in positions_to_close:
+        pos.exit_price = price
+        pos.exit_time = datetime.now(dt_timezone.utc)
+        _apply_realized_pnl(pos, account, compute_pnl(pos.action, float(pos.entry_price), price, float(pos.quantity)))
+        pos.status = "CLOSED"
+        pos.exit_reason = "counter_signal"
+
+    effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
+    if segment == "CRYPTO":
+        if settings.usdinr_rate is None:
+            row = _reject_manual(
+                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                "no USDINR rate configured - set one in Settings to size a CRYPTO position",
+            )
+            db.commit()
+            return row
+        effective_capital = effective_capital / settings.usdinr_rate
+        effective_capital = effective_capital * float(account.leverage)
+
+    lot_size = 1
+    if instrument_type == "future":
+        resolved_lot_size = get_lot_size(segment, symbol)
+        if resolved_lot_size is None:
+            row = _reject_manual(
+                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                f"could not determine lot size for {symbol} on {segment}",
+            )
+            db.commit()
+            return row
+        lot_size = resolved_lot_size
+
+    if quantity is not None:
+        required_cost = price * quantity
+        if effective_capital < required_cost:
+            row = _reject_manual(
+                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                f"insufficient account balance ({account.current_balance} left in {segment} account, "
+                f"need at least {required_cost} for {quantity})",
+            )
+            db.commit()
+            return row
+        final_quantity = quantity
+    else:
+        if effective_capital < price:
+            row = _reject_manual(
+                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                f"insufficient account balance ({account.current_balance} left in {segment} account, "
+                f"need at least {price} for 1 share)",
+            )
+            db.commit()
+            return row
+        if stop_loss_price is not None:
+            stop_distance = abs(price - stop_loss_price)
+            if stop_distance <= 0:
+                row = _reject_manual(
+                    db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                    f"stop-loss price ({stop_loss_price}) equals entry price ({price}) - can't size by risk",
+                )
+                db.commit()
+                return row
+            final_quantity = compute_risk_based_quantity(
+                effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size
+            )
+        else:
+            final_quantity = compute_quantity(effective_capital, price, lot_size)
+
+    row = db_models.Position(
+        signal_id=signal_id,
+        strategy_id=None,
+        symbol=symbol,
+        exchange=segment,
+        segment=segment,
+        action=action,
+        horizon="intraday",
+        instrument_type=instrument_type,
+        quantity=final_quantity,
+        entry_price=price,
+        status="OPEN",
+        stop_loss_price=stop_loss_price,
+        initial_stop_loss_price=stop_loss_price,
+        square_off_time=square_off_time,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def update_stop_loss(db: Session, position_id: uuid.UUID, new_price: float) -> Optional[db_models.Position]:
+    """Generically useful, not manual-only - editing SL on any already-open
+    position. Never touches initial_stop_loss_price, an immutable audit
+    column set once at open time."""
+    row = db.get(db_models.Position, position_id)
+    if row is None:
+        return None
+    row.stop_loss_price = new_price
+    db.commit()
+    return row
+
+
 def _quotes_by_exchange(positions: list, get_ltp_batch: GetLtpBatch) -> dict[tuple[str, str], float]:
     """One get_ltp_batch call per distinct exchange among `positions`,
     covering every distinct symbol on that exchange - this is what turns
@@ -431,36 +629,91 @@ def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     return {"closed": closed, "failed": failed, "total_open": len(open_positions)}
 
 
-def square_off_position(db: Session, position_id: uuid.UUID, get_ltp_batch: GetLtpBatch) -> dict:
+def square_off_position(
+    db: Session, position_id: uuid.UUID, get_ltp_batch: GetLtpBatch, quantity: Optional[float] = None
+) -> dict:
     """Closes exactly one OPEN position by id - the per-row 'Square off'
     button in the frontend's Positions grid, as opposed to
     square_off_all_open (every open position) or square_off_due_positions
     (only those past their own square_off_time). exit_reason='manual'
-    distinguishes this from the other two closing paths."""
+    distinguishes this from the other two closing paths.
+
+    `quantity` (optional) closes only part of the position - the rest
+    stays OPEN with a reduced quantity, and the closed portion gets its
+    own separate CLOSED Position row (a fresh signal_id, not the parent's -
+    open_position's own idempotency lookup does
+    filter_by(signal_id=...).one_or_none() and would break if two rows
+    ever shared one) so each partial exit is a durable, queryable record
+    rather than only living in whatever called this. Omitted or equal to
+    the full held quantity behaves exactly as before this parameter
+    existed."""
     pos = db.get(db_models.Position, position_id)
     if pos is None:
         return {"status": "not_found"}
     if pos.status != "OPEN":
         return {"status": "not_open", "position_status": pos.status}
 
+    held_quantity = float(pos.quantity)
+    close_quantity = held_quantity if quantity is None else quantity
+    if close_quantity <= 0 or close_quantity > held_quantity:
+        return {"status": "invalid_quantity", "held_quantity": held_quantity}
+
     quotes = get_ltp_batch(pos.exchange, [pos.symbol])
     cmp_price = quotes.get(pos.symbol)
     if cmp_price is None:
         return {"status": "quote_unavailable"}
 
-    pos.exit_price = cmp_price
-    pos.exit_time = datetime.now(dt_timezone.utc)
     account = load_account(db, pos.segment)
-    _apply_realized_pnl(pos, account, compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)))
-    pos.status = "CLOSED"
-    pos.exit_reason = "manual"
+    pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, close_quantity)
+
+    if close_quantity == held_quantity:
+        pos.exit_price = cmp_price
+        pos.exit_time = datetime.now(dt_timezone.utc)
+        _apply_realized_pnl(pos, account, pnl)
+        pos.status = "CLOSED"
+        pos.exit_reason = "manual"
+        db.commit()
+        return {
+            "status": "closed",
+            "position_id": str(pos.id),
+            "symbol": pos.symbol,
+            "exit_price": cmp_price,
+            "pnl": float(pos.pnl),
+            "closed_quantity": close_quantity,
+            "remaining_quantity": 0.0,
+        }
+
+    remaining_quantity = held_quantity - close_quantity
+    pos.quantity = remaining_quantity
+    closed_row = db_models.Position(
+        signal_id=uuid.uuid4(),
+        strategy_id=pos.strategy_id,
+        symbol=pos.symbol,
+        exchange=pos.exchange,
+        segment=pos.segment,
+        action=pos.action,
+        horizon=pos.horizon,
+        instrument_type=pos.instrument_type,
+        quantity=close_quantity,
+        entry_price=pos.entry_price,
+        entry_time=pos.entry_time,
+        exit_price=cmp_price,
+        exit_time=datetime.now(dt_timezone.utc),
+        status="CLOSED",
+        exit_reason="manual",
+        square_off_time=pos.square_off_time,
+    )
+    _apply_realized_pnl(closed_row, account, pnl)
+    db.add(closed_row)
     db.commit()
     return {
         "status": "closed",
-        "position_id": str(pos.id),
+        "position_id": str(closed_row.id),
         "symbol": pos.symbol,
         "exit_price": cmp_price,
-        "pnl": float(pos.pnl),
+        "pnl": float(closed_row.pnl),
+        "closed_quantity": close_quantity,
+        "remaining_quantity": remaining_quantity,
     }
 
 

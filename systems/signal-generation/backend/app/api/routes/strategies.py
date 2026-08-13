@@ -241,7 +241,15 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.option_strike_moneyness = payload.option_strike_moneyness
     if payload.option_sl_scope is not None:
         row.option_sl_scope = payload.option_sl_scope
-    if payload.option_fixed_lots is not None:
+    # Deliberately different from every other field's "not None means set"
+    # convention here: the Manual tab (see docs/architecture.md) needs to
+    # be able to clear this back to null (auto-sizing) between orders on
+    # the same reused strategy, which "omitted or null means unchanged"
+    # can't express. model_fields_set distinguishes "key present in the
+    # request body" from "key absent entirely" - only an explicit
+    # {"option_fixed_lots": null} clears it; omitting the key still leaves
+    # it untouched exactly as before.
+    if "option_fixed_lots" in payload.model_fields_set:
         row.option_fixed_lots = payload.option_fixed_lots
     if payload.contract_day_filter is not None:
         row.contract_day_filter = payload.contract_day_filter

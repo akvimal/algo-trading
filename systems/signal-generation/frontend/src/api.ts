@@ -331,7 +331,12 @@ export type StrategyEdit = {
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
-  option_fixed_lots?: number;
+  // number | null (not just optional) - unlike every other field here,
+  // this one can be explicitly cleared back to auto-sizing via
+  // {option_fixed_lots: null} - see the backend's update_strategy
+  // (model_fields_set-based) and ManualTab.tsx, which relies on this to
+  // vary an auto-provisioned strategy's lot count order-to-order.
+  option_fixed_lots?: number | null;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   square_off_time?: string;
@@ -646,4 +651,229 @@ export async function fetchLtp(exchange: string, symbol: string): Promise<number
   const res = await fetch(`${MARKET_DATA_BASE_URL}/quotes/ltp?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ ltp: number }>(res, `GET /quotes/ltp (${exchange}/${symbol})`);
   return data.ltp;
+}
+
+// ---------------------------------------------------------------------
+// Manual tab (ManualTab.tsx) - execution's own backend, read/written
+// directly from the browser (CORS-enabled), same direct-from-browser
+// cross-system pattern as market-data/signal-processing above - NOT
+// execution's own frontend's /api proxy convention. Spot/future orders
+// bypass signal-generation/signal-processing entirely (see
+// createManualPosition); option orders still need a real Strategy
+// (strike/expiry selection lives in signal-processing's choose_strategy),
+// auto-provisioned on demand - see findOrCreateManualStrategy below.
+// ---------------------------------------------------------------------
+
+const EXECUTION_PORT = import.meta.env.VITE_EXECUTION_PORT ?? "8002";
+const EXECUTION_BASE_URL = `http://${location.hostname}:${EXECUTION_PORT}`;
+
+export type ManualPosition = {
+  id: string;
+  signal_id: string;
+  // null = manually opened (Manual tab), bypassing Strategy entirely.
+  strategy_id: string | null;
+  symbol: string;
+  exchange: string;
+  segment: Segment;
+  action: "BUY" | "SELL";
+  horizon: string;
+  instrument_type: string;
+  quantity: number | null;
+  entry_price: number;
+  entry_time: string;
+  exit_price: number | null;
+  exit_time: string | null;
+  pnl: number | null;
+  live_price: number | null;
+  unrealized_pnl: number | null;
+  status: "OPEN" | "CLOSED" | "REJECTED";
+  rejection_reason: string | null;
+  stop_loss_price: number | null;
+  target_price: number | null;
+  trailing_stop_enabled: boolean;
+  exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | null;
+  square_off_time: string | null;
+  option_group_id: string | null;
+};
+
+export type ManualOptionLeg = {
+  id: string;
+  symbol: string;
+  action: "BUY" | "SELL";
+  quantity: number | null;
+  entry_price: number;
+  exit_price: number | null;
+  pnl: number | null;
+  status: string;
+  stop_loss_price: number | null;
+  target_price: number | null;
+};
+
+export type ManualOptionGroup = {
+  id: string;
+  signal_id: string;
+  strategy_id: string;
+  underlying_symbol: string;
+  exchange: string;
+  segment: Segment;
+  strategy_type: string;
+  action: "BUY" | "SELL";
+  horizon: string;
+  quantity: number | null;
+  net_debit: number | null;
+  combined_stop_loss_price: number | null;
+  combined_target_price: number | null;
+  sl_scope: OptionSlScope;
+  live_combined_price: number | null;
+  unrealized_pnl: number | null;
+  status: "OPEN" | "CLOSED" | "REJECTED";
+  rejection_reason: string | null;
+  exit_reason: string | null;
+  pnl: number | null;
+  square_off_time: string | null;
+  legs: ManualOptionLeg[];
+};
+
+// POST /positions/manual (execution) - spot/future only, bypasses
+// signal-generation/signal-processing entirely. Always returns 200 with
+// whatever status resulted (OPEN or REJECTED) - a rejection is a
+// legitimate persisted outcome here, not an HTTP error, same convention
+// the whole resolved-order pipeline already uses.
+export async function createManualPosition(payload: {
+  segment: Segment;
+  symbol: string;
+  action: "BUY" | "SELL";
+  instrument_type: "spot" | "future";
+  price: number;
+  quantity?: number;
+  stop_loss_price?: number;
+  square_off_time: string;
+}): Promise<ManualPosition> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions/manual`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "POST /positions/manual");
+}
+
+// Generically useful, not manual-only - edits SL on any already-open
+// position (execution has no other route for this).
+export async function updateStopLoss(positionId: string, stopLossPrice: number): Promise<ManualPosition> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/stop-loss`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stop_loss_price: stopLossPrice }),
+  });
+  return asJson(res, "PUT /positions/{id}/stop-loss");
+}
+
+// Combined SL only (sl_scope='combined') - editing an individual leg's
+// own SL isn't supported by this endpoint.
+export async function updateOptionStopLoss(groupId: string, stopLossPrice: number): Promise<ManualOptionGroup> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/stop-loss`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stop_loss_price: stopLossPrice }),
+  });
+  return asJson(res, "PUT /option-groups/{id}/stop-loss");
+}
+
+export async function fetchExecPositions(params: { signalId?: string; withLivePnl?: boolean } = {}): Promise<ManualPosition[]> {
+  const query = new URLSearchParams();
+  if (params.signalId) query.set("signal_id", params.signalId);
+  if (params.withLivePnl) query.set("with_live_pnl", "true");
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions?${query}`);
+  return asJson(res, "GET /positions");
+}
+
+export type SquareOffPositionResult = {
+  status: string;
+  position_id: string;
+  symbol: string;
+  exit_price: number;
+  pnl: number;
+  closed_quantity: number;
+  remaining_quantity: number;
+};
+
+// quantity omitted closes everything held; a smaller amount partially
+// closes - the position stays OPEN with the remainder, and the closed
+// portion becomes its own separate CLOSED record (see
+// position_manager.square_off_position's own docstring).
+export async function squareOffManualPosition(positionId: string, quantity?: number): Promise<SquareOffPositionResult> {
+  const query = quantity != null ? `?${new URLSearchParams({ quantity: String(quantity) })}` : "";
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off${query}`, { method: "POST" });
+  return asJson(res, "POST /positions/{id}/square-off");
+}
+
+export async function fetchOptionGroups(params: { signalId?: string; withLivePnl?: boolean } = {}): Promise<ManualOptionGroup[]> {
+  const query = new URLSearchParams();
+  if (params.signalId) query.set("signal_id", params.signalId);
+  if (params.withLivePnl) query.set("with_live_pnl", "true");
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups?${query}`);
+  return asJson(res, "GET /option-groups");
+}
+
+// Option groups are always closed in full - see docs/architecture.md's
+// note on why partial close is scoped to spot/future only.
+export async function squareOffOptionGroup(
+  groupId: string,
+): Promise<{ status: string; group_id: string; underlying_symbol: string; pnl: number }> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off`, { method: "POST" });
+  return asJson(res, "POST /option-groups/{id}/square-off");
+}
+
+// Reserved pseudo-provider name for the Manual tab's auto-provisioned
+// option Strategies/Rules - the in-house engine's periodic scan only ever
+// evaluates source_type="in_house", and no webhook route exists for
+// "manual" either, so a Strategy/Rule pair tagged this way is provably
+// inert: it can only ever receive a signal via the explicit POST /signals
+// call the Manual tab itself makes. See docs/architecture.md.
+const MANUAL_SOURCE_TYPE = "manual";
+
+export async function findOrCreateManualRule(segment: Segment): Promise<Rule> {
+  const name = `[Manual] ${segment}`;
+  const existing = await fetchRules(MANUAL_SOURCE_TYPE);
+  const found = existing.find((r) => r.segment === segment && r.name === name);
+  if (found) return found;
+  return createRule({ name, source_type: MANUAL_SOURCE_TYPE, segment });
+}
+
+// Options need a real Strategy (strike/expiry selection lives entirely in
+// signal-processing's choose_strategy, driven by a Strategy's own
+// option_position_style/option_strike_moneyness) - auto-provisioned here
+// so the Manual tab still feels Strategy-free to the user. Reused across
+// orders with the same (segment, style, moneyness) - each combination
+// gets exactly one backing Strategy, immediately activated (status=live,
+// since a draft Strategy's signals reject as "not live").
+export async function findOrCreateManualStrategy(
+  segment: Segment,
+  optionStyle: OptionPositionStyle,
+  moneyness: OptionStrikeMoneyness,
+): Promise<Strategy> {
+  const name = `[Manual] ${segment} ${optionStyle} ${moneyness}`;
+  const existing = await fetchStrategies(MANUAL_SOURCE_TYPE);
+  const found = existing.find(
+    (s) =>
+      s.segment === segment &&
+      s.instrument_type === "option" &&
+      s.option_position_style === optionStyle &&
+      s.option_strike_moneyness === moneyness &&
+      s.name === name,
+  );
+  if (found) return found;
+  const rule = await findOrCreateManualRule(segment);
+  const created = await createStrategy({
+    name,
+    source_type: MANUAL_SOURCE_TYPE,
+    horizon: "intraday",
+    instrument_type: "option",
+    rule_id: rule.id,
+    option_position_style: optionStyle,
+    option_strike_moneyness: moneyness,
+    segment,
+    duplicate_signal_policy: "add_position",
+  });
+  return updateStrategy(created.id, { status: "live" });
 }

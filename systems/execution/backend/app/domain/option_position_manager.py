@@ -477,6 +477,23 @@ def square_off_option_group(db: Session, group_id: uuid.UUID, get_ltp_batch: Get
     return {"status": "closed", "group_id": str(group.id), "underlying_symbol": group.underlying_symbol, "pnl": float(group.pnl)}
 
 
+def update_group_stop_loss(db: Session, group_id: uuid.UUID, new_price: float) -> Optional[db_models.OptionPositionGroup]:
+    """Generically useful, not manual-only - editing SL on any already-open
+    option group. Scoped to sl_scope='combined' groups only - editing an
+    individual leg's own stop_loss_price is out of scope here (would need
+    a per-leg endpoint, not this group-level one). Returns the group
+    unchanged (caller checks status/sl_scope separately) rather than
+    silently no-op'ing on a mismatch."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None:
+        return None
+    if row.sl_scope != "combined":
+        return row
+    row.combined_stop_loss_price = new_price
+    db.commit()
+    return row
+
+
 def _evaluate_option_group_square_off_due(groups: list, legs: dict, get_ltp_batch: GetLtpBatch, now_local, accounts_by_segment: dict) -> dict:
     """Pure logic (no DB query/commit) - mirrors
     position_manager._evaluate_square_off_due at the group level."""

@@ -55,7 +55,7 @@ def test_resolve_uses_live_strategy_config():
     # Not present in the fetched Strategy dict above - defaults apply, same
     # as trailing_stop_enabled's own missing-key default.
     assert resolved.duplicate_signal_policy == "add_position"
-    assert resolved.counter_signal_policy == "skip"
+    assert resolved.counter_signal_policy == "close_and_flip"
 
 
 @responses.activate

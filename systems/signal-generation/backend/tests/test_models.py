@@ -219,7 +219,7 @@ def test_strategy_create_defaults_signal_conflict_policy():
         name="x", source_type="chartink", horizon="intraday", instrument_type="spot", square_off_time="15:00:00",
     )
     assert s.duplicate_signal_policy == "add_position"
-    assert s.counter_signal_policy == "skip"
+    assert s.counter_signal_policy == "close_and_flip"
 
 
 def test_strategy_create_accepts_explicit_signal_conflict_policy():

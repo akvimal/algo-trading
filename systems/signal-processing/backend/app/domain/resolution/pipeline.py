@@ -74,5 +74,5 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         trailing_stop_enabled=strategy.get("trailing_stop_enabled", False),
         square_off_time=square_off_time,
         duplicate_signal_policy=strategy.get("duplicate_signal_policy", "add_position"),
-        counter_signal_policy=strategy.get("counter_signal_policy", "skip"),
+        counter_signal_policy=strategy.get("counter_signal_policy", "close_and_flip"),
     )

@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- Defaults match the platform-wide behavior these replaced (see
     -- infra/postgres/init/02-execution.sql).
     duplicate_signal_policy TEXT NOT NULL DEFAULT 'add_position' CHECK (duplicate_signal_policy IN ('skip', 'add_position')),
-    counter_signal_policy   TEXT NOT NULL DEFAULT 'skip' CHECK (counter_signal_policy IN ('skip', 'close_and_flip')),
+    counter_signal_policy   TEXT NOT NULL DEFAULT 'close_and_flip' CHECK (counter_signal_policy IN ('skip', 'close_and_flip')),
     status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'backtesting', 'live', 'paused')),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -443,7 +443,7 @@ function StrategyManager() {
   // matching the backend's own default.
   const [regimeFilterChecks, setRegimeFilterChecks] = useState<RegimeCheckName[]>(ALL_REGIME_CHECKS);
   const [dupPolicy, setDupPolicy] = useState<DuplicateSignalPolicy>("add_position");
-  const [counterPolicy, setCounterPolicy] = useState<CounterSignalPolicy>("skip");
+  const [counterPolicy, setCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [creating, setCreating] = useState(false);
 
   // Indicators are their own entity, shared across all in_house
@@ -490,7 +490,7 @@ function StrategyManager() {
   const [editRegimeFilterEnabled, setEditRegimeFilterEnabled] = useState(false);
   const [editRegimeFilterChecks, setEditRegimeFilterChecks] = useState<RegimeCheckName[]>(ALL_REGIME_CHECKS);
   const [editDupPolicy, setEditDupPolicy] = useState<DuplicateSignalPolicy>("add_position");
-  const [editCounterPolicy, setEditCounterPolicy] = useState<CounterSignalPolicy>("skip");
+  const [editCounterPolicy, setEditCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [saving, setSaving] = useState(false);
 
   const [backtestFrom, setBacktestFrom] = useState(() => {

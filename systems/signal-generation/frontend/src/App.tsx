@@ -37,6 +37,7 @@ import {
   deleteRule,
   deleteStrategy,
   fetchIndicators,
+  fetchLtp,
   fetchRules,
   fetchSignalsForStrategy,
   fetchStrategies,
@@ -1863,15 +1864,26 @@ function StrategyManager() {
     setSendingSignal(true);
     setSendSignalError(null);
     setSendSignalNotice(null);
+    const symbol = signalSymbol.trim().toUpperCase();
     try {
+      let price = Number(signalPrice);
+      if (!signalPrice) {
+        try {
+          price = await fetchLtp(s.segment, symbol);
+        } catch (err) {
+          throw new Error(
+            `Could not fetch current market price for ${symbol}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      }
       const result = await sendManualSignal({
         strategy_id: s.id,
-        symbol: signalSymbol.trim().toUpperCase(),
+        symbol,
         exchange: s.segment,
         action: signalAction,
-        price: Number(signalPrice),
+        price,
       });
-      setSendSignalNotice(`Sent (${result.status}) - see "Recent signals" below once it refreshes.`);
+      setSendSignalNotice(`Sent (${result.status}) at ${price} - see "Recent signals" below once it refreshes.`);
       setSignalSymbol("");
       setSignalPrice("");
     } catch (err) {
@@ -2579,21 +2591,21 @@ function StrategyManager() {
                       </select>
                     </label>
                     <label>
-                      Price
+                      Price (optional)
                       <input
                         type="number"
                         min="0"
                         step="0.01"
                         value={signalPrice}
                         onChange={(e) => setSignalPrice(e.target.value)}
-                        placeholder="e.g. 63500"
+                        placeholder="Blank = current market price"
                       />
                     </label>
                     <span className="muted">Exchange: {s.segment} (from this strategy's own segment)</span>
                     <button
                       type="button"
                       onClick={() => handleSendSignal(s)}
-                      disabled={sendingSignal || !signalSymbol.trim() || !signalPrice}
+                      disabled={sendingSignal || !signalSymbol.trim()}
                     >
                       {sendingSignal ? "Sending..." : "Send test signal"}
                     </button>
@@ -2607,7 +2619,8 @@ function StrategyManager() {
                     Posts a real signal via signal-processing's own POST /signals (source="manual") - runs through
                     the exact same resolution/conflict-policy pipeline a webhook or in-house signal would, including
                     rejecting cleanly if this strategy isn't live. Type the exact tradable symbol (for futures,
-                    the full contract symbol, not the bare underlying) - nothing here resolves it for you.
+                    the full contract symbol, not the bare underlying) - nothing here resolves it for you. Leave
+                    price blank to fetch the current market price (market-data's GET /quotes/ltp) at send time.
                   </p>
                 </td>
               </tr>

@@ -638,3 +638,12 @@ export async function fetchUniverses(): Promise<string[]> {
   const data = await asJson<{ universes: string[] }>(res, "GET /instruments/universes");
   return data.universes;
 }
+
+// Current market price for a symbol - used by the manual test-signal form
+// (App.tsx's handleSendSignal) when the price field is left blank, same
+// direct-from-browser pattern as fetchUniverses above.
+export async function fetchLtp(exchange: string, symbol: string): Promise<number> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/quotes/ltp?${new URLSearchParams({ exchange, symbol })}`);
+  const data = await asJson<{ ltp: number }>(res, `GET /quotes/ltp (${exchange}/${symbol})`);
+  return data.ltp;
+}

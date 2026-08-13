@@ -26,13 +26,14 @@ from pydantic import BaseModel, Field, model_validator
 from app.domain.rule import RuleSummary, Segment
 
 # 'in_house' is the one reserved value every other backend check compares
-# against (app/domain/engine.py, app/api/routes/strategies.py, the linked
-# Rule's own source_type via validate_rule_link_consistency below) -
-# anything else names an external webhook provider (e.g. "chartink",
-# "tradingview", or any new one) and is otherwise opaque to this system.
-# Free-form rather than a fixed enum so a new provider doesn't need a code
-# change here - see app/App.tsx's "External source name" field on the
-# frontend.
+# against (app/domain/engine.py, app/api/routes/strategies.py) - anything
+# else names an external webhook provider (e.g. "chartink", "tradingview",
+# or any new one) and is otherwise opaque to this system. Free-form rather
+# than a fixed enum so a new provider doesn't need a code change here -
+# see app/App.tsx's "External source name" field on the frontend. An
+# external Strategy carries no Rule at all (Rule is in-house only, see
+# app/domain/rule.py) - the provider decides when a signal fires, not this
+# system.
 SourceType = Annotated[str, Field(min_length=1)]
 Horizon = Literal["intraday", "swing", "positional"]
 InstrumentType = Literal["spot", "future", "option"]
@@ -88,13 +89,6 @@ StopLossInterval = Literal["1min", "5min", "15min", "25min", "60min"]
 DuplicateSignalPolicy = Literal["skip", "add_position"]
 CounterSignalPolicy = Literal["skip", "close_and_flip"]
 
-# The 5 sub-conditions app/domain/regime.py's classify_regime combines -
-# mirrors regime.REGIME_CHECK_NAMES exactly. When regime_filter_enabled,
-# only these named checks must agree to confirm a signal's direction
-# (regime.direction_confirmed) - defaults to all 5 below.
-RegimeCheckName = Literal["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]
-_ALL_REGIME_CHECK_NAMES: list[RegimeCheckName] = ["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]
-
 # Square-off time defaults by (horizon=='intraday', segment) - MCX runs
 # later than NSE cash equity, crypto's cutoff is a fixed business rule
 # rather than a real market-close (crypto trades 24/7). No default exists
@@ -112,19 +106,16 @@ def default_square_off_time(horizon: str, segment: str) -> Optional[time]:
     return DEFAULT_SQUARE_OFF_TIME_BY_SEGMENT.get(segment)
 
 
-def validate_rule_link_consistency(strategy_source_type: str, rule_source_type: str) -> None:
-    """A Strategy's rule_id must point at a Rule whose own source_type
-    agrees with the Strategy's - an external (webhook) Strategy can't
-    point at an in-house-evaluable Rule (the engine would try to evaluate
-    a condition tree that Strategy never expects to be evaluated) and vice
-    versa. Checked at the route layer (app/api/routes/strategies.py),
-    after loading the referenced Rule row - can't be a pydantic
-    model_validator on StrategyCreate/StrategyUpdate alone, since it needs
-    a DB read to know the Rule's own source_type."""
-    if strategy_source_type != rule_source_type:
-        raise ValueError(
-            f"strategy source_type '{strategy_source_type}' does not match linked rule's source_type '{rule_source_type}'"
-        )
+def validate_strategy_rule_requirement(source_type: str, rule_id: Optional[str]) -> None:
+    """Rule is in-house-only now (external/webhook strategies carry no
+    condition of their own - the provider decides when a signal fires, not
+    this system - see app/domain/rule.py). rule_id is therefore required
+    exactly when source_type=='in_house', and must be absent otherwise."""
+    if source_type == "in_house":
+        if rule_id is None:
+            raise ValueError("source_type='in_house' requires rule_id")
+    elif rule_id is not None:
+        raise ValueError("rule_id only applies to source_type='in_house'")
 
 
 def validate_contract_day_filter_fields(contract_day_filter: str, instrument_type: str) -> None:
@@ -182,10 +173,10 @@ class StrategyCreate(BaseModel):
     horizon: Horizon
     instrument_type: InstrumentType
     # Which saved Rule (app/domain/rule.py) decides when this strategy's
-    # signals fire - required for every source_type. Must reference a Rule
-    # whose own source_type matches this strategy's - checked at the route
-    # layer, see validate_rule_link_consistency.
-    rule_id: str
+    # signals fire - in_house only (Rule is purely an in-house condition
+    # definition now). Required when source_type=='in_house', forbidden
+    # otherwise - see validate_strategy_rule_requirement.
+    rule_id: Optional[str] = None
     stop_loss_method: Optional[StopLossMethod] = None
     stop_loss_interval: Optional[StopLossInterval] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
@@ -210,13 +201,6 @@ class StrategyCreate(BaseModel):
     # this stays null for them. Auto-defaulted from (horizon, segment)
     # when omitted on an intraday strategy - see default_square_off_time.
     square_off_time: Optional[time] = None
-    # in_house only (harmlessly ignored for webhook strategies) - see
-    # app/domain/regime.py and docs/architecture.md.
-    regime_filter_enabled: bool = False
-    # Which of the 5 sub-conditions must agree when regime_filter_enabled -
-    # defaults to all 5, matching classify_regime's own fixed "regime"
-    # label exactly.
-    regime_filter_checks: list[RegimeCheckName] = Field(default_factory=lambda: list(_ALL_REGIME_CHECK_NAMES))
     # Every source_type carries these, same as stop_loss_*/square_off_time -
     # see the DuplicateSignalPolicy/CounterSignalPolicy alias comments above.
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"
@@ -232,6 +216,11 @@ class StrategyCreate(BaseModel):
         validate_stop_loss_fields(
             self.stop_loss_method, self.stop_loss_interval, self.stop_loss_percent, self.trailing_stop_enabled
         )
+        return self
+
+    @model_validator(mode="after")
+    def _check_rule_requirement(self) -> "StrategyCreate":
+        validate_strategy_rule_requirement(self.source_type, self.rule_id)
         return self
 
     @model_validator(mode="after")
@@ -263,10 +252,12 @@ class StrategyUpdate(BaseModel):
     changes. source_type and exchange are deliberately not editable:
     source_type determines the webhook shape a provider is already
     configured against, and exchange only has one valid value today - both
-    are set at create time only. rule_id IS patchable - re-pointing a
-    strategy at a different saved Rule of the same source_type doesn't
-    need a delete+recreate (see validate_rule_link_consistency, re-checked
-    against the new Rule at the route layer same as at create time).
+    are set at create time only. rule_id IS patchable for an in-house
+    strategy - re-pointing it at a different saved Rule doesn't need a
+    delete+recreate (validate_strategy_rule_requirement is re-checked
+    against the merged post-update row at the route layer, same as at
+    create time - a strategy can never end up in-house with no rule_id, or
+    external with one).
 
     The stop-loss field group (stop_loss_method/_interval/_percent,
     trailing_stop_enabled) is NOT cross-field-validated at this model
@@ -298,12 +289,6 @@ class StrategyUpdate(BaseModel):
     contract_day_filter: Optional[ContractDayFilter] = None
     segment: Optional[Segment] = None
     square_off_time: Optional[time] = None
-    regime_filter_enabled: Optional[bool] = None
-    # Not provided = leave the row's existing value alone (same PATCH
-    # semantics as every other field here) - a brand new strategy already
-    # gets the full 5-check default from the DB column default, so this
-    # only matters once someone has actually customized it.
-    regime_filter_checks: Optional[list[RegimeCheckName]] = None
     duplicate_signal_policy: Optional[DuplicateSignalPolicy] = None
     counter_signal_policy: Optional[CounterSignalPolicy] = None
     active_from_time: Optional[time] = None
@@ -317,7 +302,8 @@ class StrategyOut(BaseModel):
     exchange: str
     horizon: Horizon
     instrument_type: InstrumentType
-    rule_id: str
+    # None for external (webhook) strategies - Rule is in-house only now.
+    rule_id: Optional[str] = None
     # Lightweight embed (app/domain/rule.py's RuleSummary) so the
     # strategy list/table can show which rule backs each row without an
     # N+1 fetch - populated by _to_out from a joined Rule row.
@@ -334,8 +320,6 @@ class StrategyOut(BaseModel):
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment
     square_off_time: Optional[time] = None
-    regime_filter_enabled: bool = False
-    regime_filter_checks: list[RegimeCheckName] = Field(default_factory=lambda: list(_ALL_REGIME_CHECK_NAMES))
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
     active_from_time: Optional[time] = None

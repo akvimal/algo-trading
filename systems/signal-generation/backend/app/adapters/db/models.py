@@ -23,13 +23,12 @@ class Rule(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(Text, nullable=False)
     description = Column(Text)
-    source_type = Column(Text, nullable=False)
-    provider_rule_name = Column(Text)
     segment = Column(Text, nullable=False, default="NSE")
-    underlying = Column(Text)
+    underlying = Column(Text, nullable=False)
     underlying_type = Column(Text, nullable=False, default="symbol")
-    interval = Column(Text)
-    rule_config = Column(JSONB(none_as_null=True))
+    interval = Column(Text, nullable=False)
+    rule_config = Column(JSONB(none_as_null=True), nullable=False)
+    regime_indicator_ids = Column(JSONB, nullable=False, default=list)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -45,9 +44,8 @@ class Strategy(Base):
     horizon = Column(Text, nullable=False)
     instrument_type = Column(Text, nullable=False)
     # Which Rule (above) decides when this strategy's signals fire - see
-    # app/domain/rule.py. Required for every strategy, in-house or
-    # external.
-    rule_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.rules.id"), nullable=False)
+    # app/domain/rule.py. in_house only - NULL for external strategies.
+    rule_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.rules.id"), nullable=True)
     stop_loss_method = Column(Text)
     stop_loss_interval = Column(Text)
     stop_loss_percent = Column(Numeric)
@@ -65,10 +63,6 @@ class Strategy(Base):
     contract_day_filter = Column(Text, nullable=False, default="any")
     segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO - drives the square_off_time default
     square_off_time = Column(Time)  # required for horizon='intraday' only - null for swing/positional
-    regime_filter_enabled = Column(Boolean, nullable=False, default=False)
-    regime_filter_checks = Column(
-        JSONB, nullable=False, default=lambda: ["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]
-    )
     # Optional per-strategy signal-acceptance window - see
     # infra/postgres/init/03-signal-generation.sql for the full comment.
     active_from_time = Column(Time)

@@ -89,7 +89,7 @@ def test_backtest_one_symbol_option_produces_combined_premium_trades(monkeypatch
     _patch_common(monkeypatch, leg_series)
 
     payload = RuleBacktestRequest(instrument_type="option")
-    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
+    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date(), [])
 
     assert result["trade_count"] == 1
     trade = result["trades"][0]
@@ -109,7 +109,7 @@ def test_backtest_one_symbol_option_positional_horizon_uses_month_expiry(monkeyp
     _patch_common(monkeypatch, leg_series)
 
     payload = RuleBacktestRequest(instrument_type="option", horizon="positional")
-    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
+    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date(), [])
 
     assert result["trades"][0]["legs"]["expiry_flag"] == "MONTH"
 
@@ -120,7 +120,7 @@ def test_backtest_one_symbol_option_rejects_non_crossover_rule(monkeypatch):
     payload = RuleBacktestRequest(instrument_type="option")
     with pytest.raises(HTTPException) as exc_info:
         rules_route._backtest_one_symbol(
-            FakeDb(), FakeRule(), RangeBreakoutRuleConfig(breakout_period=4), payload, "NIFTY", BASE.date(), BASE.date()
+            FakeDb(), FakeRule(), RangeBreakoutRuleConfig(breakout_period=4), payload, "NIFTY", BASE.date(), BASE.date(), []
         )
     assert exc_info.value.status_code == 422
     assert "crossover" in exc_info.value.detail
@@ -132,7 +132,7 @@ def test_backtest_one_symbol_option_rejects_range_over_max_days(monkeypatch):
     payload = RuleBacktestRequest(instrument_type="option")
     too_wide_to = BASE.date() + timedelta(days=MAX_OPTION_BACKTEST_DAYS + 1)
     with pytest.raises(HTTPException) as exc_info:
-        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), too_wide_to)
+        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), too_wide_to, [])
     assert exc_info.value.status_code == 422
     assert "too wide" in exc_info.value.detail
 
@@ -146,7 +146,7 @@ def test_backtest_one_symbol_option_rejects_naked_style(monkeypatch):
 
     payload = RuleBacktestRequest(instrument_type="option", option_position_style="naked")
     with pytest.raises(HTTPException) as exc_info:
-        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
+        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date(), [])
     assert exc_info.value.status_code == 422
     assert "naked" in exc_info.value.detail
 
@@ -159,7 +159,7 @@ def test_backtest_one_symbol_option_rejects_non_atm_moneyness(monkeypatch):
 
     payload = RuleBacktestRequest(instrument_type="option", option_strike_moneyness="OTM1")
     with pytest.raises(HTTPException) as exc_info:
-        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
+        rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date(), [])
     assert exc_info.value.status_code == 422
     assert "option_strike_moneyness" in exc_info.value.detail
 
@@ -168,7 +168,7 @@ def test_backtest_one_symbol_option_skips_trade_when_legs_unresolvable(monkeypat
     _patch_common(monkeypatch, {})  # leg_series empty -> get_option_leg_history always returns None
 
     payload = RuleBacktestRequest(instrument_type="option")
-    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date())
+    result = rules_route._backtest_one_symbol(FakeDb(), FakeRule(), RULE, payload, "NIFTY", BASE.date(), BASE.date(), [])
 
     assert result["trade_count"] == 0
     assert result["trades"] == []

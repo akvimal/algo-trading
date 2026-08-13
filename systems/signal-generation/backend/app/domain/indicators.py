@@ -3,7 +3,16 @@ reusable identically by the live engine and the backtest replay (see
 rules.py, engine.py, backtest.py). closes/values are always oldest-first
 (chronological)."""
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    # Type-checking only - app.domain.rules imports this module (for
+    # compute_indicator/compute_indicator_signal/indicator_warmup), so a
+    # top-level import here would cycle. evaluate_regime_indicator/
+    # regime_indicator_warmup below import app.domain.regime lazily
+    # (function-local) for the same reason - regime.py itself imports
+    # Bias/CandleClose from app.domain.rules.
+    from app.domain.rules import Bias, CandleClose
 
 
 def compute_rsi(closes: list[float], period: int) -> list[Optional[float]]:
@@ -80,3 +89,47 @@ def indicator_warmup(indicator_type: str, params: dict) -> int:
     if indicator_type == "rsi":
         return params["period"] + params["sma_period"]
     raise ValueError(f"no warmup rule for indicator type {indicator_type!r}")
+
+
+def evaluate_regime_indicator(indicator_type: str, params: dict, candles: "list[CandleClose]", bias: "Bias") -> Optional[bool]:
+    """Dispatches to the matching app/domain/regime.py check_* function -
+    mirrors compute_indicator's own if/elif dispatch shape, one level up
+    (a regime check's "value" is already a bullish/bearish pass/fail, not
+    a scalar series a rule then compares against a signal line). Regime
+    indicators are evaluated directly by app/domain/engine.py's
+    _regime_confirmed, not through rules.evaluate - see Rule.
+    regime_indicator_ids."""
+    # Local import - see this module's own TYPE_CHECKING note up top.
+    from app.domain.regime import check_adx, check_dmi_direction, check_ema_slope, check_efficiency_ratio, check_structure
+
+    if indicator_type == "structure":
+        return check_structure(candles, bias, params["swing_lookback"])
+    if indicator_type == "efficiency_ratio":
+        return check_efficiency_ratio(candles, bias, params["period"], params["trend_threshold"])
+    if indicator_type == "adx":
+        return check_adx(candles, bias, params["period"], params["trend_threshold"])
+    if indicator_type == "dmi_direction":
+        return check_dmi_direction(candles, bias, params["period"])
+    if indicator_type == "ema_slope":
+        return check_ema_slope(
+            candles, bias, params["ema_period"], params["slope_lookback"], params["slope_threshold"], params["atr_period"]
+        )
+    raise ValueError(f"no regime-evaluate rule for indicator type {indicator_type!r}")
+
+
+def regime_indicator_warmup(indicator_type: str, params: dict) -> int:
+    """Per-type bar-count estimate, mirroring indicator_warmup's shape -
+    same "extra empty bars cost nothing, this is a coarse over-estimate
+    not a tight bound" philosophy as regime.regime_warmup, decomposed per
+    check instead of one shared max()."""
+    if indicator_type == "structure":
+        return params["swing_lookback"] * 8  # ~2 confirmed pivots of each type
+    if indicator_type == "efficiency_ratio":
+        return params["period"] + 1
+    if indicator_type == "adx":
+        return params["period"] * 3  # DM smoothing + DX-into-ADX smoothing both need to settle
+    if indicator_type == "dmi_direction":
+        return params["period"] * 3  # same DMI settle as adx - +DI/-DI come from the same smoothing pass
+    if indicator_type == "ema_slope":
+        return max(params["ema_period"] + params["slope_lookback"], params["atr_period"] + 1)
+    raise ValueError(f"no regime-warmup rule for indicator type {indicator_type!r}")

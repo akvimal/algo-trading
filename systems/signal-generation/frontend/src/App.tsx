@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useState } from "react";
 
 import {
-  ALL_REGIME_CHECKS,
-  REGIME_CHECK_LABELS,
+  INDICATOR_TYPE_LABELS,
+  REGIME_INDICATOR_TYPES,
   type BacktestResult,
   type ContractDayFilter,
   type CounterSignalPolicy,
@@ -10,15 +10,16 @@ import {
   type GridBacktestResult,
   type Horizon,
   type Indicator,
+  type IndicatorType,
   type InstrumentType,
   type Interval,
   type OptionPositionStyle,
   type OptionSlScope,
   type OptionStrikeMoneyness,
   type ProviderSignal,
-  type RegimeCheckName,
   type Rule,
   type RuleConfig,
+  type RsiParams,
   type Segment,
   type SourceType,
   type StopLossInterval,
@@ -65,9 +66,50 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   combined_target: "Combined target",
 };
 
-function toggleRegimeCheck(checks: RegimeCheckName[], name: RegimeCheckName): RegimeCheckName[] {
-  return checks.includes(name) ? checks.filter((c) => c !== name) : [...checks, name];
+function toggleId(ids: string[], id: string): string[] {
+  return ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
 }
+
+// Per-IndicatorType params shape - drives IndicatorsTab's create form (a
+// generic {key: value} form instead of one hardcoded RSI field pair).
+// ALL_INDICATOR_TYPES also drives the type <select> itself, in the same
+// order regime types are listed elsewhere (REGIME_INDICATOR_TYPES) plus
+// "rsi" first (the crossover-only one, most commonly created).
+const ALL_INDICATOR_TYPES: IndicatorType[] = ["rsi", ...REGIME_INDICATOR_TYPES];
+
+type IndicatorParamField = { key: string; label: string; min: string; step?: string };
+
+const INDICATOR_PARAM_FIELDS: Record<IndicatorType, IndicatorParamField[]> = {
+  rsi: [
+    { key: "period", label: "RSI period", min: "2" },
+    { key: "sma_period", label: "Signal SMA period", min: "2" },
+  ],
+  structure: [{ key: "swing_lookback", label: "Swing lookback", min: "2" }],
+  efficiency_ratio: [
+    { key: "period", label: "Period", min: "2" },
+    { key: "trend_threshold", label: "Trend threshold (0-1)", min: "0", step: "0.01" },
+  ],
+  adx: [
+    { key: "period", label: "Period", min: "2" },
+    { key: "trend_threshold", label: "Trend threshold", min: "0", step: "0.1" },
+  ],
+  dmi_direction: [{ key: "period", label: "Period", min: "2" }],
+  ema_slope: [
+    { key: "ema_period", label: "EMA period", min: "2" },
+    { key: "slope_lookback", label: "Slope lookback", min: "1" },
+    { key: "slope_threshold", label: "Slope threshold", min: "0", step: "0.01" },
+    { key: "atr_period", label: "ATR period (normalizing)", min: "2" },
+  ],
+};
+
+const INDICATOR_PARAM_DEFAULTS: Record<IndicatorType, Record<string, string>> = {
+  rsi: { period: "14", sma_period: "9" },
+  structure: { swing_lookback: "3" },
+  efficiency_ratio: { period: "14", trend_threshold: "0.35" },
+  adx: { period: "14", trend_threshold: "20" },
+  dmi_direction: { period: "14" },
+  ema_slope: { ema_period: "20", slope_lookback: "5", slope_threshold: "0.15", atr_period: "14" },
+};
 
 function exitReasonLabel(reason: string): string {
   return EXIT_REASON_LABELS[reason] ?? reason;
@@ -239,8 +281,8 @@ function IndicatorsTab() {
   const [indicators, setIndicators] = useState<Indicator[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [newIndicatorName, setNewIndicatorName] = useState("");
-  const [newIndicatorPeriod, setNewIndicatorPeriod] = useState("14");
-  const [newIndicatorSmaPeriod, setNewIndicatorSmaPeriod] = useState("9");
+  const [newIndicatorType, setNewIndicatorType] = useState<IndicatorType>("rsi");
+  const [newParams, setNewParams] = useState<Record<string, string>>(INDICATOR_PARAM_DEFAULTS.rsi);
   const [creatingIndicator, setCreatingIndicator] = useState(false);
   const [deletingIndicatorId, setDeletingIndicatorId] = useState<string | null>(null);
 
@@ -266,15 +308,19 @@ function IndicatorsTab() {
     e.preventDefault();
     setCreatingIndicator(true);
     try {
+      const params: Record<string, number> = {};
+      for (const field of INDICATOR_PARAM_FIELDS[newIndicatorType]) {
+        params[field.key] = Number(newParams[field.key]);
+      }
       const created = await createIndicator({
         name: newIndicatorName,
-        type: "rsi",
-        params: { period: Number(newIndicatorPeriod), sma_period: Number(newIndicatorSmaPeriod) },
+        type: newIndicatorType,
+        params: params as Indicator["params"],
       });
       setIndicators((prev) => [created, ...prev]);
       setNewIndicatorName("");
-      setNewIndicatorPeriod("14");
-      setNewIndicatorSmaPeriod("9");
+      setNewIndicatorType("rsi");
+      setNewParams(INDICATOR_PARAM_DEFAULTS.rsi);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create indicator");
     } finally {
@@ -326,7 +372,7 @@ function IndicatorsTab() {
           {indicators.map((ind) => (
             <tr key={ind.id}>
               <td className="symbol">{ind.name}</td>
-              <td>{ind.type.toUpperCase()}</td>
+              <td>{INDICATOR_TYPE_LABELS[ind.type]}</td>
               <td>{Object.entries(ind.params).map(([k, v]) => `${k}=${v}`).join(", ")}</td>
               <td className="edit-actions">
                 <button
@@ -356,33 +402,42 @@ function IndicatorsTab() {
         </label>
         <label>
           Type
-          <select value="rsi" disabled>
-            <option value="rsi">RSI</option>
+          <select
+            value={newIndicatorType}
+            onChange={(e) => {
+              const t = e.target.value as IndicatorType;
+              setNewIndicatorType(t);
+              setNewParams(INDICATOR_PARAM_DEFAULTS[t]);
+            }}
+          >
+            {ALL_INDICATOR_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {INDICATOR_TYPE_LABELS[t]}
+              </option>
+            ))}
           </select>
         </label>
-        <label>
-          RSI period
-          <input
-            type="number"
-            min="2"
-            step="1"
-            value={newIndicatorPeriod}
-            onChange={(e) => setNewIndicatorPeriod(e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Signal SMA period
-          <input
-            type="number"
-            min="2"
-            step="1"
-            value={newIndicatorSmaPeriod}
-            onChange={(e) => setNewIndicatorSmaPeriod(e.target.value)}
-            required
-          />
-        </label>
-        <button type="submit" disabled={creatingIndicator || !newIndicatorName.trim()}>
+        {INDICATOR_PARAM_FIELDS[newIndicatorType].map((field) => (
+          <label key={field.key}>
+            {field.label}
+            <input
+              type="number"
+              min={field.min}
+              step={field.step ?? "1"}
+              value={newParams[field.key] ?? ""}
+              onChange={(e) => setNewParams((prev) => ({ ...prev, [field.key]: e.target.value }))}
+              required
+            />
+          </label>
+        ))}
+        <button
+          type="submit"
+          disabled={
+            creatingIndicator ||
+            !newIndicatorName.trim() ||
+            INDICATOR_PARAM_FIELDS[newIndicatorType].some((field) => !newParams[field.key])
+          }
+        >
           {creatingIndicator ? "Creating..." : "Create indicator"}
         </button>
       </form>
@@ -413,13 +468,9 @@ function RuleManager() {
   const [universes, setUniverses] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sourceFilter, setSourceFilter] = useState<"all" | "in_house" | "external">("all");
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [sourceKind, setSourceKind] = useState<"in_house" | "external">("in_house");
-  const [externalSourceName, setExternalSourceName] = useState("");
-  const [providerRuleName, setProviderRuleName] = useState("");
   const [segment, setSegment] = useState<Segment>("NSE");
   const [underlying, setUnderlying] = useState("");
   const [underlyingType, setUnderlyingType] = useState<UnderlyingType>("symbol");
@@ -434,12 +485,12 @@ function RuleManager() {
   const [emaFilterEnabled, setEmaFilterEnabled] = useState(false);
   const [emaPeriod, setEmaPeriod] = useState("20");
   const [rangeBreakoutPeriod, setRangeBreakoutPeriod] = useState("5");
+  const [regimeIndicatorIds, setRegimeIndicatorIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
-  const [editProviderRuleName, setEditProviderRuleName] = useState("");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
   const [editUnderlying, setEditUnderlying] = useState("");
   const [editUnderlyingType, setEditUnderlyingType] = useState<UnderlyingType>("symbol");
@@ -453,6 +504,7 @@ function RuleManager() {
   const [editEmaFilterEnabled, setEditEmaFilterEnabled] = useState(false);
   const [editEmaPeriod, setEditEmaPeriod] = useState("20");
   const [editRangeBreakoutPeriod, setEditRangeBreakoutPeriod] = useState("5");
+  const [editRegimeIndicatorIds, setEditRegimeIndicatorIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
   // Backtest - Rule-scoped (POST /rules/{id}/backtest), so instrument_type/
@@ -546,25 +598,22 @@ function RuleManager() {
     setGridError(null);
   }, [selected]);
 
-  const createIsInHouse = sourceKind === "in_house";
   const selectedRule = rules.find((r) => r.id === selected);
-  const selectedIsInHouse = selectedRule?.source_type === "in_house";
   const selectedRuleConfig = selectedRule?.rule_config;
   const selectedIndicator =
     selectedRuleConfig?.type === "crossover" ? indicators.find((i) => i.id === selectedRuleConfig.indicator_id) : undefined;
+  // Grid search only supports RSI's own params (period/sma_period) -
+  // narrows the union (a CrossoverRuleConfig can only reference a "rsi"
+  // indicator, enforced backend-side - see _check_referenced_indicator_exists).
+  const selectedRsiParams: RsiParams | undefined =
+    selectedIndicator?.type === "rsi" ? (selectedIndicator.params as RsiParams) : undefined;
   const selectedIsBreakout = selectedRule?.rule_config?.type === "breakout";
   const selectedIsRangeBreakout = selectedRule?.rule_config?.type === "range_breakout";
-  const filteredRules = rules.filter((r) => {
-    if (sourceFilter === "all") return true;
-    const isInHouse = r.source_type === "in_house";
-    return sourceFilter === "in_house" ? isInHouse : !isInHouse;
-  });
 
-  const isBreakout = createIsInHouse && ruleType === "breakout";
-  const isRangeBreakout = createIsInHouse && ruleType === "range_breakout";
+  const isBreakout = ruleType === "breakout";
+  const isRangeBreakout = ruleType === "range_breakout";
 
-  function buildRuleConfig(): RuleConfig | undefined {
-    if (!createIsInHouse) return undefined;
+  function buildRuleConfig(): RuleConfig {
     if (isBreakout) {
       return {
         type: "breakout",
@@ -589,19 +638,15 @@ function RuleManager() {
       const created = await createRule({
         name,
         description: description.trim() || undefined,
-        source_type: createIsInHouse ? "in_house" : externalSourceName.trim(),
-        provider_rule_name: !createIsInHouse && providerRuleName.trim() ? providerRuleName.trim() : undefined,
         segment,
-        underlying: createIsInHouse ? (underlyingType === "universe" ? selectedUniverse : underlying) || undefined : undefined,
-        underlying_type: createIsInHouse ? underlyingType : undefined,
-        interval: createIsInHouse ? (isBreakout ? ltfInterval : interval || undefined) : undefined,
+        underlying: (underlyingType === "universe" ? selectedUniverse : underlying) || "",
+        underlying_type: underlyingType,
+        interval: isBreakout ? ltfInterval : (interval as Interval),
         rule_config: buildRuleConfig(),
+        regime_indicator_ids: regimeIndicatorIds,
       });
       setName("");
       setDescription("");
-      setSourceKind("in_house");
-      setExternalSourceName("");
-      setProviderRuleName("");
       setSegment("NSE");
       setUnderlying("");
       setUnderlyingType("symbol");
@@ -609,6 +654,7 @@ function RuleManager() {
       setInterval_("");
       setRuleType("crossover");
       setSelectedIndicatorId("");
+      setRegimeIndicatorIds([]);
       setRules((prev) => [created, ...prev]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create rule");
@@ -621,7 +667,6 @@ function RuleManager() {
     setEditingId(r.id);
     setEditName(r.name);
     setEditDescription(r.description ?? "");
-    setEditProviderRuleName(r.provider_rule_name ?? "");
     setEditSegment(r.segment);
     setEditUnderlyingType(r.underlying_type);
     if (r.underlying_type === "universe") {
@@ -644,6 +689,7 @@ function RuleManager() {
     } else {
       setEditIndicatorId(r.rule_config?.indicator_id ?? "");
     }
+    setEditRegimeIndicatorIds(r.regime_indicator_ids);
   }
 
   function handleCancelEdit() {
@@ -654,7 +700,6 @@ function RuleManager() {
     setSaving(true);
     try {
       const editingRule = rules.find((r) => r.id === id);
-      const editingIsInHouse = editingRule?.source_type === "in_house";
       const editingIsBreakout = editingRule?.rule_config?.type === "breakout";
       const editingIsRangeBreakout = editingRule?.rule_config?.type === "range_breakout";
       const ruleConfig: RuleConfig | undefined = editingIsBreakout
@@ -669,20 +714,18 @@ function RuleManager() {
           }
         : editingIsRangeBreakout
           ? { type: "range_breakout", breakout_period: Number(editRangeBreakoutPeriod) }
-          : editingIsInHouse && editIndicatorId
+          : editIndicatorId
             ? { type: "crossover", indicator_id: editIndicatorId }
             : undefined;
       const updated = await updateRule(id, {
         name: editName,
         description: editDescription.trim() || undefined,
-        provider_rule_name: !editingIsInHouse && editProviderRuleName.trim() ? editProviderRuleName.trim() : undefined,
         segment: editSegment,
-        underlying: editingIsInHouse
-          ? (editUnderlyingType === "universe" ? editSelectedUniverse : editUnderlying) || undefined
-          : undefined,
-        underlying_type: editingIsInHouse ? editUnderlyingType : undefined,
-        interval: editingIsInHouse ? (editingIsBreakout ? editLtfInterval : editInterval || undefined) : undefined,
+        underlying: (editUnderlyingType === "universe" ? editSelectedUniverse : editUnderlying) || undefined,
+        underlying_type: editUnderlyingType,
+        interval: editingIsBreakout ? editLtfInterval : editInterval || undefined,
         rule_config: ruleConfig,
+        regime_indicator_ids: editRegimeIndicatorIds,
       });
       setRules((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setEditingId(null);
@@ -779,7 +822,7 @@ function RuleManager() {
     }
   }
 
-  const colCount = 7; // Name, Source, Segment, Underlying/Rule, Description, Provider name, actions
+  const colCount = 5; // Name, Segment, Underlying/Rule, Description, actions
 
   return (
     <>
@@ -787,37 +830,9 @@ function RuleManager() {
         <h2>New rule</h2>
         <form className="strategy-form" onSubmit={handleCreate}>
           <label>
-            Source
-            <select value={sourceKind} onChange={(e) => setSourceKind(e.target.value as "in_house" | "external")}>
-              <option value="external">External (webhook provider)</option>
-              <option value="in_house">In-house</option>
-            </select>
-          </label>
-          {sourceKind === "external" && (
-            <label>
-              External source name
-              <input
-                value={externalSourceName}
-                onChange={(e) => setExternalSourceName(e.target.value)}
-                required
-                placeholder="e.g. chartink, tradingview"
-              />
-            </label>
-          )}
-          <label>
             Name
             <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. RSI 35-49 crossover" />
           </label>
-          {sourceKind === "external" && (
-            <label>
-              Provider's own scan name <span className="optional">(optional)</span>
-              <input
-                value={providerRuleName}
-                onChange={(e) => setProviderRuleName(e.target.value)}
-                placeholder="if you renamed it above"
-              />
-            </label>
-          )}
           <label>
             Description <span className="optional">(optional)</span>
             <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="what this rule looks for" />
@@ -830,8 +845,7 @@ function RuleManager() {
               <option value="CRYPTO">Crypto</option>
             </select>
           </label>
-          {createIsInHouse && (
-            <>
+          <>
               {ruleType !== "breakout" && (
                 <label>
                   Interval
@@ -954,18 +968,34 @@ function RuleManager() {
                   </select>
                 </label>
               )}
+              <div className="regime-checks">
+                <span className="muted">Regime filters (optional)</span>
+                {indicators.filter((ind) => REGIME_INDICATOR_TYPES.includes(ind.type)).length === 0 && (
+                  <span className="muted">none defined yet - create one on the Indicators tab</span>
+                )}
+                {indicators
+                  .filter((ind) => REGIME_INDICATOR_TYPES.includes(ind.type))
+                  .map((ind) => (
+                    <label key={ind.id} className="checkbox-label tiny">
+                      <input
+                        type="checkbox"
+                        checked={regimeIndicatorIds.includes(ind.id)}
+                        onChange={() => setRegimeIndicatorIds((prev) => toggleId(prev, ind.id))}
+                      />
+                      {ind.name}
+                    </label>
+                  ))}
+              </div>
             </>
-          )}
           <button
             type="submit"
             disabled={
               creating ||
               !name.trim() ||
-              (!createIsInHouse && !externalSourceName.trim()) ||
-              (createIsInHouse && ruleType !== "breakout" && !interval) ||
-              (createIsInHouse && underlyingType === "symbol" && !underlying.trim()) ||
-              (createIsInHouse && underlyingType === "universe" && !selectedUniverse) ||
-              (createIsInHouse && !isBreakout && !isRangeBreakout && !selectedIndicatorId)
+              (ruleType !== "breakout" && !interval) ||
+              (underlyingType === "symbol" && !underlying.trim()) ||
+              (underlyingType === "universe" && !selectedUniverse) ||
+              (!isBreakout && !isRangeBreakout && !selectedIndicatorId)
             }
           >
             {creating ? "Creating..." : "Create rule"}
@@ -979,42 +1009,30 @@ function RuleManager() {
 
       {error && <p className="error">{error}</p>}
 
-      <label className="inline-filter">
-        Show
-        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as "all" | "in_house" | "external")}>
-          <option value="all">All</option>
-          <option value="in_house">In-house</option>
-          <option value="external">External</option>
-        </select>
-      </label>
-
       <table>
         <thead>
           <tr>
             <th>Name</th>
-            <th>Source</th>
             <th>Segment</th>
             <th>Underlying / Rule</th>
             <th>Description</th>
-            <th>Provider name</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {filteredRules.length === 0 && (
+          {rules.length === 0 && (
             <tr>
               <td colSpan={colCount} className="empty">
-                {rules.length === 0 ? "No rules yet - create one above." : "No rules match this filter."}
+                No rules yet - create one above.
               </td>
             </tr>
           )}
-          {filteredRules.map((r) =>
+          {rules.map((r) =>
             editingId === r.id ? (
               <tr key={r.id} className="editing-row" onClick={(e) => e.stopPropagation()}>
                 <td>
                   <input value={editName} onChange={(e) => setEditName(e.target.value)} className="cell-input" />
                 </td>
-                <td className="muted">{r.source_type === "in_house" ? "In-house" : r.source_type}</td>
                 <td>
                   <select value={editSegment} onChange={(e) => setEditSegment(e.target.value as Segment)} className="cell-input">
                     <option value="NSE">NSE</option>
@@ -1023,9 +1041,6 @@ function RuleManager() {
                   </select>
                 </td>
                 <td>
-                  {r.source_type !== "in_house" ? (
-                    <span className="muted">-</span>
-                  ) : (
                     <div className="stack-cell">
                       <select
                         value={editUnderlyingType}
@@ -1143,22 +1158,24 @@ function RuleManager() {
                           ))}
                         </select>
                       )}
+                      <div className="regime-checks" style={{ marginLeft: 0 }}>
+                        {indicators
+                          .filter((ind) => REGIME_INDICATOR_TYPES.includes(ind.type))
+                          .map((ind) => (
+                            <label key={ind.id} className="checkbox-label tiny">
+                              <input
+                                type="checkbox"
+                                checked={editRegimeIndicatorIds.includes(ind.id)}
+                                onChange={() => setEditRegimeIndicatorIds((prev) => toggleId(prev, ind.id))}
+                              />
+                              {ind.name}
+                            </label>
+                          ))}
+                      </div>
                     </div>
-                  )}
                 </td>
                 <td>
                   <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} className="cell-input" />
-                </td>
-                <td>
-                  {r.source_type !== "in_house" ? (
-                    <input
-                      value={editProviderRuleName}
-                      onChange={(e) => setEditProviderRuleName(e.target.value)}
-                      className="cell-input"
-                    />
-                  ) : (
-                    <span className="muted">-</span>
-                  )}
                 </td>
                 <td className="edit-actions">
                   <button
@@ -1179,20 +1196,12 @@ function RuleManager() {
             ) : (
               <tr key={r.id} className={r.id === selected ? "selected-row" : ""} onClick={() => setSelected(r.id)}>
                 <td className="symbol">{r.name}</td>
-                <td className="muted">{r.source_type === "in_house" ? "In-house" : r.source_type}</td>
                 <td>{r.segment}</td>
                 <td className="muted">
-                  {r.source_type === "in_house" ? (
-                    <>
-                      {r.underlying}
-                      {ruleSummary(r, indicators)}
-                    </>
-                  ) : (
-                    "-"
-                  )}
+                  {r.underlying}
+                  {ruleSummary(r, indicators)}
                 </td>
                 <td className="muted">{r.description ?? "-"}</td>
-                <td className="muted">{r.provider_rule_name ?? "-"}</td>
                 <td className="edit-actions" onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
@@ -1219,7 +1228,7 @@ function RuleManager() {
         </tbody>
       </table>
 
-      {selected && selectedIsInHouse && (
+      {selected && (
         <section className="panel">
           <h2>Backtest</h2>
           <p className="hint">
@@ -1421,7 +1430,7 @@ function RuleManager() {
               <p className="hint">
                 Sweeps the rule's indicator over candidate values (comma-separated) using the same From/To range
                 above - a param left blank stays fixed at the indicator's own current value
-                {selectedIndicator ? ` (currently period=${selectedIndicator.params.period}, sma_period=${selectedIndicator.params.sma_period})` : ""}
+                {selectedRsiParams ? ` (currently period=${selectedRsiParams.period}, sma_period=${selectedRsiParams.sma_period})` : ""}
                 . Doesn't change the indicator itself - PATCH it once you've picked a winner from the report below.
               </p>
               <div className="strategy-form">
@@ -1429,7 +1438,7 @@ function RuleManager() {
                   Period values
                   <input
                     type="text"
-                    placeholder={selectedIndicator ? `e.g. 7,14,21 (current ${selectedIndicator.params.period})` : "e.g. 7,14,21"}
+                    placeholder={selectedRsiParams ? `e.g. 7,14,21 (current ${selectedRsiParams.period})` : "e.g. 7,14,21"}
                     value={gridPeriodValues}
                     onChange={(e) => setGridPeriodValues(e.target.value)}
                   />
@@ -1438,7 +1447,7 @@ function RuleManager() {
                   SMA period values
                   <input
                     type="text"
-                    placeholder={selectedIndicator ? `e.g. 5,9,14 (current ${selectedIndicator.params.sma_period})` : "e.g. 5,9,14"}
+                    placeholder={selectedRsiParams ? `e.g. 5,9,14 (current ${selectedRsiParams.sma_period})` : "e.g. 5,9,14"}
                     value={gridSmaPeriodValues}
                     onChange={(e) => setGridSmaPeriodValues(e.target.value)}
                   />
@@ -1525,6 +1534,11 @@ function StrategyManager() {
   const [sourceFilter, setSourceFilter] = useState<"all" | "in_house" | "external">("all");
 
   const [name, setName] = useState("");
+  // Rule is in-house only now (see api.ts's Rule/Strategy comments) - a
+  // Strategy needs its own Source selector again since source_type can no
+  // longer be derived from a picked Rule's own source_type.
+  const [sourceKind, setSourceKind] = useState<"in_house" | "external">("in_house");
+  const [externalSourceName, setExternalSourceName] = useState("");
   const [horizon, setHorizon] = useState<Horizon>("intraday");
   const [instrumentType, setInstrumentType] = useState<InstrumentType>("spot");
   const [ruleId, setRuleId] = useState("");
@@ -1551,13 +1565,6 @@ function StrategyManager() {
   // Strategy's own comment in api.ts.
   const [activeFromTime, setActiveFromTime] = useState("");
   const [activeToTime, setActiveToTime] = useState("");
-  // in_house only (harmlessly ignored for webhook strategies) - gates a
-  // crossover signal on the single-timeframe market regime classifier
-  // (see the backend's app/domain/regime.py).
-  const [regimeFilterEnabled, setRegimeFilterEnabled] = useState(false);
-  // Which of the 5 sub-conditions must agree - defaults to all 5,
-  // matching the backend's own default.
-  const [regimeFilterChecks, setRegimeFilterChecks] = useState<RegimeCheckName[]>(ALL_REGIME_CHECKS);
   const [dupPolicy, setDupPolicy] = useState<DuplicateSignalPolicy>("skip");
   const [counterPolicy, setCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [creating, setCreating] = useState(false);
@@ -1581,8 +1588,6 @@ function StrategyManager() {
   const [editSquareOffTime, setEditSquareOffTime] = useState("");
   const [editActiveFromTime, setEditActiveFromTime] = useState("");
   const [editActiveToTime, setEditActiveToTime] = useState("");
-  const [editRegimeFilterEnabled, setEditRegimeFilterEnabled] = useState(false);
-  const [editRegimeFilterChecks, setEditRegimeFilterChecks] = useState<RegimeCheckName[]>(ALL_REGIME_CHECKS);
   const [editDupPolicy, setEditDupPolicy] = useState<DuplicateSignalPolicy>("skip");
   const [editCounterPolicy, setEditCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [saving, setSaving] = useState(false);
@@ -1678,29 +1683,24 @@ function StrategyManager() {
     const strategyIsInHouse = s.source_type === "in_house";
     return sourceFilter === "in_house" ? strategyIsInHouse : !strategyIsInHouse;
   });
-  // No separate Source selection in the create form - a Strategy's
-  // source_type is just whatever its picked Rule's own source_type is
-  // (validate_rule_link_consistency requires them to match anyway, so
-  // asking the user to independently choose/retype it was redundant).
-  // Sorted in-house-first, then alphabetically by rule name.
-  const createRuleOptions = [...rules].sort((a, b) =>
-    a.source_type === b.source_type ? a.name.localeCompare(b.name) : a.source_type === "in_house" ? -1 : 1,
-  );
-  const createSelectedRule = createRuleOptions.find((r) => r.id === ruleId);
-  const createIsInHouse = createSelectedRule?.source_type === "in_house";
+  // Rule is in-house only now - every rule in the list qualifies, sorted
+  // alphabetically by name.
+  const createIsInHouse = sourceKind === "in_house";
+  const createRuleOptions = [...rules].sort((a, b) => a.name.localeCompare(b.name));
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (horizon === "intraday" && !squareOffTime && !activeToTime) return; // required for intraday unless an active-to time is set - submit is disabled without it, this is just a guard
-    if (!createSelectedRule) return; // submit is disabled without a picked rule - defensive guard
+    if (createIsInHouse && !ruleId) return; // submit is disabled without a picked rule - defensive guard
+    if (!createIsInHouse && !externalSourceName.trim()) return; // submit is disabled without a source name - defensive guard
     setCreating(true);
     try {
       const created = await createStrategy({
         name,
-        source_type: createSelectedRule.source_type,
+        source_type: createIsInHouse ? "in_house" : externalSourceName.trim(),
         horizon,
         instrument_type: instrumentType,
-        rule_id: ruleId,
+        rule_id: createIsInHouse ? ruleId : undefined,
         stop_loss_method: slMethod || undefined,
         stop_loss_interval: slMethod === "previous_candle" ? slInterval || undefined : undefined,
         stop_loss_percent: slMethod === "percent" && slPercent ? Number(slPercent) : undefined,
@@ -1714,14 +1714,14 @@ function StrategyManager() {
           instrumentType === "future" || instrumentType === "option" ? contractDayFilter : undefined,
         segment,
         square_off_time: horizon === "intraday" && squareOffTime ? `${squareOffTime}:00` : undefined,
-        regime_filter_enabled: createIsInHouse ? regimeFilterEnabled : undefined,
-        regime_filter_checks: createIsInHouse ? regimeFilterChecks : undefined,
         duplicate_signal_policy: dupPolicy,
         counter_signal_policy: counterPolicy,
         active_from_time: activeFromTime && activeToTime ? `${activeFromTime}:00` : undefined,
         active_to_time: activeFromTime && activeToTime ? `${activeToTime}:00` : undefined,
       });
       setName("");
+      setSourceKind("in_house");
+      setExternalSourceName("");
       setRuleId("");
       setSlMethod("");
       setSlInterval("");
@@ -1738,8 +1738,6 @@ function StrategyManager() {
       setSquareOffTimeTouched(false);
       setActiveFromTime("");
       setActiveToTime("");
-      setRegimeFilterEnabled(false);
-      setRegimeFilterChecks(ALL_REGIME_CHECKS);
       setDupPolicy("skip");
       setCounterPolicy("close_and_flip");
       setStrategies((prev) => [created, ...prev]);
@@ -1765,7 +1763,7 @@ function StrategyManager() {
     setEditName(s.name);
     setEditHorizon(s.horizon);
     setEditInstrumentType(s.instrument_type);
-    setEditRuleId(s.rule_id);
+    setEditRuleId(s.rule_id ?? "");
     setEditSlMethod(s.stop_loss_method ?? "");
     setEditSlInterval(s.stop_loss_interval ?? "");
     setEditSlPercent(s.stop_loss_percent != null ? String(s.stop_loss_percent) : "");
@@ -1780,8 +1778,6 @@ function StrategyManager() {
     setEditSquareOffTime(s.square_off_time ? s.square_off_time.slice(0, 5) : "");
     setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
     setEditActiveToTime(s.active_to_time ? s.active_to_time.slice(0, 5) : "");
-    setEditRegimeFilterEnabled(s.regime_filter_enabled);
-    setEditRegimeFilterChecks(s.regime_filter_checks);
     setEditDupPolicy(s.duplicate_signal_policy);
     setEditCounterPolicy(s.counter_signal_policy);
   }
@@ -1793,8 +1789,6 @@ function StrategyManager() {
   async function handleSaveEdit(id: string) {
     setSaving(true);
     try {
-      const editingStrategy = strategies.find((s) => s.id === id);
-      const editingIsInHouse = editingStrategy?.source_type === "in_house";
       const updated = await updateStrategy(id, {
         name: editName,
         horizon: editHorizon,
@@ -1814,8 +1808,6 @@ function StrategyManager() {
           editInstrumentType === "future" || editInstrumentType === "option" ? editContractDayFilter : undefined,
         segment: editSegment,
         square_off_time: editHorizon === "intraday" && editSquareOffTime ? `${editSquareOffTime}:00` : undefined,
-        regime_filter_enabled: editingIsInHouse ? editRegimeFilterEnabled : undefined,
-        regime_filter_checks: editingIsInHouse ? editRegimeFilterChecks : undefined,
         duplicate_signal_policy: editDupPolicy,
         counter_signal_policy: editCounterPolicy,
         active_from_time: editActiveFromTime && editActiveToTime ? `${editActiveFromTime}:00` : undefined,
@@ -1908,6 +1900,24 @@ function StrategyManager() {
             Name
             <input value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Bullish Breakout v1" />
           </label>
+          <label>
+            Source
+            <select value={sourceKind} onChange={(e) => setSourceKind(e.target.value as "in_house" | "external")}>
+              <option value="in_house">In-house</option>
+              <option value="external">External (webhook provider)</option>
+            </select>
+          </label>
+          {!createIsInHouse && (
+            <label>
+              External source name
+              <input
+                value={externalSourceName}
+                onChange={(e) => setExternalSourceName(e.target.value)}
+                required
+                placeholder="e.g. chartink, tradingview"
+              />
+            </label>
+          )}
           <label>
             Horizon
             <select value={horizon} onChange={(e) => setHorizon(e.target.value as Horizon)}>
@@ -2062,45 +2072,24 @@ function StrategyManager() {
               <option value="close_and_flip">Close and flip</option>
             </select>
           </label>
-          <label>
-            Rule
-            <select value={ruleId} onChange={(e) => setRuleId(e.target.value)} required>
-              <option value="">&mdash;</option>
-              {createRuleOptions.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} ({r.source_type === "in_house" ? "in-house" : r.source_type})
-                </option>
-              ))}
-            </select>
-          </label>
-          {createRuleOptions.length === 0 && (
-            <p className="hint">No rules yet - create one on the Rules tab first (in-house or external/webhook).</p>
+          {createIsInHouse && (
+            <label>
+              Rule
+              <select value={ruleId} onChange={(e) => setRuleId(e.target.value)} required>
+                <option value="">&mdash;</option>
+                {createRuleOptions.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {createIsInHouse && createRuleOptions.length === 0 && (
+            <p className="hint">No rules yet - create one on the Rules tab first.</p>
           )}
           {createIsInHouse && (
-            <>
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={regimeFilterEnabled}
-                  onChange={(e) => setRegimeFilterEnabled(e.target.checked)}
-                />
-                Regime filter (only trade with the trend)
-              </label>
-              {regimeFilterEnabled && (
-                <div className="regime-checks">
-                  {ALL_REGIME_CHECKS.map((check) => (
-                    <label key={check} className="checkbox-label tiny">
-                      <input
-                        type="checkbox"
-                        checked={regimeFilterChecks.includes(check)}
-                        onChange={() => setRegimeFilterChecks((prev) => toggleRegimeCheck(prev, check))}
-                      />
-                      {REGIME_CHECK_LABELS[check]}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </>
+            <p className="hint">Regime filters (optional) are configured on the Rule itself - see the Rules tab.</p>
           )}
           {horizon === "intraday" && (
             <label>
@@ -2131,7 +2120,8 @@ function StrategyManager() {
               creating ||
               !name.trim() ||
               (horizon === "intraday" && !squareOffTime && !activeToTime) ||
-              !ruleId ||
+              (createIsInHouse && !ruleId) ||
+              (!createIsInHouse && !externalSourceName.trim()) ||
               (!!activeFromTime !== !!activeToTime) ||
               (activeFromTime !== "" && activeToTime !== "" && activeToTime <= activeFromTime)
             }
@@ -2384,41 +2374,17 @@ function StrategyManager() {
                   </div>
                 </td>
                 <td>
-                  <select value={editRuleId} onChange={(e) => setEditRuleId(e.target.value)} className="cell-input">
-                    <option value="">&mdash;</option>
-                    {rules
-                      .filter((r) => r.source_type === s.source_type)
-                      .map((r) => (
+                  {s.source_type === "in_house" ? (
+                    <select value={editRuleId} onChange={(e) => setEditRuleId(e.target.value)} className="cell-input">
+                      <option value="">&mdash;</option>
+                      {rules.map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.name}
                         </option>
                       ))}
-                  </select>
-                  {s.source_type === "in_house" && (
-                    <div className="stack-cell">
-                      <label className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={editRegimeFilterEnabled}
-                          onChange={(e) => setEditRegimeFilterEnabled(e.target.checked)}
-                        />
-                        Regime filter
-                      </label>
-                      {editRegimeFilterEnabled && (
-                        <div className="regime-checks">
-                          {ALL_REGIME_CHECKS.map((check) => (
-                            <label key={check} className="checkbox-label tiny">
-                              <input
-                                type="checkbox"
-                                checked={editRegimeFilterChecks.includes(check)}
-                                onChange={() => setEditRegimeFilterChecks((prev) => toggleRegimeCheck(prev, check))}
-                              />
-                              {REGIME_CHECK_LABELS[check]}
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    </select>
+                  ) : (
+                    <span className="muted">-</span>
                   )}
                 </td>
                 <td>

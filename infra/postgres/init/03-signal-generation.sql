@@ -10,38 +10,31 @@ CREATE SCHEMA IF NOT EXISTS signal_generation;
 -- and an option-spread Strategy on the same underlying) - see
 -- docs/architecture.md's "Rules module" section.
 --
--- source_type mirrors Strategy's own field exactly: 'in_house' is the one
--- reserved value (an evaluable condition our own engine checks); anything
--- else names an external webhook provider (chartink, tradingview, ...)
--- whose scan we never evaluate ourselves - the Rule row there is purely a
--- saved reference (name/description/provider_rule_name), matched against
--- Strategy.source_type at link time (see app/domain/models.py's
--- validate_rule_link_consistency), not evaluated.
+-- Purely an in-house condition definition - a Rule is always evaluated by
+-- this system's own engine. An external (webhook) Strategy carries its
+-- own source_type directly and references no Rule at all (rule_id is
+-- NULL for it - see strategies.rule_id below); the provider decides when
+-- a signal fires, not this system.
 CREATE TABLE IF NOT EXISTS signal_generation.rules (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name               TEXT NOT NULL,
     description        TEXT,
-    source_type        TEXT NOT NULL CHECK (source_type <> ''),
-    -- source_type != 'in_house' only - the scan's own name on the
-    -- provider's side, if `name` above renames it locally. NULL means
-    -- `name` itself is also the provider's own name.
-    provider_rule_name TEXT,
     -- Which market this rule's condition/universe is evaluated against -
     -- distinct from a linked Strategy's own `segment` (what gets traded
     -- when it fires - see strategies.segment below). Only NSE is actually
     -- exercised today; MCX/CRYPTO recorded as intent, same convention
     -- strategies.segment already uses.
     segment            TEXT NOT NULL DEFAULT 'NSE' CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
-    -- in_house only - the logical underlying to watch (e.g. "GOLDM",
-    -- "NIFTY") and a typed JSON rule config (CrossoverRuleConfig today -
-    -- {"type": "crossover", "indicator_id": ...} - or BreakoutRuleConfig/
-    -- RangeBreakoutRuleConfig). Names WHICH indicator (signal_generation.
-    -- indicators below) and HOW to decide from it - deliberately NOT the
-    -- indicator's own params (period etc.), which live on the referenced
-    -- Indicator row instead, so one indicator definition can be reused by
-    -- many rules. JSONB (not dedicated columns) so a second rule type is
-    -- new code, not a migration.
-    underlying         TEXT,
+    -- The logical underlying to watch (e.g. "GOLDM", "NIFTY") and a typed
+    -- JSON rule config (CrossoverRuleConfig - {"type": "crossover",
+    -- "indicator_id": ...} - or BreakoutRuleConfig/RangeBreakoutRuleConfig).
+    -- Names WHICH indicator (signal_generation.indicators below) and HOW
+    -- to decide from it - deliberately NOT the indicator's own params
+    -- (period etc.), which live on the referenced Indicator row instead,
+    -- so one indicator definition can be reused by many rules. JSONB (not
+    -- dedicated columns) so a second rule type is new code, not a
+    -- migration.
+    underlying         TEXT NOT NULL,
     -- 'symbol' (default): underlying names one traded symbol. 'universe':
     -- underlying instead names an index-constituent group key (e.g.
     -- 'NIFTYBANK', resolved via market-data's GET
@@ -51,31 +44,39 @@ CREATE TABLE IF NOT EXISTS signal_generation.rules (
     -- below. Not coupled to instrument_type (that's a Strategy concern
     -- now) - a universe scan can back a spot, future, or option Strategy.
     underlying_type    TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe')),
-    -- Signal/candle cadence. in_house only - see in_house_fields_consistent
-    -- below.
-    interval           TEXT CHECK (interval IN ('1min', '3min', '5min', '15min', '30min', '60min', 'daily')),
-    rule_config        JSONB,
+    -- Signal/candle cadence.
+    interval           TEXT NOT NULL CHECK (interval IN ('1min', '3min', '5min', '15min', '30min', '60min', 'daily')),
+    rule_config        JSONB NOT NULL,
+    -- Which regime-type Indicators (signal_generation.indicators below,
+    -- type IN ('structure', 'efficiency_ratio', 'adx', 'dmi_direction',
+    -- 'ema_slope')) must ALL confirm this rule's own bias before it
+    -- fires - a JSONB array of indicator id strings, no DB FK (same
+    -- reason rule_config's own indicator_id has none - see above);
+    -- existence + regime-typedness is checked at the API layer instead
+    -- (app/api/routes/rules.py). Empty (default) means no regime gate.
+    -- Applies uniformly across all 3 rule_config types (crossover,
+    -- breakout, range_breakout) - it's a cross-cutting modifier, not
+    -- specific to any one condition type, so it lives here at the top
+    -- level rather than nested inside rule_config.
+    regime_indicator_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT in_house_fields_consistent CHECK (
-        (source_type = 'in_house' AND underlying IS NOT NULL AND rule_config IS NOT NULL AND interval IS NOT NULL)
-        OR (source_type != 'in_house' AND underlying IS NULL AND rule_config IS NULL)
-    ),
     CONSTRAINT universe_requires_nse CHECK (
         underlying_type != 'universe' OR segment = 'NSE'
     )
 );
 
--- A reusable indicator definition (e.g. "RSI 14") - any number of Rule
--- rows can reference one via rule_config's indicator_id (no DB FK - that
--- field is inside a JSONB blob, not a plain column; existence is checked
--- at the API layer instead, see app/api/routes/rules.py). params is
--- JSONB (not dedicated columns) for the same reason rule_config is: a
--- second indicator type is new code, not a migration.
+-- A reusable indicator definition (e.g. "RSI 14", "ADX 14/20") - any
+-- number of Rule rows can reference one, either via rule_config's
+-- indicator_id ("rsi" only - crossover) or via the top-level
+-- regime_indicator_ids above (the other 5, regime types) - no DB FK
+-- either way (existence + type-compatibility is checked at the API layer
+-- instead, see app/api/routes/rules.py). params is JSONB (not dedicated
+-- columns) so a new indicator type is new code, not a migration.
 CREATE TABLE IF NOT EXISTS signal_generation.indicators (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        TEXT NOT NULL,
-    type        TEXT NOT NULL CHECK (type IN ('rsi')),
+    type        TEXT NOT NULL CHECK (type IN ('rsi', 'structure', 'efficiency_ratio', 'adx', 'dmi_direction', 'ema_slope')),
     params      JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -107,21 +108,17 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- against (see every backend source_type check) - anything else names
     -- an external webhook provider (chartink, tradingview, or any new
     -- one), free-form so a new provider needs no schema/code change here.
-    -- Must equal the linked Rule's own source_type (rule_id below) -
-    -- enforced app-level at create/update time, not a DB constraint
-    -- (cross-table) - see validate_rule_link_consistency.
     source_type      TEXT NOT NULL CHECK (source_type <> ''),
     exchange         TEXT NOT NULL CHECK (exchange IN ('NSE')),
     horizon          TEXT NOT NULL CHECK (horizon IN ('intraday', 'swing', 'positional')),
     instrument_type  TEXT NOT NULL CHECK (instrument_type IN ('spot', 'future', 'option')),
-    -- Which saved Rule (above) decides when this strategy's signals fire.
-    -- Required for every strategy, in-house or external - an external
-    -- strategy's Rule carries no evaluable condition tree, purely a saved
-    -- reference to the provider's own scan name/description. Not
+    -- Which saved Rule (above) decides when this strategy's signals fire -
+    -- in_house only (NULL for an external strategy - it carries no
+    -- evaluable condition, the provider decides when a signal fires). Not
     -- ON DELETE CASCADE: a Rule with strategies still pointing at it
     -- shouldn't silently vanish - see app/api/routes/rules.py's delete
     -- guard.
-    rule_id          UUID NOT NULL REFERENCES signal_generation.rules (id),
+    rule_id          UUID REFERENCES signal_generation.rules (id),
     -- Stop-loss: either the low/high of the previous completed candle at
     -- stop_loss_interval, or a flat % from entry price. The two are
     -- mutually exclusive - exactly one of stop_loss_interval/
@@ -156,8 +153,7 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- instrument_type='option' only - which fixed template choose_strategy
     -- (signal-processing) builds: 'spread' (bull_call_spread/bear_put_spread,
     -- Phase 4b) or 'naked' (naked_call/naked_put - single BUY leg, no short
-    -- leg). Harmlessly ignored for spot/future strategies, same convention
-    -- as regime_filter_enabled being ignored for non-in_house strategies.
+    -- leg). Harmlessly ignored for spot/future strategies.
     option_position_style TEXT NOT NULL DEFAULT 'spread' CHECK (option_position_style IN ('spread', 'naked')),
     -- instrument_type='option' only - which strike the primary (long) leg
     -- uses, ITM2/ITM1/ATM/OTM1/OTM2 relative to spot (see signal-processing's
@@ -185,20 +181,6 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- NSE, 22:00 for MCX, 17:25 for CRYPTO. execution has no
     -- platform-wide fallback of its own.
     square_off_time  TIME,
-    -- in_house only (harmlessly ignored for webhook strategies) - gates a
-    -- crossover signal on a single-timeframe market regime classification
-    -- (UPTREND/DOWNTREND/RANGE/TRANSITION from swing structure, Efficiency
-    -- Ratio, ADX/DMI, ATR-normalized EMA slope - see
-    -- app/domain/regime.py) computed on the linked Rule's own `interval`,
-    -- not a separate higher timeframe. Default false preserves today's
-    -- behavior exactly. See docs/architecture.md.
-    regime_filter_enabled BOOLEAN NOT NULL DEFAULT false,
-    -- Which of the 5 sub-conditions classify_regime combines
-    -- (structure/efficiency_ratio/adx/dmi_direction/ema_slope, see
-    -- app/domain/regime.py's REGIME_CHECK_NAMES) must agree to confirm a
-    -- signal's direction when regime_filter_enabled - defaults to all 5,
-    -- matching classify_regime's own fixed "regime" label exactly.
-    regime_filter_checks JSONB NOT NULL DEFAULT '["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]',
     -- Optional per-strategy time-of-day window (e.g. 09:15-11:00) during
     -- which this strategy accepts signals - both-or-neither, enforced by
     -- signal-processing's resolve() against the signal's own timestamp
@@ -245,7 +227,11 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     CONSTRAINT active_window_consistent CHECK (
         (active_from_time IS NULL) = (active_to_time IS NULL)
         AND (active_to_time IS NULL OR active_to_time > active_from_time)
-    )
+    ),
+    -- rule_id required exactly for source_type='in_house', forbidden
+    -- otherwise - DB-level mirror of validate_strategy_rule_requirement
+    -- (app/domain/models.py), enforced app-side at create/update time.
+    CONSTRAINT rule_id_matches_source_type CHECK ((source_type = 'in_house') = (rule_id IS NOT NULL))
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategies_status ON signal_generation.strategies (status);

@@ -21,9 +21,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
-from app.domain import breakout, range_breakout, regime
+from app.domain import breakout, range_breakout
+from app.domain.indicators import evaluate_regime_indicator, regime_indicator_warmup
 from app.domain.rule import BreakoutRuleConfig, RangeBreakoutRuleConfig, validate_indicator_params, validate_rule_config
-from app.domain.rules import CandleClose, bars_needed, evaluate
+from app.domain.rules import Bias, CandleClose, bars_needed, evaluate
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,44 @@ def _target_symbols(rule_row: db_models.Rule, get_universe_constituents: GetUniv
     return [rule_row.underlying]
 
 
+def _regime_confirmed(db: Session, rule_row: db_models.Rule, bias: Bias, candles: list[CandleClose]) -> bool:
+    """Rule.regime_indicator_ids gate, shared by all 3 rule types below -
+    ALL listed regime indicators must confirm `bias` (not a majority
+    vote), mirroring the old Strategy.regime_filter_enabled/checks'
+    all-must-agree semantics but resolved per-Rule now from real
+    Indicator rows instead of one fixed Strategy-level checklist. Empty
+    regime_indicator_ids (the default - no regime gate configured)
+    trivially confirms everything, same as before. A regime indicator
+    deleted after a rule already referenced it is treated as unconfirmed
+    - defensive, the route layer is the primary check (see
+    app/api/routes/rules.py)."""
+    for raw_id in rule_row.regime_indicator_ids:
+        indicator = db.get(db_models.Indicator, uuid.UUID(raw_id))
+        if indicator is None:
+            logger.warning("regime indicator %s referenced by rule %s no longer exists", raw_id, rule_row.id)
+            return False
+        params = validate_indicator_params(indicator.type, indicator.params).model_dump()
+        if not evaluate_regime_indicator(indicator.type, params, candles, bias):
+            return False
+    return True
+
+
+def _regime_warmup_bars(db: Session, rule_row: db_models.Rule) -> int:
+    """Widest bar-count any one of this rule's regime indicators needs -
+    folded into the caller's own bar_count via max(), same "extra empty
+    bars cost nothing" sizing philosophy the old Strategy-level
+    regime.regime_warmup() used. 0 (a no-op max()) when
+    regime_indicator_ids is empty."""
+    widest = 0
+    for raw_id in rule_row.regime_indicator_ids:
+        indicator = db.get(db_models.Indicator, uuid.UUID(raw_id))
+        if indicator is None:
+            continue
+        params = validate_indicator_params(indicator.type, indicator.params).model_dump()
+        widest = max(widest, regime_indicator_warmup(indicator.type, params))
+    return widest
+
+
 def _run_one_breakout(
     db: Session,
     strategy: db_models.Strategy,
@@ -148,6 +187,11 @@ def _run_one_breakout(
         return False
 
     htf_bars, ltf_bars = breakout.breakout_warmup(rule)
+    # rule_row.interval always equals rule.ltf_interval for a breakout
+    # rule (see validate_breakout_interval_consistency) - regime runs
+    # against the LTF series, same single-timeframe series the other two
+    # rule types use.
+    ltf_bars = max(ltf_bars, _regime_warmup_bars(db, rule_row))
     htf_from, htf_to = history_window(htf_bars * _HISTORY_MULTIPLIER, rule.htf_interval)
     ltf_from, ltf_to = history_window(ltf_bars * _HISTORY_MULTIPLIER, rule.ltf_interval)
     htf_candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule.htf_interval, htf_from, htf_to)
@@ -169,6 +213,9 @@ def _run_one_breakout(
 
     if run.last_signal_candle_ts is not None and run.last_signal_candle_ts == latest_ts:
         return False  # already acted on this exact completed LTF bar
+
+    if not _regime_confirmed(db, rule_row, bias, ltf_candles):
+        return False  # breakout fired, but the regime doesn't confirm its direction
 
     # The LTF candle that triggered is on the CHARTED instrument
     # (resolved.chart_symbol - an index spot, for NSE indices) - the
@@ -233,8 +280,7 @@ def _run_one_range_breakout(
         return False
 
     bar_count = range_breakout.range_breakout_warmup(rule)
-    if strategy.regime_filter_enabled:
-        bar_count = max(bar_count, regime.regime_warmup(regime.DEFAULT_REGIME_PARAMS))
+    bar_count = max(bar_count, _regime_warmup_bars(db, rule_row))
     bar_count *= _HISTORY_MULTIPLIER
     from_date, to_date = history_window(bar_count, rule_row.interval)
     candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule_row.interval, from_date, to_date)
@@ -257,11 +303,8 @@ def _run_one_range_breakout(
         return False
     bias, _ = result
 
-    if strategy.regime_filter_enabled:
-        regime_result = regime.classify_regime(candles)
-        enabled_checks = frozenset(strategy.regime_filter_checks)
-        if not regime.direction_confirmed(bias, regime_result, enabled_checks=enabled_checks):
-            return False  # breakout fired, but the regime doesn't confirm its direction
+    if not _regime_confirmed(db, rule_row, bias, candles):
+        return False  # breakout fired, but the regime doesn't confirm its direction
 
     trade_price = get_ltp(resolved.trade_exchange, resolved.trade_symbol)
     if trade_price is None:
@@ -332,8 +375,7 @@ def _run_one(
         return False
 
     bar_count = bars_needed(rule, indicator.type, indicator_params)
-    if strategy.regime_filter_enabled:
-        bar_count = max(bar_count, regime.regime_warmup(regime.DEFAULT_REGIME_PARAMS))
+    bar_count = max(bar_count, _regime_warmup_bars(db, rule_row))
     bar_count *= _HISTORY_MULTIPLIER
     from_date, to_date = history_window(bar_count, rule_row.interval)
     candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule_row.interval, from_date, to_date)
@@ -355,11 +397,8 @@ def _run_one(
     if bias is None:
         return False
 
-    if strategy.regime_filter_enabled:
-        regime_result = regime.classify_regime(candles)
-        enabled_checks = frozenset(strategy.regime_filter_checks)
-        if not regime.direction_confirmed(bias, regime_result, enabled_checks=enabled_checks):
-            return False  # crossover fired, but the regime doesn't confirm its direction
+    if not _regime_confirmed(db, rule_row, bias, candles):
+        return False  # crossover fired, but the regime doesn't confirm its direction
 
     # The completed candle that drove the signal is on the CHARTED
     # instrument (resolved.chart_symbol - an index spot, for NSE

@@ -13,7 +13,6 @@ from app.domain.models import (
     StrategyUpdate,
     validate_active_window_fields,
     validate_contract_day_filter_fields,
-    validate_rule_link_consistency,
     validate_stop_loss_fields,
 )
 from app.domain.rule import BreakoutRuleConfig, RuleSummary, validate_rule_config
@@ -29,10 +28,8 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> Stra
         exchange=row.exchange,
         horizon=row.horizon,
         instrument_type=row.instrument_type,
-        rule_id=str(row.rule_id),
-        rule=RuleSummary(id=str(rule_row.id), name=rule_row.name, source_type=rule_row.source_type, segment=rule_row.segment)
-        if rule_row is not None
-        else None,
+        rule_id=str(row.rule_id) if row.rule_id is not None else None,
+        rule=RuleSummary(id=str(rule_row.id), name=rule_row.name, segment=rule_row.segment) if rule_row is not None else None,
         stop_loss_method=row.stop_loss_method,
         stop_loss_interval=row.stop_loss_interval,
         stop_loss_percent=float(row.stop_loss_percent) if row.stop_loss_percent is not None else None,
@@ -45,8 +42,6 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> Stra
         contract_day_filter=row.contract_day_filter,
         segment=row.segment,
         square_off_time=row.square_off_time,
-        regime_filter_enabled=row.regime_filter_enabled,
-        regime_filter_checks=row.regime_filter_checks,
         duplicate_signal_policy=row.duplicate_signal_policy,
         counter_signal_policy=row.counter_signal_policy,
         active_from_time=row.active_from_time,
@@ -70,7 +65,7 @@ def _load_rule_or_404(db: Session, rule_id: str) -> db_models.Rule:
 
 
 def _stop_loss_fields_for_rule(
-    rule_row: db_models.Rule,
+    rule_row: Optional[db_models.Rule],
     stop_loss_method: Optional[str],
     stop_loss_interval: Optional[str],
     stop_loss_percent: Optional[float],
@@ -84,10 +79,11 @@ def _stop_loss_fields_for_rule(
     docstring on the live enforcement gap). Validates (422 if not) that
     htf_interval is one of execution's supported stop-loss intervals -
     otherwise this strategy could never actually be supported live, even
-    with the reversal-exit gap accepted. Every other rule type (or no
-    rule_config at all, i.e. an external rule) passes the requested
-    fields through unchanged - only breakout forces this."""
-    if rule_row.rule_config is not None:
+    with the reversal-exit gap accepted. Every other rule type passes the
+    requested fields through unchanged - only breakout forces this.
+    `rule_row` is None for an external strategy (no Rule at all) - passes
+    fields through unchanged, same as any other non-breakout rule."""
+    if rule_row is not None and rule_row.rule_config is not None:
         rule = validate_rule_config(rule_row.rule_config)
         if isinstance(rule, BreakoutRuleConfig):
             if rule.htf_interval not in get_args(StopLossInterval):
@@ -104,11 +100,9 @@ def _stop_loss_fields_for_rule(
 
 @router.post("/strategies", response_model=StrategyOut, status_code=201)
 def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
-    rule_row = _load_rule_or_404(db, payload.rule_id)
-    try:
-        validate_rule_link_consistency(payload.source_type, rule_row.source_type)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # payload.rule_id is required iff source_type=='in_house' (enforced by
+    # StrategyCreate's own validator) - external strategies carry no Rule.
+    rule_row = _load_rule_or_404(db, payload.rule_id) if payload.rule_id is not None else None
 
     stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled = _stop_loss_fields_for_rule(
         rule_row, payload.stop_loss_method, payload.stop_loss_interval, payload.stop_loss_percent, payload.trailing_stop_enabled
@@ -120,7 +114,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         exchange=payload.exchange,
         horizon=payload.horizon,
         instrument_type=payload.instrument_type,
-        rule_id=rule_row.id,
+        rule_id=rule_row.id if rule_row is not None else None,
         stop_loss_method=stop_loss_method,
         stop_loss_interval=stop_loss_interval,
         stop_loss_percent=stop_loss_percent,
@@ -133,8 +127,6 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         contract_day_filter=payload.contract_day_filter,
         segment=payload.segment,
         square_off_time=payload.square_off_time,
-        regime_filter_enabled=payload.regime_filter_enabled,
-        regime_filter_checks=payload.regime_filter_checks,
         duplicate_signal_policy=payload.duplicate_signal_policy,
         counter_signal_policy=payload.counter_signal_policy,
         active_from_time=payload.active_from_time,
@@ -168,7 +160,11 @@ def delete_strategy(strategy_id: str, db: Session = Depends(get_db)):
 
 @router.get("/strategies", response_model=list[StrategyOut])
 def list_strategies(source_type: str | None = None, db: Session = Depends(get_db)):
-    q = db.query(db_models.Strategy, db_models.Rule).join(db_models.Rule, db_models.Strategy.rule_id == db_models.Rule.id)
+    # outerjoin, not join - an external strategy has no rule_id at all, an
+    # inner join would silently drop every one of them from this list.
+    q = db.query(db_models.Strategy, db_models.Rule).outerjoin(
+        db_models.Rule, db_models.Strategy.rule_id == db_models.Rule.id
+    )
     if source_type:
         q = q.filter(db_models.Strategy.source_type == source_type)
     rows = q.order_by(db_models.Strategy.created_at.desc()).all()
@@ -187,7 +183,7 @@ def get_strategy(strategy_id: str, db: Session = Depends(get_db)):
     row = db.get(db_models.Strategy, parsed_id)
     if row is None:
         raise HTTPException(status_code=404, detail="strategy not found")
-    rule_row = db.get(db_models.Rule, row.rule_id)
+    rule_row = db.get(db_models.Rule, row.rule_id) if row.rule_id is not None else None
     return _to_out(row, rule_row)
 
 
@@ -211,11 +207,9 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     if payload.instrument_type is not None:
         row.instrument_type = payload.instrument_type
     if payload.rule_id is not None:
+        if row.source_type != "in_house":
+            raise HTTPException(status_code=422, detail="rule_id only applies to source_type='in_house' strategies")
         new_rule_row = _load_rule_or_404(db, payload.rule_id)
-        try:
-            validate_rule_link_consistency(row.source_type, new_rule_row.source_type)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
         row.rule_id = new_rule_row.id
 
     if payload.stop_loss_method is not None:
@@ -257,10 +251,6 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.segment = payload.segment
     if payload.square_off_time is not None:
         row.square_off_time = payload.square_off_time
-    if payload.regime_filter_enabled is not None:
-        row.regime_filter_enabled = payload.regime_filter_enabled
-    if payload.regime_filter_checks is not None:
-        row.regime_filter_checks = payload.regime_filter_checks
     if payload.duplicate_signal_policy is not None:
         row.duplicate_signal_policy = payload.duplicate_signal_policy
     if payload.counter_signal_policy is not None:
@@ -287,7 +277,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     # this particular PATCH touched rule_id - so the invariant always
     # holds, and a caller trying to PATCH stop_loss_method away from
     # 'previous_candle' gets overridden back rather than silently accepted.
-    rule_row = db.get(db_models.Rule, row.rule_id)
+    rule_row = db.get(db_models.Rule, row.rule_id) if row.rule_id is not None else None
     row.stop_loss_method, row.stop_loss_interval, row.stop_loss_percent, row.trailing_stop_enabled = _stop_loss_fields_for_rule(
         rule_row,
         row.stop_loss_method,

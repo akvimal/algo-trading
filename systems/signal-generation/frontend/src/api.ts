@@ -66,20 +66,6 @@ export type CounterSignalPolicy = "skip" | "close_and_flip";
 // future, or option strategy alike).
 export type UnderlyingType = "symbol" | "universe";
 
-// The 5 sub-conditions the backend's app/domain/regime.py classify_regime
-// combines - mirrors regime.REGIME_CHECK_NAMES exactly. When
-// regime_filter_enabled, only the checks named here must agree to confirm
-// a signal's direction.
-export type RegimeCheckName = "structure" | "efficiency_ratio" | "adx" | "dmi_direction" | "ema_slope";
-export const ALL_REGIME_CHECKS: RegimeCheckName[] = ["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"];
-export const REGIME_CHECK_LABELS: Record<RegimeCheckName, string> = {
-  structure: "Swing structure",
-  efficiency_ratio: "Efficiency Ratio",
-  adx: "ADX strength",
-  dmi_direction: "DMI direction",
-  ema_slope: "EMA slope",
-};
-
 // Mirrors the backend's default_square_off_time (app/domain/models.py) -
 // used here to preview/pre-fill the suggested value client-side; the
 // backend re-derives and enforces this itself, this is just UX.
@@ -97,13 +83,49 @@ export function defaultSquareOffTime(horizon: Horizon, segment: Segment): string
 // Indicators are their own entity (backend: signal_generation.indicators)
 // so one definition (e.g. "RSI 14") can be reused by any number of
 // rules - see docs/architecture.md. Only "rsi" exists today.
-export type IndicatorType = "rsi";
+export type IndicatorType = "rsi" | "structure" | "efficiency_ratio" | "adx" | "dmi_direction" | "ema_slope";
+
+// The 5 market-regime checks (backend's app/domain/regime.py) as
+// independent Indicator types, referenced from a Rule via its own
+// regime_indicator_ids (see Rule below) rather than "rsi", which is
+// crossover-only (CrossoverRuleConfig.indicator_id).
+export const REGIME_INDICATOR_TYPES: IndicatorType[] = ["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"];
+export const INDICATOR_TYPE_LABELS: Record<IndicatorType, string> = {
+  rsi: "RSI",
+  structure: "Swing structure",
+  efficiency_ratio: "Efficiency Ratio",
+  adx: "ADX strength",
+  dmi_direction: "DMI direction",
+  ema_slope: "EMA slope",
+};
 
 // sma_period is RSI's own signal line (SMA of RSI) - bundled into the
 // indicator's own definition, matching how TradingView's RSI script
 // bundles "RSI Length" and "MA Length" into one indicator's settings.
 export type RsiParams = { period: number; sma_period: number };
-export type IndicatorParams = RsiParams;
+// Confirmed swing structure (regime.check_structure) - bars each side
+// required to confirm a pivot.
+export type StructureParams = { swing_lookback: number };
+// Kaufman's Efficiency Ratio (regime.check_efficiency_ratio) -
+// trend_threshold is bias-independent (ER only measures how efficiently
+// price is moving, not which way).
+export type EfficiencyRatioParams = { period: number; trend_threshold: number };
+// Wilder's ADX (regime.check_adx) - trend_threshold is bias-independent
+// (ADX measures trend strength, not direction).
+export type AdxParams = { period: number; trend_threshold: number };
+// +DI vs -DI direction (regime.check_dmi_direction).
+export type DmiDirectionParams = { period: number };
+// ATR-normalized EMA slope (regime.check_ema_slope) - atr_period sizes
+// the normalizing ATR independently of ema_period.
+export type EmaSlopeParams = { ema_period: number; slope_lookback: number; slope_threshold: number; atr_period: number };
+
+export type IndicatorParams =
+  | RsiParams
+  | StructureParams
+  | EfficiencyRatioParams
+  | AdxParams
+  | DmiDirectionParams
+  | EmaSlopeParams;
 
 export type Indicator = {
   id: string;
@@ -172,21 +194,23 @@ export type RuleConfig = CrossoverRuleConfig | BreakoutRuleConfig | RangeBreakou
 // below). One Rule can back many Strategies (e.g. the same crossover
 // backing both a spot strategy and an option-spread strategy on the same
 // underlying) - see docs/architecture.md's "Rules module" section.
+// Rule is purely an in-house condition definition now - external (webhook)
+// strategies carry their own source_type directly and reference no Rule at
+// all (Strategy.rule_id is null for them) - see Strategy below.
 export type Rule = {
   id: string;
   name: string;
   description: string | null;
-  source_type: SourceType;
-  // source_type != 'in_house' only - the scan's own name on the
-  // provider's side, if `name` renames it locally.
-  provider_rule_name: string | null;
   segment: Segment;
-  // in_house only - the logical underlying to watch (e.g. "GOLDM",
-  // "NIFTY") and its rule config. Null for external (webhook) rules.
-  underlying: string | null;
+  underlying: string;
   underlying_type: UnderlyingType;
-  interval: Interval | null;
+  interval: Interval;
   rule_config: RuleConfig | null;
+  // Which regime-type Indicators (REGIME_INDICATOR_TYPES above) must ALL
+  // confirm this rule's own bias before it fires - a cross-cutting
+  // modifier applying uniformly regardless of rule_config's own type.
+  // Empty means no regime gate at all.
+  regime_indicator_ids: string[];
   created_at: string;
   updated_at: string;
 };
@@ -194,26 +218,23 @@ export type Rule = {
 export type RuleCreate = {
   name: string;
   description?: string;
-  source_type: SourceType;
-  provider_rule_name?: string;
   segment?: Segment;
-  underlying?: string;
+  underlying: string;
   underlying_type?: UnderlyingType;
-  interval?: Interval;
-  rule_config?: RuleConfig;
+  interval: Interval;
+  rule_config: RuleConfig;
+  regime_indicator_ids?: string[];
 };
 
-// source_type isn't here - not editable after creation (see backend's
-// RuleUpdate docstring) - delete+recreate if it's genuinely wrong.
 export type RuleUpdate = {
   name?: string;
   description?: string;
-  provider_rule_name?: string;
   segment?: Segment;
   underlying?: string;
   underlying_type?: UnderlyingType;
   interval?: Interval;
   rule_config?: RuleConfig;
+  regime_indicator_ids?: string[];
 };
 
 // Lightweight embed on Strategy (see below) - which rule backs it, without
@@ -221,7 +242,6 @@ export type RuleUpdate = {
 export type RuleSummary = {
   id: string;
   name: string;
-  source_type: SourceType;
   segment: Segment;
 };
 
@@ -236,9 +256,10 @@ export type Strategy = {
   exchange: string;
   horizon: Horizon;
   instrument_type: InstrumentType;
-  // Which saved Rule decides when this strategy's signals fire - required
-  // for every strategy, in-house or external. See Rule above.
-  rule_id: string;
+  // Which saved Rule decides when this strategy's signals fire - in_house
+  // only. Null for external (webhook) strategies - they carry no Rule at
+  // all, the provider decides when a signal fires. See Rule above.
+  rule_id: string | null;
   rule: RuleSummary | null;
   stop_loss_method: StopLossMethod | null;
   stop_loss_interval: StopLossInterval | null;
@@ -260,14 +281,6 @@ export type Strategy = {
   // above); null for swing/positional, since square-off doesn't apply
   // there. execution has no platform-wide default.
   square_off_time: string | null; // "HH:MM:SS"
-  // in_house only (harmlessly ignored for webhook strategies) - gates a
-  // crossover signal on a single-timeframe market regime classification
-  // (see the backend's app/domain/regime.py). Default false preserves
-  // today's behavior exactly.
-  regime_filter_enabled: boolean;
-  // Which of the 5 sub-conditions must agree when regime_filter_enabled -
-  // defaults to all 5 (ALL_REGIME_CHECKS) server-side.
-  regime_filter_checks: RegimeCheckName[];
   duplicate_signal_policy: DuplicateSignalPolicy;
   counter_signal_policy: CounterSignalPolicy;
   // Optional per-strategy signal-acceptance window (e.g. 09:15-11:00) -
@@ -288,7 +301,8 @@ export type StrategyCreate = {
   source_type: SourceType;
   horizon: Horizon;
   instrument_type: InstrumentType;
-  rule_id: string;
+  // Required iff source_type === 'in_house'; omit/null for external.
+  rule_id?: string | null;
   stop_loss_method?: StopLossMethod;
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
@@ -303,8 +317,6 @@ export type StrategyCreate = {
   // Optional - the backend auto-fills it from horizon+segment when
   // horizon='intraday'; required explicitly for other horizons.
   square_off_time?: string;
-  regime_filter_enabled?: boolean;
-  regime_filter_checks?: RegimeCheckName[];
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
   // Both-or-neither - see Strategy's own comment above.
@@ -340,8 +352,6 @@ export type StrategyEdit = {
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   square_off_time?: string;
-  regime_filter_enabled?: boolean;
-  regime_filter_checks?: RegimeCheckName[];
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
   active_from_time?: string;
@@ -509,9 +519,8 @@ export async function deleteIndicator(id: string): Promise<void> {
   }
 }
 
-export async function fetchRules(sourceType?: SourceType): Promise<Rule[]> {
-  const params = sourceType ? `?source_type=${sourceType}` : "";
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules${params}`);
+export async function fetchRules(): Promise<Rule[]> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules`);
   return asJson(res, "GET /rules");
 }
 
@@ -832,21 +841,15 @@ export async function squareOffOptionGroup(
 // call the Manual tab itself makes. See docs/architecture.md.
 const MANUAL_SOURCE_TYPE = "manual";
 
-export async function findOrCreateManualRule(segment: Segment): Promise<Rule> {
-  const name = `[Manual] ${segment}`;
-  const existing = await fetchRules(MANUAL_SOURCE_TYPE);
-  const found = existing.find((r) => r.segment === segment && r.name === name);
-  if (found) return found;
-  return createRule({ name, source_type: MANUAL_SOURCE_TYPE, segment });
-}
-
 // Options need a real Strategy (strike/expiry selection lives entirely in
 // signal-processing's choose_strategy, driven by a Strategy's own
 // option_position_style/option_strike_moneyness) - auto-provisioned here
 // so the Manual tab still feels Strategy-free to the user. Reused across
 // orders with the same (segment, style, moneyness) - each combination
 // gets exactly one backing Strategy, immediately activated (status=live,
-// since a draft Strategy's signals reject as "not live").
+// since a draft Strategy's signals reject as "not live"). Created with no
+// rule_id at all - source_type="manual" is external, Rule is in-house
+// only (see Strategy above).
 export async function findOrCreateManualStrategy(
   segment: Segment,
   optionStyle: OptionPositionStyle,
@@ -863,13 +866,11 @@ export async function findOrCreateManualStrategy(
       s.name === name,
   );
   if (found) return found;
-  const rule = await findOrCreateManualRule(segment);
   const created = await createStrategy({
     name,
     source_type: MANUAL_SOURCE_TYPE,
     horizon: "intraday",
     instrument_type: "option",
-    rule_id: rule.id,
     option_position_style: optionStyle,
     option_strike_moneyness: moneyness,
     segment,

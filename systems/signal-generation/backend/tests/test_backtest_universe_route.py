@@ -51,7 +51,7 @@ def test_backtest_universe_pools_trade_count_and_pnl_across_constituents(monkeyp
         rules_route, "get_candle_history", lambda exchange, symbol, interval, from_date, to_date: list(_BREAKOUT_CANDLES)
     )
 
-    result = rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date())
+    result = rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date(), [])
 
     assert result["pooled"] is True
     assert result["constituents_tested"] == 2
@@ -72,7 +72,7 @@ def test_backtest_universe_skips_unresolvable_constituent_without_failing(monkey
         rules_route, "get_candle_history", lambda exchange, symbol, interval, from_date, to_date: list(_BREAKOUT_CANDLES)
     )
 
-    result = rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date())
+    result = rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date(), [])
 
     assert result["constituents_tested"] == 1
     assert result["constituents_skipped"] == 1
@@ -83,5 +83,5 @@ def test_backtest_universe_raises_502_when_universe_itself_unresolvable(monkeypa
     monkeypatch.setattr(rules_route, "get_universe_constituents", lambda key: None)
 
     with pytest.raises(HTTPException) as exc_info:
-        rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date())
+        rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date(), [])
     assert exc_info.value.status_code == 502

@@ -5,6 +5,11 @@ from app.domain.regime import (
     DEFAULT_REGIME_PARAMS,
     RegimeParams,
     RegimeResult,
+    check_adx,
+    check_dmi_direction,
+    check_efficiency_ratio,
+    check_ema_slope,
+    check_structure,
     classify_regime,
     classify_structure,
     compute_adx_dmi,
@@ -284,3 +289,108 @@ def test_direction_confirmed_empty_checks_confirms_trivially_once_data_is_suffic
     # requires nothing, so it always confirms once past the insufficient-
     # data guard.
     assert direction_confirmed("bullish", _RANGE_LIKE, enabled_checks=frozenset()) is True
+
+
+# --- check_structure/check_efficiency_ratio/check_adx/check_dmi_direction/check_ema_slope -----
+# The 5 regime checks decomposed into independent, Optional[bool]-returning
+# functions (see app/domain/rule.py's 5 new IndicatorTypes) - each reuses
+# the exact same math as _direction_checks/classify_regime above, just
+# computed independently per check instead of bundled into one
+# RegimeParams pass. Reuses this file's own fixtures throughout.
+
+
+def test_check_structure_confirms_bullish_and_denies_bearish():
+    candles = _staircase_candles(n_cycles=15, up_bars=4, up_step=2.0, down_bars=4, down_step=0.3)
+    assert check_structure(candles, "bullish", swing_lookback=3) is True
+    assert check_structure(candles, "bearish", swing_lookback=3) is False
+
+
+def test_check_structure_confirms_bearish_and_denies_bullish():
+    candles = _staircase_candles(n_cycles=15, up_bars=4, up_step=-2.0, down_bars=4, down_step=-0.3)
+    assert check_structure(candles, "bearish", swing_lookback=3) is True
+    assert check_structure(candles, "bullish", swing_lookback=3) is False
+
+
+def test_check_structure_none_with_too_few_pivots():
+    candles = _flat([10, 12, 15, 12, 10])
+    assert check_structure(candles, "bullish", swing_lookback=2) is None
+    assert check_structure(candles, "bearish", swing_lookback=2) is None
+
+
+def test_check_efficiency_ratio_above_threshold_confirms_either_bias():
+    # Bias-independent - ER only measures how efficiently price moved, not
+    # which direction, so both biases pass together above threshold.
+    closes = [100, 102, 104, 106, 108]
+    candles = _flat(closes)
+    assert check_efficiency_ratio(candles, "bullish", period=4, trend_threshold=0.5) is True
+    assert check_efficiency_ratio(candles, "bearish", period=4, trend_threshold=0.5) is True
+
+
+def test_check_efficiency_ratio_below_threshold_denies_either_bias():
+    closes = [100, 103, 99, 102, 98, 101]
+    candles = _flat(closes)
+    assert check_efficiency_ratio(candles, "bullish", period=5, trend_threshold=0.25) is False
+    assert check_efficiency_ratio(candles, "bearish", period=5, trend_threshold=0.25) is False
+
+
+def test_check_efficiency_ratio_none_before_enough_bars():
+    candles = _flat([100, 101])
+    assert check_efficiency_ratio(candles, "bullish", period=5, trend_threshold=0.35) is None
+
+
+def test_check_adx_above_threshold_confirms_either_bias():
+    # Bias-independent - ADX measures trend strength, not direction.
+    candles = _monotonic_trend_candles(60, step=1.0)
+    assert check_adx(candles, "bullish", period=14, trend_threshold=20.0) is True
+    assert check_adx(candles, "bearish", period=14, trend_threshold=20.0) is True
+
+
+def test_check_adx_below_threshold_denies_either_bias():
+    candles = _monotonic_trend_candles(60, step=1.0)
+    assert check_adx(candles, "bullish", period=14, trend_threshold=1000.0) is False
+    assert check_adx(candles, "bearish", period=14, trend_threshold=1000.0) is False
+
+
+def test_check_adx_none_before_enough_bars():
+    candles = _monotonic_trend_candles(10, step=1.0)
+    assert check_adx(candles, "bullish", period=14, trend_threshold=20.0) is None
+
+
+def test_check_dmi_direction_confirms_bullish_in_an_uptrend():
+    candles = _monotonic_trend_candles(60, step=1.0)
+    assert check_dmi_direction(candles, "bullish", period=14) is True
+    assert check_dmi_direction(candles, "bearish", period=14) is False
+
+
+def test_check_dmi_direction_confirms_bearish_in_a_downtrend():
+    candles = _monotonic_trend_candles(60, step=-1.0)
+    assert check_dmi_direction(candles, "bearish", period=14) is True
+    assert check_dmi_direction(candles, "bullish", period=14) is False
+
+
+def test_check_dmi_direction_none_before_enough_bars():
+    candles = _monotonic_trend_candles(10, step=1.0)
+    assert check_dmi_direction(candles, "bullish", period=14) is None
+
+
+def test_check_ema_slope_confirms_bullish_for_a_rising_series():
+    candles = _ranged([(50 + i * 0.5, 50 + i * 0.5 + 0.5, 50 + i * 0.5 - 0.5) for i in range(40)])
+    assert check_ema_slope(candles, "bullish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is True
+    assert check_ema_slope(candles, "bearish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is False
+
+
+def test_check_ema_slope_confirms_bearish_for_a_falling_series():
+    candles = _ranged([(50 - i * 0.5, 50 - i * 0.5 + 0.5, 50 - i * 0.5 - 0.5) for i in range(40)])
+    assert check_ema_slope(candles, "bearish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is True
+    assert check_ema_slope(candles, "bullish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is False
+
+
+def test_check_ema_slope_denies_a_flat_series():
+    candles = _ranged([(50.0, 50.5, 49.5) for _ in range(30)])
+    assert check_ema_slope(candles, "bullish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is False
+    assert check_ema_slope(candles, "bearish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is False
+
+
+def test_check_ema_slope_none_before_enough_bars():
+    candles = _ranged([(1.0, 1.1, 0.9), (2.0, 2.1, 1.9)])
+    assert check_ema_slope(candles, "bullish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is None

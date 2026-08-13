@@ -1,6 +1,15 @@
 import pytest
 
-from app.domain.indicators import compute_indicator, compute_indicator_signal, compute_rsi, compute_sma, indicator_warmup
+from app.domain import regime as regime_module
+from app.domain.indicators import (
+    compute_indicator,
+    compute_indicator_signal,
+    compute_rsi,
+    compute_sma,
+    evaluate_regime_indicator,
+    indicator_warmup,
+    regime_indicator_warmup,
+)
 
 
 def test_compute_rsi_warmup_period_is_none():
@@ -88,3 +97,111 @@ def test_indicator_warmup_rsi_is_period_plus_sma_period():
 def test_indicator_warmup_unknown_type_raises():
     with pytest.raises(ValueError, match="no warmup rule"):
         indicator_warmup("macd", {})
+
+
+# --- evaluate_regime_indicator / regime_indicator_warmup: the regime-type dispatchers --------
+#
+# These monkeypatch app.domain.regime's own check_* functions (imported
+# lazily, function-local, by evaluate_regime_indicator - see this module's
+# own TYPE_CHECKING note) rather than engineering real candle fixtures -
+# each check's own math correctness is already covered exhaustively in
+# test_regime.py. What matters here is only that evaluate_regime_indicator
+# dispatches to the right function with the right params extracted from
+# the params dict.
+
+
+def test_evaluate_regime_indicator_dispatches_structure(monkeypatch):
+    calls = []
+
+    def _fake(candles, bias, swing_lookback):
+        calls.append((candles, bias, swing_lookback))
+        return True
+
+    monkeypatch.setattr(regime_module, "check_structure", _fake)
+    result = evaluate_regime_indicator("structure", {"swing_lookback": 3}, ["candles"], "bullish")
+    assert result is True
+    assert calls == [(["candles"], "bullish", 3)]
+
+
+def test_evaluate_regime_indicator_dispatches_efficiency_ratio(monkeypatch):
+    calls = []
+
+    def _fake(candles, bias, period, trend_threshold):
+        calls.append((candles, bias, period, trend_threshold))
+        return False
+
+    monkeypatch.setattr(regime_module, "check_efficiency_ratio", _fake)
+    result = evaluate_regime_indicator("efficiency_ratio", {"period": 14, "trend_threshold": 0.35}, ["c"], "bearish")
+    assert result is False
+    assert calls == [(["c"], "bearish", 14, 0.35)]
+
+
+def test_evaluate_regime_indicator_dispatches_adx(monkeypatch):
+    calls = []
+
+    def _fake(candles, bias, period, trend_threshold):
+        calls.append((candles, bias, period, trend_threshold))
+        return True
+
+    monkeypatch.setattr(regime_module, "check_adx", _fake)
+    result = evaluate_regime_indicator("adx", {"period": 14, "trend_threshold": 20.0}, ["c"], "bullish")
+    assert result is True
+    assert calls == [(["c"], "bullish", 14, 20.0)]
+
+
+def test_evaluate_regime_indicator_dispatches_dmi_direction(monkeypatch):
+    calls = []
+
+    def _fake(candles, bias, period):
+        calls.append((candles, bias, period))
+        return None
+
+    monkeypatch.setattr(regime_module, "check_dmi_direction", _fake)
+    result = evaluate_regime_indicator("dmi_direction", {"period": 14}, ["c"], "bullish")
+    assert result is None
+    assert calls == [(["c"], "bullish", 14)]
+
+
+def test_evaluate_regime_indicator_dispatches_ema_slope(monkeypatch):
+    calls = []
+
+    def _fake(candles, bias, ema_period, slope_lookback, slope_threshold, atr_period):
+        calls.append((candles, bias, ema_period, slope_lookback, slope_threshold, atr_period))
+        return True
+
+    monkeypatch.setattr(regime_module, "check_ema_slope", _fake)
+    params = {"ema_period": 20, "slope_lookback": 5, "slope_threshold": 0.15, "atr_period": 14}
+    result = evaluate_regime_indicator("ema_slope", params, ["c"], "bearish")
+    assert result is True
+    assert calls == [(["c"], "bearish", 20, 5, 0.15, 14)]
+
+
+def test_evaluate_regime_indicator_unknown_type_raises():
+    with pytest.raises(ValueError, match="no regime-evaluate rule"):
+        evaluate_regime_indicator("rsi", {}, [], "bullish")
+
+
+def test_regime_indicator_warmup_structure_is_swing_lookback_times_eight():
+    assert regime_indicator_warmup("structure", {"swing_lookback": 3}) == 24
+
+
+def test_regime_indicator_warmup_efficiency_ratio_is_period_plus_one():
+    assert regime_indicator_warmup("efficiency_ratio", {"period": 14, "trend_threshold": 0.35}) == 15
+
+
+def test_regime_indicator_warmup_adx_is_period_times_three():
+    assert regime_indicator_warmup("adx", {"period": 14, "trend_threshold": 20.0}) == 42
+
+
+def test_regime_indicator_warmup_dmi_direction_is_period_times_three():
+    assert regime_indicator_warmup("dmi_direction", {"period": 14}) == 42
+
+
+def test_regime_indicator_warmup_ema_slope_is_widest_of_ema_and_atr_settle():
+    params = {"ema_period": 20, "slope_lookback": 5, "slope_threshold": 0.15, "atr_period": 14}
+    assert regime_indicator_warmup("ema_slope", params) == max(20 + 5, 14 + 1)
+
+
+def test_regime_indicator_warmup_unknown_type_raises():
+    with pytest.raises(ValueError, match="no regime-warmup rule"):
+        regime_indicator_warmup("rsi", {})

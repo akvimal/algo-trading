@@ -65,8 +65,8 @@ def test_stop_loss_fields_for_rule_passes_through_unchanged_for_crossover():
     assert result == ("percent", None, 5.0, True)
 
 
-def test_stop_loss_fields_for_rule_passes_through_unchanged_for_external_rule():
-    # An external (webhook) rule's rule_config is always None.
-    rule_row = FakeRule(rule_config=None)
-    result = _stop_loss_fields_for_rule(rule_row, "previous_candle", "5min", None, False)
+def test_stop_loss_fields_for_rule_passes_through_unchanged_for_no_rule():
+    # An external (webhook) strategy carries no Rule at all now (rule_id
+    # is None) - not a Rule row with an empty rule_config.
+    result = _stop_loss_fields_for_rule(None, "previous_candle", "5min", None, False)
     assert result == ("previous_candle", "5min", None, False)

@@ -15,10 +15,12 @@ from app.adapters.market_data.client import (
     resolve_underlying,
 )
 from app.domain import breakout, range_breakout
-from app.domain.backtest import ExitConfig, expand_grid, grid_search, replay
+from app.domain.backtest import ExitConfig, RegimeIndicators, expand_grid, grid_search, replay
 from app.domain.engine import history_window
+from app.domain.indicators import regime_indicator_warmup
 from app.domain.option_backtest import MAX_OPTION_BACKTEST_DAYS, OPTION_HISTORY_INTERVAL, replay_options
 from app.domain.rule import (
+    REGIME_INDICATOR_TYPES,
     BreakoutRuleConfig,
     CrossoverRuleConfig,
     RangeBreakoutRuleConfig,
@@ -45,13 +47,12 @@ def _to_out(row: db_models.Rule) -> RuleOut:
         id=str(row.id),
         name=row.name,
         description=row.description,
-        source_type=row.source_type,
-        provider_rule_name=row.provider_rule_name,
         segment=row.segment,
         underlying=row.underlying,
         underlying_type=row.underlying_type,
         interval=row.interval,
         rule_config=row.rule_config,
+        regime_indicator_ids=row.regime_indicator_ids,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -65,7 +66,13 @@ def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict])
     second, later line of defense for an indicator deleted *after* a rule
     already referenced it, not this primary check. BreakoutRuleConfig/
     RangeBreakoutRuleConfig have no indicator_id at all - nothing to
-    check."""
+    check. Also rejects a non-"rsi" indicator here (a regime type, e.g.
+    "adx") - harmless with only one IndicatorType, but now that
+    REGIME_INDICATOR_TYPES exist too, app/domain/indicators.py's
+    compute_indicator/compute_indicator_signal only know how to dispatch
+    "rsi" - a crossover rule referencing anything else would 500 at
+    evaluation time instead of failing validation here, the same
+    reasoning _check_regime_indicator_ids applies in reverse."""
     if rule_config is None:
         return
     rule = validate_rule_config(rule_config)
@@ -74,21 +81,72 @@ def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict])
     indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
     if indicator is None:
         raise HTTPException(status_code=422, detail=f"no indicator with id '{rule.indicator_id}'")
+    if indicator.type in REGIME_INDICATOR_TYPES:
+        raise HTTPException(
+            status_code=422, detail=f"indicator '{rule.indicator_id}' has type '{indicator.type}', not a crossover-compatible type"
+        )
+
+
+def _check_regime_indicator_ids(db: Session, regime_indicator_ids: list[str]) -> None:
+    """Each id in Rule.regime_indicator_ids must resolve to a real
+    Indicator, AND that Indicator's own `type` must be one of the 5
+    regime types (REGIME_INDICATOR_TYPES) - "rsi" is a crossover-only
+    slot (CrossoverRuleConfig.indicator_id), never a regime one, so an
+    rsi id here is rejected the same as a nonexistent one. Mirrors
+    _check_referenced_indicator_exists's shape for CrossoverRuleConfig
+    above."""
+    for raw_id in regime_indicator_ids:
+        try:
+            parsed_id = uuid.UUID(raw_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid indicator id '{raw_id}'")
+        indicator = db.get(db_models.Indicator, parsed_id)
+        if indicator is None:
+            raise HTTPException(status_code=422, detail=f"no indicator with id '{raw_id}'")
+        if indicator.type not in REGIME_INDICATOR_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"indicator '{raw_id}' has type '{indicator.type}', not a regime type ({sorted(REGIME_INDICATOR_TYPES)})",
+            )
+
+
+def _resolve_regime_indicators(db: Session, rule_row: db_models.Rule) -> RegimeIndicators:
+    """Rule.regime_indicator_ids resolved to (indicator_type, params)
+    pairs, once per backtest request - fed into backtest.replay/
+    grid_search's own regime_indicators param (app/domain/backtest.py),
+    the same resolve-then-pass-in pattern the rule's own crossover
+    indicator_id already uses just above. 422 if an id no longer resolves
+    - defensive, _check_regime_indicator_ids is the primary check at Rule
+    create/update time."""
+    resolved: RegimeIndicators = []
+    for raw_id in rule_row.regime_indicator_ids:
+        indicator = db.get(db_models.Indicator, uuid.UUID(raw_id))
+        if indicator is None:
+            raise HTTPException(status_code=422, detail=f"no indicator with id '{raw_id}'")
+        resolved.append((indicator.type, validate_indicator_params(indicator.type, indicator.params).model_dump()))
+    return resolved
+
+
+def _regime_warmup_bars(regime_indicators: RegimeIndicators) -> int:
+    """Widest bar-count any one resolved regime indicator needs - folded
+    into the caller's own bar_count via max(), same sizing philosophy as
+    app/domain/engine.py's own _regime_warmup_bars."""
+    return max((regime_indicator_warmup(t, p) for t, p in regime_indicators), default=0)
 
 
 @router.post("/rules", response_model=RuleOut, status_code=201)
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
     _check_referenced_indicator_exists(db, payload.rule_config)
+    _check_regime_indicator_ids(db, payload.regime_indicator_ids)
     row = db_models.Rule(
         name=payload.name,
         description=payload.description,
-        source_type=payload.source_type,
-        provider_rule_name=payload.provider_rule_name,
         segment=payload.segment,
         underlying=payload.underlying,
         underlying_type=payload.underlying_type,
         interval=payload.interval,
         rule_config=payload.rule_config,
+        regime_indicator_ids=payload.regime_indicator_ids,
     )
     db.add(row)
     db.commit()
@@ -97,11 +155,8 @@ def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/rules", response_model=list[RuleOut])
-def list_rules(source_type: str | None = None, db: Session = Depends(get_db)):
-    q = db.query(db_models.Rule)
-    if source_type:
-        q = q.filter_by(source_type=source_type)
-    rows = q.order_by(db_models.Rule.created_at.desc()).all()
+def list_rules(db: Session = Depends(get_db)):
+    rows = db.query(db_models.Rule).order_by(db_models.Rule.created_at.desc()).all()
     return [_to_out(r) for r in rows]
 
 
@@ -120,10 +175,6 @@ def get_rule(rule_id: str, db: Session = Depends(get_db)):
 
 @router.patch("/rules/{rule_id}", response_model=RuleOut)
 def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)):
-    """source_type isn't patchable (fixed at create, same reasoning as
-    Strategy.source_type - see app/domain/models.py's
-    validate_rule_link_consistency, checked wherever a Strategy links to
-    this Rule, not here)."""
     try:
         parsed_id = uuid.UUID(rule_id)
     except ValueError:
@@ -137,8 +188,6 @@ def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)
         row.name = payload.name
     if payload.description is not None:
         row.description = payload.description
-    if payload.provider_rule_name is not None:
-        row.provider_rule_name = payload.provider_rule_name
     if payload.segment is not None:
         row.segment = payload.segment
     if payload.underlying is not None:
@@ -149,16 +198,17 @@ def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)
         row.interval = payload.interval
     if payload.rule_config is not None:
         row.rule_config = payload.rule_config
+    if payload.regime_indicator_ids is not None:
+        row.regime_indicator_ids = payload.regime_indicator_ids
 
     try:
-        validate_rule_in_house_fields(row.source_type, row.underlying, row.rule_config, row.interval)
+        validate_rule_in_house_fields(row.underlying, row.rule_config, row.interval)
         validate_rule_universe_fields(row.underlying_type, row.segment)
         validate_breakout_interval_consistency(row.interval, row.rule_config)
-        if row.source_type == "in_house" and row.provider_rule_name is not None:
-            raise ValueError("provider_rule_name only applies to source_type != 'in_house'")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _check_referenced_indicator_exists(db, row.rule_config)
+    _check_regime_indicator_ids(db, row.regime_indicator_ids)
 
     db.commit()
     db.refresh(row)
@@ -204,8 +254,6 @@ def _load_rule_for_backtest(db: Session, rule_id: str) -> db_models.Rule:
     row = db.get(db_models.Rule, parsed_id)
     if row is None:
         raise HTTPException(status_code=404, detail="rule not found")
-    if row.source_type != "in_house":
-        raise HTTPException(status_code=422, detail="backtesting only applies to source_type='in_house' rules")
     return row
 
 
@@ -239,16 +287,26 @@ def _sl_candles_for(payload, rule_row: db_models.Rule, resolved, candles: list, 
 
 
 def _backtest_one_symbol(
-    db: Session, rule_row: db_models.Rule, rule: RuleConfig, payload: RuleBacktestRequest, symbol: str, from_: date, to: date
+    db: Session,
+    rule_row: db_models.Rule,
+    rule: RuleConfig,
+    payload: RuleBacktestRequest,
+    symbol: str,
+    from_: date,
+    to: date,
+    regime_indicators: RegimeIndicators,
 ) -> dict:
     """The actual single-symbol backtest, shared by the plain (one
     underlying) and universe (many constituents, see _backtest_universe)
     paths - `symbol` is the traded symbol to run against, not necessarily
     rule_row.underlying itself (a universe rule passes each constituent
-    through here in turn). Regime filtering (Strategy-only - gates a
-    signal on top of the rule's own raw output) is never applied here,
-    since there's no Strategy in this path - always run as if
-    regime_filter_enabled=False."""
+    through here in turn). `regime_indicators` (resolved once by the
+    caller, see _resolve_regime_indicators) gates crossover/range_breakout
+    signals the same way app/domain/engine.py's live tick does - NOT
+    applied to a BreakoutRuleConfig backtest (breakout.replay_breakout is
+    its own simulation engine with no regime hook at all, a pre-existing
+    gap this refactor doesn't close) or an option backtest (see
+    _backtest_one_symbol_option)."""
     if payload.instrument_type == "option":
         return _backtest_one_symbol_option(db, rule_row, rule, payload, symbol, from_, to)
 
@@ -271,7 +329,8 @@ def _backtest_one_symbol(
         resolved = resolve_underlying(rule_row.segment, symbol)
         if resolved is None:
             raise HTTPException(status_code=502, detail=f"could not resolve underlying '{symbol}' on segment '{rule_row.segment}'")
-        warmup_from, _ = history_window(range_breakout.range_breakout_warmup(rule), rule_row.interval)
+        warmup_bars = max(range_breakout.range_breakout_warmup(rule), _regime_warmup_bars(regime_indicators))
+        warmup_from, _ = history_window(warmup_bars, rule_row.interval)
         fetch_from = min(from_, warmup_from)
         candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule_row.interval, fetch_from, to)
         sl_candles = _sl_candles_for(payload, rule_row, resolved, candles, fetch_from, to)
@@ -281,8 +340,7 @@ def _backtest_one_symbol(
             candles,
             _exit_config_for(payload),
             sl_candles,
-            False,
-            frozenset(),
+            regime_indicators,
         )
 
     if not isinstance(rule, CrossoverRuleConfig):
@@ -296,7 +354,7 @@ def _backtest_one_symbol(
     if resolved is None:
         raise HTTPException(status_code=502, detail=f"could not resolve underlying '{symbol}' on segment '{rule_row.segment}'")
 
-    bar_count = bars_needed(rule, indicator.type, indicator_params)
+    bar_count = max(bars_needed(rule, indicator.type, indicator_params), _regime_warmup_bars(regime_indicators))
     warmup_from, _ = history_window(bar_count, rule_row.interval)
     fetch_from = min(from_, warmup_from)
 
@@ -308,8 +366,7 @@ def _backtest_one_symbol(
         candles,
         _exit_config_for(payload),
         sl_candles,
-        False,
-        frozenset(),
+        regime_indicators,
     )
 
 
@@ -322,8 +379,10 @@ def _backtest_one_symbol_option(
     that don't build a bias_fn the same way, or would need a shared
     bias_fn-builder factored out first - not done yet). Does NOT apply
     trailing-stop (documented as not-yet-extended to the option variant,
-    see option_backtest.py's own module docstring) or the regime filter
-    (Strategy-only, never applies to a Rule-scoped backtest)."""
+    see option_backtest.py's own module docstring) or Rule.
+    regime_indicator_ids (option_backtest.py's replay_options is its own
+    simulation engine with no regime hook at all - same scope boundary
+    as the breakout backtest path, see _backtest_one_symbol)."""
     if not isinstance(rule, CrossoverRuleConfig):
         raise HTTPException(status_code=422, detail="option backtesting only supports crossover-rule rules today")
     if payload.option_position_style == "naked":
@@ -402,7 +461,15 @@ def _backtest_one_symbol_option(
     )
 
 
-def _backtest_universe(db: Session, rule_row: db_models.Rule, rule: RuleConfig, payload: RuleBacktestRequest, from_: date, to: date) -> dict:
+def _backtest_universe(
+    db: Session,
+    rule_row: db_models.Rule,
+    rule: RuleConfig,
+    payload: RuleBacktestRequest,
+    from_: date,
+    to: date,
+    regime_indicators: RegimeIndicators,
+) -> dict:
     """Pooled backtest for a universe-scoped rule: runs _backtest_one_symbol
     independently against every constituent and combines the results -
     total trade_count/hypothetical_pnl across all of them (the headline
@@ -420,7 +487,7 @@ def _backtest_universe(db: Session, rule_row: db_models.Rule, rule: RuleConfig, 
     skipped: list[str] = []
     for symbol in constituents:
         try:
-            by_symbol[symbol] = _backtest_one_symbol(db, rule_row, rule, payload, symbol, from_, to)
+            by_symbol[symbol] = _backtest_one_symbol(db, rule_row, rule, payload, symbol, from_, to, regime_indicators)
         except HTTPException:
             logger.warning("skipping unresolvable universe constituent %s (rule %s)", symbol, rule_row.id)
             skipped.append(symbol)
@@ -449,15 +516,19 @@ def backtest_rule(
     exit config/instrument_type/horizon (all Strategy-owned trading
     concepts) - `payload` supplies them as optional per-run overrides;
     omitting the exit-config fields reproduces ExitConfig()'s bare
-    opposite-signal/end-of-data-only defaults. Only meaningful for an
-    in_house rule. underlying_type='universe' pools the same backtest
-    across every constituent - see _backtest_universe."""
+    opposite-signal/end-of-data-only defaults. underlying_type='universe'
+    pools the same backtest across every constituent - see
+    _backtest_universe. Rule.regime_indicator_ids (if any) are resolved
+    once here and applied for real - see _backtest_one_symbol's own
+    docstring for which rule types/instrument types that does and doesn't
+    cover."""
     rule_row = _load_rule_for_backtest(db, rule_id)
     rule = validate_rule_config(rule_row.rule_config)
+    regime_indicators = _resolve_regime_indicators(db, rule_row)
 
     if rule_row.underlying_type == "universe":
-        return _backtest_universe(db, rule_row, rule, payload, from_, to)
-    return _backtest_one_symbol(db, rule_row, rule, payload, rule_row.underlying, from_, to)
+        return _backtest_universe(db, rule_row, rule, payload, from_, to, regime_indicators)
+    return _backtest_one_symbol(db, rule_row, rule, payload, rule_row.underlying, from_, to, regime_indicators)
 
 
 @router.post("/rules/{rule_id}/backtest/grid")
@@ -495,10 +566,12 @@ def backtest_rule_grid(
             status_code=502, detail=f"could not resolve underlying '{rule_row.underlying}' on segment '{rule_row.segment}'"
         )
 
+    regime_indicators = _resolve_regime_indicators(db, rule_row)
+
     # Widest warm-up across every combination in the grid, so one fetch
     # covers all of them - candidate params aren't known until expand_grid
     # runs, so this can't reuse /backtest's single bars_needed call above.
-    max_bars = max(bars_needed(rule, indicator.type, params) for params in combos)
+    max_bars = max(max(bars_needed(rule, indicator.type, params) for params in combos), _regime_warmup_bars(regime_indicators))
     warmup_from, _ = history_window(max_bars, rule_row.interval)
     fetch_from = min(from_, warmup_from)
 
@@ -511,6 +584,5 @@ def backtest_rule_grid(
         candles,
         _exit_config_for(payload),
         sl_candles,
-        False,
-        frozenset(),
+        regime_indicators,
     )

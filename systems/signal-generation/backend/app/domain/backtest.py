@@ -10,10 +10,11 @@ execution's continuous CMP monitoring), square_off_time, or - with no
 SL/target/square-off configured, or none yet triggered - the next
 opposite-direction signal. `replay()` is the route-facing wrapper that
 turns a list of simulated trades into a report. A fresh signal can also be
-gated on app/domain/regime.py's market regime classifier
-(`regime_filter_enabled`) before it's even allowed to open - the same
-single-timeframe check app/domain/engine.py's live tick applies. Still not
-a full sizing/account simulation against execution's real order logic (no
+gated on Rule.regime_indicator_ids (resolved by the route layer into
+`regime_indicators` - see app/api/routes/rules.py) before it's even
+allowed to open - the same per-Rule regime gate app/domain/engine.py's
+live tick applies (its own _regime_confirmed helper). Still not a full
+sizing/account simulation against execution's real order logic (no
 position sizing, no lot sizes, no account balance) - see
 docs/architecture.md."""
 
@@ -24,9 +25,15 @@ from typing import Callable, Optional
 
 from pydantic import ValidationError
 
-from app.domain import regime
+from app.domain.indicators import evaluate_regime_indicator
 from app.domain.rule import RuleConfig, validate_indicator_params
 from app.domain.rules import Bias, CandleClose, SimulatedTrade, bars_needed, evaluate
+
+# A resolved (indicator_type, params) pair per regime indicator a Rule
+# references (Rule.regime_indicator_ids) - the route layer resolves ids to
+# real Indicator rows once per request (app/api/routes/rules.py), not
+# re-fetched per bar. Empty (the default) means no regime gate at all.
+RegimeIndicators = list[tuple[str, dict]]
 
 # What simulate_trades/_simulate_one_trade actually need to compute a bias
 # from a candle window - decoupled from HOW that bias is derived (an
@@ -205,8 +212,7 @@ def simulate_trades(
     candles: list[CandleClose],
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
-    regime_filter_enabled: bool = False,
-    regime_checks: frozenset = regime.ALL_REGIME_CHECKS,
+    regime_indicators: RegimeIndicators = (),
 ) -> list[SimulatedTrade]:
     """The generic exit engine (SL/target/trailing/square-off/
     opposite-signal/end-of-data) - `bias_fn` is however a specific rule
@@ -236,13 +242,12 @@ def simulate_trades(
     same-direction re-signal. A signal whose own bar is already at or
     past square_off_time never opens at all, mirroring
     is_within_intraday_window's real rejection in execution. When
-    `regime_filter_enabled`, a fresh signal is also skipped (not opened)
-    unless app/domain/regime.py's direction_confirmed, on the same
-    growing window and requiring only `regime_checks` (a subset of
-    regime.REGIME_CHECK_NAMES, defaulting to all 5), confirms its
-    direction - the exact same check app/domain/engine.py's live tick
-    applies, single-timeframe (the same `candles`/interval, no separate
-    higher-timeframe fetch)."""
+    `regime_indicators` is non-empty, a fresh signal is also skipped (not
+    opened) unless EVERY listed (indicator_type, params) pair's
+    evaluate_regime_indicator confirms `direction` on the same growing
+    window - the exact same all-must-agree gate app/domain/engine.py's
+    live tick applies via its own _regime_confirmed, single-timeframe
+    (the same `candles`/interval, no separate higher-timeframe fetch)."""
     exit_config = exit_config or ExitConfig()
     trades: list[SimulatedTrade] = []
     n = len(candles)
@@ -254,11 +259,11 @@ def simulate_trades(
             i += 1
             continue
 
-        if regime_filter_enabled:
-            regime_result = regime.classify_regime(window)
-            if not regime.direction_confirmed(direction, regime_result, enabled_checks=regime_checks):
-                i += 1
-                continue
+        if regime_indicators and not all(
+            evaluate_regime_indicator(indicator_type, params, window, direction) for indicator_type, params in regime_indicators
+        ):
+            i += 1
+            continue
 
         entry_index = i - 1
         if exit_config.square_off_time is not None:
@@ -282,15 +287,12 @@ def replay(
     candles: list[CandleClose],
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
-    regime_filter_enabled: bool = False,
-    regime_checks: frozenset = regime.ALL_REGIME_CHECKS,
+    regime_indicators: RegimeIndicators = (),
 ) -> dict:
     """The route-facing report: runs simulate_trades and totals the
     result. See simulate_trades' own docstring for what "hypothetical_pnl"
     does and doesn't account for."""
-    trades = simulate_trades(
-        bias_fn, min_bars, candles, exit_config, sl_candles, regime_filter_enabled, regime_checks
-    )
+    trades = simulate_trades(bias_fn, min_bars, candles, exit_config, sl_candles, regime_indicators)
     return {
         "trade_count": len(trades),
         "hypothetical_pnl": sum(t.pnl for t in trades),
@@ -340,13 +342,12 @@ def grid_search(
     candles: list[CandleClose],
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
-    regime_filter_enabled: bool = False,
-    regime_checks: frozenset = regime.ALL_REGIME_CHECKS,
+    regime_indicators: RegimeIndicators = (),
 ) -> dict:
     """Runs `replay` once per combination in `combos` (see expand_grid),
     against the same candle series (and the same exit_config/sl_candles/
-    regime_filter_enabled/regime_checks - none of those depend on
-    indicator params) for all of them. `candles` must already cover the
+    regime_indicators - none of those depend on indicator params) for all
+    of them. `candles` must already cover the
     widest warm-up any combination needs - callers compute this up front
     from `combos` (via rules.bars_needed) since candidate params aren't
     known until the grid is expanded, see app/api/routes/strategies.py.
@@ -368,8 +369,7 @@ def grid_search(
             candles,
             exit_config,
             sl_candles,
-            regime_filter_enabled,
-            regime_checks,
+            regime_indicators,
         )
         results.append(
             {

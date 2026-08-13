@@ -2,7 +2,7 @@ from datetime import datetime, time, timedelta
 
 import pytest
 
-from app.domain import regime as regime_module
+from app.domain import backtest as backtest_module
 from app.domain.backtest import (
     MAX_GRID_COMBINATIONS,
     ExitConfig,
@@ -263,91 +263,69 @@ def test_simulate_trades_single_signal_stays_open_to_end_of_data():
     assert len(trades) == 1
 
 
-# --- simulate_trades: regime_filter_enabled wiring ---------------------------------------------
+# --- simulate_trades: regime_indicators wiring ---------------------------------------------
 #
-# These monkeypatch regime.classify_regime rather than engineering real
-# price action that produces both a known RSI crossover AND a known
-# regime simultaneously - classify_regime's own correctness against real
-# price patterns is already covered exhaustively in test_regime.py. What
-# matters here is only that simulate_trades calls it correctly and skips/
-# allows entries accordingly - the exact same wiring app/domain/engine.py
-# uses live.
+# These monkeypatch backtest.evaluate_regime_indicator (the name bound in
+# backtest.py's own module namespace via its `from app.domain.indicators
+# import evaluate_regime_indicator`, not app.domain.indicators itself -
+# simulate_trades calls the bare name, which resolves through backtest.py's
+# globals) rather than engineering real price action that produces both a
+# known RSI crossover AND known regime sub-values simultaneously - each
+# check's own math correctness is already covered exhaustively in
+# test_regime.py/test_indicators.py. What matters here is only that
+# simulate_trades calls it correctly (ALL listed regime_indicators must
+# agree, none by default) and skips/allows entries accordingly - the exact
+# same all-must-agree gate app/domain/engine.py's _regime_confirmed uses
+# live.
 
 
-def _fake_regime(label: str):
-    """Builds fake but INTERNALLY CONSISTENT raw regime sub-values for a
-    label - direction_confirmed recomputes from the raw values (structure/
-    er/adx/plus_di/minus_di/ema_slope), not the label itself, so the fake
-    must actually satisfy every one of the 5 sub-checks for "bullish"/
-    "bearish" to behave as that label implies. "range"/"transition" use
-    values that fail every directional check."""
-    if label == "uptrend":
-        structure, plus_di, minus_di, slope = "HH_HL", 20.0, 10.0, 1.0
-    elif label == "downtrend":
-        structure, plus_di, minus_di, slope = "LH_LL", 10.0, 20.0, -1.0
-    else:  # range / transition
-        structure, plus_di, minus_di, slope = "MIXED", 15.0, 15.0, 0.0
-    er = 0.5 if label in ("uptrend", "downtrend") else 0.1
-    adx = 30.0 if label in ("uptrend", "downtrend") else 5.0
+def _fake_regime_check(passing_types: set):
+    """A stand-in for evaluate_regime_indicator: confirms `bias` for every
+    (indicator_type, params) pair whose indicator_type is in
+    `passing_types`, denies every other one - regardless of the actual
+    candles/bias, so tests can control per-indicator pass/fail directly."""
 
-    def _classify(window, *args, **kwargs):
-        return regime_module.RegimeResult(label, 100, structure, er, adx, plus_di, minus_di, slope)
+    def _evaluate(indicator_type, params, candles, bias):
+        return indicator_type in passing_types
 
-    return _classify
+    return _evaluate
 
 
 def test_simulate_trades_regime_filter_blocks_entry_when_regime_disagrees(monkeypatch):
-    # The known fixture signal is bearish (see _entry_fixture) - "uptrend"
-    # only confirms bullish, so this entry must never open.
-    monkeypatch.setattr(regime_module, "classify_regime", _fake_regime("uptrend"))
-    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
+    monkeypatch.setattr(backtest_module, "evaluate_regime_indicator", _fake_regime_check(passing_types=set()))
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_indicators=[("adx", {})])
     assert trades == []
 
 
 def test_simulate_trades_regime_filter_allows_entry_when_regime_agrees(monkeypatch):
-    monkeypatch.setattr(regime_module, "classify_regime", _fake_regime("downtrend"))
-    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
+    monkeypatch.setattr(backtest_module, "evaluate_regime_indicator", _fake_regime_check(passing_types={"adx"}))
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_indicators=[("adx", {})])
     assert len(trades) == 1
     assert trades[0].direction == "bearish"
 
 
-@pytest.mark.parametrize("hostile_regime", ["range", "transition"])
-def test_simulate_trades_regime_filter_blocks_on_range_and_transition(monkeypatch, hostile_regime):
-    monkeypatch.setattr(regime_module, "classify_regime", _fake_regime(hostile_regime))
-    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
-    assert trades == []
+def test_simulate_trades_regime_filter_requires_every_listed_indicator_to_agree(monkeypatch):
+    # ADX confirms but ema_slope doesn't - ALL listed regime_indicators
+    # must agree (not a majority), same all-must-agree gate engine.py's
+    # _regime_confirmed uses.
+    monkeypatch.setattr(backtest_module, "evaluate_regime_indicator", _fake_regime_check(passing_types={"adx"}))
 
-
-def test_simulate_trades_regime_checks_selective_subset(monkeypatch):
-    # bearish entry (see _entry_fixture) - structure/ER/DMI/slope all say
-    # bearish, but ADX (10) is below the trend threshold (20). Requiring
-    # all 5 (the default) blocks it; requiring only the checks that DO
-    # pass lets it through.
-    def _mostly_bearish(window, *args, **kwargs):
-        return regime_module.RegimeResult("n/a", 0, "LH_LL", 0.5, 10.0, 10.0, 20.0, -1.0)
-
-    monkeypatch.setattr(regime_module, "classify_regime", _mostly_bearish)
-
-    blocked = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_filter_enabled=True)
+    blocked = simulate_trades(
+        _bias_fn, _MIN_BARS, _entry_fixture(), regime_indicators=[("adx", {}), ("ema_slope", {})]
+    )
     assert blocked == []
 
-    allowed = simulate_trades(
-        _bias_fn,
-        _MIN_BARS,
-        _entry_fixture(),
-        regime_filter_enabled=True,
-        regime_checks=frozenset({"structure", "efficiency_ratio", "dmi_direction", "ema_slope"}),
-    )
+    allowed = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), regime_indicators=[("adx", {})])
     assert len(allowed) == 1
     assert allowed[0].direction == "bearish"
 
 
-def test_simulate_trades_regime_filter_disabled_by_default_never_calls_classify_regime(monkeypatch):
+def test_simulate_trades_regime_filter_empty_by_default_never_calls_evaluate_regime_indicator(monkeypatch):
     def _boom(*args, **kwargs):
-        raise AssertionError("classify_regime must not be called when regime_filter_enabled=False")
+        raise AssertionError("evaluate_regime_indicator must not be called when regime_indicators is empty")
 
-    monkeypatch.setattr(regime_module, "classify_regime", _boom)
-    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture())  # regime_filter_enabled defaults to False
+    monkeypatch.setattr(backtest_module, "evaluate_regime_indicator", _boom)
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture())  # regime_indicators defaults to ()
     assert len(trades) == 1
 
 

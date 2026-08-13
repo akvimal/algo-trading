@@ -14,18 +14,10 @@ variants from here now, unchanged otherwise - this file only relocates
 existing shapes/validators, evaluation logic is untouched."""
 
 from datetime import datetime, time
-from typing import Annotated, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
-# 'in_house' is the one reserved value every other backend check compares
-# against - anything else names an external webhook provider (e.g.
-# "chartink", "tradingview", or any new one) and is otherwise opaque to
-# this system. Free-form rather than a fixed enum so a new provider
-# doesn't need a code change here. Mirrors Strategy's own SourceType
-# exactly - the two must agree at link time, see
-# app/domain/models.py's validate_rule_link_consistency.
-SourceType = Annotated[str, Field(min_length=1)]
 Interval = Literal["1min", "3min", "5min", "15min", "30min", "60min", "daily"]
 # Which market this rule's condition/universe is evaluated against -
 # distinct from a linked Strategy's own `segment` (what gets traded when
@@ -45,7 +37,13 @@ Segment = Literal["NSE", "MCX", "CRYPTO"]
 # Strategy alike.
 UnderlyingType = Literal["symbol", "universe"]
 
-IndicatorType = Literal["rsi"]
+IndicatorType = Literal["rsi", "structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]
+
+# The 5 IndicatorTypes valid in Rule.regime_indicator_ids - "rsi" is a
+# crossover-only slot (CrossoverRuleConfig.indicator_id), never a regime
+# one. Shared by app/api/routes/rules.py's route-layer validation and
+# app/domain/engine.py/backtest.py's resolution of regime_indicator_ids.
+REGIME_INDICATOR_TYPES: frozenset[str] = frozenset({"structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"})
 
 
 class RsiParams(BaseModel):
@@ -58,22 +56,87 @@ class RsiParams(BaseModel):
     sma_period: int = Field(gt=1)
 
 
-# Union[RsiParams] collapses to RsiParams today - kept as a Union alias so
-# a second indicator type later is `Union[RsiParams, MacdParams]` without
-# renaming anything that already imports IndicatorParams. Indicators are
-# their own entity (signal_generation.indicators) so one definition (e.g.
-# "RSI 14") can be reused by any number of rules - see
-# docs/architecture.md.
-IndicatorParams = Union[RsiParams]
-_indicator_params_adapter = TypeAdapter(IndicatorParams)
+# The 5 market-regime checks (formerly Strategy.regime_filter_enabled/
+# regime_filter_checks, a single shared RegimeParams bundle - see
+# app/domain/regime.py) as independent, creatable, reusable Indicator
+# types - a Rule references any number of them via its own
+# regime_indicator_ids, the same way CrossoverRuleConfig.indicator_id
+# references an "rsi" one. Fields mirror the corresponding regime.check_*
+# function's own params (minus `candles`/`bias`, which come from the
+# evaluating rule at run time, not the indicator's saved definition).
+class StructureParams(BaseModel):
+    """Confirmed swing structure (see regime.check_structure) -
+    swing_lookback is bars required on each side to confirm a pivot."""
+
+    swing_lookback: int = Field(gt=1)
 
 
-def validate_indicator_params(indicator_type: str, raw: dict) -> RsiParams:
+class EfficiencyRatioParams(BaseModel):
+    """Kaufman's Efficiency Ratio (see regime.check_efficiency_ratio) -
+    trend_threshold is bias-independent: ER only measures how efficiently
+    price is moving, not which way."""
+
+    period: int = Field(gt=1)
+    trend_threshold: float = Field(gt=0, lt=1)
+
+
+class AdxParams(BaseModel):
+    """Wilder's ADX (see regime.check_adx) - trend_threshold is
+    bias-independent: ADX measures trend strength, not direction."""
+
+    period: int = Field(gt=1)
+    trend_threshold: float = Field(gt=0)
+
+
+class DmiDirectionParams(BaseModel):
+    """+DI vs -DI direction (see regime.check_dmi_direction)."""
+
+    period: int = Field(gt=1)
+
+
+class EmaSlopeParams(BaseModel):
+    """ATR-normalized EMA slope (see regime.check_ema_slope) -
+    atr_period sizes the normalizing ATR independently of ema_period,
+    matching how classify_regime reuses its own adx_period for the same
+    purpose rather than ema_period."""
+
+    ema_period: int = Field(gt=1)
+    slope_lookback: int = Field(gt=0)
+    slope_threshold: float = Field(gt=0)
+    atr_period: int = Field(gt=1)
+
+
+# Indicators are their own entity (signal_generation.indicators) so one
+# definition (e.g. "RSI 14", "ADX 14/20") can be reused by any number of
+# rules - see docs/architecture.md.
+IndicatorParams = Union[RsiParams, StructureParams, EfficiencyRatioParams, AdxParams, DmiDirectionParams, EmaSlopeParams]
+
+_INDICATOR_PARAMS_MODELS: dict[str, type[BaseModel]] = {
+    "rsi": RsiParams,
+    "structure": StructureParams,
+    "efficiency_ratio": EfficiencyRatioParams,
+    "adx": AdxParams,
+    "dmi_direction": DmiDirectionParams,
+    "ema_slope": EmaSlopeParams,
+}
+
+
+def validate_indicator_params(indicator_type: str, raw: dict) -> BaseModel:
     """Raises pydantic.ValidationError (a 422 at the route layer) if `raw`
-    doesn't match `indicator_type`'s expected shape. `indicator_type`
+    doesn't match `indicator_type`'s expected shape. An explicit
+    {indicator_type: model} dispatch, not one blind TypeAdapter over the
+    whole IndicatorParams union - several of these models are
+    structurally similar enough (e.g. AdxParams and EfficiencyRatioParams
+    both being {period, trend_threshold}) that a union-wide adapter could
+    silently resolve an ambiguous shape to the wrong type; keying off
+    `indicator_type` explicitly removes the ambiguity. `indicator_type`
     itself isn't validated here (the DB CHECK constraint + IndicatorType
-    already constrain it) - this only validates params."""
-    return _indicator_params_adapter.validate_python(raw)
+    already constrain it at the route layer) - an unrecognized one raises
+    ValueError rather than KeyError, defensively."""
+    model = _INDICATOR_PARAMS_MODELS.get(indicator_type)
+    if model is None:
+        raise ValueError(f"unknown indicator_type: {indicator_type!r}")
+    return model.model_validate(raw)
 
 
 class IndicatorCreate(BaseModel):
@@ -180,30 +243,22 @@ def validate_rule_config(raw: dict) -> RuleConfig:
 
 
 def validate_rule_in_house_fields(
-    source_type: str,
     underlying: Optional[str],
     rule_config: Optional[dict],
     interval: Optional[str],
 ) -> None:
-    """source_type='in_house' requires underlying/rule_config/interval all
-    set - the engine needs a symbol to watch, a rule to evaluate, and a
-    timeframe. External (webhook) rules get symbol/timing per-signal from
-    the provider payload instead, so underlying/rule_config don't apply
-    there - they're purely a saved name/description reference, never
-    evaluated by our own engine."""
-    if source_type == "in_house":
-        if underlying is None:
-            raise ValueError("source_type='in_house' requires underlying")
-        if rule_config is None:
-            raise ValueError("source_type='in_house' requires rule_config")
-        if interval is None:
-            raise ValueError("source_type='in_house' requires interval")
-        validate_rule_config(rule_config)
-    else:
-        if underlying is not None:
-            raise ValueError("underlying only applies to source_type='in_house'")
-        if rule_config is not None:
-            raise ValueError("rule_config only applies to source_type='in_house'")
+    """A Rule is always in-house now (external/webhook strategies carry
+    their own source_type directly and don't reference a Rule at all - see
+    docs/architecture.md) - underlying/rule_config/interval are always
+    required: the engine needs a symbol to watch, a rule to evaluate, and
+    a timeframe."""
+    if underlying is None:
+        raise ValueError("underlying is required")
+    if rule_config is None:
+        raise ValueError("rule_config is required")
+    if interval is None:
+        raise ValueError("interval is required")
+    validate_rule_config(rule_config)
 
 
 def validate_rule_universe_fields(underlying_type: str, segment: str) -> None:
@@ -237,20 +292,25 @@ def validate_breakout_interval_consistency(interval: Optional[str], rule_config:
 class RuleCreate(BaseModel):
     name: str = Field(min_length=1)
     description: Optional[str] = None
-    source_type: SourceType
-    # source_type != 'in_house' only - the scan's own name on the
-    # provider's side, if `name` above renames it locally.
-    provider_rule_name: Optional[str] = Field(default=None, min_length=1)
     segment: Segment = "NSE"
-    # in_house only - see validate_rule_in_house_fields.
     underlying: Optional[str] = Field(default=None, min_length=1)
     underlying_type: UnderlyingType = "symbol"
     interval: Optional[Interval] = None
     rule_config: Optional[dict] = None
+    # Which regime-type Indicators (see IndicatorType's 5 "structure"/
+    # "efficiency_ratio"/"adx"/"dmi_direction"/"ema_slope" entries) must
+    # ALL confirm this rule's own bias before it fires - a cross-cutting
+    # modifier that applies uniformly regardless of rule_config's own
+    # type (crossover/breakout/range_breakout), so it lives here at the
+    # top level rather than duplicated inside each RuleConfig variant.
+    # Empty (default) means no regime gate at all. IDs are only checked
+    # for shape here - that they actually exist and are regime-typed (not
+    # "rsi") needs a DB session, see app/api/routes/rules.py.
+    regime_indicator_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_in_house_consistency(self) -> "RuleCreate":
-        validate_rule_in_house_fields(self.source_type, self.underlying, self.rule_config, self.interval)
+        validate_rule_in_house_fields(self.underlying, self.rule_config, self.interval)
         return self
 
     @model_validator(mode="after")
@@ -263,42 +323,31 @@ class RuleCreate(BaseModel):
         validate_breakout_interval_consistency(self.interval, self.rule_config)
         return self
 
-    @model_validator(mode="after")
-    def _check_provider_rule_name_scope(self) -> "RuleCreate":
-        if self.source_type == "in_house" and self.provider_rule_name is not None:
-            raise ValueError("provider_rule_name only applies to source_type != 'in_house'")
-        return self
-
 
 class RuleUpdate(BaseModel):
     """PATCH /rules/{id} - all fields optional, only what's provided
-    changes. source_type is deliberately not editable (same reasoning as
-    Strategy.source_type: it's a foundational identity fact checked
-    against any Strategy currently linked to this Rule, see
-    validate_rule_link_consistency) - delete+recreate if it's genuinely
-    wrong."""
+    changes."""
 
     name: Optional[str] = Field(default=None, min_length=1)
     description: Optional[str] = None
-    provider_rule_name: Optional[str] = Field(default=None, min_length=1)
     segment: Optional[Segment] = None
     underlying: Optional[str] = Field(default=None, min_length=1)
     underlying_type: Optional[UnderlyingType] = None
     interval: Optional[Interval] = None
     rule_config: Optional[dict] = None
+    regime_indicator_ids: Optional[list[str]] = None
 
 
 class RuleOut(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    source_type: SourceType
-    provider_rule_name: Optional[str] = None
     segment: Segment
     underlying: Optional[str] = None
     underlying_type: UnderlyingType = "symbol"
     interval: Optional[Interval] = None
     rule_config: Optional[dict] = None
+    regime_indicator_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -310,7 +359,6 @@ class RuleSummary(BaseModel):
 
     id: str
     name: str
-    source_type: SourceType
     segment: Segment
 
 
@@ -322,10 +370,10 @@ class RuleBacktestRequest(BaseModel):
     - all supplied here as optional per-run overrides instead of being
     stored. Omitting the exit-config fields reproduces ExitConfig()'s own
     all-`None` defaults exactly: opposite-signal/end-of-data exits only,
-    no stop-loss/target - see app/domain/backtest.py. The regime filter
-    (Strategy-only, gates a signal on top of the rule's own raw output)
-    has no override here at all - a Rule-scoped backtest always runs with
-    it off; it's evaluated per-Strategy, not per-Rule."""
+    no stop-loss/target - see app/domain/backtest.py. Rule.
+    regime_indicator_ids (if any) always applies - there's no override to
+    turn it off here, unlike the exit-config fields; it's a property of
+    the rule itself, not a per-run choice."""
 
     instrument_type: Literal["spot", "future", "option"] = "spot"
     # instrument_type='option' only - WEEK vs MONTH expiry choice, see

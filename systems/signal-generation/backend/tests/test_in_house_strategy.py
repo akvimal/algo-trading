@@ -23,7 +23,6 @@ BREAKOUT_RULE_CONFIG = {
 def _in_house(**overrides) -> dict:
     defaults = dict(
         name="GOLDM RSI",
-        source_type="in_house",
         segment="MCX",
         underlying="GOLDM",
         rule_config=RULE_CONFIG,
@@ -98,39 +97,27 @@ def test_validate_rule_config_still_resolves_crossover_correctly_alongside_break
 
 
 # --- validate_rule_in_house_fields -----------------------------------------------------------
+# Rule is in-house only now - underlying/rule_config/interval are always
+# required unconditionally, no source_type branch anymore.
 
 
 def test_validate_rule_in_house_fields_accepts_complete_config():
-    validate_rule_in_house_fields("in_house", "GOLDM", RULE_CONFIG, "5min")  # no raise
+    validate_rule_in_house_fields("GOLDM", RULE_CONFIG, "5min")  # no raise
 
 
 def test_validate_rule_in_house_fields_requires_underlying():
-    with pytest.raises(ValueError, match="requires underlying"):
-        validate_rule_in_house_fields("in_house", None, RULE_CONFIG, "5min")
+    with pytest.raises(ValueError, match="underlying is required"):
+        validate_rule_in_house_fields(None, RULE_CONFIG, "5min")
 
 
 def test_validate_rule_in_house_fields_requires_rule_config():
-    with pytest.raises(ValueError, match="requires rule_config"):
-        validate_rule_in_house_fields("in_house", "GOLDM", None, "5min")
+    with pytest.raises(ValueError, match="rule_config is required"):
+        validate_rule_in_house_fields("GOLDM", None, "5min")
 
 
 def test_validate_rule_in_house_fields_requires_interval():
-    with pytest.raises(ValueError, match="requires interval"):
-        validate_rule_in_house_fields("in_house", "GOLDM", RULE_CONFIG, None)
-
-
-def test_validate_rule_in_house_fields_forbids_underlying_for_webhook_source():
-    with pytest.raises(ValueError, match="only applies to source_type='in_house'"):
-        validate_rule_in_house_fields("chartink", "GOLDM", None, None)
-
-
-def test_validate_rule_in_house_fields_forbids_rule_config_for_webhook_source():
-    with pytest.raises(ValueError, match="only applies to source_type='in_house'"):
-        validate_rule_in_house_fields("chartink", None, RULE_CONFIG, None)
-
-
-def test_validate_rule_in_house_fields_webhook_source_with_nothing_set_is_fine():
-    validate_rule_in_house_fields("chartink", None, None, None)  # no raise
+    with pytest.raises(ValueError, match="interval is required"):
+        validate_rule_in_house_fields("GOLDM", RULE_CONFIG, None)
 
 
 # --- RuleCreate integration --------------------------------------------------------------
@@ -144,44 +131,23 @@ def test_rule_create_in_house_valid():
 
 
 def test_rule_create_in_house_missing_underlying_rejected():
-    with pytest.raises(ValidationError, match="requires underlying"):
+    with pytest.raises(ValidationError, match="underlying is required"):
         RuleCreate(**_in_house(underlying=None))
 
 
 def test_rule_create_in_house_missing_rule_config_rejected():
-    with pytest.raises(ValidationError, match="requires rule_config"):
+    with pytest.raises(ValidationError, match="rule_config is required"):
         RuleCreate(**_in_house(rule_config=None))
 
 
 def test_rule_create_in_house_missing_interval_rejected():
-    with pytest.raises(ValidationError, match="requires interval"):
+    with pytest.raises(ValidationError, match="interval is required"):
         RuleCreate(**_in_house(interval=None))
 
 
 def test_rule_create_in_house_bad_rule_type_rejected():
     with pytest.raises(ValidationError):
         RuleCreate(**_in_house(rule_config={"type": "unknown_rule"}))
-
-
-def test_rule_create_chartink_with_underlying_rejected():
-    with pytest.raises(ValidationError, match="only applies to source_type='in_house'"):
-        RuleCreate(name="x", source_type="chartink", underlying="GOLDM")
-
-
-def test_rule_create_chartink_without_in_house_fields_still_works():
-    r = RuleCreate(name="x", source_type="chartink")
-    assert r.underlying is None
-    assert r.rule_config is None
-
-
-def test_rule_create_chartink_with_provider_rule_name_works():
-    r = RuleCreate(name="My renamed scan", source_type="chartink", provider_rule_name="Original scan name")
-    assert r.provider_rule_name == "Original scan name"
-
-
-def test_rule_create_in_house_with_provider_rule_name_rejected():
-    with pytest.raises(ValidationError, match="provider_rule_name only applies to source_type != 'in_house'"):
-        RuleCreate(**_in_house(provider_rule_name="Original scan name"))
 
 
 def test_rule_create_breakout_requires_interval_equal_ltf_interval():

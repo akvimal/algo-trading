@@ -330,6 +330,84 @@ def regime_warmup(params: RegimeParams = DEFAULT_REGIME_PARAMS) -> int:
     return max(swing_settle, er_settle, adx_settle, ema_settle)
 
 
+def check_structure(candles: list[CandleClose], bias: Bias, swing_lookback: int = 3) -> Optional[bool]:
+    """Decomposed from _direction_checks' "structure" check - confirmed
+    swing structure (see find_pivots/classify_structure) agrees with
+    `bias` (HH_HL for bullish, LH_LL for bearish). None until at least two
+    pivots of each type have confirmed - "insufficient data," not "no"."""
+    pivot_highs, pivot_lows = find_pivots(candles, swing_lookback)
+    structure = classify_structure(candles, pivot_highs, pivot_lows)
+    if structure == "insufficient":
+        return None
+    wanted = "HH_HL" if bias == "bullish" else "LH_LL"
+    return structure == wanted
+
+
+def check_efficiency_ratio(
+    candles: list[CandleClose], bias: Bias, period: int = 14, trend_threshold: float = 0.35
+) -> Optional[bool]:
+    """Decomposed from _direction_checks' "efficiency_ratio" check -
+    Kaufman's ER above `trend_threshold` means price is moving efficiently
+    (trending), regardless of `bias` - direction comes from the other
+    checks, this one only measures how "clean" the move is. None before
+    `period` bars exist."""
+    closes = [c.close for c in candles]
+    er = compute_efficiency_ratio(closes, period)
+    if er is None:
+        return None
+    return er > trend_threshold
+
+
+def check_adx(candles: list[CandleClose], bias: Bias, period: int = 14, trend_threshold: float = 20.0) -> Optional[bool]:
+    """Decomposed from _direction_checks' "adx" check - ADX above
+    `trend_threshold` means the trend (whichever way) has strength,
+    regardless of `bias` - same "direction is a different check" split as
+    check_efficiency_ratio. None until Wilder's DX has had `period` bars
+    to smooth into an ADX value (see compute_adx_dmi)."""
+    atr_series = compute_atr(candles, period)
+    adx_series, _, _ = compute_adx_dmi(candles, period, atr_series)
+    adx = adx_series[-1] if adx_series else None
+    if adx is None:
+        return None
+    return adx > trend_threshold
+
+
+def check_dmi_direction(candles: list[CandleClose], bias: Bias, period: int = 14) -> Optional[bool]:
+    """Decomposed from _direction_checks' "dmi_direction" check - +DI vs
+    -DI agrees with `bias`. None until compute_adx_dmi has enough bars to
+    produce a DI pair."""
+    atr_series = compute_atr(candles, period)
+    _, plus_di_series, minus_di_series = compute_adx_dmi(candles, period, atr_series)
+    plus_di = plus_di_series[-1] if plus_di_series else None
+    minus_di = minus_di_series[-1] if minus_di_series else None
+    if plus_di is None or minus_di is None:
+        return None
+    return plus_di > minus_di if bias == "bullish" else minus_di > plus_di
+
+
+def check_ema_slope(
+    candles: list[CandleClose],
+    bias: Bias,
+    ema_period: int = 20,
+    slope_lookback: int = 5,
+    slope_threshold: float = 0.15,
+    atr_period: int = 14,
+) -> Optional[bool]:
+    """Decomposed from _direction_checks' "ema_slope" check - ATR-normalized
+    EMA slope agrees with `bias` (positive-and-above-threshold for
+    bullish, negative-and-below for bearish). `atr_period` is independent
+    of `ema_period` - it only sizes the ATR used to normalize the slope
+    (matching classify_regime's own RegimeParams.adx_period reuse for the
+    same purpose), not the EMA itself. None until both the EMA and its own
+    ATR have enough bars."""
+    closes = [c.close for c in candles]
+    atr_series = compute_atr(candles, atr_period)
+    slope = compute_ema_slope(closes, atr_series, ema_period, slope_lookback)
+    if slope is None:
+        return None
+    return slope > slope_threshold if bias == "bullish" else slope < -slope_threshold
+
+
 def direction_confirmed(
     bias: Bias,
     result: RegimeResult,

@@ -176,3 +176,9 @@ tbody tr:last-child td {
   background: rgba(232, 88, 106, 0.15);
   color: var(--sell);
 }
+
+.reason-icon {
+  margin-left: 0.35rem;
+  color: var(--sell);
+  cursor: help;
+}

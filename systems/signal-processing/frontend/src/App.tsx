@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 
 import { clearSignals, fetchSignals, type ResolvedSignal } from "./api";
-import { executionUrl } from "./links";
 
 const POLL_INTERVAL_MS = 5000;
 
 function signalIdFromUrl(): string | null {
   return new URLSearchParams(window.location.search).get("signal_id");
+}
+
+// Short form (e.g. "Aug 14, 2:09 PM") instead of the verbose
+// toLocaleString() default (e.g. "8/14/2026, 2:09:50 PM") - the table
+// shows many rows at once, where the full date/seconds/year add width
+// without adding useful information for a same-session activity feed.
+function formatReceivedAt(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 export default function App() {
@@ -103,13 +110,12 @@ export default function App() {
             <th>Horizon</th>
             <th>Instrument</th>
             <th>Status</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
           {signals.length === 0 && !error && (
             <tr>
-              <td colSpan={10} className="empty">
+              <td colSpan={9} className="empty">
                 {signalIdFilter
                   ? "No signal found with that ID."
                   : "No signals yet - send one via a Chartink webhook or `make test-signal`."}
@@ -118,7 +124,7 @@ export default function App() {
           )}
           {signals.map((s) => (
             <tr key={s.signal_id}>
-              <td>{new Date(s.received_at).toLocaleString()}</td>
+              <td>{formatReceivedAt(s.received_at)}</td>
               <td className="symbol">{s.symbol}</td>
               <td>{s.exchange}</td>
               <td>
@@ -128,11 +134,13 @@ export default function App() {
               <td>{s.source}</td>
               <td>{s.horizon ?? "-"}</td>
               <td>{s.instrument_type ?? "-"}</td>
-              <td title={s.rejection_reason ?? undefined}>{s.status ?? "-"}</td>
               <td>
-                <a href={executionUrl(s.signal_id)} target="_blank" rel="noreferrer" className="crosslink">
-                  Execution &rarr;
-                </a>
+                {s.status ?? "-"}
+                {s.rejection_reason && (
+                  <span className="reason-icon" title={s.rejection_reason}>
+                    &#9432;
+                  </span>
+                )}
               </td>
             </tr>
           ))}

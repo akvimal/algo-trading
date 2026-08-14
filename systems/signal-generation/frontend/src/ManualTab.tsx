@@ -603,10 +603,10 @@ export default function ManualTab() {
             {row.instrumentType === "option" && (
               <>
                 <label>
-                  Style
+                  Strategy
                   <select value={row.optionStyle} onChange={(e) => updateRow(row.id, { optionStyle: e.target.value as OptionPositionStyle })}>
-                    <option value="spread">Spread</option>
-                    <option value="naked">Naked</option>
+                    <option value="spread">{row.action === "BUY" ? "Bull Call Spread" : "Bear Put Spread"}</option>
+                    <option value="naked">{row.action === "BUY" ? "Buy Call" : "Buy Put"}</option>
                   </select>
                 </label>
                 <label>

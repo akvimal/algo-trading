@@ -256,14 +256,13 @@ export default function PositionsPage() {
               <th>CMP</th>
               <th>Unrealized P&amp;L</th>
               <th>Stop-loss</th>
-              <th>Target</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {open.length === 0 && !error && (
               <tr>
-                <td colSpan={11} className="empty">
+                <td colSpan={10} className="empty">
                   {signalIdFilter ? "No open position found for that signal." : "No open positions."}
                 </td>
               </tr>
@@ -271,9 +270,7 @@ export default function PositionsPage() {
             {open.map((p) => (
               <tr key={p.id}>
                 <td>{formatTime(p.entry_time)}</td>
-                <td className="symbol">
-                  {p.symbol} <span className="muted">{p.exchange}</span>
-                </td>
+                <td className="symbol">{p.symbol}</td>
                 <td>{p.segment}</td>
                 <td>
                   <span className={`badge ${p.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{p.action}</span>
@@ -292,7 +289,6 @@ export default function PositionsPage() {
                   {p.stop_loss_price != null ? p.stop_loss_price.toFixed(2) : "-"}
                   {p.stop_loss_price != null && p.trailing_stop_enabled && <span className="muted"> &#8599;</span>}
                 </td>
-                <td className="num">{p.target_price != null ? p.target_price.toFixed(2) : "-"}</td>
                 <td>
                   <button
                     type="button"
@@ -338,9 +334,7 @@ export default function PositionsPage() {
               <tr key={p.id}>
                 <td>{formatTime(p.entry_time)}</td>
                 <td>{p.exit_time ? formatTime(p.exit_time) : "-"}</td>
-                <td className="symbol">
-                  {p.symbol} <span className="muted">{p.exchange}</span>
-                </td>
+                <td className="symbol">{p.symbol}</td>
                 <td>{p.segment}</td>
                 <td>
                   <span className={`badge ${p.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{p.action}</span>

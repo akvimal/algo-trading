@@ -28,18 +28,27 @@ class Settings(BaseSettings):
     delta_ws_url: str = "wss://socket.india.delta.exchange"
 
     # Manual escape hatch for Dhan's own SEM_LOT_UNITS being confirmed wrong
-    # for MCX commodities - a real executed order showed GOLDM's true lot
-    # multiplier is 10, not the 1 both the compact and detailed Dhan
-    # instrument-master CSVs report (no alternate Dhan field carries the
-    # correct value). GOLD/CRUDEOIL (full-size) are NOT the same value as
-    # their _M mini counterparts - confirmed via MCX contract specs
-    # (groww.in/blog/lot-size-for-commodity and others, 2026-08-14): GOLD's
-    # 1kg lot / GOLDM's 100g lot are both quoted per 10g, so GOLD's
-    # multiplier is 10x GOLDM's (100 vs 10); CRUDEOIL's 100-barrel lot /
-    # CRUDEOILM's 10-barrel lot are both quoted per barrel, same 10x
-    # relationship (100 vs 10). "underlying:qty" pairs, comma-separated -
-    # see app/providers/dhan.py's _parse_lot_size_overrides/sync_instruments.
-    mcx_lot_size_overrides: str = "GOLD:100,GOLDM:10,CRUDEOIL:100,CRUDEOILM:10"
+    # for MCX commodities - every MCX FUTCOM row in a live download reports
+    # SEM_LOT_UNITS=1 regardless of the real contract size (no alternate
+    # Dhan field carries the correct value); a real executed GOLDM order
+    # confirmed the true multiplier is 10, not 1. Values below are each
+    # commodity's real trading-unit / quotation-unit ratio, confirmed via
+    # MCX contract specs (groww.in/blog/lot-size-for-commodity, dhan.co/
+    # commodities-lot-size, and others, 2026-08-14) - a mini/micro variant
+    # is NOT automatically the same multiplier as its full-size sibling,
+    # each pair must be checked independently:
+    #   GOLD 1kg / GOLDM 100g, both quoted per 10g -> 100 / 10
+    #   CRUDEOIL 100bbl / CRUDEOILM 10bbl, both quoted per barrel -> 100 / 10
+    #   SILVER 30kg / SILVERM 5kg / SILVERMIC 1kg, all quoted per kg -> 30 / 5 / 1
+    #   SILVER100 100g, quoted per 10g (same quotation unit as GOLD) -> 10
+    #   NATURALGAS 1250mmBtu / NATGASMINI 250mmBtu, both quoted per mmBtu -> 1250 / 250
+    # "underlying:qty" pairs, comma-separated - see app/providers/dhan.py's
+    # _parse_lot_size_overrides/sync_instruments.
+    mcx_lot_size_overrides: str = (
+        "GOLD:100,GOLDM:10,CRUDEOIL:100,CRUDEOILM:10,"
+        "SILVER:30,SILVERM:5,SILVERMIC:1,SILVER100:10,"
+        "NATURALGAS:1250,NATGASMINI:250"
+    )
 
 
 settings = Settings()

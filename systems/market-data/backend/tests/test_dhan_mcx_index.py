@@ -109,17 +109,50 @@ def test_sync_mcx_leaves_lot_size_alone_for_a_non_overridden_underlying():
     """The override is targeted by underlying, not a blanket MCX
     replacement - a commodity not listed in MCX_LOT_SIZE_OVERRIDES must
     still get Dhan's own (possibly correct, possibly not yet checked)
-    SEM_LOT_UNITS value."""
+    SEM_LOT_UNITS value. Uses COPPER, deliberately NOT one of the
+    overridden underlyings (unlike SILVERM in an earlier version of this
+    test, whose override value happened to equal its raw SEM_LOT_UNITS by
+    coincidence and so silently stopped testing what it claimed to)."""
     near, far = _expiries()
     csv_body = HEADER + (
-        f"MCX,M,700111,FUTCOM,0,SILVERM-{near:%d%b%Y}-FUT,5.0,SILVERM,{near:%Y-%m-%d} 23:30:00,0,XX,100.0,M,FUTCOM,2,SILVERM\n"
+        f"MCX,M,700222,FUTCOM,0,COPPER-{near:%d%b%Y}-FUT,2500.0,COPPER,{near:%Y-%m-%d} 23:30:00,0,XX,100.0,M,FUTCOM,2,COPPER\n"
     )
     responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=csv_body, status=200)
 
     provider = DhanProvider([MCX_FUTCOM], name="dhan-mcx")
     provider.sync_instruments()
 
+    assert provider._symbol_to_lot_size[f"COPPER-{near:%d%b%Y}-FUT"] == 2500
+
+
+@responses.activate
+def test_sync_mcx_silver_variants_and_natural_gas_get_their_own_multipliers():
+    """Silver's three retail variants (SILVER/SILVERM/SILVERMIC) are all
+    quoted per kg but hold different quantities per lot (30kg/5kg/1kg), and
+    SILVER100 is quoted per 10g like GOLD (100g lot -> multiplier 10, not
+    the same as any silver-per-kg variant). NATURALGAS/NATGASMINI are both
+    quoted per mmBtu at 1250/250 mmBtu per lot respectively. Confirmed via
+    MCX contract specs, not assumed - see app/config.py."""
+    near, _far = _expiries()
+    csv_body = HEADER + (
+        f"MCX,M,800001,FUTCOM,0,SILVER-{near:%d%b%Y}-FUT,1.0,SILVER,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,SILVER\n"
+        f"MCX,M,800002,FUTCOM,0,SILVERM-{near:%d%b%Y}-FUT,1.0,SILVERM,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,SILVERM\n"
+        f"MCX,M,800003,FUTCOM,0,SILVERMIC-{near:%d%b%Y}-FUT,1.0,SILVERMIC,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,SILVERMIC\n"
+        f"MCX,M,800004,FUTCOM,0,SILVER100-{near:%d%b%Y}-FUT,1.0,SILVER100,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,SILVER100\n"
+        f"MCX,M,800005,FUTCOM,0,NATURALGAS-{near:%d%b%Y}-FUT,1.0,NATURALGAS,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,NATURALGAS\n"
+        f"MCX,M,800006,FUTCOM,0,NATGASMINI-{near:%d%b%Y}-FUT,1.0,NATGASMINI,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,NATGASMINI\n"
+    )
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=csv_body, status=200)
+
+    provider = DhanProvider([MCX_FUTCOM], name="dhan-mcx")
+    provider.sync_instruments()
+
+    assert provider._symbol_to_lot_size[f"SILVER-{near:%d%b%Y}-FUT"] == 30
     assert provider._symbol_to_lot_size[f"SILVERM-{near:%d%b%Y}-FUT"] == 5
+    assert provider._symbol_to_lot_size[f"SILVERMIC-{near:%d%b%Y}-FUT"] == 1
+    assert provider._symbol_to_lot_size[f"SILVER100-{near:%d%b%Y}-FUT"] == 10
+    assert provider._symbol_to_lot_size[f"NATURALGAS-{near:%d%b%Y}-FUT"] == 1250
+    assert provider._symbol_to_lot_size[f"NATGASMINI-{near:%d%b%Y}-FUT"] == 250
 
 
 @responses.activate
@@ -145,11 +178,19 @@ def test_sync_nse_composite_covers_equity_index_and_index_futures():
 
 
 def test_parse_lot_size_overrides_parses_default_value():
-    assert _parse_lot_size_overrides("GOLD:100,GOLDM:10,CRUDEOIL:100,CRUDEOILM:10") == {
+    from app.config import settings
+
+    assert _parse_lot_size_overrides(settings.mcx_lot_size_overrides) == {
         "GOLD": 100,
         "GOLDM": 10,
         "CRUDEOIL": 100,
         "CRUDEOILM": 10,
+        "SILVER": 30,
+        "SILVERM": 5,
+        "SILVERMIC": 1,
+        "SILVER100": 10,
+        "NATURALGAS": 1250,
+        "NATGASMINI": 250,
     }
 
 

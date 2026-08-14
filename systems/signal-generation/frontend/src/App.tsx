@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 import {
   INDICATOR_TYPE_LABELS,
@@ -474,6 +474,15 @@ const STOP_LOSS_INTERVALS: string[] = ["1min", "3min", "5min", "15min", "25min",
 
 function RuleManager() {
   const [rules, setRules] = useState<Rule[]>([]);
+  // rules is polled every POLL_INTERVAL_MS and gets a fresh array
+  // reference each tick even when nothing changed - the SL-interval
+  // default effect below must read the latest rules without
+  // re-subscribing to it (a [selected, rules] dependency array would
+  // re-fire, and therefore re-wipe backtestResult/gridResult, on every
+  // poll tick, not just on an actual rule switch - reproduced live as
+  // grid search results flashing then disappearing after ~5s).
+  const rulesRef = useRef(rules);
+  rulesRef.current = rules;
   const [indicators, setIndicators] = useState<Indicator[]>([]);
   const [universes, setUniverses] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -620,9 +629,14 @@ function RuleManager() {
     // existed. Always overwrites on switch, matching the reset above -
     // switching rules resets the whole backtest form to that rule's own
     // sensible defaults, not a carried-over choice from the last one.
-    const rule = rules.find((r) => r.id === selected);
+    // Reads rulesRef (not the reactive `rules` state) deliberately - see
+    // rulesRef's own comment above: `rules` is polled every 5s and must
+    // NOT be a dependency here, or this whole effect (including the two
+    // setGridResult(null)/setBacktestResult(null) resets above) would
+    // re-fire on every poll tick instead of only on an actual rule switch.
+    const rule = rulesRef.current.find((r) => r.id === selected);
     setBacktestSlInterval(rule && STOP_LOSS_INTERVALS.includes(rule.interval) ? (rule.interval as StopLossInterval) : "");
-  }, [selected, rules]);
+  }, [selected]);
 
   const selectedRule = rules.find((r) => r.id === selected);
   const selectedRuleConfig = selectedRule?.rule_config;

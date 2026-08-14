@@ -203,6 +203,40 @@ def test_resolve_ignores_unset_active_window():
     assert resolved.horizon == "intraday"
 
 
+@responses.activate
+def test_resolve_rejects_cleanly_when_active_window_set_but_timestamp_missing():
+    """Reproduces a real bug (2026-08-14): no intake path (Chartink,
+    manual, in-house) ever actually sets SignalIngest.timestamp - it's
+    None on arrival, normalized to "now" only by create_signal_from_ingest
+    right before calling resolve(). If resolve() is ever reached with
+    timestamp still None (this test bypasses that normalization on
+    purpose), it must raise a clean ResolutionError - matching this
+    function's own documented contract - not an unhandled AttributeError
+    from None.astimezone() that would 500 the whole request. This exact
+    crash went undetected until a Strategy finally had both
+    active_from_time/active_to_time set together for the first time,
+    since `if active_from and active_to` had always short-circuited
+    before reaching is_within_active_window on every earlier signal."""
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json={
+            "id": STRATEGY_ID,
+            "status": "live",
+            "horizon": "intraday",
+            "instrument_type": "spot",
+            "segment": "NSE",
+            "active_from_time": "09:15:00",
+            "active_to_time": "11:00:00",
+        },
+        status=200,
+    )
+    signal = _signal(timestamp=None)
+
+    with pytest.raises(ResolutionError, match="no timestamp"):
+        resolve(signal)
+
+
 
 @responses.activate
 def test_resolve_rejects_when_signal_generation_unreachable():

@@ -39,8 +39,20 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
 
     active_from = strategy.get("active_from_time")
     active_to = strategy.get("active_to_time")
-    if active_from and active_to and not is_within_active_window(signal.timestamp, active_from, active_to):
-        raise ResolutionError(f"signal received outside strategy's active window ({active_from}–{active_to} IST)")
+    if active_from and active_to:
+        # create_signal_from_ingest (the only production caller) always
+        # normalizes signal.timestamp to a real value before calling
+        # resolve() - this is defense-in-depth for any other caller, so a
+        # missing timestamp degrades to the same clean ResolutionError
+        # (persisted as a 'rejected' order, per this function's own
+        # docstring) rather than an unhandled AttributeError 500 -
+        # reproduced live 2026-08-14, the first time a Strategy ever had
+        # both fields set (every earlier signal short-circuited this
+        # branch entirely, since `and` is lazy).
+        if signal.timestamp is None:
+            raise ResolutionError("signal has no timestamp - cannot evaluate active window")
+        if not is_within_active_window(signal.timestamp, active_from, active_to):
+            raise ResolutionError(f"signal received outside strategy's active window ({active_from}–{active_to} IST)")
 
     horizon = strategy["horizon"]
     instrument_type = strategy["instrument_type"]

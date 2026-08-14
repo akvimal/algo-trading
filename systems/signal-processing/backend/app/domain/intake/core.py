@@ -30,7 +30,21 @@ def archive_raw_payload(db: Session, provider: str, raw_payload: dict) -> db_mod
 def create_signal_from_ingest(db: Session, signal: SignalIngest) -> dict:
     """Persists the signal, resolves it (or persists it as rejected with
     no publish), and XADDs the resolved order to orders.resolved on
-    success - the full POST /signals behavior, callable in-process."""
+    success - the full POST /signals behavior, callable in-process.
+
+    No intake path (Chartink, manual, in-house) ever actually sets
+    SignalIngest.timestamp today - it's always None on arrival. Normalized
+    here, once, before either use below: resolve() needs a real datetime
+    for is_within_active_window (it crashed with AttributeError on
+    None.astimezone() - reproduced live 2026-08-14 the first time a
+    Strategy ever had both active_from_time/active_to_time set, which is
+    why this went unnoticed until now - every earlier signal short-
+    circuited resolve()'s `if active_from and active_to` guard before
+    ever reaching is_within_active_window). Reassigning signal.timestamp
+    itself (not just a local variable) so persistence below and resolve()
+    are guaranteed to agree on the same value, rather than each computing
+    their own fallback and risking drift."""
+    signal.timestamp = signal.timestamp or datetime.now(timezone.utc)
     signal_row = db_models.Signal(
         strategy_id=uuid.UUID(signal.strategy_id),
         symbol=signal.symbol,
@@ -39,7 +53,7 @@ def create_signal_from_ingest(db: Session, signal: SignalIngest) -> dict:
         price=signal.price,
         source=signal.source,
         source_meta=signal.source_meta,
-        signal_ts=signal.timestamp or datetime.now(timezone.utc),
+        signal_ts=signal.timestamp,
     )
     db.add(signal_row)
     db.flush()  # assign signal_row.id before it's referenced below

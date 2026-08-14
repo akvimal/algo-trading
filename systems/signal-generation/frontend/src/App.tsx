@@ -1072,6 +1072,23 @@ function RuleManager() {
                           placeholder={editUnderlyingType === "symbol_list" ? "e.g. GOLDM,SILVER,CRUDEOIL" : undefined}
                         />
                       )}
+                      {r.rule_config?.type !== "breakout" && (
+                        <select
+                          value={editInterval}
+                          onChange={(e) => setEditInterval(e.target.value as Interval | "")}
+                          className="cell-input"
+                          title="Interval"
+                        >
+                          <option value="">&mdash;</option>
+                          <option value="1min">1m</option>
+                          <option value="3min">3m</option>
+                          <option value="5min">5m</option>
+                          <option value="15min">15m</option>
+                          <option value="30min">30m</option>
+                          <option value="60min">60m</option>
+                          <option value="daily">1d</option>
+                        </select>
+                      )}
                       {r.rule_config?.type === "breakout" ? (
                         <>
                           <div className="regime-checks" style={{ marginLeft: 0 }}>

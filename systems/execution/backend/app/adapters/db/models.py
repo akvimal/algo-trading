@@ -54,7 +54,9 @@ class OptionPositionGroup(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     signal_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
-    strategy_id = Column(UUID(as_uuid=True), nullable=False)
+    # NULL = manually opened (Manual tab, no auto-provisioned Strategy as
+    # of 2026-08-14) - same nullability/meaning as Position.strategy_id.
+    strategy_id = Column(UUID(as_uuid=True), nullable=True)
     underlying_symbol = Column(Text, nullable=False)
     exchange = Column(Text, nullable=False)
     segment = Column(Text, nullable=False)

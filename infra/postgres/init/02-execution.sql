@@ -148,7 +148,10 @@ CREATE TABLE IF NOT EXISTS execution.positions (
 CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     signal_id                UUID NOT NULL UNIQUE,
-    strategy_id              UUID NOT NULL,
+    -- NULL = manually opened (Manual tab, no auto-provisioned Strategy as
+    -- of 2026-08-14) - same nullability/meaning as positions.strategy_id
+    -- above.
+    strategy_id              UUID,
     underlying_symbol        TEXT NOT NULL,  -- the resolved order's own symbol (e.g. "NIFTY") - NOT either leg's own symbol
     exchange                 TEXT NOT NULL,
     segment                  TEXT NOT NULL REFERENCES execution.accounts (segment),

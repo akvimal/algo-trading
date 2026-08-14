@@ -424,9 +424,10 @@ def open_manual_position(
     db: Session,
     get_lot_size: GetLotSize,
 ) -> db_models.Position:
-    """Manual tab (spot/future only - options go through the real Strategy/
-    resolution pipeline instead, since strike/expiry selection lives there,
-    see docs/architecture.md). Deliberately NOT a ResolvedOrder - that type
+    """Manual tab (spot/future only - option orders go through the sibling
+    open_manual_option_group in option_position_manager.py instead, which
+    resolves its own legs directly rather than sharing this function's
+    sizing/gates). Deliberately NOT a ResolvedOrder - that type
     represents the signal-processing contract, and a manual order never
     touches it. Mirrors open_position's gates/sizing exactly (read that
     function alongside this one), with two differences: no Strategy means

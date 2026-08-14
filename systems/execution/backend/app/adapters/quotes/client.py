@@ -65,6 +65,62 @@ def resolve_symbol_by_security_id(exchange: str, security_id: str) -> Optional[s
     return resp.json()["symbol"]
 
 
+def resolve_underlying(segment: str, underlying: str) -> Optional[dict]:
+    """What to reference an option chain against for a logical underlying
+    (e.g. "GOLDM", "NIFTY", "BTCUSD") - chart_symbol specifically, not
+    trade_symbol: an NSE index option's underlying is the index SPOT
+    (chart_symbol), not the active-month future actually traded
+    (trade_symbol) - see market-data's DhanProvider.resolve_underlying.
+    Only used by open_manual_option_group (Manual tab's option path) -
+    the signal-driven path never calls this itself, since signal-
+    processing already resolved everything before publishing to
+    orders.resolved. None if unresolvable. Raw dict (chart_symbol,
+    chart_exchange, trade_symbol, trade_exchange, lot_size, expiry), not
+    re-modeled - callers only ever read chart_symbol/chart_exchange."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/instruments/resolve",
+        params={"segment": segment, "underlying": underlying},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_expiry_list(exchange: str, symbol: str) -> Optional[list[str]]:
+    """Active option expiry dates (YYYY-MM-DD) for `symbol` on `exchange` -
+    None if unresolvable (unknown underlying, or market-data has no
+    option-chain support for this exchange). Only used by
+    open_manual_option_group, to validate the user-picked expiry is a
+    real, currently-tradeable one before building legs against it."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/options/expiries",
+        params={"exchange": exchange, "symbol": symbol},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()["expiries"]
+
+
+def get_option_chain(exchange: str, symbol: str, expiry: str) -> Optional[dict]:
+    """Full option chain for `symbol` at `expiry` - the raw JSON shape
+    market-data's GET /options/chain returns, not re-modeled here since
+    app/domain/option_templates.py only ever reads a few fields off it.
+    None if unresolvable."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/options/chain",
+        params={"exchange": exchange, "symbol": symbol, "expiry": expiry},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_lot_size(exchange: str, symbol: str) -> Optional[float]:
     """Lot size for an already-resolved trading symbol (see market-data's
     GET /instruments/lot-size) - None if unknown, not an error. Only

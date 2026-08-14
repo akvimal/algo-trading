@@ -11,17 +11,26 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.adapters.quotes.client import get_ltp_batch
-from app.domain.models import StopLossUpdate
+from app.adapters.quotes.client import (
+    get_expiry_list,
+    get_ltp_batch,
+    get_lot_size,
+    get_option_chain,
+    resolve_symbol_by_security_id,
+    resolve_underlying,
+)
+from app.domain.models import ManualOptionPositionCreate, StopLossUpdate
 from app.domain.option_position_manager import (
     check_option_group_exits,
     compute_group_unrealized_pnl,
     legs_by_group,
+    open_manual_option_group,
     square_off_all_open_option_groups,
     square_off_due_option_groups,
     square_off_option_group,
     update_group_stop_loss,
 )
+from app.domain.position_manager import load_settings
 
 router = APIRouter()
 
@@ -30,7 +39,9 @@ def _group_to_out(row: db_models.OptionPositionGroup, legs: list[dict], live_com
     return {
         "id": str(row.id),
         "signal_id": str(row.signal_id),
-        "strategy_id": str(row.strategy_id),
+        # None = manually opened (Manual tab, no auto-provisioned Strategy
+        # as of 2026-08-14) - same as positions.py's _position_to_out.
+        "strategy_id": str(row.strategy_id) if row.strategy_id is not None else None,
         "underlying_symbol": row.underlying_symbol,
         "exchange": row.exchange,
         "segment": row.segment,
@@ -104,6 +115,38 @@ def list_option_groups(
         )
         for r in rows
     ]
+
+
+@router.post("/option-groups/manual")
+def open_manual(payload: ManualOptionPositionCreate, db: Session = Depends(get_db)):
+    """The Manual tab (signal-generation's frontend) - option orders,
+    bypassing signal-generation/signal-processing entirely (no
+    auto-provisioned Strategy, unlike the pre-2026-08-14 design - see
+    docs/architecture.md and open_manual_option_group's own docstring).
+    Always 200/201 regardless of whether the result is OPEN or REJECTED,
+    matching POST /positions/manual's own convention - a rejection is a
+    legitimate persisted outcome, not an HTTP error."""
+    settings = load_settings(db)
+    row = open_manual_option_group(
+        payload.segment,
+        payload.symbol,
+        payload.action,
+        payload.option_position_style,
+        payload.option_strike_moneyness,
+        payload.expiry,
+        payload.sl_scope,
+        payload.option_fixed_lots,
+        settings,
+        db,
+        resolve_underlying,
+        get_expiry_list,
+        get_option_chain,
+        get_ltp_batch,
+        resolve_symbol_by_security_id,
+        get_lot_size,
+    )
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
 
 @router.put("/option-groups/{group_id}/stop-loss")

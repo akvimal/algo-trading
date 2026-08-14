@@ -36,6 +36,7 @@ import logging
 import uuid
 from datetime import datetime
 from datetime import timezone as dt_timezone
+from types import SimpleNamespace
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -43,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.domain.models import ExecutionSettings, ResolvedOrder
+from app.domain.option_templates import bear_put_spread, bull_call_spread, naked_call, naked_put
 from app.domain.position_manager import (
     GetLotSize,
     GetLtpBatch,
@@ -65,6 +67,14 @@ logger = logging.getLogger(__name__)
 # (exchange, security_id) -> trading symbol, or None if unresolvable -
 # see market-data's GET /instruments/resolve-by-security-id.
 ResolveSymbolBySecurityId = Callable[[str, str], Optional[str]]
+# (segment, underlying) -> raw resolve dict (chart_symbol/chart_exchange/...),
+# or None if unresolvable - see market-data's GET /instruments/resolve.
+# Only used by open_manual_option_group below.
+ResolveUnderlying = Callable[[str, str], Optional[dict]]
+# (exchange, symbol) -> list of expiry date strings, or None if unresolvable.
+GetExpiryList = Callable[[str, str], Optional[list]]
+# (exchange, symbol, expiry) -> raw option chain dict, or None if unresolvable.
+GetOptionChain = Callable[[str, str, str], Optional[dict]]
 
 
 def legs_by_group(db: Session, groups: list) -> dict:
@@ -370,6 +380,273 @@ def open_option_group(
                 stop_loss_price=leg_sl,
                 initial_stop_loss_price=leg_sl,
                 target_price=leg_target,
+            )
+        )
+    db.commit()
+    return group
+
+
+def _reject_manual_group(
+    db: Session, signal_id: uuid.UUID, symbol: str, segment: str, action: str, strategy_type: str, reason: str
+) -> db_models.OptionPositionGroup:
+    """Manual-option counterpart to _reject_group - no leg Position rows,
+    strategy_id=None (never a real Strategy for this path at all, unlike
+    _reject_group's signal-driven ResolvedOrder.strategy_id)."""
+    logger.info("rejecting manual option order %s: %s", signal_id, reason)
+    row = db_models.OptionPositionGroup(
+        signal_id=signal_id,
+        strategy_id=None,
+        underlying_symbol=symbol,
+        exchange=segment,
+        segment=segment,
+        strategy_type=strategy_type,
+        action=action,
+        horizon="intraday",
+        status="REJECTED",
+        rejection_reason=reason,
+    )
+    db.add(row)
+    return row
+
+
+def open_manual_option_group(
+    segment: str,
+    symbol: str,
+    action: str,
+    option_position_style: str,
+    option_strike_moneyness: str,
+    expiry: str,
+    sl_scope: str,
+    option_fixed_lots: Optional[float],
+    settings: ExecutionSettings,
+    db: Session,
+    resolve_underlying: ResolveUnderlying,
+    get_expiry_list: GetExpiryList,
+    get_option_chain: GetOptionChain,
+    get_ltp_batch: GetLtpBatch,
+    resolve_symbol_by_security_id: ResolveSymbolBySecurityId,
+    get_lot_size: GetLotSize,
+) -> db_models.OptionPositionGroup:
+    """Manual tab (signal-generation's frontend) - option orders, bypassing
+    signal-generation/signal-processing entirely (no auto-provisioned
+    Strategy, unlike the pre-2026-08-14 design - see docs/architecture.md).
+    Deliberately a sibling to open_option_group, not a call into it - that
+    function takes a ResolvedOrder (always a real strategy_id, legs already
+    resolved by signal-processing's choose_strategy against an
+    automatically-picked expiry); this one resolves its own legs directly
+    against a caller-supplied `expiry` instead of choose_expiry's "always
+    nearest" behavior, and never has a Strategy at all (strategy_id=None
+    throughout, mirrors open_manual_position's spot/future precedent -
+    option_position_groups.strategy_id is nullable for exactly this
+    reason). Reuses every pure/impure helper open_option_group already
+    established (account loading, conflict resolution, quoting, sizing,
+    the combined-premium-as-BUY-price identity) - only leg SELECTION
+    differs, via this module's own option_templates.py port instead of
+    signal-processing's."""
+    signal_id = uuid.uuid4()
+    strategy_type_for_rejection = f"{option_position_style}_{action.lower()}"  # best-effort label pre-leg-selection
+
+    resolved = resolve_underlying(segment, symbol)
+    if resolved is None:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            f"could not resolve underlying '{symbol}' on {segment} for options",
+        )
+        db.commit()
+        return row
+    chart_symbol, chart_exchange = resolved["chart_symbol"], resolved["chart_exchange"]
+
+    expiries = get_expiry_list(chart_exchange, chart_symbol)
+    if not expiries or expiry not in expiries:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            f"'{expiry}' is not a currently-tradeable expiry for '{chart_symbol}' - available: {expiries}",
+        )
+        db.commit()
+        return row
+
+    chain = get_option_chain(chart_exchange, chart_symbol, expiry)
+    if chain is None:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            f"could not resolve option chain for '{chart_symbol}' ({expiry})",
+        )
+        db.commit()
+        return row
+
+    try:
+        if option_position_style == "naked":
+            if action == "BUY":
+                strategy_type, legs = "naked_call", naked_call(chain, option_strike_moneyness)
+            else:
+                strategy_type, legs = "naked_put", naked_put(chain, option_strike_moneyness)
+        elif action == "BUY":
+            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness)
+        else:
+            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness)
+    except ValueError as exc:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            f"could not build an option strategy for '{symbol}': {exc}",
+        )
+        db.commit()
+        return row
+
+    # Template output order is always [long, short?] - see
+    # option_templates.py's bull_call_spread/bear_put_spread/naked_*.
+    long_leg_dict = legs[0]
+    short_leg_dict = legs[1] if len(legs) == 2 else None
+
+    account = load_account(db, segment)
+    if account is None:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type, f"no paper-trading account configured for segment {segment}"
+        )
+        db.commit()
+        return row
+
+    now = datetime.now(dt_timezone.utc)
+    if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type,
+            f"received outside intraday window (square-off is {account.square_off_time})",
+        )
+        db.commit()
+        return row
+
+    # Manual orders always allow pyramiding, same fixed platform default as
+    # open_manual_position (spot/future) - no Strategy exists here to carry
+    # duplicate_signal_policy/counter_signal_policy.
+    conflict_check = SimpleNamespace(action=action, duplicate_signal_policy="add_position", counter_signal_policy="close_and_flip")
+    open_groups = db.query(db_models.OptionPositionGroup).filter_by(underlying_symbol=symbol, status="OPEN").all()
+    groups_to_close, reject_reason = _resolve_signal_conflicts(open_groups, conflict_check)
+    if reject_reason is not None:
+        row = _reject_manual_group(db, signal_id, symbol, segment, action, strategy_type, reject_reason)
+        db.commit()
+        return row
+
+    long_symbol = resolve_symbol_by_security_id(segment, long_leg_dict["security_id"])
+    short_symbol = resolve_symbol_by_security_id(segment, short_leg_dict["security_id"]) if short_leg_dict else None
+    if long_symbol is None or (short_leg_dict and short_symbol is None):
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type,
+            "could not resolve one or both option legs' security_id to a trading symbol",
+        )
+        db.commit()
+        return row
+
+    symbols_to_quote = [long_symbol] + ([short_symbol] if short_symbol else [])
+    quotes = get_ltp_batch(segment, symbols_to_quote)
+    long_premium = quotes.get(long_symbol)
+    short_premium = quotes.get(short_symbol) if short_symbol else 0.0
+    if long_premium is None or (short_symbol and short_premium is None):
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type, "could not fetch a live quote for one or both option legs"
+        )
+        db.commit()
+        return row
+
+    net_debit = long_premium - short_premium
+    if net_debit <= 0:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type,
+            f"combined net debit ({net_debit}) is not positive - can't size or monitor this spread",
+        )
+        db.commit()
+        return row
+
+    lot_size = get_lot_size(segment, long_symbol)
+    if lot_size is None:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type, f"could not determine lot size for {long_symbol} on {segment}"
+        )
+        db.commit()
+        return row
+
+    if groups_to_close:
+        legs_to_close = legs_by_group(db, groups_to_close)
+        for grp in groups_to_close:
+            grp_legs = legs_to_close.get(grp.id)
+            closed = (
+                grp_legs is not None
+                and "BUY" in grp_legs
+                and _close_group_at_cmp(grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, account, "counter_signal")
+            )
+            if not closed:
+                row = _reject_manual_group(
+                    db, signal_id, symbol, segment, action, strategy_type,
+                    f"could not close conflicting option group {grp.id} (quote unavailable) - "
+                    "counter_signal_policy='close_and_flip' requires closing it first",
+                )
+                db.commit()
+                return row
+
+    effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
+    capital_unit = "USD" if segment == "CRYPTO" else "INR"
+    if segment == "CRYPTO":
+        if settings.usdinr_rate is None:
+            row = _reject_manual_group(
+                db, signal_id, symbol, segment, action, strategy_type,
+                "no USDINR rate configured - set one in Settings to size a CRYPTO option position",
+            )
+            db.commit()
+            return row
+        effective_capital = effective_capital / settings.usdinr_rate
+
+    required_lots = option_fixed_lots if option_fixed_lots is not None else 1
+    if effective_capital < net_debit * lot_size * required_lots:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type,
+            f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
+            f"need at least {net_debit * lot_size * required_lots} for {required_lots} lot(s))",
+        )
+        db.commit()
+        return row
+
+    # No stop-loss at open time for manual option orders (matches the
+    # pre-2026-08-14 auto-provisioned-Strategy path, which never set one
+    # either) - use PUT /option-groups/{id}/stop-loss afterward, same as
+    # any other already-open group.
+    quantity = option_fixed_lots * lot_size if option_fixed_lots is not None else compute_quantity(effective_capital, net_debit, lot_size)
+
+    group_id = uuid.uuid4()
+    group = db_models.OptionPositionGroup(
+        id=group_id,
+        signal_id=signal_id,
+        strategy_id=None,
+        underlying_symbol=symbol,
+        exchange=segment,
+        segment=segment,
+        strategy_type=strategy_type,
+        action=action,
+        horizon="intraday",
+        quantity=quantity,
+        net_debit=net_debit,
+        sl_scope=sl_scope,
+        status="OPEN",
+        square_off_time=account.square_off_time,
+    )
+    db.add(group)
+
+    legs_to_write = [(long_leg_dict, long_symbol, long_premium)]
+    if short_leg_dict:
+        legs_to_write.append((short_leg_dict, short_symbol, short_premium))
+    for leg_dict, leg_symbol, premium in legs_to_write:
+        db.add(
+            db_models.Position(
+                signal_id=signal_id,
+                strategy_id=None,
+                symbol=leg_symbol,
+                exchange=segment,
+                segment=segment,
+                action=leg_dict["action"],
+                horizon="intraday",
+                instrument_type="option",
+                quantity=quantity,
+                entry_price=premium,
+                status="OPEN",
+                square_off_time=account.square_off_time,
+                option_group_id=group_id,
             )
         )
     db.commit()

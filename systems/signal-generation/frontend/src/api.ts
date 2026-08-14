@@ -663,11 +663,13 @@ export async function fetchLotSize(exchange: string, symbol: string): Promise<nu
 // Manual tab (ManualTab.tsx) - execution's own backend, read/written
 // directly from the browser (CORS-enabled), same direct-from-browser
 // cross-system pattern as market-data/signal-processing above - NOT
-// execution's own frontend's /api proxy convention. Spot/future orders
-// bypass signal-generation/signal-processing entirely (see
-// createManualPosition); option orders still need a real Strategy
-// (strike/expiry selection lives in signal-processing's choose_strategy),
-// auto-provisioned on demand - see findOrCreateManualStrategy below.
+// execution's own frontend's /api proxy convention. Both spot/future
+// (createManualPosition) AND option (createManualOptionGroup) orders
+// bypass signal-generation/signal-processing entirely as of 2026-08-14 -
+// no auto-provisioned Strategy for either anymore. Options resolve their
+// own legs directly in execution (see open_manual_option_group there),
+// with the user picking a real expiry via fetchExpiries below instead of
+// one being auto-chosen.
 // ---------------------------------------------------------------------
 
 const EXECUTION_PORT = import.meta.env.VITE_EXECUTION_PORT ?? "8002";
@@ -718,7 +720,9 @@ export type ManualOptionLeg = {
 export type ManualOptionGroup = {
   id: string;
   signal_id: string;
-  strategy_id: string;
+  // null = manually opened (Manual tab), bypassing Strategy entirely -
+  // same as ManualPosition.strategy_id above.
+  strategy_id: string | null;
   underlying_symbol: string;
   exchange: string;
   segment: Segment;
@@ -829,48 +833,36 @@ export async function squareOffOptionGroup(
   return asJson(res, "POST /option-groups/{id}/square-off");
 }
 
-// Reserved pseudo-provider name for the Manual tab's auto-provisioned
-// option Strategies/Rules - the in-house engine's periodic scan only ever
-// evaluates source_type="in_house", and no webhook route exists for
-// "manual" either, so a Strategy/Rule pair tagged this way is provably
-// inert: it can only ever receive a signal via the explicit POST /signals
-// call the Manual tab itself makes. See docs/architecture.md.
-const MANUAL_SOURCE_TYPE = "manual";
+// market-data's GET /options/expiries, called directly from the browser
+// (same direct-from-browser pattern as fetchLtp/fetchLotSize/
+// fetchCryptoSymbols) - backs the Manual tab's expiry <select> for option
+// rows. `symbol` is the logical underlying (e.g. "NIFTY", "BTCUSD"), not
+// a leg's own symbol.
+export async function fetchExpiries(exchange: string, symbol: string): Promise<string[]> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/options/expiries?${new URLSearchParams({ exchange, symbol })}`);
+  const data = await asJson<{ expiries: string[] }>(res, `GET /options/expiries (${exchange}/${symbol})`);
+  return data.expiries;
+}
 
-// Options need a real Strategy (strike/expiry selection lives entirely in
-// signal-processing's choose_strategy, driven by a Strategy's own
-// option_position_style/option_strike_moneyness) - auto-provisioned here
-// so the Manual tab still feels Strategy-free to the user. Reused across
-// orders with the same (segment, style, moneyness) - each combination
-// gets exactly one backing Strategy, immediately activated (status=live,
-// since a draft Strategy's signals reject as "not live"). Created with no
-// rule_id at all - source_type="manual" is external, Rule is in-house
-// only (see Strategy above).
-export async function findOrCreateManualStrategy(
-  segment: Segment,
-  optionStyle: OptionPositionStyle,
-  moneyness: OptionStrikeMoneyness,
-): Promise<Strategy> {
-  const name = `[Manual] ${segment} ${optionStyle} ${moneyness}`;
-  const existing = await fetchStrategies(MANUAL_SOURCE_TYPE);
-  const found = existing.find(
-    (s) =>
-      s.segment === segment &&
-      s.instrument_type === "option" &&
-      s.option_position_style === optionStyle &&
-      s.option_strike_moneyness === moneyness &&
-      s.name === name,
-  );
-  if (found) return found;
-  const created = await createStrategy({
-    name,
-    source_type: MANUAL_SOURCE_TYPE,
-    horizon: "intraday",
-    instrument_type: "option",
-    option_position_style: optionStyle,
-    option_strike_moneyness: moneyness,
-    segment,
-    duplicate_signal_policy: "add_position",
+// POST /option-groups/manual (execution) - option orders, bypasses
+// signal-generation/signal-processing entirely, same "always 200,
+// rejection is a legitimate outcome" convention as createManualPosition.
+// No auto-provisioned Strategy (removed 2026-08-14) - execution resolves
+// its own legs directly against the caller-supplied `expiry`.
+export async function createManualOptionGroup(payload: {
+  segment: Segment;
+  symbol: string;
+  action: "BUY" | "SELL";
+  option_position_style: OptionPositionStyle;
+  option_strike_moneyness: OptionStrikeMoneyness;
+  expiry: string;
+  sl_scope?: OptionSlScope;
+  option_fixed_lots?: number;
+}): Promise<ManualOptionGroup> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
-  return updateStrategy(created.id, { status: "live" });
+  return asJson(res, "POST /option-groups/manual");
 }

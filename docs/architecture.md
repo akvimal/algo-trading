@@ -123,7 +123,7 @@ It's a genuinely different feature from the per-strategy "send test signal" mini
 tab, kept as-is): that one still requires an existing Strategy and exercises its own real
 stop-loss method/conflict policy through the normal resolution pipeline; the Manual tab works for
 an arbitrary symbol/segment/action on the spot, walking up to execution with no Strategy at all for
-spot/future, and only a small, auto-managed Strategy for options (see below).
+either spot/future or options (see below) — as of 2026-08-14, neither instrument type needs one.
 
 **Spot/future bypasses signal-generation/signal-processing entirely.** `execution` gained
 `POST /positions/manual` (`app/domain/position_manager.py`'s `open_manual_position`, mirroring
@@ -139,28 +139,35 @@ duplicate — "add again" is just calling this endpoint again, no special-casing
 above), and an optional `stop_loss_price` is a raw price the caller supplies directly (no
 percent/candle method — this path has no Strategy to carry one).
 
-**Options still need a real Strategy** — strike/expiry/leg selection lives entirely in
-signal-processing's `choose_strategy`, driven by a Strategy's own `option_position_style`/
-`option_strike_moneyness`. Rather than duplicate that logic in a new ad-hoc resolution endpoint,
-the frontend auto-provisions a small, clearly-named Strategy+Rule pair on demand
-(`findOrCreateManualStrategy`/`findOrCreateManualRule`, `api.ts`) tagged with a reserved
-`source_type="manual"` and a `"[Manual] <segment> <style> <moneyness>"` name — one pair per
-distinct (segment, option_position_style, option_strike_moneyness) combination actually used,
-reused across orders rather than created fresh each time. This is safe by construction, not just by
-convention: the in-house engine's periodic scan explicitly filters `Strategy.source_type ==
-"in_house"` (`app/domain/engine.py`), and no webhook route exists for any other provider name — a
-`source_type="manual"` Strategy/Rule is **provably inert**, it can only ever receive a signal via
-the explicit `POST /signals` call the Manual tab itself makes, never fired automatically. Per-order
-lot count for options reuses `Strategy.option_fixed_lots`, PATCHed onto the shared auto-provisioned
-Strategy immediately before every send (`{"option_fixed_lots": <n or null>}`) — this needed one
-small, deliberately-scoped fix: `PATCH /strategies/{id}` previously only ever *set* fields (`if
-payload.option_fixed_lots is not None`), never cleared one back to `null`, which would have left a
-stale fixed-lot count from an earlier manual order silently applying to a later auto-sized one on
-the same reused Strategy. Now checks `"option_fixed_lots" in payload.model_fields_set` instead —
-Pydantic v2 distinguishes "key present in the request body" from "key absent entirely," so an
-explicit `null` clears it while every other existing caller that omits the key still leaves it
-untouched. Scoped to this one field only; every other `StrategyUpdate` field keeps its existing
-"not None means set" convention.
+**Options bypass signal-generation/signal-processing entirely too, as of 2026-08-14** — the
+original design (still described in older commits) auto-provisioned a small `source_type="manual"`
+Strategy on demand so `choose_strategy` could pick strike/expiry/legs, but this was replaced after
+two real problems surfaced: the auto-provisioned strategies cluttered the Strategies tab with rows
+the user never created, and `choose_strategy`'s expiry choice (`choose_expiry` — always the
+*nearest* expiry for `horizon != "positional"`, and the manual path hardcoded
+`horizon="intraday"`) left no way for someone manually triggering a trade to see or choose which
+contract they were actually trading.
+
+`execution` gained `POST /option-groups/manual` (`app/domain/option_position_manager.py`'s
+`open_manual_option_group`, a sibling to the signal-driven `open_option_group` — not a call into
+it, since that function takes a `ResolvedOrder` with an always-real `strategy_id` and
+already-resolved legs). It resolves its own legs directly: `resolve_underlying` →
+`get_expiry_list` (validates the caller-supplied `expiry` is one of the real, currently-tradeable
+ones — reject otherwise) → `get_option_chain` at that exact expiry → the same
+bias-to-template leg selection as signal-processing's `choose_strategy`, via a **ported copy** of
+`option_templates.py` (`execution/backend/app/domain/option_templates.py` — no shared code across
+`systems/*` by design, same reasoning `is_within_intraday_window` is independently duplicated
+today) with `choose_expiry` deliberately omitted, since expiry is now explicit user input, not
+auto-picked. Every other gate/sizing step (account load, `_resolve_signal_conflicts`, live quoting,
+lot sizing, the combined-premium-as-BUY-price identity) is reused unchanged from
+`open_option_group`'s own helpers. `option_position_groups.strategy_id` was loosened to nullable
+for this (same nullability relaxation `positions.strategy_id` already had for spot/future) —
+`NULL` means "manually opened," and no leftover auto-provisioned Strategy rows accumulate anymore.
+The Manual tab's option rows gained a real Expiry `<select>`, populated via market-data's
+already-generic `GET /options/expiries` called directly from the browser (same
+direct-from-browser pattern as the existing Symbol/CRYPTO-symbol picker). No stop-loss-at-open
+support for manual option orders (matches the pre-2026-08-14 behavior, which never set one
+either) — use `PUT /option-groups/{id}/stop-loss` afterward, same as any other open group.
 
 **Trigger price is a plain browser-side watch, not a persisted pending-order concept.** There's no
 backend support for "wait until price X, then open" anywhere — when the Manual tab's price field is

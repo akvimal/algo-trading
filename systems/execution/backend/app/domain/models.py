@@ -121,6 +121,33 @@ class ManualPositionCreate(BaseModel):
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
 
 
+class ManualOptionPositionCreate(BaseModel):
+    """POST /option-groups/manual - the Manual tab (signal-generation's
+    frontend), option orders. Deliberately not a ResolvedOrder, same
+    reasoning as ManualPositionCreate above - and deliberately NOT routed
+    through an auto-provisioned Strategy either (the pre-2026-08-14 design)
+    - see open_manual_option_group's docstring. No price field: option
+    legs are always priced off a live quote at open time, never a
+    caller-supplied price (mirrors open_option_group, which never reads
+    order.price for leg pricing either)."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str  # the logical underlying (e.g. "NIFTY", "GOLDM", "BTCUSD"), not a leg's own symbol
+    action: Literal["BUY", "SELL"]
+    option_position_style: Literal["spread", "naked"] = "spread"
+    option_strike_moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"
+    # User-picked, not auto-chosen - the whole point of this endpoint over
+    # the Strategy-mediated path, which always picked the nearest expiry
+    # for horizon='intraday' with no override. Validated against a live
+    # GET /options/expiries call in open_manual_option_group, not just
+    # format-checked here.
+    expiry: str
+    sl_scope: Literal["combined", "individual"] = "combined"
+    # Bypasses auto-sizing entirely when given - same precedence pattern
+    # as Strategy.option_fixed_lots in open_option_group.
+    option_fixed_lots: Optional[float] = Field(default=None, gt=0)
+
+
 class StopLossUpdate(BaseModel):
     """PUT /positions/{id}/stop-loss and PUT /option-groups/{id}/stop-loss."""
 

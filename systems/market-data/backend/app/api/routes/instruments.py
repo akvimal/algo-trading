@@ -22,11 +22,13 @@ def sync_status():
 def resolve_underlying(segment: str, underlying: str):
     """Given a logical underlying (e.g. "GOLDM", "NIFTY") on a segment,
     resolve what to chart indicators on and what to actually trade - see
-    DhanProvider.resolve_underlying. Used by signal-generation's engine
-    and signal-processing's option-strategy resolution; execution instead
-    uses GET /instruments/resolve-by-security-id below (it already deals
-    in already-resolved option legs' security_id, not a logical
-    underlying name)."""
+    DhanProvider.resolve_underlying. Used by signal-generation's engine,
+    signal-processing's option-strategy resolution, and (as of 2026-08-14)
+    execution's own open_manual_option_group, which needs a logical
+    underlying's chart_symbol to query an option chain against for the
+    Manual tab's option orders. For an already-resolved order's option
+    legs (a security_id, not a logical underlying name), execution instead
+    uses GET /instruments/resolve-by-security-id below."""
     try:
         provider = get_provider(segment)
     except ValueError as exc:

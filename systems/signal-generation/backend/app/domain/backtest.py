@@ -331,6 +331,69 @@ def simulate_trades(
     return trades
 
 
+def _win_rate(trades: list[SimulatedTrade]) -> float:
+    """% of trades with pnl > 0 - a trade with pnl == 0 (e.g. an
+    end-of-data exit at the same price it entered) counts as neither a
+    win nor a loss, so it still lowers the rate, same as a real loss
+    would for "did this trade make money" purposes."""
+    if not trades:
+        return 0.0
+    wins = sum(1 for t in trades if t.pnl > 0)
+    return wins / len(trades) * 100
+
+
+def _max_drawdown(trades: list[SimulatedTrade]) -> float:
+    """Largest peak-to-trough decline in CUMULATIVE hypothetical_pnl,
+    walking trades in the order they actually closed (exit_time, not
+    entry_time - pnl realizes at close) - not a real equity-curve
+    drawdown (simulate_trades models no position sizing/capital, see its
+    own docstring), just how much the running total ever gave back from
+    its own high-water mark. Always >= 0; 0.0 for no trades or a
+    cumulative total that never dipped below its own running peak."""
+    if not trades:
+        return 0.0
+    ordered = sorted(trades, key=lambda t: t.exit_time)
+    cumulative = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for t in ordered:
+        cumulative += t.pnl
+        peak = max(peak, cumulative)
+        max_dd = max(max_dd, peak - cumulative)
+    return max_dd
+
+
+def _time_of_day_breakdown(trades: list[SimulatedTrade], bucket_minutes: int) -> list[dict]:
+    """Groups trades by their ENTRY time's clock-time-of-day into
+    bucket_minutes-wide buckets, clock-aligned to midnight (same
+    alignment convention market-data's aggregate_candles already uses for
+    its own N-minute bars) - not aligned to market open, so results are
+    comparable across segments with different session start times (NSE
+    vs CRYPTO's 24/7). Only buckets with at least one trade are
+    returned, sorted by start time - answers "which time of day is this
+    rule most/least profitable," the point of surfacing this at all."""
+    buckets: dict[int, list[SimulatedTrade]] = {}
+    for t in trades:
+        entry_dt = datetime.fromisoformat(t.entry_time)
+        minute_of_day = entry_dt.hour * 60 + entry_dt.minute
+        bucket_start = (minute_of_day // bucket_minutes) * bucket_minutes
+        buckets.setdefault(bucket_start, []).append(t)
+
+    def _fmt(minute_of_day: int) -> str:
+        return f"{(minute_of_day // 60) % 24:02d}:{minute_of_day % 60:02d}"
+
+    return [
+        {
+            "start": _fmt(bucket_start),
+            "end": _fmt(bucket_start + bucket_minutes),
+            "trade_count": len(bucket_trades),
+            "hypothetical_pnl": sum(t.pnl for t in bucket_trades),
+            "win_rate": _win_rate(bucket_trades),
+        }
+        for bucket_start, bucket_trades in sorted(buckets.items())
+    ]
+
+
 def replay(
     bias_fn: BiasFn,
     min_bars: int,
@@ -338,14 +401,22 @@ def replay(
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
     regime_indicators: RegimeIndicators = (),
+    time_bucket_minutes: Optional[int] = None,
 ) -> dict:
     """The route-facing report: runs simulate_trades and totals the
     result. See simulate_trades' own docstring for what "hypothetical_pnl"
-    does and doesn't account for."""
+    does and doesn't account for. win_rate/max_drawdown are always
+    included (cheap, always useful, including for grid_search's own
+    per-combination calls below). time_of_day_breakdown is opt-in
+    (time_bucket_minutes given) - a full per-bucket table on every one of
+    a grid search's combinations would be far more data than that report
+    is meant to carry, so only the single-backtest route requests it."""
     trades = simulate_trades(bias_fn, min_bars, candles, exit_config, sl_candles, regime_indicators)
-    return {
+    report = {
         "trade_count": len(trades),
         "hypothetical_pnl": sum(t.pnl for t in trades),
+        "win_rate": _win_rate(trades),
+        "max_drawdown": _max_drawdown(trades),
         "trades": [
             {
                 "entry_time": t.entry_time,
@@ -359,6 +430,9 @@ def replay(
             for t in trades
         ],
     }
+    if time_bucket_minutes is not None:
+        report["time_of_day_breakdown"] = _time_of_day_breakdown(trades, time_bucket_minutes)
+    return report
 
 
 def expand_grid(base_params: dict, param_grid: dict[str, list]) -> list[dict]:

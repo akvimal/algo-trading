@@ -373,9 +373,22 @@ export type BacktestTrade = {
   pnl: number;
 };
 
+export type TimeOfDayBucket = {
+  start: string; // "HH:MM", clock-aligned (not market-open-aligned)
+  end: string;
+  trade_count: number;
+  hypothetical_pnl: number;
+  win_rate: number;
+};
+
 export type BacktestResult = {
   trade_count: number;
   hypothetical_pnl: number;
+  win_rate: number;
+  max_drawdown: number;
+  // Only present when the request set time_bucket_minutes - see
+  // backtestOverrides' own comment.
+  time_of_day_breakdown?: TimeOfDayBucket[];
   trades: BacktestTrade[];
 };
 
@@ -432,6 +445,10 @@ export type RuleBacktestRequest = {
   square_off_time?: string;
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
+  // Opt-in - adds time_of_day_breakdown to the report, bucketed into
+  // this many clock-aligned minutes (e.g. 60 = hourly). Omitted means no
+  // breakdown at all, not just an empty one.
+  time_bucket_minutes?: number;
 };
 
 export type RuleBacktestGridRequest = {

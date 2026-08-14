@@ -549,6 +549,11 @@ function RuleManager() {
   const [backtestTargetPercent, setBacktestTargetPercent] = useState("");
   const [backtestTrailingEnabled, setBacktestTrailingEnabled] = useState(false);
   const [backtestSquareOffTime, setBacktestSquareOffTime] = useState("");
+  // Opt-in - adds time_of_day_breakdown to the report (which time of day
+  // this rule is most/least profitable), bucketed into this many
+  // clock-aligned minutes. Blank omits it entirely, same as before this
+  // existed - not every backtest run needs the extra table.
+  const [backtestTimeBucketMinutes, setBacktestTimeBucketMinutes] = useState("");
   const [backtestResult, setBacktestResult] = useState<BacktestResult | UniverseBacktestResult | null>(null);
   const [backtesting, setBacktesting] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
@@ -806,6 +811,7 @@ function RuleManager() {
       square_off_time: backtestSquareOffTime ? `${backtestSquareOffTime}:00` : undefined,
       option_position_style: backtestInstrumentType === "option" ? backtestOptionPositionStyle : undefined,
       option_strike_moneyness: backtestInstrumentType === "option" ? backtestOptionStrikeMoneyness : undefined,
+      time_bucket_minutes: backtestTimeBucketMinutes ? Number(backtestTimeBucketMinutes) : undefined,
     };
   }
 
@@ -1427,6 +1433,18 @@ function RuleManager() {
               Square-off time <span className="optional">(optional)</span>
               <input type="time" value={backtestSquareOffTime} onChange={(e) => setBacktestSquareOffTime(e.target.value)} />
             </label>
+            <label>
+              Time-of-day bucket (min) <span className="optional">(optional)</span>
+              <input
+                type="number"
+                min="1"
+                max="1440"
+                step="1"
+                placeholder="e.g. 60 - shows a P&L-by-time-of-day table"
+                value={backtestTimeBucketMinutes}
+                onChange={(e) => setBacktestTimeBucketMinutes(e.target.value)}
+              />
+            </label>
             <button type="button" onClick={handleBacktest} disabled={backtesting}>
               {backtesting ? "Running..." : "Run backtest"}
             </button>
@@ -1440,6 +1458,12 @@ function RuleManager() {
                   hypothetical P&amp;L {backtestResult.hypothetical_pnl >= 0 ? "+" : ""}
                   {backtestResult.hypothetical_pnl.toFixed(2)}
                 </span>
+                {!("pooled" in backtestResult) && (
+                  <span className="muted">
+                    {" "}
+                    - {backtestResult.win_rate.toFixed(1)}% win rate, max drawdown {backtestResult.max_drawdown.toFixed(2)}
+                  </span>
+                )}
                 {"pooled" in backtestResult && (
                   <span className="muted">
                     {" "}
@@ -1458,6 +1482,8 @@ function RuleManager() {
                           <th>Symbol</th>
                           <th>Trades</th>
                           <th>Hypothetical P&amp;L</th>
+                          <th>Win %</th>
+                          <th>Max drawdown</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1471,6 +1497,8 @@ function RuleManager() {
                                 {r.hypothetical_pnl >= 0 ? "+" : ""}
                                 {r.hypothetical_pnl.toFixed(2)}
                               </td>
+                              <td className="num">{r.win_rate.toFixed(1)}%</td>
+                              <td className="num">{r.max_drawdown.toFixed(2)}</td>
                             </tr>
                           ))}
                       </tbody>
@@ -1515,6 +1543,40 @@ function RuleManager() {
                     </table>
                   </div>
                 )
+              )}
+              {!("pooled" in backtestResult) && backtestResult.time_of_day_breakdown && backtestResult.time_of_day_breakdown.length > 0 && (
+                <>
+                  <h3>P&amp;L by time of day</h3>
+                  <div className="table-scroll">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Window</th>
+                          <th>Trades</th>
+                          <th>Win %</th>
+                          <th>Hypothetical P&amp;L</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...backtestResult.time_of_day_breakdown]
+                          .sort((a, b) => b.hypothetical_pnl - a.hypothetical_pnl)
+                          .map((bucket) => (
+                            <tr key={bucket.start}>
+                              <td>
+                                {bucket.start}&ndash;{bucket.end}
+                              </td>
+                              <td className="num">{bucket.trade_count}</td>
+                              <td className="num">{bucket.win_rate.toFixed(1)}%</td>
+                              <td className={`num ${bucket.hypothetical_pnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+                                {bucket.hypothetical_pnl >= 0 ? "+" : ""}
+                                {bucket.hypothetical_pnl.toFixed(2)}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </>
           )}

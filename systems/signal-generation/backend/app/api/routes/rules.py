@@ -369,6 +369,7 @@ def _backtest_one_symbol(
             _exit_config_for(payload),
             sl_candles,
             regime_indicators,
+            payload.time_bucket_minutes,
         )
 
     if not isinstance(rule, CrossoverRuleConfig):
@@ -395,6 +396,7 @@ def _backtest_one_symbol(
         _exit_config_for(payload),
         sl_candles,
         regime_indicators,
+        payload.time_bucket_minutes,
     )
 
 

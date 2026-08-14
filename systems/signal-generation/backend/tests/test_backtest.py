@@ -6,6 +6,9 @@ from app.domain import backtest as backtest_module
 from app.domain.backtest import (
     MAX_GRID_COMBINATIONS,
     ExitConfig,
+    _max_drawdown,
+    _time_of_day_breakdown,
+    _win_rate,
     expand_grid,
     expand_stop_loss_grid,
     grid_search,
@@ -14,7 +17,7 @@ from app.domain.backtest import (
 )
 from app.domain.rule import CrossoverRuleConfig, RangeBreakoutRuleConfig
 from app.domain.range_breakout import evaluate_range_breakout
-from app.domain.rules import CandleClose, bars_needed, evaluate
+from app.domain.rules import CandleClose, SimulatedTrade, bars_needed, evaluate
 
 RULE = CrossoverRuleConfig(indicator_id="11111111-1111-1111-1111-111111111111")
 RSI_PARAMS = {"period": 2, "sma_period": 2}
@@ -119,7 +122,110 @@ def test_replay_finds_the_single_known_signal_and_reports_end_of_data():
 def test_replay_too_few_candles_finds_nothing():
     candles = _flat_candles([10, 11, 12])
     result = replay(_bias_fn, _MIN_BARS, candles)
-    assert result == {"trade_count": 0, "hypothetical_pnl": 0.0, "trades": []}
+    assert result == {"trade_count": 0, "hypothetical_pnl": 0.0, "win_rate": 0.0, "max_drawdown": 0.0, "trades": []}
+
+
+def test_replay_omits_time_of_day_breakdown_by_default():
+    result = replay(_bias_fn, _MIN_BARS, _entry_fixture())
+    assert "time_of_day_breakdown" not in result
+
+
+def test_replay_includes_time_of_day_breakdown_when_requested():
+    result = replay(_bias_fn, _MIN_BARS, _entry_fixture(), time_bucket_minutes=60)
+    assert "time_of_day_breakdown" in result
+    assert result["time_of_day_breakdown"][0]["trade_count"] == 1
+
+
+# --- _win_rate / _max_drawdown / _time_of_day_breakdown --------------------------------------
+
+
+def _trade(entry_time: str, exit_time: str, pnl: float) -> SimulatedTrade:
+    return SimulatedTrade(
+        entry_time=entry_time, direction="bullish", entry_price=100.0, exit_time=exit_time, exit_price=100.0 + pnl,
+        exit_reason="target", pnl=pnl,
+    )
+
+
+def test_win_rate_no_trades_is_zero():
+    assert _win_rate([]) == 0.0
+
+
+def test_win_rate_counts_strictly_positive_pnl_only():
+    trades = [_trade(_ts(0), _ts(1), 5.0), _trade(_ts(1), _ts(2), -3.0), _trade(_ts(2), _ts(3), 0.0)]
+    assert _win_rate(trades) == pytest.approx(100 / 3)
+
+
+def test_win_rate_all_winners():
+    trades = [_trade(_ts(0), _ts(1), 5.0), _trade(_ts(1), _ts(2), 2.0)]
+    assert _win_rate(trades) == 100.0
+
+
+def test_max_drawdown_no_trades_is_zero():
+    assert _max_drawdown([]) == 0.0
+
+
+def test_max_drawdown_never_dips_below_peak_is_zero():
+    # Cumulative: 5, 8, 12 - monotonically rising, no drawdown at all.
+    trades = [_trade(_ts(0), _ts(1), 5.0), _trade(_ts(1), _ts(2), 3.0), _trade(_ts(2), _ts(3), 4.0)]
+    assert _max_drawdown(trades) == 0.0
+
+
+def test_max_drawdown_finds_the_worst_peak_to_trough_decline():
+    # Cumulative sequence (by exit order): 10, 4, 6, -2, 5.
+    # Peak hits 10 (after trade 1), troughs at -2 (after trade 4) -> drawdown 12.
+    # A later peak of 6 recovers only to 5 (drawdown 1) - 12 is still the worst.
+    trades = [
+        _trade(_ts(0), _ts(1), 10.0),
+        _trade(_ts(1), _ts(2), -6.0),
+        _trade(_ts(2), _ts(3), 2.0),
+        _trade(_ts(3), _ts(4), -8.0),
+        _trade(_ts(4), _ts(5), 7.0),
+    ]
+    assert _max_drawdown(trades) == pytest.approx(12.0)
+
+
+def test_max_drawdown_orders_by_exit_time_not_list_order():
+    # Same trades as above but shuffled in the input list - exit_time
+    # ordering must still produce the same result.
+    trades = [
+        _trade(_ts(3), _ts(4), -8.0),
+        _trade(_ts(0), _ts(1), 10.0),
+        _trade(_ts(4), _ts(5), 7.0),
+        _trade(_ts(1), _ts(2), -6.0),
+        _trade(_ts(2), _ts(3), 2.0),
+    ]
+    assert _max_drawdown(trades) == pytest.approx(12.0)
+
+
+def test_time_of_day_breakdown_groups_by_entry_clock_time():
+    trades = [
+        _trade("2026-08-12T09:20:00", "2026-08-12T09:25:00", 5.0),
+        _trade("2026-08-12T09:45:00", "2026-08-12T09:50:00", -2.0),
+        _trade("2026-08-12T10:05:00", "2026-08-12T10:10:00", 3.0),
+    ]
+    rows = _time_of_day_breakdown(trades, 60)
+
+    assert len(rows) == 2
+    assert rows[0] == {"start": "09:00", "end": "10:00", "trade_count": 2, "hypothetical_pnl": 3.0, "win_rate": 50.0}
+    assert rows[1] == {"start": "10:00", "end": "11:00", "trade_count": 1, "hypothetical_pnl": 3.0, "win_rate": 100.0}
+
+
+def test_time_of_day_breakdown_finer_bucket_size():
+    trades = [
+        _trade("2026-08-12T09:20:00", "2026-08-12T09:25:00", 5.0),
+        _trade("2026-08-12T09:45:00", "2026-08-12T09:50:00", -2.0),
+    ]
+    rows = _time_of_day_breakdown(trades, 30)
+
+    assert len(rows) == 2
+    assert rows[0]["start"] == "09:00"
+    assert rows[0]["end"] == "09:30"
+    assert rows[1]["start"] == "09:30"
+    assert rows[1]["end"] == "10:00"
+
+
+def test_time_of_day_breakdown_empty_trades_is_empty_list():
+    assert _time_of_day_breakdown([], 60) == []
 
 
 # --- simulate_trades: stop-loss / target / square-off / trailing -----------------------------

@@ -469,6 +469,11 @@ class RuleBacktestRequest(BaseModel):
     # instrument_type='option' only.
     option_position_style: Literal["spread", "naked"] = "spread"
     option_strike_moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"
+    # Opt-in - see app/domain/backtest.py's replay/_time_of_day_breakdown.
+    # Omitted means the report has no time_of_day_breakdown key at all,
+    # same as before this field existed. le=1440 (a full day) - anything
+    # wider isn't really "time of day" bucketing anymore.
+    time_bucket_minutes: Optional[int] = Field(default=None, gt=0, le=1440)
 
 
 class RuleBacktestGridRequest(BaseModel):

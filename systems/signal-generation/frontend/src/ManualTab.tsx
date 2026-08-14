@@ -178,8 +178,11 @@ export default function ManualTab() {
   // since it's stable within a session (not a live-updating value like
   // price/lot size, though a fresh expiry could appear after a rollover -
   // acceptable to require a page reload to pick that up). Backs the
-  // Expiry <select> below - the user picks one explicitly instead of one
-  // being auto-chosen, unlike the pre-2026-08-14 Strategy-mediated flow.
+  // Expiry <select> below - auto-defaults to the nearest one once loaded
+  // (so placing an order needs no extra click, matching the pre-2026-08-14
+  // Strategy-mediated flow's own "always nearest" behavior) but stays
+  // visible/overridable, unlike that old flow - you can see and change
+  // which contract you're actually trading instead of it being silent.
   const [expiriesCache, setExpiriesCache] = useState<Record<string, string[]>>({});
   useEffect(() => {
     const missing = [
@@ -201,7 +204,19 @@ export default function ManualTab() {
     ).then((results) => {
       if (cancelled) return;
       const updates = Object.fromEntries(results.filter((r): r is readonly [string, string[]] => r !== null));
-      if (Object.keys(updates).length > 0) setExpiriesCache((prev) => ({ ...prev, ...updates }));
+      if (Object.keys(updates).length === 0) return;
+      setExpiriesCache((prev) => ({ ...prev, ...updates }));
+      // Auto-default each matching row still missing an explicit choice to
+      // the nearest (soonest) expiry - never overwrites one the user
+      // already picked.
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.expiry || !(r.instrumentType === "option" && r.symbol)) return r;
+          const list = updates[`${r.segment}:${r.symbol}`];
+          if (!list || list.length === 0) return r;
+          return { ...r, expiry: [...list].sort()[0] };
+        }),
+      );
     });
     return () => {
       cancelled = true;
@@ -608,7 +623,11 @@ export default function ManualTab() {
                   Expiry
                   <select value={row.expiry} onChange={(e) => updateRow(row.id, { expiry: e.target.value })}>
                     <option value="" disabled>
-                      {expiriesCache[`${row.segment}:${row.symbol}`] ? "Select an expiry" : "Loading..."}
+                      {!row.symbol
+                        ? "Pick a symbol first"
+                        : expiriesCache[`${row.segment}:${row.symbol}`]
+                          ? "Select an expiry"
+                          : "Loading..."}
                     </option>
                     {(expiriesCache[`${row.segment}:${row.symbol}`] ?? []).map((exp) => (
                       <option key={exp} value={exp}>

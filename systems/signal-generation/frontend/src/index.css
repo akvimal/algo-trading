@@ -326,7 +326,7 @@ tbody tr:last-child td {
 }
 
 .hint {
-  display: none;
+  display: block;
   font-size: 0.82rem !important;
   color: var(--text-dim);
   background: var(--surface-raised);

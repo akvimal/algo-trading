@@ -8,6 +8,7 @@ import {
   type CounterSignalPolicy,
   type DuplicateSignalPolicy,
   type GridBacktestResult,
+  type GridBacktestRow,
   type Horizon,
   type Indicator,
   type IndicatorType,
@@ -44,6 +45,7 @@ import {
   fetchStrategies,
   sendManualSignal,
   fetchUniverses,
+  updateIndicator,
   updateRule,
   updateStrategy,
 } from "./api";
@@ -575,14 +577,25 @@ function RuleManager() {
   const [backtesting, setBacktesting] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
+  // Backtest and grid search share one rule-detail panel, split into tabs
+  // rather than two always-visible stacked sections.
+  const [backtestSubTab, setBacktestSubTab] = useState<"backtest" | "grid">("backtest");
+
   const [gridPeriodValues, setGridPeriodValues] = useState("");
   const [gridSmaPeriodValues, setGridSmaPeriodValues] = useState("");
-  // Second sweep dimension, stop_loss_method='indicator' only - candidate
-  // SL EMA periods, same comma-separated shape as Period/SMA period above.
+  // Second sweep dimension - candidate SL EMA periods, same comma-separated
+  // shape as Period/SMA period above. Standalone within Grid search - filling
+  // this in is what turns the sweep on (forces stop_loss_method='indicator'
+  // for the grid run), independent of whatever the Backtest tab's own
+  // Stop-loss dropdown happens to be set to.
   const [gridSlIndicatorPeriodValues, setGridSlIndicatorPeriodValues] = useState("");
   const [gridResult, setGridResult] = useState<GridBacktestResult | null>(null);
   const [gridSearching, setGridSearching] = useState(false);
   const [gridError, setGridError] = useState<string | null>(null);
+  // Applying a winning (period, sma_period) combo straight to the rule's
+  // referenced Indicator - PATCH /indicators/{id}, see handleApplyGridWinner.
+  const [applyingGridWinner, setApplyingGridWinner] = useState(false);
+  const [applyGridWinnerStatus, setApplyGridWinnerStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -883,23 +896,32 @@ function RuleManager() {
       return;
     }
 
-    const slPeriodValues = backtestSlMethod === "indicator" ? parseGridValues(gridSlIndicatorPeriodValues) : [];
+    const slPeriodValues = parseGridValues(gridSlIndicatorPeriodValues);
+    // Filling in SL EMA period values is what turns the sweep on for this
+    // grid run, standalone from the Backtest tab's own Stop-loss dropdown -
+    // forces stop_loss_method='indicator' regardless of what that's set to.
+    const sweepingSl = slPeriodValues.length > 0;
 
     setGridSearching(true);
     setGridError(null);
     setGridResult(null);
+    setApplyGridWinnerStatus(null);
     try {
       const result = await backtestRuleGrid(selected, backtestFrom, backtestTo, paramGrid, {
-        stop_loss_method: backtestSlMethod || undefined,
+        stop_loss_method: sweepingSl ? "indicator" : backtestSlMethod || undefined,
         stop_loss_interval:
-          backtestSlMethod === "previous_candle" || backtestSlMethod === "indicator" ? backtestSlInterval || undefined : undefined,
-        stop_loss_percent: backtestSlMethod === "percent" && backtestSlPercent ? Number(backtestSlPercent) : undefined,
-        stop_loss_indicator_type: backtestSlMethod === "indicator" ? backtestSlIndicatorType : undefined,
+          sweepingSl || backtestSlMethod === "previous_candle" || backtestSlMethod === "indicator"
+            ? backtestSlInterval || undefined
+            : undefined,
+        stop_loss_percent: !sweepingSl && backtestSlMethod === "percent" && backtestSlPercent ? Number(backtestSlPercent) : undefined,
+        stop_loss_indicator_type: sweepingSl || backtestSlMethod === "indicator" ? backtestSlIndicatorType : undefined,
         stop_loss_indicator_params:
-          backtestSlMethod === "indicator" && backtestSlIndicatorPeriod ? { period: Number(backtestSlIndicatorPeriod) } : undefined,
-        stop_loss_indicator_param_grid: slPeriodValues.length > 0 ? { period: slPeriodValues } : undefined,
+          !sweepingSl && backtestSlMethod === "indicator" && backtestSlIndicatorPeriod
+            ? { period: Number(backtestSlIndicatorPeriod) }
+            : undefined,
+        stop_loss_indicator_param_grid: sweepingSl ? { period: slPeriodValues } : undefined,
         target_percent: backtestTargetPercent ? Number(backtestTargetPercent) : undefined,
-        trailing_stop_enabled: backtestSlMethod ? backtestTrailingEnabled : undefined,
+        trailing_stop_enabled: sweepingSl ? backtestTrailingEnabled : backtestSlMethod ? backtestTrailingEnabled : undefined,
         square_off_time: backtestSquareOffTime ? `${backtestSquareOffTime}:00` : undefined,
       });
       setGridResult(result);
@@ -907,6 +929,27 @@ function RuleManager() {
       setGridError(err instanceof Error ? err.message : "Grid search failed");
     } finally {
       setGridSearching(false);
+    }
+  }
+
+  // Writes a grid-search row's (period, sma_period) straight to the rule's
+  // referenced Indicator (PATCH /indicators/{id}) - previously the report
+  // was a dead end, you had to go re-type the winning numbers into the
+  // Indicators panel yourself. Only ever period/sma_period (RSI's own two
+  // params, the only thing grid search sweeps) - the SL EMA sweep dimension
+  // isn't stored on an Indicator row at all, nothing to apply there.
+  async function handleApplyGridWinner(row: GridBacktestRow) {
+    if (!selectedIndicator) return;
+    setApplyingGridWinner(true);
+    setApplyGridWinnerStatus(null);
+    try {
+      const updated = await updateIndicator(selectedIndicator.id, { params: row.params as RsiParams });
+      setIndicators((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+      setApplyGridWinnerStatus(`Applied period=${row.params.period}, sma_period=${row.params.sma_period} to ${selectedIndicator.name}.`);
+    } catch (err) {
+      setApplyGridWinnerStatus(err instanceof Error ? `Failed to apply: ${err.message}` : "Failed to apply");
+    } finally {
+      setApplyingGridWinner(false);
     }
   }
 
@@ -1338,7 +1381,17 @@ function RuleManager() {
 
       {selected && (
         <section className="panel">
-          <h2>Backtest</h2>
+          <h2>Backtest &amp; grid search</h2>
+          <nav className="tabs">
+            <button type="button" className={backtestSubTab === "backtest" ? "active" : ""} onClick={() => setBacktestSubTab("backtest")}>
+              Backtest
+            </button>
+            <button type="button" className={backtestSubTab === "grid" ? "active" : ""} onClick={() => setBacktestSubTab("grid")}>
+              Grid search
+            </button>
+          </nav>
+          {backtestSubTab === "backtest" && (
+            <>
           <p className="hint">
             Simulates a paper trade per signal using this rule's own logic - a Rule alone carries no exit config or
             instrument_type (those are Strategy concerns), so supply them below; leaving stop-loss/target blank
@@ -1626,17 +1679,22 @@ function RuleManager() {
               )}
             </>
           )}
+            </>
+          )}
 
+          {backtestSubTab === "grid" && (
+          <>
           {selectedIsBreakout || selectedIsRangeBreakout ? (
             <p className="hint">Grid search isn't supported for breakout/range-breakout rules yet.</p>
           ) : (
             <>
-              <h3>Grid search indicator params</h3>
               <p className="hint">
                 Sweeps the rule's indicator over candidate values (comma-separated) using the same From/To range
                 above - a param left blank stays fixed at the indicator's own current value
                 {selectedRsiParams ? ` (currently period=${selectedRsiParams.period}, sma_period=${selectedRsiParams.sma_period})` : ""}
-                . Doesn't change the indicator itself - PATCH it once you've picked a winner from the report below.
+                . Doesn't change the indicator itself until you hit Apply on a result row below. SL EMA period
+                values (optional, independent of the Backtest tab's own Stop-loss dropdown) adds a second sweep
+                dimension - every (indicator params, SL period) pair gets its own run.
               </p>
               <div className="strategy-form">
                 <label>
@@ -1657,22 +1715,34 @@ function RuleManager() {
                     onChange={(e) => setGridSmaPeriodValues(e.target.value)}
                   />
                 </label>
-                {backtestSlMethod === "indicator" && (
-                  <label>
-                    SL EMA period values <span className="optional">(optional)</span>
-                    <input
-                      type="text"
-                      placeholder="e.g. 10,15,20 - blank keeps the single value above fixed"
-                      value={gridSlIndicatorPeriodValues}
-                      onChange={(e) => setGridSlIndicatorPeriodValues(e.target.value)}
-                    />
-                  </label>
-                )}
+                <label>
+                  SL candle interval <span className="optional">(optional, EMA sweep only)</span>
+                  <select value={backtestSlInterval} onChange={(e) => setBacktestSlInterval(e.target.value as StopLossInterval | "")}>
+                    <option value="">&mdash;</option>
+                    <option value="1min">1 min</option>
+                    <option value="3min">3 min</option>
+                    <option value="5min">5 min</option>
+                    <option value="15min">15 min</option>
+                    <option value="25min">25 min</option>
+                    <option value="30min">30 min</option>
+                    <option value="60min">60 min</option>
+                  </select>
+                </label>
+                <label>
+                  SL EMA period values <span className="optional">(optional)</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. 10,15,20 - sweeps EMA stop-loss independently of the Backtest tab"
+                    value={gridSlIndicatorPeriodValues}
+                    onChange={(e) => setGridSlIndicatorPeriodValues(e.target.value)}
+                  />
+                </label>
                 <button type="button" onClick={handleGridSearch} disabled={gridSearching}>
                   {gridSearching ? "Running..." : "Run grid search"}
                 </button>
               </div>
               {gridError && <p className="error">{gridError}</p>}
+              {applyGridWinnerStatus && <p className="hint">{applyGridWinnerStatus}</p>}
               {gridResult && (
                 <div className="table-scroll">
                   <p className="hint">{gridResult.combinations_tested} combination(s) tested - sorted best P&amp;L first.</p>
@@ -1684,6 +1754,7 @@ function RuleManager() {
                         {gridResult.results.some((row) => row.stop_loss_indicator_params) && <th>SL EMA period</th>}
                         <th>Trades</th>
                         <th>Hypothetical P&amp;L</th>
+                        <th></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1695,7 +1766,7 @@ function RuleManager() {
                             <td className="num">{row.stop_loss_indicator_params?.period ?? "-"}</td>
                           )}
                           {row.error ? (
-                            <td colSpan={2} className="error">
+                            <td colSpan={3} className="error">
                               {row.error}
                             </td>
                           ) : (
@@ -1704,6 +1775,17 @@ function RuleManager() {
                               <td className={`num ${(row.hypothetical_pnl ?? 0) >= 0 ? "pnl-positive" : "pnl-negative"}`}>
                                 {(row.hypothetical_pnl ?? 0) >= 0 ? "+" : ""}
                                 {(row.hypothetical_pnl ?? 0).toFixed(2)}
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  onClick={() => handleApplyGridWinner(row)}
+                                  disabled={applyingGridWinner || !selectedIndicator}
+                                  title={selectedIndicator ? `Apply to ${selectedIndicator.name}` : "No indicator resolved for this rule"}
+                                >
+                                  Apply
+                                </button>
                               </td>
                             </>
                           )}
@@ -1714,6 +1796,8 @@ function RuleManager() {
                 </div>
               )}
             </>
+          )}
+          </>
           )}
         </section>
       )}

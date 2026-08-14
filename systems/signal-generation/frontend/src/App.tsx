@@ -546,6 +546,9 @@ function RuleManager() {
 
   const [gridPeriodValues, setGridPeriodValues] = useState("");
   const [gridSmaPeriodValues, setGridSmaPeriodValues] = useState("");
+  // Second sweep dimension, stop_loss_method='indicator' only - candidate
+  // SL EMA periods, same comma-separated shape as Period/SMA period above.
+  const [gridSlIndicatorPeriodValues, setGridSlIndicatorPeriodValues] = useState("");
   const [gridResult, setGridResult] = useState<GridBacktestResult | null>(null);
   const [gridSearching, setGridSearching] = useState(false);
   const [gridError, setGridError] = useState<string | null>(null);
@@ -829,6 +832,8 @@ function RuleManager() {
       return;
     }
 
+    const slPeriodValues = backtestSlMethod === "indicator" ? parseGridValues(gridSlIndicatorPeriodValues) : [];
+
     setGridSearching(true);
     setGridError(null);
     setGridResult(null);
@@ -841,6 +846,7 @@ function RuleManager() {
         stop_loss_indicator_type: backtestSlMethod === "indicator" ? backtestSlIndicatorType : undefined,
         stop_loss_indicator_params:
           backtestSlMethod === "indicator" && backtestSlIndicatorPeriod ? { period: Number(backtestSlIndicatorPeriod) } : undefined,
+        stop_loss_indicator_param_grid: slPeriodValues.length > 0 ? { period: slPeriodValues } : undefined,
         target_percent: backtestTargetPercent ? Number(backtestTargetPercent) : undefined,
         trailing_stop_enabled: backtestSlMethod ? backtestTrailingEnabled : undefined,
         square_off_time: backtestSquareOffTime ? `${backtestSquareOffTime}:00` : undefined,
@@ -1529,6 +1535,17 @@ function RuleManager() {
                     onChange={(e) => setGridSmaPeriodValues(e.target.value)}
                   />
                 </label>
+                {backtestSlMethod === "indicator" && (
+                  <label>
+                    SL EMA period values <span className="optional">(optional)</span>
+                    <input
+                      type="text"
+                      placeholder="e.g. 10,15,20 - blank keeps the single value above fixed"
+                      value={gridSlIndicatorPeriodValues}
+                      onChange={(e) => setGridSlIndicatorPeriodValues(e.target.value)}
+                    />
+                  </label>
+                )}
                 <button type="button" onClick={handleGridSearch} disabled={gridSearching}>
                   {gridSearching ? "Running..." : "Run grid search"}
                 </button>
@@ -1542,6 +1559,7 @@ function RuleManager() {
                       <tr>
                         <th>Period</th>
                         <th>SMA period</th>
+                        {gridResult.results.some((row) => row.stop_loss_indicator_params) && <th>SL EMA period</th>}
                         <th>Trades</th>
                         <th>Hypothetical P&amp;L</th>
                       </tr>
@@ -1551,6 +1569,9 @@ function RuleManager() {
                         <tr key={i} className={i === 0 && !row.error ? "grid-best-row" : undefined}>
                           <td className="num">{row.params.period}</td>
                           <td className="num">{row.params.sma_period}</td>
+                          {gridResult.results.some((r) => r.stop_loss_indicator_params) && (
+                            <td className="num">{row.stop_loss_indicator_params?.period ?? "-"}</td>
+                          )}
                           {row.error ? (
                             <td colSpan={2} className="error">
                               {row.error}

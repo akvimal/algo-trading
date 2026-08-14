@@ -19,7 +19,7 @@ position sizing, no lot sizes, no account balance) - see
 docs/architecture.md."""
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time
 from typing import Callable, Optional
 
@@ -385,6 +385,29 @@ def expand_grid(base_params: dict, param_grid: dict[str, list]) -> list[dict]:
     return [{**base_params, **dict(zip(keys, combo))} for combo in combos]
 
 
+def expand_stop_loss_grid(param_grid: dict[str, list]) -> list[dict]:
+    """Same cartesian-product shape as expand_grid, for
+    stop_loss_indicator_params instead of the rule's own indicator params
+    - no "base_params to merge non-swept keys onto" concept here, unlike
+    expand_grid: every stop-loss indicator type's params model is small
+    enough (one field, 'period', for 'ema' today - see
+    _STOP_LOSS_INDICATOR_PARAMS_MODELS in app/domain/rule.py) that every
+    key must be named in the grid itself, there's no sensible "current
+    value" to fall back to the way a real Indicator row provides one for
+    expand_grid. Raises ValueError for an empty grid or one too large to
+    run (same MAX_GRID_COMBINATIONS cap, applied to THIS dimension alone -
+    the route layer caps the combined total against the indicator grid)."""
+    keys = list(param_grid)
+    combos = list(itertools.product(*(param_grid[k] for k in keys)))
+    if not combos:
+        raise ValueError("stop_loss_indicator_param_grid must have at least one candidate value per param")
+    if len(combos) > MAX_GRID_COMBINATIONS:
+        raise ValueError(
+            f"stop-loss grid search would run {len(combos)} combinations - max is {MAX_GRID_COMBINATIONS}, narrow it"
+        )
+    return [dict(zip(keys, combo)) for combo in combos]
+
+
 def grid_search(
     rule: RuleConfig,
     indicator_type: str,
@@ -393,18 +416,34 @@ def grid_search(
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
     regime_indicators: RegimeIndicators = (),
+    stop_loss_indicator_combos: Optional[list[dict]] = None,
 ) -> dict:
     """Runs `replay` once per combination in `combos` (see expand_grid),
-    against the same candle series (and the same exit_config/sl_candles/
-    regime_indicators - none of those depend on indicator params) for all
-    of them. `candles` must already cover the
-    widest warm-up any combination needs - callers compute this up front
-    from `combos` (via rules.bars_needed) since candidate params aren't
-    known until the grid is expanded, see app/api/routes/strategies.py.
+    against the same candle series (and the same sl_candles/
+    regime_indicators - neither depends on indicator params) for all of
+    them. `candles` must already cover the widest warm-up any combination
+    needs - callers compute this up front from `combos` (via
+    rules.bars_needed) since candidate params aren't known until the grid
+    is expanded, see app/api/routes/strategies.py.
+
+    stop_loss_indicator_combos (see expand_stop_loss_grid): when given
+    (exit_config.stop_loss_method must be 'indicator'), a SECOND sweep
+    dimension - every (indicator params, stop-loss params) pair gets its
+    own replay run, exit_config.stop_loss_indicator_params overridden per
+    stop-loss combo (dataclasses.replace, ExitConfig is frozen). None (the
+    default) keeps the pre-existing one-dimensional behavior: exit_config's
+    own fixed stop_loss_indicator_params applies to every combo unchanged.
+    Each result row gets an extra stop_loss_indicator_params key only when
+    this second dimension is active, so single-dimension callers/tests see
+    the exact same result shape as before this parameter existed.
+
     Results are sorted by hypothetical_pnl descending (best first); a
     combination that fails its own param validation (e.g. period=1,
     below RsiParams's gt=1 floor) is reported with an `error` instead of
-    being silently dropped or crashing the whole request."""
+    being silently dropped or crashing the whole request - this only
+    applies to the indicator dimension, stop-loss combos are pre-validated
+    by the route layer before reaching here (see validate_stop_loss_indicator_params)."""
+    sl_combos = stop_loss_indicator_combos if stop_loss_indicator_combos is not None else [None]
     results = []
     for candidate_params in combos:
         try:
@@ -413,21 +452,26 @@ def grid_search(
             message = exc.errors()[0]["msg"] if exc.errors() else str(exc)
             results.append({"params": candidate_params, "error": message})
             continue
-        outcome = replay(
-            lambda window, p=validated: evaluate(rule, indicator_type, p, window),
-            bars_needed(rule, indicator_type, validated) + 1,
-            candles,
-            exit_config,
-            sl_candles,
-            regime_indicators,
-        )
-        results.append(
-            {
+        for sl_params in sl_combos:
+            effective_exit_config = exit_config
+            if sl_params is not None and exit_config is not None:
+                effective_exit_config = replace(exit_config, stop_loss_indicator_params=sl_params)
+            outcome = replay(
+                lambda window, p=validated: evaluate(rule, indicator_type, p, window),
+                bars_needed(rule, indicator_type, validated) + 1,
+                candles,
+                effective_exit_config,
+                sl_candles,
+                regime_indicators,
+            )
+            result_row = {
                 "params": candidate_params,
                 "trade_count": outcome["trade_count"],
                 "hypothetical_pnl": outcome["hypothetical_pnl"],
             }
-        )
+            if sl_params is not None:
+                result_row["stop_loss_indicator_params"] = sl_params
+            results.append(result_row)
 
     results.sort(key=lambda r: r.get("hypothetical_pnl", float("-inf")), reverse=True)
-    return {"combinations_tested": len(combos), "results": results}
+    return {"combinations_tested": len(results), "results": results}

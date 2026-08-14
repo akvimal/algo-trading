@@ -7,6 +7,7 @@ from app.domain.backtest import (
     MAX_GRID_COMBINATIONS,
     ExitConfig,
     expand_grid,
+    expand_stop_loss_grid,
     grid_search,
     replay,
     simulate_trades,
@@ -500,6 +501,65 @@ def test_grid_search_applies_the_same_exit_config_to_every_combination():
     assert result["combinations_tested"] == 2
     assert all(row["trade_count"] == 1 for row in result["results"])
     assert all(row["hypothetical_pnl"] == pytest.approx(15.0 - 16.5) for row in result["results"])
+
+
+# --- expand_stop_loss_grid: cartesian product, no base_params merge ------------------------
+
+
+def test_expand_stop_loss_grid_cartesian_product():
+    assert expand_stop_loss_grid({"period": [10, 20]}) == [{"period": 10}, {"period": 20}]
+
+
+def test_expand_stop_loss_grid_empty_grid_raises():
+    with pytest.raises(ValueError, match="at least one candidate value"):
+        expand_stop_loss_grid({"period": []})
+
+
+def test_expand_stop_loss_grid_too_many_combinations_raises():
+    too_many = {"period": list(range(1, MAX_GRID_COMBINATIONS + 2))}
+    with pytest.raises(ValueError, match="max is"):
+        expand_stop_loss_grid(too_many)
+
+
+# --- grid_search: stop_loss_indicator_combos second sweep dimension ------------------------
+
+
+def test_grid_search_sweeps_stop_loss_indicator_params_independently():
+    # period=2 EMA of [10,10,10,20] (all strictly before entry@ts(5)) =
+    # 16.6667; period=4 EMA of the same 4 closes = 12.5 (mean-seeded,
+    # exactly period-length) - genuinely different stop prices for the
+    # SAME bearish entry, proving each row's own sl_combo actually drives
+    # its own replay run rather than exit_config's single fixed value.
+    sl_candles = [_bar(1, 10.0), _bar(2, 10.0), _bar(3, 10.0), _bar(4, 20.0)]
+    candles = _entry_fixture()  # bearish entry@15, ts(5)
+    candles.append(_bar(6, 17.0, high=17.0, low=16.0))  # crosses both candidate stops
+
+    result = grid_search(
+        RULE,
+        "rsi",
+        [{"period": 2, "sma_period": 2}],
+        candles,
+        ExitConfig(stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 999}),
+        sl_candles=sl_candles,
+        stop_loss_indicator_combos=[{"period": 2}, {"period": 4}],
+    )
+
+    assert result["combinations_tested"] == 2
+    by_period = {row["stop_loss_indicator_params"]["period"]: row for row in result["results"]}
+    assert by_period[2]["hypothetical_pnl"] == pytest.approx(15.0 - 16.666666666666668)
+    assert by_period[4]["hypothetical_pnl"] == pytest.approx(15.0 - 12.5)
+    # Sorted best-first - period=4's higher pnl (2.5) must lead period=2's (-1.667).
+    assert result["results"][0]["stop_loss_indicator_params"]["period"] == 4
+
+
+def test_grid_search_without_stop_loss_indicator_combos_keeps_old_result_shape():
+    candles = _entry_fixture()
+    combos = expand_grid({"period": 2, "sma_period": 2}, {"period": [2, 3]})
+
+    result = grid_search(RULE, "rsi", combos, candles)
+
+    assert result["combinations_tested"] == 2
+    assert all("stop_loss_indicator_params" not in row for row in result["results"])
 
 
 # --- range_breakout through the generalized (bias_fn) exit engine ----------------------------

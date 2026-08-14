@@ -401,6 +401,9 @@ export type UniverseBacktestResult = {
 // being silently dropped. Rows arrive pre-sorted best (highest pnl) first.
 export type GridBacktestRow = {
   params: Record<string, number>;
+  // Present only when the request swept stop_loss_indicator_param_grid -
+  // which stop-loss params (e.g. EMA period) this particular row used.
+  stop_loss_indicator_params?: Record<string, number>;
   trade_count?: number;
   hypothetical_pnl?: number;
   error?: string;
@@ -438,6 +441,10 @@ export type RuleBacktestGridRequest = {
   stop_loss_percent?: number;
   stop_loss_indicator_type?: StopLossIndicatorType;
   stop_loss_indicator_params?: { period: number };
+  // A second, independent sweep dimension (stop_loss_method='indicator'
+  // only) - e.g. {"period": [10, 15, 20]} to try multiple EMA periods
+  // against every param_grid combination above (full cartesian product).
+  stop_loss_indicator_param_grid?: { period: number[] };
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   square_off_time?: string;

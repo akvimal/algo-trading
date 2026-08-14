@@ -15,7 +15,15 @@ from app.adapters.market_data.client import (
     resolve_underlying,
 )
 from app.domain import breakout, range_breakout
-from app.domain.backtest import ExitConfig, RegimeIndicators, expand_grid, grid_search, replay
+from app.domain.backtest import (
+    MAX_GRID_COMBINATIONS,
+    ExitConfig,
+    RegimeIndicators,
+    expand_grid,
+    expand_stop_loss_grid,
+    grid_search,
+    replay,
+)
 from app.domain.engine import history_window
 from app.domain.indicators import regime_indicator_warmup
 from app.domain.option_backtest import MAX_OPTION_BACKTEST_DAYS, OPTION_HISTORY_INTERVAL, replay_options
@@ -608,7 +616,14 @@ def backtest_rule_grid(
     at the Indicator's own current value), fetching candle history ONCE
     for the widest warm-up any combination in the grid needs rather than
     once per combination. Does NOT mutate the Indicator row - PATCH
-    /indicators/{id} once you've picked a winner from the report."""
+    /indicators/{id} once you've picked a winner from the report.
+
+    stop_loss_method='indicator' with stop_loss_indicator_param_grid set
+    adds a SECOND, independent sweep dimension (e.g. candidate EMA
+    periods) - every (indicator params, stop-loss params) pair gets its
+    own replay run, see app/domain/backtest.py's grid_search. The total
+    combination count (indicator combos x stop-loss combos) is capped at
+    MAX_GRID_COMBINATIONS same as either dimension alone."""
     rule_row = _load_rule_for_backtest(db, rule_id)
     rule = validate_rule_config(rule_row.rule_config)
     if not isinstance(rule, CrossoverRuleConfig):
@@ -622,6 +637,22 @@ def backtest_rule_grid(
         combos = expand_grid(base_params, payload.param_grid)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    sl_combos: Optional[list[dict]] = None
+    if payload.stop_loss_method == "indicator" and payload.stop_loss_indicator_param_grid:
+        try:
+            sl_combos = expand_stop_loss_grid(payload.stop_loss_indicator_param_grid)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        total = len(combos) * len(sl_combos)
+        if total > MAX_GRID_COMBINATIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"grid search would run {total} combinations (indicator x stop-loss) - "
+                    f"max is {MAX_GRID_COMBINATIONS}, narrow one of the grids"
+                ),
+            )
 
     resolved = resolve_underlying(rule_row.segment, rule_row.underlying)
     if resolved is None:
@@ -639,7 +670,23 @@ def backtest_rule_grid(
     fetch_from = min(from_, warmup_from)
 
     candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule_row.interval, fetch_from, to)
-    sl_candles = _sl_candles_for(payload, rule_row, resolved, candles, fetch_from, to)
+
+    # sl_candles must cover the WIDEST stop-loss indicator period across
+    # the whole sweep, not just payload.stop_loss_indicator_params's own
+    # value - _sl_candles_for only reads a single period, so temporarily
+    # widen it for this one fetch call. Each individual replay run below
+    # still uses its own sl_combo value against this same fetched series
+    # (a wider-than-needed series computes a smaller-period EMA correctly
+    # too, same as _indicator_stop_price already relies on).
+    sl_fetch_payload = payload
+    if sl_combos:
+        periods = [c["period"] for c in sl_combos if "period" in c]
+        if periods:
+            widened = dict(payload.stop_loss_indicator_params or {})
+            widened["period"] = max(periods + [widened.get("period", 0)])
+            sl_fetch_payload = payload.model_copy(update={"stop_loss_indicator_params": widened})
+
+    sl_candles = _sl_candles_for(sl_fetch_payload, rule_row, resolved, candles, fetch_from, to)
     return grid_search(
         rule,
         indicator.type,
@@ -648,4 +695,5 @@ def backtest_rule_grid(
         _exit_config_for(payload),
         sl_candles,
         regime_indicators,
+        stop_loss_indicator_combos=sl_combos,
     )

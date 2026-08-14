@@ -493,6 +493,16 @@ class RuleBacktestGridRequest(BaseModel):
     # reasoning as RuleBacktestRequest's own copy of these two fields.
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
+    # A SECOND, independent sweep dimension (stop_loss_method='indicator'
+    # only) - candidate values for the stop-loss indicator's own params,
+    # e.g. {"period": [10, 15, 20]} to try 3 different EMA periods against
+    # every combination in param_grid above (full cartesian product - see
+    # app/domain/backtest.py's expand_stop_loss_grid/grid_search). Omitted
+    # means stop_loss_indicator_params above applies as one fixed value to
+    # every combo, same as before this field existed. Not merged onto
+    # stop_loss_indicator_params - every key the sweep needs must be named
+    # here (see expand_stop_loss_grid's own docstring on why).
+    stop_loss_indicator_param_grid: Optional[dict[str, list[int]]] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: bool = False
     square_off_time: Optional[time] = None

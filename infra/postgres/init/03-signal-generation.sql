@@ -195,15 +195,24 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- ignored for spot/future strategies.
     option_fixed_lots INTEGER CHECK (option_fixed_lots > 0),
     -- Optional per-strategy time-of-day window (e.g. 09:15-11:00) during
-    -- which this strategy accepts signals - both-or-neither, enforced by
-    -- signal-processing's resolve() against the signal's own timestamp
-    -- (not wall-clock time at resolution), for every source_type, not
-    -- just in_house. No longer interacts with square-off in any way -
+    -- which this strategy accepts signals - a JSON array of
+    -- {"start": "HH:MM:SS", "end": "HH:MM:SS"} objects, e.g.
+    -- [{"start":"09:15:00","end":"10:30:00"},{"start":"13:00:00","end":"14:30:00"}] -
+    -- a signal is accepted if it falls within ANY one of them (multiple
+    -- windows may overlap, harmlessly). Enforced by signal-processing's
+    -- resolve() against the signal's own timestamp (not wall-clock time
+    -- at resolution), for every source_type, not just in_house. Purely
+    -- gates whether an entry SIGNAL is accepted - an already-open
+    -- position can still close outside every window via stop-loss/
+    -- target/square-off/counter-signal, unaffected by this field
+    -- entirely (no longer interacts with square-off in any way -
     -- square-off is a per-segment execution.accounts setting now, not a
-    -- Strategy field, so there's nothing here to fold it into - see
-    -- docs/architecture.md. NULL/NULL (default) means no restriction.
-    active_from_time TIME,
-    active_to_time   TIME,
+    -- Strategy field - see docs/architecture.md). Empty array (default)
+    -- means no restriction. Internal shape (each window's own end>start)
+    -- validated at the Pydantic layer only (ActiveWindow in
+    -- app/domain/models.py) - same as rule_config/regime_indicator_ids
+    -- elsewhere in this file, no DB-level CHECK on JSONB internals.
+    active_windows JSONB NOT NULL DEFAULT '[]'::jsonb,
     -- Signal-conflict policy - passed through unchanged on resolved-order
     -- to execution's position_manager._resolve_signal_conflicts.
     -- duplicate_signal_policy: what to do when this symbol already has an
@@ -234,10 +243,6 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'backtesting', 'live', 'paused')),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT active_window_consistent CHECK (
-        (active_from_time IS NULL) = (active_to_time IS NULL)
-        AND (active_to_time IS NULL OR active_to_time > active_from_time)
-    ),
     -- rule_id required exactly for source_type='in_house', forbidden
     -- otherwise - DB-level mirror of validate_strategy_rule_requirement
     -- (app/domain/models.py), enforced app-side at create/update time.

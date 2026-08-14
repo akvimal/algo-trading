@@ -121,17 +121,33 @@ def validate_contract_day_filter_fields(contract_day_filter: str, instrument_typ
         raise ValueError("contract_day_filter='start' requires instrument_type='option' - not reliably computable for futures")
 
 
-def validate_active_window_fields(active_from_time: Optional[time], active_to_time: Optional[time]) -> None:
-    """Shared consistency rule for the optional signal-acceptance window,
-    used by both StrategyCreate (all fields always present) and the PATCH
-    route handler (validated against the merged post-update row, same
-    pattern as validate_stop_loss_fields). Both-or-neither; no overnight
-    wraparound support - active_to_time must be strictly after
-    active_from_time."""
-    if (active_from_time is None) != (active_to_time is None):
-        raise ValueError("active_from_time and active_to_time must both be set, or both left unset")
-    if active_from_time is not None and active_to_time is not None and active_to_time <= active_from_time:
-        raise ValueError("active_to_time must be after active_from_time")
+class ActiveWindow(BaseModel):
+    """One [start, end) slice of a Strategy's optional signal-acceptance
+    window - see Strategy.active_windows below. No overnight wraparound
+    support, same limitation the old single from/to pair had - end must
+    be strictly after start."""
+
+    start: time
+    end: time
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "ActiveWindow":
+        if self.end <= self.start:
+            raise ValueError(f"active window end ({self.end}) must be after start ({self.start})")
+        return self
+
+
+def validate_active_windows(windows: list[dict]) -> list[ActiveWindow]:
+    """Re-validates a Strategy row's raw JSONB active_windows (list of
+    {"start": "HH:MM:SS", "end": "HH:MM:SS"} dicts) against ActiveWindow's
+    own per-window rule - used by the PATCH route handler to re-check the
+    merged post-update row, same pattern validate_stop_loss_fields uses
+    for its own field group. Multiple windows may overlap; not treated as
+    an error (harmless redundancy) - a signal is accepted if it falls in
+    ANY of them, see signal-processing's is_within_active_window. Raises
+    pydantic.ValidationError (a 422 at the route layer) for a malformed
+    or backwards window."""
+    return [ActiveWindow(**w) for w in windows]
 
 
 def validate_stop_loss_fields(
@@ -217,11 +233,16 @@ class StrategyCreate(BaseModel):
     # see the DuplicateSignalPolicy/CounterSignalPolicy alias comments above.
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
-    # Optional per-strategy signal-acceptance window (e.g. 09:15-11:00),
-    # every source_type - see infra/postgres/init/03-signal-generation.sql
-    # and validate_active_window_fields.
-    active_from_time: Optional[time] = None
-    active_to_time: Optional[time] = None
+    # Optional per-strategy signal-acceptance window(s) (e.g. 09:15-11:00,
+    # or several - "09:15-10:30" AND "13:00-14:30"), every source_type -
+    # see infra/postgres/init/03-signal-generation.sql and ActiveWindow
+    # above. Empty list (the default) means unrestricted - a signal is
+    # accepted any time. A signal is accepted if it falls within ANY one
+    # of them (see signal-processing's is_within_active_window) - the
+    # window only gates whether an entry SIGNAL is accepted; an already-open
+    # position can still close outside every window via stop-loss/target/
+    # square-off/counter-signal, unaffected by this field entirely.
+    active_windows: list[ActiveWindow] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_stop_loss_consistency(self) -> "StrategyCreate":
@@ -243,11 +264,6 @@ class StrategyCreate(BaseModel):
     @model_validator(mode="after")
     def _check_contract_day_filter_consistency(self) -> "StrategyCreate":
         validate_contract_day_filter_fields(self.contract_day_filter, self.instrument_type)
-        return self
-
-    @model_validator(mode="after")
-    def _check_active_window_consistency(self) -> "StrategyCreate":
-        validate_active_window_fields(self.active_from_time, self.active_to_time)
         return self
 
 
@@ -296,8 +312,13 @@ class StrategyUpdate(BaseModel):
     segment: Optional[Segment] = None
     duplicate_signal_policy: Optional[DuplicateSignalPolicy] = None
     counter_signal_policy: Optional[CounterSignalPolicy] = None
-    active_from_time: Optional[time] = None
-    active_to_time: Optional[time] = None
+    # Optional[...] = None here means "omitted" (leave unchanged), same as
+    # every other field on this model - but active_windows=[] is ALSO a
+    # meaningful, distinct value (clear back to unrestricted), which plain
+    # Optional can't express. The route handler checks model_fields_set
+    # (same pattern option_fixed_lots already established) to tell
+    # "omitted" from "explicitly set to []" apart.
+    active_windows: Optional[list[ActiveWindow]] = None
 
 
 class StrategyOut(BaseModel):
@@ -328,8 +349,7 @@ class StrategyOut(BaseModel):
     segment: Segment
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
-    active_from_time: Optional[time] = None
-    active_to_time: Optional[time] = None
+    active_windows: list[ActiveWindow] = Field(default_factory=list)
     status: Status
     created_at: datetime
     updated_at: datetime

@@ -11,7 +11,7 @@ from app.domain.models import (
     StrategyCreate,
     StrategyOut,
     StrategyUpdate,
-    validate_active_window_fields,
+    validate_active_windows,
     validate_contract_day_filter_fields,
     validate_stop_loss_fields,
 )
@@ -45,8 +45,7 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> Stra
         segment=row.segment,
         duplicate_signal_policy=row.duplicate_signal_policy,
         counter_signal_policy=row.counter_signal_policy,
-        active_from_time=row.active_from_time,
-        active_to_time=row.active_to_time,
+        active_windows=row.active_windows,
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -141,8 +140,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         segment=payload.segment,
         duplicate_signal_policy=payload.duplicate_signal_policy,
         counter_signal_policy=payload.counter_signal_policy,
-        active_from_time=payload.active_from_time,
-        active_to_time=payload.active_to_time,
+        active_windows=[w.model_dump(mode="json") for w in payload.active_windows],
         status="draft",
     )
     db.add(row)
@@ -271,10 +269,11 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.duplicate_signal_policy = payload.duplicate_signal_policy
     if payload.counter_signal_policy is not None:
         row.counter_signal_policy = payload.counter_signal_policy
-    if payload.active_from_time is not None:
-        row.active_from_time = payload.active_from_time
-    if payload.active_to_time is not None:
-        row.active_to_time = payload.active_to_time
+    # active_windows=[] is a meaningful, distinct value from "omitted" -
+    # see StrategyUpdate's own comment on why this checks
+    # model_fields_set rather than "is not None" like every field above.
+    if "active_windows" in payload.model_fields_set:
+        row.active_windows = [w.model_dump(mode="json") for w in payload.active_windows]
 
     try:
         validate_stop_loss_fields(
@@ -286,7 +285,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
             row.stop_loss_indicator_params,
         )
         validate_contract_day_filter_fields(row.contract_day_filter, row.instrument_type)
-        validate_active_window_fields(row.active_from_time, row.active_to_time)
+        validate_active_windows(row.active_windows)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

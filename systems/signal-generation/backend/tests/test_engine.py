@@ -82,25 +82,34 @@ def test_target_symbols_symbol_list_strips_whitespace_and_drops_empty_entries():
 # --- _is_within_active_window: run_live_tick's skip-outside-window optimization --------------
 
 
-def test_is_within_active_window_no_window_always_true():
-    assert _is_within_active_window(time(3, 0), None, None) is True
+_WINDOW = [{"start": "09:15:00", "end": "11:00:00"}]
+
+
+def test_is_within_active_window_no_windows_always_true():
+    assert _is_within_active_window(time(3, 0), []) is True
 
 
 def test_is_within_active_window_inside_window_true():
-    assert _is_within_active_window(time(10, 0), time(9, 15), time(11, 0)) is True
+    assert _is_within_active_window(time(10, 0), _WINDOW) is True
 
 
 def test_is_within_active_window_before_window_false():
-    assert _is_within_active_window(time(9, 0), time(9, 15), time(11, 0)) is False
+    assert _is_within_active_window(time(9, 0), _WINDOW) is False
 
 
 def test_is_within_active_window_after_window_false():
-    assert _is_within_active_window(time(11, 30), time(9, 15), time(11, 0)) is False
+    assert _is_within_active_window(time(11, 30), _WINDOW) is False
 
 
 def test_is_within_active_window_on_boundaries_true():
-    assert _is_within_active_window(time(9, 15), time(9, 15), time(11, 0)) is True
-    assert _is_within_active_window(time(11, 0), time(9, 15), time(11, 0)) is True
+    assert _is_within_active_window(time(9, 15), _WINDOW) is True
+    assert _is_within_active_window(time(11, 0), _WINDOW) is True
+
+
+def test_is_within_active_window_matches_any_of_multiple_windows():
+    windows = [{"start": "09:15:00", "end": "10:30:00"}, {"start": "13:00:00", "end": "14:30:00"}]
+    assert _is_within_active_window(time(13, 30), windows) is True  # 2nd window only
+    assert _is_within_active_window(time(11, 30), windows) is False  # between the two
 
 
 # --- _matches_contract_day_filter: futures-side enforcement of Strategy.contract_day_filter --

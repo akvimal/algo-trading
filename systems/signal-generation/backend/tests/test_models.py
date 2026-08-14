@@ -360,59 +360,80 @@ def test_strategy_update_signal_conflict_policy_fields_optional():
     assert u.counter_signal_policy is None
 
 
-# --- active_from_time/active_to_time (per-strategy signal-acceptance window) -----------------
+# --- active_windows (per-strategy signal-acceptance window(s)) -------------------------------
 
 
-def test_strategy_create_active_window_unset_by_default():
+def test_strategy_create_active_windows_empty_by_default():
     s = StrategyCreate(
         name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
     )
-    assert s.active_from_time is None
-    assert s.active_to_time is None
+    assert s.active_windows == []
 
 
-def test_strategy_create_accepts_active_window():
+def test_strategy_create_accepts_one_active_window():
     s = StrategyCreate(
         name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
-        active_from_time="09:15:00", active_to_time="11:00:00",
+        active_windows=[{"start": "09:15:00", "end": "11:00:00"}],
     )
-    assert s.active_from_time.isoformat() == "09:15:00"
-    assert s.active_to_time.isoformat() == "11:00:00"
+    assert len(s.active_windows) == 1
+    assert s.active_windows[0].start.isoformat() == "09:15:00"
+    assert s.active_windows[0].end.isoformat() == "11:00:00"
 
 
-def test_strategy_create_rejects_active_window_missing_to():
+def test_strategy_create_accepts_multiple_active_windows():
+    s = StrategyCreate(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+        active_windows=[
+            {"start": "09:15:00", "end": "10:30:00"},
+            {"start": "13:00:00", "end": "14:30:00"},
+        ],
+    )
+    assert len(s.active_windows) == 2
+    assert s.active_windows[1].start.isoformat() == "13:00:00"
+
+
+def test_strategy_create_rejects_active_window_end_before_start():
     with pytest.raises(ValidationError):
         StrategyCreate(
             name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
-            active_from_time="09:15:00",
+            active_windows=[{"start": "11:00:00", "end": "09:15:00"}],
         )
 
 
-def test_strategy_create_rejects_active_window_missing_from():
+def test_strategy_create_rejects_active_window_equal_start_and_end():
     with pytest.raises(ValidationError):
         StrategyCreate(
             name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
-            active_to_time="11:00:00",
+            active_windows=[{"start": "09:15:00", "end": "09:15:00"}],
         )
 
 
-def test_strategy_create_rejects_active_window_to_before_from():
+def test_strategy_create_rejects_one_bad_window_even_with_others_valid():
+    # A typo/backwards window in the list must reject the whole request,
+    # not silently drop just that one entry.
     with pytest.raises(ValidationError):
         StrategyCreate(
             name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
-            active_from_time="11:00:00", active_to_time="09:15:00",
+            active_windows=[
+                {"start": "09:15:00", "end": "10:30:00"},
+                {"start": "14:30:00", "end": "13:00:00"},
+            ],
         )
 
 
-def test_strategy_create_rejects_active_window_equal_from_and_to():
-    with pytest.raises(ValidationError):
-        StrategyCreate(
-            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
-            active_from_time="09:15:00", active_to_time="09:15:00",
-        )
-
-
-def test_strategy_update_active_window_fields_optional():
+def test_strategy_update_active_windows_omitted_by_default():
     u = StrategyUpdate()
-    assert u.active_from_time is None
-    assert u.active_to_time is None
+    assert u.active_windows is None
+
+
+def test_strategy_update_accepts_active_windows():
+    u = StrategyUpdate(active_windows=[{"start": "09:15:00", "end": "11:00:00"}])
+    assert len(u.active_windows) == 1
+
+
+def test_strategy_update_accepts_empty_active_windows_list_explicitly():
+    # Distinct from omitting the field entirely (None, above) - the route
+    # layer (model_fields_set) is what tells these apart; the model
+    # itself just needs to accept [] as a valid value.
+    u = StrategyUpdate(active_windows=[])
+    assert u.active_windows == []

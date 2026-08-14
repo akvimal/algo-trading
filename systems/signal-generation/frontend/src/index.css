@@ -365,6 +365,30 @@ tbody tr:last-child td {
   min-width: 5rem;
 }
 
+.active-windows-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.active-windows-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.active-window-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.stack-cell .active-windows-editor input[type="time"] {
+  min-width: 0;
+  width: 6.5rem;
+}
+
 button {
   background: var(--accent);
   color: #fff;

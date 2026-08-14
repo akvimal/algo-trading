@@ -9,13 +9,18 @@ from app.domain.resolution.strategy import choose_strategy
 _TZ = "Asia/Kolkata"  # NSE-only platform end-to-end today - see execution.settings.timezone's own default.
 
 
-def is_within_active_window(ts: datetime, active_from_time: str, active_to_time: str) -> bool:
+def is_within_active_window(ts: datetime, active_windows: list[dict]) -> bool:
     """Pure, directly unit-testable - mirrors execution's own
     is_within_intraday_window (app/domain/position_manager.py there).
     `ts` is the signal's own timestamp (when it actually fired), not
-    wall-clock time at resolution - see resolve()'s docstring."""
+    wall-clock time at resolution - see resolve()'s docstring. True if
+    `local_time` falls within ANY one of active_windows (each a
+    {"start": "HH:MM:SS", "end": "HH:MM:SS"} dict, straight from the
+    Strategy's own JSON response) - multiple windows may overlap,
+    harmlessly. Caller (resolve() below) already skips this entirely
+    when active_windows is empty, so this is never called with one."""
     local_time = ts.astimezone(ZoneInfo(_TZ)).time()
-    return time.fromisoformat(active_from_time) <= local_time <= time.fromisoformat(active_to_time)
+    return any(time.fromisoformat(w["start"]) <= local_time <= time.fromisoformat(w["end"]) for w in active_windows)
 
 
 def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
@@ -24,22 +29,20 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
     Position size is deliberately not decided here - execution computes
     its own quantity from capital_per_trade and the signal's price.
     Raises ResolutionError if the strategy is unknown, unreachable, not
-    live, or the signal arrived outside the strategy's optional active
-    window (active_from_time/active_to_time - every source_type, not just
-    in_house); the caller persists that as a rejected order and does not
-    publish to the Redis stream. Manual test signals (source="manual" -
-    the frontend's "Send test signal"/Manual tab) are exempt from the
-    live-status check only, so a strategy can be exercised end-to-end
-    before being promoted to live - every other source (chartink,
-    in_house) still requires it."""
+    live, or the signal arrived outside every one of the strategy's
+    optional active_windows (every source_type, not just in_house); the
+    caller persists that as a rejected order and does not publish to the
+    Redis stream. Manual test signals (source="manual" - the frontend's
+    "Send test signal"/Manual tab) are exempt from the live-status check
+    only, so a strategy can be exercised end-to-end before being promoted
+    to live - every other source (chartink, in_house) still requires it."""
     strategy = fetch_strategy(signal.strategy_id)
 
     if strategy["status"] != "live" and signal.source != "manual":
         raise ResolutionError(f"strategy is not live (status={strategy['status']})")
 
-    active_from = strategy.get("active_from_time")
-    active_to = strategy.get("active_to_time")
-    if active_from and active_to:
+    active_windows = strategy.get("active_windows") or []
+    if active_windows:
         # create_signal_from_ingest (the only production caller) always
         # normalizes signal.timestamp to a real value before calling
         # resolve() - this is defense-in-depth for any other caller, so a
@@ -51,8 +54,9 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         # branch entirely, since `and` is lazy).
         if signal.timestamp is None:
             raise ResolutionError("signal has no timestamp - cannot evaluate active window")
-        if not is_within_active_window(signal.timestamp, active_from, active_to):
-            raise ResolutionError(f"signal received outside strategy's active window ({active_from}–{active_to} IST)")
+        if not is_within_active_window(signal.timestamp, active_windows):
+            windows_desc = ", ".join(f"{w['start']}–{w['end']}" for w in active_windows)
+            raise ResolutionError(f"signal received outside strategy's active window(s) ({windows_desc} IST)")
 
     horizon = strategy["horizon"]
     instrument_type = strategy["instrument_type"]

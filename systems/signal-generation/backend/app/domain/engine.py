@@ -68,18 +68,19 @@ def history_window(bar_count: int, interval: str) -> tuple[date, date]:
     return today - timedelta(days=days_needed), today
 
 
-def _is_within_active_window(now_time: time, active_from_time: Optional[time], active_to_time: Optional[time]) -> bool:
-    """True if there's no window (both None - no restriction) or now_time
-    falls within [active_from_time, active_to_time]. Pure efficiency
-    optimization for run_live_tick - skips wasted market-data calls for a
-    strategy that resolve() (signal-processing) would just reject anyway;
-    NOT the authoritative check, which is resolve()'s own
-    is_within_active_window (app/domain/resolution/pipeline.py there) -
-    that one also covers external-provider signals this engine never
-    sees."""
-    if active_from_time is None or active_to_time is None:
+def _is_within_active_window(now_time: time, active_windows: list[dict]) -> bool:
+    """True if there are no windows at all (empty list - no restriction)
+    or now_time falls within ANY one of active_windows (each a
+    {"start": "HH:MM:SS", "end": "HH:MM:SS"} dict, straight from the
+    Strategy row's own JSONB column). Pure efficiency optimization for
+    run_live_tick - skips wasted market-data calls for a strategy that
+    resolve() (signal-processing) would just reject anyway; NOT the
+    authoritative check, which is resolve()'s own is_within_active_window
+    (app/domain/resolution/pipeline.py there) - that one also covers
+    external-provider signals this engine never sees."""
+    if not active_windows:
         return True
-    return active_from_time <= now_time <= active_to_time
+    return any(time.fromisoformat(w["start"]) <= now_time <= time.fromisoformat(w["end"]) for w in active_windows)
 
 
 def _matches_contract_day_filter(
@@ -515,7 +516,7 @@ def run_live_tick(
     signaled = 0
     failed = 0
     for strategy, rule_row in strategy_rule_pairs:
-        if not _is_within_active_window(now_ist, strategy.active_from_time, strategy.active_to_time):
+        if not _is_within_active_window(now_ist, strategy.active_windows):
             continue
         for symbol in _target_symbols(rule_row, get_universe_constituents):
             checked += 1

@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, Numeric, Text, Time, func
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -67,10 +67,12 @@ class Strategy(Base):
     # instrument_type in ('future', 'option') only - see ContractDayFilter in app/domain/models.py.
     contract_day_filter = Column(Text, nullable=False, default="any")
     segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO
-    # Optional per-strategy signal-acceptance window - see
+    # Optional per-strategy signal-acceptance window(s) - see
     # infra/postgres/init/03-signal-generation.sql for the full comment.
-    active_from_time = Column(Time)
-    active_to_time = Column(Time)
+    # Always a real (possibly empty) JSON array, never NULL - no
+    # none_as_null concern here unlike stop_loss_indicator_params above,
+    # since this column is never assigned a bare None.
+    active_windows = Column(JSONB, nullable=False, default=list)
     # Passed through unchanged on resolved-order to execution - see
     # DuplicateSignalPolicy/CounterSignalPolicy in app/domain/models.py.
     duplicate_signal_policy = Column(Text, nullable=False, default="skip")

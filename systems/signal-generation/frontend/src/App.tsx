@@ -275,6 +275,49 @@ function formatTarget(s: Strategy): string {
   return s.target_percent != null ? `${s.target_percent}%` : "-";
 }
 
+function formatActiveWindows(s: Strategy): string {
+  if (s.active_windows.length === 0) return "-";
+  return s.active_windows.map((w) => `${w.start.slice(0, 5)}–${w.end.slice(0, 5)}`).join(", ");
+}
+
+// A repeatable list of {start, end} time-of-day pairs - shared by the
+// create form and the edit-row form below. `windows` uses bare "HH:MM"
+// (native <input type="time"> values); the caller converts to "HH:MM:SS"
+// only when building the actual API payload.
+function ActiveWindowsEditor({
+  windows,
+  onChange,
+}: {
+  windows: { start: string; end: string }[];
+  onChange: (windows: { start: string; end: string }[]) => void;
+}) {
+  return (
+    <div className="active-windows-editor">
+      {windows.map((w, i) => (
+        <div key={i} className="active-window-row">
+          <input
+            type="time"
+            value={w.start}
+            onChange={(e) => onChange(windows.map((x, j) => (j === i ? { ...x, start: e.target.value } : x)))}
+          />
+          <span className="muted">&ndash;</span>
+          <input
+            type="time"
+            value={w.end}
+            onChange={(e) => onChange(windows.map((x, j) => (j === i ? { ...x, end: e.target.value } : x)))}
+          />
+          <button type="button" className="secondary" onClick={() => onChange(windows.filter((_, j) => j !== i))}>
+            Remove
+          </button>
+        </div>
+      ))}
+      <button type="button" className="secondary" onClick={() => onChange([...windows, { start: "", end: "" }])}>
+        + Add window
+      </button>
+    </div>
+  );
+}
+
 function WebhookLinks({ strategyId, sourceType }: { strategyId: string; sourceType: SourceType }) {
   // In-house strategies never get a webhook - they run off this system's
   // own scheduled engine, not an inbound provider payload - so this isn't
@@ -1870,11 +1913,13 @@ function StrategyManager() {
   // instrument_type in ('future', 'option') only - see ContractDayFilter in api.ts.
   const [contractDayFilter, setContractDayFilter] = useState<ContractDayFilter>("any");
   const [segment, setSegment] = useState<Segment>("NSE");
-  // Optional per-strategy signal-acceptance window (e.g. 09:15-11:00) -
-  // both-or-neither, every source_type, not gated behind in-house. See
-  // Strategy's own comment in api.ts.
-  const [activeFromTime, setActiveFromTime] = useState("");
-  const [activeToTime, setActiveToTime] = useState("");
+  // Optional per-strategy signal-acceptance window(s) (e.g. 09:15-11:00,
+  // or several) - every source_type, not gated behind in-house. See
+  // Strategy's own comment in api.ts. Bare "HH:MM" per row (native
+  // <input type="time"> shape) - converted to "HH:MM:SS" pairs only when
+  // building the create payload; incomplete rows (either side blank) are
+  // dropped rather than submitted.
+  const [activeWindows, setActiveWindows] = useState<{ start: string; end: string }[]>([]);
   const [dupPolicy, setDupPolicy] = useState<DuplicateSignalPolicy>("skip");
   const [counterPolicy, setCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [creating, setCreating] = useState(false);
@@ -1897,8 +1942,7 @@ function StrategyManager() {
   const [editOptionFixedLots, setEditOptionFixedLots] = useState("");
   const [editContractDayFilter, setEditContractDayFilter] = useState<ContractDayFilter>("any");
   const [editSegment, setEditSegment] = useState<Segment>("NSE");
-  const [editActiveFromTime, setEditActiveFromTime] = useState("");
-  const [editActiveToTime, setEditActiveToTime] = useState("");
+  const [editActiveWindows, setEditActiveWindows] = useState<{ start: string; end: string }[]>([]);
   const [editDupPolicy, setEditDupPolicy] = useState<DuplicateSignalPolicy>("skip");
   const [editCounterPolicy, setEditCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [saving, setSaving] = useState(false);
@@ -2020,8 +2064,9 @@ function StrategyManager() {
         segment,
         duplicate_signal_policy: dupPolicy,
         counter_signal_policy: counterPolicy,
-        active_from_time: activeFromTime && activeToTime ? `${activeFromTime}:00` : undefined,
-        active_to_time: activeFromTime && activeToTime ? `${activeToTime}:00` : undefined,
+        active_windows: activeWindows
+          .filter((w) => w.start && w.end)
+          .map((w) => ({ start: `${w.start}:00`, end: `${w.end}:00` })),
       });
       setName("");
       setSourceKind("in_house");
@@ -2039,8 +2084,7 @@ function StrategyManager() {
       setOptionFixedLots("");
       setContractDayFilter("any");
       setSegment("NSE");
-      setActiveFromTime("");
-      setActiveToTime("");
+      setActiveWindows([]);
       setDupPolicy("skip");
       setCounterPolicy("close_and_flip");
       setStrategies((prev) => [created, ...prev]);
@@ -2080,8 +2124,7 @@ function StrategyManager() {
     setEditOptionFixedLots(s.option_fixed_lots != null ? String(s.option_fixed_lots) : "");
     setEditContractDayFilter(s.contract_day_filter);
     setEditSegment(s.segment);
-    setEditActiveFromTime(s.active_from_time ? s.active_from_time.slice(0, 5) : "");
-    setEditActiveToTime(s.active_to_time ? s.active_to_time.slice(0, 5) : "");
+    setEditActiveWindows(s.active_windows.map((w) => ({ start: w.start.slice(0, 5), end: w.end.slice(0, 5) })));
     setEditDupPolicy(s.duplicate_signal_policy);
     setEditCounterPolicy(s.counter_signal_policy);
   }
@@ -2117,8 +2160,9 @@ function StrategyManager() {
         segment: editSegment,
         duplicate_signal_policy: editDupPolicy,
         counter_signal_policy: editCounterPolicy,
-        active_from_time: editActiveFromTime && editActiveToTime ? `${editActiveFromTime}:00` : undefined,
-        active_to_time: editActiveFromTime && editActiveToTime ? `${editActiveToTime}:00` : undefined,
+        active_windows: editActiveWindows
+          .filter((w) => w.start && w.end)
+          .map((w) => ({ start: `${w.start}:00`, end: `${w.end}:00` })),
       });
       setStrategies((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setEditingId(null);
@@ -2421,14 +2465,10 @@ function StrategyManager() {
           {createIsInHouse && (
             <p className="hint">Regime filters (optional) are configured on the Rule itself - see the Rules tab.</p>
           )}
-          <label>
-            Active from <span className="optional">(optional)</span>
-            <input type="time" value={activeFromTime} onChange={(e) => setActiveFromTime(e.target.value)} />
-          </label>
-          <label>
-            Active to <span className="optional">(optional)</span>
-            <input type="time" value={activeToTime} onChange={(e) => setActiveToTime(e.target.value)} />
-          </label>
+          <div className="active-windows-field">
+            <span className="muted">Active window(s) (optional)</span>
+            <ActiveWindowsEditor windows={activeWindows} onChange={setActiveWindows} />
+          </div>
           <button
             type="submit"
             disabled={
@@ -2436,8 +2476,8 @@ function StrategyManager() {
               !name.trim() ||
               (createIsInHouse && !ruleId) ||
               (!createIsInHouse && !externalSourceName.trim()) ||
-              (!!activeFromTime !== !!activeToTime) ||
-              (activeFromTime !== "" && activeToTime !== "" && activeToTime <= activeFromTime)
+              activeWindows.some((w) => !!w.start !== !!w.end) ||
+              activeWindows.some((w) => w.start && w.end && w.end <= w.start)
             }
           >
             {creating ? "Creating..." : "Create strategy"}
@@ -2722,18 +2762,7 @@ function StrategyManager() {
                   )}
                 </td>
                 <td className="stack-cell">
-                  <input
-                    type="time"
-                    value={editActiveFromTime}
-                    onChange={(e) => setEditActiveFromTime(e.target.value)}
-                    className="cell-input"
-                  />
-                  <input
-                    type="time"
-                    value={editActiveToTime}
-                    onChange={(e) => setEditActiveToTime(e.target.value)}
-                    className="cell-input"
-                  />
+                  <ActiveWindowsEditor windows={editActiveWindows} onChange={setEditActiveWindows} />
                 </td>
                 <td />
                 <td className="edit-actions">
@@ -2744,8 +2773,8 @@ function StrategyManager() {
                     disabled={
                       saving ||
                       !editName.trim() ||
-                      !!editActiveFromTime !== !!editActiveToTime ||
-                      (editActiveFromTime !== "" && editActiveToTime !== "" && editActiveToTime <= editActiveFromTime)
+                      editActiveWindows.some((w) => !!w.start !== !!w.end) ||
+                      editActiveWindows.some((w) => w.start && w.end && w.end <= w.start)
                     }
                     title="Save changes"
                     aria-label="Save changes"
@@ -2795,11 +2824,7 @@ function StrategyManager() {
                 <td>{formatTarget(s)}</td>
                 <td>{s.segment}</td>
                 <td className="muted">{s.rule?.name ?? "-"}</td>
-                <td className="muted">
-                  {s.active_from_time && s.active_to_time
-                    ? `${s.active_from_time.slice(0, 5)}–${s.active_to_time.slice(0, 5)}`
-                    : "-"}
-                </td>
+                <td className="muted">{formatActiveWindows(s)}</td>
                 <td onClick={(e) => e.stopPropagation()}>
                   <WebhookLinks strategyId={s.id} sourceType={s.source_type} />
                 </td>

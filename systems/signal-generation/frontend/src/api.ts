@@ -5,6 +5,9 @@ export type SourceType = string;
 export type Horizon = "intraday" | "swing" | "positional";
 export type InstrumentType = "spot" | "future" | "option";
 export type StrategyStatus = "draft" | "backtesting" | "live" | "paused";
+// One [start, end) slice of a Strategy's optional signal-acceptance
+// window(s) - "HH:MM:SS" strings, end strictly after start.
+export type ActiveWindow = { start: string; end: string };
 export type Interval = "1min" | "3min" | "5min" | "15min" | "30min" | "60min" | "daily";
 export type StopLossMethod = "previous_candle" | "percent" | "indicator";
 // stop_loss_method='indicator' only - which computation to run. One
@@ -275,13 +278,14 @@ export type Strategy = {
   segment: Segment;
   duplicate_signal_policy: DuplicateSignalPolicy;
   counter_signal_policy: CounterSignalPolicy;
-  // Optional per-strategy signal-acceptance window (e.g. 09:15-11:00) -
-  // both-or-neither, every source_type. Enforced by signal-processing's
-  // resolve() against the signal's own timestamp - purely gates whether a
-  // signal is accepted, unrelated to square-off (a per-segment execution
-  // setting now, not a Strategy field - see docs/architecture.md).
-  active_from_time: string | null; // "HH:MM:SS"
-  active_to_time: string | null; // "HH:MM:SS"
+  // Optional per-strategy signal-acceptance window(s) (e.g. 09:15-11:00,
+  // or several) - every source_type, empty array means unrestricted.
+  // Enforced by signal-processing's resolve() against the signal's own
+  // timestamp - a signal is accepted if it falls within ANY one of them.
+  // Purely gates whether a signal is accepted, unrelated to square-off (a
+  // per-segment execution setting now, not a Strategy field - see
+  // docs/architecture.md).
+  active_windows: ActiveWindow[];
   status: StrategyStatus;
   created_at: string;
   updated_at: string;
@@ -309,9 +313,8 @@ export type StrategyCreate = {
   segment?: Segment;
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
-  // Both-or-neither - see Strategy's own comment above.
-  active_from_time?: string;
-  active_to_time?: string;
+  // See Strategy's own comment above. Omitted = empty (unrestricted).
+  active_windows?: ActiveWindow[];
 };
 
 // source_type/exchange aren't here - not editable after creation, see
@@ -345,8 +348,10 @@ export type StrategyEdit = {
   segment?: Segment;
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
-  active_from_time?: string;
-  active_to_time?: string;
+  // Omitted = unchanged; [] explicitly clears back to unrestricted - the
+  // backend tells these apart via model_fields_set (same pattern
+  // option_fixed_lots above already established for a nullable field).
+  active_windows?: ActiveWindow[];
 };
 
 // A simulated paper trade from POST /rules/{id}/backtest - entry on a

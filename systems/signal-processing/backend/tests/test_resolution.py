@@ -131,7 +131,7 @@ def test_resolve_rejects_unknown_strategy():
         resolve(_signal())
 
 
-# --- active_from_time/active_to_time (per-strategy signal-acceptance window) -----------------
+# --- active_windows (per-strategy signal-acceptance window(s)) -------------------------------
 
 
 @responses.activate
@@ -145,8 +145,7 @@ def test_resolve_rejects_signal_outside_active_window():
             "horizon": "intraday",
             "instrument_type": "spot",
             "segment": "NSE",
-            "active_from_time": "09:15:00",
-            "active_to_time": "11:00:00",
+            "active_windows": [{"start": "09:15:00", "end": "11:00:00"}],
         },
         status=200,
     )
@@ -168,8 +167,7 @@ def test_resolve_accepts_signal_inside_active_window():
             "horizon": "intraday",
             "instrument_type": "spot",
             "segment": "NSE",
-            "active_from_time": "09:15:00",
-            "active_to_time": "11:00:00",
+            "active_windows": [{"start": "09:15:00", "end": "11:00:00"}],
         },
         status=200,
     )
@@ -179,6 +177,57 @@ def test_resolve_accepts_signal_inside_active_window():
     resolved = resolve(signal)
 
     assert resolved.horizon == "intraday"
+
+
+@responses.activate
+def test_resolve_accepts_signal_inside_second_of_multiple_active_windows():
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json={
+            "id": STRATEGY_ID,
+            "status": "live",
+            "horizon": "intraday",
+            "instrument_type": "spot",
+            "segment": "NSE",
+            "active_windows": [
+                {"start": "09:15:00", "end": "10:30:00"},
+                {"start": "13:00:00", "end": "14:30:00"},
+            ],
+        },
+        status=200,
+    )
+    # 08:00 UTC = 13:30 IST - inside the second window only.
+    signal = _signal(timestamp=datetime(2026, 8, 12, 8, 0, tzinfo=timezone.utc))
+
+    resolved = resolve(signal)
+
+    assert resolved.horizon == "intraday"
+
+
+@responses.activate
+def test_resolve_rejects_signal_between_multiple_active_windows():
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json={
+            "id": STRATEGY_ID,
+            "status": "live",
+            "horizon": "intraday",
+            "instrument_type": "spot",
+            "segment": "NSE",
+            "active_windows": [
+                {"start": "09:15:00", "end": "10:30:00"},
+                {"start": "13:00:00", "end": "14:30:00"},
+            ],
+        },
+        status=200,
+    )
+    # 06:30 UTC = 12:00 IST - between the two windows.
+    signal = _signal(timestamp=datetime(2026, 8, 12, 6, 30, tzinfo=timezone.utc))
+
+    with pytest.raises(ResolutionError, match="outside strategy's active window"):
+        resolve(signal)
 
 
 @responses.activate
@@ -195,7 +244,29 @@ def test_resolve_ignores_unset_active_window():
         },
         status=200,
     )
-    # No window configured - any timestamp resolves, backward compatible.
+    # No windows configured (key absent entirely) - any timestamp resolves, backward compatible.
+    signal = _signal(timestamp=datetime(2026, 8, 12, 0, 0, tzinfo=timezone.utc))
+
+    resolved = resolve(signal)
+
+    assert resolved.horizon == "intraday"
+
+
+@responses.activate
+def test_resolve_ignores_empty_active_windows_list():
+    responses.add(
+        responses.GET,
+        _strategy_url(),
+        json={
+            "id": STRATEGY_ID,
+            "status": "live",
+            "horizon": "intraday",
+            "instrument_type": "spot",
+            "segment": "NSE",
+            "active_windows": [],
+        },
+        status=200,
+    )
     signal = _signal(timestamp=datetime(2026, 8, 12, 0, 0, tzinfo=timezone.utc))
 
     resolved = resolve(signal)
@@ -213,10 +284,10 @@ def test_resolve_rejects_cleanly_when_active_window_set_but_timestamp_missing():
     purpose), it must raise a clean ResolutionError - matching this
     function's own documented contract - not an unhandled AttributeError
     from None.astimezone() that would 500 the whole request. This exact
-    crash went undetected until a Strategy finally had both
-    active_from_time/active_to_time set together for the first time,
-    since `if active_from and active_to` had always short-circuited
-    before reaching is_within_active_window on every earlier signal."""
+    crash went undetected until a Strategy finally had an active window
+    set for the first time, since `if active_windows:` had always
+    short-circuited before reaching is_within_active_window on every
+    earlier signal."""
     responses.add(
         responses.GET,
         _strategy_url(),
@@ -226,8 +297,7 @@ def test_resolve_rejects_cleanly_when_active_window_set_but_timestamp_missing():
             "horizon": "intraday",
             "instrument_type": "spot",
             "segment": "NSE",
-            "active_from_time": "09:15:00",
-            "active_to_time": "11:00:00",
+            "active_windows": [{"start": "09:15:00", "end": "11:00:00"}],
         },
         status=200,
     )

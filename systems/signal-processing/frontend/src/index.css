@@ -69,6 +69,18 @@ button.danger {
   color: var(--sell);
 }
 
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+button.tiny {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+}
+
 .header-row {
   display: flex;
   align-items: flex-start;
@@ -177,8 +189,58 @@ tbody tr:last-child td {
   color: var(--sell);
 }
 
-.reason-icon {
-  margin-left: 0.35rem;
-  color: var(--sell);
+/* Smaller than .badge above - up to 4 of these sit side by side in the
+   grid's single consolidated Info column (horizon/instrument/status/
+   source), so each needs to be compact. */
+.badge-mini {
+  display: inline-block;
+  min-width: 1.4rem;
+  padding: 0.1rem 0.35rem;
+  margin-right: 0.3rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-align: center;
   cursor: help;
+}
+
+.badge-mini-buy {
+  background: rgba(62, 207, 142, 0.15);
+  color: var(--buy);
+}
+
+.badge-mini-sell {
+  background: rgba(232, 88, 106, 0.15);
+  color: var(--sell);
+}
+
+.badge-mini-muted {
+  background: rgba(139, 147, 161, 0.15);
+  color: var(--text-dim);
+}
+
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.settings-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.settings-row input,
+.settings-row select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.9rem;
 }

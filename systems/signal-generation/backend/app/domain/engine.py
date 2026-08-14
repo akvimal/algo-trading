@@ -232,7 +232,22 @@ def _run_one_breakout(
     post_signal(
         {
             "strategy_id": str(strategy.id),
-            "symbol": resolved.trade_symbol,
+            # For instrument_type='option', signal-processing's
+            # choose_strategy re-resolves the underlying itself (it needs
+            # a fresh option chain, not the future/spot instrument this
+            # engine would otherwise trade) - it calls resolve_underlying
+            # again with THIS symbol, so it must be the bare underlying
+            # name (e.g. "GOLDM"), not resolved.trade_symbol (e.g.
+            # "GOLDM-04Sep2026-FUT" - a real MCX contract symbol, not a
+            # valid "underlying" resolve_underlying can look up) - see
+            # signal-processing's app/domain/resolution/strategy.py
+            # choose_strategy's own docstring for the chart_symbol vs
+            # bare-underlying distinction this mirrors. Reproduced live:
+            # an in-house option strategy on GOLDM was rejected with
+            # "could not resolve underlying 'GOLDM-04Sep2026-FUT' ...for
+            # options" before this fix. Spot/future are unaffected - they
+            # trade resolved.trade_symbol directly, exactly as before.
+            "symbol": symbol if strategy.instrument_type == "option" else resolved.trade_symbol,
             "exchange": resolved.trade_exchange,
             "action": "BUY" if bias == "bullish" else "SELL",
             "price": trade_price,
@@ -314,7 +329,22 @@ def _run_one_range_breakout(
     post_signal(
         {
             "strategy_id": str(strategy.id),
-            "symbol": resolved.trade_symbol,
+            # For instrument_type='option', signal-processing's
+            # choose_strategy re-resolves the underlying itself (it needs
+            # a fresh option chain, not the future/spot instrument this
+            # engine would otherwise trade) - it calls resolve_underlying
+            # again with THIS symbol, so it must be the bare underlying
+            # name (e.g. "GOLDM"), not resolved.trade_symbol (e.g.
+            # "GOLDM-04Sep2026-FUT" - a real MCX contract symbol, not a
+            # valid "underlying" resolve_underlying can look up) - see
+            # signal-processing's app/domain/resolution/strategy.py
+            # choose_strategy's own docstring for the chart_symbol vs
+            # bare-underlying distinction this mirrors. Reproduced live:
+            # an in-house option strategy on GOLDM was rejected with
+            # "could not resolve underlying 'GOLDM-04Sep2026-FUT' ...for
+            # options" before this fix. Spot/future are unaffected - they
+            # trade resolved.trade_symbol directly, exactly as before.
+            "symbol": symbol if strategy.instrument_type == "option" else resolved.trade_symbol,
             "exchange": resolved.trade_exchange,
             "action": "BUY" if bias == "bullish" else "SELL",
             "price": trade_price,
@@ -415,7 +445,22 @@ def _run_one(
     post_signal(
         {
             "strategy_id": str(strategy.id),
-            "symbol": resolved.trade_symbol,
+            # For instrument_type='option', signal-processing's
+            # choose_strategy re-resolves the underlying itself (it needs
+            # a fresh option chain, not the future/spot instrument this
+            # engine would otherwise trade) - it calls resolve_underlying
+            # again with THIS symbol, so it must be the bare underlying
+            # name (e.g. "GOLDM"), not resolved.trade_symbol (e.g.
+            # "GOLDM-04Sep2026-FUT" - a real MCX contract symbol, not a
+            # valid "underlying" resolve_underlying can look up) - see
+            # signal-processing's app/domain/resolution/strategy.py
+            # choose_strategy's own docstring for the chart_symbol vs
+            # bare-underlying distinction this mirrors. Reproduced live:
+            # an in-house option strategy on GOLDM was rejected with
+            # "could not resolve underlying 'GOLDM-04Sep2026-FUT' ...for
+            # options" before this fix. Spot/future are unaffected - they
+            # trade resolved.trade_symbol directly, exactly as before.
+            "symbol": symbol if strategy.instrument_type == "option" else resolved.trade_symbol,
             "exchange": resolved.trade_exchange,
             "action": "BUY" if bias == "bullish" else "SELL",
             "price": trade_price,

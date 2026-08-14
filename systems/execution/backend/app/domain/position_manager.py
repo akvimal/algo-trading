@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 GetLtpBatch = Callable[[str, list[str]], dict[str, float]]  # (exchange, symbols) -> {symbol: price}
 GetPreviousCandle = Callable[[str, str, str], Optional[dict]]  # (exchange, symbol, interval) -> candle dict or None
 GetLotSize = Callable[[str, str], Optional[float]]  # (exchange, symbol) -> lot size, or None if unknown
+# (segment, underlying) -> {chart_symbol, chart_exchange, trade_symbol,
+# trade_exchange, lot_size, expiry}, or None if unresolvable - same shape
+# as option_position_manager.py's own ResolveUnderlying (not imported from
+# there to avoid a circular import - that module already imports FROM this
+# one).
+ResolveUnderlying = Callable[[str, str], Optional[dict]]
 
 
 def compute_pnl(action: str, entry_price: float, exit_price: float, quantity: float) -> float:
@@ -422,7 +428,7 @@ def open_manual_position(
     stop_loss_price: Optional[float],
     settings: ExecutionSettings,
     db: Session,
-    get_lot_size: GetLotSize,
+    resolve_underlying: ResolveUnderlying,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -438,7 +444,22 @@ def open_manual_position(
     precedence pattern already used for Strategy.option_fixed_lots in
     open_option_group. square_off_time is no longer a caller-supplied
     parameter - like open_position, it's looked up from the segment's own
-    account row below."""
+    account row below.
+
+    `symbol` for instrument_type='future' is whatever the caller typed
+    (e.g. "BANKNIFTY", the bare underlying) - it is NOT yet the actual
+    tradeable contract. The signal-driven path (open_position) never has
+    this problem because signal-processing already resolved the contract
+    (resolved.trade_symbol) before publishing to orders.resolved; a manual
+    order bypasses that pipeline entirely, so this function must do the
+    same resolution itself, via resolve_underlying below, before EITHER
+    sizing or persisting. Reproduced live 2026-08-14: a manual BANKNIFTY
+    future order persisted symbol="BANKNIFTY" (not the real Aug-2026
+    contract) and lot_size=1 (not the real ~30-35 futures multiplier) -
+    "BANKNIFTY" bare IS a real, resolvable Dhan symbol (the index SPOT,
+    lot_size=1 by definition), so the old get_lot_size(segment, symbol)
+    call silently succeeded against the WRONG instrument instead of
+    failing loudly."""
     signal_id = uuid.uuid4()
 
     if not is_supported("intraday", instrument_type):
@@ -448,6 +469,22 @@ def open_manual_position(
         )
         db.commit()
         return row
+
+    lot_size = 1
+    if instrument_type == "future":
+        resolved = resolve_underlying(segment, symbol)
+        if resolved is None:
+            row = _reject_manual(
+                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                f"could not resolve underlying '{symbol}' on {segment} for futures",
+            )
+            db.commit()
+            return row
+        # Everything below (conflict detection, sizing, persistence) uses
+        # the REAL contract symbol from here on - not the bare underlying
+        # the caller typed.
+        symbol = resolved["trade_symbol"]
+        lot_size = resolved["lot_size"]
 
     account = load_account(db, segment)
     if account is None:
@@ -498,18 +535,6 @@ def open_manual_position(
             return row
         effective_capital = effective_capital / settings.usdinr_rate
         effective_capital = effective_capital * float(account.leverage)
-
-    lot_size = 1
-    if instrument_type == "future":
-        resolved_lot_size = get_lot_size(segment, symbol)
-        if resolved_lot_size is None:
-            row = _reject_manual(
-                db, signal_id, symbol, segment, segment, action, instrument_type, price,
-                f"could not determine lot size for {symbol} on {segment}",
-            )
-            db.commit()
-            return row
-        lot_size = resolved_lot_size
 
     capital_unit = "USD" if segment == "CRYPTO" else "INR"
     if quantity is not None:

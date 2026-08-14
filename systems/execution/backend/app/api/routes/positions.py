@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.adapters.quotes.client import get_lot_size, get_ltp_batch, get_previous_candle
+from app.adapters.quotes.client import get_ltp_batch, get_previous_candle, resolve_underlying
 from app.domain.models import ManualPositionCreate, StopLossUpdate
 from app.domain.position_manager import (
     check_exits,
@@ -106,7 +106,7 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
         payload.stop_loss_price,
         settings,
         db,
-        get_lot_size,
+        resolve_underlying,
     )
     return _position_to_out(row)
 

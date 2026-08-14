@@ -140,12 +140,14 @@ class ManualOptionPositionCreate(BaseModel):
     action: Literal["BUY", "SELL"]
     option_position_style: Literal["spread", "naked"] = "spread"
     option_strike_moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"
-    # User-picked, not auto-chosen - the whole point of this endpoint over
-    # the Strategy-mediated path, which always picked the nearest expiry
-    # for horizon='intraday' with no override. Validated against a live
+    # Optional override - omitted (the normal case, no Expiry dropdown in
+    # the frontend anymore as of 2026-08-14) means open_manual_option_group
+    # picks the nearest currently-tradeable expiry itself, matching the
+    # pre-2026-08-14 Strategy-mediated path's own always-nearest behavior.
+    # A caller-supplied value is still validated against a live
     # GET /options/expiries call in open_manual_option_group, not just
     # format-checked here.
-    expiry: str
+    expiry: Optional[str] = None
     sl_scope: Literal["combined", "individual"] = "combined"
     # Bypasses auto-sizing entirely when given - same precedence pattern
     # as Strategy.option_fixed_lots in open_option_group.

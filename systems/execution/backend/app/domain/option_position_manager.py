@@ -415,7 +415,7 @@ def open_manual_option_group(
     action: str,
     option_position_style: str,
     option_strike_moneyness: str,
-    expiry: str,
+    expiry: Optional[str],
     sl_scope: str,
     option_fixed_lots: Optional[float],
     settings: ExecutionSettings,
@@ -433,9 +433,14 @@ def open_manual_option_group(
     Deliberately a sibling to open_option_group, not a call into it - that
     function takes a ResolvedOrder (always a real strategy_id, legs already
     resolved by signal-processing's choose_strategy against an
-    automatically-picked expiry); this one resolves its own legs directly
-    against a caller-supplied `expiry` instead of choose_expiry's "always
-    nearest" behavior, and never has a Strategy at all (strategy_id=None
+    automatically-picked expiry); this one resolves its own legs directly,
+    defaulting to the nearest currently-tradeable expiry itself when
+    `expiry` is None (no dropdown in the frontend as of 2026-08-14 - it
+    used to require an explicit, user-picked one, but GET /options/expiries
+    proved slow/unreliable enough as a blocking frontend dependency that
+    silent-auto-nearest, matching the pre-2026-08-14 Strategy-mediated
+    path, won out) - an explicit `expiry` is still honored/validated if
+    given, and never has a Strategy at all (strategy_id=None
     throughout, mirrors open_manual_position's spot/future precedent -
     option_position_groups.strategy_id is nullable for exactly this
     reason). Reuses every pure/impure helper open_option_group already
@@ -457,15 +462,26 @@ def open_manual_option_group(
     chart_symbol, chart_exchange = resolved["chart_symbol"], resolved["chart_exchange"]
 
     expiries = get_expiry_list(chart_exchange, chart_symbol)
-    if not expiries or expiry not in expiries:
+    if not expiries:
+        row = _reject_manual_group(
+            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            f"no currently-tradeable expiry available for '{chart_symbol}'",
+        )
+        db.commit()
+        return row
+    if expiry is None:
+        resolved_expiry = sorted(expiries)[0]  # nearest - see docstring above
+    elif expiry not in expiries:
         row = _reject_manual_group(
             db, signal_id, symbol, segment, action, strategy_type_for_rejection,
             f"'{expiry}' is not a currently-tradeable expiry for '{chart_symbol}' - available: {expiries}",
         )
         db.commit()
         return row
+    else:
+        resolved_expiry = expiry
 
-    chain = get_option_chain(chart_exchange, chart_symbol, expiry)
+    chain = get_option_chain(chart_exchange, chart_symbol, resolved_expiry)
     if chain is None:
         row = _reject_manual_group(
             db, signal_id, symbol, segment, action, strategy_type_for_rejection,

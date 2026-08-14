@@ -849,29 +849,23 @@ export async function squareOffOptionGroup(
   return asJson(res, "POST /option-groups/{id}/square-off");
 }
 
-// market-data's GET /options/expiries, called directly from the browser
-// (same direct-from-browser pattern as fetchLtp/fetchLotSize/
-// fetchCryptoSymbols) - backs the Manual tab's expiry <select> for option
-// rows. `symbol` is the logical underlying (e.g. "NIFTY", "BTCUSD"), not
-// a leg's own symbol.
-export async function fetchExpiries(exchange: string, symbol: string): Promise<string[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/options/expiries?${new URLSearchParams({ exchange, symbol })}`);
-  const data = await asJson<{ expiries: string[] }>(res, `GET /options/expiries (${exchange}/${symbol})`);
-  return data.expiries;
-}
-
 // POST /option-groups/manual (execution) - option orders, bypasses
 // signal-generation/signal-processing entirely, same "always 200,
 // rejection is a legitimate outcome" convention as createManualPosition.
-// No auto-provisioned Strategy (removed 2026-08-14) - execution resolves
-// its own legs directly against the caller-supplied `expiry`.
+// No auto-provisioned Strategy (removed 2026-08-14). No `expiry` field -
+// there used to be an Expiry <select> here backed by market-data's
+// GET /options/expiries, but that call proved slow/unreliable enough to
+// leave the dropdown stuck on "Loading..." indefinitely; removed
+// 2026-08-14 in favor of execution resolving its own legs against
+// whatever the nearest currently-tradeable expiry is at open time (see
+// open_manual_option_group's docstring) - no frontend dependency on that
+// endpoint at all anymore.
 export async function createManualOptionGroup(payload: {
   segment: Segment;
   symbol: string;
   action: "BUY" | "SELL";
   option_position_style: OptionPositionStyle;
   option_strike_moneyness: OptionStrikeMoneyness;
-  expiry: string;
   sl_scope?: OptionSlScope;
   option_fixed_lots?: number;
 }): Promise<ManualOptionGroup> {

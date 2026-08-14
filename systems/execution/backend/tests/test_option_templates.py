@@ -2,10 +2,11 @@
 option-strategy leg builders, ported from signal-processing's own copy
 (see that module's tests, systems/signal-processing/backend/tests/
 test_option_templates.py - identical fixtures/assertions here minus
-choose_expiry, which doesn't exist in this port at all since
-open_manual_option_group takes an explicit, user-picked expiry instead of
-an auto-chosen one). Pure functions, hand-built fake chains matching
-market-data's real OptionChain JSON shape - no network/mocking needed."""
+choose_expiry, which doesn't exist in this port at all: nearest-expiry
+selection lives directly in open_manual_option_group instead, not in this
+module - see its own docstring). Pure functions, hand-built fake chains
+matching market-data's real OptionChain JSON shape - no network/mocking
+needed."""
 
 import pytest
 

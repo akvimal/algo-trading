@@ -8,7 +8,6 @@ import {
   createManualPosition,
   fetchCryptoSymbols,
   fetchExecPositions,
-  fetchExpiries,
   fetchLotSize,
   fetchLtp,
   fetchOptionGroups,
@@ -64,10 +63,6 @@ type ManualRow = {
   action: "BUY" | "SELL";
   optionStyle: OptionPositionStyle;
   moneyness: OptionStrikeMoneyness;
-  // Option rows only - user-picked, not auto-chosen (see fetchExpiries/
-  // expiriesCache below). Empty until a real expiry is selected from the
-  // live list.
-  expiry: string;
   draftQuantity: string;
   draftTriggerPrice: string;
   draftStopLoss: string;
@@ -86,7 +81,6 @@ function newRow(): ManualRow {
     action: "BUY",
     optionStyle: "spread",
     moneyness: "ATM",
-    expiry: "",
     draftQuantity: "",
     draftTriggerPrice: "",
     draftStopLoss: "",
@@ -172,56 +166,6 @@ export default function ManualTab() {
       cancelled = true;
     };
   }, [rows, lotSizeCache]);
-
-  // Real, currently-tradeable expiry dates for an option row's underlying
-  // - fetched lazily per (segment, symbol) as rows reference one, cached
-  // since it's stable within a session (not a live-updating value like
-  // price/lot size, though a fresh expiry could appear after a rollover -
-  // acceptable to require a page reload to pick that up). Backs the
-  // Expiry <select> below - auto-defaults to the nearest one once loaded
-  // (so placing an order needs no extra click, matching the pre-2026-08-14
-  // Strategy-mediated flow's own "always nearest" behavior) but stays
-  // visible/overridable, unlike that old flow - you can see and change
-  // which contract you're actually trading instead of it being silent.
-  const [expiriesCache, setExpiriesCache] = useState<Record<string, string[]>>({});
-  useEffect(() => {
-    const missing = [
-      ...new Set(
-        rows
-          .filter((r) => r.instrumentType === "option" && r.symbol && !(`${r.segment}:${r.symbol}` in expiriesCache))
-          .map((r) => `${r.segment}:${r.symbol}`),
-      ),
-    ];
-    if (missing.length === 0) return;
-    let cancelled = false;
-    Promise.all(
-      missing.map((key) => {
-        const [segment, symbol] = key.split(":");
-        return fetchExpiries(segment, symbol)
-          .then((expiries) => [key, expiries] as const)
-          .catch(() => null);
-      }),
-    ).then((results) => {
-      if (cancelled) return;
-      const updates = Object.fromEntries(results.filter((r): r is readonly [string, string[]] => r !== null));
-      if (Object.keys(updates).length === 0) return;
-      setExpiriesCache((prev) => ({ ...prev, ...updates }));
-      // Auto-default each matching row still missing an explicit choice to
-      // the nearest (soonest) expiry - never overwrites one the user
-      // already picked.
-      setRows((prev) =>
-        prev.map((r) => {
-          if (r.expiry || !(r.instrumentType === "option" && r.symbol)) return r;
-          const list = updates[`${r.segment}:${r.symbol}`];
-          if (!list || list.length === 0) return r;
-          return { ...r, expiry: [...list].sort()[0] };
-        }),
-      );
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [rows, expiriesCache]);
 
   function updateRow(id: string, patch: Partial<ManualRow>) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -327,7 +271,6 @@ export default function ManualTab() {
           action: row.action,
           option_position_style: row.optionStyle,
           option_strike_moneyness: row.moneyness,
-          expiry: row.expiry,
           option_fixed_lots: quantity,
         });
         if (created.status === "REJECTED") {
@@ -539,11 +482,10 @@ export default function ManualTab() {
       <section className="panel">
         <h2>Manual trading</h2>
         <p className="hint">
-          Opens real paper positions directly against execution - spot/future bypass Strategy entirely; option
-          orders (naked/spread) route through a small auto-provisioned "[Manual] ..." Strategy behind the
-          scenes (visible, tagged, in the Strategies tab) since strike/expiry selection lives there. Leave
-          price blank to fire immediately at the current market price, or set one to wait until the market
-          reaches it (fires once price reaches/crosses that level, from either side).
+          Opens real paper positions directly against execution, bypassing Strategy entirely for both
+          spot/future and option (naked/spread) orders - options trade the nearest currently-tradeable expiry
+          automatically. Leave price blank to fire immediately at the current market price, or set one to
+          wait until the market reaches it (fires once price reaches/crosses that level, from either side).
         </p>
         <button type="button" onClick={() => setRows((prev) => [...prev, newRow()])}>
           Add instrument
@@ -619,23 +561,6 @@ export default function ManualTab() {
                     <option value="OTM2">OTM2</option>
                   </select>
                 </label>
-                <label>
-                  Expiry
-                  <select value={row.expiry} onChange={(e) => updateRow(row.id, { expiry: e.target.value })}>
-                    <option value="" disabled>
-                      {!row.symbol
-                        ? "Pick a symbol first"
-                        : expiriesCache[`${row.segment}:${row.symbol}`]
-                          ? "Select an expiry"
-                          : "Loading..."}
-                    </option>
-                    {(expiriesCache[`${row.segment}:${row.symbol}`] ?? []).map((exp) => (
-                      <option key={exp} value={exp}>
-                        {exp}
-                      </option>
-                    ))}
-                  </select>
-                </label>
               </>
             )}
             <label>
@@ -677,7 +602,7 @@ export default function ManualTab() {
             <button
               type="button"
               onClick={() => placeOrder(row)}
-              disabled={!row.symbol.trim() || (row.instrumentType === "option" && !row.expiry)}
+              disabled={!row.symbol.trim()}
             >
               Place order
             </button>

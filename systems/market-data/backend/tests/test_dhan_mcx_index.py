@@ -19,6 +19,7 @@ from app.providers.dhan import (
     NSE_FUTIDX,
     NSE_INDEX,
     DhanProvider,
+    _parse_lot_size_overrides,
 )
 
 HEADER = (
@@ -72,7 +73,30 @@ def test_sync_mcx_filters_to_futcom_and_groups_by_underlying():
     assert result["symbol_count"] == 3  # 2 GOLDM + 1 CRUDEOILM FUTCOM rows, OPTFUT excluded
     goldm_contracts = provider._underlying_to_contracts["GOLDM"]
     assert [c.expiry_date for c in goldm_contracts] == [near, far]  # sorted ascending
-    assert provider._symbol_to_lot_size[f"GOLDM-{near:%d%b%Y}-FUT"] == 1  # real Dhan value for MCX commodities
+    # SEM_LOT_UNITS itself says 1 (see _mcx_csv) - confirmed wrong against a
+    # real executed Dhan order (true multiplier 10), so MCX_LOT_SIZE_OVERRIDES
+    # (default "GOLD:10,GOLDM:10,CRUDEOIL:10,CRUDEOILM:10") overrides it - see
+    # _parse_lot_size_overrides/sync_instruments.
+    assert provider._symbol_to_lot_size[f"GOLDM-{near:%d%b%Y}-FUT"] == 10
+    assert provider._symbol_to_lot_size[f"CRUDEOILM-{near:%d%b%Y}-FUT"] == 10
+
+
+@responses.activate
+def test_sync_mcx_leaves_lot_size_alone_for_a_non_overridden_underlying():
+    """The override is targeted by underlying, not a blanket MCX
+    replacement - a commodity not listed in MCX_LOT_SIZE_OVERRIDES must
+    still get Dhan's own (possibly correct, possibly not yet checked)
+    SEM_LOT_UNITS value."""
+    near, far = _expiries()
+    csv_body = HEADER + (
+        f"MCX,M,700111,FUTCOM,0,SILVERM-{near:%d%b%Y}-FUT,5.0,SILVERM,{near:%Y-%m-%d} 23:30:00,0,XX,100.0,M,FUTCOM,2,SILVERM\n"
+    )
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=csv_body, status=200)
+
+    provider = DhanProvider([MCX_FUTCOM], name="dhan-mcx")
+    provider.sync_instruments()
+
+    assert provider._symbol_to_lot_size[f"SILVERM-{near:%d%b%Y}-FUT"] == 5
 
 
 @responses.activate
@@ -92,6 +116,29 @@ def test_sync_nse_composite_covers_equity_index_and_index_futures():
     assert "BANKNIFTY" in provider._symbol_to_security_id
     assert provider._symbol_to_lot_size["NIFTY"] == 1  # index spot, no lot concept
     assert result["symbol_count"] == len(provider._symbol_to_security_id)
+
+
+# --- _parse_lot_size_overrides: env-var parsing ---------------------------------------------
+
+
+def test_parse_lot_size_overrides_parses_default_value():
+    assert _parse_lot_size_overrides("GOLD:10,GOLDM:10,CRUDEOIL:10,CRUDEOILM:10") == {
+        "GOLD": 10,
+        "GOLDM": 10,
+        "CRUDEOIL": 10,
+        "CRUDEOILM": 10,
+    }
+
+
+def test_parse_lot_size_overrides_skips_malformed_entries():
+    assert _parse_lot_size_overrides("GOLDM:10, ,BADENTRY,CRUDEOILM:notanumber,SILVERM:5") == {
+        "GOLDM": 10,
+        "SILVERM": 5,
+    }
+
+
+def test_parse_lot_size_overrides_empty_string_yields_no_overrides():
+    assert _parse_lot_size_overrides("") == {}
 
 
 # --- resolve_active_contract: nearest unexpired --------------------------------------------
@@ -151,7 +198,7 @@ def test_resolve_underlying_commodity_chart_equals_trade():
     assert resolved is not None
     assert resolved.chart_symbol == resolved.trade_symbol == f"GOLDM-{near:%d%b%Y}-FUT"
     assert resolved.chart_exchange == resolved.trade_exchange == "MCX"
-    assert resolved.lot_size == 1
+    assert resolved.lot_size == 10  # MCX_LOT_SIZE_OVERRIDES, not Dhan's own (wrong) SEM_LOT_UNITS=1
     assert resolved.expiry == near.isoformat()
 
 

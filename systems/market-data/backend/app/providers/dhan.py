@@ -440,6 +440,34 @@ class ContractInfo:
     expiry_date: date
 
 
+def _parse_lot_size_overrides(raw: str) -> dict[str, int]:
+    """Parses settings.mcx_lot_size_overrides (e.g. "GOLD:10,GOLDM:10,
+    CRUDEOIL:10,CRUDEOILM:10") into {underlying: lot_size}. Keyed by
+    underlying (the SEM_TRADING_SYMBOL prefix - see
+    _underlying_from_trading_symbol), not by the full contract symbol,
+    since that changes every expiry/strike and one override entry needs
+    to cover every contract for that underlying. A malformed entry is
+    skipped with a warning rather than failing the whole sync - this is
+    a manually-maintained env var, not validated input."""
+    overrides: dict[str, int] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        underlying, _, qty_raw = entry.partition(":")
+        underlying = underlying.strip()
+        try:
+            qty = int(qty_raw.strip())
+        except ValueError:
+            logger.warning("skipping malformed MCX_LOT_SIZE_OVERRIDES entry: %r", entry)
+            continue
+        overrides[underlying] = qty
+    return overrides
+
+
+_LOT_SIZE_OVERRIDES = _parse_lot_size_overrides(settings.mcx_lot_size_overrides)
+
+
 class DhanProvider(QuoteProvider):
     def __init__(self, segment_configs: Optional[list[SegmentConfig]] = None, name: str = "dhan") -> None:
         # Defaults to NSE-cash-equity-only, matching this class's
@@ -532,7 +560,12 @@ class DhanProvider(QuoteProvider):
                     )
                 symbol_to_id[symbol] = security_id
                 symbol_to_config[symbol] = config
-                symbol_to_lot[symbol] = int(float(row.get("SEM_LOT_UNITS") or 1))
+                lot_size = int(float(row.get("SEM_LOT_UNITS") or 1))
+                if row.get("SEM_EXM_EXCH_ID") == "MCX":
+                    override = _LOT_SIZE_OVERRIDES.get(_underlying_from_trading_symbol(row))
+                    if override is not None:
+                        lot_size = override
+                symbol_to_lot[symbol] = lot_size
 
                 if config.underlying_of is not None:
                     underlying = config.underlying_of(row)

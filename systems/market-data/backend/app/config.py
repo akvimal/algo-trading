@@ -27,5 +27,13 @@ class Settings(BaseSettings):
     delta_base_url: str = "https://api.india.delta.exchange"
     delta_ws_url: str = "wss://socket.india.delta.exchange"
 
+    # Manual escape hatch for Dhan's own SEM_LOT_UNITS being confirmed wrong
+    # for MCX commodities - a real executed order showed GOLDM/CRUDEOILM's
+    # true lot multiplier is 10, not the 1 both the compact and detailed
+    # Dhan instrument-master CSVs report (no alternate Dhan field carries
+    # the correct value). "underlying:qty" pairs, comma-separated - see
+    # app/providers/dhan.py's _parse_lot_size_overrides/sync_instruments.
+    mcx_lot_size_overrides: str = "GOLD:10,GOLDM:10,CRUDEOIL:10,CRUDEOILM:10"
+
 
 settings = Settings()

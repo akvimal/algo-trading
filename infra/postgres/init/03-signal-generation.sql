@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- match Dhan's charts/intraday API exactly - see market-data's
     -- DhanProvider.get_previous_candle.
     stop_loss_method    TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
-    stop_loss_interval  TEXT CHECK (stop_loss_interval IN ('1min', '5min', '15min', '25min', '60min')),
+    stop_loss_interval  TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent   NUMERIC CHECK (stop_loss_percent > 0 AND stop_loss_percent < 100),
     -- One value today ('ema') - MUST be widened here in lockstep with
     -- _STOP_LOSS_INDICATOR_PARAMS_MODELS in app/domain/rule.py whenever a

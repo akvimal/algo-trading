@@ -452,7 +452,7 @@ class RuleBacktestRequest(BaseModel):
     # app/api/routes/rules.py's option backtest path.
     horizon: Literal["intraday", "swing", "positional"] = "intraday"
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
-    stop_loss_interval: Optional[Literal["1min", "5min", "15min", "25min", "60min"]] = None
+    stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     # stop_loss_method='indicator' only - see Strategy's own
     # stop_loss_indicator_type/stop_loss_indicator_params (app/domain/models.py)
@@ -480,12 +480,19 @@ class RuleBacktestGridRequest(BaseModel):
     the Indicator row; PATCH /indicators/{id} once you've picked a winner
     from the report. Crossover-rule rules only (matches the pre-split
     route's own scope) - no instrument_type/option overrides here, since
-    there's no option-backtest variant of grid search."""
+    there's no option-backtest variant of grid search. Same exit-config
+    field set as RuleBacktestRequest (all 3 stop_loss_method values,
+    including 'indicator') - _exit_config_for/_sl_candles_for in
+    app/api/routes/rules.py accept either request type interchangeably."""
 
     param_grid: dict[str, list[int]] = Field(min_length=1)
-    stop_loss_method: Optional[Literal["previous_candle", "percent"]] = None
-    stop_loss_interval: Optional[Literal["1min", "5min", "15min", "25min", "60min"]] = None
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
+    stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
+    # stop_loss_method='indicator' only - same "not cross-validated here"
+    # reasoning as RuleBacktestRequest's own copy of these two fields.
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: bool = False
     square_off_time: Optional[time] = None

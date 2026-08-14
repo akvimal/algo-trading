@@ -50,7 +50,7 @@ GetLtp = Callable[[str, str], Optional[float]]
 GetUniverseConstituents = Callable[[str], Optional[list[str]]]
 PostSignal = Callable[[dict], dict]
 
-_INTERVAL_MINUTES = {"1min": 1, "5min": 5, "15min": 15, "25min": 25, "60min": 60}
+_INTERVAL_MINUTES = {"1min": 1, "3min": 3, "5min": 5, "15min": 15, "25min": 25, "30min": 30, "60min": 60}
 _HISTORY_MULTIPLIER = 4  # fetch this many warm-up periods' worth of bars, not just barely enough
 _MIN_HISTORY_DAYS = 3
 _MAX_HISTORY_DAYS = 30

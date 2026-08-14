@@ -60,7 +60,11 @@ def test_stop_loss_fields_for_rule_overrides_whatever_was_requested_for_breakout
 
 
 def test_stop_loss_fields_for_rule_rejects_unsupported_htf_interval():
-    rule_row = FakeRule(rule_config={**BREAKOUT_RULE_CONFIG, "htf_interval": "30min"})
+    # "daily" is a valid Interval (Rule condition timeframes allow it) but
+    # deliberately excluded from StopLossInterval - the intraday
+    # candle-history endpoints stop-loss fetching relies on don't serve
+    # it at all (see StopLossInterval's own comment, app/domain/models.py).
+    rule_row = FakeRule(rule_config={**BREAKOUT_RULE_CONFIG, "htf_interval": "daily"})
     with pytest.raises(HTTPException) as exc_info:
         _stop_loss_fields_for_rule(rule_row, None, None, None, False)
     assert exc_info.value.status_code == 422

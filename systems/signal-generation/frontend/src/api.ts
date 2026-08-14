@@ -11,9 +11,10 @@ export type StopLossMethod = "previous_candle" | "percent" | "indicator";
 // value today ('ema') - see backend app/domain/rule.py's
 // _STOP_LOSS_INDICATOR_PARAMS_MODELS.
 export type StopLossIndicatorType = "ema";
-// matches Dhan's actual supported intraday-candle intervals (no "daily",
-// and 25min not 30min - Dhan's charts/intraday API only supports 1/5/15/25/60)
-export type StopLossInterval = "1min" | "5min" | "15min" | "25min" | "60min";
+// 1/5/15/25/60 are Dhan's native intraday-candle intervals; 3min/30min
+// are locally aggregated from 1min bars (same as Interval's own 3min/
+// 30min support) - "daily" excluded, the intraday endpoints don't serve it.
+export type StopLossInterval = "1min" | "3min" | "5min" | "15min" | "25min" | "30min" | "60min";
 // instrument_type='option' only - which fixed template signal-processing's
 // choose_strategy builds: 'spread' (bull_call_spread/bear_put_spread,
 // 2 legs) or 'naked' (naked_call/naked_put, single BUY leg only, no
@@ -435,6 +436,8 @@ export type RuleBacktestGridRequest = {
   stop_loss_method?: StopLossMethod;
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
+  stop_loss_indicator_type?: StopLossIndicatorType;
+  stop_loss_indicator_params?: { period: number };
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   square_off_time?: string;

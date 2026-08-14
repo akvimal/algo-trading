@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- exit-monitor job's trailing logic knows HOW to recompute a
     -- candidate stop without needing the strategy again.
     stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
-    stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '5min', '15min', '25min', '60min')),
+    stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent       NUMERIC,
     -- stop_loss_method='indicator' only - one value today ('ema'). MUST be
     -- widened in lockstep with signal-generation's own identical CHECK

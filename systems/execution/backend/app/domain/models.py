@@ -30,7 +30,7 @@ class ResolvedOrder(BaseModel):
     resolved_at: datetime
     status: str
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
-    stop_loss_interval: Optional[Literal["1min", "5min", "15min", "25min", "60min"]] = None
+    stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = None
     # stop_loss_method='indicator' only - see
     # position_manager.py's _STOP_LOSS_COMPUTE_FUNCS.

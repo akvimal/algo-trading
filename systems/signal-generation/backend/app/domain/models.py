@@ -79,11 +79,15 @@ Status = Literal["draft", "backtesting", "live", "paused"]
 # Literal again). Uses stop_loss_interval (candle timeframe, reused) plus
 # the two new stop_loss_indicator_* fields below - never stop_loss_percent.
 StopLossMethod = Literal["previous_candle", "percent", "indicator"]
-# Matches Dhan's actual supported intraday-candle intervals for the
-# charts/intraday API (1/5/15/25/60 - no 30, no daily): a deliberate
-# leak of the one provider's capabilities, consistent with this codebase
-# already hardcoding to Dhan/NSE elsewhere (see market-data's DhanProvider).
-StopLossInterval = Literal["1min", "5min", "15min", "25min", "60min"]
+# 1/5/15/25/60 are Dhan's native charts/intraday intervals; 3/30 are
+# locally aggregated from 1min bars (any "Nmin" shape works - see
+# market-data's resolve_interval_minutes/aggregate_candles) same as
+# Rule's own `interval` field already relies on for 3min/30min LTF
+# breakout legs. `daily` is deliberately excluded - the intraday
+# candle-history endpoints these providers use don't serve it at all
+# (resolve_interval_minutes raises for it), so a stop-loss interval of
+# 'daily' could never actually fetch a candle.
+StopLossInterval = Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]
 # Signal-conflict policy, per-strategy - passed through unchanged on
 # resolved-order to execution's position_manager._resolve_signal_conflicts.
 # duplicate_signal_policy governs a SAME-direction signal arriving while

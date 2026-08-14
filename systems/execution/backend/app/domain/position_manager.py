@@ -113,7 +113,7 @@ _STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[float], dict], Optional[float
 # history_window exactly (same bar-count-to-calendar-days shape,
 # duplicated locally rather than imported). Extra empty days cost nothing
 # but a wider market-data query.
-_INDICATOR_INTERVAL_MINUTES = {"1min": 1, "5min": 5, "15min": 15, "25min": 25, "60min": 60}
+_INDICATOR_INTERVAL_MINUTES = {"1min": 1, "3min": 3, "5min": 5, "15min": 15, "25min": 25, "30min": 30, "60min": 60}
 _INDICATOR_MIN_HISTORY_DAYS = 5
 _INDICATOR_MAX_HISTORY_DAYS = 30
 

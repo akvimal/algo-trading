@@ -39,7 +39,7 @@ class ResolvedOrderDraft(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     strategy: Optional[dict] = None
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
-    stop_loss_interval: Optional[Literal["1min", "5min", "15min", "25min", "60min"]] = None
+    stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = None
     # stop_loss_method='indicator' only - see docs/contracts/resolved-order.schema.json.
     stop_loss_indicator_type: Optional[str] = None

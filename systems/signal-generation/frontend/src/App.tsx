@@ -467,6 +467,11 @@ function ruleSummary(r: Rule, indicators: Indicator[]): string {
   return ` - ${indicator.name} crosses its own SMA(${smaPeriod})`;
 }
 
+// Rule.interval (Interval) allows "daily" too, which StopLossInterval
+// deliberately excludes (see api.ts) - this guards the auto-default
+// below from ever proposing a value the SL-interval field can't accept.
+const STOP_LOSS_INTERVALS: string[] = ["1min", "3min", "5min", "15min", "25min", "30min", "60min"];
+
 function RuleManager() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [indicators, setIndicators] = useState<Indicator[]>([]);
@@ -603,7 +608,18 @@ function RuleManager() {
     setBacktestError(null);
     setGridResult(null);
     setGridError(null);
-  }, [selected]);
+    // Default the backtest panel's SL candle interval to this rule's own
+    // interval - almost always what you want (the SL series lives on the
+    // same timeframe the rule itself trades), and one less field to fill
+    // in per rule switched to. Only when it's a value the SL-interval
+    // field can actually accept (excludes "daily" - see STOP_LOSS_INTERVALS
+    // above); falls back to blank otherwise, same as before this default
+    // existed. Always overwrites on switch, matching the reset above -
+    // switching rules resets the whole backtest form to that rule's own
+    // sensible defaults, not a carried-over choice from the last one.
+    const rule = rules.find((r) => r.id === selected);
+    setBacktestSlInterval(rule && STOP_LOSS_INTERVALS.includes(rule.interval) ? (rule.interval as StopLossInterval) : "");
+  }, [selected, rules]);
 
   const selectedRule = rules.find((r) => r.id === selected);
   const selectedRuleConfig = selectedRule?.rule_config;
@@ -819,8 +835,12 @@ function RuleManager() {
     try {
       const result = await backtestRuleGrid(selected, backtestFrom, backtestTo, paramGrid, {
         stop_loss_method: backtestSlMethod || undefined,
-        stop_loss_interval: backtestSlMethod === "previous_candle" ? backtestSlInterval || undefined : undefined,
+        stop_loss_interval:
+          backtestSlMethod === "previous_candle" || backtestSlMethod === "indicator" ? backtestSlInterval || undefined : undefined,
         stop_loss_percent: backtestSlMethod === "percent" && backtestSlPercent ? Number(backtestSlPercent) : undefined,
+        stop_loss_indicator_type: backtestSlMethod === "indicator" ? backtestSlIndicatorType : undefined,
+        stop_loss_indicator_params:
+          backtestSlMethod === "indicator" && backtestSlIndicatorPeriod ? { period: Number(backtestSlIndicatorPeriod) } : undefined,
         target_percent: backtestTargetPercent ? Number(backtestTargetPercent) : undefined,
         trailing_stop_enabled: backtestSlMethod ? backtestTrailingEnabled : undefined,
         square_off_time: backtestSquareOffTime ? `${backtestSquareOffTime}:00` : undefined,
@@ -1335,9 +1355,11 @@ function RuleManager() {
                 <select value={backtestSlInterval} onChange={(e) => setBacktestSlInterval(e.target.value as StopLossInterval | "")}>
                   <option value="">&mdash;</option>
                   <option value="1min">1 min</option>
+                  <option value="3min">3 min</option>
                   <option value="5min">5 min</option>
                   <option value="15min">15 min</option>
                   <option value="25min">25 min</option>
+                  <option value="30min">30 min</option>
                   <option value="60min">60 min</option>
                 </select>
               </label>
@@ -2064,9 +2086,11 @@ function StrategyManager() {
               <select value={slInterval} onChange={(e) => setSlInterval(e.target.value as StopLossInterval | "")}>
                 <option value="">&mdash;</option>
                 <option value="1min">1 min</option>
+                <option value="3min">3 min</option>
                 <option value="5min">5 min</option>
                 <option value="15min">15 min</option>
                 <option value="25min">25 min</option>
+                <option value="30min">30 min</option>
                 <option value="60min">60 min</option>
               </select>
             </label>
@@ -2356,9 +2380,11 @@ function StrategyManager() {
                       >
                         <option value="">&mdash;</option>
                         <option value="1min">1 min</option>
+                        <option value="3min">3 min</option>
                         <option value="5min">5 min</option>
                         <option value="15min">15 min</option>
                         <option value="25min">25 min</option>
+                        <option value="30min">30 min</option>
                         <option value="60min">60 min</option>
                       </select>
                     )}

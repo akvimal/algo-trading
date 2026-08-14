@@ -19,7 +19,18 @@ SEM_LOT_UNITS, SEM_EXPIRY_DATE) are confirmed directly from that
 download; the marketfeed/charts "segment key" strings themselves
 (NSE_EQ, MCX_COMM, NSE_FNO, IDX_I) aren't present in the CSV at all -
 NSE_EQ is proven correct by this file's pre-existing working code, the
-other three are Dhan's documented exchangeSegment values.
+other three are Dhan's documented exchangeSegment values. One thing that
+DIDN'T hold up under a live download despite an earlier assumption
+baked into this file's own tests: SEM_TRADING_SYMBOL for options only
+encodes month+year, not the exact day (unlike futures, where Dhan's own
+symbols already include the day) - real weekly/monthly contracts at the
+same strike collide on one symbol string as a result. A second, related
+gap surfaced right after fixing the first: SEM_STRIKE_PRICE isn't always
+a whole number either (e.g. IOC/CANBK both list a .5 strike alongside
+the whole-number one, same expiry) - naively coercing it to int
+reintroduces the identical collision class one field over. See
+_disambiguated_option_symbol's own docstring - both confirmed live
+2026-08-14 against real Dhan data, not assumed.
 """
 
 import csv
@@ -29,6 +40,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -282,6 +294,58 @@ def _underlying_from_trading_symbol(row: dict) -> str:
     return row.get("SEM_TRADING_SYMBOL", "").split("-")[0]
 
 
+def _disambiguated_option_symbol(row: dict) -> Optional[str]:
+    """Dhan's own SEM_TRADING_SYMBOL for options only encodes month+year
+    (e.g. "NIFTY-Aug2026-24400-PE"), not the exact day - unlike futures,
+    where Dhan's own symbols already include the full day (e.g.
+    "GOLDM-04Sep2026-FUT"). Confirmed live (2026-08-14) that this is a
+    real collision, not a hypothetical: a weekly and a monthly NIFTY put
+    at the same strike shared one SEM_TRADING_SYMBOL across two rows
+    with different security_ids - sync_instruments()'s symbol-keyed dicts
+    silently kept whichever row it processed last, making the other
+    security_id (the nearest/weekly one - exactly what choose_expiry
+    always picks) permanently unresolvable via resolve_symbol_by_security_id.
+    Builds a day-inclusive symbol instead, from the row's own structured
+    fields (SEM_EXPIRY_DATE/SEM_STRIKE_PRICE/SEM_OPTION_TYPE) rather than
+    Dhan's ambiguous string - matches the same day-inclusive shape Dhan's
+    own futures symbols already use, so this doesn't introduce a third
+    format. Deliberately does NOT use SM_SYMBOL_NAME for the underlying -
+    confirmed live it's blank for NSE_OPTIDX rows too, same gotcha
+    _underlying_from_trading_symbol's own docstring already documents for
+    NSE_FUTIDX - reuses that helper instead, which only depends on the
+    underlying-name prefix (never ambiguous) rather than the date portion
+    (the actual source of the collision).
+
+    The strike itself must keep its fractional part rather than truncate
+    to int: confirmed live (2026-08-14) that some NSE stock options list
+    both a whole and a half strike in the same expiry (e.g. IOC 162 and
+    162.5 CE, same day) - int(float(strike)) collapsed both to "162" and
+    reintroduced the exact same class of collision this function exists
+    to fix, just on the strike instead of the date. Formats via
+    normalize("f") + strip so a whole strike still renders as "162" (no
+    ".0" noise) while a fractional one keeps only what it needs ("162.5"),
+    with no float binary-representation artifacts (e.g. "162.49999999").
+
+    None if any required field is missing/malformed - caller falls back
+    to Dhan's raw symbol in that case rather than failing the whole
+    sync."""
+    expiry_raw = (row.get("SEM_EXPIRY_DATE") or "").split(" ")[0]
+    strike_raw = row.get("SEM_STRIKE_PRICE")
+    option_type = row.get("SEM_OPTION_TYPE")
+    if not expiry_raw or not strike_raw or not option_type:
+        return None
+    try:
+        expiry_date = date.fromisoformat(expiry_raw)
+        strike_decimal = Decimal(str(strike_raw)).normalize()
+        strike = format(strike_decimal, "f")
+    except (ValueError, InvalidOperation):
+        return None
+    underlying = _underlying_from_trading_symbol(row)
+    if not underlying:
+        return None
+    return f"{underlying}-{expiry_date.strftime('%d%b%Y')}-{strike}-{option_type}"
+
+
 NSE_EQ = SegmentConfig(
     exchange="NSE",
     ltp_segment_key="NSE_EQ",
@@ -447,7 +511,26 @@ class DhanProvider(QuoteProvider):
                 if not config.row_matches(row):
                     continue
                 symbol = row["SEM_TRADING_SYMBOL"]
-                symbol_to_id[symbol] = row["SEM_SMST_SECURITY_ID"]
+                if row.get("SEM_INSTRUMENT_NAME") in ("OPTIDX", "OPTSTK", "OPTFUT"):
+                    disambiguated = _disambiguated_option_symbol(row)
+                    if disambiguated is not None:
+                        symbol = disambiguated
+                    else:
+                        logger.warning(
+                            "could not build a disambiguated option symbol for security_id %s "
+                            "(row: %s) - falling back to Dhan's own SEM_TRADING_SYMBOL, which may "
+                            "collide with a different contract",
+                            row.get("SEM_SMST_SECURITY_ID"), row.get("SEM_TRADING_SYMBOL"),
+                        )
+                security_id = row["SEM_SMST_SECURITY_ID"]
+                if symbol in symbol_to_id and symbol_to_id[symbol] != security_id:
+                    logger.warning(
+                        "symbol collision during instrument sync (%s): '%s' already mapped to "
+                        "security_id %s, now also claimed by security_id %s - the earlier "
+                        "contract just became unresolvable by symbol",
+                        self.name, symbol, symbol_to_id[symbol], security_id,
+                    )
+                symbol_to_id[symbol] = security_id
                 symbol_to_config[symbol] = config
                 symbol_to_lot[symbol] = int(float(row.get("SEM_LOT_UNITS") or 1))
 

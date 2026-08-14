@@ -1,7 +1,19 @@
 """Tests for the option SegmentConfigs (NSE_OPTIDX/NSE_OPTSTK/MCX_OPTFUT)
 and resolve_symbol_by_security_id (Phase 4d of the options trading
 module - see docs/architecture.md). Same fake-CSV-over-a-real-network-
-call convention as test_dhan_provider.py."""
+call convention as test_dhan_provider.py.
+
+FAKE_OPTION_CSV's SEM_TRADING_SYMBOL values are deliberately day-less
+(e.g. "RELIANCE-Aug2026-1320-CE", not "RELIANCE-27Aug2026-1320-CE") -
+this is what Dhan's real instrument master actually looks like for
+options, confirmed via a live download 2026-08-14 (this file's own
+fixture used to assume the day was already included, which is why the
+real weekly/monthly symbol-collision bug went undiscovered until it hit
+a real order - see docs/architecture.md and dhan.py's
+_disambiguated_option_symbol). The expected `_symbol_to_security_id`
+keys below are the *disambiguated* (day-inclusive) symbols sync_instruments()
+now builds from SEM_EXPIRY_DATE/SEM_STRIKE_PRICE/SEM_OPTION_TYPE, not a
+copy of the raw (ambiguous) SEM_TRADING_SYMBOL column."""
 
 import responses
 
@@ -14,11 +26,39 @@ _CSV_HEADER = (
 )
 
 FAKE_OPTION_CSV = _CSV_HEADER + (
-    "NSE,D,824088,OPTSTK,0,RELIANCE-27Aug2026-1320-CE,500.0,RELIANCE OPT,2026-08-27,1320.0,CE,5.0,M,OPTSTK,,RELIANCE\n"
-    "NSE,D,900123,OPTIDX,0,NIFTY-14Aug2026-24000-CE,75.0,NIFTY OPT,2026-08-14,24000.0,CE,0.05,W,OPTIDX,,NIFTY\n"
-    "MCX,D,700456,OPTFUT,0,GOLDM-04Sep2026-72000-CE,100.0,GOLDM OPT,2026-09-04,72000.0,CE,1.0,M,OPTFUT,,GOLDM\n"
+    "NSE,D,824088,OPTSTK,0,RELIANCE-Aug2026-1320-CE,500.0,RELIANCE OPT,2026-08-27,1320.0,CE,5.0,M,OPTSTK,,\n"
+    "NSE,D,900123,OPTIDX,0,NIFTY-Aug2026-24000-CE,75.0,NIFTY OPT,2026-08-14,24000.0,CE,0.05,W,OPTIDX,,\n"
+    "MCX,D,700456,OPTFUT,0,GOLDM-Sep2026-72000-CE,100.0,GOLDM OPT,2026-09-04,72000.0,CE,1.0,M,OPTFUT,,\n"
     # non-matching rows must be filtered out per-config
     "NSE,E,2885,EQUITY,0,RELIANCE,1.0,Reliance Industries,,,,10.0000,NA,ES,EQ,RELIANCE INDUSTRIES LTD\n"
+)
+
+# Real bug, reproduced live 2026-08-14: a weekly and a monthly NIFTY put
+# at the same strike (24400) sharing Dhan's own SEM_TRADING_SYMBOL
+# ("NIFTY-Aug2026-24400-PE" - no day) because they fall in the same
+# calendar month. Different security_ids, different real expiry dates.
+COLLIDING_OPTION_CSV = _CSV_HEADER + (
+    "NSE,D,45107,OPTIDX,0,NIFTY-Aug2026-24400-PE,65.0,NIFTY 18 AUG 24400 PUT,2026-08-18,24400.0,PE,5.0,W,OPTIDX,,\n"
+    "NSE,D,61726,OPTIDX,0,NIFTY-Aug2026-24400-PE,65.0,NIFTY 25 AUG 24400 PUT,2026-08-25,24400.0,PE,5.0,M,OPTIDX,,\n"
+)
+
+# A malformed row missing SEM_EXPIRY_DATE - _disambiguated_option_symbol
+# can't build a day-inclusive symbol from it, so sync must fall back to
+# Dhan's own raw (possibly ambiguous) SEM_TRADING_SYMBOL rather than
+# crashing.
+MALFORMED_OPTION_CSV = _CSV_HEADER + (
+    "NSE,D,555001,OPTIDX,0,NIFTY-Aug2026-24500-CE,65.0,NIFTY OPT,,24500.0,CE,5.0,W,OPTIDX,,\n"
+)
+
+# Real bug, reproduced live 2026-08-14: two genuinely different NSE stock
+# option contracts (whole strike 162 and half strike 162.5), same
+# underlying, same expiry day - int(float(strike)) truncated both to
+# "162", colliding the two contracts under the fix that was supposed to
+# have already eliminated this collision class (day-inclusion alone
+# isn't enough when the strike itself gets mangled).
+FRACTIONAL_STRIKE_COLLISION_CSV = _CSV_HEADER + (
+    "NSE,D,109915,OPTSTK,0,IOC-Aug2026-162-CE,4875.0,IOC 25 AUG 162 CALL,2026-08-25,162.0,CE,1.0,M,OPTSTK,,\n"
+    "NSE,D,116642,OPTSTK,0,IOC-Aug2026-162.5-CE,4875.0,IOC 25 AUG 162.50 CALL,2026-08-25,162.5,CE,1.0,M,OPTSTK,,\n"
 )
 
 
@@ -85,3 +125,58 @@ def test_resolve_symbol_by_security_id_works_for_non_option_rows_too():
     provider = DhanProvider([NSE_EQ], name="dhan-nse")
 
     assert provider.resolve_symbol_by_security_id("2885") == "RELIANCE"
+
+
+# --- weekly/monthly symbol collision (real bug, reproduced live 2026-08-14) ---------------------
+
+
+@responses.activate
+def test_colliding_weekly_and_monthly_options_both_resolve_to_distinct_symbols():
+    """Before the fix: both rows shared SEM_TRADING_SYMBOL
+    "NIFTY-Aug2026-24400-PE", so the later-processed row (61726, monthly)
+    silently overwrote the earlier one (45107, weekly) in
+    _symbol_to_security_id, leaving 45107 - the nearest expiry, exactly
+    what choose_expiry always picks - permanently unresolvable via
+    resolve_symbol_by_security_id. After the fix, each gets its own
+    day-inclusive symbol and both resolve correctly."""
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=COLLIDING_OPTION_CSV, status=200)
+
+    provider = DhanProvider([NSE_OPTIDX], name="dhan-nse")
+    result = provider.sync_instruments()
+
+    assert result["symbol_count"] == 2
+    assert provider.resolve_symbol_by_security_id("45107") == "NIFTY-18Aug2026-24400-PE"
+    assert provider.resolve_symbol_by_security_id("61726") == "NIFTY-25Aug2026-24400-PE"
+    assert provider._symbol_to_lot_size["NIFTY-18Aug2026-24400-PE"] == 65
+    assert provider._symbol_to_lot_size["NIFTY-25Aug2026-24400-PE"] == 65
+
+
+@responses.activate
+def test_colliding_whole_and_fractional_strikes_both_resolve_to_distinct_symbols():
+    """Before this fix: SEM_STRIKE_PRICE was coerced via int(float(...)),
+    truncating 162.5 down to 162 and colliding with the real 162-strike
+    contract - the same collision class the day-inclusion fix targeted,
+    just reintroduced via the strike instead of the date. After the fix,
+    the fractional strike keeps its ".5" and both resolve distinctly."""
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=FRACTIONAL_STRIKE_COLLISION_CSV, status=200)
+
+    provider = DhanProvider([NSE_OPTSTK], name="dhan-nse")
+    result = provider.sync_instruments()
+
+    assert result["symbol_count"] == 2
+    assert provider.resolve_symbol_by_security_id("109915") == "IOC-25Aug2026-162-CE"
+    assert provider.resolve_symbol_by_security_id("116642") == "IOC-25Aug2026-162.5-CE"
+
+
+@responses.activate
+def test_malformed_option_row_falls_back_to_raw_trading_symbol(caplog):
+    """No SEM_EXPIRY_DATE - _disambiguated_option_symbol returns None -
+    sync must still succeed, keeping Dhan's own (possibly ambiguous)
+    SEM_TRADING_SYMBOL rather than crashing or dropping the row."""
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=MALFORMED_OPTION_CSV, status=200)
+
+    provider = DhanProvider([NSE_OPTIDX], name="dhan-nse")
+    result = provider.sync_instruments()
+
+    assert result["symbol_count"] == 1
+    assert provider._symbol_to_security_id == {"NIFTY-Aug2026-24500-CE": "555001"}

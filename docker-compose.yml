@@ -87,9 +87,11 @@ services:
       DHAN_TOKEN_RENEW_INTERVAL_HOURS: ${DHAN_TOKEN_RENEW_INTERVAL_HOURS:-20}
       # Manual override for Dhan's own SEM_LOT_UNITS, confirmed wrong for
       # MCX commodities (real GOLDM/CRUDEOILM lot multiplier is 10, Dhan's
-      # CSV says 1) - "underlying:qty" pairs, comma-separated. See
+      # CSV says 1). GOLD/CRUDEOIL (full-size) are 10x their _M mini
+      # counterparts' multiplier (100, not 10) - see app/config.py.
+      # "underlying:qty" pairs, comma-separated. See
       # app/providers/dhan.py's _parse_lot_size_overrides.
-      MCX_LOT_SIZE_OVERRIDES: ${MCX_LOT_SIZE_OVERRIDES:-GOLD:10,GOLDM:10,CRUDEOIL:10,CRUDEOILM:10}
+      MCX_LOT_SIZE_OVERRIDES: ${MCX_LOT_SIZE_OVERRIDES:-GOLD:100,GOLDM:10,CRUDEOIL:100,CRUDEOILM:10}
     ports:
       - "${MARKET_DATA_BACKEND_PORT}:8000"
 

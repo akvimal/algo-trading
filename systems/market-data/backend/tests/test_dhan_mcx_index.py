@@ -74,11 +74,34 @@ def test_sync_mcx_filters_to_futcom_and_groups_by_underlying():
     goldm_contracts = provider._underlying_to_contracts["GOLDM"]
     assert [c.expiry_date for c in goldm_contracts] == [near, far]  # sorted ascending
     # SEM_LOT_UNITS itself says 1 (see _mcx_csv) - confirmed wrong against a
-    # real executed Dhan order (true multiplier 10), so MCX_LOT_SIZE_OVERRIDES
-    # (default "GOLD:10,GOLDM:10,CRUDEOIL:10,CRUDEOILM:10") overrides it - see
+    # real executed Dhan order (true multiplier 10 for the _M mini
+    # contracts), so MCX_LOT_SIZE_OVERRIDES (default "GOLD:100,GOLDM:10,
+    # CRUDEOIL:100,CRUDEOILM:10") overrides it - see
     # _parse_lot_size_overrides/sync_instruments.
     assert provider._symbol_to_lot_size[f"GOLDM-{near:%d%b%Y}-FUT"] == 10
     assert provider._symbol_to_lot_size[f"CRUDEOILM-{near:%d%b%Y}-FUT"] == 10
+
+
+@responses.activate
+def test_sync_mcx_full_size_gold_and_crudeoil_get_the_10x_mini_multiplier():
+    """GOLD/CRUDEOIL (full-size) are NOT the same override value as their
+    _M mini counterparts - both are quoted in the same units as their mini
+    contract (Rs./10g for gold, Rs./barrel for crude) but hold 10x the
+    underlying quantity per lot (1kg vs 100g; 100 barrels vs 10 barrels),
+    so the correct multiplier is 10x too (100, not 10) - confirmed via MCX
+    contract specs, not assumed."""
+    near, _far = _expiries()
+    csv_body = HEADER + (
+        f"MCX,M,563001,FUTCOM,0,GOLD-{near:%d%b%Y}-FUT,1.0,GOLD,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,GOLD\n"
+        f"MCX,M,560001,FUTCOM,0,CRUDEOIL-{near:%d%b%Y}-FUT,1.0,CRUDEOIL,{near:%Y-%m-%d} 23:30:00,0,XX,1.0,M,FUTCOM,2,CRUDEOIL\n"
+    )
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=csv_body, status=200)
+
+    provider = DhanProvider([MCX_FUTCOM], name="dhan-mcx")
+    provider.sync_instruments()
+
+    assert provider._symbol_to_lot_size[f"GOLD-{near:%d%b%Y}-FUT"] == 100
+    assert provider._symbol_to_lot_size[f"CRUDEOIL-{near:%d%b%Y}-FUT"] == 100
 
 
 @responses.activate
@@ -122,10 +145,10 @@ def test_sync_nse_composite_covers_equity_index_and_index_futures():
 
 
 def test_parse_lot_size_overrides_parses_default_value():
-    assert _parse_lot_size_overrides("GOLD:10,GOLDM:10,CRUDEOIL:10,CRUDEOILM:10") == {
-        "GOLD": 10,
+    assert _parse_lot_size_overrides("GOLD:100,GOLDM:10,CRUDEOIL:100,CRUDEOILM:10") == {
+        "GOLD": 100,
         "GOLDM": 10,
-        "CRUDEOIL": 10,
+        "CRUDEOIL": 100,
         "CRUDEOILM": 10,
     }
 

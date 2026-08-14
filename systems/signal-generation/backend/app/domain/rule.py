@@ -32,10 +32,15 @@ Segment = Literal["NSE", "MCX", "CRYPTO"]
 # against every constituent independently, each with its own dedupe state
 # (see signal_generation.engine_runs, keyed by (strategy_id, symbol)).
 # Universes are NSE cash-equity index membership lists only - see
-# validate_rule_universe_fields. Not coupled to any Strategy's
-# instrument_type - a universe scan can back a spot, future, or option
-# Strategy alike.
-UnderlyingType = Literal["symbol", "universe"]
+# validate_rule_universe_fields. 'symbol_list': underlying instead holds a
+# comma-separated list of explicit symbols (e.g. "GOLDM,SILVER,CRUDEOIL") -
+# added for segments like MCX with no index/universe concept at all, where
+# the user still wants one rule to scan a hand-picked set of symbols. Fully
+# local to signal-generation (see parse_symbol_list) - unlike 'universe' it
+# never calls market-data, so it works for any segment, not just NSE. Not
+# coupled to any Strategy's instrument_type - same as 'universe' above, a
+# symbol_list scan can back a spot, future, or option Strategy alike.
+UnderlyingType = Literal["symbol", "universe", "symbol_list"]
 
 IndicatorType = Literal["rsi", "structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]
 
@@ -267,9 +272,34 @@ def validate_rule_universe_fields(underlying_type: str, segment: str) -> None:
     Unlike the pre-split validate_underlying_type_fields, this no longer
     checks instrument_type at all - that's a Strategy-level trading
     concept now, decoupled from what the rule scans (a universe scan can
-    back a spot, future, or option Strategy alike)."""
+    back a spot, future, or option Strategy alike). 'symbol_list' has no
+    such restriction - see parse_symbol_list/validate_rule_symbol_list_fields,
+    it works on any segment since it never calls market-data at all."""
     if underlying_type == "universe" and segment != "NSE":
         raise ValueError("underlying_type='universe' requires segment='NSE'")
+
+
+def parse_symbol_list(underlying: Optional[str]) -> list[str]:
+    """"GOLDM, SILVER,CRUDEOIL" -> ["GOLDM", "SILVER", "CRUDEOIL"] - shared
+    by the live engine (app/domain/engine.py's _target_symbols) and the
+    backtest route (app/api/routes/rules.py's _backtest_symbol_list) so
+    both parse underlying_type='symbol_list' identically. Whitespace
+    around each entry is stripped and empty entries (from a stray comma)
+    are dropped; case is left as-is since callers already uppercase on
+    entry (see the frontend's underlying input)."""
+    if not underlying:
+        return []
+    return [s.strip() for s in underlying.split(",") if s.strip()]
+
+
+def validate_rule_symbol_list_fields(underlying_type: str, underlying: Optional[str]) -> None:
+    """underlying_type='symbol_list' needs at least one real symbol once
+    parsed - catches "underlying=','" or "underlying=' '" at create/update
+    time rather than silently producing a rule that never scans anything
+    once live (same reasoning as validate_rule_universe_fields catching a
+    segment mismatch up front instead of failing later, in the engine)."""
+    if underlying_type == "symbol_list" and not parse_symbol_list(underlying):
+        raise ValueError("underlying_type='symbol_list' requires at least one comma-separated symbol in underlying")
 
 
 def validate_breakout_interval_consistency(interval: Optional[str], rule_config: Optional[dict]) -> None:
@@ -316,6 +346,7 @@ class RuleCreate(BaseModel):
     @model_validator(mode="after")
     def _check_underlying_type_consistency(self) -> "RuleCreate":
         validate_rule_universe_fields(self.underlying_type, self.segment)
+        validate_rule_symbol_list_fields(self.underlying_type, self.underlying)
         return self
 
     @model_validator(mode="after")

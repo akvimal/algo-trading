@@ -30,10 +30,12 @@ from app.domain.rule import (
     RuleCreate,
     RuleOut,
     RuleUpdate,
+    parse_symbol_list,
     validate_breakout_interval_consistency,
     validate_indicator_params,
     validate_rule_config,
     validate_rule_in_house_fields,
+    validate_rule_symbol_list_fields,
     validate_rule_universe_fields,
 )
 from app.domain.rules import bars_needed, evaluate
@@ -204,6 +206,7 @@ def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)
     try:
         validate_rule_in_house_fields(row.underlying, row.rule_config, row.interval)
         validate_rule_universe_fields(row.underlying_type, row.segment)
+        validate_rule_symbol_list_fields(row.underlying_type, row.underlying)
         validate_breakout_interval_consistency(row.interval, row.rule_config)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -461,35 +464,32 @@ def _backtest_one_symbol_option(
     )
 
 
-def _backtest_universe(
+def _backtest_pooled_symbols(
     db: Session,
     rule_row: db_models.Rule,
     rule: RuleConfig,
     payload: RuleBacktestRequest,
+    symbols: list[str],
     from_: date,
     to: date,
     regime_indicators: RegimeIndicators,
 ) -> dict:
-    """Pooled backtest for a universe-scoped rule: runs _backtest_one_symbol
-    independently against every constituent and combines the results -
-    total trade_count/hypothetical_pnl across all of them (the headline
-    numbers), plus a by_symbol breakdown for drill-down. A constituent
-    that fails to resolve (delisted, not in market-data's cache, ...) is
-    logged and skipped rather than failing the whole pooled request - same
-    "one failure doesn't abort the batch" defensiveness as the live
-    engine's own per-constituent loop (see app/domain/engine.py's
-    run_live_tick)."""
-    constituents = get_universe_constituents(rule_row.underlying)
-    if not constituents:
-        raise HTTPException(status_code=502, detail=f"could not resolve universe '{rule_row.underlying}'")
-
+    """Shared by _backtest_universe and _backtest_symbol_list: runs
+    _backtest_one_symbol independently against every symbol in the list
+    and combines the results - total trade_count/hypothetical_pnl across
+    all of them (the headline numbers), plus a by_symbol breakdown for
+    drill-down. A symbol that fails to resolve (delisted, not in
+    market-data's cache, ...) is logged and skipped rather than failing
+    the whole pooled request - same "one failure doesn't abort the batch"
+    defensiveness as the live engine's own per-symbol loop (see
+    app/domain/engine.py's run_live_tick)."""
     by_symbol: dict[str, dict] = {}
     skipped: list[str] = []
-    for symbol in constituents:
+    for symbol in symbols:
         try:
             by_symbol[symbol] = _backtest_one_symbol(db, rule_row, rule, payload, symbol, from_, to, regime_indicators)
         except HTTPException:
-            logger.warning("skipping unresolvable universe constituent %s (rule %s)", symbol, rule_row.id)
+            logger.warning("skipping unresolvable symbol %s (rule %s)", symbol, rule_row.id)
             skipped.append(symbol)
 
     return {
@@ -500,6 +500,43 @@ def _backtest_universe(
         "constituents_skipped": len(skipped),
         "by_symbol": by_symbol,
     }
+
+
+def _backtest_universe(
+    db: Session,
+    rule_row: db_models.Rule,
+    rule: RuleConfig,
+    payload: RuleBacktestRequest,
+    from_: date,
+    to: date,
+    regime_indicators: RegimeIndicators,
+) -> dict:
+    """Pooled backtest for a universe-scoped rule - see
+    _backtest_pooled_symbols for the shared pooling logic."""
+    constituents = get_universe_constituents(rule_row.underlying)
+    if not constituents:
+        raise HTTPException(status_code=502, detail=f"could not resolve universe '{rule_row.underlying}'")
+    return _backtest_pooled_symbols(db, rule_row, rule, payload, constituents, from_, to, regime_indicators)
+
+
+def _backtest_symbol_list(
+    db: Session,
+    rule_row: db_models.Rule,
+    rule: RuleConfig,
+    payload: RuleBacktestRequest,
+    from_: date,
+    to: date,
+    regime_indicators: RegimeIndicators,
+) -> dict:
+    """Pooled backtest for a symbol_list-scoped rule - see
+    _backtest_pooled_symbols for the shared pooling logic. Unlike
+    _backtest_universe, the symbol list comes from parsing
+    rule_row.underlying directly (parse_symbol_list), never market-data -
+    same distinction as _target_symbols in app/domain/engine.py."""
+    symbols = parse_symbol_list(rule_row.underlying)
+    if not symbols:
+        raise HTTPException(status_code=422, detail=f"could not parse any symbols from underlying '{rule_row.underlying}'")
+    return _backtest_pooled_symbols(db, rule_row, rule, payload, symbols, from_, to, regime_indicators)
 
 
 @router.post("/rules/{rule_id}/backtest")
@@ -517,17 +554,19 @@ def backtest_rule(
     concepts) - `payload` supplies them as optional per-run overrides;
     omitting the exit-config fields reproduces ExitConfig()'s bare
     opposite-signal/end-of-data-only defaults. underlying_type='universe'
-    pools the same backtest across every constituent - see
-    _backtest_universe. Rule.regime_indicator_ids (if any) are resolved
-    once here and applied for real - see _backtest_one_symbol's own
-    docstring for which rule types/instrument types that does and doesn't
-    cover."""
+    or 'symbol_list' pools the same backtest across every constituent/
+    listed symbol - see _backtest_universe/_backtest_symbol_list.
+    Rule.regime_indicator_ids (if any) are resolved once here and applied
+    for real - see _backtest_one_symbol's own docstring for which rule
+    types/instrument types that does and doesn't cover."""
     rule_row = _load_rule_for_backtest(db, rule_id)
     rule = validate_rule_config(rule_row.rule_config)
     regime_indicators = _resolve_regime_indicators(db, rule_row)
 
     if rule_row.underlying_type == "universe":
         return _backtest_universe(db, rule_row, rule, payload, from_, to, regime_indicators)
+    if rule_row.underlying_type == "symbol_list":
+        return _backtest_symbol_list(db, rule_row, rule, payload, from_, to, regime_indicators)
     return _backtest_one_symbol(db, rule_row, rule, payload, rule_row.underlying, from_, to, regime_indicators)
 
 

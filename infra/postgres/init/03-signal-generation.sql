@@ -43,7 +43,12 @@ CREATE TABLE IF NOT EXISTS signal_generation.rules (
     -- cash-equity index membership lists only - see universe_requires_nse
     -- below. Not coupled to instrument_type (that's a Strategy concern
     -- now) - a universe scan can back a spot, future, or option Strategy.
-    underlying_type    TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe')),
+    -- 'symbol_list': underlying instead holds a comma-separated list of
+    -- explicit symbols (e.g. "GOLDM,SILVER,CRUDEOIL") - for segments like
+    -- MCX with no index/universe concept, a rule can still scan a
+    -- hand-picked set of symbols. Fully local (never calls market-data),
+    -- so unlike 'universe' it works on any segment.
+    underlying_type    TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe', 'symbol_list')),
     -- Signal/candle cadence.
     interval           TEXT NOT NULL CHECK (interval IN ('1min', '3min', '5min', '15min', '30min', '60min', 'daily')),
     rule_config        JSONB NOT NULL,

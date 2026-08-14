@@ -5,8 +5,10 @@ from app.domain.rule import (
     BreakoutRuleConfig,
     CrossoverRuleConfig,
     RuleCreate,
+    parse_symbol_list,
     validate_rule_config,
     validate_rule_in_house_fields,
+    validate_rule_symbol_list_fields,
 )
 
 INDICATOR_ID = "11111111-1111-1111-1111-111111111111"
@@ -168,3 +170,47 @@ def test_rule_create_universe_requires_nse_segment():
 def test_rule_create_universe_with_nse_segment_is_fine():
     r = RuleCreate(**_in_house(segment="NSE", underlying_type="universe", underlying="NIFTYBANK"))
     assert r.underlying_type == "universe"
+
+
+# --- parse_symbol_list / validate_rule_symbol_list_fields / underlying_type='symbol_list' ----
+
+
+def test_parse_symbol_list_splits_and_strips():
+    assert parse_symbol_list("GOLDM,SILVER,CRUDEOIL") == ["GOLDM", "SILVER", "CRUDEOIL"]
+    assert parse_symbol_list(" GOLDM , SILVER,,CRUDEOIL ") == ["GOLDM", "SILVER", "CRUDEOIL"]
+
+
+def test_parse_symbol_list_none_or_empty_returns_empty_list():
+    assert parse_symbol_list(None) == []
+    assert parse_symbol_list("") == []
+    assert parse_symbol_list("   ") == []
+
+
+def test_validate_rule_symbol_list_fields_accepts_nonempty_list():
+    validate_rule_symbol_list_fields("symbol_list", "GOLDM,SILVER")  # no raise
+
+
+def test_validate_rule_symbol_list_fields_rejects_empty_underlying():
+    with pytest.raises(ValueError, match="requires at least one comma-separated symbol"):
+        validate_rule_symbol_list_fields("symbol_list", None)
+
+
+def test_validate_rule_symbol_list_fields_rejects_commas_only():
+    with pytest.raises(ValueError, match="requires at least one comma-separated symbol"):
+        validate_rule_symbol_list_fields("symbol_list", " , , ")
+
+
+def test_validate_rule_symbol_list_fields_ignores_other_underlying_types():
+    validate_rule_symbol_list_fields("symbol", None)  # no raise - not symbol_list, not this validator's concern
+    validate_rule_symbol_list_fields("universe", None)  # no raise
+
+
+def test_rule_create_symbol_list_works_on_mcx_unlike_universe():
+    r = RuleCreate(**_in_house(segment="MCX", underlying_type="symbol_list", underlying="GOLDM,SILVER,CRUDEOIL"))
+    assert r.underlying_type == "symbol_list"
+    assert r.underlying == "GOLDM,SILVER,CRUDEOIL"
+
+
+def test_rule_create_symbol_list_rejects_unparseable_underlying():
+    with pytest.raises(ValidationError, match="requires at least one comma-separated symbol"):
+        RuleCreate(**_in_house(segment="MCX", underlying_type="symbol_list", underlying=" , "))

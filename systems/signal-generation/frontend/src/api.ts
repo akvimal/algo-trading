@@ -63,8 +63,11 @@ export type CounterSignalPolicy = "skip" | "close_and_flip";
 // below) - the engine evaluates the rule against every constituent
 // independently. Only valid combined with segment='NSE' - not coupled to
 // any linked Strategy's instrument_type (a universe scan can back a spot,
-// future, or option strategy alike).
-export type UnderlyingType = "symbol" | "universe";
+// future, or option strategy alike). 'symbol_list': underlying instead
+// holds a comma-separated list of explicit symbols (e.g.
+// "GOLDM,SILVER,CRUDEOIL") - for segments like MCX with no index/universe
+// concept, valid on any segment since it never calls market-data.
+export type UnderlyingType = "symbol" | "universe" | "symbol_list";
 
 // Indicators are their own entity (backend: signal_generation.indicators)
 // so one definition (e.g. "RSI 14") can be reused by any number of

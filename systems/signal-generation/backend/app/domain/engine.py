@@ -23,7 +23,13 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.domain import breakout, range_breakout
 from app.domain.indicators import evaluate_regime_indicator, regime_indicator_warmup
-from app.domain.rule import BreakoutRuleConfig, RangeBreakoutRuleConfig, validate_indicator_params, validate_rule_config
+from app.domain.rule import (
+    BreakoutRuleConfig,
+    RangeBreakoutRuleConfig,
+    parse_symbol_list,
+    validate_indicator_params,
+    validate_rule_config,
+)
 from app.domain.rules import Bias, CandleClose, bars_needed, evaluate
 
 logger = logging.getLogger(__name__)
@@ -103,13 +109,19 @@ def _target_symbols(rule_row: db_models.Rule, get_universe_constituents: GetUniv
     and its own resolve/candle-fetch/evaluate/post_signal pass, via the
     exact same per-symbol functions below. An unresolvable universe
     (market-data unreachable, unknown key) is logged and skipped for this
-    tick, same defensive shape as an unresolvable plain underlying."""
+    tick, same defensive shape as an unresolvable plain underlying.
+    underlying_type='symbol_list' is the same fan-out, but the member list
+    comes from parsing `underlying` itself (see parse_symbol_list) rather
+    than a market-data lookup - for segments like MCX with no index/
+    universe concept, letting a rule scan a hand-picked set of symbols."""
     if rule_row.underlying_type == "universe":
         constituents = get_universe_constituents(rule_row.underlying)
         if not constituents:
             logger.warning("could not resolve universe %s for rule %s", rule_row.underlying, rule_row.id)
             return []
         return constituents
+    if rule_row.underlying_type == "symbol_list":
+        return parse_symbol_list(rule_row.underlying)
     return [rule_row.underlying]
 
 
@@ -255,6 +267,7 @@ def _run_one_breakout(
             "source_meta": {
                 "underlying": symbol,
                 "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
+                "symbol_list": rule_row.underlying if rule_row.underlying_type == "symbol_list" else None,
                 "rule": "breakout",
                 "htf_interval": rule.htf_interval,
                 "ltf_interval": rule.ltf_interval,
@@ -352,6 +365,7 @@ def _run_one_range_breakout(
             "source_meta": {
                 "underlying": symbol,
                 "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
+                "symbol_list": rule_row.underlying if rule_row.underlying_type == "symbol_list" else None,
                 "rule": "range_breakout",
                 "chart_symbol": resolved.chart_symbol,
             },
@@ -468,6 +482,7 @@ def _run_one(
             "source_meta": {
                 "underlying": symbol,
                 "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
+                "symbol_list": rule_row.underlying if rule_row.underlying_type == "symbol_list" else None,
                 "indicator": indicator.name,
                 "chart_symbol": resolved.chart_symbol,
             },

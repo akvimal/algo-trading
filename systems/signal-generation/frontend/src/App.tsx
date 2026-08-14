@@ -864,6 +864,7 @@ function RuleManager() {
                 Underlying type
                 <select value={underlyingType} onChange={(e) => setUnderlyingType(e.target.value as UnderlyingType)}>
                   <option value="symbol">Single symbol</option>
+                  <option value="symbol_list">Multiple symbols</option>
                   <option value="universe">Universe (NSE index constituents)</option>
                 </select>
               </label>
@@ -881,12 +882,12 @@ function RuleManager() {
                 </label>
               ) : (
                 <label>
-                  Underlying
+                  {underlyingType === "symbol_list" ? "Symbols (comma-separated)" : "Underlying"}
                   <input
                     value={underlying}
                     onChange={(e) => setUnderlying(e.target.value.toUpperCase())}
                     required
-                    placeholder="e.g. GOLDM, NIFTY"
+                    placeholder={underlyingType === "symbol_list" ? "e.g. GOLDM,SILVER,CRUDEOIL" : "e.g. GOLDM, NIFTY"}
                   />
                 </label>
               )}
@@ -1047,6 +1048,7 @@ function RuleManager() {
                         className="cell-input"
                       >
                         <option value="symbol">Symbol</option>
+                        <option value="symbol_list">Multiple symbols</option>
                         <option value="universe">Universe</option>
                       </select>
                       {editUnderlyingType === "universe" ? (
@@ -1067,6 +1069,7 @@ function RuleManager() {
                           value={editUnderlying}
                           onChange={(e) => setEditUnderlying(e.target.value.toUpperCase())}
                           className="cell-input"
+                          placeholder={editUnderlyingType === "symbol_list" ? "e.g. GOLDM,SILVER,CRUDEOIL" : undefined}
                         />
                       )}
                       {r.rule_config?.type === "breakout" ? (

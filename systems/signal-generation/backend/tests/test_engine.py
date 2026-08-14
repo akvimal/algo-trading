@@ -67,6 +67,18 @@ def test_target_symbols_empty_universe_constituents_returns_empty_list():
     assert result == []
 
 
+def test_target_symbols_symbol_list_scoped_returns_parsed_list_without_calling_market_data():
+    rule_row = FakeRule(underlying="GOLDM,SILVER,CRUDEOIL", underlying_type="symbol_list")
+    result = _target_symbols(rule_row, get_universe_constituents=lambda key: (_ for _ in ()).throw(AssertionError("should not call market-data")))
+    assert result == ["GOLDM", "SILVER", "CRUDEOIL"]
+
+
+def test_target_symbols_symbol_list_strips_whitespace_and_drops_empty_entries():
+    rule_row = FakeRule(underlying=" GOLDM , SILVER,,CRUDEOIL ", underlying_type="symbol_list")
+    result = _target_symbols(rule_row, get_universe_constituents=lambda key: None)
+    assert result == ["GOLDM", "SILVER", "CRUDEOIL"]
+
+
 # --- _is_within_active_window: run_live_tick's skip-outside-window optimization --------------
 
 

@@ -7,6 +7,19 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     redis_stream: str = "orders.resolved"
 
+    # A second, separate Redis stream (NOT orders.resolved above) - moves
+    # resolve()'s Dhan-throttled option-chain calls off the webhook/POST
+    # /signals request-response cycle, onto a background consumer
+    # (app/consumers/signal_resolution_consumer.py), mirroring execution's
+    # own orders_consumer.py pattern exactly. Purely internal to this
+    # system (producer and consumer both live here) - not a cross-system
+    # contract like orders.resolved is, so no docs/contracts/*.schema.json
+    # entry needed. See app/domain/intake/core.py's
+    # create_signal_from_ingest/resolve_and_finalize_signal split.
+    signal_resolution_stream: str = "signals.pending_resolution"
+    signal_resolution_consumer_group: str = "signal-processing-resolver"
+    signal_resolution_consumer_name: str = "signal-processing-resolver-1"
+
     signal_generation_base_url: str = "http://signal-generation-backend:8000"
     signal_generation_timeout_seconds: float = 5.0
 

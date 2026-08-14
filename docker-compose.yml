@@ -43,6 +43,13 @@ services:
       DATABASE_SCHEMA: signal_processing
       REDIS_URL: redis://redis:6379/0
       REDIS_STREAM: orders.resolved
+      # A second, separate stream from REDIS_STREAM above - moves resolve()'s
+      # Dhan-throttled option-chain calls off the webhook/POST /signals
+      # request-response cycle onto a background consumer, purely internal
+      # to this service. See app/config.py/app/consumers/signal_resolution_consumer.py.
+      SIGNAL_RESOLUTION_STREAM: signals.pending_resolution
+      SIGNAL_RESOLUTION_CONSUMER_GROUP: signal-processing-resolver
+      SIGNAL_RESOLUTION_CONSUMER_NAME: signal-processing-resolver-1
       SIGNAL_GENERATION_BASE_URL: http://signal-generation-backend:8000
       # Option-strategy resolution only (Phase 4b of the options trading
       # module) - see app/adapters/market_data/client.py.

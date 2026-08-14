@@ -48,7 +48,13 @@ CREATE TABLE IF NOT EXISTS signal_processing.resolved_orders (
     instrument_type  TEXT CHECK (instrument_type IN ('spot', 'future', 'option')),
     strategy         JSONB,
     price            NUMERIC NOT NULL,
-    status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'rejected')),
+    -- 'queued': the fast-path placeholder create_signal_from_ingest inserts
+    -- immediately, before resolve() has run at all (horizon/instrument_type/
+    -- rejection_reason still NULL) - see app/domain/intake/core.py's
+    -- create_signal_from_ingest/resolve_and_finalize_signal split. The
+    -- background consumer (app/consumers/signal_resolution_consumer.py)
+    -- transitions this SAME row to 'pending'/'rejected' shortly after.
+    status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('queued', 'pending', 'sent', 'rejected')),
     rejection_reason TEXT,
     resolved_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );

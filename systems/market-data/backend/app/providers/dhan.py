@@ -141,11 +141,19 @@ MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS = 3.0
 # doesn't meaningfully change within 30s; only OI/last-traded-price/greeks
 # inside a cached chain go stale, and those aren't what position entry
 # price is sourced from (execution fetches a fresh LTP at open time
-# instead - see docs/architecture.md). get_expiry_list has no equivalent
-# cache (Dhan serves it from a separate dedicated endpoint, not this
-# chain) - it relies on the caller's own timeout headroom instead, see
-# signal-processing's market_data_timeout_seconds.
+# instead - see docs/architecture.md). See EXPIRY_LIST_CACHE_TTL_SECONDS
+# below for get_expiry_list's own (longer) cache.
 OPTION_CHAIN_CACHE_TTL_SECONDS = 30.0
+# Longer than OPTION_CHAIN_CACHE_TTL_SECONDS deliberately: an expiry LIST
+# changes far less often intraday than a chain's OI/LTP does (a new weekly
+# expiry only ever appears once a week) - a 5-minute TTL is still safely
+# fresh while eliminating the 3s throttle wait for the overwhelming
+# majority of same-burst resolutions (e.g. a multi-symbol Chartink alert,
+# or repeated manual tests against the same underlying) - previously this
+# endpoint had NO cache at all and paid the full throttle on every single
+# resolution, confirmed live 2026-08-14 as the dominant cost of a
+# multi-symbol option-strategy webhook call (~12s for 2 symbols).
+EXPIRY_LIST_CACHE_TTL_SECONDS = 300.0
 
 # Dhan doesn't separately document a rate limit for charts/rollingoption -
 # same conservative default as the option-chain family above, own
@@ -515,6 +523,9 @@ class DhanProvider(QuoteProvider):
         self._last_option_chain_call_at: float = 0.0
         self._option_chain_cache: dict[tuple[str, str], tuple[OptionChain, float]] = {}
         self._option_chain_cache_lock = threading.Lock()
+
+        self._expiry_list_cache: dict[str, tuple[list[str], float]] = {}
+        self._expiry_list_cache_lock = threading.Lock()
 
     def status(self) -> dict:
         return {
@@ -969,7 +980,13 @@ class DhanProvider(QuoteProvider):
 
     def get_expiry_list(self, symbol: str) -> Optional[list[str]]:
         """Every active option expiry date (YYYY-MM-DD) for `symbol` (e.g.
-        "NIFTY") - None if `symbol` doesn't resolve on this provider."""
+        "NIFTY") - None if `symbol` doesn't resolve on this provider.
+        Self-throttled to Dhan's documented 1-request-per-3s limit and
+        short-cached (EXPIRY_LIST_CACHE_TTL_SECONDS)."""
+        cached = self._cached_expiry_list(symbol)
+        if cached is not None:
+            return cached
+
         target = self.resolve_feed_target(symbol)
         if target is None:
             return None
@@ -995,7 +1012,23 @@ class DhanProvider(QuoteProvider):
         except requests.exceptions.HTTPError as exc:
             raise RuntimeError(f"Dhan API error ({resp.status_code}): {resp.text[:200]}") from exc
 
-        return resp.json().get("data", [])
+        expiries = resp.json().get("data", [])
+        self._store_expiry_list(symbol, expiries)
+        return expiries
+
+    def _cached_expiry_list(self, symbol: str) -> Optional[list[str]]:
+        with self._expiry_list_cache_lock:
+            cached = self._expiry_list_cache.get(symbol)
+        if cached is None:
+            return None
+        expiries, fetched_at = cached
+        if (time.monotonic() - fetched_at) >= EXPIRY_LIST_CACHE_TTL_SECONDS:
+            return None
+        return expiries
+
+    def _store_expiry_list(self, symbol: str, expiries: list[str]) -> None:
+        with self._expiry_list_cache_lock:
+            self._expiry_list_cache[symbol] = (expiries, time.monotonic())
 
     def _cached_option_chain(self, symbol: str, expiry: str) -> Optional[OptionChain]:
         with self._option_chain_cache_lock:

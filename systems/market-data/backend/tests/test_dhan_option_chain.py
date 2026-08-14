@@ -67,6 +67,20 @@ def test_get_expiry_list_success(monkeypatch):
     assert sent == {"UnderlyingScrip": 13, "UnderlyingSeg": "IDX_I"}
 
 
+@responses.activate
+def test_get_expiry_list_second_call_within_ttl_hits_cache_not_network(monkeypatch):
+    monkeypatch.setattr(settings, "dhan_client_id", "test-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "test-token")
+    responses.add(responses.POST, OPTION_EXPIRY_LIST_URL, body=json.dumps({"data": ["2026-08-14", "2026-08-21"]}), status=200)
+
+    provider = _provider_with_nifty()
+    first = provider.get_expiry_list("NIFTY")
+    second = provider.get_expiry_list("NIFTY")
+
+    assert first == second
+    assert len(responses.calls) == 1
+
+
 def test_get_expiry_list_unknown_symbol_returns_none(monkeypatch):
     monkeypatch.setattr(settings, "dhan_client_id", "test-client")
     monkeypatch.setattr(settings, "dhan_access_token", "test-token")

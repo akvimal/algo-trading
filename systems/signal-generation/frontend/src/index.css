@@ -247,6 +247,16 @@ th {
   letter-spacing: 0.04em;
 }
 
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.sortable-th:hover {
+  color: var(--text);
+}
+
 tbody tr:last-child td {
   border-bottom: none;
 }

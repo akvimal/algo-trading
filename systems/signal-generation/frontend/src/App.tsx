@@ -115,6 +115,19 @@ function exitReasonLabel(reason: string): string {
   return EXIT_REASON_LABELS[reason] ?? reason;
 }
 
+// toLocaleString()'s default time style includes seconds (e.g.
+// "8/7/2026, 8:50:00 AM") - noise for a backtest trades grid where every
+// entry/exit lands on a whole-minute candle boundary anyway.
+function formatDateTimeNoSeconds(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function ClipboardIcon() {
   return (
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -554,6 +567,10 @@ function RuleManager() {
   // clock-aligned minutes. Blank omits it entirely, same as before this
   // existed - not every backtest run needs the extra table.
   const [backtestTimeBucketMinutes, setBacktestTimeBucketMinutes] = useState("");
+  // Sortable "P&L by time of day" table below - defaults to the same
+  // best-P&L-first order the table always used before sorting existed.
+  const [todSortColumn, setTodSortColumn] = useState<"start" | "trade_count" | "win_rate" | "hypothetical_pnl">("hypothetical_pnl");
+  const [todSortDir, setTodSortDir] = useState<"asc" | "desc">("desc");
   const [backtestResult, setBacktestResult] = useState<BacktestResult | UniverseBacktestResult | null>(null);
   const [backtesting, setBacktesting] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
@@ -813,6 +830,20 @@ function RuleManager() {
       option_strike_moneyness: backtestInstrumentType === "option" ? backtestOptionStrikeMoneyness : undefined,
       time_bucket_minutes: backtestTimeBucketMinutes ? Number(backtestTimeBucketMinutes) : undefined,
     };
+  }
+
+  // Clicking the already-active column flips direction; a new column
+  // starts descending for the numeric ones (best/most first, matching
+  // the table's original hardcoded sort) and ascending for Window
+  // (chronological - "20:00" sorting before "21:00" numerically has no
+  // other sensible default).
+  function handleTodSort(column: typeof todSortColumn) {
+    if (column === todSortColumn) {
+      setTodSortDir((prev) => (prev === "desc" ? "asc" : "desc"));
+    } else {
+      setTodSortColumn(column);
+      setTodSortDir(column === "start" ? "asc" : "desc");
+    }
   }
 
   async function handleBacktest() {
@@ -1523,14 +1554,14 @@ function RuleManager() {
                       <tbody>
                         {backtestResult.trades.map((trade, i) => (
                           <tr key={i}>
-                            <td>{new Date(trade.entry_time).toLocaleString()}</td>
+                            <td>{formatDateTimeNoSeconds(trade.entry_time)}</td>
                             <td>
                               <span className={`badge ${trade.direction === "bullish" ? "badge-buy" : "badge-sell"}`}>
                                 {trade.direction}
                               </span>
                             </td>
                             <td className="num">{trade.entry_price.toFixed(2)}</td>
-                            <td>{new Date(trade.exit_time).toLocaleString()}</td>
+                            <td>{formatDateTimeNoSeconds(trade.exit_time)}</td>
                             <td className="num">{trade.exit_price.toFixed(2)}</td>
                             <td>{exitReasonLabel(trade.exit_reason)}</td>
                             <td className={`num ${trade.pnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
@@ -1551,15 +1582,30 @@ function RuleManager() {
                     <table>
                       <thead>
                         <tr>
-                          <th>Window</th>
-                          <th>Trades</th>
-                          <th>Win %</th>
-                          <th>Hypothetical P&amp;L</th>
+                          <th className="sortable-th" onClick={() => handleTodSort("start")}>
+                            Window{todSortColumn === "start" ? (todSortDir === "asc" ? " ▲" : " ▼") : ""}
+                          </th>
+                          <th className="sortable-th" onClick={() => handleTodSort("trade_count")}>
+                            Trades{todSortColumn === "trade_count" ? (todSortDir === "asc" ? " ▲" : " ▼") : ""}
+                          </th>
+                          <th className="sortable-th" onClick={() => handleTodSort("win_rate")}>
+                            Win %{todSortColumn === "win_rate" ? (todSortDir === "asc" ? " ▲" : " ▼") : ""}
+                          </th>
+                          <th className="sortable-th" onClick={() => handleTodSort("hypothetical_pnl")}>
+                            Hypothetical P&amp;L
+                            {todSortColumn === "hypothetical_pnl" ? (todSortDir === "asc" ? " ▲" : " ▼") : ""}
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
                         {[...backtestResult.time_of_day_breakdown]
-                          .sort((a, b) => b.hypothetical_pnl - a.hypothetical_pnl)
+                          .sort((a, b) => {
+                            const cmp =
+                              todSortColumn === "start"
+                                ? a.start.localeCompare(b.start)
+                                : a[todSortColumn] - b[todSortColumn];
+                            return todSortDir === "asc" ? cmp : -cmp;
+                          })
                           .map((bucket) => (
                             <tr key={bucket.start}>
                               <td>

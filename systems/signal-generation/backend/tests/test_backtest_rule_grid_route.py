@@ -21,8 +21,10 @@ RULE_ID = "22222222-2222-2222-2222-222222222222"
 BASE = datetime(2026, 8, 12, 9, 15)
 
 # Same hand-traced fixture as test_backtest.py's own grid_search sweep
-# test: sl closes strictly before entry give period=2 EMA=16.6667,
-# period=4 EMA=12.5 - genuinely different stop prices.
+# test: sl closes strictly before entry give period=2 EMA=17.7778,
+# period=4 EMA=17.5 - distinct from each other but both genuinely above
+# the bearish entry (15), a valid protective stop for either (see
+# _indicator_stop_price's wrong-side-of-entry guard).
 _ENTRY_CLOSES = [10, 11, 10, 13, 20, 15]
 
 
@@ -59,8 +61,8 @@ def _bar(minute_offset: int, close: float, high: float | None = None, low: float
     return CandleClose(timestamp=_ts(minute_offset), close=close, high=high if high is not None else close, low=low if low is not None else close)
 
 
-_UNDERLYING_CANDLES = [_bar(i, c) for i, c in enumerate(_ENTRY_CLOSES)] + [_bar(6, 17.0, high=17.0, low=16.0)]
-_SL_CANDLES = [_bar(1, 10.0), _bar(2, 10.0), _bar(3, 10.0), _bar(4, 20.0)]
+_UNDERLYING_CANDLES = [_bar(i, c) for i, c in enumerate(_ENTRY_CLOSES)] + [_bar(6, 17.9, high=18.0, low=17.0)]
+_SL_CANDLES = [_bar(1, 20.0), _bar(2, 20.0), _bar(3, 10.0), _bar(4, 20.0)]
 
 
 def _patch_common(monkeypatch):

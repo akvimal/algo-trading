@@ -1536,6 +1536,12 @@ function RuleManager() {
           {backtestError && <p className="error">{backtestError}</p>}
           {backtestResult && (
             <>
+              {selectedRsiParams && (
+                <p className="hint">
+                  Used the indicator's current saved values: period={selectedRsiParams.period}, sma_period=
+                  {selectedRsiParams.sma_period}. To test other values, use the Grid search tab instead.
+                </p>
+              )}
               <p>
                 <strong>{backtestResult.trade_count}</strong> trade(s) -{" "}
                 <span className={backtestResult.hypothetical_pnl >= 0 ? "pnl-positive" : "pnl-negative"}>

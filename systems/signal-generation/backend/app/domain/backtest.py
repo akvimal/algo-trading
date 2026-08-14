@@ -132,19 +132,41 @@ _STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[float], dict], Optional[float
 
 
 def _indicator_stop_price(
-    sl_candles: list[CandleClose], reference_timestamp: str, indicator_type: str, indicator_params: dict
+    sl_candles: list[CandleClose],
+    reference_timestamp: str,
+    indicator_type: str,
+    indicator_params: dict,
+    direction: Bias,
+    reference_price: float,
 ) -> Optional[float]:
     """Indicator value computed only from sl_candles strictly before
     reference_timestamp - same as-of-this-point-in-time semantics
     _previous_candle_stop_price already uses, to avoid lookahead bias.
-    None if there isn't enough history yet or indicator_type is
-    unrecognized."""
+    None if there isn't enough history yet, indicator_type is
+    unrecognized, OR the computed value sits on the wrong side of
+    reference_price for this direction (e.g. a slow EMA that's still
+    above the entry price for a fresh bullish position after a downtrend
+    - a real, reproduced case: EMA(400) sitting ~415 points above a
+    bullish entry gave an instant "stop_loss" exit at a phantom price
+    the market never actually traded at, fabricating a same-direction
+    profit instead of protecting against loss. Unlike
+    _previous_candle_stop_price, which is directionally safe by
+    construction (always the reference candle's own low/high),
+    _STOP_LOSS_COMPUTE_FUNCS returns a raw value with no direction
+    concept at all - this is the one place that has to guard it)."""
     ref = datetime.fromisoformat(reference_timestamp)
     closes = [c.close for c in sl_candles if datetime.fromisoformat(c.timestamp) < ref]
     compute = _STOP_LOSS_COMPUTE_FUNCS.get(indicator_type)
     if compute is None or not closes:
         return None
-    return compute(closes, indicator_params)
+    value = compute(closes, indicator_params)
+    if value is None:
+        return None
+    if direction == "bullish" and value >= reference_price:
+        return None
+    if direction == "bearish" and value <= reference_price:
+        return None
+    return value
 
 
 def _pnl(direction: Bias, entry_price: float, exit_price: float) -> float:
@@ -164,7 +186,12 @@ def _initial_stop_loss_price(
         return _previous_candle_stop_price(direction, sl_candles, entry_timestamp)
     if exit_config.stop_loss_method == "indicator" and sl_candles and exit_config.stop_loss_indicator_type and exit_config.stop_loss_indicator_params:
         return _indicator_stop_price(
-            sl_candles, entry_timestamp, exit_config.stop_loss_indicator_type, exit_config.stop_loss_indicator_params
+            sl_candles,
+            entry_timestamp,
+            exit_config.stop_loss_indicator_type,
+            exit_config.stop_loss_indicator_params,
+            direction,
+            entry_price,
         )
     return None
 
@@ -241,7 +268,12 @@ def _simulate_one_trade(
                 candidate = _previous_candle_stop_price(direction, sl_candles, bar.timestamp)
             elif exit_config.stop_loss_method == "indicator" and sl_candles and exit_config.stop_loss_indicator_type and exit_config.stop_loss_indicator_params:
                 candidate = _indicator_stop_price(
-                    sl_candles, bar.timestamp, exit_config.stop_loss_indicator_type, exit_config.stop_loss_indicator_params
+                    sl_candles,
+                    bar.timestamp,
+                    exit_config.stop_loss_indicator_type,
+                    exit_config.stop_loss_indicator_params,
+                    direction,
+                    bar.close,
                 )
             if candidate is not None:
                 more_favorable = candidate > stop_loss_price if direction == "bullish" else candidate < stop_loss_price

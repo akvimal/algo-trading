@@ -377,21 +377,27 @@ def test_simulate_trades_indicator_stop_loss_missing_series_disables_sl():
 
 
 def test_simulate_trades_indicator_ema_trailing_stop_ratchets_and_never_loosens():
-    candles = _entry_fixture()  # bearish entry@15, ts(5)
-    candles.append(_bar(6, 14.0, high=14.5, low=13.5))
-    candles.append(_bar(7, 12.0, high=12.5, low=11.5))
+    # Custom fixed-entry bias_fn (bearish once, on the 6th bar, never
+    # again) instead of the RSI-crossover one - isolates this test to
+    # purely the SL/trailing engine, no risk of an incidental opposite
+    # signal from RSI math depending on the exact close values chosen below.
+    bias_fn = lambda window: "bearish" if len(window) == 6 else None  # noqa: E731
+
+    candles = _entry_fixture()  # entry@15, ts(5) (bias_fn ignores the actual closes)
+    candles.append(_bar(6, 16.0, high=16.5, low=15.5))  # price ticks up slightly, doesn't hit the initial stop yet
+    candles.append(_bar(7, 17.5, high=18.0, low=17.0))  # reverses further up, through the ratcheted stop
 
     # Initial stop (as of ts(5), strictly-before filter) uses only offsets
-    # 1-4 (flat 20s -> ema=20.0). offset 5's close=8.0 only enters the
-    # window once the trailing loop evaluates bar(6) (ts(6) > ts(5)),
-    # pulling the period=2 EMA down to 12.0 - a ratchet the position
-    # couldn't have "seen" at entry, same as-of-this-point-in-time
-    # semantics _previous_candle_stop_price already relies on.
-    sl_candles = [_bar(1, 20.0), _bar(2, 20.0), _bar(3, 20.0), _bar(4, 20.0), _bar(5, 8.0)]
+    # 1-4 (flat 20s -> ema=20.0) - above entry (15), a genuinely protective
+    # bearish stop. offset 5's close=15.5 only enters the window once the
+    # trailing loop evaluates bar(6) (ts(6) > ts(5)), pulling the period=2
+    # EMA down to 17.0 - still above bar(6)'s own close (16.0), so still a
+    # valid protective level, just tighter than the initial 20.0.
+    sl_candles = [_bar(1, 20.0), _bar(2, 20.0), _bar(3, 20.0), _bar(4, 20.0), _bar(5, 15.5)]
 
     trades = simulate_trades(
-        _bias_fn,
-        _MIN_BARS,
+        bias_fn,
+        6,
         candles,
         ExitConfig(
             stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2},
@@ -403,10 +409,39 @@ def test_simulate_trades_indicator_ema_trailing_stop_ratchets_and_never_loosens(
     assert len(trades) == 1
     trade = trades[0]
     assert trade.exit_reason == "stop_loss"
-    # Ratcheted down to the period=2 EMA of [20,20,20,20,8] = 12.0, not the
-    # original 20.0 - and bar(6)'s high (14.5) didn't touch either stop, so
-    # this can only be the tightened value.
-    assert trade.exit_price == pytest.approx(12.0)
+    # Ratcheted down to the period=2 EMA of [20,20,20,20,15.5] = 17.0, not
+    # the original 20.0 - bar(6)'s high (16.5) didn't touch either stop, so
+    # this can only be the tightened value, hit once bar(7) reverses up to it.
+    assert trade.exit_price == pytest.approx(17.0)
+    assert trade.pnl == pytest.approx(15.0 - 17.0)
+
+
+def test_simulate_trades_indicator_ema_stop_rejects_wrong_side_of_entry():
+    # A slow EMA that's still above the entry price for a fresh BULLISH
+    # position (plausible after a downtrend) isn't a protective stop at
+    # all - it's a near-guaranteed instant "stop_loss" hit at a phantom
+    # price, fabricating a same-direction profit instead of limiting a
+    # loss. Reproduced live: EMA(400) ~415 points above a bullish BTCUSD
+    # entry gave a fake +414.50 "stop-loss" win in 5 minutes. Must be
+    # rejected (no stop applied) rather than used as-is.
+    bias_fn = lambda window: "bullish" if len(window) == 6 else None  # noqa: E731
+    candles = _entry_fixture()  # entry@15, ts(5)
+    candles.append(_bar(6, 21.0, high=22.0, low=19.0))  # would trivially cross a wrong-side stop of 20.0
+
+    sl_candles = [_bar(1, 20.0), _bar(2, 20.0), _bar(3, 20.0), _bar(4, 20.0)]  # EMA(2) = 20.0, above entry (15)
+
+    trades = simulate_trades(
+        bias_fn,
+        6,
+        candles,
+        ExitConfig(stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+        sl_candles=sl_candles,
+    )
+
+    assert len(trades) == 1
+    # No usable stop was ever set - falls through to whatever else closes
+    # the trade (here, end of data), not a fabricated "stop_loss" exit.
+    assert trades[0].exit_reason != "stop_loss"
 
 
 def test_simulate_trades_trailing_stop_ratchets_and_never_loosens():
@@ -631,14 +666,15 @@ def test_expand_stop_loss_grid_too_many_combinations_raises():
 
 
 def test_grid_search_sweeps_stop_loss_indicator_params_independently():
-    # period=2 EMA of [10,10,10,20] (all strictly before entry@ts(5)) =
-    # 16.6667; period=4 EMA of the same 4 closes = 12.5 (mean-seeded,
-    # exactly period-length) - genuinely different stop prices for the
-    # SAME bearish entry, proving each row's own sl_combo actually drives
-    # its own replay run rather than exit_config's single fixed value.
-    sl_candles = [_bar(1, 10.0), _bar(2, 10.0), _bar(3, 10.0), _bar(4, 20.0)]
+    # period=2 EMA of [20,20,10,20] (all strictly before entry@ts(5)) =
+    # 17.7778; period=4 EMA of the same 4 closes = 17.5 (mean-seeded,
+    # exactly period-length) - both genuinely above the bearish entry (15,
+    # a valid protective stop for either), but distinct from each other -
+    # proving each row's own sl_combo actually drives its own replay run
+    # rather than exit_config's single fixed value.
+    sl_candles = [_bar(1, 20.0), _bar(2, 20.0), _bar(3, 10.0), _bar(4, 20.0)]
     candles = _entry_fixture()  # bearish entry@15, ts(5)
-    candles.append(_bar(6, 17.0, high=17.0, low=16.0))  # crosses both candidate stops
+    candles.append(_bar(6, 17.9, high=18.0, low=17.0))  # crosses both candidate stops
 
     result = grid_search(
         RULE,
@@ -652,9 +688,9 @@ def test_grid_search_sweeps_stop_loss_indicator_params_independently():
 
     assert result["combinations_tested"] == 2
     by_period = {row["stop_loss_indicator_params"]["period"]: row for row in result["results"]}
-    assert by_period[2]["hypothetical_pnl"] == pytest.approx(15.0 - 16.666666666666668)
-    assert by_period[4]["hypothetical_pnl"] == pytest.approx(15.0 - 12.5)
-    # Sorted best-first - period=4's higher pnl (2.5) must lead period=2's (-1.667).
+    assert by_period[2]["hypothetical_pnl"] == pytest.approx(15.0 - 17.77777777777778)
+    assert by_period[4]["hypothetical_pnl"] == pytest.approx(15.0 - 17.5)
+    # Sorted best-first - period=4's higher (less negative) pnl must lead period=2's.
     assert result["results"][0]["stop_loss_indicator_params"]["period"] == 4
 
 

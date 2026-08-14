@@ -533,6 +533,31 @@ def test_evaluate_exits_indicator_trailing_never_loosens():
     assert positions[0].stop_loss_price == 99.0
 
 
+def test_evaluate_exits_indicator_trailing_rejects_candidate_on_wrong_side_of_cmp():
+    # EMA candidate (102.0) sits ABOVE the current market price (101.0) -
+    # not a protective stop for a BUY at all (a long's stop must stay
+    # below price). The stale "more_favorable than the stored stop"
+    # check alone would have waved this through (102 > 95, looks like a
+    # tightening update) - reproduced live via backtest (a fake
+    # "stop_loss" exit that was actually a profit, see
+    # backtest.py's _indicator_stop_price for the full writeup). Must be
+    # discarded, not applied.
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=95.0, trailing_stop_enabled=True,
+                     stop_loss_method="indicator", stop_loss_interval="5min",
+                     stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+    ]
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 101.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(),
+        get_candle_history=lambda *a: [{"close": 102.0}, {"close": 102.0}],
+    )
+
+    assert result["trailed"] == 0
+    assert positions[0].stop_loss_price == 95.0
+
+
 def test_evaluate_exits_indicator_trailing_skipped_when_history_insufficient():
     positions = [
         FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",

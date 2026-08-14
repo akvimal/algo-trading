@@ -454,6 +454,29 @@ def open_position(
             )
             db.commit()
             return row
+        # The compute functions return a raw indicator value with no
+        # direction concept at all (unlike previous_candle's own low/high
+        # split, which is directionally safe by construction) - a value
+        # that lands on the WRONG side of entry (e.g. a slow EMA still
+        # above entry for a fresh BUY after a downtrend) isn't a
+        # protective stop, it's a near-certain instant "stop-out" at a
+        # phantom price the market may never trade at, fabricating a
+        # same-direction profit instead of limiting a loss - reproduced
+        # live via backtest (EMA(400) ~415 points above a bullish entry).
+        # Reject cleanly rather than open an unprotected/nonsensical
+        # position, same as the "not enough history" case just above.
+        if (order.action == "BUY" and stop_loss_price >= order.price) or (
+            order.action == "SELL" and stop_loss_price <= order.price
+        ):
+            row = _reject(
+                db,
+                order,
+                signal_id,
+                f"stop_loss_method='indicator' ({order.stop_loss_indicator_type}) computed {stop_loss_price} - "
+                f"not on the protective side of entry ({order.price}) for a {order.action}, not usable as a stop-loss",
+            )
+            db.commit()
+            return row
 
     if order.target_percent is not None:
         target_price = compute_target_percent_price(order.action, order.price, order.target_percent)
@@ -1017,7 +1040,16 @@ def _evaluate_exits(
                 compute = _STOP_LOSS_COMPUTE_FUNCS.get(pos.stop_loss_indicator_type)
                 if compute is not None and candle_history_cache[key]:
                     closes = [c["close"] for c in candle_history_cache[key]]
-                    candidate_stop = compute(closes, pos.stop_loss_indicator_params or {})
+                    raw_candidate = compute(closes, pos.stop_loss_indicator_params or {})
+                    # Same wrong-side guard as open_position's own indicator
+                    # branch - a candidate that isn't on the protective side
+                    # of the CURRENT price isn't a real trailing update,
+                    # discard it rather than let "only tighten" wave it
+                    # through against the stored stop.
+                    if raw_candidate is not None and (
+                        (pos.action == "BUY" and raw_candidate < cmp_price) or (pos.action == "SELL" and raw_candidate > cmp_price)
+                    ):
+                        candidate_stop = raw_candidate
 
             if candidate_stop is not None:
                 current_stop = float(pos.stop_loss_price)

@@ -50,7 +50,10 @@ class Strategy(Base):
     stop_loss_interval = Column(Text)
     stop_loss_percent = Column(Numeric)
     stop_loss_indicator_type = Column(Text)
-    stop_loss_indicator_params = Column(JSONB)
+    # none_as_null=True - without it, a Python None serializes as the JSON
+    # 'null' literal, not SQL NULL, which fails the stop_loss_fields_consistent
+    # CHECK constraint's "IS NULL" branches (see rule_config above, same fix).
+    stop_loss_indicator_params = Column(JSONB(none_as_null=True))
     target_percent = Column(Numeric)
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
     # instrument_type='option' only - 'spread' or 'naked', see OptionPositionStyle in app/domain/models.py.

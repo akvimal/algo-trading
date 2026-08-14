@@ -114,7 +114,12 @@ class Position(Base):
     stop_loss_interval = Column(Text)
     stop_loss_percent = Column(Numeric)
     stop_loss_indicator_type = Column(Text)
-    stop_loss_indicator_params = Column(JSONB)
+    # none_as_null=True - a bare None otherwise serializes as the JSON 'null'
+    # literal, not SQL NULL (see signal-generation's identical Strategy
+    # column - a real bug there, fixed 2026-08-14, since its own
+    # stop_loss_fields_consistent CHECK does "IS NULL" comparisons; no such
+    # constraint here, but kept consistent).
+    stop_loss_indicator_params = Column(JSONB(none_as_null=True))
     # 'square_off' | 'stop_loss' | 'target' | 'manual' | 'counter_signal', set when status becomes CLOSED
     exit_reason = Column(Text)
     # The square-off time this position's Strategy set (required there) -

@@ -464,7 +464,14 @@ def _backtest_one_symbol_option(
                 option_type,
                 strike,
                 expiry_flag,
-                0,
+                # Dhan's rollingoption expiryCode is 1-indexed (1=nearest,
+                # not 0) - passing 0 gets rejected outright ("expiryCode is
+                # required", confirmed live) rather than silently treated
+                # as nearest. This whole backtest path only ever wants the
+                # nearest rolling contract for expiry_flag's own week/month
+                # bucket (see expiry_flag's comment above), so 1 is always
+                # correct here, not just a placeholder default.
+                1,
                 OPTION_HISTORY_INTERVAL,
                 fetch_from,
                 to,

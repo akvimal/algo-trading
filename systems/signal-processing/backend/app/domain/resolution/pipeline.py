@@ -77,6 +77,8 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         stop_loss_method=strategy.get("stop_loss_method"),
         stop_loss_interval=strategy.get("stop_loss_interval"),
         stop_loss_percent=strategy.get("stop_loss_percent"),
+        stop_loss_indicator_type=strategy.get("stop_loss_indicator_type"),
+        stop_loss_indicator_params=strategy.get("stop_loss_indicator_params"),
         target_percent=strategy.get("target_percent"),
         trailing_stop_enabled=strategy.get("trailing_stop_enabled", False),
         duplicate_signal_policy=strategy.get("duplicate_signal_policy", "skip"),

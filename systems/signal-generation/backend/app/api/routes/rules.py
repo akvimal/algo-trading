@@ -266,10 +266,12 @@ def _exit_config_for(payload) -> ExitConfig:
     Strategy-owned). Omitting every field reproduces ExitConfig()'s bare
     defaults: opposite-signal/end-of-data exits only. Accepts either
     RuleBacktestRequest or RuleBacktestGridRequest - both expose the same
-    5 field names."""
+    field names."""
     return ExitConfig(
         stop_loss_method=payload.stop_loss_method,
         stop_loss_percent=payload.stop_loss_percent,
+        stop_loss_indicator_type=getattr(payload, "stop_loss_indicator_type", None),
+        stop_loss_indicator_params=getattr(payload, "stop_loss_indicator_params", None),
         target_percent=payload.target_percent,
         trailing_stop_enabled=payload.trailing_stop_enabled,
         square_off_time=payload.square_off_time,
@@ -277,16 +279,31 @@ def _exit_config_for(payload) -> ExitConfig:
 
 
 def _sl_candles_for(payload, rule_row: db_models.Rule, resolved, candles: list, fetch_from: date, to: date) -> Optional[list]:
-    """Only stop_loss_method='previous_candle' needs a second candle
-    series (at the request's own stop_loss_interval, which can differ
-    from the rule's main `interval`) - reuses the already-fetched
-    `candles` outright when the two intervals match, so the common case
-    costs no extra market-data call."""
-    if payload.stop_loss_method != "previous_candle" or not payload.stop_loss_interval:
-        return None
-    if payload.stop_loss_interval == rule_row.interval:
-        return candles
-    return get_candle_history(resolved.chart_exchange, resolved.chart_symbol, payload.stop_loss_interval, fetch_from, to)
+    """stop_loss_method='previous_candle' needs a second candle series (at
+    the request's own stop_loss_interval, which can differ from the
+    rule's main `interval`) - reuses the already-fetched `candles`
+    outright when the two intervals match, so the common case costs no
+    extra market-data call.
+
+    stop_loss_method='indicator' also needs its own series, always
+    fetched fresh over a widened window (not opportunistically reused
+    like previous_candle above) since the indicator's own warm-up
+    requirement isn't generally the same as the rule's. Reads the warmup
+    bar count from stop_loss_indicator_params["period"] - the only shape
+    today ('ema'); a second indicator type with a differently-named
+    warmup field would need its own small dispatch here, mirroring
+    backtest.py's _STOP_LOSS_COMPUTE_FUNCS."""
+    if payload.stop_loss_method == "previous_candle" and payload.stop_loss_interval:
+        if payload.stop_loss_interval == rule_row.interval:
+            return candles
+        return get_candle_history(resolved.chart_exchange, resolved.chart_symbol, payload.stop_loss_interval, fetch_from, to)
+    if payload.stop_loss_method == "indicator" and payload.stop_loss_interval and payload.stop_loss_indicator_params:
+        warmup_bars = payload.stop_loss_indicator_params.get("period", 20)
+        warmup_from, _ = history_window(warmup_bars, payload.stop_loss_interval)
+        return get_candle_history(
+            resolved.chart_exchange, resolved.chart_symbol, payload.stop_loss_interval, min(fetch_from, warmup_from), to
+        )
+    return None
 
 
 def _backtest_one_symbol(

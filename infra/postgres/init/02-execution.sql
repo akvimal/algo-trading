@@ -125,9 +125,16 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- execution never calls signal-generation directly) so the
     -- exit-monitor job's trailing logic knows HOW to recompute a
     -- candidate stop without needing the strategy again.
-    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent')),
+    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
     stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '5min', '15min', '25min', '60min')),
     stop_loss_percent       NUMERIC,
+    -- stop_loss_method='indicator' only - one value today ('ema'). MUST be
+    -- widened in lockstep with signal-generation's own identical CHECK
+    -- constraint (infra/postgres/init/03-signal-generation.sql) and both
+    -- systems' _STOP_LOSS_*_FUNCS/_MODELS registries whenever a new
+    -- indicator type is added.
+    stop_loss_indicator_type   TEXT CHECK (stop_loss_indicator_type IN ('ema')),
+    stop_loss_indicator_params JSONB,
     exit_reason             TEXT CHECK (exit_reason IN ('square_off', 'stop_loss', 'target', 'manual', 'counter_signal')),
     -- This position's segment's own square-off time (execution.accounts.
     -- square_off_time) - copied at open time, never changed afterward.

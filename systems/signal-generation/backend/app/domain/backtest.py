@@ -26,6 +26,7 @@ from typing import Callable, Optional
 from pydantic import ValidationError
 
 from app.domain.indicators import evaluate_regime_indicator
+from app.domain.regime import compute_ema
 from app.domain.rule import RuleConfig, validate_indicator_params
 from app.domain.rules import Bias, CandleClose, SimulatedTrade, bars_needed, evaluate
 
@@ -59,8 +60,14 @@ class ExitConfig:
     Every field defaults to "not configured," so ExitConfig() alone
     reproduces the old next-opposite-signal-only replay exactly."""
 
-    stop_loss_method: Optional[str] = None  # "percent" | "previous_candle" | None
+    stop_loss_method: Optional[str] = None  # "percent" | "previous_candle" | "indicator" | None
     stop_loss_percent: Optional[float] = None
+    # stop_loss_method='indicator' only - see app/domain/rule.py's
+    # validate_stop_loss_indicator_params/_STOP_LOSS_INDICATOR_PARAMS_MODELS
+    # for the type->params-shape dispatch, and _STOP_LOSS_COMPUTE_FUNCS
+    # below for the type->candidate-value dispatch.
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
     square_off_time: Optional[time] = None
@@ -105,6 +112,41 @@ def _previous_candle_stop_price(
     return candidate.low if direction == "bullish" else candidate.high
 
 
+def _ema_stop_value(closes: list[float], params: dict) -> Optional[float]:
+    ema = compute_ema(closes, params["period"])
+    return ema[-1] if ema and ema[-1] is not None else None
+
+
+# stop_loss_indicator_type -> (closes, params) -> candidate stop value, no
+# direction concept here (unlike _previous_candle_stop_price's low/high
+# split) - the caller decides whether a given candidate is more favorable
+# based on direction, this only computes the raw indicator value. Mirrors
+# execution's own _STOP_LOSS_COMPUTE_FUNCS (position_manager.py) exactly -
+# a deliberate duplicate, not shared, since execution can't import this
+# module (systems/* self-contained). Adding a second indicator type means
+# a new entry here AND there, plus widening both CHECK constraints - see
+# app/domain/rule.py's own comment on this.
+_STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[float], dict], Optional[float]]] = {
+    "ema": _ema_stop_value,
+}
+
+
+def _indicator_stop_price(
+    sl_candles: list[CandleClose], reference_timestamp: str, indicator_type: str, indicator_params: dict
+) -> Optional[float]:
+    """Indicator value computed only from sl_candles strictly before
+    reference_timestamp - same as-of-this-point-in-time semantics
+    _previous_candle_stop_price already uses, to avoid lookahead bias.
+    None if there isn't enough history yet or indicator_type is
+    unrecognized."""
+    ref = datetime.fromisoformat(reference_timestamp)
+    closes = [c.close for c in sl_candles if datetime.fromisoformat(c.timestamp) < ref]
+    compute = _STOP_LOSS_COMPUTE_FUNCS.get(indicator_type)
+    if compute is None or not closes:
+        return None
+    return compute(closes, indicator_params)
+
+
 def _pnl(direction: Bias, entry_price: float, exit_price: float) -> float:
     return exit_price - entry_price if direction == "bullish" else entry_price - exit_price
 
@@ -120,6 +162,10 @@ def _initial_stop_loss_price(
         return _stop_loss_percent_price(direction, entry_price, exit_config.stop_loss_percent)
     if exit_config.stop_loss_method == "previous_candle" and sl_candles:
         return _previous_candle_stop_price(direction, sl_candles, entry_timestamp)
+    if exit_config.stop_loss_method == "indicator" and sl_candles and exit_config.stop_loss_indicator_type and exit_config.stop_loss_indicator_params:
+        return _indicator_stop_price(
+            sl_candles, entry_timestamp, exit_config.stop_loss_indicator_type, exit_config.stop_loss_indicator_params
+        )
     return None
 
 
@@ -193,6 +239,10 @@ def _simulate_one_trade(
                 candidate = _stop_loss_percent_price(direction, bar.close, exit_config.stop_loss_percent)
             elif exit_config.stop_loss_method == "previous_candle" and sl_candles:
                 candidate = _previous_candle_stop_price(direction, sl_candles, bar.timestamp)
+            elif exit_config.stop_loss_method == "indicator" and sl_candles and exit_config.stop_loss_indicator_type and exit_config.stop_loss_indicator_params:
+                candidate = _indicator_stop_price(
+                    sl_candles, bar.timestamp, exit_config.stop_loss_indicator_type, exit_config.stop_loss_indicator_params
+                )
             if candidate is not None:
                 more_favorable = candidate > stop_loss_price if direction == "bullish" else candidate < stop_loss_price
                 if more_favorable:

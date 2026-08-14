@@ -124,26 +124,42 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- shouldn't silently vanish - see app/api/routes/rules.py's delete
     -- guard.
     rule_id          UUID REFERENCES signal_generation.rules (id),
-    -- Stop-loss: either the low/high of the previous completed candle at
-    -- stop_loss_interval, or a flat % from entry price. The two are
-    -- mutually exclusive - exactly one of stop_loss_interval/
-    -- stop_loss_percent is set, matching whichever stop_loss_method was
-    -- chosen. trailing_stop_enabled only means something once a
-    -- stop_loss_method is set. Interval values (1/5/15/25/60min, no
-    -- 'daily', no '30min') match Dhan's charts/intraday API exactly -
-    -- see market-data's DhanProvider.get_previous_candle.
-    stop_loss_method    TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent')),
+    -- Stop-loss: the low/high of the previous completed candle at
+    -- stop_loss_interval, a flat % from entry price, or the latest value
+    -- of a pluggable indicator computation (stop_loss_indicator_type +
+    -- stop_loss_indicator_params, see app/domain/rule.py's
+    -- validate_stop_loss_indicator_params/_STOP_LOSS_INDICATOR_PARAMS_MODELS
+    -- for the type->params-shape dispatch). Exactly one of
+    -- stop_loss_interval/stop_loss_percent/(stop_loss_indicator_type+
+    -- stop_loss_indicator_params) is set, matching stop_loss_method.
+    -- trailing_stop_enabled only means something once a stop_loss_method
+    -- is set. Interval values (1/5/15/25/60min, no 'daily', no '30min')
+    -- match Dhan's charts/intraday API exactly - see market-data's
+    -- DhanProvider.get_previous_candle.
+    stop_loss_method    TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
     stop_loss_interval  TEXT CHECK (stop_loss_interval IN ('1min', '5min', '15min', '25min', '60min')),
     stop_loss_percent   NUMERIC CHECK (stop_loss_percent > 0 AND stop_loss_percent < 100),
+    -- One value today ('ema') - MUST be widened here in lockstep with
+    -- _STOP_LOSS_INDICATOR_PARAMS_MODELS in app/domain/rule.py whenever a
+    -- new stop-loss indicator type is added (indicators.type's own CHECK
+    -- constraint was once left behind when new IndicatorTypes were added
+    -- at the Pydantic layer - don't repeat that here).
+    stop_loss_indicator_type   TEXT CHECK (stop_loss_indicator_type IN ('ema')),
+    stop_loss_indicator_params JSONB,
     -- Target (take-profit): always a flat % from entry price, independent
     -- of the stop-loss method. No trailing variant for target.
     target_percent      NUMERIC CHECK (target_percent > 0 AND target_percent < 100),
     trailing_stop_enabled BOOLEAN NOT NULL DEFAULT false,
     CONSTRAINT stop_loss_fields_consistent CHECK (
         (stop_loss_method IS NULL AND stop_loss_interval IS NULL AND stop_loss_percent IS NULL
+            AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL
             AND trailing_stop_enabled = false)
-        OR (stop_loss_method = 'previous_candle' AND stop_loss_interval IS NOT NULL AND stop_loss_percent IS NULL)
-        OR (stop_loss_method = 'percent' AND stop_loss_percent IS NOT NULL AND stop_loss_interval IS NULL)
+        OR (stop_loss_method = 'previous_candle' AND stop_loss_interval IS NOT NULL AND stop_loss_percent IS NULL
+            AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL)
+        OR (stop_loss_method = 'percent' AND stop_loss_percent IS NOT NULL AND stop_loss_interval IS NULL
+            AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL)
+        OR (stop_loss_method = 'indicator' AND stop_loss_interval IS NOT NULL AND stop_loss_percent IS NULL
+            AND stop_loss_indicator_type IS NOT NULL AND stop_loss_indicator_params IS NOT NULL)
     ),
     -- Which market this strategy trades in - distinct from `exchange`
     -- above (still fixed to NSE, the only one actually wired up

@@ -29,9 +29,13 @@ class ResolvedOrder(BaseModel):
     price: float
     resolved_at: datetime
     status: str
-    stop_loss_method: Optional[Literal["previous_candle", "percent"]] = None
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
     stop_loss_interval: Optional[Literal["1min", "5min", "15min", "25min", "60min"]] = None
     stop_loss_percent: Optional[float] = None
+    # stop_loss_method='indicator' only - see
+    # position_manager.py's _STOP_LOSS_COMPUTE_FUNCS.
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
     # Per-strategy signal-conflict policy, also passed through unchanged

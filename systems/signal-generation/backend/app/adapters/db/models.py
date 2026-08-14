@@ -49,6 +49,8 @@ class Strategy(Base):
     stop_loss_method = Column(Text)
     stop_loss_interval = Column(Text)
     stop_loss_percent = Column(Numeric)
+    stop_loss_indicator_type = Column(Text)
+    stop_loss_indicator_params = Column(JSONB)
     target_percent = Column(Numeric)
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
     # instrument_type='option' only - 'spread' or 'naked', see OptionPositionStyle in app/domain/models.py.

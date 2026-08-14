@@ -6,7 +6,11 @@ export type Horizon = "intraday" | "swing" | "positional";
 export type InstrumentType = "spot" | "future" | "option";
 export type StrategyStatus = "draft" | "backtesting" | "live" | "paused";
 export type Interval = "1min" | "3min" | "5min" | "15min" | "30min" | "60min" | "daily";
-export type StopLossMethod = "previous_candle" | "percent";
+export type StopLossMethod = "previous_candle" | "percent" | "indicator";
+// stop_loss_method='indicator' only - which computation to run. One
+// value today ('ema') - see backend app/domain/rule.py's
+// _STOP_LOSS_INDICATOR_PARAMS_MODELS.
+export type StopLossIndicatorType = "ema";
 // matches Dhan's actual supported intraday-candle intervals (no "daily",
 // and 25min not 30min - Dhan's charts/intraday API only supports 1/5/15/25/60)
 export type StopLossInterval = "1min" | "5min" | "15min" | "25min" | "60min";
@@ -253,6 +257,9 @@ export type Strategy = {
   stop_loss_method: StopLossMethod | null;
   stop_loss_interval: StopLossInterval | null;
   stop_loss_percent: number | null;
+  // stop_loss_method='indicator' only - see StopLossIndicatorType above.
+  stop_loss_indicator_type: StopLossIndicatorType | null;
+  stop_loss_indicator_params: { period: number } | null;
   target_percent: number | null;
   trailing_stop_enabled: boolean;
   // instrument_type='option' only - see OptionPositionStyle above.
@@ -289,6 +296,8 @@ export type StrategyCreate = {
   stop_loss_method?: StopLossMethod;
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
+  stop_loss_indicator_type?: StopLossIndicatorType;
+  stop_loss_indicator_params?: { period: number };
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
@@ -318,6 +327,8 @@ export type StrategyEdit = {
   stop_loss_method?: StopLossMethod;
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
+  stop_loss_indicator_type?: StopLossIndicatorType;
+  stop_loss_indicator_params?: { period: number };
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
@@ -410,6 +421,8 @@ export type RuleBacktestRequest = {
   stop_loss_method?: StopLossMethod;
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
+  stop_loss_indicator_type?: StopLossIndicatorType;
+  stop_loss_indicator_params?: { period: number };
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   square_off_time?: string;

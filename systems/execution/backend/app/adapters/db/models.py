@@ -7,7 +7,7 @@ update both places.
 import uuid
 
 from sqlalchemy import Boolean, Column, ForeignKey, Numeric, SmallInteger, Text, Time, func
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
 from app.config import settings
@@ -113,6 +113,8 @@ class Position(Base):
     stop_loss_method = Column(Text)
     stop_loss_interval = Column(Text)
     stop_loss_percent = Column(Numeric)
+    stop_loss_indicator_type = Column(Text)
+    stop_loss_indicator_params = Column(JSONB)
     # 'square_off' | 'stop_loss' | 'target' | 'manual' | 'counter_signal', set when status becomes CLOSED
     exit_reason = Column(Text)
     # The square-off time this position's Strategy set (required there) -

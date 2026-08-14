@@ -63,19 +63,27 @@
     "status": { "type": "string", "enum": ["pending", "sent", "rejected"] },
     "stop_loss_method": {
       "type": ["string", "null"],
-      "enum": ["previous_candle", "percent", null],
+      "enum": ["previous_candle", "percent", "indicator", null],
       "description": "From the resolved Strategy. null means no stop-loss configured - execution falls back to plain capital_per_trade sizing with no stop/target monitoring."
     },
     "stop_loss_interval": {
       "type": ["string", "null"],
       "enum": ["1min", "5min", "15min", "25min", "60min", null],
-      "description": "Only set when stop_loss_method='previous_candle' - the candle interval execution asks market-data's GET /candles/previous for."
+      "description": "Set when stop_loss_method='previous_candle' (the candle interval execution asks market-data's GET /candles/previous for) or stop_loss_method='indicator' (the candle interval execution asks market-data's GET /candles/history for)."
     },
     "stop_loss_percent": {
       "type": ["number", "null"],
       "exclusiveMinimum": 0,
       "exclusiveMaximum": 100,
       "description": "Only set when stop_loss_method='percent'."
+    },
+    "stop_loss_indicator_type": {
+      "type": ["string", "null"],
+      "description": "Only set when stop_loss_method='indicator' - which computation to run (one value today, 'ema'). See signal-generation's app/domain/rule.py _STOP_LOSS_INDICATOR_PARAMS_MODELS and execution's app/domain/position_manager.py _STOP_LOSS_COMPUTE_FUNCS - both must be widened together when a new type is added, along with this schema and both systems' DB CHECK constraints."
+    },
+    "stop_loss_indicator_params": {
+      "type": ["object", "null"],
+      "description": "Only set when stop_loss_method='indicator' - shape depends on stop_loss_indicator_type (for 'ema': {\"period\": int})."
     },
     "target_percent": {
       "type": ["number", "null"],

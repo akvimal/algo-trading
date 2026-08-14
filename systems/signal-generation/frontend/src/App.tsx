@@ -22,6 +22,7 @@ import {
   type RsiParams,
   type Segment,
   type SourceType,
+  type StopLossIndicatorType,
   type StopLossInterval,
   type StopLossMethod,
   type Strategy,
@@ -246,7 +247,12 @@ function WebhookLine({ label, url }: { label: string; url: string }) {
 
 function formatStopLoss(s: Strategy): string {
   if (!s.stop_loss_method) return "-";
-  const base = s.stop_loss_method === "previous_candle" ? `Prev candle (${s.stop_loss_interval})` : `${s.stop_loss_percent}%`;
+  const base =
+    s.stop_loss_method === "previous_candle"
+      ? `Prev candle (${s.stop_loss_interval})`
+      : s.stop_loss_method === "indicator"
+        ? `${(s.stop_loss_indicator_type ?? "indicator").toUpperCase()}(${s.stop_loss_indicator_params?.period ?? "?"})`
+        : `${s.stop_loss_percent}%`;
   return s.trailing_stop_enabled ? `${base}, trailing` : base;
 }
 
@@ -524,6 +530,8 @@ function RuleManager() {
   const [backtestSlMethod, setBacktestSlMethod] = useState<StopLossMethod | "">("");
   const [backtestSlInterval, setBacktestSlInterval] = useState<StopLossInterval | "">("");
   const [backtestSlPercent, setBacktestSlPercent] = useState("");
+  const [backtestSlIndicatorType, setBacktestSlIndicatorType] = useState<StopLossIndicatorType>("ema");
+  const [backtestSlIndicatorPeriod, setBacktestSlIndicatorPeriod] = useState("");
   const [backtestTargetPercent, setBacktestTargetPercent] = useState("");
   const [backtestTrailingEnabled, setBacktestTrailingEnabled] = useState(false);
   const [backtestSquareOffTime, setBacktestSquareOffTime] = useState("");
@@ -754,8 +762,12 @@ function RuleManager() {
       instrument_type: backtestInstrumentType,
       horizon: backtestHorizon,
       stop_loss_method: backtestSlMethod || undefined,
-      stop_loss_interval: backtestSlMethod === "previous_candle" ? backtestSlInterval || undefined : undefined,
+      stop_loss_interval:
+        backtestSlMethod === "previous_candle" || backtestSlMethod === "indicator" ? backtestSlInterval || undefined : undefined,
       stop_loss_percent: backtestSlMethod === "percent" && backtestSlPercent ? Number(backtestSlPercent) : undefined,
+      stop_loss_indicator_type: backtestSlMethod === "indicator" ? backtestSlIndicatorType : undefined,
+      stop_loss_indicator_params:
+        backtestSlMethod === "indicator" && backtestSlIndicatorPeriod ? { period: Number(backtestSlIndicatorPeriod) } : undefined,
       target_percent: backtestTargetPercent ? Number(backtestTargetPercent) : undefined,
       trailing_stop_enabled: backtestSlMethod ? backtestTrailingEnabled : undefined,
       square_off_time: backtestSquareOffTime ? `${backtestSquareOffTime}:00` : undefined,
@@ -1314,9 +1326,10 @@ function RuleManager() {
                 <option value="">&mdash;</option>
                 <option value="previous_candle">Previous candle low/high</option>
                 <option value="percent">% from entry</option>
+                <option value="indicator">Indicator</option>
               </select>
             </label>
-            {backtestSlMethod === "previous_candle" && (
+            {(backtestSlMethod === "previous_candle" || backtestSlMethod === "indicator") && (
               <label>
                 SL candle interval
                 <select value={backtestSlInterval} onChange={(e) => setBacktestSlInterval(e.target.value as StopLossInterval | "")}>
@@ -1334,6 +1347,29 @@ function RuleManager() {
                 SL %
                 <input type="number" min="0" max="100" step="0.1" value={backtestSlPercent} onChange={(e) => setBacktestSlPercent(e.target.value)} />
               </label>
+            )}
+            {backtestSlMethod === "indicator" && (
+              <>
+                <label>
+                  Indicator type
+                  <select
+                    value={backtestSlIndicatorType}
+                    onChange={(e) => setBacktestSlIndicatorType(e.target.value as StopLossIndicatorType)}
+                  >
+                    <option value="ema">EMA</option>
+                  </select>
+                </label>
+                <label>
+                  EMA period
+                  <input
+                    type="number"
+                    min="2"
+                    value={backtestSlIndicatorPeriod}
+                    onChange={(e) => setBacktestSlIndicatorPeriod(e.target.value)}
+                    placeholder="e.g. 20"
+                  />
+                </label>
+              </>
             )}
             <label>
               Target % <span className="optional">(optional)</span>
@@ -1564,6 +1600,10 @@ function StrategyManager() {
   const [slMethod, setSlMethod] = useState<StopLossMethod | "">("");
   const [slInterval, setSlInterval] = useState<StopLossInterval | "">("");
   const [slPercent, setSlPercent] = useState("");
+  // stop_loss_method='indicator' only - one type today ('ema'), see
+  // StopLossIndicatorType in api.ts.
+  const [slIndicatorType, setSlIndicatorType] = useState<StopLossIndicatorType>("ema");
+  const [slIndicatorPeriod, setSlIndicatorPeriod] = useState("");
   const [targetPercent, setTargetPercent] = useState("");
   const [trailingEnabled, setTrailingEnabled] = useState(false);
   // instrument_type='option' only - see OptionPositionStyle in api.ts.
@@ -1592,6 +1632,8 @@ function StrategyManager() {
   const [editSlMethod, setEditSlMethod] = useState<StopLossMethod | "">("");
   const [editSlInterval, setEditSlInterval] = useState<StopLossInterval | "">("");
   const [editSlPercent, setEditSlPercent] = useState("");
+  const [editSlIndicatorType, setEditSlIndicatorType] = useState<StopLossIndicatorType>("ema");
+  const [editSlIndicatorPeriod, setEditSlIndicatorPeriod] = useState("");
   const [editTargetPercent, setEditTargetPercent] = useState("");
   const [editTrailingEnabled, setEditTrailingEnabled] = useState(false);
   const [editOptionPositionStyle, setEditOptionPositionStyle] = useState<OptionPositionStyle>("spread");
@@ -1706,8 +1748,12 @@ function StrategyManager() {
         instrument_type: instrumentType,
         rule_id: createIsInHouse ? ruleId : undefined,
         stop_loss_method: slMethod || undefined,
-        stop_loss_interval: slMethod === "previous_candle" ? slInterval || undefined : undefined,
+        stop_loss_interval:
+          slMethod === "previous_candle" || slMethod === "indicator" ? slInterval || undefined : undefined,
         stop_loss_percent: slMethod === "percent" && slPercent ? Number(slPercent) : undefined,
+        stop_loss_indicator_type: slMethod === "indicator" ? slIndicatorType : undefined,
+        stop_loss_indicator_params:
+          slMethod === "indicator" && slIndicatorPeriod ? { period: Number(slIndicatorPeriod) } : undefined,
         target_percent: targetPercent ? Number(targetPercent) : undefined,
         trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
         option_position_style: instrumentType === "option" ? optionPositionStyle : undefined,
@@ -1729,6 +1775,7 @@ function StrategyManager() {
       setSlMethod("");
       setSlInterval("");
       setSlPercent("");
+      setSlIndicatorPeriod("");
       setTargetPercent("");
       setTrailingEnabled(false);
       setOptionPositionStyle("spread");
@@ -1768,6 +1815,8 @@ function StrategyManager() {
     setEditSlMethod(s.stop_loss_method ?? "");
     setEditSlInterval(s.stop_loss_interval ?? "");
     setEditSlPercent(s.stop_loss_percent != null ? String(s.stop_loss_percent) : "");
+    setEditSlIndicatorType(s.stop_loss_indicator_type ?? "ema");
+    setEditSlIndicatorPeriod(s.stop_loss_indicator_params?.period != null ? String(s.stop_loss_indicator_params.period) : "");
     setEditTargetPercent(s.target_percent != null ? String(s.target_percent) : "");
     setEditTrailingEnabled(s.trailing_stop_enabled);
     setEditOptionPositionStyle(s.option_position_style);
@@ -1795,8 +1844,12 @@ function StrategyManager() {
         instrument_type: editInstrumentType,
         rule_id: editRuleId || undefined,
         stop_loss_method: editSlMethod || undefined,
-        stop_loss_interval: editSlMethod === "previous_candle" ? editSlInterval || undefined : undefined,
+        stop_loss_interval:
+          editSlMethod === "previous_candle" || editSlMethod === "indicator" ? editSlInterval || undefined : undefined,
         stop_loss_percent: editSlMethod === "percent" && editSlPercent ? Number(editSlPercent) : undefined,
+        stop_loss_indicator_type: editSlMethod === "indicator" ? editSlIndicatorType : undefined,
+        stop_loss_indicator_params:
+          editSlMethod === "indicator" && editSlIndicatorPeriod ? { period: Number(editSlIndicatorPeriod) } : undefined,
         target_percent: editTargetPercent ? Number(editTargetPercent) : undefined,
         trailing_stop_enabled: editSlMethod ? editTrailingEnabled : undefined,
         option_position_style: editInstrumentType === "option" ? editOptionPositionStyle : undefined,
@@ -2002,9 +2055,10 @@ function StrategyManager() {
               <option value="">&mdash;</option>
               <option value="previous_candle">Previous candle low/high</option>
               <option value="percent">% from entry</option>
+              <option value="indicator">Indicator</option>
             </select>
           </label>
-          {slMethod === "previous_candle" && (
+          {(slMethod === "previous_candle" || slMethod === "indicator") && (
             <label>
               SL candle interval
               <select value={slInterval} onChange={(e) => setSlInterval(e.target.value as StopLossInterval | "")}>
@@ -2030,6 +2084,26 @@ function StrategyManager() {
                 placeholder="e.g. 2"
               />
             </label>
+          )}
+          {slMethod === "indicator" && (
+            <>
+              <label>
+                Indicator type
+                <select value={slIndicatorType} onChange={(e) => setSlIndicatorType(e.target.value as StopLossIndicatorType)}>
+                  <option value="ema">EMA</option>
+                </select>
+              </label>
+              <label>
+                EMA period
+                <input
+                  type="number"
+                  min="2"
+                  value={slIndicatorPeriod}
+                  onChange={(e) => setSlIndicatorPeriod(e.target.value)}
+                  placeholder="e.g. 20"
+                />
+              </label>
+            </>
           )}
           <label>
             Target % <span className="optional">(optional)</span>
@@ -2272,8 +2346,9 @@ function StrategyManager() {
                       <option value="">&mdash;</option>
                       <option value="previous_candle">Prev candle</option>
                       <option value="percent">%</option>
+                      <option value="indicator">Indicator</option>
                     </select>
-                    {editSlMethod === "previous_candle" && (
+                    {(editSlMethod === "previous_candle" || editSlMethod === "indicator") && (
                       <select
                         value={editSlInterval}
                         onChange={(e) => setEditSlInterval(e.target.value as StopLossInterval | "")}
@@ -2298,6 +2373,25 @@ function StrategyManager() {
                         className="cell-input"
                         placeholder="%"
                       />
+                    )}
+                    {editSlMethod === "indicator" && (
+                      <>
+                        <select
+                          value={editSlIndicatorType}
+                          onChange={(e) => setEditSlIndicatorType(e.target.value as StopLossIndicatorType)}
+                          className="cell-input"
+                        >
+                          <option value="ema">EMA</option>
+                        </select>
+                        <input
+                          type="number"
+                          min="2"
+                          value={editSlIndicatorPeriod}
+                          onChange={(e) => setEditSlIndicatorPeriod(e.target.value)}
+                          className="cell-input"
+                          placeholder="period"
+                        />
+                      </>
                     )}
                     {editSlMethod && (
                       <label className="checkbox-label tiny">

@@ -1,7 +1,14 @@
 import pytest
 from pydantic import ValidationError
 
-from app.domain.rule import IndicatorCreate, IndicatorUpdate, RsiParams, validate_indicator_params
+from app.domain.rule import (
+    EmaStopParams,
+    IndicatorCreate,
+    IndicatorUpdate,
+    RsiParams,
+    validate_indicator_params,
+    validate_stop_loss_indicator_params,
+)
 
 
 def test_validate_indicator_params_accepts_valid_rsi():
@@ -56,3 +63,24 @@ def test_indicator_update_all_fields_optional():
 def test_indicator_update_rejects_empty_name():
     with pytest.raises(ValidationError):
         IndicatorUpdate(name="")
+
+
+def test_validate_stop_loss_indicator_params_accepts_valid_ema():
+    params = validate_stop_loss_indicator_params("ema", {"period": 20})
+    assert isinstance(params, EmaStopParams)
+    assert params.period == 20
+
+
+def test_validate_stop_loss_indicator_params_rejects_non_positive_period():
+    with pytest.raises(ValidationError):
+        validate_stop_loss_indicator_params("ema", {"period": 1})
+
+
+def test_validate_stop_loss_indicator_params_rejects_missing_period():
+    with pytest.raises(ValidationError):
+        validate_stop_loss_indicator_params("ema", {})
+
+
+def test_validate_stop_loss_indicator_params_rejects_unknown_type():
+    with pytest.raises(ValueError):
+        validate_stop_loss_indicator_params("supertrend", {"period": 10})

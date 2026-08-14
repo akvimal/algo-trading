@@ -111,6 +111,47 @@ class EmaSlopeParams(BaseModel):
     atr_period: int = Field(gt=1)
 
 
+# Strategy.stop_loss_method='indicator' params - a SEPARATE registry from
+# _INDICATOR_PARAMS_MODELS below (different concern: a Rule's own
+# condition/regime-filter indicators vs. what trails a Strategy's
+# stop-loss), but the exact same dispatch-by-type-string shape
+# deliberately, so a second stop-loss indicator (e.g. SuperTrend) is just
+# a new params model + one registry entry here, matching how a 6th regime
+# IndicatorType was added below - not a new stop_loss_method value or any
+# schema/contract restructuring. See docs/architecture.md "Generic
+# indicator-based trailing stop-loss" and position_manager.py's own
+# _STOP_LOSS_COMPUTE_FUNCS in execution (a duplicate registry there -
+# execution can't import this module, systems/* are self-contained).
+class EmaStopParams(BaseModel):
+    """stop_loss_indicator_type='ema' - single EMA period, trailing stop
+    is the latest EMA value of closes at the position's own
+    stop_loss_interval."""
+
+    period: int = Field(gt=1)
+
+
+_STOP_LOSS_INDICATOR_PARAMS_MODELS: dict[str, type[BaseModel]] = {
+    "ema": EmaStopParams,
+}
+
+
+def validate_stop_loss_indicator_params(indicator_type: str, raw: dict) -> BaseModel:
+    """Raises pydantic.ValidationError (a 422 at the route layer) if `raw`
+    doesn't match `indicator_type`'s expected shape - same explicit
+    {type: model} dispatch as validate_indicator_params below, same
+    reasoning (avoids a blind union adapter silently resolving an
+    ambiguous shape to the wrong type). Unrecognized indicator_type raises
+    ValueError, not KeyError - the DB CHECK constraint on
+    stop_loss_indicator_type is the first line of defense, but must be
+    widened in lockstep with this dict whenever a new type is added (the
+    indicators.type CHECK constraint was once left behind when new
+    IndicatorTypes were added here - don't repeat that)."""
+    model = _STOP_LOSS_INDICATOR_PARAMS_MODELS.get(indicator_type)
+    if model is None:
+        raise ValueError(f"unknown stop_loss_indicator_type '{indicator_type}'")
+    return model.model_validate(raw)
+
+
 # Indicators are their own entity (signal_generation.indicators) so one
 # definition (e.g. "RSI 14", "ADX 14/20") can be reused by any number of
 # rules - see docs/architecture.md.
@@ -410,9 +451,18 @@ class RuleBacktestRequest(BaseModel):
     # instrument_type='option' only - WEEK vs MONTH expiry choice, see
     # app/api/routes/rules.py's option backtest path.
     horizon: Literal["intraday", "swing", "positional"] = "intraday"
-    stop_loss_method: Optional[Literal["previous_candle", "percent"]] = None
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
     stop_loss_interval: Optional[Literal["1min", "5min", "15min", "25min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
+    # stop_loss_method='indicator' only - see Strategy's own
+    # stop_loss_indicator_type/stop_loss_indicator_params (app/domain/models.py)
+    # and validate_stop_loss_indicator_params above. Not cross-validated
+    # here (a backtest request's exit-config fields are all optional
+    # per-run overrides, same as the other stop_loss_* fields on this
+    # model) - an invalid/missing shape surfaces as a 502 from the actual
+    # compute dispatch instead of a 422 here.
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: bool = False
     square_off_time: Optional[time] = None

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.adapters.quotes.client import get_ltp_batch, get_previous_candle, resolve_underlying
+from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
 from app.domain.models import ManualPositionCreate, StopLossUpdate
 from app.domain.position_manager import (
     check_exits,
@@ -150,7 +150,7 @@ def square_off_due_now(db: Session = Depends(get_db)):
 def check_exits_now(db: Session = Depends(get_db)):
     """Manual trigger - same logic the exit-monitor job runs on its
     interval. Useful for testing without waiting on the poll interval."""
-    return check_exits(db, get_ltp_batch, get_previous_candle)
+    return check_exits(db, get_ltp_batch, get_previous_candle, get_candle_history)
 
 
 @router.post("/positions/{position_id}/square-off")

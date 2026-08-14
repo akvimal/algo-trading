@@ -33,6 +33,8 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> Stra
         stop_loss_method=row.stop_loss_method,
         stop_loss_interval=row.stop_loss_interval,
         stop_loss_percent=float(row.stop_loss_percent) if row.stop_loss_percent is not None else None,
+        stop_loss_indicator_type=row.stop_loss_indicator_type,
+        stop_loss_indicator_params=row.stop_loss_indicator_params,
         target_percent=float(row.target_percent) if row.target_percent is not None else None,
         trailing_stop_enabled=row.trailing_stop_enabled,
         option_position_style=row.option_position_style,
@@ -69,7 +71,9 @@ def _stop_loss_fields_for_rule(
     stop_loss_interval: Optional[str],
     stop_loss_percent: Optional[float],
     trailing_stop_enabled: bool,
-) -> tuple[Optional[str], Optional[str], Optional[float], bool]:
+    stop_loss_indicator_type: Optional[str] = None,
+    stop_loss_indicator_params: Optional[dict] = None,
+) -> tuple[Optional[str], Optional[str], Optional[float], bool, Optional[str], Optional[dict]]:
     """A strategy linked to a breakout rule owns its own stop-loss scheme
     rather than accepting whatever stop_loss_method/interval was
     requested - the initial stop is enforced live by reusing execution's
@@ -93,8 +97,8 @@ def _stop_loss_fields_for_rule(
                         f"({', '.join(get_args(StopLossInterval))}) - required so the initial stop-loss can be enforced live"
                     ),
                 )
-            return "previous_candle", rule.htf_interval, None, False
-    return stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled
+            return "previous_candle", rule.htf_interval, None, False, None, None
+    return stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled, stop_loss_indicator_type, stop_loss_indicator_params
 
 
 @router.post("/strategies", response_model=StrategyOut, status_code=201)
@@ -103,8 +107,16 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
     # StrategyCreate's own validator) - external strategies carry no Rule.
     rule_row = _load_rule_or_404(db, payload.rule_id) if payload.rule_id is not None else None
 
-    stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled = _stop_loss_fields_for_rule(
-        rule_row, payload.stop_loss_method, payload.stop_loss_interval, payload.stop_loss_percent, payload.trailing_stop_enabled
+    stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled, stop_loss_indicator_type, stop_loss_indicator_params = (
+        _stop_loss_fields_for_rule(
+            rule_row,
+            payload.stop_loss_method,
+            payload.stop_loss_interval,
+            payload.stop_loss_percent,
+            payload.trailing_stop_enabled,
+            payload.stop_loss_indicator_type,
+            payload.stop_loss_indicator_params,
+        )
     )
 
     row = db_models.Strategy(
@@ -117,6 +129,8 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         stop_loss_method=stop_loss_method,
         stop_loss_interval=stop_loss_interval,
         stop_loss_percent=stop_loss_percent,
+        stop_loss_indicator_type=stop_loss_indicator_type,
+        stop_loss_indicator_params=stop_loss_indicator_params,
         target_percent=payload.target_percent,
         trailing_stop_enabled=trailing_stop_enabled,
         option_position_style=payload.option_position_style,
@@ -211,18 +225,24 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.rule_id = new_rule_row.id
 
     if payload.stop_loss_method is not None:
-        # Method is the complete replacement pair for interval/percent -
-        # explicitly clears whichever one the new method doesn't use, so
-        # switching methods in one PATCH never leaves a stale value from
-        # the old method behind.
+        # Method is the complete replacement group for interval/percent/
+        # indicator_type/indicator_params - explicitly clears whichever
+        # ones the new method doesn't use, so switching methods in one
+        # PATCH never leaves a stale value from the old method behind.
         row.stop_loss_method = payload.stop_loss_method
         row.stop_loss_interval = payload.stop_loss_interval
         row.stop_loss_percent = payload.stop_loss_percent
+        row.stop_loss_indicator_type = payload.stop_loss_indicator_type
+        row.stop_loss_indicator_params = payload.stop_loss_indicator_params
     else:
         if payload.stop_loss_interval is not None:
             row.stop_loss_interval = payload.stop_loss_interval
         if payload.stop_loss_percent is not None:
             row.stop_loss_percent = payload.stop_loss_percent
+        if payload.stop_loss_indicator_type is not None:
+            row.stop_loss_indicator_type = payload.stop_loss_indicator_type
+        if payload.stop_loss_indicator_params is not None:
+            row.stop_loss_indicator_params = payload.stop_loss_indicator_params
     if payload.target_percent is not None:
         row.target_percent = payload.target_percent
     if payload.trailing_stop_enabled is not None:
@@ -262,6 +282,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
             row.stop_loss_interval,
             float(row.stop_loss_percent) if row.stop_loss_percent is not None else None,
             row.trailing_stop_enabled,
+            row.stop_loss_indicator_type,
+            row.stop_loss_indicator_params,
         )
         validate_contract_day_filter_fields(row.contract_day_filter, row.instrument_type)
         validate_active_window_fields(row.active_from_time, row.active_to_time)
@@ -274,12 +296,21 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     # holds, and a caller trying to PATCH stop_loss_method away from
     # 'previous_candle' gets overridden back rather than silently accepted.
     rule_row = db.get(db_models.Rule, row.rule_id) if row.rule_id is not None else None
-    row.stop_loss_method, row.stop_loss_interval, row.stop_loss_percent, row.trailing_stop_enabled = _stop_loss_fields_for_rule(
+    (
+        row.stop_loss_method,
+        row.stop_loss_interval,
+        row.stop_loss_percent,
+        row.trailing_stop_enabled,
+        row.stop_loss_indicator_type,
+        row.stop_loss_indicator_params,
+    ) = _stop_loss_fields_for_rule(
         rule_row,
         row.stop_loss_method,
         row.stop_loss_interval,
         float(row.stop_loss_percent) if row.stop_loss_percent is not None else None,
         row.trailing_stop_enabled,
+        row.stop_loss_indicator_type,
+        row.stop_loss_indicator_params,
     )
 
     db.commit()

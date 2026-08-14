@@ -35,20 +35,28 @@ class FakeRule:
 
 def test_stop_loss_fields_for_rule_forces_previous_candle_scheme_for_breakout():
     rule_row = FakeRule(rule_config=BREAKOUT_RULE_CONFIG)
-    method, interval, percent, trailing = _stop_loss_fields_for_rule(rule_row, None, None, None, False)
+    method, interval, percent, trailing, indicator_type, indicator_params = _stop_loss_fields_for_rule(
+        rule_row, None, None, None, False
+    )
     assert method == "previous_candle"
     assert interval == "15min"  # the rule's own htf_interval
     assert percent is None
     assert trailing is False
+    assert indicator_type is None
+    assert indicator_params is None
 
 
 def test_stop_loss_fields_for_rule_overrides_whatever_was_requested_for_breakout():
     rule_row = FakeRule(rule_config=BREAKOUT_RULE_CONFIG)
-    method, interval, percent, trailing = _stop_loss_fields_for_rule(rule_row, "percent", None, 5.0, True)
+    method, interval, percent, trailing, indicator_type, indicator_params = _stop_loss_fields_for_rule(
+        rule_row, "indicator", None, None, True, "ema", {"period": 20}
+    )
     assert method == "previous_candle"
     assert interval == "15min"
     assert percent is None
     assert trailing is False
+    assert indicator_type is None
+    assert indicator_params is None
 
 
 def test_stop_loss_fields_for_rule_rejects_unsupported_htf_interval():
@@ -62,11 +70,17 @@ def test_stop_loss_fields_for_rule_rejects_unsupported_htf_interval():
 def test_stop_loss_fields_for_rule_passes_through_unchanged_for_crossover():
     rule_row = FakeRule(rule_config=CROSSOVER_RULE_CONFIG)
     result = _stop_loss_fields_for_rule(rule_row, "percent", None, 5.0, True)
-    assert result == ("percent", None, 5.0, True)
+    assert result == ("percent", None, 5.0, True, None, None)
+
+
+def test_stop_loss_fields_for_rule_passes_through_unchanged_for_indicator():
+    rule_row = FakeRule(rule_config=CROSSOVER_RULE_CONFIG)
+    result = _stop_loss_fields_for_rule(rule_row, "indicator", "5min", None, True, "ema", {"period": 20})
+    assert result == ("indicator", "5min", None, True, "ema", {"period": 20})
 
 
 def test_stop_loss_fields_for_rule_passes_through_unchanged_for_no_rule():
     # An external (webhook) strategy carries no Rule at all now (rule_id
     # is None) - not a Rule row with an empty rule_config.
     result = _stop_loss_fields_for_rule(None, "previous_candle", "5min", None, False)
-    assert result == ("previous_candle", "5min", None, False)
+    assert result == ("previous_candle", "5min", None, False, None, None)

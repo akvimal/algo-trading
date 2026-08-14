@@ -23,7 +23,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.domain.rule import RuleSummary, Segment
+from app.domain.rule import RuleSummary, Segment, validate_stop_loss_indicator_params
 
 # 'in_house' is the one reserved value every other backend check compares
 # against (app/domain/engine.py, app/api/routes/strategies.py) - anything
@@ -72,7 +72,13 @@ OptionSlScope = Literal["combined", "individual"]
 # distinction meaningless there). Harmlessly ignored for 'spot'.
 ContractDayFilter = Literal["any", "start", "expiry"]
 Status = Literal["draft", "backtesting", "live", "paused"]
-StopLossMethod = Literal["previous_candle", "percent"]
+# 'indicator': trailing stop is the latest value of a generic, pluggable
+# indicator computation (see app/domain/rule.py's
+# validate_stop_loss_indicator_params/_STOP_LOSS_INDICATOR_PARAMS_MODELS
+# - one type today, 'ema', more addable there without touching this
+# Literal again). Uses stop_loss_interval (candle timeframe, reused) plus
+# the two new stop_loss_indicator_* fields below - never stop_loss_percent.
+StopLossMethod = Literal["previous_candle", "percent", "indicator"]
 # Matches Dhan's actual supported intraday-candle intervals for the
 # charts/intraday API (1/5/15/25/60 - no 30, no daily): a deliberate
 # leak of the one provider's capabilities, consistent with this codebase
@@ -129,24 +135,44 @@ def validate_stop_loss_fields(
     interval: Optional[str],
     percent: Optional[float],
     trailing_enabled: bool,
+    indicator_type: Optional[str] = None,
+    indicator_params: Optional[dict] = None,
 ) -> None:
     """Shared consistency rule for the stop-loss field group, used by both
     StrategyCreate (all fields always present) and the PATCH route handler
     (validated against the merged post-update row, since PATCH applies
     fields one at a time - see app/api/routes/strategies.py)."""
     if method is None:
-        if interval is not None or percent is not None or trailing_enabled:
-            raise ValueError("stop_loss_interval/stop_loss_percent/trailing_stop_enabled require a stop_loss_method")
+        if interval is not None or percent is not None or trailing_enabled or indicator_type is not None or indicator_params is not None:
+            raise ValueError(
+                "stop_loss_interval/stop_loss_percent/trailing_stop_enabled/stop_loss_indicator_type/"
+                "stop_loss_indicator_params require a stop_loss_method"
+            )
     elif method == "previous_candle":
         if interval is None:
             raise ValueError("stop_loss_method='previous_candle' requires stop_loss_interval")
         if percent is not None:
             raise ValueError("stop_loss_method='previous_candle' must not set stop_loss_percent")
+        if indicator_type is not None or indicator_params is not None:
+            raise ValueError("stop_loss_method='previous_candle' must not set stop_loss_indicator_type/stop_loss_indicator_params")
     elif method == "percent":
         if percent is None:
             raise ValueError("stop_loss_method='percent' requires stop_loss_percent")
         if interval is not None:
             raise ValueError("stop_loss_method='percent' must not set stop_loss_interval")
+        if indicator_type is not None or indicator_params is not None:
+            raise ValueError("stop_loss_method='percent' must not set stop_loss_indicator_type/stop_loss_indicator_params")
+    elif method == "indicator":
+        if interval is None:
+            raise ValueError("stop_loss_method='indicator' requires stop_loss_interval")
+        if percent is not None:
+            raise ValueError("stop_loss_method='indicator' must not set stop_loss_percent")
+        if indicator_type is None or indicator_params is None:
+            raise ValueError("stop_loss_method='indicator' requires stop_loss_indicator_type and stop_loss_indicator_params")
+        try:
+            validate_stop_loss_indicator_params(indicator_type, indicator_params)
+        except ValueError as exc:
+            raise ValueError(f"invalid stop_loss_indicator_params for '{indicator_type}': {exc}") from exc
 
 
 class StrategyCreate(BaseModel):
@@ -163,6 +189,10 @@ class StrategyCreate(BaseModel):
     stop_loss_method: Optional[StopLossMethod] = None
     stop_loss_interval: Optional[StopLossInterval] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
+    # stop_loss_method='indicator' only - see StopLossMethod's own comment
+    # and app/domain/rule.py's validate_stop_loss_indicator_params.
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: bool = False
     # instrument_type='option' only - see OptionPositionStyle above.
@@ -192,7 +222,12 @@ class StrategyCreate(BaseModel):
     @model_validator(mode="after")
     def _check_stop_loss_consistency(self) -> "StrategyCreate":
         validate_stop_loss_fields(
-            self.stop_loss_method, self.stop_loss_interval, self.stop_loss_percent, self.trailing_stop_enabled
+            self.stop_loss_method,
+            self.stop_loss_interval,
+            self.stop_loss_percent,
+            self.trailing_stop_enabled,
+            self.stop_loss_indicator_type,
+            self.stop_loss_indicator_params,
         )
         return self
 
@@ -245,6 +280,8 @@ class StrategyUpdate(BaseModel):
     stop_loss_method: Optional[StopLossMethod] = None
     stop_loss_interval: Optional[StopLossInterval] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: Optional[bool] = None
     option_position_style: Optional[OptionPositionStyle] = None
@@ -275,6 +312,8 @@ class StrategyOut(BaseModel):
     stop_loss_method: Optional[StopLossMethod] = None
     stop_loss_interval: Optional[StopLossInterval] = None
     stop_loss_percent: Optional[float] = None
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
     option_position_style: OptionPositionStyle = "spread"

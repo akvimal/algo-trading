@@ -5,10 +5,12 @@ from typing import Optional
 import pytest
 
 from app.domain.position_manager import (
+    _STOP_LOSS_COMPUTE_FUNCS,
     _apply_realized_pnl,
     _evaluate_exits,
     _evaluate_square_off_due,
     _resolve_signal_conflicts,
+    compute_ema,
     compute_pnl,
     compute_quantity,
     compute_risk_based_quantity,
@@ -36,6 +38,8 @@ class FakePosition:
     stop_loss_method: Optional[str] = None
     stop_loss_interval: Optional[str] = None
     stop_loss_percent: Optional[float] = None
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
     exit_price: Optional[float] = None
     exit_time: Optional[object] = None
     pnl: Optional[float] = None
@@ -450,6 +454,118 @@ def test_evaluate_exits_trails_previous_candle_stop_and_dedupes_fetch():
     assert result["trailed"] == 2  # 97.0 is more favorable than both 95.0 and 96.0
     assert positions[0].stop_loss_price == 97.0
     assert positions[1].stop_loss_price == 97.0
+
+
+def test_compute_ema_seeds_with_sma_then_smooths():
+    # period=2: seed = mean(closes[:2]) = 15.0 at index 1; k=2/3 thereafter -
+    # same values regime.py's own compute_ema would produce for this input.
+    assert compute_ema([10.0, 20.0], 2) == [None, 15.0]
+
+
+def test_compute_ema_insufficient_closes_is_all_none():
+    assert compute_ema([10.0], 2) == [None]
+
+
+def test_compute_ema_matches_hand_traced_series():
+    ema = compute_ema([20.0, 20.0, 20.0, 20.0, 8.0], 2)
+    assert ema[0] is None
+    assert ema[1] == pytest.approx(20.0)
+    assert ema[2] == pytest.approx(20.0)
+    assert ema[3] == pytest.approx(20.0)
+    assert ema[4] == pytest.approx(12.0)
+
+
+def test_stop_loss_compute_funcs_ema_dispatch():
+    compute = _STOP_LOSS_COMPUTE_FUNCS["ema"]
+    assert compute([20.0, 20.0, 20.0, 20.0, 8.0], {"period": 2}) == pytest.approx(12.0)
+
+
+def test_stop_loss_compute_funcs_ema_insufficient_history_returns_none():
+    compute = _STOP_LOSS_COMPUTE_FUNCS["ema"]
+    assert compute([10.0], {"period": 2}) is None
+
+
+def test_evaluate_exits_trails_indicator_ema_stop_and_dedupes_fetch():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=95.0, trailing_stop_enabled=True,
+                     stop_loss_method="indicator", stop_loss_interval="5min",
+                     stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+        FakePosition(id="p2", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=5, stop_loss_price=96.0, trailing_stop_enabled=True,
+                     stop_loss_method="indicator", stop_loss_interval="5min",
+                     stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+    ]
+    calls = []
+
+    def fake_get_candle_history(exchange, symbol, interval, from_date, to_date):
+        calls.append((exchange, symbol, interval))
+        return [{"close": 96.0}, {"close": 96.0}, {"close": 96.0}, {"close": 96.0}, {"close": 100.0}]
+
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 101.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(), get_candle_history=fake_get_candle_history,
+    )
+
+    # period=2 EMA of [96,96,96,96,100]: seed=96.0, then 96*(1/3)+100*(2/3) = 98.667 -
+    # same (exchange, symbol, interval) key, fetched once and reused for both positions.
+    assert len(calls) == 1
+    assert result["trailed"] == 2
+    assert positions[0].stop_loss_price == pytest.approx(98.66666666666666)
+    assert positions[1].stop_loss_price == pytest.approx(98.66666666666666)
+
+
+def test_evaluate_exits_indicator_trailing_never_loosens():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=99.0, trailing_stop_enabled=True,
+                     stop_loss_method="indicator", stop_loss_interval="5min",
+                     stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+    ]
+    # EMA candidate (96.0) is LESS favorable than the stored 99.0 for a BUY - must not move.
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 101.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(),
+        get_candle_history=lambda *a: [{"close": 96.0}, {"close": 96.0}],
+    )
+
+    assert result["trailed"] == 0
+    assert positions[0].stop_loss_price == 99.0
+
+
+def test_evaluate_exits_indicator_trailing_skipped_when_history_insufficient():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=95.0, trailing_stop_enabled=True,
+                     stop_loss_method="indicator", stop_loss_interval="5min",
+                     stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 20}),
+    ]
+    # Not enough history for a period=20 EMA (only 1 close) -> compute()
+    # returns None -> no crash, candidate simply doesn't apply.
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 101.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(),
+        get_candle_history=lambda *a: [{"close": 96.0}],
+    )
+
+    assert result["trailed"] == 0
+    assert positions[0].stop_loss_price == 95.0
+
+
+def test_evaluate_exits_indicator_trailing_skipped_when_no_get_candle_history_supplied():
+    # get_candle_history defaults to None - existing callers/tests that
+    # never pass it must not crash on an indicator-method position, same
+    # backward-compatibility guarantee previous_candle/percent already had.
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=95.0, trailing_stop_enabled=True,
+                     stop_loss_method="indicator", stop_loss_interval="5min",
+                     stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+    ]
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 101.0}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["trailed"] == 0
+    assert positions[0].stop_loss_price == 95.0
 
 
 def test_evaluate_exits_trailing_skipped_when_disabled():

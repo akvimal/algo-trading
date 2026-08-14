@@ -24,7 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.adapters.db.session import SessionLocal
-from app.adapters.quotes.client import get_ltp_batch, get_previous_candle
+from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle
 from app.config import settings
 from app.domain.option_position_manager import check_option_group_exits, square_off_due_option_groups
 from app.domain.position_manager import check_exits, square_off_due_positions
@@ -51,7 +51,7 @@ def run_square_off_due() -> dict:
 
 def run_check_exits() -> dict:
     with SessionLocal() as db:
-        result = check_exits(db, get_ltp_batch, get_previous_candle)
+        result = check_exits(db, get_ltp_batch, get_previous_candle, get_candle_history)
         option_result = check_option_group_exits(db, get_ltp_batch)
     if result["closed_stop_loss"] or result["closed_target"] or result["trailed"]:
         logger.info("exit-monitor run: %s", result)

@@ -1,6 +1,7 @@
 """Thin HTTP client to the market-data system. execution never embeds a
 broker SDK or credentials directly - see docs/architecture.md."""
 
+from datetime import date
 from typing import Optional
 
 import requests
@@ -44,6 +45,28 @@ def get_previous_candle(exchange: str, symbol: str, interval: str) -> Optional[d
     )
     if resp.status_code == 404:
         return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_candle_history(exchange: str, symbol: str, interval: str, from_date: date, to_date: date) -> list[dict]:
+    """A general multi-bar series over [from_date, to_date] (see
+    market-data's GET /candles/history) - unlike get_previous_candle
+    above, which only ever returns one value. Only used by
+    stop_loss_method='indicator' (position_manager.py), which needs
+    enough history to warm up a computation like EMA, not just the latest
+    completed bar. Oldest-first, matching signal-generation's own client
+    wrapper of the same route (app/adapters/market_data/client.py there) -
+    duplicated, not shared, per the systems/* self-containment rule.
+    Empty list (not None) if unavailable - callers already treat "not
+    enough bars" and "no bars at all" the same way."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/candles/history",
+        params={"exchange": exchange, "symbol": symbol, "interval": interval, "from": from_date.isoformat(), "to": to_date.isoformat()},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    if resp.status_code == 404:
+        return []
     resp.raise_for_status()
     return resp.json()
 

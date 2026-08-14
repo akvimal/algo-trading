@@ -8,7 +8,7 @@ persistence.
 
 import logging
 import uuid
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
 from typing import Callable, Optional
@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 GetLtpBatch = Callable[[str, list[str]], dict[str, float]]  # (exchange, symbols) -> {symbol: price}
 GetPreviousCandle = Callable[[str, str, str], Optional[dict]]  # (exchange, symbol, interval) -> candle dict or None
+# (exchange, symbol, interval, from_date, to_date) -> oldest-first candle
+# dicts (each with at least "close") - stop_loss_method='indicator' only,
+# needs a full warm-up series, unlike GetPreviousCandle's single bar.
+GetCandleHistory = Callable[[str, str, str, date, date], list[dict]]
 GetLotSize = Callable[[str, str], Optional[float]]  # (exchange, symbol) -> lot size, or None if unknown
 # (segment, underlying) -> {chart_symbol, chart_exchange, trade_symbol,
 # trade_exchange, lot_size, expiry}, or None if unresolvable - same shape
@@ -65,6 +69,61 @@ def compute_target_percent_price(action: str, entry_price: float, target_percent
     if action == "BUY":
         return entry_price * (1 + target_percent / 100)
     return entry_price * (1 - target_percent / 100)  # SELL - target is below entry
+
+
+def compute_ema(closes: list[float], period: int) -> list[Optional[float]]:
+    """Standard EMA - direct port of signal-generation's
+    app/domain/regime.py compute_ema. Duplicated, not imported: execution
+    can't import signal-generation's code (systems/* self-contained, see
+    docs/architecture.md) - same "duplicate, don't cross-import" precedent
+    app/domain/option_templates.py already established for a different
+    piece of signal-processing's logic."""
+    n = len(closes)
+    ema: list[Optional[float]] = [None] * n
+    if n < period:
+        return ema
+    seed = sum(closes[:period]) / period
+    ema[period - 1] = seed
+    k = 2 / (period + 1)
+    for i in range(period, n):
+        ema[i] = closes[i] * k + ema[i - 1] * (1 - k)
+    return ema
+
+
+def _ema_stop_value(closes: list[float], params: dict) -> Optional[float]:
+    ema = compute_ema(closes, params["period"])
+    return ema[-1] if ema and ema[-1] is not None else None
+
+
+# stop_loss_indicator_type -> (closes, params) -> candidate stop value.
+# Mirrors signal-generation's own _STOP_LOSS_COMPUTE_FUNCS
+# (app/domain/backtest.py) exactly - a deliberate duplicate registry, not
+# shared, so live and backtest can never disagree about what a given
+# indicator_type+params computes. Adding a second indicator type (e.g.
+# SuperTrend) means a new entry here AND there, plus widening both
+# systems' DB CHECK constraints and the contract's own enum - see
+# signal-generation's app/domain/rule.py for the equivalent comment on
+# its own params-validation registry.
+_STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[float], dict], Optional[float]]] = {
+    "ema": _ema_stop_value,
+}
+
+# Rough over-estimate of calendar days needed to cover `bar_count` bars at
+# `interval` - mirrors signal-generation's app/domain/engine.py
+# history_window exactly (same bar-count-to-calendar-days shape,
+# duplicated locally rather than imported). Extra empty days cost nothing
+# but a wider market-data query.
+_INDICATOR_INTERVAL_MINUTES = {"1min": 1, "5min": 5, "15min": 15, "25min": 25, "60min": 60}
+_INDICATOR_MIN_HISTORY_DAYS = 5
+_INDICATOR_MAX_HISTORY_DAYS = 30
+
+
+def _indicator_history_window(period: int, interval: str) -> tuple[date, date]:
+    today = datetime.now(dt_timezone.utc).date()
+    minutes = _INDICATOR_INTERVAL_MINUTES.get(interval, 5)
+    bars_per_day = max(1, (6.25 * 60) // minutes)  # ~6h15m NSE session as a rough yardstick
+    days_needed = max(_INDICATOR_MIN_HISTORY_DAYS, min(_INDICATOR_MAX_HISTORY_DAYS, int(period / bars_per_day) + 2))
+    return today - timedelta(days=days_needed), today
 
 
 def compute_risk_based_quantity(
@@ -234,6 +293,7 @@ def open_position(
     db: Session,
     get_previous_candle: GetPreviousCandle,
     get_lot_size: GetLotSize,
+    get_candle_history: GetCandleHistory,
 ) -> db_models.Position:
     """Idempotent: a signal_id already processed (e.g. Redis redelivered
     the message after a crash) returns the existing row rather than
@@ -370,6 +430,30 @@ def open_position(
             db.commit()
             return row
         stop_loss_price = candle["low"] if order.action == "BUY" else candle["high"]
+    elif order.stop_loss_method == "indicator":
+        compute = _STOP_LOSS_COMPUTE_FUNCS.get(order.stop_loss_indicator_type)
+        if compute is None:
+            row = _reject(
+                db, order, signal_id, f"unrecognized stop_loss_indicator_type '{order.stop_loss_indicator_type}'"
+            )
+            db.commit()
+            return row
+        warmup_from, warmup_to = _indicator_history_window(
+            order.stop_loss_indicator_params.get("period", 20), order.stop_loss_interval
+        )
+        history = get_candle_history(order.exchange, order.symbol, order.stop_loss_interval, warmup_from, warmup_to)
+        closes = [c["close"] for c in history]
+        stop_loss_price = compute(closes, order.stop_loss_indicator_params)
+        if stop_loss_price is None:
+            row = _reject(
+                db,
+                order,
+                signal_id,
+                f"stop_loss_method='indicator' ({order.stop_loss_indicator_type}) but not enough {order.stop_loss_interval} "
+                f"history available for {order.symbol} yet",
+            )
+            db.commit()
+            return row
 
     if order.target_percent is not None:
         target_price = compute_target_percent_price(order.action, order.price, order.target_percent)
@@ -411,6 +495,8 @@ def open_position(
         stop_loss_method=order.stop_loss_method,
         stop_loss_interval=order.stop_loss_interval,
         stop_loss_percent=order.stop_loss_percent,
+        stop_loss_indicator_type=order.stop_loss_indicator_type,
+        stop_loss_indicator_params=order.stop_loss_indicator_params,
         square_off_time=account.square_off_time,
     )
     db.add(row)
@@ -828,7 +914,11 @@ def square_off_due_positions(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
 
 
 def _evaluate_exits(
-    positions: list, get_ltp_batch: GetLtpBatch, get_previous_candle: GetPreviousCandle, accounts_by_segment: dict
+    positions: list,
+    get_ltp_batch: GetLtpBatch,
+    get_previous_candle: GetPreviousCandle,
+    accounts_by_segment: dict,
+    get_candle_history: Optional[GetCandleHistory] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mutates the given position
     objects in place (closing them, or trailing stop_loss_price) and
@@ -846,9 +936,15 @@ def _evaluate_exits(
     Trailing (only trailing_stop_enabled positions, stop-loss only, never
     the target - see docs/architecture.md) ratchets stop_loss_price using
     the same method the position was opened with, re-anchored to the
-    current CMP (percent method) or the latest completed candle
-    (previous_candle method) - and only if the new candidate is MORE
-    favorable than the stored value. It never loosens."""
+    current CMP (percent method), the latest completed candle
+    (previous_candle method), or the latest indicator value (indicator
+    method, via _STOP_LOSS_COMPUTE_FUNCS) - and only if the new candidate
+    is MORE favorable than the stored value. It never loosens.
+    get_candle_history is Optional (default None) purely so existing
+    callers/tests that only ever exercise percent/previous_candle
+    positions don't need updating - a position with
+    stop_loss_method='indicator' but no get_candle_history supplied is
+    simply skipped for trailing, same as a candle fetch failure below."""
     if not positions:
         return {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 0}
 
@@ -860,6 +956,7 @@ def _evaluate_exits(
     # the same (exchange, symbol, interval); market-data's own
     # interval-length TTL cache further dedupes across separate runs.
     candle_cache: dict[tuple[str, str, str], Optional[dict]] = {}
+    candle_history_cache: dict[tuple[str, str, str], list[dict]] = {}
 
     for pos in positions:
         cmp_price = quotes.get((pos.exchange, pos.symbol))
@@ -905,6 +1002,22 @@ def _evaluate_exits(
                 candle = candle_cache[key]
                 if candle is not None:
                     candidate_stop = candle["low"] if pos.action == "BUY" else candle["high"]
+            elif pos.stop_loss_method == "indicator" and get_candle_history is not None:
+                key = (pos.exchange, pos.symbol, pos.stop_loss_interval)
+                if key not in candle_history_cache:
+                    try:
+                        params = pos.stop_loss_indicator_params or {}
+                        warmup_from, warmup_to = _indicator_history_window(params.get("period", 20), pos.stop_loss_interval)
+                        candle_history_cache[key] = get_candle_history(
+                            pos.exchange, pos.symbol, pos.stop_loss_interval, warmup_from, warmup_to
+                        )
+                    except Exception:
+                        logger.exception("failed to fetch trailing candle history for %s:%s", pos.exchange, pos.symbol)
+                        candle_history_cache[key] = []
+                compute = _STOP_LOSS_COMPUTE_FUNCS.get(pos.stop_loss_indicator_type)
+                if compute is not None and candle_history_cache[key]:
+                    closes = [c["close"] for c in candle_history_cache[key]]
+                    candidate_stop = compute(closes, pos.stop_loss_indicator_params or {})
 
             if candidate_stop is not None:
                 current_stop = float(pos.stop_loss_price)
@@ -921,7 +1034,9 @@ def _evaluate_exits(
     }
 
 
-def check_exits(db: Session, get_ltp_batch: GetLtpBatch, get_previous_candle: GetPreviousCandle) -> dict:
+def check_exits(
+    db: Session, get_ltp_batch: GetLtpBatch, get_previous_candle: GetPreviousCandle, get_candle_history: GetCandleHistory
+) -> dict:
     """Closes OPEN positions early if CMP has hit their stop-loss or
     target, ahead of square-off - the continuous monitoring loop
     square_off_all_open alone doesn't provide. See _evaluate_exits for
@@ -934,6 +1049,6 @@ def check_exits(db: Session, get_ltp_batch: GetLtpBatch, get_previous_candle: Ge
         .all()
     )
     accounts = _accounts_by_segment(db, candidates)
-    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts)
+    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history)
     db.commit()
     return result

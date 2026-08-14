@@ -233,6 +233,75 @@ def test_simulate_trades_previous_candle_stop_loss_missing_series_disables_sl():
     assert trades[0].exit_reason != "stop_loss"
 
 
+def test_simulate_trades_indicator_ema_stop_loss():
+    candles = _entry_fixture()  # bearish entry@15, ts(5)
+    # period=2 EMA of closes strictly before ts(5) = flat 20s -> ema=20.0,
+    # far above where bar(6)'s high could reach - proves the indicator
+    # dispatch (not just previous_candle) drives the initial stop.
+    sl_candles = [_bar(1, 20.0), _bar(2, 20.0), _bar(3, 20.0), _bar(4, 20.0)]
+    candles.append(_bar(6, 21.0, high=22.0, low=19.0))  # crosses the ema=20.0 stop
+
+    trades = simulate_trades(
+        _bias_fn,
+        _MIN_BARS,
+        candles,
+        ExitConfig(stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+        sl_candles=sl_candles,
+    )
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "stop_loss"
+    assert trades[0].exit_price == pytest.approx(20.0)
+
+
+def test_simulate_trades_indicator_stop_loss_missing_series_disables_sl():
+    candles = _entry_fixture()
+    candles.append(_bar(6, 18.0, high=20.0, low=17.0))  # would hit a percent-style stop, if one were configured
+
+    trades = simulate_trades(
+        _bias_fn,
+        _MIN_BARS,
+        candles,
+        ExitConfig(stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2}),
+        sl_candles=None,
+    )
+
+    assert trades[0].exit_reason != "stop_loss"
+
+
+def test_simulate_trades_indicator_ema_trailing_stop_ratchets_and_never_loosens():
+    candles = _entry_fixture()  # bearish entry@15, ts(5)
+    candles.append(_bar(6, 14.0, high=14.5, low=13.5))
+    candles.append(_bar(7, 12.0, high=12.5, low=11.5))
+
+    # Initial stop (as of ts(5), strictly-before filter) uses only offsets
+    # 1-4 (flat 20s -> ema=20.0). offset 5's close=8.0 only enters the
+    # window once the trailing loop evaluates bar(6) (ts(6) > ts(5)),
+    # pulling the period=2 EMA down to 12.0 - a ratchet the position
+    # couldn't have "seen" at entry, same as-of-this-point-in-time
+    # semantics _previous_candle_stop_price already relies on.
+    sl_candles = [_bar(1, 20.0), _bar(2, 20.0), _bar(3, 20.0), _bar(4, 20.0), _bar(5, 8.0)]
+
+    trades = simulate_trades(
+        _bias_fn,
+        _MIN_BARS,
+        candles,
+        ExitConfig(
+            stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2},
+            trailing_stop_enabled=True,
+        ),
+        sl_candles=sl_candles,
+    )
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.exit_reason == "stop_loss"
+    # Ratcheted down to the period=2 EMA of [20,20,20,20,8] = 12.0, not the
+    # original 20.0 - and bar(6)'s high (14.5) didn't touch either stop, so
+    # this can only be the tightened value.
+    assert trade.exit_price == pytest.approx(12.0)
+
+
 def test_simulate_trades_trailing_stop_ratchets_and_never_loosens():
     candles = _entry_fixture()  # bearish entry@15, initial 10% stop = 16.5
     # Price only ever moves favorably (down) for this short - the trailing

@@ -141,6 +141,61 @@ def test_strategy_create_stop_loss_percent_out_of_bounds_rejected():
         )
 
 
+def test_strategy_create_indicator_method_requires_interval():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 20},
+        )
+
+
+def test_strategy_create_indicator_method_requires_indicator_type_and_params():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            stop_loss_method="indicator", stop_loss_interval="5min",
+        )
+
+
+def test_strategy_create_indicator_method_forbids_percent():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            stop_loss_method="indicator", stop_loss_interval="5min",
+            stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 20},
+            stop_loss_percent=2.0,
+        )
+
+
+def test_strategy_create_indicator_method_rejects_malformed_params():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            stop_loss_method="indicator", stop_loss_interval="5min",
+            stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 1},
+        )
+
+
+def test_strategy_create_indicator_method_rejects_unknown_indicator_type():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            stop_loss_method="indicator", stop_loss_interval="5min",
+            stop_loss_indicator_type="supertrend", stop_loss_indicator_params={"period": 20},
+        )
+
+
+def test_strategy_create_valid_indicator_with_trailing():
+    s = StrategyCreate(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+        stop_loss_method="indicator", stop_loss_interval="5min",
+        stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 20},
+        trailing_stop_enabled=True,
+    )
+    assert s.stop_loss_indicator_type == "ema"
+    assert s.stop_loss_indicator_params == {"period": 20}
+
+
 def test_validate_stop_loss_fields_no_method_allows_no_extras():
     validate_stop_loss_fields(None, None, None, False)  # should not raise
 

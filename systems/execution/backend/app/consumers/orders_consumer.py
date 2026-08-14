@@ -13,6 +13,7 @@ from redis.exceptions import ResponseError
 
 from app.adapters.db.session import SessionLocal
 from app.adapters.quotes.client import (
+    get_candle_history,
     get_lot_size,
     get_ltp_batch,
     get_previous_candle,
@@ -49,7 +50,7 @@ def _process_message(message_id: str, fields: dict) -> None:
                 order, exec_settings, db, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size
             )
         else:
-            open_position(order, exec_settings, db, get_previous_candle, get_lot_size)
+            open_position(order, exec_settings, db, get_previous_candle, get_lot_size, get_candle_history)
     _client.xack(settings.redis_stream, settings.redis_consumer_group, message_id)
 
 

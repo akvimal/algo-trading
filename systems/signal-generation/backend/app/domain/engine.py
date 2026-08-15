@@ -60,8 +60,19 @@ def history_window(bar_count: int, interval: str) -> tuple[date, date]:
     """A coarse over-estimate of calendar days needed to cover
     `bars_needed` bars at `interval` - extra empty days cost nothing but
     a wider query, so this deliberately doesn't try to be a precise
-    trading-calendar calculation."""
-    today = datetime.now(timezone.utc).date()
+    trading-calendar calculation.
+
+    `today` MUST be IST, not UTC - market-data's candle history is IST-
+    calendar-dated (see docs/architecture.md). Using UTC's date here used
+    to freeze `to=<date>` at the previous IST day for the ~5h30m/day UTC
+    trails IST (18:30-24:00 UTC = 00:00-05:30 IST next day), silently
+    excluding every candle formed since the last IST midnight - a live
+    in-house CRYPTO strategy ticking in that window would evaluate stale
+    data and could never signal. Reproduced live: a 24/7 BTCUSD crossover
+    rule with an 02:15-04:14 IST active window produced zero signals
+    despite 6 real crossovers occurring in it, because every candle fetch
+    during that window still carried `to=<yesterday's UTC date>`."""
+    today = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
     minutes = _INTERVAL_MINUTES.get(interval, 5)
     bars_per_day = max(1, (6.25 * 60) // minutes)  # ~6h15m NSE session as a rough yardstick
     days_needed = max(_MIN_HISTORY_DAYS, min(_MAX_HISTORY_DAYS, int(bar_count / bars_per_day) + 2))

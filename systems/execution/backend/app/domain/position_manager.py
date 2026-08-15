@@ -119,7 +119,14 @@ _INDICATOR_MAX_HISTORY_DAYS = 30
 
 
 def _indicator_history_window(period: int, interval: str) -> tuple[date, date]:
-    today = datetime.now(dt_timezone.utc).date()
+    # Must be IST's "today", not UTC's - market-data's candle history is
+    # IST-calendar-dated, and UTC trails IST by up to a full calendar day
+    # for 5h30m/day (18:30-24:00 UTC = 00:00-05:30 IST next day). Mirrors
+    # the same fix in signal-generation's app/domain/engine.py
+    # history_window - see that function's docstring for the reproduced
+    # live bug (a CRYPTO strategy silently never saw candles during that
+    # window because `to=` stayed frozen at the previous IST day).
+    today = datetime.now(dt_timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
     minutes = _INDICATOR_INTERVAL_MINUTES.get(interval, 5)
     bars_per_day = max(1, (6.25 * 60) // minutes)  # ~6h15m NSE session as a rough yardstick
     days_needed = max(_INDICATOR_MIN_HISTORY_DAYS, min(_INDICATOR_MAX_HISTORY_DAYS, int(period / bars_per_day) + 2))

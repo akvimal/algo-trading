@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from app.adapters.db import models as db_models
 from app.domain import engine as engine_module
@@ -17,7 +18,9 @@ from app.domain.engine import (
 def test_history_window_ends_today_and_covers_at_least_min_days():
     from_date, to_date = history_window(bar_count=10, interval="5min")
 
-    assert to_date == datetime.now(timezone.utc).date()
+    # Must be IST's "today", not UTC's - see history_window's own
+    # docstring for why (the two disagree for ~5h30m every day).
+    assert to_date == datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
     assert (to_date - from_date).days >= 3
 
 

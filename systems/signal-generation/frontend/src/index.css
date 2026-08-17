@@ -9,6 +9,7 @@
   --buy: #3ecf8e;
   --sell: #e8586a;
   --accent: #4c8bf5;
+  --save: #8a7cf0;
 
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
@@ -325,6 +326,13 @@ tbody tr:last-child td {
   margin: 0.75rem 0;
 }
 
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
 .hint {
   display: block;
   font-size: 0.82rem !important;
@@ -350,6 +358,18 @@ tbody tr:last-child td {
   color: var(--text-dim);
 }
 
+.save-backtest-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.6rem 0;
+}
+
+.save-backtest-row input {
+  flex: 1;
+  max-width: 20rem;
+}
+
 .strategy-form input,
 .strategy-form select {
   background: var(--surface-raised);
@@ -365,9 +385,29 @@ tbody tr:last-child td {
   min-width: 5rem;
 }
 
+/* The generic `.strategy-form input` rule above (min-width: 10rem, text-
+   input padding/background/border) was matching every checkbox too - a
+   pre-existing bug that stayed invisible with a single lone checkbox (e.g.
+   "Trailing stop-loss") but blew up a tight 7-checkbox weekday row to
+   ~1150px wide (each checkbox forced to a 160px min-width), which cascaded
+   into an incorrect intrinsic-width calculation for its whole flex/grid
+   ancestor chain. Reset back to a normal-sized native checkbox. Radio
+   inputs (the Source field) hit the exact same bug - each Platform/
+   External radio forced to 160px wide, spreading the pair across the
+   whole row - same fix. */
+.strategy-form input[type="checkbox"],
+.strategy-form input[type="radio"] {
+  min-width: 0;
+  width: auto;
+  padding: 0;
+  background: none;
+  border: none;
+}
+
 .active-windows-field {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 0.35rem;
   font-size: 0.8rem;
 }
@@ -387,6 +427,132 @@ tbody tr:last-child td {
 .stack-cell .active-windows-editor input[type="time"] {
   min-width: 0;
   width: 6.5rem;
+}
+
+.weekdays-editor {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.weekday-checkbox {
+  gap: 0.2rem !important;
+}
+
+.active-windows-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-width: 14rem;
+}
+
+.active-windows-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface-raised);
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+}
+
+/* The "New/Edit strategy" panel's grouped-section layout (Signal / Entry /
+   Exit / Schedule, stacked) - .strategy-form-v2 sits alongside the base
+   .strategy-form class (kept for its label/input/checkbox styling, which
+   still applies via descendant selectors) and only overrides the outer
+   flex direction: the base class's own flex-wrap-row-of-labels shape
+   doesn't fit a form that's now built from stacked, titled sections
+   instead of a flat field list. */
+.strategy-form-v2 {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.form-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.3rem;
+  min-width: 0;
+}
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.section-heading {
+  display: inline-block;
+  margin: 0;
+  color: var(--sell);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 2px solid var(--sell);
+  padding-bottom: 0.25rem;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.radio-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.field-label {
+  color: var(--text-dim);
+}
+
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  height: 2.15rem;
+}
+
+.radio-label {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.sl-fields-box {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.title-field {
+  max-width: 28rem;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
 }
 
 button {
@@ -453,6 +619,50 @@ tbody tr.selected-row {
 .status-paused {
   background: rgba(232, 88, 106, 0.15);
   color: var(--sell);
+}
+
+/* StrategyInfoCell - a hover tooltip consolidating the strategy table's
+   Stop-loss/Target/Active window/Active weekdays/Webhooks columns behind
+   one info icon. Real floating panel (not a native `title` attribute) so
+   Webhooks' click-to-copy buttons stay interactive. Portaled to
+   document.body with JS-computed `top`/`right` (see StrategyInfoCell) -
+   the strategy table has `overflow: hidden` for its own rounded corners,
+   which silently clips any absolutely-positioned descendant that extends
+   past the table's box, so this can't be a plain CSS-`:hover`-shown
+   absolute child of the cell like a normal tooltip would be. */
+.info-tooltip-wrap {
+  display: inline-block;
+}
+
+.info-tooltip {
+  position: fixed;
+  z-index: 100;
+  width: max-content;
+  max-width: 22rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  cursor: default;
+}
+
+.info-tooltip dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.3rem 1rem;
+  font-size: 0.82rem;
+}
+
+.info-tooltip dt {
+  color: var(--text-dim);
+}
+
+.info-tooltip dd {
+  margin: 0;
+  color: var(--text);
+  text-align: right;
 }
 
 .webhook-links {
@@ -561,4 +771,280 @@ tbody tr.selected-row {
   text-transform: none;
   letter-spacing: normal;
   color: var(--text-dim);
+}
+
+/* ManualTab.tsx card redesign - one order slot per row (segment/symbol/
+   instrument header, entry controls left, spot-price exit-watch controls
+   right, closed trades collapsed below), see ManualTab.tsx's own comments
+   for the interaction model. */
+.manual-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.manual-card-fields {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.manual-add-instrument-btn {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manual-confirm-remove {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+}
+
+.manual-card-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.manual-card-fields select,
+.manual-card-fields input {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+  min-width: 8rem;
+}
+
+/* Live LTP readout - far right of the order row (same row as the Add
+   button), just before Square off - refreshed immediately on a Segment/
+   Symbol change (refreshLtp in ManualTab.tsx) and every poll tick after
+   that, same lastKnownLtp already used for the order-value preview.
+   margin-left: auto pushes it to the row's right edge - kept alongside
+   .manual-squareoff-btn's own auto margin (not removed) so Square off
+   still lands at the far right even when this span isn't rendered at all
+   (no symbol typed yet). */
+.manual-ltp-live {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  color: var(--buy);
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.manual-ltp-unit {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.manual-card-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.manual-pnl-toggle {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.manual-icon-btn {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 6px;
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.manual-icon-btn:disabled {
+  border-color: var(--border);
+  color: var(--text-dim);
+  opacity: 1;
+}
+
+.manual-lock-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.manual-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.manual-toggle-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.manual-toggle {
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  border: none;
+  border-radius: 0;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.manual-toggle:disabled {
+  opacity: 0.6;
+}
+
+.manual-toggle.active-buy {
+  background: var(--buy);
+  color: #06231a;
+}
+
+.manual-toggle.active-sell {
+  background: var(--sell);
+  color: #2b0a0e;
+}
+
+.manual-squareoff-btn {
+  margin-left: auto;
+}
+
+.manual-order-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+.manual-entry-group,
+.manual-exit-group {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.manual-entry-group label,
+.manual-exit-group label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.manual-entry-group select,
+.manual-entry-group input,
+.manual-exit-group select,
+.manual-exit-group input {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  min-width: 6rem;
+}
+
+.manual-entry-group input[type="number"],
+.manual-exit-group input[type="number"] {
+  min-width: 5.5rem;
+}
+
+button.btn-add {
+  background: var(--buy);
+  color: #06231a;
+}
+
+button.btn-save {
+  background: var(--save);
+  color: #fff;
+}
+
+button.btn-exit {
+  background: var(--sell);
+  color: #fff;
+}
+
+.manual-current-status {
+  margin-top: 0.7rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.manual-divider {
+  display: flex;
+  align-items: center;
+  margin: 1rem 0 0.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.manual-divider span {
+  margin: 0 auto;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.manual-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.manual-history-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface-raised);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.manual-history-meta {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
 }

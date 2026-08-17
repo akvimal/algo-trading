@@ -2,18 +2,38 @@
 // app/domain/models.py's SourceType) - anything else names an external
 // webhook provider (chartink, tradingview, or any new one).
 export type SourceType = string;
-export type Horizon = "intraday" | "swing" | "positional";
+export type Horizon = "intraday" | "positional"; // "swing" merged into these two 2026-08-17
 export type InstrumentType = "spot" | "future" | "option";
 export type StrategyStatus = "draft" | "backtesting" | "live" | "paused";
 // One [start, end) slice of a Strategy's optional signal-acceptance
 // window(s) - "HH:MM:SS" strings, end strictly after start.
 export type ActiveWindow = { start: string; end: string };
+// Mon-Sun abbreviations for Strategy.active_weekdays - a day-of-week
+// signal-acceptance filter, independent of ActiveWindow's time-of-day
+// one. Empty array (the default) means unrestricted.
+export type Weekday = "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
+export const ALL_WEEKDAYS: Weekday[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// The UI's own default-checked set for a new/never-configured strategy -
+// weekdays only (most strategies target NSE/MCX, which don't trade
+// weekends). A real, active restriction (excludes Sat/Sun), NOT a stand-in
+// for "unrestricted" the way checking all 7 would be - a CRYPTO strategy
+// meant to trade every day still needs Sat/Sun checked explicitly.
+export const DEFAULT_ACTIVE_WEEKDAYS: Weekday[] = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 export type Interval = "1min" | "3min" | "5min" | "15min" | "30min" | "60min" | "daily";
 export type StopLossMethod = "previous_candle" | "percent" | "indicator";
-// stop_loss_method='indicator' only - which computation to run. One
-// value today ('ema') - see backend app/domain/rule.py's
+// Backtest-only - "touch" (default, matches live execution's continuous
+// CMP monitoring) vs "close" (a what-if: only exits once a bar's CLOSE
+// crosses the stop level). See backend's ExitConfig docstring.
+export type StopLossConfirmation = "touch" | "close";
+// stop_loss_method='indicator' only - which computation to run. 'ema'/
+// 'supertrend' today - see backend app/domain/rule.py's
 // _STOP_LOSS_INDICATOR_PARAMS_MODELS.
-export type StopLossIndicatorType = "ema";
+export type StopLossIndicatorType = "ema" | "supertrend";
+// Shape depends on StopLossIndicatorType - 'ema' uses only `period`,
+// 'supertrend' uses both (ATR period + band multiplier). `multiplier`
+// stays optional here rather than a discriminated union so every existing
+// `{ period }`-shaped call site keeps compiling unchanged.
+export type StopLossIndicatorParams = { period: number; multiplier?: number };
 // 1/5/15/25/60 are Dhan's native intraday-candle intervals; 3min/30min
 // are locally aggregated from 1min bars (same as Interval's own 3min/
 // 30min support) - "daily" excluded, the intraday endpoints don't serve it.
@@ -80,13 +100,20 @@ export type UnderlyingType = "symbol" | "universe" | "symbol_list";
 // Indicators are their own entity (backend: signal_generation.indicators)
 // so one definition (e.g. "RSI 14") can be reused by any number of
 // rules - see docs/architecture.md. Only "rsi" exists today.
-export type IndicatorType = "rsi" | "structure" | "efficiency_ratio" | "adx" | "dmi_direction" | "ema_slope";
+export type IndicatorType = "rsi" | "structure" | "efficiency_ratio" | "adx" | "dmi_direction" | "ema_slope" | "supertrend";
 
-// The 5 market-regime checks (backend's app/domain/regime.py) as
+// The 6 market-regime checks (backend's app/domain/regime.py) as
 // independent Indicator types, referenced from a Rule via its own
 // regime_indicator_ids (see Rule below) rather than "rsi", which is
 // crossover-only (CrossoverRuleConfig.indicator_id).
-export const REGIME_INDICATOR_TYPES: IndicatorType[] = ["structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"];
+export const REGIME_INDICATOR_TYPES: IndicatorType[] = [
+  "structure",
+  "efficiency_ratio",
+  "adx",
+  "dmi_direction",
+  "ema_slope",
+  "supertrend",
+];
 export const INDICATOR_TYPE_LABELS: Record<IndicatorType, string> = {
   rsi: "RSI",
   structure: "Swing structure",
@@ -94,6 +121,7 @@ export const INDICATOR_TYPE_LABELS: Record<IndicatorType, string> = {
   adx: "ADX strength",
   dmi_direction: "DMI direction",
   ema_slope: "EMA slope",
+  supertrend: "SuperTrend",
 };
 
 // sma_period is RSI's own signal line (SMA of RSI) - bundled into the
@@ -115,6 +143,10 @@ export type DmiDirectionParams = { period: number };
 // ATR-normalized EMA slope (regime.check_ema_slope) - atr_period sizes
 // the normalizing ATR independently of ema_period.
 export type EmaSlopeParams = { ema_period: number; slope_lookback: number; slope_threshold: number; atr_period: number };
+// SuperTrend line vs. close (regime.check_supertrend) - same {period,
+// multiplier} shape as StopLossIndicatorType='supertrend' above, but a
+// separate, unrelated params type (different registry/concern).
+export type SupertrendParams = { period: number; multiplier: number };
 
 export type IndicatorParams =
   | RsiParams
@@ -122,7 +154,8 @@ export type IndicatorParams =
   | EfficiencyRatioParams
   | AdxParams
   | DmiDirectionParams
-  | EmaSlopeParams;
+  | EmaSlopeParams
+  | SupertrendParams;
 
 export type Indicator = {
   id: string;
@@ -263,17 +296,21 @@ export type Strategy = {
   stop_loss_percent: number | null;
   // stop_loss_method='indicator' only - see StopLossIndicatorType above.
   stop_loss_indicator_type: StopLossIndicatorType | null;
-  stop_loss_indicator_params: { period: number } | null;
+  stop_loss_indicator_params: StopLossIndicatorParams | null;
   target_percent: number | null;
   trailing_stop_enabled: boolean;
   // instrument_type='option' only - see OptionPositionStyle above.
   option_position_style: OptionPositionStyle;
   option_strike_moneyness: OptionStrikeMoneyness;
   option_sl_scope: OptionSlScope;
-  // instrument_type='option' only, nullable. When set, execution trades
-  // exactly this many lots instead of auto-sizing off capital/risk% -
-  // takes precedence over stop-loss-based sizing entirely.
-  option_fixed_lots: number | null;
+  // Every instrument_type, nullable (renamed from option_fixed_lots,
+  // which used to be options-only). When set, execution trades exactly
+  // this many LOTS instead of auto-sizing off capital/risk% - takes
+  // precedence over stop-loss-based sizing entirely. Number of lots, not
+  // raw underlying units - a no-op distinction for spot (lot_size is
+  // always 1 there, so this is really "quantity" for spot) but real for
+  // futures/options.
+  fixed_lots: number | null;
   contract_day_filter: ContractDayFilter;
   segment: Segment;
   duplicate_signal_policy: DuplicateSignalPolicy;
@@ -286,7 +323,15 @@ export type Strategy = {
   // per-segment execution setting now, not a Strategy field - see
   // docs/architecture.md).
   active_windows: ActiveWindow[];
+  // Optional day-of-week filter (e.g. ["Mon","Tue","Wed","Thu","Fri"] for
+  // weekdays-only) - independent of active_windows, same signal-
+  // ACCEPTANCE-only scope. Empty array means unrestricted.
+  active_weekdays: Weekday[];
   status: StrategyStatus;
+  // MAX(engine_runs.last_checked_at) across every symbol this strategy
+  // scans - null if the engine has never ticked it yet (e.g. just
+  // created, or paused since before it ever got its first poll).
+  last_scan_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -302,19 +347,20 @@ export type StrategyCreate = {
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
   stop_loss_indicator_type?: StopLossIndicatorType;
-  stop_loss_indicator_params?: { period: number };
+  stop_loss_indicator_params?: StopLossIndicatorParams;
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
-  option_fixed_lots?: number;
+  fixed_lots?: number;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
   // See Strategy's own comment above. Omitted = empty (unrestricted).
   active_windows?: ActiveWindow[];
+  active_weekdays?: Weekday[];
 };
 
 // source_type/exchange aren't here - not editable after creation, see
@@ -332,7 +378,7 @@ export type StrategyEdit = {
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
   stop_loss_indicator_type?: StopLossIndicatorType;
-  stop_loss_indicator_params?: { period: number };
+  stop_loss_indicator_params?: StopLossIndicatorParams;
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   option_position_style?: OptionPositionStyle;
@@ -340,18 +386,18 @@ export type StrategyEdit = {
   option_sl_scope?: OptionSlScope;
   // number | null (not just optional) - unlike every other field here,
   // this one can be explicitly cleared back to auto-sizing via
-  // {option_fixed_lots: null} - see the backend's update_strategy
-  // (model_fields_set-based) and ManualTab.tsx, which relies on this to
-  // vary an auto-provisioned strategy's lot count order-to-order.
-  option_fixed_lots?: number | null;
+  // {fixed_lots: null} - see the backend's update_strategy
+  // (model_fields_set-based).
+  fixed_lots?: number | null;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   duplicate_signal_policy?: DuplicateSignalPolicy;
   counter_signal_policy?: CounterSignalPolicy;
   // Omitted = unchanged; [] explicitly clears back to unrestricted - the
   // backend tells these apart via model_fields_set (same pattern
-  // option_fixed_lots above already established for a nullable field).
+  // fixed_lots above already established for a nullable field).
   active_windows?: ActiveWindow[];
+  active_weekdays?: Weekday[];
 };
 
 // A simulated paper trade from POST /rules/{id}/backtest - entry on a
@@ -386,14 +432,25 @@ export type TimeOfDayBucket = {
   win_rate: number;
 };
 
+// Always all 7 entries, Mon-Sun order, even for a weekday with zero
+// trades (e.g. Sat/Sun on an NSE rule) - see backend's _weekday_breakdown.
+export type WeekdayBucket = {
+  weekday: "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
+  trade_count: number;
+  hypothetical_pnl: number;
+  win_rate: number;
+};
+
 export type BacktestResult = {
   trade_count: number;
   hypothetical_pnl: number;
   win_rate: number;
   max_drawdown: number;
-  // Only present when the request set time_bucket_minutes - see
-  // backtestOverrides' own comment.
+  // Both only present when the request set time_bucket_minutes - see
+  // backtestOverrides' own comment. weekday_breakdown rides the same
+  // opt-in flag even though it has no "bucket size" of its own.
   time_of_day_breakdown?: TimeOfDayBucket[];
+  weekday_breakdown?: WeekdayBucket[];
   trades: BacktestTrade[];
 };
 
@@ -422,6 +479,9 @@ export type GridBacktestRow = {
   // Present only when the request swept stop_loss_indicator_param_grid -
   // which stop-loss params (e.g. EMA period) this particular row used.
   stop_loss_indicator_params?: Record<string, number>;
+  // Present only when the request swept stop_loss_percent_grid instead -
+  // the alternative sweep dimension for stop_loss_method='percent'.
+  stop_loss_percent?: number;
   trade_count?: number;
   hypothetical_pnl?: number;
   error?: string;
@@ -444,7 +504,7 @@ export type RuleBacktestRequest = {
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
   stop_loss_indicator_type?: StopLossIndicatorType;
-  stop_loss_indicator_params?: { period: number };
+  stop_loss_indicator_params?: StopLossIndicatorParams;
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   square_off_time?: string;
@@ -454,6 +514,17 @@ export type RuleBacktestRequest = {
   // this many clock-aligned minutes (e.g. 60 = hourly). Omitted means no
   // breakdown at all, not just an empty one.
   time_bucket_minutes?: number;
+  // "touch" (default) vs "close" - see StopLossConfirmation above.
+  stop_loss_confirmation?: StopLossConfirmation;
+  // Both-or-neither time-of-day window (HH:MM:SS, inclusive) a fresh
+  // signal must fall in to open a trade at all - date range stays from/to
+  // on the request itself, this is time-of-day only.
+  entry_window_start?: string;
+  entry_window_end?: string;
+  // Which weekdays a fresh signal is allowed to open a trade on - same
+  // "gates acceptance only" scope as entry_window_start/end, mirroring
+  // Strategy's own active_weekdays. Omitted/empty means unrestricted.
+  entry_weekdays?: Weekday[];
 };
 
 export type RuleBacktestGridRequest = {
@@ -462,14 +533,67 @@ export type RuleBacktestGridRequest = {
   stop_loss_interval?: StopLossInterval;
   stop_loss_percent?: number;
   stop_loss_indicator_type?: StopLossIndicatorType;
-  stop_loss_indicator_params?: { period: number };
+  stop_loss_indicator_params?: StopLossIndicatorParams;
   // A second, independent sweep dimension (stop_loss_method='indicator'
-  // only) - e.g. {"period": [10, 15, 20]} to try multiple EMA periods
-  // against every param_grid combination above (full cartesian product).
-  stop_loss_indicator_param_grid?: { period: number[] };
+  // only) - e.g. {"period": [10, 15, 20]} to try multiple EMA periods, or
+  // {"period": [7, 14], "multiplier": [2, 3]} for SuperTrend, against
+  // every param_grid combination above (full cartesian product).
+  stop_loss_indicator_param_grid?: Record<string, number[]>;
+  // The same second sweep dimension, for stop_loss_method='percent'
+  // instead - e.g. [1, 1.5, 2, 2.5] to try multiple SL percentages
+  // against every param_grid combination above. Mutually exclusive with
+  // stop_loss_indicator_param_grid in practice (one fixed stop_loss_method
+  // per request).
+  stop_loss_percent_grid?: number[];
   target_percent?: number;
   trailing_stop_enabled?: boolean;
   square_off_time?: string;
+  // Same as RuleBacktestRequest's own copies.
+  stop_loss_confirmation?: StopLossConfirmation;
+  entry_window_start?: string;
+  entry_window_end?: string;
+  entry_weekdays?: Weekday[];
+};
+
+// A frozen snapshot (request + result, as they were at save time) of a
+// completed POST /rules/{id}/backtest run - see backend's
+// SavedBacktestCreate/Out docstrings for why it's a verbatim record, not
+// a re-derived one, and why there's no update endpoint (saving again
+// after editing a duplicated one always creates a new row).
+export type SavedBacktestCreate = {
+  name: string;
+  from_date: string;
+  to_date: string;
+  request: RuleBacktestRequest;
+  result: BacktestResult | UniverseBacktestResult;
+};
+
+// GET /rules/{rule_id}/saved-backtests' list view - no request/result (a
+// pooled universe/symbol_list result can be large) - see
+// SavedBacktestOut for the full detail, fetched on demand when loaded.
+export type SavedBacktestSummary = {
+  id: string;
+  name: string;
+  from_date: string;
+  to_date: string;
+  trade_count: number | null;
+  hypothetical_pnl: number | null;
+  // Only present for a plain (non-pooled) single-symbol result - null for
+  // a pooled universe/symbol_list save (no top-level equivalent there).
+  win_rate: number | null;
+  max_drawdown: number | null;
+  created_at: string;
+};
+
+export type SavedBacktestOut = {
+  id: string;
+  rule_id: string;
+  name: string;
+  from_date: string;
+  to_date: string;
+  request: RuleBacktestRequest;
+  result: BacktestResult | UniverseBacktestResult;
+  created_at: string;
 };
 
 export type ProviderSignal = {
@@ -506,9 +630,25 @@ const SIGNAL_PROCESSING_BASE_URL = `http://${location.hostname}:${SIGNAL_PROCESS
 // for the universe picker below, same pattern as signal-processing above.
 const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
 
+// FastAPI's own error body shape is {"detail": "..."} - a specific reason
+// (e.g. DELETE /rules/{id}'s own "cannot delete rule - 2 strategies still
+// reference it") is far more useful to show than the bare status code
+// alone, which is all callers saw before this existed. Falls back to the
+// status code if the body isn't JSON or has no `detail` (a non-FastAPI
+// failure, e.g. a proxy/network-level error page).
+async function extractErrorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body && typeof body.detail === "string") return body.detail;
+  } catch {
+    // not JSON - fall through to the status code below
+  }
+  return `HTTP ${res.status}`;
+}
+
 async function asJson<T>(res: Response, what: string): Promise<T> {
   if (!res.ok) {
-    throw new Error(`${what} failed: ${res.status}`);
+    throw new Error(`${what} failed: ${await extractErrorDetail(res)}`);
   }
   return res.json();
 }
@@ -539,7 +679,7 @@ export async function updateIndicator(id: string, payload: IndicatorUpdate): Pro
 export async function deleteIndicator(id: string): Promise<void> {
   const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/indicators/${id}`, { method: "DELETE" });
   if (!res.ok) {
-    throw new Error(`DELETE /indicators/{id} failed: ${res.status}`);
+    throw new Error(`DELETE /indicators/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
@@ -569,7 +709,7 @@ export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule>
 export async function deleteRule(id: string): Promise<void> {
   const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}`, { method: "DELETE" });
   if (!res.ok) {
-    throw new Error(`DELETE /rules/{id} failed: ${res.status}`);
+    throw new Error(`DELETE /rules/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
@@ -586,6 +726,32 @@ export async function backtestRule(
     body: JSON.stringify(overrides),
   });
   return asJson(res, "POST /rules/{id}/backtest");
+}
+
+export async function listSavedBacktests(ruleId: string): Promise<SavedBacktestSummary[]> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${ruleId}/saved-backtests`);
+  return asJson(res, "GET /rules/{id}/saved-backtests");
+}
+
+export async function createSavedBacktest(ruleId: string, payload: SavedBacktestCreate): Promise<SavedBacktestOut> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${ruleId}/saved-backtests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "POST /rules/{id}/saved-backtests");
+}
+
+export async function getSavedBacktest(id: string): Promise<SavedBacktestOut> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/saved-backtests/${id}`);
+  return asJson(res, "GET /saved-backtests/{id}");
+}
+
+export async function deleteSavedBacktest(id: string): Promise<void> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`DELETE /saved-backtests/{id} failed: ${await extractErrorDetail(res)}`);
+  }
 }
 
 // Sweeps the rule's referenced indicator's params (e.g. RSI's period/
@@ -634,7 +800,7 @@ export async function updateStrategy(id: string, payload: StrategyEdit): Promise
 export async function deleteStrategy(id: string): Promise<void> {
   const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies/${id}`, { method: "DELETE" });
   if (!res.ok) {
-    throw new Error(`DELETE /strategies/{id} failed: ${res.status}`);
+    throw new Error(`DELETE /strategies/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
@@ -696,6 +862,30 @@ export async function fetchLtp(exchange: string, symbol: string): Promise<number
   return data.ltp;
 }
 
+// A logical underlying (e.g. "GOLDM", "BANKNIFTY", or a plain equity like
+// "RELIANCE") isn't always a directly-quotable Dhan/Delta symbol on its
+// own - MCX futures roll monthly and are keyed by their expiry-coded
+// contract (e.g. "GOLDM-04Sep2026-FUT"), and NSE index futures resolve to
+// a DIFFERENT chart vs trade symbol (chart the spot index, trade the
+// active-month future). chart_symbol/chart_exchange is what to quote a
+// live "underlying" price against; trade_symbol/trade_exchange (+
+// lot_size) is what execution actually resolves/sizes a future order
+// against server-side (position_manager.py's own open_manual_position -
+// same endpoint, same reasoning, see its 2026-08-14 BANKNIFTY fix note).
+export type ResolvedUnderlying = {
+  chart_symbol: string;
+  chart_exchange: string;
+  trade_symbol: string;
+  trade_exchange: string;
+  lot_size: number;
+  expiry: string | null;
+};
+
+export async function resolveUnderlying(segment: string, underlying: string): Promise<ResolvedUnderlying> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/resolve?${new URLSearchParams({ segment, underlying })}`);
+  return asJson<ResolvedUnderlying>(res, `GET /instruments/resolve (${segment}/${underlying})`);
+}
+
 // Real per-symbol lot multiplier (1 for instruments with no lot concept;
 // a real fraction for Delta Exchange India CRYPTO perpetuals, e.g.
 // BTCUSD=0.001) - used by the Manual tab's order-value preview and
@@ -705,6 +895,67 @@ export async function fetchLotSize(exchange: string, symbol: string): Promise<nu
   const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/lot-size?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ lot_size: number }>(res, `GET /instruments/lot-size (${exchange}/${symbol})`);
   return data.lot_size;
+}
+
+// Backs the Rules page's backtest form - what date range is actually
+// usable, per market-data's GET /candles/availability. NSE/MCX (Dhan)
+// report a fixed `max_days_per_request` (a hard per-call cap - real
+// history goes back years, but this codebase doesn't chunk around it for
+// spot/future backtests); CRYPTO (Delta) reports a live-probed
+// `earliest_available_date` instead (no per-call cap, but real depth is
+// shallower and grows over time) - exactly one of the two is ever set.
+// See market-data's app/domain/models.py DataAvailability for the full
+// rationale.
+export type DataAvailability = {
+  exchange: string;
+  symbol: string;
+  interval: string;
+  max_days_per_request: number | null;
+  earliest_available_date: string | null;
+  note: string;
+};
+
+export async function fetchDataAvailability(exchange: string, symbol: string, interval: string): Promise<DataAvailability> {
+  const res = await fetch(
+    `${MARKET_DATA_BASE_URL}/candles/availability?${new URLSearchParams({ exchange, symbol, interval })}`,
+  );
+  return asJson<DataAvailability>(res, `GET /candles/availability (${exchange}/${symbol}/${interval})`);
+}
+
+// Whether GET /candles/history's own in-memory cache currently holds a
+// live entry for this exact (exchange, symbol, interval, from, to) -
+// same direct-from-browser call as fetchDataAvailability above (segment/
+// underlying passed straight through, no signal-generation proxy - the
+// provider resolves the symbol internally either way).
+export type CandleCacheStatus = {
+  cached: boolean;
+  fetched_at: string | null;
+};
+
+export async function fetchCandleCacheStatus(
+  exchange: string,
+  symbol: string,
+  interval: string,
+  from: string,
+  to: string,
+): Promise<CandleCacheStatus> {
+  const res = await fetch(
+    `${MARKET_DATA_BASE_URL}/candles/cache-status?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
+  );
+  return asJson<CandleCacheStatus>(res, `GET /candles/cache-status (${exchange}/${symbol}/${interval})`);
+}
+
+// Evicts that one cache entry - a manual "force refresh" so the next
+// backtest run for this exact symbol/interval/range genuinely re-fetches
+// from the provider instead of serving the cached copy.
+export async function clearCandleCache(exchange: string, symbol: string, interval: string, from: string, to: string): Promise<void> {
+  const res = await fetch(
+    `${MARKET_DATA_BASE_URL}/candles/cache/clear?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    throw new Error(`POST /candles/cache/clear failed: ${await extractErrorDetail(res)}`);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -747,6 +998,15 @@ export type ManualPosition = {
   stop_loss_price: number | null;
   target_price: number | null;
   trailing_stop_enabled: boolean;
+  // Set when stop_loss_price came from a method (percent/previous_candle/
+  // indicator) rather than a flat caller-supplied price - see
+  // StopLossTab's own "Trail SL" checkbox. null for a fixed stop_loss_price
+  // (or no stop-loss at all).
+  stop_loss_method: StopLossMethod | null;
+  stop_loss_interval: StopLossInterval | null;
+  stop_loss_percent: number | null;
+  stop_loss_indicator_type: StopLossIndicatorType | null;
+  stop_loss_indicator_params: StopLossIndicatorParams | null;
   exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | null;
   square_off_time: string | null;
   option_group_id: string | null;
@@ -797,15 +1057,33 @@ export type ManualOptionGroup = {
 // whatever status resulted (OPEN or REJECTED) - a rejection is a
 // legitimate persisted outcome here, not an HTTP error, same convention
 // the whole resolved-order pipeline already uses.
-export async function createManualPosition(payload: {
-  segment: Segment;
-  symbol: string;
-  action: "BUY" | "SELL";
-  instrument_type: "spot" | "future";
-  price: number;
-  quantity?: number;
+// Two mutually exclusive ways to protect the position (see execution's own
+// ManualPositionCreate): a flat stop_loss_price, OR stop_loss_method + its
+// own sibling fields ("Trail SL" checkbox in the frontend) - reuses the
+// same StopLossMethod/StopLossInterval/StopLossIndicatorType/
+// StopLossIndicatorParams types the Strategy form's own stop-loss fields
+// already use above, since it's the identical concept now reachable from
+// the Manual tab too.
+export type ManualStopLossConfig = {
   stop_loss_price?: number;
-}): Promise<ManualPosition> {
+  stop_loss_method?: StopLossMethod;
+  stop_loss_interval?: StopLossInterval;
+  stop_loss_percent?: number;
+  stop_loss_indicator_type?: StopLossIndicatorType;
+  stop_loss_indicator_params?: StopLossIndicatorParams;
+  trailing_stop_enabled?: boolean;
+};
+
+export async function createManualPosition(
+  payload: {
+    segment: Segment;
+    symbol: string;
+    action: "BUY" | "SELL";
+    instrument_type: "spot" | "future";
+    price: number;
+    quantity?: number;
+  } & ManualStopLossConfig,
+): Promise<ManualPosition> {
   const res = await fetch(`${EXECUTION_BASE_URL}/positions/manual`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -815,12 +1093,15 @@ export async function createManualPosition(payload: {
 }
 
 // Generically useful, not manual-only - edits SL on any already-open
-// position (execution has no other route for this).
-export async function updateStopLoss(positionId: string, stopLossPrice: number): Promise<ManualPosition> {
+// position (execution has no other route for this), including attaching
+// or replacing a trailing method-based stop after the fact - at least one
+// of stop_loss_price/stop_loss_method is required (unlike
+// createManualPosition, where "neither" just means no stop-loss at all).
+export async function updateStopLoss(positionId: string, config: ManualStopLossConfig): Promise<ManualPosition> {
   const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ stop_loss_price: stopLossPrice }),
+    body: JSON.stringify(config),
   });
   return asJson(res, "PUT /positions/{id}/stop-loss");
 }

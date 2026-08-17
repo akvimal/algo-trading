@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, Numeric, Text, func
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -62,8 +62,8 @@ class Strategy(Base):
     option_strike_moneyness = Column(Text, nullable=False, default="ATM")
     # instrument_type='option' only - combined vs per-leg SL/target, see OptionSlScope in app/domain/models.py.
     option_sl_scope = Column(Text, nullable=False, default="combined")
-    # instrument_type='option' only, nullable - see option_fixed_lots in app/domain/models.py.
-    option_fixed_lots = Column(Integer, nullable=True)
+    # Every instrument_type, nullable - see fixed_lots in app/domain/models.py.
+    fixed_lots = Column(Integer, nullable=True)
     # instrument_type in ('future', 'option') only - see ContractDayFilter in app/domain/models.py.
     contract_day_filter = Column(Text, nullable=False, default="any")
     segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO
@@ -73,6 +73,10 @@ class Strategy(Base):
     # none_as_null concern here unlike stop_loss_indicator_params above,
     # since this column is never assigned a bare None.
     active_windows = Column(JSONB, nullable=False, default=list)
+    # Optional day-of-week filter - see app/domain/models.py's Weekday/
+    # active_weekdays comment. Same always-a-real-array convention as
+    # active_windows above.
+    active_weekdays = Column(JSONB, nullable=False, default=list)
     # Passed through unchanged on resolved-order to execution - see
     # DuplicateSignalPolicy/CounterSignalPolicy in app/domain/models.py.
     duplicate_signal_policy = Column(Text, nullable=False, default="skip")
@@ -113,3 +117,22 @@ class EngineRun(Base):
     symbol = Column(Text, primary_key=True)
     last_signal_candle_ts = Column(TIMESTAMP(timezone=True))
     last_checked_at = Column(TIMESTAMP(timezone=True))
+
+
+class SavedBacktest(Base):
+    """A saved snapshot (request + result, frozen at save time) of a
+    POST /rules/{id}/backtest run - see infra/postgres/init/
+    03-signal-generation.sql for why this stores the result too, not just
+    the request."""
+
+    __tablename__ = "saved_backtests"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.rules.id"), nullable=False)
+    name = Column(Text, nullable=False)
+    from_date = Column(Date, nullable=False)
+    to_date = Column(Date, nullable=False)
+    request = Column(JSONB, nullable=False)
+    result = Column(JSONB, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

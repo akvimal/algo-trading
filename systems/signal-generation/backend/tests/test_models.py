@@ -181,7 +181,7 @@ def test_strategy_create_indicator_method_rejects_unknown_indicator_type():
         StrategyCreate(
             name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
             stop_loss_method="indicator", stop_loss_interval="5min",
-            stop_loss_indicator_type="supertrend", stop_loss_indicator_params={"period": 20},
+            stop_loss_indicator_type="parabolic_sar", stop_loss_indicator_params={"period": 20},
         )
 
 
@@ -194,6 +194,25 @@ def test_strategy_create_valid_indicator_with_trailing():
     )
     assert s.stop_loss_indicator_type == "ema"
     assert s.stop_loss_indicator_params == {"period": 20}
+
+
+def test_strategy_create_valid_indicator_supertrend():
+    s = StrategyCreate(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+        stop_loss_method="indicator", stop_loss_interval="5min",
+        stop_loss_indicator_type="supertrend", stop_loss_indicator_params={"period": 10, "multiplier": 3.0},
+    )
+    assert s.stop_loss_indicator_type == "supertrend"
+    assert s.stop_loss_indicator_params == {"period": 10, "multiplier": 3.0}
+
+
+def test_strategy_create_indicator_method_rejects_supertrend_missing_multiplier():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            stop_loss_method="indicator", stop_loss_interval="5min",
+            stop_loss_indicator_type="supertrend", stop_loss_indicator_params={"period": 10},
+        )
 
 
 def test_validate_stop_loss_fields_no_method_allows_no_extras():
@@ -259,26 +278,36 @@ def test_strategy_create_rejects_unknown_option_sl_scope():
         )
 
 
-def test_strategy_create_defaults_option_fixed_lots_to_none():
+def test_strategy_create_defaults_fixed_lots_to_none():
     s = StrategyCreate(
         name="x", source_type="in_house", horizon="intraday", instrument_type="option", rule_id=RULE_ID,
     )
-    assert s.option_fixed_lots is None
+    assert s.fixed_lots is None
 
 
-def test_strategy_create_accepts_explicit_option_fixed_lots():
+def test_strategy_create_accepts_explicit_fixed_lots():
     s = StrategyCreate(
         name="x", source_type="in_house", horizon="intraday", instrument_type="option", rule_id=RULE_ID,
-        option_fixed_lots=5,
+        fixed_lots=5,
     )
-    assert s.option_fixed_lots == 5
+    assert s.fixed_lots == 5
 
 
-def test_strategy_create_rejects_non_positive_option_fixed_lots():
+def test_strategy_create_accepts_fixed_lots_for_spot():
+    # fixed_lots is no longer options-only (renamed from option_fixed_lots)
+    # - a spot strategy can set it too (labeled "Qty" in the frontend).
+    s = StrategyCreate(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+        fixed_lots=5,
+    )
+    assert s.fixed_lots == 5
+
+
+def test_strategy_create_rejects_non_positive_fixed_lots():
     with pytest.raises(ValidationError):
         StrategyCreate(
             name="x", source_type="in_house", horizon="intraday", instrument_type="option", rule_id=RULE_ID,
-            option_fixed_lots=0,
+            fixed_lots=0,
         )
 
 
@@ -437,3 +466,44 @@ def test_strategy_update_accepts_empty_active_windows_list_explicitly():
     # itself just needs to accept [] as a valid value.
     u = StrategyUpdate(active_windows=[])
     assert u.active_windows == []
+
+
+# --- active_weekdays (per-strategy day-of-week signal-acceptance filter) ----------------------
+
+
+def test_strategy_create_active_weekdays_empty_by_default():
+    s = StrategyCreate(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+    )
+    assert s.active_weekdays == []
+
+
+def test_strategy_create_accepts_weekdays_only():
+    s = StrategyCreate(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+        active_weekdays=["Mon", "Tue", "Wed", "Thu", "Fri"],
+    )
+    assert s.active_weekdays == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+
+def test_strategy_create_rejects_unrecognized_weekday():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            active_weekdays=["Monday"],
+        )
+
+
+def test_strategy_update_active_weekdays_omitted_by_default():
+    u = StrategyUpdate()
+    assert u.active_weekdays is None
+
+
+def test_strategy_update_accepts_active_weekdays():
+    u = StrategyUpdate(active_weekdays=["Sat", "Sun"])
+    assert u.active_weekdays == ["Sat", "Sun"]
+
+
+def test_strategy_update_accepts_empty_active_weekdays_list_explicitly():
+    u = StrategyUpdate(active_weekdays=[])
+    assert u.active_weekdays == []

@@ -23,8 +23,11 @@ params):
   no special-case "reset" logic needed.
 - LTF trigger: while armed, the first LTF candle to close beyond its OWN
   Donchian channel (`ltf_breakout_period`) in the armed direction opens
-  the position. Initial stop = the confirming HTF candle's low (long) or
-  high (short), set once at entry, never recalculated.
+  the position. Initial stop = the LTF candle immediately BEFORE the
+  triggering one's low (long) or high (short), set once at entry, never
+  recalculated - HTF only ever arms the setup, both entry and the stop
+  are entirely LTF-derived (matches execution's own live `previous_candle`
+  enforcement exactly, see the module docstring's "Live enforcement gap").
 - Reversal exit: while a position is open, watches every subsequent HTF
   candle for a single-bar flip (close below the previous HTF candle's
   close, for a long - the mirror for a short) - NOT an N-bar breakout,
@@ -38,14 +41,22 @@ real position-closing has no mechanism for the reversal exit - only
 `previous_candle`/`percent` stop-loss, a flat target%, and square-off. The
 initial stop IS enforced live, by reusing execution's existing
 `previous_candle` method with `stop_loss_interval` set to this rule's own
-`htf_interval` (see app/api/routes/strategies.py, which auto-sets this at
+`ltf_interval` (see app/api/routes/strategies.py, which auto-sets this at
 create time) - the reversal exit only ever runs inside the backtest
-simulation here."""
+simulation here. HTF is arm-only (setup confirmation + reversal-exit
+level) - entry AND the initial stop are both LTF-only, matching
+execution's own `previous_candle` semantics exactly: the initial stop is
+the LTF candle immediately BEFORE the one that triggered entry (see
+simulate_breakout_trades' own `ltf_candles[ltf_idx - 1]` below), not the
+triggering candle's own low/high and not anything HTF-derived - keeping
+backtest and live in agreement is the whole point of reusing
+`previous_candle` for live enforcement at all."""
 
 from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Optional
 
+from app.domain.backtest import _max_drawdown, _win_rate
 from app.domain.rule import BreakoutRuleConfig
 from app.domain.regime import compute_ema
 from app.domain.rules import Bias, CandleClose, SimulatedTrade
@@ -223,7 +234,17 @@ def simulate_breakout_trades(
                         pending_entry.direction == "bullish" and dc_high is not None and bar.close > dc_high
                     ) or (pending_entry.direction == "bearish" and dc_low is not None and bar.close < dc_low)
                     if triggered:
-                        initial_stop = htf_candles[k].low if pending_entry.direction == "bullish" else htf_candles[k].high
+                        # The LTF candle immediately before the triggering
+                        # one (ltf_idx - 1), NOT the triggering candle
+                        # itself and NOT anything HTF-derived - matches
+                        # execution's own live previous_candle stop-loss
+                        # exactly (see module docstring's "Live enforcement
+                        # gap"). Always safe to index: dc_high/dc_low above
+                        # are only non-None from ltf_idx >= ltf_breakout_period
+                        # (>1 by RuleConfig's own validation), so ltf_idx - 1
+                        # is never negative here.
+                        prev_ltf = ltf_candles[ltf_idx - 1]
+                        initial_stop = prev_ltf.low if pending_entry.direction == "bullish" else prev_ltf.high
                         position = {
                             "direction": pending_entry.direction,
                             "entry_price": bar.close,
@@ -257,6 +278,8 @@ def replay_breakout(
     return {
         "trade_count": len(trades),
         "hypothetical_pnl": sum(t.pnl for t in trades),
+        "win_rate": _win_rate(trades),
+        "max_drawdown": _max_drawdown(trades),
         "trades": [
             {
                 "entry_time": t.entry_time,

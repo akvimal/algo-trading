@@ -21,8 +21,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
+from app.config import settings
 from app.domain import breakout, range_breakout
 from app.domain.indicators import evaluate_regime_indicator, regime_indicator_warmup
+from app.domain.models import WEEKDAY_NAMES
 from app.domain.rule import (
     BreakoutRuleConfig,
     RangeBreakoutRuleConfig,
@@ -92,6 +94,18 @@ def _is_within_active_window(now_time: time, active_windows: list[dict]) -> bool
     if not active_windows:
         return True
     return any(time.fromisoformat(w["start"]) <= now_time <= time.fromisoformat(w["end"]) for w in active_windows)
+
+
+def _matches_active_weekdays(today: date, active_weekdays: list[str]) -> bool:
+    """True if there's no weekday filter at all (empty list - no
+    restriction) or today's weekday name is in active_weekdays (e.g.
+    ["Mon","Tue","Wed","Thu","Fri"] for weekdays-only). Same pure
+    efficiency-optimization role _is_within_active_window has above - not
+    the authoritative check, which is resolve()'s own
+    matches_active_weekday (app/domain/resolution/pipeline.py there)."""
+    if not active_weekdays:
+        return True
+    return WEEKDAY_NAMES[today.weekday()] in active_weekdays
 
 
 def _matches_contract_day_filter(
@@ -175,6 +189,20 @@ def _regime_warmup_bars(db: Session, rule_row: db_models.Rule) -> int:
     return widest
 
 
+def _breakout_ltf_settled(ltf_candle_start: datetime, ltf_interval: str) -> bool:
+    """Whether settings.breakout_ltf_settle_seconds have passed since the
+    LTF candle STARTING at ltf_candle_start actually CLOSED (start +
+    interval, not the start time itself) - a real-world buffer against
+    the provider still finalizing that candle's OHLC for a few seconds
+    after our own timestamp math says it's complete. Pure/stateless so
+    it's directly testable without faking a live clock through the whole
+    _run_one_breakout orchestration - see Settings.
+    breakout_ltf_settle_seconds' own comment for the "why" in full."""
+    close_time = ltf_candle_start + timedelta(minutes=_INTERVAL_MINUTES[ltf_interval])
+    settle_deadline = close_time + timedelta(seconds=settings.breakout_ltf_settle_seconds)
+    return datetime.now(timezone.utc) >= settle_deadline
+
+
 def _run_one_breakout(
     db: Session,
     strategy: db_models.Strategy,
@@ -193,9 +221,20 @@ def _run_one_breakout(
     execution has no mechanism to enforce it on a real position. The
     initial stop-loss IS enforced live, via execution's existing
     `previous_candle` method - app/api/routes/strategies.py auto-sets
-    Strategy.stop_loss_interval to this rule's own htf_interval whenever a
-    strategy links to a breakout rule, for exactly that reason, so nothing
-    extra needs to happen here.
+    Strategy.stop_loss_interval to this rule's own ltf_interval whenever a
+    strategy links to a breakout rule (HTF only arms the setup; entry and
+    the stop are both LTF-only), for exactly that reason, so nothing extra
+    needs to happen here.
+
+    A fresh trigger is only acted on once at least
+    settings.breakout_ltf_settle_seconds have passed since the triggering
+    LTF candle's own scheduled CLOSE (not its start timestamp) - a real-
+    world buffer against the provider still finalizing that candle's OHLC
+    for a few seconds after our own timestamp math says it's complete
+    (see Settings.breakout_ltf_settle_seconds' own comment). Not acting
+    yet just defers, not skips - last_signal_candle_ts is only set once a
+    signal actually posts, so the very next tick past the settle window
+    still catches it.
 
     `symbol` is the one target this call checks - rule_row.underlying
     itself for a plain symbol-scoped rule, or one constituent of
@@ -234,6 +273,9 @@ def _run_one_breakout(
         return False
     bias, ltf_ts = result
     latest_ts = datetime.fromisoformat(ltf_ts)
+
+    if not _breakout_ltf_settled(latest_ts, rule.ltf_interval):
+        return False  # too soon past this LTF candle's own close - try again next tick
 
     if run.last_signal_candle_ts is not None and run.last_signal_candle_ts == latest_ts:
         return False  # already acted on this exact completed LTF bar
@@ -528,6 +570,8 @@ def run_live_tick(
     failed = 0
     for strategy, rule_row in strategy_rule_pairs:
         if not _is_within_active_window(now_ist, strategy.active_windows):
+            continue
+        if not _matches_active_weekdays(today_ist, strategy.active_weekdays):
             continue
         for symbol in _target_symbols(rule_row, get_universe_constituents):
             checked += 1

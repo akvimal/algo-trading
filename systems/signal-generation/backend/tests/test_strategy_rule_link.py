@@ -1,6 +1,7 @@
 """Tests for app/api/routes/strategies.py's _stop_loss_fields_for_rule -
 the new consolidated helper that forces a breakout-linked strategy's
-stop-loss scheme onto the rule's own htf_interval, replacing the old
+stop-loss scheme onto the rule's own ltf_interval (HTF only ever arms the
+setup - entry and the stop are both LTF-only), replacing the old
 Strategy-vs-rule_config cross-check this logic used to be split across
 (see app/domain/rule.py's validate_breakout_interval_consistency for the
 other half, now a pure Rule-internal check). Same "plain fakes, no real
@@ -39,7 +40,7 @@ def test_stop_loss_fields_for_rule_forces_previous_candle_scheme_for_breakout():
         rule_row, None, None, None, False
     )
     assert method == "previous_candle"
-    assert interval == "15min"  # the rule's own htf_interval
+    assert interval == "3min"  # the rule's own ltf_interval
     assert percent is None
     assert trailing is False
     assert indicator_type is None
@@ -52,19 +53,19 @@ def test_stop_loss_fields_for_rule_overrides_whatever_was_requested_for_breakout
         rule_row, "indicator", None, None, True, "ema", {"period": 20}
     )
     assert method == "previous_candle"
-    assert interval == "15min"
+    assert interval == "3min"
     assert percent is None
     assert trailing is False
     assert indicator_type is None
     assert indicator_params is None
 
 
-def test_stop_loss_fields_for_rule_rejects_unsupported_htf_interval():
+def test_stop_loss_fields_for_rule_rejects_unsupported_ltf_interval():
     # "daily" is a valid Interval (Rule condition timeframes allow it) but
     # deliberately excluded from StopLossInterval - the intraday
     # candle-history endpoints stop-loss fetching relies on don't serve
     # it at all (see StopLossInterval's own comment, app/domain/models.py).
-    rule_row = FakeRule(rule_config={**BREAKOUT_RULE_CONFIG, "htf_interval": "daily"})
+    rule_row = FakeRule(rule_config={**BREAKOUT_RULE_CONFIG, "ltf_interval": "daily"})
     with pytest.raises(HTTPException) as exc_info:
         _stop_loss_fields_for_rule(rule_row, None, None, None, False)
     assert exc_info.value.status_code == 422

@@ -1,12 +1,15 @@
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from app.adapters.db import models as db_models
+from app.config import settings
 from app.domain import engine as engine_module
 from app.domain.engine import (
+    _breakout_ltf_settled,
     _is_within_active_window,
+    _matches_active_weekdays,
     _matches_contract_day_filter,
     _regime_confirmed,
     _regime_warmup_bars,
@@ -115,6 +118,23 @@ def test_is_within_active_window_matches_any_of_multiple_windows():
     assert _is_within_active_window(time(11, 30), windows) is False  # between the two
 
 
+# --- _matches_active_weekdays: run_live_tick's own day-of-week skip-optimization --------------
+
+
+def test_matches_active_weekdays_no_filter_always_true():
+    assert _matches_active_weekdays(date(2026, 8, 17), []) is True  # a Monday
+
+
+def test_matches_active_weekdays_true_when_todays_weekday_listed():
+    weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    assert _matches_active_weekdays(date(2026, 8, 17), weekdays) is True  # Monday
+
+
+def test_matches_active_weekdays_false_when_todays_weekday_not_listed():
+    weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    assert _matches_active_weekdays(date(2026, 8, 22), weekdays) is False  # a Saturday
+
+
 # --- _matches_contract_day_filter: futures-side enforcement of Strategy.contract_day_filter --
 
 
@@ -138,6 +158,40 @@ def test_matches_contract_day_filter_expiry_false_when_expiry_unknown():
 def test_matches_contract_day_filter_only_applies_to_futures():
     # instrument_type='spot' has no expiry concept - never restricted.
     assert _matches_contract_day_filter("spot", "NSE", "expiry", "2026-09-04", date(2026, 9, 3)) is True
+
+
+# --- _breakout_ltf_settled: real-world settle buffer past an LTF candle's own close -----------
+
+
+def test_breakout_ltf_settled_false_for_a_still_forming_candle():
+    now = datetime.now(timezone.utc)
+    assert _breakout_ltf_settled(now, "15min") is False  # closes 15min from now - nowhere near settled
+
+
+def test_breakout_ltf_settled_false_immediately_at_close():
+    now = datetime.now(timezone.utc)
+    ltf_start = now - timedelta(minutes=15)  # closes exactly now - no settle buffer elapsed yet
+    assert _breakout_ltf_settled(ltf_start, "15min") is False
+
+
+def test_breakout_ltf_settled_false_just_before_settle_deadline():
+    now = datetime.now(timezone.utc)
+    ltf_start = now - timedelta(minutes=15, seconds=settings.breakout_ltf_settle_seconds - 1)
+    assert _breakout_ltf_settled(ltf_start, "15min") is False
+
+
+def test_breakout_ltf_settled_true_once_past_settle_deadline():
+    now = datetime.now(timezone.utc)
+    ltf_start = now - timedelta(minutes=15, seconds=settings.breakout_ltf_settle_seconds + 1)
+    assert _breakout_ltf_settled(ltf_start, "15min") is True
+
+
+def test_breakout_ltf_settled_scales_with_interval_duration():
+    # A 60min candle that started 16 minutes ago hasn't even closed yet
+    # (needs 60), regardless of the settle buffer.
+    now = datetime.now(timezone.utc)
+    ltf_start = now - timedelta(minutes=16)
+    assert _breakout_ltf_settled(ltf_start, "60min") is False
 
 
 def test_matches_contract_day_filter_crypto_always_true_regardless_of_expiry():

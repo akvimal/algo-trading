@@ -31,5 +31,15 @@ class Settings(BaseSettings):
     # same bar every tick, not this poll cadence.
     engine_poll_seconds: int = 60
 
+    # A breakout rule's LTF trigger candle must be at least this many
+    # seconds past its own scheduled close before the engine will act on
+    # it - a real-world settle buffer against the provider's own
+    # publishing lag (its API can still be finalizing a candle's OHLC a
+    # few seconds after our own timestamp math says it "should" be
+    # complete). engine_poll_seconds' 60s cadence already absorbs most of
+    # this in practice, but a tick landing right at the boundary has no
+    # such cushion - see app/domain/engine.py's _run_one_breakout.
+    breakout_ltf_settle_seconds: int = 5
+
 
 settings = Settings()

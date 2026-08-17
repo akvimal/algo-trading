@@ -99,6 +99,17 @@ def test_replay_breakout_matches_simulate():
     assert result["trades"][0]["exit_reason"] == "end_of_data"
 
 
+def test_replay_breakout_includes_win_rate_and_max_drawdown():
+    """The docstring promises "same shape as backtest.replay's" - replay()
+    always includes these two, so replay_breakout must too (previously
+    didn't, which crashed the frontend's per-symbol table with "Cannot
+    read properties of undefined (reading 'toFixed')" for any pooled
+    universe/symbol_list backtest using a BreakoutRuleConfig)."""
+    result = replay_breakout(RULE, _entry_fixture_htf(), _entry_fixture_ltf())
+    assert result["win_rate"] == pytest.approx(100.0)
+    assert result["max_drawdown"] == pytest.approx(0.0)
+
+
 # --- arm expiry: no LTF trigger within the window -> must not fire later -----------------------
 
 
@@ -142,14 +153,14 @@ def test_simulate_breakout_trades_newer_confirmation_replaces_pending_arm():
 
     assert len(trades) == 1
     assert trades[0].direction == "bullish"
-    # initial stop only observable via a stop-loss hit - open a follow-up
-    # scenario check instead: re-run with a bar whose low pierces k=3's
-    # low (115) but NOT k=2's low (99), and confirm it stops out.
-    htf_with_dip = htf + [_htf(75, close=118, high=120, low=116)]
-    ltf_with_dip = ltf + [_ltf(65, close=116, wick=3)]  # low = 113, below 115 but nowhere near 99
-    trades_with_dip = simulate_breakout_trades(RULE, htf_with_dip, ltf_with_dip)
-    assert trades_with_dip[0].exit_reason == "initial_stop_loss"
-    assert trades_with_dip[0].exit_price == 115.0  # k=3's low, not k=2's (99)
+    # Entered off k=3's arm (not k=2's, which never triggered before being
+    # replaced) - confirmed by which window's LTF breakout actually fired.
+    # The initial stop itself is LTF-only now (see
+    # test_simulate_breakout_trades_initial_stop_loss_hit and
+    # test_simulate_breakout_trades_initial_stop_is_ltf_not_htf_derived),
+    # so it isn't part of what this test is checking - whether entry
+    # correctly followed the newer (k=3) arm, not k=2's stale one.
+    assert trades[0].entry_time == (BASE + timedelta(minutes=55)).isoformat()  # ltf index 11
 
 
 # --- initial stop-loss ---------------------------------------------------------------------------
@@ -158,14 +169,48 @@ def test_simulate_breakout_trades_newer_confirmation_replaces_pending_arm():
 def test_simulate_breakout_trades_initial_stop_loss_hit():
     htf = _entry_fixture_htf()
     # Same entry as the clean-entry fixture (triggers at ltf index 6,
-    # entry_price=103, initial_stop = htf[2].low = 99) - append a bar
-    # whose low pierces 99, still within window k=2 ([09:45, 10:00) =
-    # offsets [30, 45)).
+    # entry_price=103, initial_stop = ltf[5].low = 99, the LTF candle
+    # immediately before the triggering one - htf[2].low is ALSO 99 in
+    # this fixture, coincidentally, see
+    # test_simulate_breakout_trades_initial_stop_is_ltf_not_htf_derived
+    # for a fixture where they differ, proving the source is really LTF)
+    # - append a bar whose low pierces 99, still within window k=2
+    # ([09:45, 10:00) = offsets [30, 45)).
     ltf = _entry_fixture_ltf() + [_ltf(41, close=97, wick=3)]  # low = 94, below 99
     trades = simulate_breakout_trades(RULE, htf, ltf)
     assert len(trades) == 1
     assert trades[0].exit_reason == "initial_stop_loss"
     assert trades[0].exit_price == 99.0
+
+
+def test_simulate_breakout_trades_initial_stop_is_ltf_not_htf_derived():
+    """Proves the stop source is genuinely the LTF candle before entry,
+    not the confirming HTF candle - crafts htf[2].low and ltf[5].low to
+    be clearly DIFFERENT values (99 vs 80), then confirms a stop-loss
+    exit fires at the LTF-derived level (80), not the HTF one (99), even
+    though a bar piercing 99 would already trip the HTF-derived stop if
+    that were still the source."""
+    htf = _entry_fixture_htf()  # k=2 arms bullish (htf[2].low=99); k=3 only bounds the window
+    ltf = _entry_fixture_ltf()  # entry triggers at index 6 (close=103), window k=2 = indices 6,7,8
+    ltf[5] = CandleClose(timestamp=ltf[5].timestamp, close=100, high=101, low=80)  # ltf[5].low = 80, far below htf[2]'s 99
+
+    # A bar whose low is between the two candidate stops (90: below HTF's
+    # 99, but still above LTF's 80), still within window k=2 (offsets
+    # [30,45) -> index 8 at offset 40 is the last one in-window) - if the
+    # stop were still HTF-derived this would incorrectly trip it; it must
+    # NOT, since the real (LTF-derived) stop is 80.
+    ltf.append(_ltf(41, close=95, wick=5))  # low = 90 - pierces 99 but not 80
+    trades = simulate_breakout_trades(RULE, htf, ltf)
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "end_of_data"  # did NOT stop out at the old HTF-derived level (99)
+
+    # Now append a bar that actually pierces the LTF-derived stop (80),
+    # still within the same window.
+    ltf_with_real_dip = ltf + [_ltf(42, close=82, wick=5)]  # low = 77, below 80
+    trades_with_dip = simulate_breakout_trades(RULE, htf, ltf_with_real_dip)
+    assert trades_with_dip[0].exit_reason == "initial_stop_loss"
+    assert trades_with_dip[0].exit_price == 80.0
 
 
 # --- reversal exit: closes only, never flips ----------------------------------------------------

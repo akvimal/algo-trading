@@ -13,7 +13,7 @@ breakout.py/range_breakout.py/indicators.py import their RuleConfig
 variants from here now, unchanged otherwise - this file only relocates
 existing shapes/validators, evaluation logic is untouched."""
 
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
@@ -25,6 +25,12 @@ Interval = Literal["1min", "3min", "5min", "15min", "30min", "60min", "daily"]
 # so Strategy can import it without this module depending back on
 # Strategy's own module.
 Segment = Literal["NSE", "MCX", "CRYPTO"]
+# Same "defined here, not app/domain/models.py" reasoning as Segment above
+# - RuleBacktestRequest/RuleBacktestGridRequest's own entry_weekdays needs
+# this without importing Strategy's identical Weekday (app/domain/
+# models.py), which would create the exact cycle this module's docstring
+# already avoids for Segment/RuleSummary.
+Weekday = Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # in_house only. 'symbol': underlying names one traded symbol. 'universe':
 # underlying instead names an index-constituent group key (e.g.
 # "NIFTYBANK", resolved via market-data's GET
@@ -42,13 +48,15 @@ Segment = Literal["NSE", "MCX", "CRYPTO"]
 # symbol_list scan can back a spot, future, or option Strategy alike.
 UnderlyingType = Literal["symbol", "universe", "symbol_list"]
 
-IndicatorType = Literal["rsi", "structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"]
+IndicatorType = Literal["rsi", "structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope", "supertrend"]
 
-# The 5 IndicatorTypes valid in Rule.regime_indicator_ids - "rsi" is a
+# The 6 IndicatorTypes valid in Rule.regime_indicator_ids - "rsi" is a
 # crossover-only slot (CrossoverRuleConfig.indicator_id), never a regime
 # one. Shared by app/api/routes/rules.py's route-layer validation and
 # app/domain/engine.py/backtest.py's resolution of regime_indicator_ids.
-REGIME_INDICATOR_TYPES: frozenset[str] = frozenset({"structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope"})
+REGIME_INDICATOR_TYPES: frozenset[str] = frozenset(
+    {"structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope", "supertrend"}
+)
 
 
 class RsiParams(BaseModel):
@@ -111,6 +119,19 @@ class EmaSlopeParams(BaseModel):
     atr_period: int = Field(gt=1)
 
 
+class SupertrendParams(BaseModel):
+    """SuperTrend line vs. close (see regime.check_supertrend) - the 6th
+    regime check, added 2026-08-15. Same {period, multiplier} shape as
+    Strategy.stop_loss_indicator_type='supertrend's own SupertrendStopParams
+    below, but deliberately a SEPARATE model: that one is keyed into
+    _STOP_LOSS_INDICATOR_PARAMS_MODELS (a different registry, different
+    concern - trailing a Strategy's stop-loss, not a Rule's regime
+    filter), not this one."""
+
+    period: int = Field(gt=1)
+    multiplier: float = Field(gt=0)
+
+
 # Strategy.stop_loss_method='indicator' params - a SEPARATE registry from
 # _INDICATOR_PARAMS_MODELS below (different concern: a Rule's own
 # condition/regime-filter indicators vs. what trails a Strategy's
@@ -130,8 +151,22 @@ class EmaStopParams(BaseModel):
     period: int = Field(gt=1)
 
 
+class SupertrendStopParams(BaseModel):
+    """stop_loss_indicator_type='supertrend' - ATR period + band
+    multiplier, trailing stop is the latest SuperTrend line value (see
+    app/domain/regime.py compute_supertrend). `period` is deliberately
+    named the same as EmaStopParams' own field (not e.g. atr_period) -
+    every warmup-bar-count call site (app/api/routes/rules.py
+    _sl_candles_for, execution's _indicator_history_window) reads
+    params["period"] generically, with no per-type dispatch of its own."""
+
+    period: int = Field(gt=1)
+    multiplier: float = Field(gt=0)
+
+
 _STOP_LOSS_INDICATOR_PARAMS_MODELS: dict[str, type[BaseModel]] = {
     "ema": EmaStopParams,
+    "supertrend": SupertrendStopParams,
 }
 
 
@@ -155,7 +190,9 @@ def validate_stop_loss_indicator_params(indicator_type: str, raw: dict) -> BaseM
 # Indicators are their own entity (signal_generation.indicators) so one
 # definition (e.g. "RSI 14", "ADX 14/20") can be reused by any number of
 # rules - see docs/architecture.md.
-IndicatorParams = Union[RsiParams, StructureParams, EfficiencyRatioParams, AdxParams, DmiDirectionParams, EmaSlopeParams]
+IndicatorParams = Union[
+    RsiParams, StructureParams, EfficiencyRatioParams, AdxParams, DmiDirectionParams, EmaSlopeParams, SupertrendParams
+]
 
 _INDICATOR_PARAMS_MODELS: dict[str, type[BaseModel]] = {
     "rsi": RsiParams,
@@ -164,6 +201,7 @@ _INDICATOR_PARAMS_MODELS: dict[str, type[BaseModel]] = {
     "adx": AdxParams,
     "dmi_direction": DmiDirectionParams,
     "ema_slope": EmaSlopeParams,
+    "supertrend": SupertrendParams,
 }
 
 
@@ -333,6 +371,18 @@ def parse_symbol_list(underlying: Optional[str]) -> list[str]:
     return [s.strip() for s in underlying.split(",") if s.strip()]
 
 
+def validate_entry_window(entry_window_start: Optional[time], entry_window_end: Optional[time]) -> None:
+    """Both-or-neither for a backtest request's optional time-of-day entry
+    filter - see backtest.py's ExitConfig.entry_window_start/end for what
+    this actually gates. Shared by RuleBacktestRequest/
+    RuleBacktestGridRequest, same "not cross-validated beyond shape" scope
+    as their other exit-config fields."""
+    if (entry_window_start is None) != (entry_window_end is None):
+        raise ValueError("entry_window_start and entry_window_end must both be set, or both omitted")
+    if entry_window_start is not None and entry_window_end is not None and entry_window_start > entry_window_end:
+        raise ValueError("entry_window_start must not be after entry_window_end")
+
+
 def validate_rule_symbol_list_fields(underlying_type: str, underlying: Optional[str]) -> None:
     """underlying_type='symbol_list' needs at least one real symbol once
     parsed - catches "underlying=','" or "underlying=' '" at create/update
@@ -450,7 +500,7 @@ class RuleBacktestRequest(BaseModel):
     instrument_type: Literal["spot", "future", "option"] = "spot"
     # instrument_type='option' only - WEEK vs MONTH expiry choice, see
     # app/api/routes/rules.py's option backtest path.
-    horizon: Literal["intraday", "swing", "positional"] = "intraday"
+    horizon: Literal["intraday", "positional"] = "intraday"
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
     stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0, lt=100)
@@ -474,6 +524,27 @@ class RuleBacktestRequest(BaseModel):
     # same as before this field existed. le=1440 (a full day) - anything
     # wider isn't really "time of day" bucketing anymore.
     time_bucket_minutes: Optional[int] = Field(default=None, gt=0, le=1440)
+    # "touch" (default, matches live) vs "close" (backtest-only what-if) -
+    # see ExitConfig's own docstring in app/domain/backtest.py for why
+    # these produce genuinely different, not just cosmetically different,
+    # results.
+    stop_loss_confirmation: Literal["touch", "close"] = "touch"
+    # Both-or-neither time-of-day window (inclusive) a fresh signal must
+    # fall in to open a trade at all - the date range is still from/to on
+    # the route itself, this is time-of-day only, same scope as Strategy's
+    # own active_windows. See validate_entry_window/ExitConfig.
+    entry_window_start: Optional[time] = None
+    entry_window_end: Optional[time] = None
+    # Which weekdays a fresh signal is allowed to open a trade on - same
+    # "gates acceptance only" scope as entry_window_start/end above,
+    # mirroring Strategy's own active_weekdays. Empty (default) means no
+    # restriction, same convention active_weekdays itself uses.
+    entry_weekdays: list[Weekday] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_entry_window(self) -> "RuleBacktestRequest":
+        validate_entry_window(self.entry_window_start, self.entry_window_end)
+        return self
 
 
 class RuleBacktestGridRequest(BaseModel):
@@ -488,7 +559,14 @@ class RuleBacktestGridRequest(BaseModel):
     there's no option-backtest variant of grid search. Same exit-config
     field set as RuleBacktestRequest (all 3 stop_loss_method values,
     including 'indicator') - _exit_config_for/_sl_candles_for in
-    app/api/routes/rules.py accept either request type interchangeably."""
+    app/api/routes/rules.py accept either request type interchangeably.
+
+    Stop-loss values are sweepable too, not just the rule's own indicator
+    params - stop_loss_indicator_param_grid below (stop_loss_method=
+    'indicator') or stop_loss_percent_grid (stop_loss_method='percent'),
+    whichever matches the chosen method - the same tuning workflow
+    available for the rule's own crossover indicator, extended to
+    whichever stop-loss a Strategy backing this rule would actually use."""
 
     param_grid: dict[str, list[int]] = Field(min_length=1)
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
@@ -508,6 +586,85 @@ class RuleBacktestGridRequest(BaseModel):
     # stop_loss_indicator_params - every key the sweep needs must be named
     # here (see expand_stop_loss_grid's own docstring on why).
     stop_loss_indicator_param_grid: Optional[dict[str, list[int]]] = None
+    # A second sweep dimension for stop_loss_method='percent' instead -
+    # candidate stop-loss percent values, e.g. [1, 1.5, 2, 2.5] to try 4
+    # different SL percentages against every combination in param_grid
+    # above (same full-cartesian-product shape as
+    # stop_loss_indicator_param_grid, just a flat list since 'percent' has
+    # only the one tunable value - see app/domain/backtest.py's
+    # grid_search). Mutually exclusive with stop_loss_indicator_param_grid
+    # in practice (stop_loss_method is one fixed choice for the whole
+    # request - the route layer only consults whichever grid matches it),
+    # not cross-validated here for the same "not cross-validated" reasons
+    # the other stop_loss_* fields on this model already have. Omitted
+    # means stop_loss_percent above applies as one fixed value to every
+    # combo, same as before this field existed.
+    stop_loss_percent_grid: Optional[list[float]] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: bool = False
     square_off_time: Optional[time] = None
+    # Same as RuleBacktestRequest's own copies - see there for what these
+    # actually do (backtest.py's ExitConfig).
+    stop_loss_confirmation: Literal["touch", "close"] = "touch"
+    entry_window_start: Optional[time] = None
+    entry_window_end: Optional[time] = None
+    entry_weekdays: list[Weekday] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_entry_window(self) -> "RuleBacktestGridRequest":
+        validate_entry_window(self.entry_window_start, self.entry_window_end)
+        return self
+
+
+# A saved snapshot of a completed POST /rules/{id}/backtest run - both the
+# request body (criteria) and the response it produced (result), frozen
+# at save time rather than re-derived on read (market data keeps arriving,
+# so replaying the same request later could silently give different
+# numbers - see infra/postgres/init/03-signal-generation.sql's own
+# comment on signal_generation.saved_backtests). request/result are
+# stored as opaque dicts, not re-validated against RuleBacktestRequest/the
+# response shape here - the whole point is a verbatim record of what was
+# actually reviewed, not a re-derived one. "Duplicate and edit" is a
+# frontend-only operation (prefills the backtest form from an existing
+# row's request); POST always creates a new row, there's no update
+# endpoint - saving again after editing never overwrites a prior snapshot,
+# see app/api/routes/saved_backtests.py.
+class SavedBacktestCreate(BaseModel):
+    name: str = Field(min_length=1)
+    from_date: date
+    to_date: date
+    request: dict
+    result: dict
+
+
+# GET /rules/{rule_id}/saved-backtests' list view - deliberately without
+# request/result (a pooled universe/symbol_list result's by_symbol trade
+# lists can be large) - trade_count/hypothetical_pnl/win_rate/max_drawdown
+# are pulled out of result at the route layer for an at-a-glance list
+# without the full payload. win_rate/max_drawdown are only present at the
+# top level for a plain (non-pooled) single-symbol result - a pooled
+# universe/symbol_list result has no top-level equivalent (only per-
+# by_symbol-entry ones), so both are None there, same null-safe handling
+# trade_count/hypothetical_pnl already have. See SavedBacktestOut for the
+# full detail, fetched on demand.
+class SavedBacktestSummary(BaseModel):
+    id: str
+    name: str
+    from_date: date
+    to_date: date
+    trade_count: Optional[int] = None
+    hypothetical_pnl: Optional[float] = None
+    win_rate: Optional[float] = None
+    max_drawdown: Optional[float] = None
+    created_at: datetime
+
+
+class SavedBacktestOut(BaseModel):
+    id: str
+    rule_id: str
+    name: str
+    from_date: date
+    to_date: date
+    request: dict
+    result: dict
+    created_at: datetime

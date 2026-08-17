@@ -1,7 +1,9 @@
 import uuid
+from datetime import datetime
 from typing import Optional, get_args
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
@@ -11,6 +13,7 @@ from app.domain.models import (
     StrategyCreate,
     StrategyOut,
     StrategyUpdate,
+    validate_active_weekdays,
     validate_active_windows,
     validate_contract_day_filter_fields,
     validate_stop_loss_fields,
@@ -20,7 +23,17 @@ from app.domain.rule import BreakoutRuleConfig, RuleSummary, validate_rule_confi
 router = APIRouter()
 
 
-def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> StrategyOut:
+def _last_scan_at(db: Session, strategy_id: uuid.UUID) -> Optional[datetime]:
+    """MAX(engine_runs.last_checked_at) across every symbol this one
+    strategy scans - see StrategyOut.last_scan_at's own docstring. Single-
+    strategy lookup, used by GET /strategies/{id} - list_strategies below
+    does the batched equivalent in one query instead of N of these."""
+    return db.query(func.max(db_models.EngineRun.last_checked_at)).filter(
+        db_models.EngineRun.strategy_id == strategy_id
+    ).scalar()
+
+
+def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule], last_scan_at: Optional[datetime] = None) -> StrategyOut:
     return StrategyOut(
         id=str(row.id),
         name=row.name,
@@ -40,13 +53,15 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule]) -> Stra
         option_position_style=row.option_position_style,
         option_strike_moneyness=row.option_strike_moneyness,
         option_sl_scope=row.option_sl_scope,
-        option_fixed_lots=row.option_fixed_lots,
+        fixed_lots=row.fixed_lots,
         contract_day_filter=row.contract_day_filter,
         segment=row.segment,
         duplicate_signal_policy=row.duplicate_signal_policy,
         counter_signal_policy=row.counter_signal_policy,
         active_windows=row.active_windows,
+        active_weekdays=row.active_weekdays,
         status=row.status,
+        last_scan_at=last_scan_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -77,9 +92,11 @@ def _stop_loss_fields_for_rule(
     rather than accepting whatever stop_loss_method/interval was
     requested - the initial stop is enforced live by reusing execution's
     existing `previous_candle` mechanism with stop_loss_interval set to
-    the rule's own htf_interval (see app/domain/breakout.py's module
-    docstring on the live enforcement gap). Validates (422 if not) that
-    htf_interval is one of execution's supported stop-loss intervals -
+    the rule's own ltf_interval (see app/domain/breakout.py's module
+    docstring on the live enforcement gap) - HTF only ever arms the setup,
+    entry and the stop are both entirely LTF-derived, so live enforcement
+    must read the LTF series too, not HTF. Validates (422 if not) that
+    ltf_interval is one of execution's supported stop-loss intervals -
     otherwise this strategy could never actually be supported live, even
     with the reversal-exit gap accepted. Every other rule type passes the
     requested fields through unchanged - only breakout forces this.
@@ -88,15 +105,15 @@ def _stop_loss_fields_for_rule(
     if rule_row is not None and rule_row.rule_config is not None:
         rule = validate_rule_config(rule_row.rule_config)
         if isinstance(rule, BreakoutRuleConfig):
-            if rule.htf_interval not in get_args(StopLossInterval):
+            if rule.ltf_interval not in get_args(StopLossInterval):
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"htf_interval '{rule.htf_interval}' isn't one of execution's supported stop-loss intervals "
+                        f"ltf_interval '{rule.ltf_interval}' isn't one of execution's supported stop-loss intervals "
                         f"({', '.join(get_args(StopLossInterval))}) - required so the initial stop-loss can be enforced live"
                     ),
                 )
-            return "previous_candle", rule.htf_interval, None, False, None, None
+            return "previous_candle", rule.ltf_interval, None, False, None, None
     return stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled, stop_loss_indicator_type, stop_loss_indicator_params
 
 
@@ -135,12 +152,13 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         option_position_style=payload.option_position_style,
         option_strike_moneyness=payload.option_strike_moneyness,
         option_sl_scope=payload.option_sl_scope,
-        option_fixed_lots=payload.option_fixed_lots,
+        fixed_lots=payload.fixed_lots,
         contract_day_filter=payload.contract_day_filter,
         segment=payload.segment,
         duplicate_signal_policy=payload.duplicate_signal_policy,
         counter_signal_policy=payload.counter_signal_policy,
         active_windows=[w.model_dump(mode="json") for w in payload.active_windows],
+        active_weekdays=list(payload.active_weekdays),
         status="draft",
     )
     db.add(row)
@@ -178,7 +196,15 @@ def list_strategies(source_type: str | None = None, db: Session = Depends(get_db
     if source_type:
         q = q.filter(db_models.Strategy.source_type == source_type)
     rows = q.order_by(db_models.Strategy.created_at.desc()).all()
-    return [_to_out(strategy_row, rule_row) for strategy_row, rule_row in rows]
+
+    # One batched GROUP BY instead of N _last_scan_at() calls - same
+    # "avoid N+1" reasoning the Rule outerjoin above already follows.
+    last_scan_rows = db.query(db_models.EngineRun.strategy_id, func.max(db_models.EngineRun.last_checked_at)).group_by(
+        db_models.EngineRun.strategy_id
+    ).all()
+    last_scan_by_strategy = dict(last_scan_rows)
+
+    return [_to_out(strategy_row, rule_row, last_scan_by_strategy.get(strategy_row.id)) for strategy_row, rule_row in rows]
 
 
 @router.get("/strategies/{strategy_id}", response_model=StrategyOut)
@@ -194,7 +220,7 @@ def get_strategy(strategy_id: str, db: Session = Depends(get_db)):
     if row is None:
         raise HTTPException(status_code=404, detail="strategy not found")
     rule_row = db.get(db_models.Rule, row.rule_id) if row.rule_id is not None else None
-    return _to_out(row, rule_row)
+    return _to_out(row, rule_row, _last_scan_at(db, parsed_id))
 
 
 @router.patch("/strategies/{strategy_id}", response_model=StrategyOut)
@@ -257,10 +283,10 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     # the same reused strategy, which "omitted or null means unchanged"
     # can't express. model_fields_set distinguishes "key present in the
     # request body" from "key absent entirely" - only an explicit
-    # {"option_fixed_lots": null} clears it; omitting the key still leaves
+    # {"fixed_lots": null} clears it; omitting the key still leaves
     # it untouched exactly as before.
-    if "option_fixed_lots" in payload.model_fields_set:
-        row.option_fixed_lots = payload.option_fixed_lots
+    if "fixed_lots" in payload.model_fields_set:
+        row.fixed_lots = payload.fixed_lots
     if payload.contract_day_filter is not None:
         row.contract_day_filter = payload.contract_day_filter
     if payload.segment is not None:
@@ -274,6 +300,9 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     # model_fields_set rather than "is not None" like every field above.
     if "active_windows" in payload.model_fields_set:
         row.active_windows = [w.model_dump(mode="json") for w in payload.active_windows]
+    # Same omitted-vs-explicit-empty distinction as active_windows above.
+    if "active_weekdays" in payload.model_fields_set:
+        row.active_weekdays = list(payload.active_weekdays)
 
     try:
         validate_stop_loss_fields(
@@ -286,6 +315,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         )
         validate_contract_day_filter_fields(row.contract_day_filter, row.instrument_type)
         validate_active_windows(row.active_windows)
+        validate_active_weekdays(row.active_weekdays)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -314,4 +344,4 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
 
     db.commit()
     db.refresh(row)
-    return _to_out(row, rule_row)
+    return _to_out(row, rule_row, _last_scan_at(db, row.id))

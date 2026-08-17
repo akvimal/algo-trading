@@ -21,7 +21,7 @@ from typing import Literal, Optional
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from app.domain.rule import RuleSummary, Segment, validate_stop_loss_indicator_params
 
@@ -35,7 +35,7 @@ from app.domain.rule import RuleSummary, Segment, validate_stop_loss_indicator_p
 # app/domain/rule.py) - the provider decides when a signal fires, not this
 # system.
 SourceType = Annotated[str, Field(min_length=1)]
-Horizon = Literal["intraday", "swing", "positional"]
+Horizon = Literal["intraday", "positional"]  # "swing" merged into these two 2026-08-17 - never had distinct behavior anywhere (see docs/architecture.md)
 InstrumentType = Literal["spot", "future", "option"]
 # instrument_type='option' only - which fixed template signal-processing's
 # choose_strategy builds: 'spread' (bull_call_spread/bear_put_spread, Phase
@@ -75,7 +75,7 @@ Status = Literal["draft", "backtesting", "live", "paused"]
 # 'indicator': trailing stop is the latest value of a generic, pluggable
 # indicator computation (see app/domain/rule.py's
 # validate_stop_loss_indicator_params/_STOP_LOSS_INDICATOR_PARAMS_MODELS
-# - one type today, 'ema', more addable there without touching this
+# - 'ema'/'supertrend' today, more addable there without touching this
 # Literal again). Uses stop_loss_interval (candle timeframe, reused) plus
 # the two new stop_loss_indicator_* fields below - never stop_loss_percent.
 StopLossMethod = Literal["previous_candle", "percent", "indicator"]
@@ -150,6 +150,27 @@ def validate_active_windows(windows: list[dict]) -> list[ActiveWindow]:
     return [ActiveWindow(**w) for w in windows]
 
 
+# Mon-Sun abbreviations, ISO order (Monday first) - matches Python's own
+# date.weekday()/datetime.weekday() convention (0=Monday...6=Sunday), so
+# every consumer (engine.py, signal-processing's pipeline.py) can index
+# straight from date.weekday() without a separate lookup table.
+Weekday = Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+WEEKDAY_NAMES: tuple[Weekday, ...] = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+_active_weekdays_adapter = TypeAdapter(list[Weekday])
+
+
+def validate_active_weekdays(weekdays: list) -> list[Weekday]:
+    """Re-validates a Strategy row's raw JSONB active_weekdays against the
+    Weekday literal - used by the PATCH route handler to re-check the
+    merged post-update row, same pattern validate_active_windows uses for
+    its own field. Raises pydantic.ValidationError (a 422 at the route
+    layer) for an unrecognized weekday abbreviation. Duplicates aren't an
+    error (harmless redundancy), same as active_windows' own overlap
+    tolerance."""
+    return _active_weekdays_adapter.validate_python(weekdays)
+
+
 def validate_stop_loss_fields(
     method: Optional[str],
     interval: Optional[str],
@@ -219,14 +240,15 @@ class StrategyCreate(BaseModel):
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"
-    # instrument_type='option' only, harmlessly ignored otherwise (same
-    # convention as the other option_* fields above). When set, execution
-    # trades exactly this many lots instead of auto-sizing off capital/risk%
-    # - takes precedence over stop-loss-based sizing entirely, even when a
-    # stop-loss is also configured. See docs/architecture.md § "Why position
-    # sizing lives in execution, not signal-generation" for why this is a
-    # deliberate, narrow exception.
-    option_fixed_lots: Optional[int] = Field(default=None, gt=0)
+    # Optional, every instrument_type (renamed from option_fixed_lots,
+    # which used to be options-only - see docs/architecture.md's
+    # "fixed_lots" section for the widening). When set, execution trades
+    # exactly this many LOTS instead of auto-sizing off capital/risk% -
+    # takes precedence over stop-loss-based sizing entirely, even when a
+    # stop-loss is also configured. Number of lots, not raw underlying
+    # units - a no-op distinction for spot (lot_size is always 1 there,
+    # so this is really "quantity" for spot) but real for futures/options.
+    fixed_lots: Optional[int] = Field(default=None, gt=0)
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment = "NSE"
     # Every source_type carries these, same as stop_loss_* above -
@@ -243,6 +265,16 @@ class StrategyCreate(BaseModel):
     # position can still close outside every window via stop-loss/target/
     # square-off/counter-signal, unaffected by this field entirely.
     active_windows: list[ActiveWindow] = Field(default_factory=list)
+    # Optional day-of-week filter (e.g. ["Mon","Tue","Wed","Thu","Fri"] for
+    # weekdays-only), every source_type, independent of active_windows -
+    # both gate signal ACCEPTANCE only, same "doesn't affect closing an
+    # already-open position" rule active_windows itself has (stop-loss/
+    # target/square-off/counter-signal are all unaffected). Empty list
+    # (the default) means unrestricted - every day is accepted. A signal
+    # is accepted if today's weekday is in this list at all, no ANY-of-
+    # multiple-ranges concept needed since a weekday is already atomic
+    # (unlike active_windows' time-of-day ranges).
+    active_weekdays: list[Weekday] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_stop_loss_consistency(self) -> "StrategyCreate":
@@ -307,7 +339,7 @@ class StrategyUpdate(BaseModel):
     option_position_style: Optional[OptionPositionStyle] = None
     option_strike_moneyness: Optional[OptionStrikeMoneyness] = None
     option_sl_scope: Optional[OptionSlScope] = None
-    option_fixed_lots: Optional[int] = Field(default=None, gt=0)
+    fixed_lots: Optional[int] = Field(default=None, gt=0)
     contract_day_filter: Optional[ContractDayFilter] = None
     segment: Optional[Segment] = None
     duplicate_signal_policy: Optional[DuplicateSignalPolicy] = None
@@ -316,9 +348,12 @@ class StrategyUpdate(BaseModel):
     # every other field on this model - but active_windows=[] is ALSO a
     # meaningful, distinct value (clear back to unrestricted), which plain
     # Optional can't express. The route handler checks model_fields_set
-    # (same pattern option_fixed_lots already established) to tell
+    # (same pattern fixed_lots already established) to tell
     # "omitted" from "explicitly set to []" apart.
     active_windows: Optional[list[ActiveWindow]] = None
+    # Same omitted-vs-explicit-empty distinction as active_windows above -
+    # the route handler checks model_fields_set for this field too.
+    active_weekdays: Optional[list[Weekday]] = None
 
 
 class StrategyOut(BaseModel):
@@ -344,12 +379,21 @@ class StrategyOut(BaseModel):
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"
-    option_fixed_lots: Optional[int] = None
+    fixed_lots: Optional[int] = None
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
     active_windows: list[ActiveWindow] = Field(default_factory=list)
+    active_weekdays: list[Weekday] = Field(default_factory=list)
     status: Status
+    # MAX(engine_runs.last_checked_at) across every symbol this strategy
+    # scans (a universe-scoped one has one EngineRun row per constituent) -
+    # None if the engine has never ticked it yet, e.g. just created, or an
+    # external strategy (engine_runs is in-house-engine bookkeeping only).
+    # Populated by the route layer (app/api/routes/strategies.py), not a
+    # real column on this row - EngineRun is keyed by (strategy_id,
+    # symbol), not something _to_out can read off `row` directly.
+    last_scan_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

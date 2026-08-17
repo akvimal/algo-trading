@@ -19,7 +19,7 @@ from app.adapters.quotes.client import (
     resolve_symbol_by_security_id,
     resolve_underlying,
 )
-from app.domain.models import ManualOptionPositionCreate, StopLossUpdate
+from app.domain.models import ManualOptionPositionCreate, SpotStopLossUpdate, StopLossUpdate
 from app.domain.option_position_manager import (
     check_option_group_exits,
     compute_group_unrealized_pnl,
@@ -28,6 +28,7 @@ from app.domain.option_position_manager import (
     square_off_all_open_option_groups,
     square_off_due_option_groups,
     square_off_option_group,
+    update_group_spot_stop_loss,
     update_group_stop_loss,
 )
 from app.domain.position_manager import load_settings
@@ -35,7 +36,13 @@ from app.domain.position_manager import load_settings
 router = APIRouter()
 
 
-def _group_to_out(row: db_models.OptionPositionGroup, legs: list[dict], live_combined_price: Optional[float] = None, unrealized_pnl: Optional[float] = None) -> dict:
+def _group_to_out(
+    row: db_models.OptionPositionGroup,
+    legs: list[dict],
+    live_combined_price: Optional[float] = None,
+    unrealized_pnl: Optional[float] = None,
+    live_spot_price: Optional[float] = None,
+) -> dict:
     return {
         "id": str(row.id),
         "signal_id": str(row.signal_id),
@@ -53,18 +60,31 @@ def _group_to_out(row: db_models.OptionPositionGroup, legs: list[dict], live_com
         "combined_stop_loss_price": float(row.combined_stop_loss_price) if row.combined_stop_loss_price is not None else None,
         "combined_target_price": float(row.combined_target_price) if row.combined_target_price is not None else None,
         "sl_scope": row.sl_scope,
+        "entry_spot_price": float(row.entry_spot_price) if row.entry_spot_price is not None else None,
+        "spot_stop_loss_price": float(row.spot_stop_loss_price) if row.spot_stop_loss_price is not None else None,
         "live_combined_price": live_combined_price,
+        # Fresh underlying LTP (with_live_pnl=true only) - distinct from
+        # entry_spot_price (frozen at open) - lets the UI show "how far is
+        # spot from my stop" while setting/reviewing spot_stop_loss_price.
+        "live_spot_price": live_spot_price,
         "unrealized_pnl": unrealized_pnl,
         "status": row.status,
         "rejection_reason": row.rejection_reason,
         "exit_reason": row.exit_reason,
         "pnl": float(row.pnl) if row.pnl is not None else None,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
+        # Named entry_time/exit_time (not created_at) to match
+        # positions.py's _position_to_out - the frontend's date filter and
+        # Orders-grid sort reuse the same field names across both.
+        "entry_time": row.created_at.isoformat() if row.created_at is not None else None,
+        "exit_time": row.exit_time.isoformat() if row.exit_time is not None else None,
         "legs": legs,
     }
 
 
-def _leg_dict(pos: db_models.Position) -> dict:
+def _leg_dict(
+    pos: db_models.Position, live_price: Optional[float] = None, live_unrealized_pnl: Optional[float] = None
+) -> dict:
     return {
         "id": str(pos.id),
         "symbol": pos.symbol,
@@ -78,6 +98,10 @@ def _leg_dict(pos: db_models.Position) -> dict:
         # for every other option leg) in 'combined' mode.
         "stop_loss_price": float(pos.stop_loss_price) if pos.stop_loss_price is not None else None,
         "target_price": float(pos.target_price) if pos.target_price is not None else None,
+        # with_live_pnl=true only - this leg's own live premium/P&L, not
+        # just the group's combined figure. See compute_group_unrealized_pnl.
+        "live_price": live_price,
+        "unrealized_pnl": live_unrealized_pnl,
     }
 
 
@@ -106,15 +130,21 @@ def list_option_groups(
     legs = legs_by_group(db, rows)
     mtm = compute_group_unrealized_pnl(rows, legs, get_ltp_batch) if with_live_pnl else {}
 
-    return [
-        _group_to_out(
-            r,
-            [_leg_dict(pos) for pos in legs.get(r.id, {}).values()],
-            live_combined_price=mtm[r.id][0] if r.id in mtm else None,
-            unrealized_pnl=mtm[r.id][1] if r.id in mtm else None,
+    result = []
+    for r in rows:
+        group_mtm = mtm.get(r.id)
+        leg_mtm = group_mtm["legs"] if group_mtm else {}
+        leg_dicts = [_leg_dict(pos, *leg_mtm.get(pos.id, (None, None))) for pos in legs.get(r.id, {}).values()]
+        result.append(
+            _group_to_out(
+                r,
+                leg_dicts,
+                live_combined_price=group_mtm["combined_price"] if group_mtm else None,
+                unrealized_pnl=group_mtm["unrealized_pnl"] if group_mtm else None,
+                live_spot_price=group_mtm["spot_price"] if group_mtm else None,
+            )
         )
-        for r in rows
-    ]
+    return result
 
 
 @router.post("/option-groups/manual")
@@ -167,8 +197,33 @@ def edit_group_stop_loss(group_id: str, payload: StopLossUpdate, db: Session = D
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
     if row.sl_scope != "combined":
         raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing SL here")
+    if payload.stop_loss_method is not None:
+        raise HTTPException(status_code=422, detail="stop_loss_method is not supported for options - use stop_loss_price")
 
     row = update_group_stop_loss(db, parsed_id, payload.stop_loss_price)
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/spot-stop-loss")
+def edit_group_spot_stop_loss(group_id: str, payload: SpotStopLossUpdate, db: Session = Depends(get_db)):
+    """A stop on the UNDERLYING's own price - independent of sl_scope/the
+    premium-based endpoint above, see update_group_spot_stop_loss's own
+    docstring. 404/409 conventions match edit_group_stop_loss; no
+    sl_scope restriction (a spot stop is orthogonal to how the premium
+    side is monitored, so it's available regardless)."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
+
+    row = update_group_spot_stop_loss(db, parsed_id, payload.spot_stop_loss_price)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 

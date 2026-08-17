@@ -205,10 +205,16 @@ def open_option_group(
         db.commit()
         return row
 
-    symbols_to_quote = [long_symbol] + ([short_symbol] if short_symbol else [])
+    # order.symbol (the underlying, e.g. "NIFTY") rides along in the SAME
+    # batched quote call - one extra symbol, no extra provider round trip.
+    # Best-effort only (see entry_spot_price's own comment in
+    # infra/postgres/init/02-execution.sql) - a missing underlying quote
+    # doesn't reject the group the way a missing LEG quote does below.
+    symbols_to_quote = [long_symbol, order.symbol] + ([short_symbol] if short_symbol else [])
     quotes = get_ltp_batch(order.exchange, symbols_to_quote)
     long_premium = quotes.get(long_symbol)
     short_premium = quotes.get(short_symbol) if short_symbol else 0.0
+    entry_spot_price = quotes.get(order.symbol)
     if long_premium is None or (short_symbol and short_premium is None):
         row = _reject_group(db, order, signal_id, "could not fetch a live quote for one or both option legs")
         db.commit()
@@ -263,13 +269,13 @@ def open_option_group(
             db.commit()
             return row
         effective_capital = effective_capital / settings.usdinr_rate
-    # option_fixed_lots (Strategy-level, options only) overrides auto-sizing
-    # below entirely, but the balance check still runs against its real
-    # cost, not a 1-lot minimum - a fixed count that's genuinely
+    # fixed_lots (Strategy-level, every instrument_type) overrides
+    # auto-sizing below entirely, but the balance check still runs against
+    # its real cost, not a 1-lot minimum - a fixed count that's genuinely
     # unaffordable against current_balance still rejects cleanly, same
     # "paper trading still respects the simulated balance" reasoning every
     # other rejection case here already has.
-    required_lots = order.option_fixed_lots if order.option_fixed_lots is not None else 1
+    required_lots = order.fixed_lots if order.fixed_lots is not None else 1
     if effective_capital < net_debit * lot_size * required_lots:
         capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
         row = _reject_group(
@@ -312,13 +318,14 @@ def open_option_group(
     sizing_price = long_premium if sl_scope == "individual" else net_debit
     sizing_stop_loss_price = long_stop_loss_price if sl_scope == "individual" else combined_stop_loss_price
 
-    if order.option_fixed_lots is not None:
-        # Strategy-level override (options only) - trades exactly this many
-        # lots instead of auto-sizing off capital/risk% - takes precedence
-        # over stop-loss-based sizing entirely, even when a stop-loss is
-        # also configured. The stop-loss price above is still computed and
-        # stored as normal; only its role in SIZING is bypassed here.
-        quantity = order.option_fixed_lots * lot_size
+    if order.fixed_lots is not None:
+        # Strategy-level override (every instrument_type) - trades exactly
+        # this many lots instead of auto-sizing off capital/risk% - takes
+        # precedence over stop-loss-based sizing entirely, even when a
+        # stop-loss is also configured. The stop-loss price above is still
+        # computed and stored as normal; only its role in SIZING is
+        # bypassed here.
+        quantity = order.fixed_lots * lot_size
     elif sizing_stop_loss_price is not None:
         stop_distance = abs(sizing_price - sizing_stop_loss_price)
         if stop_distance <= 0:
@@ -350,6 +357,7 @@ def open_option_group(
         combined_stop_loss_price=combined_stop_loss_price,
         combined_target_price=combined_target_price,
         sl_scope=sl_scope,
+        entry_spot_price=entry_spot_price,
         status="OPEN",
         square_off_time=account.square_off_time,
     )
@@ -551,10 +559,13 @@ def open_manual_option_group(
         db.commit()
         return row
 
-    symbols_to_quote = [long_symbol] + ([short_symbol] if short_symbol else [])
+    # symbol (the underlying) rides along in the same batched quote call -
+    # see open_option_group's identical comment.
+    symbols_to_quote = [long_symbol, symbol] + ([short_symbol] if short_symbol else [])
     quotes = get_ltp_batch(segment, symbols_to_quote)
     long_premium = quotes.get(long_symbol)
     short_premium = quotes.get(short_symbol) if short_symbol else 0.0
+    entry_spot_price = quotes.get(symbol)
     if long_premium is None or (short_symbol and short_premium is None):
         row = _reject_manual_group(
             db, signal_id, symbol, segment, action, strategy_type, "could not fetch a live quote for one or both option legs"
@@ -639,6 +650,7 @@ def open_manual_option_group(
         quantity=quantity,
         net_debit=net_debit,
         sl_scope=sl_scope,
+        entry_spot_price=entry_spot_price,
         status="OPEN",
         square_off_time=account.square_off_time,
     )
@@ -706,12 +718,24 @@ def _close_group_at_cmp(group, long_leg, short_leg: Optional[object], get_ltp_ba
 
 
 def compute_group_unrealized_pnl(groups: list, legs: dict, get_ltp_batch: GetLtpBatch) -> dict:
-    """Read-only mark-to-market for OPEN groups - mirrors
-    position_manager.compute_unrealized_pnl. Returns {group.id:
-    (combined_price, unrealized_pnl)}."""
+    """Read-only mark-to-market for OPEN groups AND their individual legs -
+    mirrors position_manager.compute_unrealized_pnl, extended with the
+    underlying's own live spot price (context for setting
+    spot_stop_loss_price - see update_group_spot_stop_loss) and each leg's
+    own live premium/P&L (the frontend's collapsible legs detail shows
+    these per-leg, not just the group's combined figure). One batched
+    quote call covers legs + underlyings together, same
+    _quotes_by_exchange dedup _evaluate_option_group_exits already uses.
+
+    Returns {group.id: {"combined_price", "unrealized_pnl", "spot_price",
+    "legs": {leg.id: (live_price, leg_unrealized_pnl)}}} - a group absent
+    from the result had a failed/partial leg quote (spot_price alone can
+    still be None even when present, if just the underlying's own quote
+    failed - legs remain the authority for whether the group prices at all)."""
     open_groups = [g for g in groups if g.status == "OPEN"]
     all_legs = [pos for g in open_groups for pos in legs.get(g.id, {}).values()]
-    quotes = _quotes_by_exchange(all_legs, get_ltp_batch)
+    underlying_probes = [SimpleNamespace(exchange=g.exchange, symbol=g.underlying_symbol) for g in open_groups]
+    quotes = _quotes_by_exchange(all_legs + underlying_probes, get_ltp_batch)
 
     result: dict = {}
     for group in open_groups:
@@ -723,9 +747,26 @@ def compute_group_unrealized_pnl(groups: list, legs: dict, get_ltp_batch: GetLtp
         short_cmp = quotes.get((short_leg.exchange, short_leg.symbol)) if short_leg else 0.0
         if long_cmp is None or (short_leg and short_cmp is None):
             continue
+
         combined_price = long_cmp - short_cmp
         unrealized = (combined_price - float(group.net_debit)) * float(group.quantity)
-        result[group.id] = (combined_price, unrealized)
+        spot_price = quotes.get((group.exchange, group.underlying_symbol))
+
+        leg_mtm = {
+            long_leg.id: (long_cmp, compute_pnl(long_leg.action, float(long_leg.entry_price), long_cmp, float(long_leg.quantity)))
+        }
+        if short_leg is not None:
+            leg_mtm[short_leg.id] = (
+                short_cmp,
+                compute_pnl(short_leg.action, float(short_leg.entry_price), short_cmp, float(short_leg.quantity)),
+            )
+
+        result[group.id] = {
+            "combined_price": combined_price,
+            "unrealized_pnl": unrealized,
+            "spot_price": spot_price,
+            "legs": leg_mtm,
+        }
 
     return result
 
@@ -782,6 +823,22 @@ def update_group_stop_loss(db: Session, group_id: uuid.UUID, new_price: float) -
     if row.sl_scope != "combined":
         return row
     row.combined_stop_loss_price = new_price
+    db.commit()
+    return row
+
+
+def update_group_spot_stop_loss(db: Session, group_id: uuid.UUID, new_price: float) -> Optional[db_models.OptionPositionGroup]:
+    """Sets the underlying-spot-price stop - independent of sl_scope and
+    the premium-based combined_stop_loss_price/individual leg stops above;
+    _evaluate_option_group_exits checks both, whichever trips first closes
+    the group. Unlike update_group_stop_loss, not restricted to
+    sl_scope='combined' - a spot-based stop is orthogonal to how the
+    premium side is monitored. Never auto-computed at open (see
+    entry_spot_price's own comment) - always an explicit user action."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None:
+        return None
+    row.spot_stop_loss_price = new_price
     db.commit()
     return row
 
@@ -857,12 +914,19 @@ def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtp
     this only changes what triggers the close, never leaves one leg open.
     Either mode credits/debits the account off the same real combined P&L
     (combined_price - net_debit) * quantity - the trigger condition never
-    changes what the position was actually worth at exit."""
+    changes what the position was actually worth at exit.
+
+    spot_stop_loss_price is checked independently of all the above,
+    against the UNDERLYING's own fresh quote (not either leg's) - a third,
+    orthogonal way to trip the same close. group.action-aware, same
+    direction convention compute_stop_loss_percent_price uses: BUY closes
+    when spot falls to/through it, SELL when spot rises to/through it."""
     if not groups:
         return {"closed_stop_loss": 0, "closed_target": 0, "checked": 0}
 
     all_legs = [pos for g in groups for pos in legs.get(g.id, {}).values()]
-    quotes = _quotes_by_exchange(all_legs, get_ltp_batch)
+    underlying_probes = [SimpleNamespace(exchange=g.exchange, symbol=g.underlying_symbol) for g in groups]
+    quotes = _quotes_by_exchange(all_legs + underlying_probes, get_ltp_batch)
     closed_stop_loss = 0
     closed_target = 0
     now = datetime.now(dt_timezone.utc)
@@ -890,18 +954,31 @@ def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtp
         else:
             sl_hit = group.combined_stop_loss_price is not None and combined_price <= float(group.combined_stop_loss_price)
             target_hit = group.combined_target_price is not None and combined_price >= float(group.combined_target_price)
-        if not (sl_hit or target_hit):
+
+        spot_cmp = quotes.get((group.exchange, group.underlying_symbol))
+        spot_sl_hit = group.spot_stop_loss_price is not None and spot_cmp is not None and (
+            (group.action == "BUY" and spot_cmp <= float(group.spot_stop_loss_price))
+            or (group.action == "SELL" and spot_cmp >= float(group.spot_stop_loss_price))
+        )
+        if not (sl_hit or target_hit or spot_sl_hit):
             continue
 
-        group_reason_prefix = "individual" if group.sl_scope == "individual" else "combined"
-        group_reason = f"{group_reason_prefix}_stop_loss" if sl_hit else f"{group_reason_prefix}_target"
-        # Leg-level exit_reason is the plain 'stop_loss'/'target' every
-        # other position already uses (positions.exit_reason's own CHECK
-        # constraint doesn't have 'combined_'/'individual_' variants at
-        # all - only the group's own exit_reason does) - same value
-        # regardless of sl_scope, since both legs close as a consequence
-        # of the group's trigger either way, not independently.
-        leg_reason = "stop_loss" if sl_hit else "target"
+        if sl_hit:
+            group_reason_prefix = "individual" if group.sl_scope == "individual" else "combined"
+            group_reason = f"{group_reason_prefix}_stop_loss"
+            leg_reason = "stop_loss"
+        elif target_hit:
+            group_reason_prefix = "individual" if group.sl_scope == "individual" else "combined"
+            group_reason = f"{group_reason_prefix}_target"
+            leg_reason = "target"
+        else:
+            group_reason = "spot_stop_loss"
+            # Leg-level exit_reason is the plain 'stop_loss'/'target' every
+            # other position already uses (positions.exit_reason's own
+            # CHECK constraint has no 'spot_'/'combined_'/'individual_'
+            # variants at all - only the group's own exit_reason does).
+            leg_reason = "stop_loss"
+
         legs_to_close = [(long_leg, long_cmp)] + ([(short_leg, short_cmp)] if short_leg else [])
         for pos, cmp_price in legs_to_close:
             pos.exit_price = cmp_price
@@ -916,7 +993,7 @@ def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtp
         group.exit_reason = group_reason
         _apply_realized_pnl(group, accounts_by_segment.get(group.segment), combined_pnl)
 
-        if sl_hit:
+        if sl_hit or spot_sl_hit:
             closed_stop_loss += 1
         else:
             closed_target += 1
@@ -935,6 +1012,11 @@ def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
             # combined_target_price at all (see open_option_group) - would
             # otherwise never be selected as a candidate here.
             | (db_models.OptionPositionGroup.sl_scope == "individual")
+            # A spot-based stop can be the ONLY thing armed on a group
+            # (combined_stop_loss_price/target both NULL, sl_scope stays
+            # 'combined') - same reasoning as the sl_scope='individual'
+            # clause above.
+            | (db_models.OptionPositionGroup.spot_stop_loss_price.isnot(None))
         )
         .all()
     )

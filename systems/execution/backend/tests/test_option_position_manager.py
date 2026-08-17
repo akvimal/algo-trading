@@ -51,6 +51,8 @@ class FakeGroup:
     combined_stop_loss_price: Optional[float] = None
     combined_target_price: Optional[float] = None
     sl_scope: str = "combined"
+    entry_spot_price: Optional[float] = None
+    spot_stop_loss_price: Optional[float] = None
     square_off_time: Optional[time] = None
     exit_time: Optional[object] = None
     exit_reason: Optional[str] = None
@@ -187,6 +189,67 @@ def test_evaluate_option_group_exits_leaves_open_when_neither_hit():
 
     assert result == {"closed_stop_loss": 0, "closed_target": 0, "checked": 1}
     assert group.status == "OPEN"
+
+
+def test_evaluate_option_group_exits_closes_on_spot_stop_loss_buy():
+    # No combined SL/target configured at all - only the underlying's own
+    # price (not the combined premium) trips this close.
+    group = _group(net_debit=20.0, spot_stop_loss_price=24800.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24750.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert group.status == "CLOSED"
+    assert group.exit_reason == "spot_stop_loss"
+    assert long_leg.exit_reason == "stop_loss"
+
+
+def test_evaluate_option_group_exits_closes_on_spot_stop_loss_sell():
+    # SELL (bearish combo) - spot stop trips when the underlying RISES
+    # through it, opposite direction from the BUY case above.
+    group = _group(net_debit=20.0, action="SELL", spot_stop_loss_price=25200.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 25250.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert group.exit_reason == "spot_stop_loss"
+
+
+def test_evaluate_option_group_exits_spot_stop_loss_not_hit_leaves_open():
+    group = _group(net_debit=20.0, spot_stop_loss_price=24000.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24750.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "checked": 1}
+    assert group.status == "OPEN"
+
+
+def test_evaluate_option_group_exits_combined_stop_loss_takes_priority_over_spot():
+    # Both the combined premium SL and the spot SL trip in the same tick -
+    # combined_stop_loss wins the reason label (checked first), same
+    # priority order sl_hit already had over target_hit.
+    group = _group(net_debit=20.0, combined_stop_loss_price=18.0, spot_stop_loss_price=24800.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24750.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert group.exit_reason == "combined_stop_loss"
 
 
 def test_evaluate_option_group_exits_naked_group_closes_on_stop_loss():
@@ -350,12 +413,15 @@ def test_compute_group_unrealized_pnl_only_reports_open_groups():
     long_leg, short_leg = _legs()
     legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
 
-    result = compute_group_unrealized_pnl([open_group, closed_group], legs, lambda ex, syms: {"NIFTY-CE": 35.0, "NIFTY-CE-OTM": 10.0})
+    result = compute_group_unrealized_pnl(
+        [open_group, closed_group], legs, lambda ex, syms: {"NIFTY-CE": 35.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24800.0}
+    )
 
     assert set(result) == {"group-1"}
-    combined_price, unrealized = result["group-1"]
-    assert combined_price == 25.0  # 35-10
-    assert unrealized == (25.0 - 20.0) * 75  # (combined - net_debit) * quantity
+    mtm = result["group-1"]
+    assert mtm["combined_price"] == 25.0  # 35-10
+    assert mtm["unrealized_pnl"] == (25.0 - 20.0) * 75  # (combined - net_debit) * quantity
+    assert mtm["spot_price"] == 24800.0
 
 
 def test_compute_group_unrealized_pnl_naked_group_uses_long_leg_price_directly():
@@ -365,9 +431,40 @@ def test_compute_group_unrealized_pnl_naked_group_uses_long_leg_price_directly()
 
     result = compute_group_unrealized_pnl([group], legs, lambda ex, syms: {"NIFTY-CE": 38.0})
 
-    combined_price, unrealized = result["group-1"]
-    assert combined_price == 38.0
-    assert unrealized == (38.0 - 30.0) * 75
+    mtm = result["group-1"]
+    assert mtm["combined_price"] == 38.0
+    assert mtm["unrealized_pnl"] == (38.0 - 30.0) * 75
+    assert mtm["spot_price"] is None  # no "NIFTY" quote given - best-effort, doesn't block the group's own pricing
+
+
+def test_compute_group_unrealized_pnl_reports_legwise_live_price_and_pnl():
+    group = _group(net_debit=20.0)
+    long_leg, short_leg = _legs(net_debit_entry=(30.0, 10.0))  # long entered at 30, short at 10
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = compute_group_unrealized_pnl(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 35.0, "NIFTY-CE-OTM": 8.0, "NIFTY": 24800.0}
+    )
+
+    leg_mtm = result["group-1"]["legs"]
+    assert set(leg_mtm) == {"long", "short"}
+    long_price, long_pnl = leg_mtm["long"]
+    short_price, short_pnl = leg_mtm["short"]
+    assert long_price == 35.0
+    assert long_pnl == (35.0 - 30.0) * 75  # BUY - gains as price rises
+    assert short_price == 8.0
+    assert short_pnl == (10.0 - 8.0) * 75  # SELL - gains as price falls
+
+
+def test_compute_group_unrealized_pnl_naked_group_has_no_short_leg_entry():
+    group = _group(net_debit=30.0)
+    long_leg = _naked_leg(entry_price=30.0)
+    legs = {"group-1": {"BUY": long_leg}}
+
+    result = compute_group_unrealized_pnl([group], legs, lambda ex, syms: {"NIFTY-CE": 38.0})
+
+    leg_mtm = result["group-1"]["legs"]
+    assert set(leg_mtm) == {"long"}
 
 
 # --- _resolve_signal_conflicts reused against option groups ---------------------------------------

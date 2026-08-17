@@ -68,6 +68,12 @@ class OptionPositionGroup(Base):
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
     sl_scope = Column(Text, nullable=False, default="combined")
+    # Underlying's own LTP at open (best-effort, may be NULL) and an
+    # optional stop expressed on THAT price instead of the combined
+    # premium - independent of sl_scope, checked separately in
+    # _evaluate_option_group_exits. See infra/postgres/init/02-execution.sql.
+    entry_spot_price = Column(Numeric)
+    spot_stop_loss_price = Column(Numeric)
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
     exit_reason = Column(Text)

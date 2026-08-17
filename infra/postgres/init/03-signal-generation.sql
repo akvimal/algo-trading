@@ -74,14 +74,17 @@ CREATE TABLE IF NOT EXISTS signal_generation.rules (
 -- A reusable indicator definition (e.g. "RSI 14", "ADX 14/20") - any
 -- number of Rule rows can reference one, either via rule_config's
 -- indicator_id ("rsi" only - crossover) or via the top-level
--- regime_indicator_ids above (the other 5, regime types) - no DB FK
+-- regime_indicator_ids above (the other 6, regime types) - no DB FK
 -- either way (existence + type-compatibility is checked at the API layer
 -- instead, see app/api/routes/rules.py). params is JSONB (not dedicated
--- columns) so a new indicator type is new code, not a migration.
+-- columns) so a new indicator type is new code, not a migration - but
+-- THIS constraint still must be widened in lockstep with any new
+-- IndicatorType, or creation 500s (this was once left behind - see
+-- app/domain/rule.py's own comment).
 CREATE TABLE IF NOT EXISTS signal_generation.indicators (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        TEXT NOT NULL,
-    type        TEXT NOT NULL CHECK (type IN ('rsi', 'structure', 'efficiency_ratio', 'adx', 'dmi_direction', 'ema_slope')),
+    type        TEXT NOT NULL CHECK (type IN ('rsi', 'structure', 'efficiency_ratio', 'adx', 'dmi_direction', 'ema_slope', 'supertrend')),
     params      JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -115,7 +118,7 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- one), free-form so a new provider needs no schema/code change here.
     source_type      TEXT NOT NULL CHECK (source_type <> ''),
     exchange         TEXT NOT NULL CHECK (exchange IN ('NSE')),
-    horizon          TEXT NOT NULL CHECK (horizon IN ('intraday', 'swing', 'positional')),
+    horizon          TEXT NOT NULL CHECK (horizon IN ('intraday', 'positional')),
     instrument_type  TEXT NOT NULL CHECK (instrument_type IN ('spot', 'future', 'option')),
     -- Which saved Rule (above) decides when this strategy's signals fire -
     -- in_house only (NULL for an external strategy - it carries no
@@ -139,12 +142,12 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     stop_loss_method    TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
     stop_loss_interval  TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent   NUMERIC CHECK (stop_loss_percent > 0 AND stop_loss_percent < 100),
-    -- One value today ('ema') - MUST be widened here in lockstep with
+    -- 'ema'/'supertrend' today - MUST be widened here in lockstep with
     -- _STOP_LOSS_INDICATOR_PARAMS_MODELS in app/domain/rule.py whenever a
     -- new stop-loss indicator type is added (indicators.type's own CHECK
     -- constraint was once left behind when new IndicatorTypes were added
     -- at the Pydantic layer - don't repeat that here).
-    stop_loss_indicator_type   TEXT CHECK (stop_loss_indicator_type IN ('ema')),
+    stop_loss_indicator_type   TEXT CHECK (stop_loss_indicator_type IN ('ema', 'supertrend')),
     stop_loss_indicator_params JSONB,
     -- Target (take-profit): always a flat % from entry price, independent
     -- of the stop-loss method. No trailing variant for target.
@@ -189,11 +192,13 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- the whole group together, never just one leg). Harmlessly ignored
     -- for spot/future strategies.
     option_sl_scope TEXT NOT NULL DEFAULT 'combined' CHECK (option_sl_scope IN ('combined', 'individual')),
-    -- instrument_type='option' only, nullable. When set, execution trades
-    -- exactly this many lots instead of auto-sizing off capital/risk% -
-    -- takes precedence over stop-loss-based sizing entirely. Harmlessly
-    -- ignored for spot/future strategies.
-    option_fixed_lots INTEGER CHECK (option_fixed_lots > 0),
+    -- Every instrument_type, nullable (renamed from option_fixed_lots,
+    -- which used to be options-only). When set, execution trades exactly
+    -- this many LOTS instead of auto-sizing off capital/risk% - takes
+    -- precedence over stop-loss-based sizing entirely. Number of lots,
+    -- not raw underlying units - a no-op distinction for spot (lot_size
+    -- is always 1 there) but real for futures/options.
+    fixed_lots INTEGER CHECK (fixed_lots > 0),
     -- Optional per-strategy time-of-day window (e.g. 09:15-11:00) during
     -- which this strategy accepts signals - a JSON array of
     -- {"start": "HH:MM:SS", "end": "HH:MM:SS"} objects, e.g.
@@ -213,6 +218,16 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- app/domain/models.py) - same as rule_config/regime_indicator_ids
     -- elsewhere in this file, no DB-level CHECK on JSONB internals.
     active_windows JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Optional day-of-week filter, e.g. ["Mon","Tue","Wed","Thu","Fri"]
+    -- for weekdays-only - a JSON array of "Mon".."Sun" strings. Same
+    -- signal-ACCEPTANCE-only scope as active_windows above (an already-
+    -- open position still closes outside it via stop-loss/target/
+    -- square-off/counter-signal), enforced the same place (signal-
+    -- processing's resolve(), every source_type). Empty array (default)
+    -- means no restriction. Validated at the Pydantic layer only
+    -- (Weekday literal in app/domain/models.py), no DB-level CHECK on
+    -- JSONB internals - same precedent as active_windows/rule_config.
+    active_weekdays JSONB NOT NULL DEFAULT '[]'::jsonb,
     -- Signal-conflict policy - passed through unchanged on resolved-order
     -- to execution's position_manager._resolve_signal_conflicts.
     -- duplicate_signal_policy: what to do when this symbol already has an
@@ -272,3 +287,35 @@ CREATE TABLE IF NOT EXISTS signal_generation.engine_runs (
     last_checked_at        TIMESTAMPTZ,
     PRIMARY KEY (strategy_id, symbol)
 );
+
+-- A saved snapshot of a POST /rules/{id}/backtest run - both the request
+-- body (criteria) AND the response it produced (result), frozen at save
+-- time. Deliberately not just the request replayed on read: market data
+-- keeps arriving, so re-running later against a fixed from/to range could
+-- silently produce different numbers than what was actually reviewed and
+-- saved - this is a point-in-time record, not a live query. User-named
+-- (name) so a growing list stays scannable. "Duplicate and edit" is a
+-- frontend-only operation (prefills the backtest form from an existing
+-- row's request); saving again always INSERTs a new row rather than
+-- updating one in place, so history is never silently overwritten - see
+-- app/api/routes/saved_backtests.py. ON DELETE CASCADE: a saved snapshot
+-- for a deleted Rule has nothing left to re-run it against, same
+-- reasoning engine_runs above already uses.
+CREATE TABLE IF NOT EXISTS signal_generation.saved_backtests (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rule_id     UUID NOT NULL REFERENCES signal_generation.rules (id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    from_date   DATE NOT NULL,
+    to_date     DATE NOT NULL,
+    -- The exact RuleBacktestRequest body used - JSONB (not dedicated
+    -- columns) so a new backtest-request field is new code, not a
+    -- migration, same reasoning rule_config elsewhere in this file uses.
+    request     JSONB NOT NULL,
+    -- The exact response POST /rules/{id}/backtest returned (single-symbol
+    -- BacktestResult, or the pooled by_symbol shape for underlying_type IN
+    -- ('universe', 'symbol_list')).
+    result      JSONB NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_backtests_rule_id ON signal_generation.saved_backtests (rule_id);

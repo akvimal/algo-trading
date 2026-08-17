@@ -128,12 +128,12 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
     stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent       NUMERIC,
-    -- stop_loss_method='indicator' only - one value today ('ema'). MUST be
+    -- stop_loss_method='indicator' only - 'ema'/'supertrend' today. MUST be
     -- widened in lockstep with signal-generation's own identical CHECK
     -- constraint (infra/postgres/init/03-signal-generation.sql) and both
     -- systems' _STOP_LOSS_*_FUNCS/_MODELS registries whenever a new
     -- indicator type is added.
-    stop_loss_indicator_type   TEXT CHECK (stop_loss_indicator_type IN ('ema')),
+    stop_loss_indicator_type   TEXT CHECK (stop_loss_indicator_type IN ('ema', 'supertrend')),
     stop_loss_indicator_params JSONB,
     exit_reason             TEXT CHECK (exit_reason IN ('square_off', 'stop_loss', 'target', 'manual', 'counter_signal')),
     -- This position's segment's own square-off time (execution.accounts.
@@ -176,9 +176,21 @@ CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     -- combined_target_price stay NULL in this mode. See
     -- docs/contracts/resolved-order.schema.json's option_sl_scope.
     sl_scope                 TEXT NOT NULL DEFAULT 'combined' CHECK (sl_scope IN ('combined', 'individual')),
+    -- The underlying's own LTP at open (best-effort - NULL if that quote
+    -- failed even though both legs priced fine, non-fatal). Lets
+    -- spot_stop_loss_price below be set/displayed as a % move from entry,
+    -- same convention positions.stop_loss_percent uses for spot/future.
+    entry_spot_price          NUMERIC,
+    -- A stop expressed on the UNDERLYING's own price, not the combined
+    -- premium - independent of sl_scope/combined_stop_loss_price above and
+    -- checked separately (whichever trips first closes the group) - see
+    -- option_position_manager.py's _evaluate_option_group_exits. NULL
+    -- (default) means no spot-based stop is armed; user-set only, never
+    -- auto-computed from a Strategy the way combined_stop_loss_price can be.
+    spot_stop_loss_price      NUMERIC,
     status                   TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'REJECTED')),
     rejection_reason         TEXT,
-    exit_reason              TEXT CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'individual_stop_loss', 'individual_target', 'manual', 'counter_signal')),
+    exit_reason              TEXT CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'individual_stop_loss', 'individual_target', 'spot_stop_loss', 'manual', 'counter_signal')),
     exit_time                TIMESTAMPTZ,
     pnl                      NUMERIC,
     square_off_time          TIME,

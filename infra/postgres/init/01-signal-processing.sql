@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS signal_processing.resolved_orders (
     symbol           TEXT NOT NULL,
     exchange         TEXT NOT NULL CHECK (exchange IN ('NSE', 'MCX', 'CRYPTO')),
     action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
-    horizon          TEXT CHECK (horizon IN ('intraday', 'swing', 'positional')),
+    horizon          TEXT CHECK (horizon IN ('intraday', 'positional')),
     instrument_type  TEXT CHECK (instrument_type IN ('spot', 'future', 'option')),
     strategy         JSONB,
     price            NUMERIC NOT NULL,

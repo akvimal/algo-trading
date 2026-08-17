@@ -20,7 +20,7 @@
       "description": "Carried through from signal-ingest unchanged - tells execution which quote provider owns this position's CMP. 'CRYPTO' is Delta Exchange India (market-data's DeltaProvider) - see docs/architecture.md."
     },
     "action": { "type": "string", "enum": ["BUY", "SELL"] },
-    "horizon": { "type": "string", "enum": ["intraday", "swing", "positional"] },
+    "horizon": { "type": "string", "enum": ["intraday", "positional"] },
     "instrument_type": { "type": "string", "enum": ["spot", "future", "option"] },
     "segment": {
       "type": "string",
@@ -79,11 +79,11 @@
     },
     "stop_loss_indicator_type": {
       "type": ["string", "null"],
-      "description": "Only set when stop_loss_method='indicator' - which computation to run (one value today, 'ema'). See signal-generation's app/domain/rule.py _STOP_LOSS_INDICATOR_PARAMS_MODELS and execution's app/domain/position_manager.py _STOP_LOSS_COMPUTE_FUNCS - both must be widened together when a new type is added, along with this schema and both systems' DB CHECK constraints."
+      "description": "Only set when stop_loss_method='indicator' - which computation to run ('ema' or 'supertrend' today). See signal-generation's app/domain/rule.py _STOP_LOSS_INDICATOR_PARAMS_MODELS and execution's app/domain/position_manager.py _STOP_LOSS_COMPUTE_FUNCS - both must be widened together when a new type is added, along with this schema and both systems' DB CHECK constraints."
     },
     "stop_loss_indicator_params": {
       "type": ["object", "null"],
-      "description": "Only set when stop_loss_method='indicator' - shape depends on stop_loss_indicator_type (for 'ema': {\"period\": int})."
+      "description": "Only set when stop_loss_method='indicator' - shape depends on stop_loss_indicator_type (for 'ema': {\"period\": int}; for 'supertrend': {\"period\": int, \"multiplier\": number})."
     },
     "target_percent": {
       "type": ["number", "null"],
@@ -110,10 +110,10 @@
       "enum": ["combined", "individual", null],
       "description": "instrument_type='option' only, from the resolved Strategy - null for spot/future orders. 'combined' (default): one SL/target threshold on the combined (net debit) premium, the original Phase 4d design. 'individual': each leg gets its own SL/target computed from its own entry premium - whichever leg's own threshold trips first still closes the WHOLE group together (same atomic close as 'combined'), it only changes what triggers the close, never leaves one leg open while the other closes. Mathematically identical to 'combined' for a naked (1-leg) position - no separate handling needed there."
     },
-    "option_fixed_lots": {
+    "fixed_lots": {
       "type": ["integer", "null"],
       "minimum": 1,
-      "description": "instrument_type='option' only, from the resolved Strategy - null for spot/future orders and for option orders that didn't set it. When set, execution trades exactly this many lots instead of auto-sizing off capital_per_trade/risk_per_trade_pct - takes precedence over stop-loss-based (risk-%) sizing entirely, even when a stop-loss is also configured. The stop-loss price itself is still computed and stored as normal; only its role in sizing is bypassed. See docs/architecture.md."
+      "description": "From the resolved Strategy, every instrument_type (renamed from option_fixed_lots, which used to be options-only) - null if not set. When set, execution trades exactly this many LOTS instead of auto-sizing off capital_per_trade/risk_per_trade_pct - takes precedence over stop-loss-based (risk-%) sizing entirely, even when a stop-loss is also configured. The stop-loss price itself is still computed and stored as normal; only its role in sizing is bypassed. Number of lots, not raw underlying units - a no-op distinction for spot (lot_size is always 1 there) but real for futures/options. See docs/architecture.md."
     }
   }
 }

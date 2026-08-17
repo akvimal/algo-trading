@@ -9,6 +9,16 @@ class Settings(BaseSettings):
 
     dhan_client_id: str = ""
     dhan_access_token: str = ""
+    # PUT /dhan/credentials persists here (a Docker-volume-backed file, not
+    # a DB - matches this service's own "in-memory cache, cheap to rebuild"
+    # design instead of adding one) so a UI-submitted token survives a
+    # container restart - previously it lived only in the in-memory
+    # _renewed_token slot (app/providers/dhan.py) and silently reverted to
+    # this same dhan_access_token seed value on every restart, which is
+    # exactly what caused a real outage (see docs/architecture.md). The
+    # env var above is now only a first-boot seed for a brand new volume;
+    # once anyone's used the UI once, this file is authoritative.
+    dhan_credentials_file_path: str = "/data/dhan-credentials.json"
     # Dhan tokens are valid 24h - renewing at this cadence leaves comfortable
     # margin even if a run is briefly delayed. See app/providers/dhan.py's
     # renew_access_token / app/scheduler.py. 0 disables the scheduled+on-boot

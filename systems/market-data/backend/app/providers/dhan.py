@@ -35,7 +35,9 @@ _disambiguated_option_symbol's own docstring - both confirmed live
 
 import csv
 import io
+import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -50,6 +52,7 @@ from app.config import settings
 from app.domain.candle_aggregation import aggregate_candles, resolve_interval_minutes
 from app.domain.models import (
     Candle,
+    DataAvailability,
     OptionChain,
     OptionChainStrike,
     OptionGreeks,
@@ -81,6 +84,16 @@ ROLLING_OPTION_URL = "https://api.dhan.co/v2/charts/rollingoption"
 # used by Strategy's interval (signal-generation) is NOT limited to this
 # dict; it's just which values skip local aggregation.
 DHAN_CANDLE_INTERVAL_MINUTES = {"1min": 1, "5min": 5, "15min": 15, "25min": 25, "60min": 60}
+
+# Dhan's own hard per-request cap on charts/intraday - confirmed live
+# (2026-08-16) via the exact rejection: {"errorType":"Input_Exception",
+# "errorCode":"DH-905","errorMessage":"Data for Intraday Charts can be
+# fetched for 90 days at a time"}. Real history goes back years (verified
+# same day: real 1min/60min bars for NSE:TCS as far back as 2017), but
+# get_candle_history above makes exactly one request and doesn't chunk a
+# wider range the way option_backtest.py's get_option_leg_history does -
+# so 90 days is the actual usable ceiling for a single backtest today.
+DHAN_INTRADAY_MAX_DAYS_PER_REQUEST = 90
 
 
 def _interval_minutes(interval: str) -> int:
@@ -186,13 +199,66 @@ ROLLING_OPTION_EXCHANGE_SEGMENT = "NSE_FNO"
 
 # Shared, in-memory access-token state - genuinely global (not per
 # DhanProvider instance) since router.py's two instances (dhan-nse,
-# dhan-mcx) share one Dhan account/token. In-memory only, no persistence:
-# a container restart reverts to DHAN_ACCESS_TOKEN from the environment,
-# same as before this existed - see docs/architecture.md.
+# dhan-mcx) share one Dhan account/token. Mirrored to
+# settings.dhan_credentials_file_path on every change (see
+# _persist_credentials/load_persisted_credentials below) so a
+# UI-submitted token survives a container restart instead of silently
+# reverting to DHAN_ACCESS_TOKEN from the environment - see
+# docs/architecture.md.
 _token_lock = threading.Lock()
 _renewed_token: Optional[str] = None  # None until the first successful renewal
 _last_renewed_at: Optional[datetime] = None
 _last_renewal_response: Optional[dict] = None  # raw Dhan response, for the status endpoint
+
+
+def _persist_credentials(client_id: str, access_token: str) -> None:
+    """Best-effort durable copy of the active credentials - a plain JSON
+    file on a Docker-mounted volume (app/config.py's
+    dhan_credentials_file_path), not a DB, matching this service's own
+    "in-memory cache, cheap to rebuild" design (see its README) rather
+    than adding one just for this. Failures are logged, not raised - a
+    write failure (e.g. the volume isn't mounted in some environment)
+    should degrade to the pre-existing in-memory-only behavior, not break
+    PUT /dhan/credentials itself."""
+    path = settings.dhan_credentials_file_path
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Write to a temp file then rename (atomic on the same filesystem)
+        # so a crash mid-write never leaves a truncated/corrupt file behind
+        # for the next load_persisted_credentials() to choke on.
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w") as f:
+            json.dump({"client_id": client_id, "access_token": access_token}, f)
+        os.replace(tmp_path, path)
+    except OSError:
+        logger.exception("could not persist Dhan credentials to %s - staying in-memory-only this run", path)
+
+
+def load_persisted_credentials() -> None:
+    """Called once at app startup (app/main.py) - restores whatever was
+    last saved via PUT /dhan/credentials, so it's active immediately
+    without anyone needing to re-submit it after every restart. A no-op
+    (falls through to DHAN_ACCESS_TOKEN/DHAN_CLIENT_ID from the
+    environment, the pre-existing behavior) if the file doesn't exist yet
+    - a brand new volume, or an environment that's never used the UI."""
+    path = settings.dhan_credentials_file_path
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        client_id = data["client_id"]
+        access_token = data["access_token"]
+    except (OSError, ValueError, KeyError):
+        logger.exception("could not load persisted Dhan credentials from %s - falling back to the environment seed", path)
+        return
+
+    global _renewed_token, _last_renewed_at
+    settings.dhan_client_id = client_id
+    with _token_lock:
+        _renewed_token = access_token
+        _last_renewed_at = datetime.now(timezone.utc)
+    logger.info("restored persisted Dhan credentials from %s", path)
 
 
 def current_access_token() -> str:
@@ -270,8 +336,39 @@ def renew_access_token() -> dict:
         _renewed_token = new_token
         _last_renewed_at = datetime.now(timezone.utc)
         _last_renewal_response = data
+    _persist_credentials(settings.dhan_client_id, new_token)
     logger.info("Dhan access token renewed, new expiry %s", data.get("expiryTime"))
     return data
+
+
+def set_manual_credentials(client_id: str, access_token: str) -> None:
+    """Sets both the Dhan client ID and access token at runtime - the UI's
+    own 'Data provider keys' form (PUT /dhan/credentials), for pasting in
+    a freshly-generated token without touching .env/restarting. Persisted
+    to settings.dhan_credentials_file_path (see _persist_credentials) so
+    it's also what survives a container restart now, not just what's
+    active for the rest of this process's life - previously reverted
+    straight back to DHAN_CLIENT_ID/DHAN_ACCESS_TOKEN from the environment
+    on every restart, which caused a real outage (see docs/architecture.md).
+
+    client_id has no separate renewed/seed split the way access_token
+    does (nothing ever "renews" it independently) - written straight to
+    settings.dhan_client_id, the one place every call site already reads
+    it from, live immediately. access_token goes through the SAME shared
+    _renewed_token slot current_access_token()/renew_access_token() use,
+    so it takes priority immediately, exactly like a real renewal would.
+    _last_renewal_response is cleared (not a real Dhan RenewToken response
+    - renew_token_status()'s expiry_time/dhan_client_name/create_time
+    fields will read None until an actual renewal happens against this
+    new token), but _last_renewed_at is stamped now so the status endpoint
+    still shows when the active credentials last changed."""
+    global _renewed_token, _last_renewed_at, _last_renewal_response
+    settings.dhan_client_id = client_id
+    with _token_lock:
+        _renewed_token = access_token
+        _last_renewed_at = datetime.now(timezone.utc)
+        _last_renewal_response = None
+    _persist_credentials(client_id, access_token)
 
 
 @dataclass(frozen=True)
@@ -965,6 +1062,23 @@ class DhanProvider(QuoteProvider):
         from_dt = datetime.combine(from_date, datetime.min.time(), tzinfo=tz)
         to_dt = datetime.combine(to_date, datetime.max.time().replace(microsecond=0), tzinfo=tz)
         return self._fetch_candles(symbol, interval, from_dt, to_dt)
+
+    def get_data_availability(self, symbol: str, interval: str) -> DataAvailability:
+        """A fixed, documented constant - not a live probe. See
+        DHAN_INTRADAY_MAX_DAYS_PER_REQUEST above for how this was
+        confirmed; unlike Delta's real history-depth question, this
+        never changes, so there's nothing to check live."""
+        return DataAvailability(
+            exchange=self._config_for(symbol).exchange,
+            symbol=symbol,
+            interval=interval,
+            max_days_per_request=DHAN_INTRADAY_MAX_DAYS_PER_REQUEST,
+            earliest_available_date=None,
+            note=(
+                f"Dhan holds several years of intraday history, but a single backtest request can only span "
+                f"{DHAN_INTRADAY_MAX_DAYS_PER_REQUEST} days at a time."
+            ),
+        )
 
     def _option_chain_headers(self, access_token: str) -> dict:
         return {"Accept": "application/json", "Content-Type": "application/json", "access-token": access_token, "client-id": settings.dhan_client_id}

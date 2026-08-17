@@ -6,12 +6,15 @@ response shapes confirmed live against the real API during planning."""
 
 import json
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import responses
 from responses import matchers
 
 from app.config import settings
+from app.domain.models import Candle
 from app.providers.delta import DeltaProvider
 
 
@@ -325,6 +328,58 @@ def test_get_candle_history_rejects_unsupported_interval():
         pass
 
 
+def test_fetch_native_candles_chunks_wide_ranges_to_avoid_delta_truncation():
+    """Delta silently truncates a single /v2/history/candles call to its
+    own internal row cap instead of erroring (confirmed live, see
+    DELTA_MAX_CANDLES_PER_REQUEST's own comment) - _fetch_native_candles
+    must split a wide-enough range into multiple chunked calls rather than
+    ever risking that. Stubs _fetch_native_candles_page (the actual HTTP
+    call) instead of mocking real HTTP responses, since exercising the
+    real cap would need thousands of fixture rows - this only verifies
+    the chunk-splitting logic: call count, non-overlapping/no-gap tiling
+    of the sub-windows, and correct concatenation."""
+    provider = DeltaProvider()
+    calls: list[tuple[datetime, datetime]] = []
+
+    def _fake_page(symbol, interval, interval_minutes, from_dt, to_dt):
+        calls.append((from_dt, to_dt))
+        return [Candle(exchange="CRYPTO", symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, timestamp=from_dt.isoformat(), provider="delta-india")]
+
+    with patch.object(provider, "_fetch_native_candles_page", side_effect=_fake_page):
+        # 15min * 2000 = 20.83 days is the widest single-chunk span - a
+        # 40-day request must split into (at least) 2 chunks.
+        from_dt = datetime(2026, 1, 1, tzinfo=ZoneInfo(settings.timezone))
+        to_dt = from_dt + timedelta(days=40)
+        candles = provider._fetch_native_candles("BTCUSD", "15min", 15, from_dt, to_dt)
+
+    assert len(calls) >= 2
+    # Tiled with no gap and no overlap: each chunk starts exactly one
+    # interval after the previous chunk's end.
+    for (prev_start, prev_end), (next_start, _) in zip(calls, calls[1:]):
+        assert next_start == prev_end + timedelta(minutes=15)
+    assert calls[0][0] == from_dt
+    assert calls[-1][1] == to_dt
+    assert len(candles) == len(calls)  # one fake candle per chunk, concatenated
+
+
+def test_fetch_native_candles_single_page_for_narrow_range():
+    """A range under DELTA_MAX_CANDLES_PER_REQUEST's span makes exactly
+    one call, unchanged from before chunking existed."""
+    provider = DeltaProvider()
+    calls: list[tuple[datetime, datetime]] = []
+
+    def _fake_page(symbol, interval, interval_minutes, from_dt, to_dt):
+        calls.append((from_dt, to_dt))
+        return []
+
+    with patch.object(provider, "_fetch_native_candles_page", side_effect=_fake_page):
+        from_dt = datetime(2026, 1, 1, tzinfo=ZoneInfo(settings.timezone))
+        to_dt = from_dt + timedelta(days=5)
+        provider._fetch_native_candles("BTCUSD", "15min", 15, from_dt, to_dt)
+
+    assert calls == [(from_dt, to_dt)]
+
+
 # --- resolve_underlying / get_lot_size ----------------------------------------------------------
 
 
@@ -634,3 +689,71 @@ def test_get_option_chain_fails_fast_when_throttle_queue_too_deep():
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "backed up" in str(exc)
+
+
+# --- get_data_availability / _probe_earliest_available_date ---------------------------------
+
+
+def _fake_candle() -> Candle:
+    return Candle(
+        exchange="CRYPTO", symbol="BTCUSD", interval="60min",
+        open=1.0, high=1.0, low=1.0, close=1.0, timestamp="2024-01-01T00:00:00+05:30", provider="delta-india",
+    )
+
+
+def test_probe_earliest_available_date_binary_searches_to_the_real_floor():
+    # _fetch_candles is mocked directly (not HTTP) - the binary search
+    # itself is the thing under test, not the network call each probe
+    # step makes (that's already covered by the get_candle_history tests
+    # above). Simulates a real floor 400 days back.
+    provider = DeltaProvider()
+    tz = ZoneInfo(settings.timezone)
+    cutoff = datetime.now(tz) - timedelta(days=400)
+
+    def fake_fetch_candles(symbol, interval, from_dt, to_dt):
+        return [_fake_candle()] if to_dt >= cutoff else []
+
+    with patch.object(provider, "_fetch_candles", side_effect=fake_fetch_candles):
+        earliest = provider._probe_earliest_available_date("BTCUSD", "60min")
+
+    assert earliest is not None
+    # Converges to within AVAILABILITY_PROBE_WINDOW_DAYS of the true floor.
+    assert abs((datetime.now(tz).date() - earliest).days - 400) <= 3
+
+
+def test_probe_earliest_available_date_returns_none_when_no_data_at_all():
+    provider = DeltaProvider()
+
+    with patch.object(provider, "_fetch_candles", return_value=[]):
+        earliest = provider._probe_earliest_available_date("DEADSYM", "60min")
+
+    assert earliest is None
+
+
+def test_get_data_availability_caches_result_across_calls():
+    provider = DeltaProvider()
+    call_count = {"n": 0}
+
+    def fake_fetch_candles(symbol, interval, from_dt, to_dt):
+        call_count["n"] += 1
+        return [_fake_candle()]
+
+    with patch.object(provider, "_fetch_candles", side_effect=fake_fetch_candles):
+        first = provider.get_data_availability("BTCUSD", "60min")
+        calls_after_first_probe = call_count["n"]
+        second = provider.get_data_availability("BTCUSD", "60min")
+
+    assert call_count["n"] == calls_after_first_probe  # second call served from cache, no new probes
+    assert first == second
+    assert first.exchange == "CRYPTO"
+    assert first.max_days_per_request is None
+    assert first.earliest_available_date is not None
+
+
+def test_get_data_availability_rejects_unsupported_interval():
+    provider = DeltaProvider()
+    try:
+        provider.get_data_availability("BTCUSD", "daily")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass

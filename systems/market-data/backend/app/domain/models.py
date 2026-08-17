@@ -1,6 +1,6 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Quote(BaseModel):
@@ -28,6 +28,14 @@ class FeedSubscribeRequest(BaseModel):
     symbol: str
 
 
+class DhanCredentialsUpdate(BaseModel):
+    """PUT /dhan/credentials body - the UI's 'Data provider keys' form, see
+    app/providers/dhan.py's set_manual_credentials."""
+
+    client_id: str = Field(min_length=1)
+    access_token: str = Field(min_length=1)
+
+
 class ProviderStatus(BaseModel):
     provider: str
     symbol_count: int
@@ -49,6 +57,43 @@ class Candle(BaseModel):
     close: float
     timestamp: str  # ISO-8601, the candle's start time
     provider: str
+
+
+class DataAvailability(BaseModel):
+    """Backs GET /candles/history's sibling GET /candles/availability -
+    what the signal-generation backtest form shows so a user doesn't pick
+    a date range that's guaranteed to fail or silently return partial
+    data. The two providers have genuinely different constraints, so only
+    one of the two optional fields is ever populated for a given exchange:
+
+    - Dhan (NSE/MCX): a fixed, documented per-request cap
+      (`max_days_per_request`) - real history goes back years, but a
+      single charts/intraday call 400s past 90 days (DH-905), and this
+      codebase doesn't chunk around it for spot/future the way
+      option_backtest.py does for options. `earliest_available_date`
+      stays None - not worth a live probe for a constant.
+    - Delta Exchange India (CRYPTO): no per-request day cap, but real
+      history is much shallower and grows day by day - `earliest_available_date`
+      is live-probed and cached (see DeltaProvider.get_data_availability).
+      `max_days_per_request` stays None."""
+
+    exchange: str
+    symbol: str
+    interval: str
+    max_days_per_request: Optional[int] = None
+    earliest_available_date: Optional[str] = None  # ISO date "YYYY-MM-DD"
+    note: str
+
+
+class CandleCacheStatus(BaseModel):
+    """Backs GET /candles/cache-status - whether GET /candles/history's own
+    in-memory cache (app/api/routes/candles.py's _history_cache) currently
+    holds an entry for one exact (exchange, symbol, interval, from, to)
+    tuple, and when it was fetched. `fetched_at` is None whenever `cached`
+    is False (nothing to report) - never a stale leftover value."""
+
+    cached: bool
+    fetched_at: Optional[str] = None  # ISO 8601 UTC timestamp
 
 
 class OptionGreeks(BaseModel):

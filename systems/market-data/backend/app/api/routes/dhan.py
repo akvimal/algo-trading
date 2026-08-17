@@ -15,8 +15,9 @@ it already."""
 
 from fastapi import APIRouter, HTTPException
 
-from app.domain.models import FeedSubscribeRequest
-from app.providers.dhan import renew_access_token, renew_token_status
+from app.config import settings
+from app.domain.models import DhanCredentialsUpdate, FeedSubscribeRequest
+from app.providers.dhan import current_access_token, renew_access_token, renew_token_status, set_manual_credentials
 from app.providers.dhan_feed import feed_status, start_feed, subscribe
 
 router = APIRouter()
@@ -32,7 +33,23 @@ def renew_token():
 
 @router.get("/dhan/token-status")
 def token_status():
-    return renew_token_status()
+    # dhan_client_id/has_access_token surface what's CURRENTLY configured
+    # (from .env, or a prior PUT /dhan/credentials) - has_access_token is
+    # a presence check only, never the raw secret itself.
+    return {
+        **renew_token_status(),
+        "dhan_client_id": settings.dhan_client_id,
+        "has_access_token": bool(current_access_token()),
+    }
+
+
+@router.put("/dhan/credentials")
+def update_credentials(payload: DhanCredentialsUpdate):
+    """The UI's 'Data provider keys' form - sets both the Dhan client ID
+    and access token at runtime, no restart needed (see
+    set_manual_credentials' own docstring for the in-memory-only caveat)."""
+    set_manual_credentials(payload.client_id, payload.access_token)
+    return token_status()
 
 
 @router.get("/dhan/feed-status")

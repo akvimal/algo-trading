@@ -302,3 +302,22 @@ def test_get_candle_history_native_interval_makes_no_aggregation_overhead(monkey
     assert b'"interval": "5"' in sent_body or b'"interval":"5"' in sent_body
     assert len(candles) == 5
     assert all(c.interval == "5min" for c in candles)
+
+
+# --- get_data_availability -----------------------------------------------------------------
+
+
+def test_get_data_availability_reports_fixed_90_day_cap_without_any_http_call():
+    # A fixed, documented constant (DHAN_INTRADAY_MAX_DAYS_PER_REQUEST) -
+    # no live probe, so this must not touch the network at all (no
+    # responses.activate/CANDLE_URL registration - a stray call would 501
+    # with ConnectionError from the `responses` library if this changed).
+    provider = DhanProvider()
+
+    result = provider.get_data_availability("RELIANCE", "5min")
+
+    assert result.exchange == "NSE"
+    assert result.symbol == "RELIANCE"
+    assert result.interval == "5min"
+    assert result.max_days_per_request == 90
+    assert result.earliest_available_date is None

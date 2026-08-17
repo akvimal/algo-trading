@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import date
 from typing import Optional
 
-from app.domain.models import Candle, ResolvedUnderlying
+from app.domain.models import Candle, DataAvailability, ResolvedUnderlying
 
 
 class QuoteProvider(ABC):
@@ -31,6 +31,12 @@ class QuoteProvider(ABC):
         caller-supplied date range - used to warm up indicator state
         (signal-generation's engine) and for backtesting. Not cached
         (unlike get_previous_candle's single-value TTL cache)."""
+
+    @abstractmethod
+    def get_data_availability(self, symbol: str, interval: str) -> DataAvailability:
+        """What date range is actually usable for a backtest against this
+        symbol/interval - see DataAvailability's own docstring for why
+        Dhan and Delta report genuinely different things here."""
 
     @abstractmethod
     def resolve_underlying(self, underlying: str) -> Optional[ResolvedUnderlying]:

@@ -27,7 +27,15 @@ import requests
 
 from app.config import settings
 from app.domain.candle_aggregation import aggregate_candles, resolve_interval_minutes
-from app.domain.models import Candle, OptionChain, OptionChainStrike, OptionGreeks, OptionLegQuote, ResolvedUnderlying
+from app.domain.models import (
+    Candle,
+    DataAvailability,
+    OptionChain,
+    OptionChainStrike,
+    OptionGreeks,
+    OptionLegQuote,
+    ResolvedUnderlying,
+)
 from app.domain.moneyness import classify_moneyness, infer_strike_step
 from app.providers.base import QuoteProvider
 
@@ -48,6 +56,29 @@ MIN_CANDLE_CALL_INTERVAL_SECONDS = 1.0
 MIN_TICKER_CALL_INTERVAL_SECONDS = 1.0
 MAX_THROTTLE_WAIT_SECONDS = 4.0
 QUOTE_CACHE_TTL_SECONDS = 3.0
+
+# get_data_availability's live probe (see below) - Delta publishes no
+# retention policy, and live testing (2026-08-16) found BTCUSD 60min data
+# starting around early Feb 2024 (~2.5 years back) with a wide single
+# request otherwise silently truncating to the most recent ~4000 bars
+# rather than erroring, unlike Dhan's hard per-call day cap. The upper
+# bound just needs to comfortably exceed the real floor, with room for it
+# to keep growing - it does NOT claim data exists that far back.
+AVAILABILITY_PROBE_UPPER_BOUND_DAYS = 1460
+AVAILABILITY_PROBE_WINDOW_DAYS = 3
+AVAILABILITY_CACHE_TTL_SECONDS = 6 * 3600
+
+# get_candle_history's own defense against the same silent-truncation
+# behavior noted above - confirmed live 2026-08-16 that the real cap
+# varies a little by resolution (~3600-4000 rows observed, not one clean
+# documented number), so this stays safely under that rather than trying
+# to detect/react to truncation after the fact (nothing in the response
+# distinguishes "truncated" from "genuinely that few rows exist" - both
+# come back as `success: true`). A request needing more than this many
+# candles is split into consecutive chunks (see _fetch_native_candles)
+# and concatenated - each chunk still goes through the same self-throttle
+# as any other call, so a wide backtest just takes longer, not wrong.
+DELTA_MAX_CANDLES_PER_REQUEST = 2000
 
 # Own lock/timestamp/cache, distinct from the candle/ticker throttles
 # above - a different Dhan-style "own state per distinct endpoint"
@@ -127,6 +158,9 @@ class DeltaProvider(QuoteProvider):
         self._last_candle_call_at: float = 0.0
         self._candle_cache: dict[tuple[str, str], tuple[Candle, float]] = {}
         self._candle_cache_lock = threading.Lock()
+
+        self._availability_cache: dict[tuple[str, str], tuple[DataAvailability, float]] = {}
+        self._availability_cache_lock = threading.Lock()
 
         self._option_lock = threading.Lock()
         self._last_option_call_at: float = 0.0
@@ -381,6 +415,37 @@ class DeltaProvider(QuoteProvider):
     def _fetch_native_candles(
         self, symbol: str, interval: str, interval_minutes: int, from_dt: datetime, to_dt: datetime
     ) -> list[Candle]:
+        """Splits into consecutive DELTA_MAX_CANDLES_PER_REQUEST-sized
+        chunks first, so a wide backtest range never risks the silent
+        per-request truncation _fetch_native_candles_page's own docstring
+        describes - each chunk is small enough to stay under it. Chunk
+        boundaries are exclusive-of-next-chunk-start (chunk_end computed
+        as one interval before the next chunk_start) so no candle is
+        requested twice."""
+        max_span = timedelta(minutes=interval_minutes * DELTA_MAX_CANDLES_PER_REQUEST)
+        if to_dt - from_dt <= max_span:
+            return self._fetch_native_candles_page(symbol, interval, interval_minutes, from_dt, to_dt)
+
+        candles: list[Candle] = []
+        chunk_start = from_dt
+        interval_delta = timedelta(minutes=interval_minutes)
+        while chunk_start <= to_dt:
+            chunk_end = min(chunk_start + max_span - interval_delta, to_dt)
+            candles.extend(self._fetch_native_candles_page(symbol, interval, interval_minutes, chunk_start, chunk_end))
+            chunk_start = chunk_end + interval_delta
+        return candles
+
+    def _fetch_native_candles_page(
+        self, symbol: str, interval: str, interval_minutes: int, from_dt: datetime, to_dt: datetime
+    ) -> list[Candle]:
+        """The actual single HTTP call - Delta's /v2/history/candles
+        silently truncates to its own internal row cap rather than
+        erroring or paginating when [from_dt, to_dt] needs more candles
+        than that (confirmed live 2026-08-16 - returns `success: true`
+        with just the most recent rows, nothing distinguishing that from
+        "genuinely this few exist") - see DELTA_MAX_CANDLES_PER_REQUEST's
+        own comment and _fetch_native_candles, which chunks around this
+        rather than calling this directly for a wide range."""
         resolution = _RESOLUTION_BY_MINUTES[interval_minutes]
 
         with self._candle_lock:
@@ -476,6 +541,70 @@ class DeltaProvider(QuoteProvider):
         from_dt = datetime.combine(from_date, datetime.min.time(), tzinfo=tz)
         to_dt = datetime.combine(to_date, datetime.max.time().replace(microsecond=0), tzinfo=tz)
         return self._fetch_candles(symbol, interval, from_dt, to_dt)
+
+    def get_data_availability(self, symbol: str, interval: str) -> DataAvailability:
+        """Unlike Dhan's fixed per-request cap, Delta's real constraint is
+        how far back it actually has data - a genuinely moving quantity
+        (see AVAILABILITY_PROBE_UPPER_BOUND_DAYS above), so this is a real
+        live probe, cached for AVAILABILITY_CACHE_TTL_SECONDS rather than
+        hardcoded."""
+        resolve_interval_minutes(interval, DELTA_CANDLE_INTERVAL_MINUTES)  # raises ValueError for a malformed interval
+
+        with self._availability_cache_lock:
+            cached = self._availability_cache.get((symbol, interval))
+        if cached is not None:
+            result, fetched_at = cached
+            if (time.monotonic() - fetched_at) < AVAILABILITY_CACHE_TTL_SECONDS:
+                return result
+
+        earliest = self._probe_earliest_available_date(symbol, interval)
+        note = (
+            f"Delta Exchange India's history for {symbol} appears to start around {earliest.isoformat()} - "
+            "checked live just now and cached for a few hours, not a fixed limit like Dhan's."
+            if earliest is not None
+            else f"Could not find any historical data for {symbol}/{interval} in the last "
+            f"{AVAILABILITY_PROBE_UPPER_BOUND_DAYS} days - check the symbol is a real, currently-listed perpetual."
+        )
+        result = DataAvailability(
+            exchange="CRYPTO",
+            symbol=symbol,
+            interval=interval,
+            max_days_per_request=None,
+            earliest_available_date=earliest.isoformat() if earliest is not None else None,
+            note=note,
+        )
+        with self._availability_cache_lock:
+            self._availability_cache[(symbol, interval)] = (result, time.monotonic())
+        return result
+
+    def _probe_earliest_available_date(self, symbol: str, interval: str) -> Optional[date]:
+        """Binary search over days-back for the earliest point Delta
+        actually returns candles for a narrow (AVAILABILITY_PROBE_WINDOW_DAYS)
+        window. lo=0 (today) is checked first and assumed reachable for any
+        real, currently-listed symbol; if even that's empty, gives up
+        rather than searching a dead symbol. ~11 probe calls to converge
+        on day precision, ~1s apart (MIN_CANDLE_CALL_INTERVAL_SECONDS's
+        own throttle) - a few seconds for a cold cache entry, acceptable
+        given the result is then cached for AVAILABILITY_CACHE_TTL_SECONDS."""
+        tz = ZoneInfo(settings.timezone)
+
+        def has_data(days_back: int) -> bool:
+            end = datetime.now(tz) - timedelta(days=days_back)
+            start = end - timedelta(days=AVAILABILITY_PROBE_WINDOW_DAYS)
+            return len(self._fetch_candles(symbol, interval, start, end)) > 0
+
+        if not has_data(0):
+            return None
+
+        lo, hi = 0, AVAILABILITY_PROBE_UPPER_BOUND_DAYS
+        while hi - lo > AVAILABILITY_PROBE_WINDOW_DAYS:
+            mid = (lo + hi) // 2
+            if has_data(mid):
+                lo = mid
+            else:
+                hi = mid
+
+        return (datetime.now(tz) - timedelta(days=lo)).date()
 
     def _cached_option_rows(self, underlying_asset: str) -> Optional[list[dict]]:
         with self._option_chain_cache_lock:

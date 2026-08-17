@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import candles, delta, dhan, health, instruments, options, quotes
 from app.providers.delta_feed import start_feed as start_delta_feed
+from app.providers.dhan import load_persisted_credentials
 from app.scheduler import start_scheduler
 
 app = FastAPI(title="market-data")
@@ -25,6 +26,7 @@ app.include_router(options.router)
 
 @app.on_event("startup")
 def _startup() -> None:
+    load_persisted_credentials()
     start_scheduler()
     # Dhan's live feed is no longer auto-started on boot - its
     # reconnect-on-every-restart behavior was hammering Dhan's own

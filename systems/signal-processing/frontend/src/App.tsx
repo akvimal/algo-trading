@@ -31,7 +31,7 @@ function todayLocalDate(): string {
 // 2-letter codes for the consolidated Info column's Horizon/Instrument
 // badges - null (not yet resolved) renders as "-" rather than looking
 // these up.
-const HORIZON_CODES: Record<string, string> = { intraday: "ID", swing: "SW", positional: "PO" };
+const HORIZON_CODES: Record<string, string> = { intraday: "ID", positional: "PO" };
 const INSTRUMENT_CODES: Record<string, string> = { spot: "SP", future: "FU", option: "OP" };
 
 // Status badge: 1-letter code + a color matching this page's existing

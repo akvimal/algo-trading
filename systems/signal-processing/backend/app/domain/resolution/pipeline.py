@@ -8,6 +8,12 @@ from app.domain.resolution.strategy import choose_strategy
 
 _TZ = "Asia/Kolkata"  # NSE-only platform end-to-end today - see execution.settings.timezone's own default.
 
+# Mon-Sun abbreviations, ISO order (Monday first) - matches Python's own
+# date.weekday() convention (0=Monday...6=Sunday), mirrors signal-generation's
+# identical WEEKDAY_NAMES (app/domain/models.py there) - duplicated, not
+# imported, since systems/* are self-contained (see docs/architecture.md).
+_WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
 
 def is_within_active_window(ts: datetime, active_windows: list[dict]) -> bool:
     """Pure, directly unit-testable - mirrors execution's own
@@ -23,16 +29,29 @@ def is_within_active_window(ts: datetime, active_windows: list[dict]) -> bool:
     return any(time.fromisoformat(w["start"]) <= local_time <= time.fromisoformat(w["end"]) for w in active_windows)
 
 
+def matches_active_weekday(ts: datetime, active_weekdays: list[str]) -> bool:
+    """Pure, directly unit-testable - same shape as is_within_active_window
+    above, for the day-of-week filter instead of time-of-day. `ts` is the
+    signal's own timestamp, not wall-clock time at resolution. True if
+    today's (in IST) weekday name is in active_weekdays (e.g.
+    ["Mon","Tue","Wed","Thu","Fri"]). Caller (resolve() below) already
+    skips this entirely when active_weekdays is empty, so this is never
+    called with one."""
+    local_date = ts.astimezone(ZoneInfo(_TZ)).date()
+    return _WEEKDAY_NAMES[local_date.weekday()] in active_weekdays
+
+
 def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
     """horizon/instrument_type come from the signal's Strategy
     (signal-generation), not from guessing - see docs/architecture.md.
     Position size is deliberately not decided here - execution computes
     its own quantity from capital_per_trade and the signal's price.
     Raises ResolutionError if the strategy is unknown, unreachable, not
-    live, or the signal arrived outside every one of the strategy's
-    optional active_windows (every source_type, not just in_house); the
-    caller persists that as a rejected order and does not publish to the
-    Redis stream. Manual test signals (source="manual" - the frontend's
+    live, the signal arrived outside every one of the strategy's optional
+    active_windows, or on a day outside its optional active_weekdays
+    (both every source_type, not just in_house); the caller persists that
+    as a rejected order and does not publish to the Redis stream. Manual
+    test signals (source="manual" - the frontend's
     "Send test signal"/Manual tab) are exempt from the live-status check
     only, so a strategy can be exercised end-to-end before being promoted
     to live - every other source (chartink, in_house) still requires it."""
@@ -57,6 +76,14 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         if not is_within_active_window(signal.timestamp, active_windows):
             windows_desc = ", ".join(f"{w['start']}–{w['end']}" for w in active_windows)
             raise ResolutionError(f"signal received outside strategy's active window(s) ({windows_desc} IST)")
+
+    active_weekdays = strategy.get("active_weekdays") or []
+    if active_weekdays:
+        if signal.timestamp is None:
+            raise ResolutionError("signal has no timestamp - cannot evaluate active weekday")
+        if not matches_active_weekday(signal.timestamp, active_weekdays):
+            weekdays_desc = ", ".join(active_weekdays)
+            raise ResolutionError(f"signal received on a day outside strategy's active weekday(s) ({weekdays_desc})")
 
     horizon = strategy["horizon"]
     instrument_type = strategy["instrument_type"]
@@ -92,8 +119,9 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         # NOT passed into choose_strategy - it only affects how execution
         # monitors/closes an already-resolved group, not which legs get built.
         option_sl_scope=strategy.get("option_sl_scope", "combined") if instrument_type == "option" else None,
-        # instrument_type='option' only - takes precedence over stop-loss-
-        # based sizing entirely in execution when set. See
+        # Every instrument_type (renamed from option_fixed_lots, which used
+        # to be options-only) - takes precedence over stop-loss-based
+        # sizing entirely in execution when set. See
         # docs/contracts/resolved-order.schema.json.
-        option_fixed_lots=strategy.get("option_fixed_lots") if instrument_type == "option" else None,
+        fixed_lots=strategy.get("fixed_lots"),
     )

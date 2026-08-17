@@ -34,7 +34,7 @@ class ResolvedOrderDraft(BaseModel):
     Matches docs/contracts/resolved-order.schema.json minus the fields
     that only exist once persisted (signal_id, resolved_at, status)."""
 
-    horizon: Literal["intraday", "swing", "positional"]
+    horizon: Literal["intraday", "positional"]
     instrument_type: Literal["spot", "future", "option"]
     segment: Literal["NSE", "MCX", "CRYPTO"]
     strategy: Optional[dict] = None
@@ -50,4 +50,5 @@ class ResolvedOrderDraft(BaseModel):
     counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
     # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.
     option_sl_scope: Optional[Literal["combined", "individual"]] = None
-    option_fixed_lots: Optional[int] = None
+    # Every instrument_type - see docs/contracts/resolved-order.schema.json.
+    fixed_lots: Optional[int] = None

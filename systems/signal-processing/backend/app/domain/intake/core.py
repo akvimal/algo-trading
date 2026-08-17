@@ -144,6 +144,6 @@ def resolve_and_finalize_signal(db: Session, signal_id: str, signal: SignalInges
             "duplicate_signal_policy": resolved.duplicate_signal_policy,
             "counter_signal_policy": resolved.counter_signal_policy,
             "option_sl_scope": resolved.option_sl_scope,
-            "option_fixed_lots": resolved.option_fixed_lots,
+            "fixed_lots": resolved.fixed_lots,
         }
     )

@@ -47,6 +47,11 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         "stop_loss_price": float(row.stop_loss_price) if row.stop_loss_price is not None else None,
         "target_price": float(row.target_price) if row.target_price is not None else None,
         "trailing_stop_enabled": row.trailing_stop_enabled,
+        "stop_loss_method": row.stop_loss_method,
+        "stop_loss_interval": row.stop_loss_interval,
+        "stop_loss_percent": float(row.stop_loss_percent) if row.stop_loss_percent is not None else None,
+        "stop_loss_indicator_type": row.stop_loss_indicator_type,
+        "stop_loss_indicator_params": row.stop_loss_indicator_params,
         "exit_reason": row.exit_reason,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "option_group_id": str(row.option_group_id) if row.option_group_id is not None else None,
@@ -107,6 +112,14 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
         settings,
         db,
         resolve_underlying,
+        get_previous_candle,
+        get_candle_history,
+        payload.stop_loss_method,
+        payload.stop_loss_interval,
+        payload.stop_loss_percent,
+        payload.stop_loss_indicator_type,
+        payload.stop_loss_indicator_params,
+        payload.trailing_stop_enabled,
     )
     return _position_to_out(row)
 
@@ -114,7 +127,12 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
 @router.put("/positions/{position_id}/stop-loss")
 def edit_stop_loss(position_id: str, payload: StopLossUpdate, db: Session = Depends(get_db)):
     """Generically useful, not manual-only - editing SL on any already-open
-    position. 404 if missing, 409 if not OPEN."""
+    position, including attaching/replacing a trailing, method-based
+    stop-loss after the fact (percent/previous_candle/indicator - see
+    StopLossUpdate/update_stop_loss). 404 if missing, 409 if not OPEN, 422
+    if a stop_loss_method was given but couldn't be computed (not enough
+    history yet, wrong side of entry, etc - the position's existing
+    stop-loss is left untouched in that case)."""
     try:
         parsed_id = uuid.UUID(position_id)
     except ValueError:
@@ -126,7 +144,21 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, db: Session = Depe
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
-    row = update_stop_loss(db, parsed_id, payload.stop_loss_price)
+    row, reject_reason = update_stop_loss(
+        db,
+        parsed_id,
+        payload.stop_loss_price,
+        payload.stop_loss_method,
+        payload.stop_loss_interval,
+        payload.stop_loss_percent,
+        payload.stop_loss_indicator_type,
+        payload.stop_loss_indicator_params,
+        payload.trailing_stop_enabled,
+        get_previous_candle,
+        get_candle_history,
+    )
+    if reject_reason is not None:
+        raise HTTPException(status_code=422, detail=reject_reason)
     return _position_to_out(row)
 
 

@@ -90,22 +90,114 @@ def compute_ema(closes: list[float], period: int) -> list[Optional[float]]:
     return ema
 
 
-def _ema_stop_value(closes: list[float], params: dict) -> Optional[float]:
-    ema = compute_ema(closes, params["period"])
+def compute_atr(candles: list[dict], period: int) -> list[Optional[float]]:
+    """Wilder-smoothed true range - direct port of signal-generation's
+    app/domain/regime.py compute_atr, operating on the raw candle dicts
+    get_candle_history returns (each with at least high/low/close) rather
+    than its CandleClose dataclass - same duplicate-not-import reasoning
+    as compute_ema above."""
+    n = len(candles)
+    atr: list[Optional[float]] = [None] * n
+    if n <= period:
+        return atr
+
+    true_ranges = [
+        max(
+            candles[i]["high"] - candles[i]["low"],
+            abs(candles[i]["high"] - candles[i - 1]["close"]),
+            abs(candles[i]["low"] - candles[i - 1]["close"]),
+        )
+        for i in range(1, n)
+    ]
+
+    avg_tr = sum(true_ranges[:period]) / period
+    atr[period] = avg_tr
+    for i in range(period, len(true_ranges)):
+        avg_tr = (avg_tr * (period - 1) + true_ranges[i]) / period
+        atr[i + 1] = avg_tr
+    return atr
+
+
+def compute_supertrend(candles: list[dict], period: int, multiplier: float) -> list[Optional[float]]:
+    """Standard SuperTrend line - direct port of signal-generation's
+    app/domain/regime.py compute_supertrend (see that function's own
+    docstring for why this returns one flat scalar series rather than
+    separate band/direction outputs). Duplicated, not imported - same
+    reasoning as compute_ema/compute_atr above."""
+    n = len(candles)
+    atr = compute_atr(candles, period)
+    supertrend: list[Optional[float]] = [None] * n
+    final_upper: list[Optional[float]] = [None] * n
+    final_lower: list[Optional[float]] = [None] * n
+    direction: list[Optional[int]] = [None] * n
+
+    for i in range(n):
+        if atr[i] is None:
+            continue
+        mid = (candles[i]["high"] + candles[i]["low"]) / 2
+        basic_upper = mid + multiplier * atr[i]
+        basic_lower = mid - multiplier * atr[i]
+
+        prev = i - 1
+        if prev < 0 or final_upper[prev] is None:
+            final_upper[i] = basic_upper
+            final_lower[i] = basic_lower
+            direction[i] = -1 if candles[i]["close"] <= basic_upper else 1
+            supertrend[i] = final_upper[i] if direction[i] == -1 else final_lower[i]
+            continue
+
+        final_upper[i] = (
+            basic_upper
+            if (basic_upper < final_upper[prev] or candles[prev]["close"] > final_upper[prev])
+            else final_upper[prev]
+        )
+        final_lower[i] = (
+            basic_lower
+            if (basic_lower > final_lower[prev] or candles[prev]["close"] < final_lower[prev])
+            else final_lower[prev]
+        )
+
+        if direction[prev] == 1:
+            if candles[i]["close"] < final_lower[i]:
+                direction[i] = -1
+                supertrend[i] = final_upper[i]
+            else:
+                direction[i] = 1
+                supertrend[i] = final_lower[i]
+        else:
+            if candles[i]["close"] > final_upper[i]:
+                direction[i] = 1
+                supertrend[i] = final_lower[i]
+            else:
+                direction[i] = -1
+                supertrend[i] = final_upper[i]
+
+    return supertrend
+
+
+def _ema_stop_value(candles: list[dict], params: dict) -> Optional[float]:
+    ema = compute_ema([c["close"] for c in candles], params["period"])
     return ema[-1] if ema and ema[-1] is not None else None
 
 
-# stop_loss_indicator_type -> (closes, params) -> candidate stop value.
-# Mirrors signal-generation's own _STOP_LOSS_COMPUTE_FUNCS
-# (app/domain/backtest.py) exactly - a deliberate duplicate registry, not
-# shared, so live and backtest can never disagree about what a given
-# indicator_type+params computes. Adding a second indicator type (e.g.
-# SuperTrend) means a new entry here AND there, plus widening both
-# systems' DB CHECK constraints and the contract's own enum - see
-# signal-generation's app/domain/rule.py for the equivalent comment on
-# its own params-validation registry.
-_STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[float], dict], Optional[float]]] = {
+def _supertrend_stop_value(candles: list[dict], params: dict) -> Optional[float]:
+    st = compute_supertrend(candles, params["period"], params["multiplier"])
+    return st[-1] if st and st[-1] is not None else None
+
+
+# stop_loss_indicator_type -> (candles, params) -> candidate stop value.
+# Takes the raw candle dicts (not just closes) since SuperTrend needs
+# high/low too - EMA just ignores them. Mirrors signal-generation's own
+# _STOP_LOSS_COMPUTE_FUNCS (app/domain/backtest.py) exactly - a deliberate
+# duplicate registry, not shared, so live and backtest can never disagree
+# about what a given indicator_type+params computes. Adding a second
+# indicator type (e.g. SuperTrend) means a new entry here AND there, plus
+# widening both systems' DB CHECK constraints and the contract's own enum
+# - see signal-generation's app/domain/rule.py for the equivalent comment
+# on its own params-validation registry.
+_STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[dict], dict], Optional[float]]] = {
     "ema": _ema_stop_value,
+    "supertrend": _supertrend_stop_value,
 }
 
 # Rough over-estimate of calendar days needed to cover `bar_count` bars at
@@ -294,6 +386,74 @@ def _reject_manual(
     return row
 
 
+def _resolve_stop_loss(
+    method: Optional[str],
+    action: str,
+    price: float,
+    interval: Optional[str],
+    percent: Optional[float],
+    indicator_type: Optional[str],
+    indicator_params: Optional[dict],
+    exchange: str,
+    symbol: str,
+    get_previous_candle: GetPreviousCandle,
+    get_candle_history: GetCandleHistory,
+) -> tuple[Optional[float], Optional[str]]:
+    """Computes a stop-loss price for `method` ('percent'/'previous_candle'/
+    'indicator') at open time - returns (price, None) on success or
+    (None, reason) on failure (no completed candle yet, not enough
+    indicator history yet, unrecognized indicator_type, or an indicator
+    value that lands on the wrong side of entry). method=None returns
+    (None, None) - no stop-loss requested at all.
+
+    Shared by open_position (Strategy-driven, every field sourced from a
+    ResolvedOrder already validated upstream in signal-generation) and
+    open_manual_position (Manual tab, validated by ManualPositionCreate's
+    own model_validator instead) so both compute a stop-loss identically -
+    previously only open_position had this dispatch; open_manual_position
+    took nothing but a raw caller-supplied price."""
+    if method is None:
+        return None, None
+
+    if method == "percent":
+        return compute_stop_loss_percent_price(action, price, percent), None
+
+    if method == "previous_candle":
+        candle = get_previous_candle(exchange, symbol, interval)
+        if candle is None:
+            return None, (
+                f"stop_loss_method='previous_candle' but no completed {interval} candle available for {symbol} yet"
+            )
+        return (candle["low"] if action == "BUY" else candle["high"]), None
+
+    # method == "indicator"
+    compute = _STOP_LOSS_COMPUTE_FUNCS.get(indicator_type)
+    if compute is None:
+        return None, f"unrecognized stop_loss_indicator_type '{indicator_type}'"
+    warmup_from, warmup_to = _indicator_history_window((indicator_params or {}).get("period", 20), interval)
+    history = get_candle_history(exchange, symbol, interval, warmup_from, warmup_to)
+    candidate = compute(history, indicator_params or {})
+    if candidate is None:
+        return None, (
+            f"stop_loss_method='indicator' ({indicator_type}) but not enough {interval} history available "
+            f"for {symbol} yet"
+        )
+    # A raw indicator value has no direction concept at all (unlike
+    # previous_candle's own low/high split, which is directionally safe by
+    # construction) - a value on the WRONG side of entry (e.g. a slow EMA
+    # still above entry for a fresh BUY after a downtrend) isn't a
+    # protective stop, it's a near-certain instant "stop-out" at a phantom
+    # price the market may never trade at. Reject cleanly rather than open
+    # an unprotected/nonsensical position - reproduced live via backtest
+    # (EMA(400) ~415 points above a bullish entry).
+    if (action == "BUY" and candidate >= price) or (action == "SELL" and candidate <= price):
+        return None, (
+            f"stop_loss_method='indicator' ({indicator_type}) computed {candidate} - not on the protective side "
+            f"of entry ({price}) for a {action}, not usable as a stop-loss"
+        )
+    return candidate, None
+
+
 def open_position(
     order: ResolvedOrder,
     settings: ExecutionSettings,
@@ -407,88 +567,60 @@ def open_position(
             return row
         lot_size = resolved_lot_size
 
-    if effective_capital < order.price * lot_size:
+    # order.fixed_lots (Strategy-level, every instrument_type) overrides
+    # auto-sizing below entirely, but the balance check still runs against
+    # its real cost, not a 1-lot minimum - a fixed count that's genuinely
+    # unaffordable against current_balance still rejects cleanly, same
+    # "paper trading still respects the simulated balance" reasoning every
+    # other rejection case here already has. Mirrors
+    # option_position_manager.open_option_group's own identical handling.
+    required_lots = order.fixed_lots if order.fixed_lots is not None else 1
+    if effective_capital < order.price * lot_size * required_lots:
         capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
         row = _reject(
             db,
             order,
             signal_id,
             f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
-            f"need at least {order.price * lot_size} for 1 lot)",
+            f"need at least {order.price * lot_size * required_lots} for {required_lots} lot(s))",
         )
         db.commit()
         return row
 
-    stop_loss_price: Optional[float] = None
+    stop_loss_price, sl_reject_reason = _resolve_stop_loss(
+        order.stop_loss_method,
+        order.action,
+        order.price,
+        order.stop_loss_interval,
+        order.stop_loss_percent,
+        order.stop_loss_indicator_type,
+        order.stop_loss_indicator_params,
+        order.exchange,
+        order.symbol,
+        get_previous_candle,
+        get_candle_history,
+    )
+    if sl_reject_reason is not None:
+        row = _reject(db, order, signal_id, sl_reject_reason)
+        db.commit()
+        return row
+
     target_price: Optional[float] = None
-
-    if order.stop_loss_method == "percent":
-        stop_loss_price = compute_stop_loss_percent_price(order.action, order.price, order.stop_loss_percent)
-    elif order.stop_loss_method == "previous_candle":
-        candle = get_previous_candle(order.exchange, order.symbol, order.stop_loss_interval)
-        if candle is None:
-            row = _reject(
-                db,
-                order,
-                signal_id,
-                f"stop_loss_method='previous_candle' but no completed {order.stop_loss_interval} candle "
-                f"available for {order.symbol} yet",
-            )
-            db.commit()
-            return row
-        stop_loss_price = candle["low"] if order.action == "BUY" else candle["high"]
-    elif order.stop_loss_method == "indicator":
-        compute = _STOP_LOSS_COMPUTE_FUNCS.get(order.stop_loss_indicator_type)
-        if compute is None:
-            row = _reject(
-                db, order, signal_id, f"unrecognized stop_loss_indicator_type '{order.stop_loss_indicator_type}'"
-            )
-            db.commit()
-            return row
-        warmup_from, warmup_to = _indicator_history_window(
-            order.stop_loss_indicator_params.get("period", 20), order.stop_loss_interval
-        )
-        history = get_candle_history(order.exchange, order.symbol, order.stop_loss_interval, warmup_from, warmup_to)
-        closes = [c["close"] for c in history]
-        stop_loss_price = compute(closes, order.stop_loss_indicator_params)
-        if stop_loss_price is None:
-            row = _reject(
-                db,
-                order,
-                signal_id,
-                f"stop_loss_method='indicator' ({order.stop_loss_indicator_type}) but not enough {order.stop_loss_interval} "
-                f"history available for {order.symbol} yet",
-            )
-            db.commit()
-            return row
-        # The compute functions return a raw indicator value with no
-        # direction concept at all (unlike previous_candle's own low/high
-        # split, which is directionally safe by construction) - a value
-        # that lands on the WRONG side of entry (e.g. a slow EMA still
-        # above entry for a fresh BUY after a downtrend) isn't a
-        # protective stop, it's a near-certain instant "stop-out" at a
-        # phantom price the market may never trade at, fabricating a
-        # same-direction profit instead of limiting a loss - reproduced
-        # live via backtest (EMA(400) ~415 points above a bullish entry).
-        # Reject cleanly rather than open an unprotected/nonsensical
-        # position, same as the "not enough history" case just above.
-        if (order.action == "BUY" and stop_loss_price >= order.price) or (
-            order.action == "SELL" and stop_loss_price <= order.price
-        ):
-            row = _reject(
-                db,
-                order,
-                signal_id,
-                f"stop_loss_method='indicator' ({order.stop_loss_indicator_type}) computed {stop_loss_price} - "
-                f"not on the protective side of entry ({order.price}) for a {order.action}, not usable as a stop-loss",
-            )
-            db.commit()
-            return row
-
     if order.target_percent is not None:
         target_price = compute_target_percent_price(order.action, order.price, order.target_percent)
 
-    if stop_loss_price is not None:
+    if order.fixed_lots is not None:
+        # Strategy-level override (every instrument_type) - trades exactly
+        # this many lots instead of auto-sizing off capital/risk% - takes
+        # precedence over stop-loss-based sizing entirely, even when a
+        # stop-loss is also configured. stop_loss_price above is still
+        # computed and stored as normal; only its role in SIZING (including
+        # the "stop equals entry, can't size by risk" rejection just below,
+        # which only makes sense when actually sizing BY risk) is bypassed
+        # here. Mirrors option_position_manager.open_option_group's own
+        # identical handling.
+        quantity = order.fixed_lots * lot_size
+    elif stop_loss_price is not None:
         stop_distance = abs(order.price - stop_loss_price)
         if stop_distance <= 0:
             row = _reject(
@@ -545,6 +677,14 @@ def open_manual_position(
     settings: ExecutionSettings,
     db: Session,
     resolve_underlying: ResolveUnderlying,
+    get_previous_candle: Optional[GetPreviousCandle] = None,
+    get_candle_history: Optional[GetCandleHistory] = None,
+    stop_loss_method: Optional[str] = None,
+    stop_loss_interval: Optional[str] = None,
+    stop_loss_percent: Optional[float] = None,
+    stop_loss_indicator_type: Optional[str] = None,
+    stop_loss_indicator_params: Optional[dict] = None,
+    trailing_stop_enabled: bool = False,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -552,15 +692,30 @@ def open_manual_position(
     sizing/gates). Deliberately NOT a ResolvedOrder - that type
     represents the signal-processing contract, and a manual order never
     touches it. Mirrors open_position's gates/sizing exactly (read that
-    function alongside this one), with two differences: no Strategy means
-    no stop-loss method/percent-target/horizon to carry, so those are
-    simplified to "caller supplies a raw stop-loss price directly, horizon
-    is always intraday" (the only value is_supported() ever accepts
-    anyway); and `quantity`, if given, bypasses auto-sizing entirely - same
-    precedence pattern already used for Strategy.option_fixed_lots in
-    open_option_group. square_off_time is no longer a caller-supplied
-    parameter - like open_position, it's looked up from the segment's own
-    account row below.
+    function alongside this one); `quantity`, if given, bypasses
+    auto-sizing entirely - same precedence pattern already used for
+    Strategy.fixed_lots in open_position/open_option_group. square_off_time
+    is no longer a caller-supplied parameter - like open_position, it's
+    looked up from the segment's own account row below.
+
+    Stop-loss: the caller passes EITHER a raw `stop_loss_price` (fixed at
+    entry, `stop_loss_method` left None - the original manual-tab
+    behavior) OR `stop_loss_method` + its own sibling fields, computed via
+    the same `_resolve_stop_loss` dispatch open_position uses (percent/
+    previous_candle/indicator) - ManualPositionCreate's own model_validator
+    is what actually enforces these are mutually exclusive and that a
+    method's required siblings are present; this function trusts that's
+    already been checked. `get_previous_candle`/`get_candle_history`
+    default to None since most callers (a fixed stop_loss_price, or none
+    at all) never need them - only stop_loss_method='previous_candle'/
+    'indicator' do, and ManualPositionCreate can't set either of those
+    without the interval/percent/indicator fields the validator requires,
+    so a caller that reaches this branch without supplying them is a
+    caller bug, not a runtime possibility from the real route.
+    `trailing_stop_enabled` is stored as-is and picked up by the SAME
+    exit-monitor trailing logic (_evaluate_exits) Strategy-driven
+    positions already use - no separate mechanism needed, since that
+    function has never cared whether strategy_id is set.
 
     `symbol` for instrument_type='future' is whatever the caller typed
     (e.g. "BANKNIFTY", the bare underlying) - it is NOT yet the actual
@@ -601,6 +756,25 @@ def open_manual_position(
         # the caller typed.
         symbol = resolved["trade_symbol"]
         lot_size = resolved["lot_size"]
+
+    if stop_loss_method is not None:
+        stop_loss_price, sl_reject_reason = _resolve_stop_loss(
+            stop_loss_method,
+            action,
+            price,
+            stop_loss_interval,
+            stop_loss_percent,
+            stop_loss_indicator_type,
+            stop_loss_indicator_params,
+            segment,
+            symbol,
+            get_previous_candle,
+            get_candle_history,
+        )
+        if sl_reject_reason is not None:
+            row = _reject_manual(db, signal_id, symbol, segment, segment, action, instrument_type, price, sl_reject_reason)
+            db.commit()
+            return row
 
     account = load_account(db, segment)
     if account is None:
@@ -712,6 +886,12 @@ def open_manual_position(
         status="OPEN",
         stop_loss_price=stop_loss_price,
         initial_stop_loss_price=stop_loss_price,
+        trailing_stop_enabled=trailing_stop_enabled,
+        stop_loss_method=stop_loss_method,
+        stop_loss_interval=stop_loss_interval,
+        stop_loss_percent=stop_loss_percent,
+        stop_loss_indicator_type=stop_loss_indicator_type,
+        stop_loss_indicator_params=stop_loss_indicator_params,
         square_off_time=account.square_off_time,
     )
     db.add(row)
@@ -719,16 +899,80 @@ def open_manual_position(
     return row
 
 
-def update_stop_loss(db: Session, position_id: uuid.UUID, new_price: float) -> Optional[db_models.Position]:
+def update_stop_loss(
+    db: Session,
+    position_id: uuid.UUID,
+    stop_loss_price: Optional[float],
+    stop_loss_method: Optional[str] = None,
+    stop_loss_interval: Optional[str] = None,
+    stop_loss_percent: Optional[float] = None,
+    stop_loss_indicator_type: Optional[str] = None,
+    stop_loss_indicator_params: Optional[dict] = None,
+    trailing_stop_enabled: bool = False,
+    get_previous_candle: Optional[GetPreviousCandle] = None,
+    get_candle_history: Optional[GetCandleHistory] = None,
+) -> tuple[Optional[db_models.Position], Optional[str]]:
     """Generically useful, not manual-only - editing SL on any already-open
-    position. Never touches initial_stop_loss_price, an immutable audit
-    column set once at open time."""
+    position, including (new) attaching or replacing a trailing,
+    method-based stop-loss AFTER the position is already open - the same
+    percent/previous_candle/indicator choice ManualPositionCreate offers
+    at order placement time (StopLossUpdate's own model_validator enforces
+    the same mutual-exclusion/required-siblings rules before this is ever
+    called). `stop_loss_method=None` sets a flat, fixed `stop_loss_price`
+    directly (the original behavior) and clears any previously-armed
+    trailing method. Never touches initial_stop_loss_price, an immutable
+    audit column set once at open time.
+
+    Returns (row, reject_reason) - reject_reason is only ever non-None for
+    the method branch (not enough history yet, wrong side of the
+    position's own entry_price, etc, via _resolve_stop_loss), in which
+    case the position's stop-loss is left completely untouched rather than
+    partially applied. Uses `row.entry_price` as the reference price for
+    _resolve_stop_loss's own wrong-side guard (not a fresh CMP fetch) -
+    same reference point open_position/open_manual_position already use
+    at order-placement time; any staleness self-corrects on the very next
+    check_exits tick once trailing_stop_enabled is on, same as a freshly-
+    opened position's own indicator stop would."""
     row = db.get(db_models.Position, position_id)
     if row is None:
-        return None
-    row.stop_loss_price = new_price
+        return None, None
+
+    if stop_loss_method is None:
+        row.stop_loss_price = stop_loss_price
+        row.stop_loss_method = None
+        row.stop_loss_interval = None
+        row.stop_loss_percent = None
+        row.stop_loss_indicator_type = None
+        row.stop_loss_indicator_params = None
+        row.trailing_stop_enabled = False
+        db.commit()
+        return row, None
+
+    resolved_price, reject_reason = _resolve_stop_loss(
+        stop_loss_method,
+        row.action,
+        float(row.entry_price),
+        stop_loss_interval,
+        stop_loss_percent,
+        stop_loss_indicator_type,
+        stop_loss_indicator_params,
+        row.exchange,
+        row.symbol,
+        get_previous_candle,
+        get_candle_history,
+    )
+    if reject_reason is not None:
+        return row, reject_reason
+
+    row.stop_loss_price = resolved_price
+    row.stop_loss_method = stop_loss_method
+    row.stop_loss_interval = stop_loss_interval
+    row.stop_loss_percent = stop_loss_percent
+    row.stop_loss_indicator_type = stop_loss_indicator_type
+    row.stop_loss_indicator_params = stop_loss_indicator_params
+    row.trailing_stop_enabled = trailing_stop_enabled
     db.commit()
-    return row
+    return row, None
 
 
 def _quotes_by_exchange(positions: list, get_ltp_batch: GetLtpBatch) -> dict[tuple[str, str], float]:
@@ -1046,8 +1290,7 @@ def _evaluate_exits(
                         candle_history_cache[key] = []
                 compute = _STOP_LOSS_COMPUTE_FUNCS.get(pos.stop_loss_indicator_type)
                 if compute is not None and candle_history_cache[key]:
-                    closes = [c["close"] for c in candle_history_cache[key]]
-                    raw_candidate = compute(closes, pos.stop_loss_indicator_params or {})
+                    raw_candidate = compute(candle_history_cache[key], pos.stop_loss_indicator_params or {})
                     # Same wrong-side guard as open_position's own indicator
                     # branch - a candidate that isn't on the protective side
                     # of the CURRENT price isn't a real trailing update,

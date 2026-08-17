@@ -41,7 +41,7 @@ def update_account(segment: str, update: AccountUpdate, db: Session = Depends(ge
     not just "leave unchanged" - model_fields_set distinguishes an
     explicit {"square_off_time": null} from the key being omitted
     entirely, same pattern signal-generation's update_strategy uses for
-    option_fixed_lots."""
+    fixed_lots."""
     row = db.get(db_models.Account, segment.upper())
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")

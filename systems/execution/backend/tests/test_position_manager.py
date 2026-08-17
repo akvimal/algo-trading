@@ -10,11 +10,14 @@ from app.domain.position_manager import (
     _evaluate_exits,
     _evaluate_square_off_due,
     _resolve_signal_conflicts,
+    _resolve_stop_loss,
+    compute_atr,
     compute_ema,
     compute_pnl,
     compute_quantity,
     compute_risk_based_quantity,
     compute_stop_loss_percent_price,
+    compute_supertrend,
     compute_target_percent_price,
     compute_unrealized_pnl,
     is_supported,
@@ -117,8 +120,8 @@ def test_compute_quantity_fractional_lot_size_for_crypto():
 def test_is_supported_intraday_spot_or_future():
     assert is_supported("intraday", "spot") is True
     assert is_supported("intraday", "future") is True
-    assert is_supported("swing", "spot") is False
-    assert is_supported("swing", "future") is False
+    assert is_supported("positional", "spot") is False
+    assert is_supported("positional", "future") is False
     assert is_supported("intraday", "option") is False
 
 
@@ -477,12 +480,137 @@ def test_compute_ema_matches_hand_traced_series():
 
 def test_stop_loss_compute_funcs_ema_dispatch():
     compute = _STOP_LOSS_COMPUTE_FUNCS["ema"]
-    assert compute([20.0, 20.0, 20.0, 20.0, 8.0], {"period": 2}) == pytest.approx(12.0)
+    candles = [{"close": c} for c in [20.0, 20.0, 20.0, 20.0, 8.0]]
+    assert compute(candles, {"period": 2}) == pytest.approx(12.0)
 
 
 def test_stop_loss_compute_funcs_ema_insufficient_history_returns_none():
     compute = _STOP_LOSS_COMPUTE_FUNCS["ema"]
-    assert compute([10.0], {"period": 2}) is None
+    assert compute([{"close": 10.0}], {"period": 2}) is None
+
+
+def test_compute_atr_settles_to_the_constant_true_range():
+    # Direct port of signal-generation's own test_compute_atr_settles_to_
+    # the_constant_true_range (test_regime.py) - high=close+1/low=close-1,
+    # constant true range of 2 on every bar, so ATR must settle to exactly
+    # 2.0. Confirms this duplicated port matches the original.
+    candles = [{"close": 50 + i, "high": 50 + i + 1, "low": 50 + i - 1} for i in range(20)]
+    atr = compute_atr(candles, period=5)
+    assert atr[-1] == pytest.approx(2.0)
+
+
+def test_compute_supertrend_settles_below_price_in_a_steady_uptrend():
+    # Same fixture/reasoning as signal-generation's
+    # test_compute_supertrend_settles_below_price_in_a_steady_uptrend
+    # (test_regime.py) - confirms this duplicated port matches the original.
+    candles = [{"close": 50 + i, "high": 50 + i + 1, "low": 50 + i - 1} for i in range(20)]
+    st = compute_supertrend(candles, period=5, multiplier=1.0)
+    assert st[-1] == pytest.approx(candles[-1]["close"] - 2.0)
+
+
+def test_stop_loss_compute_funcs_supertrend_dispatch():
+    compute = _STOP_LOSS_COMPUTE_FUNCS["supertrend"]
+    candles = [{"close": 50 + i, "high": 50 + i + 1, "low": 50 + i - 1} for i in range(20)]
+    assert compute(candles, {"period": 5, "multiplier": 1.0}) == pytest.approx(candles[-1]["close"] - 2.0)
+
+
+def test_stop_loss_compute_funcs_supertrend_insufficient_history_returns_none():
+    compute = _STOP_LOSS_COMPUTE_FUNCS["supertrend"]
+    candles = [{"close": 50 + i, "high": 50 + i + 1, "low": 50 + i - 1} for i in range(4)]
+    assert compute(candles, {"period": 5, "multiplier": 1.0}) is None
+
+
+def test_resolve_stop_loss_none_method_is_a_noop():
+    price, reason = _resolve_stop_loss(
+        None, "BUY", 100.0, None, None, None, None, "NSE", "RELIANCE", lambda *a: None, lambda *a: []
+    )
+    assert price is None
+    assert reason is None
+
+
+def test_resolve_stop_loss_percent():
+    price, reason = _resolve_stop_loss(
+        "percent", "BUY", 100.0, None, 2.0, None, None, "NSE", "RELIANCE", lambda *a: None, lambda *a: []
+    )
+    assert price == pytest.approx(98.0)
+    assert reason is None
+
+
+def test_resolve_stop_loss_previous_candle_uses_low_for_buy():
+    price, reason = _resolve_stop_loss(
+        "previous_candle", "BUY", 100.0, "5min", None, None, None, "NSE", "RELIANCE",
+        lambda ex, sym, interval: {"low": 97.0, "high": 101.0}, lambda *a: [],
+    )
+    assert price == 97.0
+    assert reason is None
+
+
+def test_resolve_stop_loss_previous_candle_missing_is_rejected():
+    price, reason = _resolve_stop_loss(
+        "previous_candle", "BUY", 100.0, "5min", None, None, None, "NSE", "RELIANCE",
+        lambda *a: None, lambda *a: [],
+    )
+    assert price is None
+    assert "no completed 5min candle" in reason
+
+
+def test_resolve_stop_loss_indicator_ema():
+    candles = [{"close": 96.0}, {"close": 96.0}, {"close": 96.0}, {"close": 96.0}, {"close": 100.0}]
+    price, reason = _resolve_stop_loss(
+        "indicator", "BUY", 100.0, "5min", None, "ema", {"period": 2}, "NSE", "RELIANCE",
+        lambda *a: None, lambda *a: candles,
+    )
+    assert price == pytest.approx(98.66666666666666)
+    assert reason is None
+
+
+def test_resolve_stop_loss_indicator_unrecognized_type_is_rejected():
+    price, reason = _resolve_stop_loss(
+        "indicator", "BUY", 100.0, "5min", None, "macd", {}, "NSE", "RELIANCE", lambda *a: None, lambda *a: [],
+    )
+    assert price is None
+    assert "unrecognized stop_loss_indicator_type" in reason
+
+
+def test_resolve_stop_loss_indicator_insufficient_history_is_rejected():
+    price, reason = _resolve_stop_loss(
+        "indicator", "BUY", 100.0, "5min", None, "ema", {"period": 20}, "NSE", "RELIANCE",
+        lambda *a: None, lambda *a: [{"close": 96.0}],
+    )
+    assert price is None
+    assert "not enough 5min history" in reason
+
+
+def test_resolve_stop_loss_indicator_wrong_side_of_entry_is_rejected():
+    # EMA candidate (102.0) sits ABOVE entry (100.0) - not a protective
+    # stop for a BUY, same wrong-side guard _evaluate_exits' trailing path
+    # already has for its own candidates.
+    candles = [{"close": 102.0}, {"close": 102.0}]
+    price, reason = _resolve_stop_loss(
+        "indicator", "BUY", 100.0, "5min", None, "ema", {"period": 2}, "NSE", "RELIANCE",
+        lambda *a: None, lambda *a: candles,
+    )
+    assert price is None
+    assert "not on the protective side of entry" in reason
+
+
+def test_evaluate_exits_trails_indicator_supertrend_stop():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY",
+                     entry_price=40.0, quantity=1, stop_loss_price=30.0, trailing_stop_enabled=True,
+                     stop_loss_method="indicator", stop_loss_interval="5min",
+                     stop_loss_indicator_type="supertrend", stop_loss_indicator_params={"period": 5, "multiplier": 1.0}),
+    ]
+    candles = [{"close": 50 + i, "high": 50 + i + 1, "low": 50 + i - 1} for i in range(20)]
+    # SuperTrend settles to close[-1]-2.0 = 67.0, above the stored 30.0 -
+    # a genuine tightening for this BUY.
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"BTCUSD": 70.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(), get_candle_history=lambda *a: candles,
+    )
+
+    assert result["trailed"] == 1
+    assert positions[0].stop_loss_price == pytest.approx(67.0)
 
 
 def test_evaluate_exits_trails_indicator_ema_stop_and_dedupes_fetch():

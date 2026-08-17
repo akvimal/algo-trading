@@ -5,7 +5,80 @@ this too."""
 from datetime import datetime, time
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+# stop_loss_indicator_type params shapes - mirrors signal-generation's own
+# EmaStopParams/SupertrendStopParams (app/domain/rule.py) exactly, but
+# duplicated rather than imported (systems/* self-contained, see
+# docs/architecture.md). A ResolvedOrder's own stop_loss_indicator_params
+# never needs shape-checking here - signal-generation already validated it
+# before publishing. ManualPositionCreate below is a new entry point with
+# no such upstream validator, so execution needs its own copy of this
+# dispatch to reject a malformed dict with a 422 instead of a 500 deep
+# inside position_manager's _STOP_LOSS_COMPUTE_FUNCS.
+class EmaStopParams(BaseModel):
+    period: int = Field(gt=1)
+
+
+class SupertrendStopParams(BaseModel):
+    period: int = Field(gt=1)
+    multiplier: float = Field(gt=0)
+
+
+_STOP_LOSS_INDICATOR_PARAMS_MODELS: dict[str, type[BaseModel]] = {
+    "ema": EmaStopParams,
+    "supertrend": SupertrendStopParams,
+}
+
+
+def validate_stop_loss_indicator_params(indicator_type: str, raw: dict) -> BaseModel:
+    """Raises pydantic.ValidationError (a 422 at the route layer, via
+    ManualPositionCreate's own model_validator) if `raw` doesn't match
+    `indicator_type`'s expected shape. Unrecognized indicator_type raises
+    ValueError instead - the DB CHECK constraint on stop_loss_indicator_type
+    (infra/postgres/init/02-execution.sql) is the first line of defense,
+    but must be widened in lockstep with this dict and signal-generation's
+    own identical registry whenever a new type is added."""
+    model = _STOP_LOSS_INDICATOR_PARAMS_MODELS.get(indicator_type)
+    if model is None:
+        raise ValueError(f"unknown stop_loss_indicator_type '{indicator_type}'")
+    return model.model_validate(raw)
+
+
+def _validate_stop_loss_config(
+    stop_loss_price: Optional[float],
+    stop_loss_method: Optional[str],
+    stop_loss_interval: Optional[str],
+    stop_loss_percent: Optional[float],
+    stop_loss_indicator_type: Optional[str],
+    stop_loss_indicator_params: Optional[dict],
+    trailing_stop_enabled: bool,
+) -> None:
+    """Shared by ManualPositionCreate (at order placement) and
+    StopLossUpdate (attaching/replacing a stop-loss on an already-open
+    position) - both offer the identical choice: a flat, fixed
+    `stop_loss_price`, OR `stop_loss_method` + its own sibling fields
+    (percent/previous_candle/indicator). Raises ValueError, which Pydantic
+    turns into a 422 either way. Whether at least one of stop_loss_price/
+    stop_loss_method must be present at all is the ONE thing that differs
+    between the two callers (optional for a fresh order - no stop-loss at
+    all is valid; required for an explicit "set the stop-loss" edit), so
+    that check stays in each model's own validator, not here."""
+    if stop_loss_method is not None and stop_loss_price is not None:
+        raise ValueError("stop_loss_price and stop_loss_method are mutually exclusive - pick one")
+    if stop_loss_method is None:
+        if trailing_stop_enabled:
+            raise ValueError("trailing_stop_enabled requires a stop_loss_method")
+        return
+    if stop_loss_method == "percent" and stop_loss_percent is None:
+        raise ValueError("stop_loss_method='percent' requires stop_loss_percent")
+    if stop_loss_method in ("previous_candle", "indicator") and stop_loss_interval is None:
+        raise ValueError(f"stop_loss_method='{stop_loss_method}' requires stop_loss_interval")
+    if stop_loss_method == "indicator":
+        if stop_loss_indicator_type is None or stop_loss_indicator_params is None:
+            raise ValueError("stop_loss_method='indicator' requires stop_loss_indicator_type and stop_loss_indicator_params")
+        validate_stop_loss_indicator_params(stop_loss_indicator_type, stop_loss_indicator_params)
 
 
 class ResolvedOrder(BaseModel):
@@ -22,7 +95,7 @@ class ResolvedOrder(BaseModel):
     symbol: str
     exchange: Literal["NSE", "MCX", "CRYPTO"]
     action: Literal["BUY", "SELL"]
-    horizon: Literal["intraday", "swing", "positional"]
+    horizon: Literal["intraday", "positional"]
     instrument_type: Literal["spot", "future", "option"]
     segment: Literal["NSE", "MCX", "CRYPTO"]
     strategy: Optional[dict] = None
@@ -45,7 +118,9 @@ class ResolvedOrder(BaseModel):
     counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
     # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.
     option_sl_scope: Optional[Literal["combined", "individual"]] = None
-    option_fixed_lots: Optional[int] = None
+    # Every instrument_type - see docs/contracts/resolved-order.schema.json
+    # and position_manager.open_position/option_position_manager.open_option_group.
+    fixed_lots: Optional[int] = None
 
 
 class ExecutionSettings(BaseModel):
@@ -101,7 +176,7 @@ class AccountUpdate(BaseModel):
     # Explicitly settable back to null (never force-close) - unlike most
     # other fields here, None is a real, meaningful value for this one, not
     # just "leave unchanged." Route layer uses model_fields_set (same
-    # pattern Strategy.option_fixed_lots' PATCH handler already uses) to
+    # pattern Strategy.fixed_lots' PATCH handler already uses) to
     # distinguish "omitted" from "explicitly cleared."
     square_off_time: Optional[time] = None
 
@@ -109,7 +184,17 @@ class AccountUpdate(BaseModel):
 class ManualPositionCreate(BaseModel):
     """POST /positions/manual - the Manual tab (signal-generation's
     frontend), spot/future only. Deliberately not a ResolvedOrder - see
-    open_manual_position's docstring."""
+    open_manual_position's docstring.
+
+    Two mutually exclusive ways to protect the position: a flat
+    `stop_loss_price` (fixed at entry, no re-anchoring - the original
+    "enter SL manually" case), OR `stop_loss_method` + its own sibling
+    fields (percent/previous_candle/indicator - same shape Strategy-driven
+    orders already carry via ResolvedOrder, now reachable from the Manual
+    tab too). `trailing_stop_enabled` only means something alongside a
+    stop_loss_method - see position_manager._evaluate_exits for how it
+    re-anchors (only tightening, never loosening) on each exit-monitor
+    tick, exactly like a Strategy's own trailing stop."""
 
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str
@@ -117,12 +202,31 @@ class ManualPositionCreate(BaseModel):
     instrument_type: Literal["spot", "future"]
     price: float = Field(gt=0)
     # Bypasses auto-sizing entirely when given - same precedence pattern
-    # as Strategy.option_fixed_lots in open_option_group. Number of LOTS,
+    # as Strategy.fixed_lots in open_position. Number of LOTS,
     # not raw underlying units - a no-op distinction for spot (lot_size is
     # always 1 there) but real for future (e.g. CRYPTO BTCUSD lot_size=
     # 0.001) - see open_manual_position's own comment at the multiply.
     quantity: Optional[float] = Field(default=None, gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
+    stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
+    stop_loss_percent: Optional[float] = Field(default=None, gt=0)
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
+    trailing_stop_enabled: bool = False
+
+    @model_validator(mode="after")
+    def _check_stop_loss_config(self) -> "ManualPositionCreate":
+        _validate_stop_loss_config(
+            self.stop_loss_price,
+            self.stop_loss_method,
+            self.stop_loss_interval,
+            self.stop_loss_percent,
+            self.stop_loss_indicator_type,
+            self.stop_loss_indicator_params,
+            self.trailing_stop_enabled,
+        )
+        return self
 
 
 class ManualOptionPositionCreate(BaseModel):
@@ -150,11 +254,56 @@ class ManualOptionPositionCreate(BaseModel):
     expiry: Optional[str] = None
     sl_scope: Literal["combined", "individual"] = "combined"
     # Bypasses auto-sizing entirely when given - same precedence pattern
-    # as Strategy.option_fixed_lots in open_option_group.
+    # as Strategy.fixed_lots in open_option_group.
     option_fixed_lots: Optional[float] = Field(default=None, gt=0)
 
 
 class StopLossUpdate(BaseModel):
-    """PUT /positions/{id}/stop-loss and PUT /option-groups/{id}/stop-loss."""
+    """PUT /positions/{id}/stop-loss and PUT /option-groups/{id}/stop-loss.
+    option-groups only ever uses the flat `stop_loss_price` form (no
+    trailing/indicator concept exists for options yet - see
+    open_option_group's own 'percent'-only stop-loss) - its route reads
+    only that field, the rest are simply ignored there.
 
-    stop_loss_price: float = Field(gt=0)
+    For positions, the same choice ManualPositionCreate offers at order
+    placement time is offered again here, for attaching (or replacing) a
+    trailing stop-loss AFTER a position is already open - a flat
+    `stop_loss_price` (fixed, clears any previously-armed trailing
+    method), OR `stop_loss_method` + its own sibling fields (percent/
+    previous_candle/indicator). Unlike ManualPositionCreate, at least one
+    of the two must be given here - this endpoint's whole purpose is
+    setting a stop-loss, not optionally skipping it."""
+
+    stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
+    stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
+    stop_loss_percent: Optional[float] = Field(default=None, gt=0)
+    stop_loss_indicator_type: Optional[str] = None
+    stop_loss_indicator_params: Optional[dict] = None
+    trailing_stop_enabled: bool = False
+
+    @model_validator(mode="after")
+    def _check_stop_loss_config(self) -> "StopLossUpdate":
+        if self.stop_loss_price is None and self.stop_loss_method is None:
+            raise ValueError("must supply either stop_loss_price or stop_loss_method")
+        _validate_stop_loss_config(
+            self.stop_loss_price,
+            self.stop_loss_method,
+            self.stop_loss_interval,
+            self.stop_loss_percent,
+            self.stop_loss_indicator_type,
+            self.stop_loss_indicator_params,
+            self.trailing_stop_enabled,
+        )
+        return self
+
+
+class SpotStopLossUpdate(BaseModel):
+    """PUT /option-groups/{id}/spot-stop-loss - a stop expressed on the
+    underlying's own price, independent of StopLossUpdate above (which
+    only ever moves the combined-PREMIUM stop) - see
+    option_position_manager.py's update_group_spot_stop_loss/
+    _evaluate_option_group_exits. No trailing/method variants, same
+    flat-price-only scope StopLossUpdate has for options."""
+
+    spot_stop_loss_price: float = Field(gt=0)

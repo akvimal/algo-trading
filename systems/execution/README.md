@@ -1,6 +1,6 @@
 # execution
 
-Consumes the `orders.resolved` Redis stream published by `signal-processing` (see `docs/contracts/resolved-order.schema.json`) and manages paper positions. Scope right now: **intraday** only — spot, future, and (Phase 4d of the options trading module, see `docs/architecture.md`) 2-leg option spreads (`bull_call_spread`/`bear_put_spread`, combined SL/target). Swing/positional is recorded as `REJECTED` with a reason for every instrument type, ready to support once that logic exists here.
+Consumes the `orders.resolved` Redis stream published by `signal-processing` (see `docs/contracts/resolved-order.schema.json`) and manages paper positions. Scope right now: **intraday** only — spot, future, and (Phase 4d of the options trading module, see `docs/architecture.md`) 2-leg option spreads (`bull_call_spread`/`bear_put_spread`, combined SL/target). Positional is recorded as `REJECTED` with a reason for every instrument type, ready to support once that logic exists here.
 
 ## How it works
 
@@ -32,7 +32,7 @@ Needs `market-data-backend` reachable (always up, no profile) and Dhan credentia
 
 ## Not yet built
 
-- Swing/positional handling for any instrument type.
+- Positional handling for any instrument type.
 - A live broker adapter for real order placement — this is paper trading only.
 - A frontend view grouping an option spread's 2 legs together — they currently show up as ordinary rows in the Positions grid, distinguishable by `option_group_id`.
 - More than 2 legs / other option templates (straddle, naked leg, ...) — `open_option_group` rejects anything besides exactly one BUY + one SELL leg.

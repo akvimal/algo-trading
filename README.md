@@ -1,6 +1,6 @@
 # algo-trading
 
-A multi-system algo-trading platform: **signal-generation** (owns the Strategy concept — external providers like Chartink/TradingView, and eventually in-house rules — that produce BUY/SELL ideas), **signal-processing** (resolve a raw signal into an intraday/swing/positional trade on spot/futures/options, using its Strategy's configuration), **execution** (paper or live broker trading), and **market-data** (provider credentials + quote lookups, shared by the others). The systems are loosely coupled — HTTP calls against versioned JSON contracts, and a Redis stream between signal-processing and execution — never a shared database or shared code import.
+A multi-system algo-trading platform: **signal-generation** (owns the Strategy concept — external providers like Chartink/TradingView, and eventually in-house rules — that produce BUY/SELL ideas), **signal-processing** (resolve a raw signal into an intraday/positional trade on spot/futures/options, using its Strategy's configuration), **execution** (paper or live broker trading), and **market-data** (provider credentials + quote lookups, shared by the others). The systems are loosely coupled — HTTP calls against versioned JSON contracts, and a Redis stream between signal-processing and execution — never a shared database or shared code import.
 
 Full architecture writeup: [`docs/architecture.md`](docs/architecture.md).
 

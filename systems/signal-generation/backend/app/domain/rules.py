@@ -15,7 +15,7 @@ later means adding a new evaluate_* function and a new RuleConfig variant
 indicator type means a change in indicators.py only, not here."""
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from app.domain.indicators import compute_indicator, compute_indicator_signal, indicator_warmup
 from app.domain.rule import CrossoverRuleConfig, RuleConfig
@@ -81,6 +81,36 @@ def evaluate_crossover(value_series: list[Optional[float]], signal_series: list[
     return "bullish" if curr_above else "bearish"
 
 
+def evaluate_crossover_at(
+    value_series: list[Optional[float]], signal_series: list[Optional[float]], index: int
+) -> Optional[Bias]:
+    """Same check as evaluate_crossover, against an explicit 0-based bar
+    index into an already-computed full series (the "window ending at
+    index" is candles[:index+1]) instead of always the series' own last
+    two elements - evaluate_crossover(value_series, signal_series) is
+    exactly evaluate_crossover_at(value_series, signal_series,
+    len(value_series) - 1). Exists so build_crossover_bias_fn below can
+    precompute value_series/signal_series ONCE for a whole candle range
+    and do an O(1) lookup per bar of backtest.py's scan loop, instead of
+    evaluate()'s own re-slice-and-recompute-the-whole-series-from-scratch
+    behavior repeated on every bar (each of those was itself
+    O(bars-so-far), making the whole scan O(n^2) for an n-bar backtest -
+    confirmed live: ~90s-2min for a ~9,400-bar 15min/3-month range)."""
+    if index < 1:
+        return None
+    if value_series[index] is None or value_series[index - 1] is None:
+        return None
+    if signal_series[index] is None or signal_series[index - 1] is None:
+        return None
+
+    prev_above = value_series[index - 1] > signal_series[index - 1]
+    curr_above = value_series[index] > signal_series[index]
+    if prev_above == curr_above:
+        return None
+
+    return "bullish" if curr_above else "bearish"
+
+
 def bars_needed(rule: RuleConfig, indicator_type: str, indicator_params: dict) -> int:
     """How many candles a (rule, indicator) pair needs before it can
     produce its first evaluation - used to size a history request
@@ -101,3 +131,34 @@ def evaluate(rule: RuleConfig, indicator_type: str, indicator_params: dict, cand
         signal_series = compute_indicator_signal(indicator_type, indicator_params, closes)
         return evaluate_crossover(value_series, signal_series)
     raise ValueError(f"no evaluator for rule type {type(rule).__name__}")  # pragma: no cover
+
+
+def build_crossover_bias_fn(
+    rule: RuleConfig, indicator_type: str, indicator_params: dict, candles: list[CandleClose]
+) -> Callable[[list[CandleClose]], Optional[Bias]]:
+    """Backtest-only optimization: precomputes the indicator's value/
+    signal series ONCE over the full candle range up front, returning a
+    bias_fn (same (window) -> Optional[Bias] shape evaluate() itself has -
+    a drop-in for backtest.py's simulate_trades/replay/grid_search bias_fn
+    parameter) that does an O(1) lookup per bar via evaluate_crossover_at
+    instead of evaluate()'s own recompute-the-whole-series-from-scratch
+    behavior. Safe because every indicator this can dispatch to
+    (compute_rsi, compute_sma) is causal - index i's value only ever
+    depends on closes[0..i], never future data - so precomputing over the
+    FULL series and later reading index i produces exactly what
+    evaluate() would compute fresh from just candles[:i+1], not an
+    approximation. evaluate() itself is untouched and still what the live
+    engine tick (engine.py) uses, which only ever evaluates one fixed
+    window once per tick - its own per-call recompute cost was never
+    accumulated in a loop there, so it was never worth this complexity."""
+    if not isinstance(rule, CrossoverRuleConfig):
+        raise ValueError(f"no crossover bias_fn for rule type {type(rule).__name__}")  # pragma: no cover
+
+    closes = [c.close for c in candles]
+    value_series = compute_indicator(indicator_type, indicator_params, closes)
+    signal_series = compute_indicator_signal(indicator_type, indicator_params, closes)
+
+    def bias_fn(window: list[CandleClose]) -> Optional[Bias]:
+        return evaluate_crossover_at(value_series, signal_series, len(window) - 1)
+
+    return bias_fn

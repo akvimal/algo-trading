@@ -3,6 +3,7 @@ import uuid
 from datetime import date
 from typing import Optional
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -46,7 +47,7 @@ from app.domain.rule import (
     validate_rule_symbol_list_fields,
     validate_rule_universe_fields,
 )
-from app.domain.rules import bars_needed, evaluate
+from app.domain.rules import bars_needed, build_crossover_bias_fn, evaluate
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -283,6 +284,10 @@ def _exit_config_for(payload) -> ExitConfig:
         target_percent=payload.target_percent,
         trailing_stop_enabled=payload.trailing_stop_enabled,
         square_off_time=payload.square_off_time,
+        stop_loss_confirmation=payload.stop_loss_confirmation,
+        entry_window_start=payload.entry_window_start,
+        entry_window_end=payload.entry_window_end,
+        entry_weekdays=payload.entry_weekdays,
     )
 
 
@@ -297,10 +302,11 @@ def _sl_candles_for(payload, rule_row: db_models.Rule, resolved, candles: list, 
     fetched fresh over a widened window (not opportunistically reused
     like previous_candle above) since the indicator's own warm-up
     requirement isn't generally the same as the rule's. Reads the warmup
-    bar count from stop_loss_indicator_params["period"] - the only shape
-    today ('ema'); a second indicator type with a differently-named
-    warmup field would need its own small dispatch here, mirroring
-    backtest.py's _STOP_LOSS_COMPUTE_FUNCS."""
+    bar count from stop_loss_indicator_params["period"] - both 'ema' and
+    'supertrend' name their warmup field "period" deliberately (see
+    SupertrendStopParams' own comment); an indicator type with a
+    differently-named warmup field would need its own small dispatch
+    here, mirroring backtest.py's _STOP_LOSS_COMPUTE_FUNCS."""
     if payload.stop_loss_method == "previous_candle" and payload.stop_loss_interval:
         if payload.stop_loss_interval == rule_row.interval:
             return candles
@@ -390,7 +396,7 @@ def _backtest_one_symbol(
     candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, rule_row.interval, fetch_from, to)
     sl_candles = _sl_candles_for(payload, rule_row, resolved, candles, fetch_from, to)
     return replay(
-        lambda window: evaluate(rule, indicator.type, indicator_params, window),
+        build_crossover_bias_fn(rule, indicator.type, indicator_params, candles),
         bars_needed(rule, indicator.type, indicator_params) + 1,
         candles,
         _exit_config_for(payload),
@@ -513,8 +519,13 @@ def _backtest_pooled_symbols(
     and combines the results - total trade_count/hypothetical_pnl across
     all of them (the headline numbers), plus a by_symbol breakdown for
     drill-down. A symbol that fails to resolve (delisted, not in
-    market-data's cache, ...) is logged and skipped rather than failing
-    the whole pooled request - same "one failure doesn't abort the batch"
+    market-data's cache, ...) or whose candle history call to market-data
+    itself fails (e.g. a transient 502, or a too-wide date range Dhan
+    rejects - get_candle_history/get_option_leg_history in
+    app/adapters/market_data/client.py raise requests.RequestException
+    uncaught, unlike get_ltp/get_universe_constituents which already
+    swallow it) is logged and skipped rather than failing the whole
+    pooled request - same "one failure doesn't abort the batch"
     defensiveness as the live engine's own per-symbol loop (see
     app/domain/engine.py's run_live_tick)."""
     by_symbol: dict[str, dict] = {}
@@ -522,8 +533,8 @@ def _backtest_pooled_symbols(
     for symbol in symbols:
         try:
             by_symbol[symbol] = _backtest_one_symbol(db, rule_row, rule, payload, symbol, from_, to, regime_indicators)
-        except HTTPException:
-            logger.warning("skipping unresolvable symbol %s (rule %s)", symbol, rule_row.id)
+        except (HTTPException, requests.RequestException) as exc:
+            logger.warning("skipping symbol %s (rule %s) - %s", symbol, rule_row.id, exc)
             skipped.append(symbol)
 
     return {
@@ -620,12 +631,14 @@ def backtest_rule_grid(
     once per combination. Does NOT mutate the Indicator row - PATCH
     /indicators/{id} once you've picked a winner from the report.
 
-    stop_loss_method='indicator' with stop_loss_indicator_param_grid set
-    adds a SECOND, independent sweep dimension (e.g. candidate EMA
-    periods) - every (indicator params, stop-loss params) pair gets its
-    own replay run, see app/domain/backtest.py's grid_search. The total
-    combination count (indicator combos x stop-loss combos) is capped at
-    MAX_GRID_COMBINATIONS same as either dimension alone."""
+    stop_loss_method='indicator' with stop_loss_indicator_param_grid set,
+    OR stop_loss_method='percent' with stop_loss_percent_grid set, adds a
+    SECOND, independent sweep dimension (e.g. candidate EMA periods, or
+    candidate SL percentages) - every (indicator params, stop-loss value)
+    pair gets its own replay run, see app/domain/backtest.py's
+    grid_search. The total combination count (indicator combos x
+    stop-loss combos) is capped at MAX_GRID_COMBINATIONS same as either
+    dimension alone."""
     rule_row = _load_rule_for_backtest(db, rule_id)
     rule = validate_rule_config(rule_row.rule_config)
     if not isinstance(rule, CrossoverRuleConfig):
@@ -647,6 +660,23 @@ def backtest_rule_grid(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         total = len(combos) * len(sl_combos)
+        if total > MAX_GRID_COMBINATIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"grid search would run {total} combinations (indicator x stop-loss) - "
+                    f"max is {MAX_GRID_COMBINATIONS}, narrow one of the grids"
+                ),
+            )
+
+    # Alternative to sl_combos above, for stop_loss_method='percent' - same
+    # "one fixed method per request" mutual exclusion grid_search itself
+    # relies on (see its own docstring), so only one of sl_combos/
+    # sl_percent_combos is ever non-None.
+    sl_percent_combos: Optional[list[float]] = None
+    if payload.stop_loss_method == "percent" and payload.stop_loss_percent_grid:
+        sl_percent_combos = payload.stop_loss_percent_grid
+        total = len(combos) * len(sl_percent_combos)
         if total > MAX_GRID_COMBINATIONS:
             raise HTTPException(
                 status_code=422,
@@ -698,4 +728,5 @@ def backtest_rule_grid(
         sl_candles,
         regime_indicators,
         stop_loss_indicator_combos=sl_combos,
+        stop_loss_percent_combos=sl_percent_combos,
     )

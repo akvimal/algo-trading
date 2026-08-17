@@ -100,7 +100,14 @@ def evaluate_regime_indicator(indicator_type: str, params: dict, candles: "list[
     _regime_confirmed, not through rules.evaluate - see Rule.
     regime_indicator_ids."""
     # Local import - see this module's own TYPE_CHECKING note up top.
-    from app.domain.regime import check_adx, check_dmi_direction, check_ema_slope, check_efficiency_ratio, check_structure
+    from app.domain.regime import (
+        check_adx,
+        check_dmi_direction,
+        check_ema_slope,
+        check_efficiency_ratio,
+        check_structure,
+        check_supertrend,
+    )
 
     if indicator_type == "structure":
         return check_structure(candles, bias, params["swing_lookback"])
@@ -114,6 +121,8 @@ def evaluate_regime_indicator(indicator_type: str, params: dict, candles: "list[
         return check_ema_slope(
             candles, bias, params["ema_period"], params["slope_lookback"], params["slope_threshold"], params["atr_period"]
         )
+    if indicator_type == "supertrend":
+        return check_supertrend(candles, bias, params["period"], params["multiplier"])
     raise ValueError(f"no regime-evaluate rule for indicator type {indicator_type!r}")
 
 
@@ -132,4 +141,6 @@ def regime_indicator_warmup(indicator_type: str, params: dict) -> int:
         return params["period"] * 3  # same DMI settle as adx - +DI/-DI come from the same smoothing pass
     if indicator_type == "ema_slope":
         return max(params["ema_period"] + params["slope_lookback"], params["atr_period"] + 1)
+    if indicator_type == "supertrend":
+        return params["period"] + 1  # single ATR smoothing pass, same settle as compute_atr itself
     raise ValueError(f"no regime-warmup rule for indicator type {indicator_type!r}")

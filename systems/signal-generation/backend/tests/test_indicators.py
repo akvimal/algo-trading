@@ -176,6 +176,20 @@ def test_evaluate_regime_indicator_dispatches_ema_slope(monkeypatch):
     assert calls == [(["c"], "bearish", 20, 5, 0.15, 14)]
 
 
+def test_evaluate_regime_indicator_dispatches_supertrend(monkeypatch):
+    calls = []
+
+    def _fake(candles, bias, period, multiplier):
+        calls.append((candles, bias, period, multiplier))
+        return True
+
+    monkeypatch.setattr(regime_module, "check_supertrend", _fake)
+    params = {"period": 10, "multiplier": 3.0}
+    result = evaluate_regime_indicator("supertrend", params, ["c"], "bearish")
+    assert result is True
+    assert calls == [(["c"], "bearish", 10, 3.0)]
+
+
 def test_evaluate_regime_indicator_unknown_type_raises():
     with pytest.raises(ValueError, match="no regime-evaluate rule"):
         evaluate_regime_indicator("rsi", {}, [], "bullish")
@@ -200,6 +214,10 @@ def test_regime_indicator_warmup_dmi_direction_is_period_times_three():
 def test_regime_indicator_warmup_ema_slope_is_widest_of_ema_and_atr_settle():
     params = {"ema_period": 20, "slope_lookback": 5, "slope_threshold": 0.15, "atr_period": 14}
     assert regime_indicator_warmup("ema_slope", params) == max(20 + 5, 14 + 1)
+
+
+def test_regime_indicator_warmup_supertrend_is_period_plus_one():
+    assert regime_indicator_warmup("supertrend", {"period": 10, "multiplier": 3.0}) == 11
 
 
 def test_regime_indicator_warmup_unknown_type_raises():

@@ -12,9 +12,11 @@ sma=[None,None,None,31.25,7.6389,28.3619] -> RSI was below its SMA, then
 rose above -> bullish crossover on the last bar.
 """
 
+import pytest
+
 from app.domain.indicators import compute_rsi, compute_sma
-from app.domain.rule import CrossoverRuleConfig
-from app.domain.rules import CandleClose, bars_needed, evaluate, evaluate_crossover
+from app.domain.rule import CrossoverRuleConfig, RangeBreakoutRuleConfig
+from app.domain.rules import CandleClose, bars_needed, build_crossover_bias_fn, evaluate, evaluate_crossover, evaluate_crossover_at
 
 RULE = CrossoverRuleConfig(indicator_id="11111111-1111-1111-1111-111111111111")
 RSI_PARAMS = {"period": 2, "sma_period": 2}
@@ -57,6 +59,55 @@ def test_evaluate_crossover_insufficient_data_returns_none():
 
 def test_evaluate_crossover_empty_series_returns_none():
     assert evaluate_crossover([], []) is None
+
+
+# --- evaluate_crossover_at: indexed version build_crossover_bias_fn actually uses -------------
+
+
+def test_evaluate_crossover_at_matches_evaluate_crossover_at_last_index():
+    value = compute_rsi([10, 11, 10, 13, 20, 15], period=2)
+    signal = compute_sma(value, period=2)
+    assert evaluate_crossover_at(value, signal, len(value) - 1) == evaluate_crossover(value, signal) == "bearish"
+
+
+def test_evaluate_crossover_at_bullish_fixture():
+    value = compute_rsi([20, 19, 20, 17, 10, 15], period=2)
+    signal = compute_sma(value, period=2)
+    assert evaluate_crossover_at(value, signal, len(value) - 1) == "bullish"
+
+
+def test_evaluate_crossover_at_index_zero_returns_none():
+    value = compute_rsi([10, 11, 10, 13, 20, 15], period=2)
+    signal = compute_sma(value, period=2)
+    assert evaluate_crossover_at(value, signal, 0) is None
+
+
+def test_evaluate_crossover_at_negative_index_returns_none():
+    assert evaluate_crossover_at([1.0], [1.0], -1) is None
+
+
+# --- build_crossover_bias_fn: the O(1)-per-bar precomputed replacement for evaluate() ----------
+
+
+def test_build_crossover_bias_fn_matches_evaluate_bar_by_bar():
+    """The equivalence build_crossover_bias_fn's whole optimization relies
+    on: for every bar i of a real scan, calling the precomputed bias_fn
+    with candles[:i] must return EXACTLY what evaluate() would compute
+    fresh from that same candles[:i] slice - proving the precompute-once
+    approach isn't an approximation, just a faster way to get the same
+    answer (both closes fixtures from this file's own module docstring,
+    scanned bar by bar, not just checked at the final bar)."""
+    for closes in ([10, 11, 10, 13, 20, 15], [20, 19, 20, 17, 10, 15]):
+        candles = _candles(closes)
+        bias_fn = build_crossover_bias_fn(RULE, "rsi", RSI_PARAMS, candles)
+        for i in range(1, len(candles) + 1):
+            window = candles[:i]
+            assert bias_fn(window) == evaluate(RULE, "rsi", RSI_PARAMS, window)
+
+
+def test_build_crossover_bias_fn_rejects_non_crossover_rule():
+    with pytest.raises(ValueError):
+        build_crossover_bias_fn(RangeBreakoutRuleConfig(breakout_period=4), "rsi", RSI_PARAMS, _candles([1, 2, 3]))
 
 
 # --- evaluate/bars_needed: the top-level (rule, indicator) dispatchers -----------------------

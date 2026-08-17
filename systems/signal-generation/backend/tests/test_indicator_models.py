@@ -6,6 +6,8 @@ from app.domain.rule import (
     IndicatorCreate,
     IndicatorUpdate,
     RsiParams,
+    SupertrendParams,
+    SupertrendStopParams,
     validate_indicator_params,
     validate_stop_loss_indicator_params,
 )
@@ -31,6 +33,24 @@ def test_validate_indicator_params_rejects_missing_period():
 def test_validate_indicator_params_rejects_missing_sma_period():
     with pytest.raises(ValidationError):
         validate_indicator_params("rsi", {"period": 14})
+
+
+def test_validate_indicator_params_accepts_valid_supertrend():
+    params = validate_indicator_params("supertrend", {"period": 10, "multiplier": 3.0})
+    assert isinstance(params, SupertrendParams)
+    assert params.period == 10
+    assert params.multiplier == 3.0
+
+
+def test_validate_indicator_params_supertrend_rejects_non_positive_multiplier():
+    with pytest.raises(ValidationError):
+        validate_indicator_params("supertrend", {"period": 10, "multiplier": 0})
+
+
+def test_indicator_create_valid_supertrend():
+    ind = IndicatorCreate(name="SuperTrend 10/3", type="supertrend", params={"period": 10, "multiplier": 3.0})
+    assert ind.name == "SuperTrend 10/3"
+    assert ind.type == "supertrend"
 
 
 def test_indicator_create_valid():
@@ -83,4 +103,21 @@ def test_validate_stop_loss_indicator_params_rejects_missing_period():
 
 def test_validate_stop_loss_indicator_params_rejects_unknown_type():
     with pytest.raises(ValueError):
+        validate_stop_loss_indicator_params("parabolic_sar", {"period": 10})
+
+
+def test_validate_stop_loss_indicator_params_accepts_valid_supertrend():
+    params = validate_stop_loss_indicator_params("supertrend", {"period": 10, "multiplier": 3.0})
+    assert isinstance(params, SupertrendStopParams)
+    assert params.period == 10
+    assert params.multiplier == 3.0
+
+
+def test_validate_stop_loss_indicator_params_supertrend_rejects_non_positive_multiplier():
+    with pytest.raises(ValidationError):
+        validate_stop_loss_indicator_params("supertrend", {"period": 10, "multiplier": 0})
+
+
+def test_validate_stop_loss_indicator_params_supertrend_rejects_missing_multiplier():
+    with pytest.raises(ValidationError):
         validate_stop_loss_indicator_params("supertrend", {"period": 10})

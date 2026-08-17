@@ -19,16 +19,16 @@ position sizing, no lot sizes, no account balance) - see
 docs/architecture.md."""
 
 import itertools
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time
 from typing import Callable, Optional
 
 from pydantic import ValidationError
 
 from app.domain.indicators import evaluate_regime_indicator
-from app.domain.regime import compute_ema
+from app.domain.regime import compute_ema, compute_supertrend
 from app.domain.rule import RuleConfig, validate_indicator_params
-from app.domain.rules import Bias, CandleClose, SimulatedTrade, bars_needed, evaluate
+from app.domain.rules import Bias, CandleClose, SimulatedTrade, bars_needed, build_crossover_bias_fn
 
 # A resolved (indicator_type, params) pair per regime indicator a Rule
 # references (Rule.regime_indicator_ids) - the route layer resolves ids to
@@ -71,6 +71,30 @@ class ExitConfig:
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
     square_off_time: Optional[time] = None
+    # "touch" (default) mirrors live execution's continuous CMP monitoring
+    # (_evaluate_exits in execution/backend/app/domain/position_manager.py)
+    # - a bar's own high/low crossing the stop level exits, same as a real
+    # position would the instant price touches it. "close" is a backtest-
+    # only what-if: only exits once a bar's CLOSE crosses the level (no
+    # live equivalent - a real position never waits for a candle close
+    # before honoring its stop), so a "close" backtest is systematically
+    # more optimistic than what live trading would actually do.
+    stop_loss_confirmation: str = "touch"  # "touch" | "close"
+    # Both-or-neither: when set, a fresh signal only opens a trade if its
+    # own bar's time-of-day falls within [start, end] (inclusive) - same
+    # "gates acceptance only, no further effect on the resulting position"
+    # scope as Strategy's own active_windows, just time-of-day only here
+    # (no date range - from_/to already cover that). None/None (default)
+    # means no restriction, matching every existing backtest.
+    entry_window_start: Optional[time] = None
+    entry_window_end: Optional[time] = None
+    # Same "gates acceptance only" scope as entry_window_start/end above,
+    # mirroring Strategy's own active_weekdays (see
+    # app/domain/engine.py's _matches_active_weekdays) - a fresh signal
+    # only opens a trade if today's weekday name (see _WEEKDAY_NAMES) is
+    # in this list. Empty (default) means no restriction, same convention
+    # active_weekdays itself uses.
+    entry_weekdays: list[str] = field(default_factory=list)
 
 
 def _stop_loss_percent_price(direction: Bias, entry_price: float, stop_loss_percent: float) -> float:
@@ -112,22 +136,30 @@ def _previous_candle_stop_price(
     return candidate.low if direction == "bullish" else candidate.high
 
 
-def _ema_stop_value(closes: list[float], params: dict) -> Optional[float]:
-    ema = compute_ema(closes, params["period"])
+def _ema_stop_value(candles: list[CandleClose], params: dict) -> Optional[float]:
+    ema = compute_ema([c.close for c in candles], params["period"])
     return ema[-1] if ema and ema[-1] is not None else None
 
 
-# stop_loss_indicator_type -> (closes, params) -> candidate stop value, no
+def _supertrend_stop_value(candles: list[CandleClose], params: dict) -> Optional[float]:
+    st = compute_supertrend(candles, params["period"], params["multiplier"])
+    return st[-1] if st and st[-1] is not None else None
+
+
+# stop_loss_indicator_type -> (candles, params) -> candidate stop value, no
 # direction concept here (unlike _previous_candle_stop_price's low/high
 # split) - the caller decides whether a given candidate is more favorable
-# based on direction, this only computes the raw indicator value. Mirrors
-# execution's own _STOP_LOSS_COMPUTE_FUNCS (position_manager.py) exactly -
-# a deliberate duplicate, not shared, since execution can't import this
-# module (systems/* self-contained). Adding a second indicator type means
-# a new entry here AND there, plus widening both CHECK constraints - see
+# based on direction, this only computes the raw indicator value. Takes
+# full CandleClose objects (not just closes) since SuperTrend needs
+# high/low too - EMA just ignores them. Mirrors execution's own
+# _STOP_LOSS_COMPUTE_FUNCS (position_manager.py) exactly - a deliberate
+# duplicate, not shared, since execution can't import this module
+# (systems/* self-contained). Adding a second indicator type means a new
+# entry here AND there, plus widening both CHECK constraints - see
 # app/domain/rule.py's own comment on this.
-_STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[float], dict], Optional[float]]] = {
+_STOP_LOSS_COMPUTE_FUNCS: dict[str, Callable[[list[CandleClose], dict], Optional[float]]] = {
     "ema": _ema_stop_value,
+    "supertrend": _supertrend_stop_value,
 }
 
 
@@ -155,11 +187,11 @@ def _indicator_stop_price(
     _STOP_LOSS_COMPUTE_FUNCS returns a raw value with no direction
     concept at all - this is the one place that has to guard it)."""
     ref = datetime.fromisoformat(reference_timestamp)
-    closes = [c.close for c in sl_candles if datetime.fromisoformat(c.timestamp) < ref]
+    candles_before = [c for c in sl_candles if datetime.fromisoformat(c.timestamp) < ref]
     compute = _STOP_LOSS_COMPUTE_FUNCS.get(indicator_type)
-    if compute is None or not closes:
+    if compute is None or not candles_before:
         return None
-    value = compute(closes, indicator_params)
+    value = compute(candles_before, indicator_params)
     if value is None:
         return None
     if direction == "bullish" and value >= reference_price:
@@ -223,7 +255,9 @@ def _simulate_one_trade(
     at/after it means the real position would already have been closed
     by execution's continuous local-time monitoring before this bar's own
     price action even began) - then a stop-loss/target hit, checked
-    against that bar's high/low - then, only if trailing_stop_enabled and
+    against that bar's high/low (or its close, for
+    exit_config.stop_loss_confirmation='close' - see ExitConfig's own
+    docstring) - then, only if trailing_stop_enabled and
     nothing closed yet, ratchet the stop toward the current price (never
     loosens) - then a fresh opposite-direction signal (the fallback close
     when nothing more specific is configured, or once configured
@@ -246,17 +280,28 @@ def _simulate_one_trade(
             if datetime.fromisoformat(bar.timestamp).time() >= exit_config.square_off_time:
                 return _close(entry_candle, direction, entry_price, bar, bar.close, "square_off"), j
 
-        sl_hit = stop_loss_price is not None and (
-            (direction == "bullish" and bar.low <= stop_loss_price) or (direction == "bearish" and bar.high >= stop_loss_price)
-        )
+        if exit_config.stop_loss_confirmation == "close":
+            sl_hit = stop_loss_price is not None and (
+                (direction == "bullish" and bar.close <= stop_loss_price) or (direction == "bearish" and bar.close >= stop_loss_price)
+            )
+        else:
+            sl_hit = stop_loss_price is not None and (
+                (direction == "bullish" and bar.low <= stop_loss_price) or (direction == "bearish" and bar.high >= stop_loss_price)
+            )
         target_hit = target_price is not None and (
             (direction == "bullish" and bar.high >= target_price) or (direction == "bearish" and bar.low <= target_price)
         )
         if sl_hit or target_hit:
             # SL takes priority over target if both would fire on the same
             # (gappy/wide) bar - same tie-break execution's own
-            # _evaluate_exits uses.
-            exit_price = stop_loss_price if sl_hit else target_price
+            # _evaluate_exits uses. Under close-confirmation there's no
+            # broker-side stop order to assume a fill exactly at
+            # stop_loss_price, so the fill is the bar's own close instead -
+            # same as an opposite-signal exit already does below.
+            if sl_hit and exit_config.stop_loss_confirmation == "close":
+                exit_price = bar.close
+            else:
+                exit_price = stop_loss_price if sl_hit else target_price
             reason = "stop_loss" if sl_hit else "target"
             return _close(entry_candle, direction, entry_price, bar, exit_price, reason), j
 
@@ -323,7 +368,10 @@ def simulate_trades(
     trade only closes via SL/target/square-off/opposite-signal, never a
     same-direction re-signal. A signal whose own bar is already at or
     past square_off_time never opens at all, mirroring
-    is_within_intraday_window's real rejection in execution. When
+    is_within_intraday_window's real rejection in execution. A signal
+    outside exit_config.entry_window_start/end, or on a weekday not in
+    exit_config.entry_weekdays (if set), is similarly skipped, not opened
+    - see ExitConfig's own docstring. When
     `regime_indicators` is non-empty, a fresh signal is also skipped (not
     opened) unless EVERY listed (indicator_type, params) pair's
     evaluate_regime_indicator confirms `direction` on the same growing
@@ -348,8 +396,18 @@ def simulate_trades(
             continue
 
         entry_index = i - 1
+        entry_dt = datetime.fromisoformat(candles[entry_index].timestamp)
+
+        if exit_config.entry_window_start is not None and exit_config.entry_window_end is not None:
+            if not (exit_config.entry_window_start <= entry_dt.time() <= exit_config.entry_window_end):
+                i += 1
+                continue  # outside the requested time-of-day window - not a rejected signal, just not scanned as an entry
+
+        if exit_config.entry_weekdays and _WEEKDAY_NAMES[entry_dt.weekday()] not in exit_config.entry_weekdays:
+            i += 1
+            continue  # today's weekday isn't in the allowed list - same "not scanned as an entry" treatment
+
         if exit_config.square_off_time is not None:
-            entry_dt = datetime.fromisoformat(candles[entry_index].timestamp)
             if entry_dt.time() >= exit_config.square_off_time:
                 i += 1
                 continue  # would be rejected outside the intraday window, same as execution
@@ -426,6 +484,32 @@ def _time_of_day_breakdown(trades: list[SimulatedTrade], bucket_minutes: int) ->
     ]
 
 
+_WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _weekday_breakdown(trades: list[SimulatedTrade]) -> list[dict]:
+    """Groups trades by their ENTRY time's day-of-week - same "entry
+    decides the bucket, not exit" convention _time_of_day_breakdown uses,
+    answers "which weekday is this rule most/least profitable" instead of
+    "which time of day." Unlike _time_of_day_breakdown, always returns
+    all 7 days in Mon-Sun order, including ones with zero trades (e.g.
+    Sat/Sun for an NSE rule) - a fixed 7-row shape makes "this rule never
+    trades weekends" visible at a glance instead of just absent."""
+    buckets: dict[int, list[SimulatedTrade]] = {i: [] for i in range(7)}
+    for t in trades:
+        buckets[datetime.fromisoformat(t.entry_time).weekday()].append(t)
+
+    return [
+        {
+            "weekday": _WEEKDAY_NAMES[i],
+            "trade_count": len(day_trades),
+            "hypothetical_pnl": sum(t.pnl for t in day_trades),
+            "win_rate": _win_rate(day_trades),
+        }
+        for i, day_trades in buckets.items()
+    ]
+
+
 def replay(
     bias_fn: BiasFn,
     min_bars: int,
@@ -439,10 +523,15 @@ def replay(
     result. See simulate_trades' own docstring for what "hypothetical_pnl"
     does and doesn't account for. win_rate/max_drawdown are always
     included (cheap, always useful, including for grid_search's own
-    per-combination calls below). time_of_day_breakdown is opt-in
-    (time_bucket_minutes given) - a full per-bucket table on every one of
-    a grid search's combinations would be far more data than that report
-    is meant to carry, so only the single-backtest route requests it."""
+    per-combination calls below). time_of_day_breakdown/weekday_breakdown
+    are opt-in together (time_bucket_minutes given) - a full per-bucket
+    table on every one of a grid search's combinations would be far more
+    data than that report is meant to carry, so only the single-backtest
+    route requests it. weekday_breakdown doesn't itself depend on
+    time_bucket_minutes' value (no "bucket size" concept for weekdays) -
+    it's just gated on the same flag for lack of its own separate opt-in,
+    and computing it costs nothing extra once trades are already in
+    hand."""
     trades = simulate_trades(bias_fn, min_bars, candles, exit_config, sl_candles, regime_indicators)
     report = {
         "trade_count": len(trades),
@@ -464,6 +553,7 @@ def replay(
     }
     if time_bucket_minutes is not None:
         report["time_of_day_breakdown"] = _time_of_day_breakdown(trades, time_bucket_minutes)
+        report["weekday_breakdown"] = _weekday_breakdown(trades)
     return report
 
 
@@ -496,9 +586,10 @@ def expand_stop_loss_grid(param_grid: dict[str, list]) -> list[dict]:
     stop_loss_indicator_params instead of the rule's own indicator params
     - no "base_params to merge non-swept keys onto" concept here, unlike
     expand_grid: every stop-loss indicator type's params model is small
-    enough (one field, 'period', for 'ema' today - see
-    _STOP_LOSS_INDICATOR_PARAMS_MODELS in app/domain/rule.py) that every
-    key must be named in the grid itself, there's no sensible "current
+    enough ('period' alone for 'ema', 'period'+'multiplier' for
+    'supertrend' - see _STOP_LOSS_INDICATOR_PARAMS_MODELS in
+    app/domain/rule.py) that every key must be named in the grid itself,
+    there's no sensible "current
     value" to fall back to the way a real Indicator row provides one for
     expand_grid. Raises ValueError for an empty grid or one too large to
     run (same MAX_GRID_COMBINATIONS cap, applied to THIS dimension alone -
@@ -523,6 +614,7 @@ def grid_search(
     sl_candles: Optional[list[CandleClose]] = None,
     regime_indicators: RegimeIndicators = (),
     stop_loss_indicator_combos: Optional[list[dict]] = None,
+    stop_loss_percent_combos: Optional[list[float]] = None,
 ) -> dict:
     """Runs `replay` once per combination in `combos` (see expand_grid),
     against the same candle series (and the same sl_candles/
@@ -532,16 +624,22 @@ def grid_search(
     rules.bars_needed) since candidate params aren't known until the grid
     is expanded, see app/api/routes/strategies.py.
 
-    stop_loss_indicator_combos (see expand_stop_loss_grid): when given
-    (exit_config.stop_loss_method must be 'indicator'), a SECOND sweep
-    dimension - every (indicator params, stop-loss params) pair gets its
-    own replay run, exit_config.stop_loss_indicator_params overridden per
-    stop-loss combo (dataclasses.replace, ExitConfig is frozen). None (the
-    default) keeps the pre-existing one-dimensional behavior: exit_config's
-    own fixed stop_loss_indicator_params applies to every combo unchanged.
-    Each result row gets an extra stop_loss_indicator_params key only when
-    this second dimension is active, so single-dimension callers/tests see
-    the exact same result shape as before this parameter existed.
+    stop_loss_indicator_combos (see expand_stop_loss_grid) and
+    stop_loss_percent_combos are two alternative forms of the SAME second
+    sweep dimension - stop-loss VALUES, not just the rule's own indicator
+    params - one for exit_config.stop_loss_method='indicator' (candidate
+    stop_loss_indicator_params dicts), the other for ='percent' (candidate
+    stop_loss_percent floats). Only one is ever given at a time (a single
+    backtest run has one fixed stop_loss_method), enforced by the route
+    layer, not here. Every (indicator params, stop-loss value) pair gets
+    its own replay run, exit_config overridden per stop-loss value
+    (dataclasses.replace, ExitConfig is frozen). Both None (the default)
+    keeps the pre-existing one-dimensional behavior: exit_config's own
+    fixed stop-loss config applies to every combo unchanged. Each result
+    row gets an extra stop_loss_indicator_params or stop_loss_percent key
+    only when the matching dimension is active, so single-dimension
+    callers/tests see the exact same result shape as before this
+    parameter existed.
 
     Results are sorted by hypothetical_pnl descending (best first); a
     combination that fails its own param validation (e.g. period=1,
@@ -549,7 +647,13 @@ def grid_search(
     being silently dropped or crashing the whole request - this only
     applies to the indicator dimension, stop-loss combos are pre-validated
     by the route layer before reaching here (see validate_stop_loss_indicator_params)."""
-    sl_combos = stop_loss_indicator_combos if stop_loss_indicator_combos is not None else [None]
+    if stop_loss_indicator_combos is not None:
+        sl_dimension: list[tuple[Optional[str], object]] = [("indicator_params", c) for c in stop_loss_indicator_combos]
+    elif stop_loss_percent_combos is not None:
+        sl_dimension = [("percent", c) for c in stop_loss_percent_combos]
+    else:
+        sl_dimension = [(None, None)]
+
     results = []
     for candidate_params in combos:
         try:
@@ -558,12 +662,14 @@ def grid_search(
             message = exc.errors()[0]["msg"] if exc.errors() else str(exc)
             results.append({"params": candidate_params, "error": message})
             continue
-        for sl_params in sl_combos:
+        for sl_kind, sl_value in sl_dimension:
             effective_exit_config = exit_config
-            if sl_params is not None and exit_config is not None:
-                effective_exit_config = replace(exit_config, stop_loss_indicator_params=sl_params)
+            if sl_kind == "indicator_params" and exit_config is not None:
+                effective_exit_config = replace(exit_config, stop_loss_indicator_params=sl_value)
+            elif sl_kind == "percent" and exit_config is not None:
+                effective_exit_config = replace(exit_config, stop_loss_percent=sl_value)
             outcome = replay(
-                lambda window, p=validated: evaluate(rule, indicator_type, p, window),
+                build_crossover_bias_fn(rule, indicator_type, validated, candles),
                 bars_needed(rule, indicator_type, validated) + 1,
                 candles,
                 effective_exit_config,
@@ -575,8 +681,10 @@ def grid_search(
                 "trade_count": outcome["trade_count"],
                 "hypothetical_pnl": outcome["hypothetical_pnl"],
             }
-            if sl_params is not None:
-                result_row["stop_loss_indicator_params"] = sl_params
+            if sl_kind == "indicator_params":
+                result_row["stop_loss_indicator_params"] = sl_value
+            elif sl_kind == "percent":
+                result_row["stop_loss_percent"] = sl_value
             results.append(result_row)
 
     results.sort(key=lambda r: r.get("hypothetical_pnl", float("-inf")), reverse=True)

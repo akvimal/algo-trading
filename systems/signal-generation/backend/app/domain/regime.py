@@ -233,6 +233,68 @@ def compute_ema(closes: list[float], period: int) -> list[Optional[float]]:
     return ema
 
 
+def compute_supertrend(candles: list[CandleClose], period: int, multiplier: float) -> list[Optional[float]]:
+    """Standard SuperTrend line (ATR-based, via compute_atr above) - used
+    as app/domain/backtest.py's stop_loss_indicator_type='supertrend'
+    trailing stop (see _STOP_LOSS_COMPUTE_FUNCS there). Returns one flat
+    scalar series like compute_ema, not the separate
+    upper-band/lower-band/trend-direction triple a charting library would
+    want: the caller (_indicator_stop_price) already has its own
+    direction-vs-reference-price guard (added after the EMA wrong-side-
+    of-entry bug - see that function's docstring), so a SuperTrend value
+    that's momentarily on the wrong side after a trend flip is rejected
+    the same generic way an EMA value would be, without this function
+    needing to know which side is "protective" for a given trade.
+
+    Same None-padding convention as compute_atr/compute_ema (an index has
+    a value only once ATR itself does, i.e. index >= period)."""
+    n = len(candles)
+    atr = compute_atr(candles, period)
+    supertrend: list[Optional[float]] = [None] * n
+    final_upper: list[Optional[float]] = [None] * n
+    final_lower: list[Optional[float]] = [None] * n
+    direction: list[Optional[int]] = [None] * n  # 1 = up (line trails below price), -1 = down (trails above)
+
+    for i in range(n):
+        if atr[i] is None:
+            continue
+        mid = (candles[i].high + candles[i].low) / 2
+        basic_upper = mid + multiplier * atr[i]
+        basic_lower = mid - multiplier * atr[i]
+
+        prev = i - 1
+        if prev < 0 or final_upper[prev] is None:
+            final_upper[i] = basic_upper
+            final_lower[i] = basic_lower
+            direction[i] = -1 if candles[i].close <= basic_upper else 1
+            supertrend[i] = final_upper[i] if direction[i] == -1 else final_lower[i]
+            continue
+
+        final_upper[i] = (
+            basic_upper if (basic_upper < final_upper[prev] or candles[prev].close > final_upper[prev]) else final_upper[prev]
+        )
+        final_lower[i] = (
+            basic_lower if (basic_lower > final_lower[prev] or candles[prev].close < final_lower[prev]) else final_lower[prev]
+        )
+
+        if direction[prev] == 1:
+            if candles[i].close < final_lower[i]:
+                direction[i] = -1
+                supertrend[i] = final_upper[i]
+            else:
+                direction[i] = 1
+                supertrend[i] = final_lower[i]
+        else:
+            if candles[i].close > final_upper[i]:
+                direction[i] = 1
+                supertrend[i] = final_lower[i]
+            else:
+                direction[i] = -1
+                supertrend[i] = final_upper[i]
+
+    return supertrend
+
+
 def compute_ema_slope(
     closes: list[float], atr_series: list[Optional[float]], ema_period: int, lookback: int
 ) -> Optional[float]:
@@ -406,6 +468,25 @@ def check_ema_slope(
     if slope is None:
         return None
     return slope > slope_threshold if bias == "bullish" else slope < -slope_threshold
+
+
+def check_supertrend(
+    candles: list[CandleClose], bias: Bias, period: int = 10, multiplier: float = 3.0
+) -> Optional[bool]:
+    """6th regime check (added alongside structure/efficiency_ratio/adx/
+    dmi_direction/ema_slope, not part of classify_regime's fixed 5 -
+    reuses compute_supertrend, the same trend line
+    stop_loss_indicator_type='supertrend' trails against). Confirmed
+    bullish when the latest close is above the SuperTrend line (line
+    trailing below price = uptrend), bearish when below - mirrors
+    compute_supertrend's own direction convention. None until ATR (and so
+    the line itself) has `period` bars to settle."""
+    line = compute_supertrend(candles, period, multiplier)
+    value = line[-1] if line else None
+    if value is None:
+        return None
+    close = candles[-1].close
+    return close > value if bias == "bullish" else close < value
 
 
 def direction_confirmed(

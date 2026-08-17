@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import pytest
+import requests
 from fastapi import HTTPException
 
 import app.api.routes.rules as rules_route
@@ -73,6 +74,34 @@ def test_backtest_universe_skips_unresolvable_constituent_without_failing(monkey
     monkeypatch.setattr(
         rules_route, "get_candle_history", lambda exchange, symbol, interval, from_date, to_date: list(_BREAKOUT_CANDLES)
     )
+
+    result = rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date(), [])
+
+    assert result["constituents_tested"] == 1
+    assert result["constituents_skipped"] == 1
+    assert set(result["by_symbol"]) == {"HDFCBANK"}
+
+
+def test_backtest_universe_skips_symbol_whose_candle_history_call_fails(monkeypatch):
+    """Reproduces a real failure: market-data returns a 502 for one
+    constituent (e.g. a date range Dhan rejects) - get_candle_history
+    raises requests.HTTPError uncaught (unlike resolve_underlying/
+    get_universe_constituents, which already return None on failure), so
+    the pooled backtest must catch it itself rather than let one bad
+    symbol 500 the whole request."""
+    monkeypatch.setattr(rules_route, "get_universe_constituents", lambda key: ["HDFCBANK", "AUBANK"])
+    monkeypatch.setattr(
+        rules_route,
+        "resolve_underlying",
+        lambda segment, symbol: ResolvedUnderlying(symbol, "NSE", symbol, "NSE", 1),
+    )
+
+    def _fake_candle_history(exchange, symbol, interval, from_date, to_date):
+        if symbol == "AUBANK":
+            raise requests.HTTPError("502 Server Error: Bad Gateway")
+        return list(_BREAKOUT_CANDLES)
+
+    monkeypatch.setattr(rules_route, "get_candle_history", _fake_candle_history)
 
     result = rules_route._backtest_universe(None, FakeRule(), RULE, PAYLOAD, BASE.date(), BASE.date(), [])
 

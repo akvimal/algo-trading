@@ -10,6 +10,7 @@ from app.domain.regime import (
     check_efficiency_ratio,
     check_ema_slope,
     check_structure,
+    check_supertrend,
     classify_regime,
     classify_structure,
     compute_adx_dmi,
@@ -17,6 +18,7 @@ from app.domain.regime import (
     compute_efficiency_ratio,
     compute_ema,
     compute_ema_slope,
+    compute_supertrend,
     direction_confirmed,
     find_pivots,
     regime_warmup,
@@ -112,6 +114,33 @@ def test_compute_ema_of_a_constant_series_equals_that_constant():
 
 def test_compute_ema_none_before_enough_bars():
     assert compute_ema([1.0, 2.0], period=5)[-1] is None
+
+
+# --- compute_supertrend: used as stop_loss_indicator_type='supertrend' -----------------------
+
+
+def test_compute_supertrend_none_before_enough_bars():
+    candles = _ranged([(50 + i, 50 + i + 1, 50 + i - 1) for i in range(4)])
+    assert compute_supertrend(candles, period=5, multiplier=1.0)[-1] is None
+
+
+def test_compute_supertrend_settles_below_price_in_a_steady_uptrend():
+    # Constant true range of 2 (high=close+1/low=close-1, matching
+    # test_compute_atr_settles_to_the_constant_true_range) means ATR
+    # settles to exactly 2.0 immediately - once the line has locked into
+    # the uptrend it should track close - multiplier*ATR = close - 2.0
+    # bar-for-bar, hand-verified by running the function.
+    candles = _ranged([(50 + i, 50 + i + 1, 50 + i - 1) for i in range(20)])
+    st = compute_supertrend(candles, period=5, multiplier=1.0)
+    assert st[-1] == pytest.approx(candles[-1].close - 2.0)
+    assert st[-1] < candles[-1].close  # below price - a valid bullish stop
+
+
+def test_compute_supertrend_settles_above_price_in_a_steady_downtrend():
+    candles = _ranged([(100 - i, 100 - i + 1, 100 - i - 1) for i in range(20)])
+    st = compute_supertrend(candles, period=5, multiplier=1.0)
+    assert st[-1] == pytest.approx(candles[-1].close + 2.0)
+    assert st[-1] > candles[-1].close  # above price - a valid bearish stop
 
 
 def test_compute_ema_slope_zero_for_a_flat_series():
@@ -394,3 +423,20 @@ def test_check_ema_slope_denies_a_flat_series():
 def test_check_ema_slope_none_before_enough_bars():
     candles = _ranged([(1.0, 1.1, 0.9), (2.0, 2.1, 1.9)])
     assert check_ema_slope(candles, "bullish", ema_period=20, slope_lookback=5, slope_threshold=0.15, atr_period=14) is None
+
+
+def test_check_supertrend_confirms_bullish_in_a_steady_uptrend():
+    candles = _ranged([(50 + i, 50 + i + 1, 50 + i - 1) for i in range(20)])
+    assert check_supertrend(candles, "bullish", period=5, multiplier=1.0) is True
+    assert check_supertrend(candles, "bearish", period=5, multiplier=1.0) is False
+
+
+def test_check_supertrend_confirms_bearish_in_a_steady_downtrend():
+    candles = _ranged([(100 - i, 100 - i + 1, 100 - i - 1) for i in range(20)])
+    assert check_supertrend(candles, "bearish", period=5, multiplier=1.0) is True
+    assert check_supertrend(candles, "bullish", period=5, multiplier=1.0) is False
+
+
+def test_check_supertrend_none_before_enough_bars():
+    candles = _ranged([(50 + i, 50 + i + 1, 50 + i - 1) for i in range(4)])
+    assert check_supertrend(candles, "bullish", period=5, multiplier=1.0) is None

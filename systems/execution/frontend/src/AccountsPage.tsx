@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 
-import { type Account, type Settings, fetchAccounts, fetchSettings, resetAccount, updateAccount, updateSettings } from "./api";
+import {
+  type Account,
+  type DhanStatus,
+  type Settings,
+  fetchAccounts,
+  fetchDhanStatus,
+  fetchSettings,
+  resetAccount,
+  updateAccount,
+  updateDhanCredentials,
+  updateSettings,
+} from "./api";
 import Nav from "./Nav";
 import { SEGMENTS, formatPct } from "./format";
 
@@ -22,6 +33,19 @@ export default function AccountsPage() {
   const [savingUsdinr, setSavingUsdinr] = useState(false);
   const [usdinrMessage, setUsdinrMessage] = useState<string | null>(null);
 
+  // Data provider (Dhan) credentials - fetched from market-data directly
+  // (see api.ts's own comment on this section). accessTokenDraft is never
+  // pre-filled from the fetched status (has_access_token is a presence
+  // check only, market-data never echoes the real secret back) - blank
+  // means "leave the currently-configured token alone" is NOT an option
+  // here (PUT /dhan/credentials always sets both fields together), so the
+  // Save button stays disabled until both are typed.
+  const [dhanStatus, setDhanStatus] = useState<DhanStatus | null>(null);
+  const [dhanClientIdDraft, setDhanClientIdDraft] = useState("");
+  const [dhanAccessTokenDraft, setDhanAccessTokenDraft] = useState("");
+  const [savingDhan, setSavingDhan] = useState(false);
+  const [dhanMessage, setDhanMessage] = useState<string | null>(null);
+
   useEffect(() => {
     fetchSettings()
       .then((s) => {
@@ -29,7 +53,33 @@ export default function AccountsPage() {
         setUsdinrDraft(s.usdinr_rate ?? "");
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load settings"));
+    fetchDhanStatus()
+      .then((s) => {
+        setDhanStatus(s);
+        setDhanClientIdDraft(s.dhan_client_id);
+      })
+      .catch(() => {
+        // market-data may be down/unreachable - this section just shows
+        // its own "couldn't load" state below rather than blocking the
+        // rest of the page (accounts/USDINR are unrelated to it).
+      });
   }, []);
+
+  async function handleSaveDhanCredentials() {
+    if (!dhanClientIdDraft.trim() || !dhanAccessTokenDraft.trim()) return;
+    setSavingDhan(true);
+    setDhanMessage(null);
+    try {
+      const updated = await updateDhanCredentials(dhanClientIdDraft.trim(), dhanAccessTokenDraft.trim());
+      setDhanStatus(updated);
+      setDhanAccessTokenDraft("");
+      setDhanMessage("Data provider keys saved.");
+    } catch (err) {
+      setDhanMessage(err instanceof Error ? err.message : "Failed to save data provider keys");
+    } finally {
+      setSavingDhan(false);
+    }
+  }
 
   async function handleSaveUsdinr() {
     if (usdinrDraft === "") return;
@@ -152,6 +202,50 @@ export default function AccountsPage() {
       {usdinrMessage && <p className="action-message">{usdinrMessage}</p>}
       {settings && settings.usdinr_rate == null && (
         <p className="subtitle">No USDINR rate set - CRYPTO positions will reject until one is configured.</p>
+      )}
+
+      <h2>Data provider (Dhan)</h2>
+      <p className="subtitle">
+        Client ID and access token for NSE/MCX quotes and candles (market-data's own credentials) - saving here takes
+        effect immediately, no restart needed, but doesn't survive one (in-memory only, same as a renewed token).
+      </p>
+      <div className="settings-row">
+        <label>
+          Client ID
+          <input
+            type="text"
+            placeholder="Dhan client ID"
+            value={dhanClientIdDraft}
+            onChange={(e) => setDhanClientIdDraft(e.target.value)}
+          />
+        </label>
+        <label>
+          Access token
+          <input
+            type="password"
+            placeholder={dhanStatus?.has_access_token ? "Configured (hidden) - paste a new one to replace" : "Not set"}
+            value={dhanAccessTokenDraft}
+            onChange={(e) => setDhanAccessTokenDraft(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className="secondary tiny"
+          onClick={handleSaveDhanCredentials}
+          disabled={savingDhan || !dhanClientIdDraft.trim() || !dhanAccessTokenDraft.trim()}
+        >
+          {savingDhan ? "Saving..." : "Save"}
+        </button>
+      </div>
+      {dhanMessage && <p className="action-message">{dhanMessage}</p>}
+      {dhanStatus ? (
+        <p className="subtitle">
+          {dhanStatus.has_access_token
+            ? `Configured (client ID ${dhanStatus.dhan_client_id})${dhanStatus.dhan_client_name ? ` - ${dhanStatus.dhan_client_name}` : ""}.`
+            : "No access token configured - Dhan-backed quotes/candles (NSE, MCX) will fail until one is set."}
+        </p>
+      ) : (
+        <p className="subtitle">Could not reach market-data to check the current status.</p>
       )}
 
       <div className="table-scroll">

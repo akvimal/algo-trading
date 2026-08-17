@@ -20,9 +20,11 @@ export function todayLocalDate(): string {
 }
 
 // % return on cost basis (entry_price * quantity) - same formula for
-// BUY and SELL, since it's read as "return relative to risk basis" either way.
-export function pnlPercent(pnl: number | null, entryPrice: number, quantity: number | null): number | null {
-  if (pnl == null || quantity == null || quantity === 0) return null;
+// BUY and SELL, since it's read as "return relative to risk basis" either
+// way. entryPrice accepts null too - option groups pass net_debit, which
+// is null for a REJECTED group that never got a live quote.
+export function pnlPercent(pnl: number | null, entryPrice: number | null, quantity: number | null): number | null {
+  if (pnl == null || entryPrice == null || quantity == null || quantity === 0) return null;
   return (pnl / (entryPrice * quantity)) * 100;
 }
 

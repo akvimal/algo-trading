@@ -100,6 +100,15 @@ services:
       # "underlying:qty" pairs, comma-separated. See
       # app/providers/dhan.py's _parse_lot_size_overrides.
       MCX_LOT_SIZE_OVERRIDES: ${MCX_LOT_SIZE_OVERRIDES:-GOLD:100,GOLDM:10,CRUDEOIL:100,CRUDEOILM:10,SILVER:30,SILVERM:5,SILVERMIC:1,SILVER100:10,NATURALGAS:1250,NATGASMINI:250}
+    volumes:
+      # PUT /dhan/credentials persists here (app/providers/dhan.py) so a
+      # UI-submitted Dhan token survives a container restart instead of
+      # reverting to the DHAN_ACCESS_TOKEN env var above - see
+      # docs/architecture.md. Compose namespaces named volumes per
+      # project, so dev (`algo-trading`) and test (`algo-trading-test`)
+      # each get their own, matching every other dev/test isolation
+      # guarantee this stack already has.
+      - dhan-credentials:/data
     ports:
       - "${MARKET_DATA_BACKEND_PORT}:8000"
 
@@ -142,6 +151,15 @@ services:
       context: ./systems/execution/frontend
       args:
         VITE_API_BASE_URL: /api
+        # Data provider (Dhan) credentials settings - execution's frontend
+        # calls market-data-backend directly (CORS-enabled), same
+        # direct-from-browser cross-system pattern signal-generation's
+        # frontend already uses for its own market-data calls.
+        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+        # Strategy names for the derivatives Orders grid's "Signal" column
+        # (id -> name) - same direct-from-browser CORS pattern as above,
+        # not execution's own /api proxy (this isn't execution's data).
+        VITE_SIGNAL_GENERATION_PORT: ${SIGNAL_GENERATION_BACKEND_PORT}
     restart: unless-stopped
     ports:
       - "${EXECUTION_FRONTEND_PORT}:80"
@@ -174,6 +192,7 @@ services:
         VITE_SIGNAL_GENERATION_PORT: ${SIGNAL_GENERATION_BACKEND_PORT}
         VITE_SIGNAL_PROCESSING_PORT: ${SIGNAL_PROCESSING_BACKEND_PORT}
         VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+        VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
     restart: unless-stopped
     ports:
       - "${SIGNAL_GENERATION_FRONTEND_PORT}:80"
@@ -198,3 +217,4 @@ services:
 volumes:
   pg-data:
   redis-data:
+  dhan-credentials:

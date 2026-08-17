@@ -204,12 +204,69 @@ button.tiny {
   border-radius: 4px;
 }
 
+button.icon-btn {
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+button.icon-btn.edit-icon {
+  width: 1.3rem;
+  height: 1.3rem;
+  font-size: 0.65rem;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
 .section-title {
   font-size: 0.9rem;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin: 1.5rem 0 0.35rem;
+}
+
+nav.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+nav.tabs button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+nav.tabs button.active {
+  background: var(--surface-raised);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+nav.tabs.subtabs {
+  margin-top: -0.15rem;
+}
+
+nav.tabs.subtabs button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+}
+
+.tab-count {
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: 0.78rem;
 }
 
 .action-message {
@@ -252,6 +309,55 @@ tbody tr:last-child td {
 }
 
 .symbol {
+  font-weight: 600;
+}
+
+.row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.legs-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.legs-detail {
+  background: var(--surface-raised);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.legs-detail-header {
+  font-size: 0.85rem;
+}
+
+.legs-table {
+  width: auto;
+  min-width: 60%;
+  background: transparent;
+  border: none;
+  font-size: 0.85rem;
+}
+
+.legs-table th,
+.legs-table td {
+  padding: 0.35rem 0.6rem;
+}
+
+.legs-detail-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.legs-detail-footer strong {
+  color: var(--text);
   font-weight: 600;
 }
 

@@ -126,6 +126,23 @@ export type Account = {
   updated_at: string;
 };
 
+// Optional per-strategy override of a segment's shared Account above - see
+// execution.strategy_accounts / position_manager.load_capital_account. A
+// strategy with a row here sizes/tracks P&L against IT instead of its
+// segment's shared account; a strategy with no row here keeps sharing the
+// segment account exactly as before this existed. Deliberately no
+// leverage/square_off_time fields - those stay segment-only always, see
+// docs/architecture.md.
+export type StrategyAccount = {
+  strategy_id: string;
+  segment: "NSE" | "MCX" | "CRYPTO";
+  starting_balance: number;
+  current_balance: number;
+  capital_per_trade: number;
+  risk_per_trade_pct: number;
+  updated_at: string;
+};
+
 export type Settings = {
   timezone: string;
   // CRYPTO only - a manually configured INR-per-USD rate used to convert
@@ -197,6 +214,45 @@ export async function resetAccount(segment: Account["segment"]): Promise<Account
   return asJson(res, `POST /accounts/${segment}/reset`);
 }
 
+export async function fetchStrategyAccounts(): Promise<StrategyAccount[]> {
+  const res = await fetch(`${API_BASE}/accounts/strategy`);
+  return asJson(res, "GET /accounts/strategy");
+}
+
+export async function createStrategyAccount(
+  strategyId: string,
+  create: Pick<StrategyAccount, "segment" | "starting_balance" | "capital_per_trade" | "risk_per_trade_pct">,
+): Promise<StrategyAccount> {
+  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(create),
+  });
+  return asJson(res, `POST /accounts/strategy/${strategyId}`);
+}
+
+export async function updateStrategyAccount(
+  strategyId: string,
+  update: Pick<StrategyAccount, "capital_per_trade" | "risk_per_trade_pct">,
+): Promise<StrategyAccount> {
+  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  return asJson(res, `PUT /accounts/strategy/${strategyId}`);
+}
+
+export async function deleteStrategyAccount(strategyId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`DELETE /accounts/strategy/${strategyId} failed: ${res.status}`);
+}
+
+export async function resetStrategyAccount(strategyId: string): Promise<StrategyAccount> {
+  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}/reset`, { method: "POST" });
+  return asJson(res, `POST /accounts/strategy/${strategyId}/reset`);
+}
+
 export async function fetchSettings(): Promise<Settings> {
   const res = await fetch(`${API_BASE}/settings`);
   return asJson(res, "GET /settings");
@@ -263,6 +319,11 @@ const SIGNAL_GENERATION_BASE_URL = `http://${location.hostname}:${SIGNAL_GENERAT
 export type StrategySummary = {
   id: string;
   name: string;
+  // Present on the real /strategies response - only used by the
+  // dedicated-account creation form below (AccountsPage) to auto-fill/
+  // lock the segment field to whatever the chosen strategy already trades,
+  // rather than letting the two be picked independently and mismatched.
+  segment: "NSE" | "MCX" | "CRYPTO";
 };
 
 export async function fetchStrategyNames(): Promise<StrategySummary[]> {

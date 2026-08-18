@@ -15,11 +15,16 @@ import app.consumers.signal_resolution_consumer as consumer
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, autoclaim_pages=None):
         self.acked = []
+        self._autoclaim_pages = list(autoclaim_pages) if autoclaim_pages is not None else [("0-0", [])]
 
     def xack(self, stream, group, message_id):
         self.acked.append(message_id)
+
+    def xautoclaim(self, stream, group, consumer_name, min_idle_time, start_id, count):
+        cursor, claimed = self._autoclaim_pages.pop(0)
+        return cursor, claimed, []  # 3rd element: deleted-message ids, unused here
 
 
 def _signal_payload(**overrides) -> str:
@@ -88,5 +93,36 @@ def test_process_message_does_not_ack_if_resolution_raises(monkeypatch):
         assert False, "expected RuntimeError to propagate"
     except RuntimeError:
         pass
+
+    assert consumer._client.acked == []
+
+
+# --- _reclaim_stale_pending (XAUTOCLAIM-based retry - see
+# app/consumers/orders_consumer.py's identical function/docstring for why
+# this exists) ------------------------------------------------------------
+
+
+def test_reclaim_reprocesses_and_acks_a_claimed_message(monkeypatch):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(consumer, "resolve_and_finalize_signal", lambda db, signal_id, signal: None)
+    claimed = [("9-0", {"signal_id": "11111111-1111-1111-1111-111111111111", "payload": _signal_payload()})]
+    monkeypatch.setattr(consumer, "_client", FakeClient(autoclaim_pages=[("0-0", claimed)]))
+
+    consumer._reclaim_stale_pending()
+
+    assert consumer._client.acked == ["9-0"]
+
+
+def test_reclaim_logs_and_continues_when_a_claimed_message_fails_again(monkeypatch):
+    _patch_common(monkeypatch)
+
+    def _raise(db, signal_id, signal):
+        raise RuntimeError("still down")
+
+    monkeypatch.setattr(consumer, "resolve_and_finalize_signal", _raise)
+    claimed = [("9-0", {"signal_id": "11111111-1111-1111-1111-111111111111", "payload": _signal_payload()})]
+    monkeypatch.setattr(consumer, "_client", FakeClient(autoclaim_pages=[("0-0", claimed)]))
+
+    consumer._reclaim_stale_pending()  # must not raise
 
     assert consumer._client.acked == []

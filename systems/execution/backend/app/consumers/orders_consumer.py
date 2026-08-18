@@ -2,7 +2,17 @@
 delivery via XREADGROUP/XACK, so a crash mid-processing redelivers the
 message instead of silently dropping a signal. open_position() is itself
 idempotent on signal_id, so redelivery is safe.
-"""
+
+XREADGROUP's own ">" id only ever returns messages never before delivered
+to this group - it does NOT redeliver a message that was already handed
+to a consumer and then failed (that message just sits in the group's
+pending entries list, PEL). The run() loop below's except branch used to
+just log "leaving unacked for retry" without anything that actually
+retried it - confirmed live 2026-08-18: a transient market-data 502 during
+open_option_group left a signal stuck in the PEL for hours with zero
+automatic recovery, discovered only because a second, unrelated signal had
+been stuck the same way for ~4h already. _reclaim_stale_pending below
+closes that gap with XAUTOCLAIM, run once per loop iteration."""
 
 import logging
 import threading
@@ -54,11 +64,51 @@ def _process_message(message_id: str, fields: dict) -> None:
     _client.xack(settings.redis_stream, settings.redis_consumer_group, message_id)
 
 
+# How long a message can sit claimed-but-unacked before it's considered
+# abandoned (crashed consumer, or an exception that left it unacked) and
+# fair game to reclaim. Comfortably longer than any single message should
+# ever take to process (option chain fetch + Dhan-throttled quote calls,
+# worst case a few seconds) so a message still legitimately in flight is
+# never yanked out from under its own consumer.
+RECLAIM_MIN_IDLE_MS = 60_000
+
+
+def _reclaim_stale_pending() -> None:
+    """XAUTOCLAIM every PEL entry idle longer than RECLAIM_MIN_IDLE_MS onto
+    this consumer and retry it - the actual retry _process_message's
+    except branch only ever claimed to do (see module docstring). Safe to
+    reclaim onto the SAME consumer name even with only one consumer
+    process: XAUTOCLAIM's idle-time tracking is wall-clock based against
+    the message's last-delivered time, so this also self-heals a
+    crash-and-restart, not just an in-process exception. Walks the whole
+    PEL each call (cursor loops back to "0-0" when exhausted) rather than
+    claiming one page and stopping, so a backlog from an extended outage
+    doesn't linger across multiple poll cycles."""
+    cursor = "0-0"
+    while True:
+        cursor, claimed, _deleted = _client.xautoclaim(
+            settings.redis_stream,
+            settings.redis_consumer_group,
+            settings.redis_consumer_name,
+            min_idle_time=RECLAIM_MIN_IDLE_MS,
+            start_id=cursor,
+            count=10,
+        )
+        for message_id, fields in claimed:
+            try:
+                _process_message(message_id, fields)
+            except Exception:
+                logger.exception("failed to reprocess reclaimed message %s, will retry again next reclaim pass", message_id)
+        if cursor == "0-0":
+            break
+
+
 def run(stop_event: threading.Event) -> None:
     _ensure_group()
     logger.info("execution consumer started (group=%s)", settings.redis_consumer_group)
     while not stop_event.is_set():
         try:
+            _reclaim_stale_pending()
             response = _client.xreadgroup(
                 settings.redis_consumer_group,
                 settings.redis_consumer_name,

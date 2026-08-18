@@ -73,9 +73,21 @@
   .placeholder.active {
     display: flex;
   }
+  #dhan-banner {
+    display: none;
+    padding: 0.5rem 1rem;
+    background: #4a2a10;
+    color: #ffd8a8;
+    font-size: 0.85rem;
+    border-bottom: 1px solid var(--border);
+  }
+  #dhan-banner.active {
+    display: block;
+  }
 </style>
 </head>
 <body>
+  <div id="dhan-banner"></div>
   <nav id="tabs"></nav>
   <div class="frame-wrap" id="frame-wrap"></div>
 
@@ -142,6 +154,51 @@
         .querySelectorAll(".frame-wrap > *")
         .forEach((el) => el.classList.toggle("active", el.id === `frame-${id}`));
     }
+
+    // Dhan access-token expiry banner - the NSE/MCX in-house engine (and
+    // any Dhan quote call) 401s the instant this token expires, but
+    // nothing else surfaces that until a signal silently fails to
+    // generate. market-data's GET /dhan/token-status now decodes the
+    // token's own JWT `exp` claim (see app/providers/dhan.py), so this
+    // polls that directly rather than duplicating the decode here.
+    const MARKET_DATA_BACKEND_PORT = 8001;
+    const DHAN_WARNING_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+    const DHAN_POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    const bannerEl = document.getElementById("dhan-banner");
+
+    async function checkDhanTokenExpiry() {
+      const base = `http://${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
+      let status;
+      try {
+        const res = await fetch(`${base}/dhan/token-status`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        status = await res.json();
+      } catch {
+        // market-data unreachable - not this banner's job to report that.
+        bannerEl.classList.remove("active");
+        return;
+      }
+
+      if (!status.token_expires_at) {
+        bannerEl.classList.remove("active");
+        return;
+      }
+
+      const msRemaining = new Date(status.token_expires_at).getTime() - Date.now();
+      if (msRemaining > DHAN_WARNING_WINDOW_MS) {
+        bannerEl.classList.remove("active");
+        return;
+      }
+
+      bannerEl.textContent =
+        msRemaining <= 0
+          ? "Dhan access token has EXPIRED - NSE/MCX signal generation and quotes are down until it's renewed (Market Data tab > Data provider keys)."
+          : `Dhan access token expires in ${Math.round(msRemaining / 60000)} min - renew it soon (Market Data tab > Data provider keys) to avoid an NSE/MCX outage.`;
+      bannerEl.classList.add("active");
+    }
+
+    checkDhanTokenExpiry();
+    setInterval(checkDhanTokenExpiry, DHAN_POLL_INTERVAL_MS);
   </script>
 </body>
 </html>

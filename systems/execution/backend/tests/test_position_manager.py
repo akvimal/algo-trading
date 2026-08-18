@@ -9,6 +9,7 @@ from app.domain.position_manager import (
     _apply_realized_pnl,
     _evaluate_exits,
     _evaluate_square_off_due,
+    _resolve_capital_account,
     _resolve_signal_conflicts,
     _resolve_stop_loss,
     compute_atr,
@@ -48,6 +49,7 @@ class FakePosition:
     pnl: Optional[float] = None
     exit_reason: Optional[str] = None
     square_off_time: Optional[time] = None
+    strategy_id: Optional[str] = None
 
 
 @dataclass
@@ -757,6 +759,94 @@ def test_evaluate_exits_closing_a_loser_debits_its_segment_account():
     expected_pnl = compute_pnl("BUY", 100.0, 97.5, 10)  # -25.0
     assert positions[0].pnl == expected_pnl
     assert accounts["NSE"].current_balance == 200000.0 + expected_pnl
+
+
+# --- optional per-strategy dedicated account (execution.strategy_accounts) -
+# _resolve_capital_account is the shared pick-one-account piece
+# load_capital_account (the DB-touching single-lookup version, not
+# directly tested here - same "pure logic only" convention this file
+# already follows for load_account/_accounts_by_segment) mirrors. -------
+
+
+def test_resolve_capital_account_prefers_a_dedicated_strategy_account():
+    accounts = _accounts(balance=200000.0)
+    dedicated = FakeAccount(segment="NSE", starting_balance=50000.0, current_balance=50000.0)
+    pos = FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                        entry_price=100.0, quantity=10, segment="NSE", strategy_id="strat-1")
+
+    resolved = _resolve_capital_account(pos, accounts, {"strat-1": dedicated})
+
+    assert resolved is dedicated
+
+
+def test_resolve_capital_account_falls_back_to_segment_when_no_dedicated_row():
+    accounts = _accounts(balance=200000.0)
+    pos = FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                        entry_price=100.0, quantity=10, segment="NSE", strategy_id="strat-1")
+
+    resolved = _resolve_capital_account(pos, accounts, {})  # strat-1 has no dedicated row
+
+    assert resolved is accounts["NSE"]
+
+
+def test_resolve_capital_account_falls_back_to_segment_when_no_strategy_id_at_all():
+    accounts = _accounts(balance=200000.0)
+    dedicated = FakeAccount(segment="NSE", starting_balance=50000.0, current_balance=50000.0)
+    pos = FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                        entry_price=100.0, quantity=10, segment="NSE", strategy_id=None)  # manual order
+
+    resolved = _resolve_capital_account(pos, accounts, {"strat-1": dedicated})
+
+    assert resolved is accounts["NSE"]
+
+
+def test_resolve_capital_account_treats_none_strategy_accounts_as_empty():
+    # strategy_accounts=None is what every pre-existing caller/test that
+    # never passes it gets (the parameter's own default) - must behave
+    # identically to {}, not crash on a NoneType .get() call.
+    accounts = _accounts(balance=200000.0)
+    pos = FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                        entry_price=100.0, quantity=10, segment="NSE", strategy_id="strat-1")
+
+    resolved = _resolve_capital_account(pos, accounts, None)
+
+    assert resolved is accounts["NSE"]
+
+
+def test_evaluate_exits_credits_the_dedicated_strategy_account_when_one_exists():
+    accounts = _accounts(balance=200000.0)
+    strategy_accounts = {"strat-1": FakeAccount(segment="NSE", starting_balance=50000.0, current_balance=50000.0)}
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, target_price=104.0, segment="NSE", strategy_id="strat-1"),
+    ]
+    _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 104.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=accounts, strategy_accounts=strategy_accounts,
+    )
+
+    expected_pnl = compute_pnl("BUY", 100.0, 104.0, 10)
+    assert positions[0].status == "CLOSED"
+    # Credited to the DEDICATED account, not the shared segment one.
+    assert strategy_accounts["strat-1"].current_balance == 50000.0 + expected_pnl
+    assert accounts["NSE"].current_balance == 200000.0  # untouched
+
+
+def test_evaluate_square_off_due_credits_the_dedicated_strategy_account_when_one_exists():
+    accounts = _accounts(balance=200000.0)
+    strategy_accounts = {"strat-1": FakeAccount(segment="NSE", starting_balance=50000.0, current_balance=50000.0)}
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, square_off_time=time(14, 30), segment="NSE", strategy_id="strat-1"),
+    ]
+    _evaluate_square_off_due(
+        positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 105.0}, now_local=time(14, 30),
+        accounts_by_segment=accounts, strategy_accounts=strategy_accounts,
+    )
+
+    expected_pnl = compute_pnl("BUY", 100.0, 105.0, 10)
+    assert strategy_accounts["strat-1"].current_balance == 50000.0 + expected_pnl
+    assert accounts["NSE"].current_balance == 200000.0  # untouched
 
 
 # --- periodic due-position closing (each position's own stored square_off_time) -----------

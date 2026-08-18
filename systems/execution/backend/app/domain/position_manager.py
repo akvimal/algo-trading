@@ -307,6 +307,54 @@ def load_account(db: Session, segment: str) -> Optional[db_models.Account]:
     return db.get(db_models.Account, segment)
 
 
+def load_capital_account(db: Session, segment: str, strategy_id: Optional[str]):
+    """The account to size against and credit/debit realized P&L on - a
+    strategy_id with a execution.strategy_accounts row of its own gets
+    THAT (isolated capital pool), everything else (no strategy_id at all -
+    a manual order - or a strategy_id with no dedicated row, the default)
+    falls back to the shared segment account, exactly as before this
+    table existed. Deliberately separate from load_account: leverage/
+    square_off_time are NEVER read off what this returns - those two stay
+    segment-only, callers that need them call load_account too. See
+    infra/postgres/init/02-execution.sql's own comment on
+    execution.strategy_accounts."""
+    if strategy_id is not None:
+        strategy_account = db.get(db_models.StrategyAccount, uuid.UUID(str(strategy_id)))
+        if strategy_account is not None:
+            return strategy_account
+    return load_account(db, segment)
+
+
+def _strategy_accounts_by_id(db: Session, positions: list) -> dict[str, db_models.StrategyAccount]:
+    """Batch counterpart to load_capital_account, for the closing paths
+    that operate on many positions/groups at once (mirrors
+    _accounts_by_segment's own shape/reasoning). Keyed by str(strategy_id)
+    since positions.strategy_id is a UUID column but comparing/hashing as
+    str avoids any UUID-vs-str equality surprises across the ORM boundary.
+    Only strategy_ids that actually HAVE a dedicated row are present in
+    the result - callers fall back to the segment account (via
+    accounts_by_segment) for every key not found here, same optional-
+    override semantics load_capital_account has for the single-lookup
+    case."""
+    strategy_ids = {pos.strategy_id for pos in positions if pos.strategy_id is not None}
+    if not strategy_ids:
+        return {}
+    rows = db.query(db_models.StrategyAccount).filter(db_models.StrategyAccount.strategy_id.in_(strategy_ids)).all()
+    return {str(row.strategy_id): row for row in rows}
+
+
+def _resolve_capital_account(pos, accounts_by_segment: dict, strategy_accounts: Optional[dict]):
+    """Same optional-override resolution load_capital_account does for a
+    single lookup, applied to an already-fetched pair of batch dicts - the
+    shared piece _evaluate_exits/_evaluate_square_off_due (and their
+    option-group mirrors) each call per position/group in their loop."""
+    if strategy_accounts and pos.strategy_id is not None:
+        account = strategy_accounts.get(str(pos.strategy_id))
+        if account is not None:
+            return account
+    return accounts_by_segment.get(pos.segment)
+
+
 def _accounts_by_segment(db: Session, positions: list) -> dict[str, db_models.Account]:
     """One query for the distinct segments among `positions` - mirrors
     _quotes_by_exchange's per-distinct-key batching shape. Used by the
@@ -489,6 +537,12 @@ def open_position(
         db.commit()
         return row
 
+    # Sizing/balance uses the strategy's OWN dedicated account if it has
+    # one (execution.strategy_accounts), else the same shared segment
+    # `account` above - leverage/square_off_time always stay segment-only
+    # regardless (see load_capital_account's own docstring).
+    capital_account = load_capital_account(db, order.segment, order.strategy_id)
+
     # square_off_time is the SEGMENT's own configured cutoff now
     # (execution.accounts.square_off_time), not a per-Strategy value -
     # None (e.g. CRYPTO) means this segment never force-closes, so a
@@ -512,7 +566,7 @@ def open_position(
         pos.exit_price = order.price
         pos.exit_time = datetime.now(dt_timezone.utc)
         _apply_realized_pnl(
-            pos, account, compute_pnl(pos.action, float(pos.entry_price), order.price, float(pos.quantity))
+            pos, capital_account, compute_pnl(pos.action, float(pos.entry_price), order.price, float(pos.quantity))
         )
         pos.status = "CLOSED"
         pos.exit_reason = "counter_signal"
@@ -522,7 +576,7 @@ def open_position(
     # account sizes smaller (or rejects outright below) rather than
     # opening a position it can't afford. See docs/architecture.md
     # § 'Why paper-trading accounts are per-segment, not per-strategy'.
-    effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
+    effective_capital = min(float(capital_account.capital_per_trade), float(capital_account.current_balance))
     if order.segment == "CRYPTO":
         # capital_per_trade/current_balance are INR-denominated like every
         # other segment, but order.price (from Delta Exchange India) is
@@ -633,7 +687,7 @@ def open_position(
             return row
 
         quantity = compute_risk_based_quantity(
-            effective_capital, float(account.risk_per_trade_pct), order.price, stop_loss_price, lot_size
+            effective_capital, float(capital_account.risk_per_trade_pct), order.price, stop_loss_price, lot_size
         )
     else:
         quantity = compute_quantity(effective_capital, order.price, lot_size)
@@ -1028,6 +1082,7 @@ def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     open_positions = db.query(db_models.Position).filter_by(status="OPEN").all()
     quotes = _quotes_by_exchange(open_positions, get_ltp_batch)
     accounts = _accounts_by_segment(db, open_positions)
+    strategy_accounts = _strategy_accounts_by_id(db, open_positions)
     closed = 0
     failed = 0
 
@@ -1039,7 +1094,11 @@ def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
 
         pos.exit_price = cmp_price
         pos.exit_time = datetime.now(dt_timezone.utc)
-        _apply_realized_pnl(pos, accounts.get(pos.segment), compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)))
+        _apply_realized_pnl(
+            pos,
+            _resolve_capital_account(pos, accounts, strategy_accounts),
+            compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)),
+        )
         pos.status = "CLOSED"
         pos.exit_reason = "square_off"
         closed += 1
@@ -1082,7 +1141,7 @@ def square_off_position(
     if cmp_price is None:
         return {"status": "quote_unavailable"}
 
-    account = load_account(db, pos.segment)
+    account = load_capital_account(db, pos.segment, pos.strategy_id)
     pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, close_quantity)
 
     if close_quantity == held_quantity:
@@ -1137,13 +1196,20 @@ def square_off_position(
 
 
 def _evaluate_square_off_due(
-    positions: list, get_ltp_batch: GetLtpBatch, now_local: time, accounts_by_segment: dict
+    positions: list,
+    get_ltp_batch: GetLtpBatch,
+    now_local: time,
+    accounts_by_segment: dict,
+    strategy_accounts: Optional[dict] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - closes positions in place whose
     own square_off_time has already passed the given local time. Mirrors
     _evaluate_exits' split from its DB-querying wrapper, for the same
     testability reason (plain objects like FakePosition instead of a
-    real Session)."""
+    real Session). strategy_accounts is optional (defaults to {}, i.e.
+    every position falls back to its segment account) so every existing
+    caller/test that predates execution.strategy_accounts keeps working
+    unchanged - see _resolve_capital_account."""
     due = [p for p in positions if p.square_off_time is not None and now_local >= p.square_off_time]
     if not due:
         return {"closed": 0, "failed": 0, "checked": 0}
@@ -1161,7 +1227,9 @@ def _evaluate_square_off_due(
         pos.exit_price = cmp_price
         pos.exit_time = datetime.now(dt_timezone.utc)
         _apply_realized_pnl(
-            pos, accounts_by_segment.get(pos.segment), compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
+            pos,
+            _resolve_capital_account(pos, accounts_by_segment, strategy_accounts),
+            compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)),
         )
         pos.status = "CLOSED"
         pos.exit_reason = "square_off"
@@ -1182,7 +1250,8 @@ def square_off_due_positions(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     now_local = datetime.now(dt_timezone.utc).astimezone(ZoneInfo(exec_settings.timezone)).time()
     open_positions = db.query(db_models.Position).filter_by(status="OPEN").all()
     accounts = _accounts_by_segment(db, open_positions)
-    result = _evaluate_square_off_due(open_positions, get_ltp_batch, now_local, accounts)
+    strategy_accounts = _strategy_accounts_by_id(db, open_positions)
+    result = _evaluate_square_off_due(open_positions, get_ltp_batch, now_local, accounts, strategy_accounts)
     db.commit()
     return result
 
@@ -1193,6 +1262,7 @@ def _evaluate_exits(
     get_previous_candle: GetPreviousCandle,
     accounts_by_segment: dict,
     get_candle_history: Optional[GetCandleHistory] = None,
+    strategy_accounts: Optional[dict] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mutates the given position
     objects in place (closing them, or trailing stop_loss_price) and
@@ -1250,7 +1320,9 @@ def _evaluate_exits(
             pos.exit_price = cmp_price
             pos.exit_time = datetime.now(dt_timezone.utc)
             _apply_realized_pnl(
-                pos, accounts_by_segment.get(pos.segment), compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
+                pos,
+                _resolve_capital_account(pos, accounts_by_segment, strategy_accounts),
+                compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)),
             )
             pos.status = "CLOSED"
             if sl_hit:
@@ -1331,6 +1403,7 @@ def check_exits(
         .all()
     )
     accounts = _accounts_by_segment(db, candidates)
-    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history)
+    strategy_accounts = _strategy_accounts_by_id(db, candidates)
+    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts)
     db.commit()
     return result

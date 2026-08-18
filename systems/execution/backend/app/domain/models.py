@@ -181,6 +181,41 @@ class AccountUpdate(BaseModel):
     square_off_time: Optional[time] = None
 
 
+class StrategyAccountOut(BaseModel):
+    """Optional per-strategy override of a segment's shared account - see
+    execution.strategy_accounts. Deliberately no leverage/square_off_time
+    (see that table's own comment) - those always come from AccountOut for
+    the same segment, never overridden here."""
+
+    strategy_id: str
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    starting_balance: float
+    current_balance: float
+    capital_per_trade: float
+    risk_per_trade_pct: float
+    updated_at: datetime
+
+
+class StrategyAccountCreate(BaseModel):
+    """POST /accounts/strategy/{strategy_id} - segment isn't editable
+    afterward (same reasoning Account's own segment PK isn't), so it's
+    required here and absent from StrategyAccountUpdate below."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    starting_balance: float = Field(gt=0)
+    capital_per_trade: float = Field(gt=0)
+    risk_per_trade_pct: float = Field(gt=0, le=100)
+
+
+class StrategyAccountUpdate(BaseModel):
+    """PUT /accounts/strategy/{strategy_id} - same shape as AccountUpdate
+    minus leverage/square_off_time (not fields on this table at all).
+    Doesn't touch current_balance - see the /reset route for that."""
+
+    capital_per_trade: Optional[float] = Field(default=None, gt=0)
+    risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
+
+
 class ManualPositionCreate(BaseModel):
     """POST /positions/manual - the Manual tab (signal-generation's
     frontend), spot/future only. Deliberately not a ResolvedOrder - see

@@ -51,7 +51,9 @@ from app.domain.position_manager import (
     _accounts_by_segment,
     _apply_realized_pnl,
     _quotes_by_exchange,
+    _resolve_capital_account,
     _resolve_signal_conflicts,
+    _strategy_accounts_by_id,
     compute_pnl,
     compute_quantity,
     compute_risk_based_quantity,
@@ -59,6 +61,7 @@ from app.domain.position_manager import (
     compute_target_percent_price,
     is_within_intraday_window,
     load_account,
+    load_capital_account,
     load_settings,
 )
 
@@ -180,6 +183,11 @@ def open_option_group(
         db.commit()
         return row
 
+    # Sizing/balance uses the strategy's OWN dedicated account if it has
+    # one, else the same shared segment `account` above - leverage/
+    # square_off_time always stay segment-only (see load_capital_account).
+    capital_account = load_capital_account(db, order.segment, order.strategy_id)
+
     # square_off_time is the SEGMENT's own configured cutoff now
     # (execution.accounts.square_off_time), not a per-Strategy value -
     # None (e.g. CRYPTO) means this segment never force-closes.
@@ -241,7 +249,7 @@ def open_option_group(
             closed = (
                 grp_legs is not None
                 and "BUY" in grp_legs
-                and _close_group_at_cmp(grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, account, "counter_signal")
+                and _close_group_at_cmp(grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, capital_account, "counter_signal")
             )
             if not closed:
                 row = _reject_group(
@@ -252,7 +260,7 @@ def open_option_group(
                 db.commit()
                 return row
 
-    effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
+    effective_capital = min(float(capital_account.capital_per_trade), float(capital_account.current_balance))
     if order.segment == "CRYPTO":
         # Same reasoning as position_manager.open_position - net_debit
         # (from Delta Exchange India) is raw USD, capital_per_trade/
@@ -336,7 +344,7 @@ def open_option_group(
             db.commit()
             return row
         quantity = compute_risk_based_quantity(
-            effective_capital, float(account.risk_per_trade_pct), sizing_price, sizing_stop_loss_price, lot_size
+            effective_capital, float(capital_account.risk_per_trade_pct), sizing_price, sizing_stop_loss_price, lot_size
         )
     else:
         quantity = compute_quantity(effective_capital, net_debit, lot_size)
@@ -775,6 +783,7 @@ def square_off_all_open_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -
     open_groups = db.query(db_models.OptionPositionGroup).filter_by(status="OPEN").all()
     legs = legs_by_group(db, open_groups)
     accounts = _accounts_by_segment(db, open_groups)
+    strategy_accounts = _strategy_accounts_by_id(db, open_groups)
     closed = 0
     failed = 0
     for group in open_groups:
@@ -782,7 +791,10 @@ def square_off_all_open_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -
         if (
             group_legs is not None
             and "BUY" in group_legs
-            and _close_group_at_cmp(group, group_legs["BUY"], group_legs.get("SELL"), get_ltp_batch, accounts.get(group.segment), "square_off")
+            and _close_group_at_cmp(
+                group, group_legs["BUY"], group_legs.get("SELL"), get_ltp_batch,
+                _resolve_capital_account(group, accounts, strategy_accounts), "square_off",
+            )
         ):
             closed += 1
         else:
@@ -799,7 +811,7 @@ def square_off_option_group(db: Session, group_id: uuid.UUID, get_ltp_batch: Get
         return {"status": "not_open", "group_status": group.status}
 
     group_legs = legs_by_group(db, [group]).get(group.id)
-    account = load_account(db, group.segment)
+    account = load_capital_account(db, group.segment, group.strategy_id)
     if (
         group_legs is None
         or "BUY" not in group_legs
@@ -843,9 +855,18 @@ def update_group_spot_stop_loss(db: Session, group_id: uuid.UUID, new_price: flo
     return row
 
 
-def _evaluate_option_group_square_off_due(groups: list, legs: dict, get_ltp_batch: GetLtpBatch, now_local, accounts_by_segment: dict) -> dict:
+def _evaluate_option_group_square_off_due(
+    groups: list,
+    legs: dict,
+    get_ltp_batch: GetLtpBatch,
+    now_local,
+    accounts_by_segment: dict,
+    strategy_accounts: Optional[dict] = None,
+) -> dict:
     """Pure logic (no DB query/commit) - mirrors
-    position_manager._evaluate_square_off_due at the group level."""
+    position_manager._evaluate_square_off_due at the group level.
+    strategy_accounts is optional (default {}) - see that function's own
+    docstring for why."""
     due = [g for g in groups if g.square_off_time is not None and now_local >= g.square_off_time]
     if not due:
         return {"closed": 0, "failed": 0, "checked": 0}
@@ -881,7 +902,7 @@ def _evaluate_option_group_square_off_due(groups: list, legs: dict, get_ltp_batc
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = "square_off"
-        _apply_realized_pnl(group, accounts_by_segment.get(group.segment), combined_pnl)
+        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl)
         closed += 1
 
     return {"closed": closed, "failed": failed, "checked": len(due)}
@@ -893,17 +914,25 @@ def square_off_due_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -> dic
     open_groups = db.query(db_models.OptionPositionGroup).filter_by(status="OPEN").all()
     legs = legs_by_group(db, open_groups)
     accounts = _accounts_by_segment(db, open_groups)
-    result = _evaluate_option_group_square_off_due(open_groups, legs, get_ltp_batch, now_local, accounts)
+    strategy_accounts = _strategy_accounts_by_id(db, open_groups)
+    result = _evaluate_option_group_square_off_due(open_groups, legs, get_ltp_batch, now_local, accounts, strategy_accounts)
     db.commit()
     return result
 
 
-def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtpBatch, accounts_by_segment: dict) -> dict:
+def _evaluate_option_group_exits(
+    groups: list,
+    legs: dict,
+    get_ltp_batch: GetLtpBatch,
+    accounts_by_segment: dict,
+    strategy_accounts: Optional[dict] = None,
+) -> dict:
     """Pure logic (no DB query/commit) - mirrors position_manager
     ._evaluate_exits at the group level (no trailing, no previous_candle -
     see module docstring's scope notes). `legs`: group.id -> {'BUY':
     Position, 'SELL': Position}, pre-queried by the caller
-    (check_option_group_exits).
+    (check_option_group_exits). strategy_accounts is optional (default {})
+    - see position_manager._evaluate_exits' own docstring for why.
 
     sl_scope='combined' (default) checks the group's own combined_stop_loss_price/
     combined_target_price against the combined (long-short) price, exactly
@@ -991,7 +1020,7 @@ def _evaluate_option_group_exits(groups: list, legs: dict, get_ltp_batch: GetLtp
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = group_reason
-        _apply_realized_pnl(group, accounts_by_segment.get(group.segment), combined_pnl)
+        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl)
 
         if sl_hit or spot_sl_hit:
             closed_stop_loss += 1
@@ -1022,6 +1051,7 @@ def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     )
     legs = legs_by_group(db, candidates)
     accounts = _accounts_by_segment(db, candidates)
-    result = _evaluate_option_group_exits(candidates, legs, get_ltp_batch, accounts)
+    strategy_accounts = _strategy_accounts_by_id(db, candidates)
+    result = _evaluate_option_group_exits(candidates, legs, get_ltp_batch, accounts, strategy_accounts)
     db.commit()
     return result

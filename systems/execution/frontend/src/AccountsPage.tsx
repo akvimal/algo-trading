@@ -4,13 +4,21 @@ import {
   type Account,
   type DhanStatus,
   type Settings,
+  type StrategyAccount,
+  type StrategySummary,
+  createStrategyAccount,
+  deleteStrategyAccount,
   fetchAccounts,
   fetchDhanStatus,
   fetchSettings,
+  fetchStrategyAccounts,
+  fetchStrategyNames,
   resetAccount,
+  resetStrategyAccount,
   updateAccount,
   updateDhanCredentials,
   updateSettings,
+  updateStrategyAccount,
 } from "./api";
 import Nav from "./Nav";
 import { SEGMENTS, formatPct } from "./format";
@@ -45,6 +53,26 @@ export default function AccountsPage() {
   const [dhanAccessTokenDraft, setDhanAccessTokenDraft] = useState("");
   const [savingDhan, setSavingDhan] = useState(false);
   const [dhanMessage, setDhanMessage] = useState<string | null>(null);
+
+  // Optional per-strategy dedicated accounts (execution.strategy_accounts) -
+  // strategies list comes from signal-generation directly (same
+  // cross-system CORS pattern PositionsPage already uses for the same
+  // data), so the picker/segment auto-fill below work without execution
+  // owning a copy of Strategy names.
+  const [strategies, setStrategies] = useState<StrategySummary[]>([]);
+  const [strategyAccounts, setStrategyAccounts] = useState<StrategyAccount[]>([]);
+  const [strategyAccountError, setStrategyAccountError] = useState<string | null>(null);
+  const [strategyAccountMessage, setStrategyAccountMessage] = useState<string | null>(null);
+  const [strategyDrafts, setStrategyDrafts] = useState<Record<string, { capital: number | ""; risk: number | "" }>>({});
+  const [savingStrategyAccount, setSavingStrategyAccount] = useState<string | null>(null);
+  const [resettingStrategyAccount, setResettingStrategyAccount] = useState<string | null>(null);
+  const [deletingStrategyAccount, setDeletingStrategyAccount] = useState<string | null>(null);
+
+  const [newStrategyId, setNewStrategyId] = useState("");
+  const [newStartingBalance, setNewStartingBalance] = useState<number | "">(200000);
+  const [newCapitalPerTrade, setNewCapitalPerTrade] = useState<number | "">(50000);
+  const [newRiskPerTrade, setNewRiskPerTrade] = useState<number | "">(1);
+  const [creatingStrategyAccount, setCreatingStrategyAccount] = useState(false);
 
   useEffect(() => {
     fetchSettings()
@@ -130,6 +158,127 @@ export default function AccountsPage() {
       clearInterval(id);
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const data = await fetchStrategyAccounts();
+        if (cancelled) return;
+        setStrategyAccounts(data);
+        setStrategyDrafts((prev) => {
+          const next = { ...prev };
+          for (const a of data) {
+            if (!(a.strategy_id in next)) next[a.strategy_id] = { capital: a.capital_per_trade, risk: a.risk_per_trade_pct };
+          }
+          return next;
+        });
+        setStrategyAccountError(null);
+      } catch (err) {
+        if (!cancelled) setStrategyAccountError(err instanceof Error ? err.message : "Failed to load dedicated accounts");
+      }
+    }
+
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    fetchStrategyNames()
+      .then(setStrategies)
+      .catch(() => {
+        // signal-generation may be unreachable - the create form just
+        // shows an empty picker below rather than blocking this page.
+      });
+  }, []);
+
+  function strategyName(strategyId: string): string {
+    return strategies.find((s) => s.id === strategyId)?.name ?? strategyId;
+  }
+
+  async function handleCreateStrategyAccount() {
+    if (!newStrategyId || newStartingBalance === "" || newCapitalPerTrade === "" || newRiskPerTrade === "") return;
+    const strategy = strategies.find((s) => s.id === newStrategyId);
+    if (!strategy) return;
+    setCreatingStrategyAccount(true);
+    setStrategyAccountMessage(null);
+    try {
+      const created = await createStrategyAccount(newStrategyId, {
+        segment: strategy.segment,
+        starting_balance: newStartingBalance,
+        capital_per_trade: newCapitalPerTrade,
+        risk_per_trade_pct: newRiskPerTrade,
+      });
+      setStrategyAccounts((prev) => [...prev, created]);
+      setNewStrategyId("");
+      setStrategyAccountMessage(`Dedicated account created for ${strategy.name}.`);
+    } catch (err) {
+      setStrategyAccountMessage(err instanceof Error ? err.message : "Failed to create dedicated account");
+    } finally {
+      setCreatingStrategyAccount(false);
+    }
+  }
+
+  async function handleSaveStrategyAccount(strategyId: string) {
+    const draft = strategyDrafts[strategyId];
+    if (!draft || draft.capital === "" || draft.risk === "") return;
+    setSavingStrategyAccount(strategyId);
+    setStrategyAccountMessage(null);
+    try {
+      const updated = await updateStrategyAccount(strategyId, {
+        capital_per_trade: draft.capital,
+        risk_per_trade_pct: draft.risk,
+      });
+      setStrategyAccounts((prev) => prev.map((a) => (a.strategy_id === strategyId ? updated : a)));
+      setStrategyAccountMessage(`${strategyName(strategyId)}'s dedicated account saved.`);
+    } catch (err) {
+      setStrategyAccountMessage(err instanceof Error ? err.message : "Failed to save dedicated account");
+    } finally {
+      setSavingStrategyAccount(null);
+    }
+  }
+
+  async function handleResetStrategyAccount(strategyId: string) {
+    const confirmed = window.confirm(
+      `Reset ${strategyName(strategyId)}'s dedicated account balance back to its starting balance? This doesn't undo any positions.`,
+    );
+    if (!confirmed) return;
+    setResettingStrategyAccount(strategyId);
+    setStrategyAccountMessage(null);
+    try {
+      const updated = await resetStrategyAccount(strategyId);
+      setStrategyAccounts((prev) => prev.map((a) => (a.strategy_id === strategyId ? updated : a)));
+      setStrategyAccountMessage(`${strategyName(strategyId)}'s dedicated account balance reset.`);
+    } catch (err) {
+      setStrategyAccountMessage(err instanceof Error ? err.message : "Failed to reset dedicated account");
+    } finally {
+      setResettingStrategyAccount(null);
+    }
+  }
+
+  async function handleDeleteStrategyAccount(strategyId: string) {
+    const confirmed = window.confirm(
+      `Remove ${strategyName(strategyId)}'s dedicated account? It goes back to sharing its segment's account. ` +
+        "Already-open positions/orders are unaffected.",
+    );
+    if (!confirmed) return;
+    setDeletingStrategyAccount(strategyId);
+    setStrategyAccountMessage(null);
+    try {
+      await deleteStrategyAccount(strategyId);
+      setStrategyAccounts((prev) => prev.filter((a) => a.strategy_id !== strategyId));
+      setStrategyAccountMessage(`${strategyName(strategyId)}'s dedicated account removed.`);
+    } catch (err) {
+      setStrategyAccountMessage(err instanceof Error ? err.message : "Failed to remove dedicated account");
+    } finally {
+      setDeletingStrategyAccount(null);
+    }
+  }
 
   async function handleSave(segment: Account["segment"]) {
     const draft = drafts[segment];
@@ -357,6 +506,164 @@ export default function AccountsPage() {
           </tbody>
         </table>
       </div>
+
+      <h2>Dedicated strategy accounts</h2>
+      <p className="subtitle">
+        Optional - a strategy with its own account here sizes/tracks P&amp;L against it instead of sharing its
+        segment's account above. Every strategy without one keeps sharing the segment account as before.
+      </p>
+
+      {strategyAccountError && <p className="error">Could not reach the backend: {strategyAccountError}</p>}
+      {strategyAccountMessage && <p className="action-message">{strategyAccountMessage}</p>}
+
+      <div className="settings-row">
+        <label>
+          Strategy
+          <select value={newStrategyId} onChange={(e) => setNewStrategyId(e.target.value)}>
+            <option value="">&mdash; select &mdash;</option>
+            {strategies
+              .filter((s) => !strategyAccounts.some((a) => a.strategy_id === s.id))
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.segment})
+                </option>
+              ))}
+          </select>
+        </label>
+        <label>
+          Starting balance (&#8377;)
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={newStartingBalance}
+            onChange={(e) => setNewStartingBalance(e.target.value === "" ? "" : Number(e.target.value))}
+          />
+        </label>
+        <label>
+          Capital per trade (&#8377;)
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={newCapitalPerTrade}
+            onChange={(e) => setNewCapitalPerTrade(e.target.value === "" ? "" : Number(e.target.value))}
+          />
+        </label>
+        <label>
+          Risk per trade (%)
+          <input
+            type="number"
+            min="0.01"
+            max="100"
+            step="0.1"
+            value={newRiskPerTrade}
+            onChange={(e) => setNewRiskPerTrade(e.target.value === "" ? "" : Number(e.target.value))}
+          />
+        </label>
+        <button
+          type="button"
+          className="secondary tiny"
+          onClick={handleCreateStrategyAccount}
+          disabled={
+            creatingStrategyAccount ||
+            !newStrategyId ||
+            newStartingBalance === "" ||
+            newCapitalPerTrade === "" ||
+            newRiskPerTrade === ""
+          }
+        >
+          {creatingStrategyAccount ? "Creating..." : "Create"}
+        </button>
+      </div>
+
+      {strategyAccounts.length > 0 && (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Segment</th>
+                <th>Balance</th>
+                <th>Capital per trade (&#8377;)</th>
+                <th>Risk per trade (%)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {strategyAccounts.map((account) => {
+                const draft = strategyDrafts[account.strategy_id] ?? { capital: "", risk: "" };
+                const delta = account.current_balance - account.starting_balance;
+                return (
+                  <tr key={account.strategy_id}>
+                    <td className="symbol">{strategyName(account.strategy_id)}</td>
+                    <td>{account.segment}</td>
+                    <td className={`num ${delta >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+                      {account.current_balance.toFixed(2)}
+                      {formatPct((delta / account.starting_balance) * 100)}
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={draft.capital}
+                        onChange={(e) =>
+                          setStrategyDrafts((prev) => ({
+                            ...prev,
+                            [account.strategy_id]: { ...draft, capital: e.target.value === "" ? "" : Number(e.target.value) },
+                          }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        min="0.01"
+                        max="100"
+                        step="0.1"
+                        value={draft.risk}
+                        onChange={(e) =>
+                          setStrategyDrafts((prev) => ({
+                            ...prev,
+                            [account.strategy_id]: { ...draft, risk: e.target.value === "" ? "" : Number(e.target.value) },
+                          }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="tiny"
+                        onClick={() => handleSaveStrategyAccount(account.strategy_id)}
+                        disabled={savingStrategyAccount === account.strategy_id}
+                      >
+                        {savingStrategyAccount === account.strategy_id ? "Saving..." : "Save"}
+                      </button>{" "}
+                      <button
+                        type="button"
+                        className="secondary tiny"
+                        onClick={() => handleResetStrategyAccount(account.strategy_id)}
+                        disabled={resettingStrategyAccount === account.strategy_id}
+                      >
+                        {resettingStrategyAccount === account.strategy_id ? "Resetting..." : "Reset balance"}
+                      </button>{" "}
+                      <button
+                        type="button"
+                        className="secondary tiny"
+                        onClick={() => handleDeleteStrategyAccount(account.strategy_id)}
+                        disabled={deletingStrategyAccount === account.strategy_id}
+                      >
+                        {deletingStrategyAccount === account.strategy_id ? "Removing..." : "Remove"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </main>
   );
 }

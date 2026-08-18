@@ -11,12 +11,19 @@ another test's expectations (or into test_dhan_provider.py's tests,
 which assume current_access_token() falls straight through to
 settings.dhan_access_token)."""
 
+import base64
 import json
 
 import responses
 
 from app.config import settings
 from app.providers import dhan
+
+
+def json_b64(payload: dict) -> str:
+    """Base64url-encode a JWT claims payload the way a real token does -
+    no padding."""
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
 
 def test_current_access_token_falls_through_to_settings_before_any_renewal(monkeypatch):
@@ -175,6 +182,7 @@ def test_renew_token_status_before_any_renewal(monkeypatch):
     monkeypatch.setattr(dhan, "_renewed_token", None)
     monkeypatch.setattr(dhan, "_last_renewed_at", None)
     monkeypatch.setattr(dhan, "_last_renewal_response", None)
+    monkeypatch.setattr(settings, "dhan_access_token", "")
 
     status = dhan.renew_token_status()
 
@@ -184,7 +192,32 @@ def test_renew_token_status_before_any_renewal(monkeypatch):
         "expiry_time": None,
         "dhan_client_name": None,
         "create_time": None,
+        "token_expires_at": None,
     }
+
+
+def test_renew_token_status_decodes_exp_claim_from_a_jwt_access_token(monkeypatch):
+    # header.payload.signature, payload = {"exp": 1786795587} (base64url,
+    # unpadded) - a real Dhan access token's shape (confirmed live
+    # 2026-08-18), not asserting anything about the header/signature.
+    jwt_token = "header." + json_b64({"exp": 1786795587}) + ".sig"
+    monkeypatch.setattr(dhan, "_renewed_token", jwt_token)
+    monkeypatch.setattr(dhan, "_last_renewed_at", None)
+    monkeypatch.setattr(dhan, "_last_renewal_response", None)
+
+    status = dhan.renew_token_status()
+
+    assert status["token_expires_at"] == "2026-08-15T12:06:27+00:00"
+
+
+def test_renew_token_status_tolerates_a_non_jwt_access_token(monkeypatch):
+    monkeypatch.setattr(dhan, "_renewed_token", "not-a-jwt")
+    monkeypatch.setattr(dhan, "_last_renewed_at", None)
+    monkeypatch.setattr(dhan, "_last_renewal_response", None)
+
+    status = dhan.renew_token_status()
+
+    assert status["token_expires_at"] is None
 
 
 def test_set_manual_credentials_updates_shared_state(monkeypatch, tmp_path):

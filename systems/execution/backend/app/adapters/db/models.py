@@ -43,6 +43,24 @@ class Account(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class StrategyAccount(Base):
+    """Optional per-strategy override of Account's capital pool - see
+    infra/postgres/init/02-execution.sql's own comment on this table for
+    the full reasoning. No leverage/square_off_time columns (those stay
+    segment-only, always read from Account regardless)."""
+
+    __tablename__ = "strategy_accounts"
+    __table_args__ = {"schema": SCHEMA}
+
+    strategy_id = Column(UUID(as_uuid=True), primary_key=True)  # no FK - see table comment
+    segment = Column(Text, nullable=False)
+    starting_balance = Column(Numeric, nullable=False)
+    current_balance = Column(Numeric, nullable=False)
+    capital_per_trade = Column(Numeric, nullable=False)
+    risk_per_trade_pct = Column(Numeric, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class OptionPositionGroup(Base):
     """One row per multi-leg option order (Phase 4d of the options
     trading module - see docs/architecture.md) - owns the COMBINED SL/

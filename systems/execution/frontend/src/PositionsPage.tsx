@@ -27,6 +27,13 @@ function combinedExitPrice(g: OptionGroup): number | null {
   return buyLeg.exit_price - (sellLeg?.exit_price ?? 0);
 }
 
+// "Value" column - total premium committed (lots × net debit per unit),
+// not the bare per-unit premium net_debit is on its own.
+function groupValue(g: OptionGroup): number | null {
+  if (g.net_debit == null || g.quantity == null) return null;
+  return g.net_debit * g.quantity;
+}
+
 // "Signal" column - the originating signal-generation Strategy's name, or
 // "Manual" for the Manual tab's option orders (strategy_id null - see
 // docs/architecture.md's "Manual tab" section). Falls back to the raw id
@@ -630,7 +637,7 @@ export default function PositionsPage() {
                       <span className={`badge ${g.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{g.action}</span>
                     </td>
                     <td className="num">{g.quantity ?? "-"}</td>
-                    <td className="num">{g.net_debit?.toFixed(2) ?? "-"}</td>
+                    <td className="num">{groupValue(g)?.toFixed(2) ?? "-"}</td>
                     <td className="num">{g.live_spot_price != null ? g.live_spot_price.toFixed(2) : "-"}</td>
                     <td className="num">
                       {g.spot_stop_loss_price != null ? (
@@ -806,7 +813,7 @@ export default function PositionsPage() {
                     <td>{signalLabel(g, strategyNames)}</td>
                     <td>{g.strategy_type}</td>
                     <td className="num">{g.quantity ?? "-"}</td>
-                    <td className="num">{g.net_debit?.toFixed(2) ?? "-"}</td>
+                    <td className="num">{groupValue(g)?.toFixed(2) ?? "-"}</td>
                     <td>{g.exit_time ? formatTime(g.exit_time) : "-"}</td>
                     <td className={`num ${g.pnl != null ? (g.pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
                       {g.pnl != null ? `${g.pnl >= 0 ? "+" : ""}${g.pnl.toFixed(2)}` : "-"}

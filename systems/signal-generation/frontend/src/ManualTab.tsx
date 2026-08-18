@@ -1145,7 +1145,17 @@ export default function ManualTab() {
               </button>
             </div>
 
-            {!row.current && <span className="muted">Order value &#8776; {orderValuePreview(row)}</span>}
+            {/* Option rows: the real cost is the resolved legs' NET premium
+                (long - short for a spread), only known once the option
+                chain is actually resolved server-side at order time - this
+                preview only ever has the underlying's own spot LTP to work
+                with, which would be wildly misleading shown as "order
+                value" for an option trade (spot price vs. a premium are
+                different orders of magnitude). Suppressed here rather than
+                shown wrong. */}
+            {!row.current && row.instrumentType !== "option" && (
+              <span className="muted">Order value &#8776; {orderValuePreview(row)}</span>
+            )}
 
             {row.rowError && <p className="error">{row.rowError}</p>}
 

@@ -18,7 +18,7 @@ from app.domain.option_position_manager import (
     _evaluate_option_group_square_off_due,
     compute_group_unrealized_pnl,
 )
-from app.domain.position_manager import _resolve_signal_conflicts
+from app.domain.position_manager import _resolve_capital_account, _resolve_signal_conflicts
 
 
 @dataclass
@@ -59,6 +59,7 @@ class FakeGroup:
     pnl: Optional[float] = None
     duplicate_signal_policy: str = "add_position"
     counter_signal_policy: str = "skip"
+    strategy_id: Optional[str] = None
 
 
 @dataclass
@@ -178,6 +179,35 @@ def test_evaluate_option_group_exits_closes_on_combined_target():
 
     assert result == {"closed_stop_loss": 0, "closed_target": 1, "checked": 1}
     assert group.exit_reason == "combined_target"
+
+
+def test_evaluate_option_group_exits_credits_the_dedicated_strategy_account_when_one_exists():
+    group = _group(net_debit=20.0, combined_target_price=35.0, strategy_id="strat-1")
+    strategy_accounts = {"strat-1": FakeAccount(segment="NSE", starting_balance=50000.0, current_balance=50000.0)}
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    # combined = 45-8=37, above combined_target_price=35 -> target hit
+    _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 8.0}, _accounts(), strategy_accounts,
+    )
+
+    combined_pnl = (37.0 - 20.0) * group.quantity
+    assert strategy_accounts["strat-1"].current_balance == 50000.0 + combined_pnl
+
+
+def test_evaluate_option_group_exits_falls_back_to_segment_account_with_no_dedicated_row():
+    group = _group(net_debit=20.0, combined_target_price=35.0, strategy_id="strat-1")
+    accounts = _accounts(balance=200000.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 8.0}, accounts, {},
+    )
+
+    combined_pnl = (37.0 - 20.0) * group.quantity
+    assert accounts["NSE"].current_balance == 200000.0 + combined_pnl
 
 
 def test_evaluate_option_group_exits_leaves_open_when_neither_hit():
@@ -378,6 +408,19 @@ def test_evaluate_option_group_square_off_due_closes_naked_group():
     assert result == {"closed": 1, "failed": 0, "checked": 1}
     assert group.status == "CLOSED"
     assert group.pnl == (32.0 - 30.0) * 75
+
+
+def test_evaluate_option_group_square_off_due_credits_the_dedicated_strategy_account_when_one_exists():
+    group = _group(net_debit=30.0, square_off_time=time(15, 0), strategy_id="strat-1")
+    strategy_accounts = {"strat-1": FakeAccount(segment="NSE", starting_balance=50000.0, current_balance=50000.0)}
+    long_leg = _naked_leg(entry_price=30.0)
+    legs = {"group-1": {"BUY": long_leg}}
+
+    _evaluate_option_group_square_off_due(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 32.0}, time(15, 30), _accounts(), strategy_accounts,
+    )
+
+    assert strategy_accounts["strat-1"].current_balance == 50000.0 + (32.0 - 30.0) * 75
 
 
 def test_evaluate_option_group_square_off_due_ignores_groups_not_yet_due():

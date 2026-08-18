@@ -33,6 +33,7 @@ _disambiguated_option_symbol's own docstring - both confirmed live
 2026-08-14 against real Dhan data, not assumed.
 """
 
+import base64
 import csv
 import io
 import json
@@ -272,8 +273,28 @@ def current_access_token() -> str:
         return _renewed_token if _renewed_token is not None else settings.dhan_access_token
 
 
+def _decode_jwt_exp(token: str) -> Optional[datetime]:
+    """Dhan access tokens are JWTs with a standard `exp` claim (confirmed
+    live 2026-08-18: iat/exp are exactly 24h apart) - decoding it directly
+    gives a real expiry the instant a token is set, unlike expiry_time
+    below which stays null until a renewal call has actually succeeded.
+    No signature verification - we're only reading a claim from a token
+    we already trust (it came from settings or a UI-submitted credential),
+    not authenticating it."""
+    try:
+        payload_b64 = token.split(".")[1]
+        padding = "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+        exp = payload["exp"]
+        return datetime.fromtimestamp(exp, tz=timezone.utc)
+    except (IndexError, ValueError, KeyError, TypeError):
+        return None
+
+
 def renew_token_status() -> dict:
     with _token_lock:
+        token = _renewed_token if _renewed_token is not None else settings.dhan_access_token
+        token_expires_at = _decode_jwt_exp(token) if token else None
         return {
             "renewed": _renewed_token is not None,
             "last_renewed_at": _last_renewed_at.isoformat() if _last_renewed_at else None,
@@ -283,6 +304,7 @@ def renew_token_status() -> dict:
             # both defensively (see renew_access_token's own note).
             "dhan_client_name": (_last_renewal_response or {}).get("dhanClientName"),
             "create_time": (_last_renewal_response or {}).get("createTime"),
+            "token_expires_at": token_expires_at.isoformat() if token_expires_at else None,
         }
 
 

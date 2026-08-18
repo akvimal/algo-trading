@@ -70,6 +70,30 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Optional, purely additive per-STRATEGY capital pool - a strategy with a
+-- row here sizes/tracks P&L against IT instead of its segment's shared
+-- execution.accounts row; a strategy with no row here (the default, same
+-- as every strategy before this table existed) keeps sharing the segment
+-- account exactly as before. strategy_id has no FK (execution can't
+-- reference signal_generation.strategies - systems/* are self-contained,
+-- same reasoning positions.strategy_id/option_position_groups.strategy_id
+-- already have). Deliberately does NOT carry leverage/square_off_time -
+-- those stay market-hours/margin-model concepts scoped to the SEGMENT
+-- account always, never overridden per-strategy (see execution.accounts'
+-- own square_off_time comment) - app/domain/position_manager.py's
+-- load_capital_account resolves this table for the money, load_account
+-- for those two fields, always separately. See docs/architecture.md
+-- § 'Why paper-trading accounts are per-segment, not per-strategy'.
+CREATE TABLE IF NOT EXISTS execution.strategy_accounts (
+    strategy_id         UUID PRIMARY KEY,
+    segment             TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    starting_balance    NUMERIC NOT NULL CHECK (starting_balance > 0),
+    current_balance     NUMERIC NOT NULL,
+    capital_per_trade   NUMERIC NOT NULL CHECK (capital_per_trade > 0),
+    risk_per_trade_pct  NUMERIC NOT NULL CHECK (risk_per_trade_pct > 0 AND risk_per_trade_pct <= 100),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 INSERT INTO execution.accounts (segment, starting_balance, current_balance, capital_per_trade, risk_per_trade_pct, square_off_time)
 VALUES
     ('NSE', 200000, 200000, 50000, 1.0, '15:00:00'),

@@ -13,11 +13,19 @@ from app.domain.models import ExecutionSettings
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, autoclaim_pages=None):
         self.acked = []
+        # Each call to xautoclaim pops the next (cursor, claimed) page -
+        # defaults to one empty page (nothing to reclaim), matching most
+        # tests' needs; _reclaim_stale_pending tests override this.
+        self._autoclaim_pages = list(autoclaim_pages) if autoclaim_pages is not None else [("0-0", [])]
 
     def xack(self, stream, group, message_id):
         self.acked.append(message_id)
+
+    def xautoclaim(self, stream, group, consumer_name, min_idle_time, start_id, count):
+        cursor, claimed = self._autoclaim_pages.pop(0)
+        return cursor, claimed, []  # 3rd element: deleted-message ids, unused here
 
 
 def _order_payload(instrument_type: str, **overrides) -> str:
@@ -91,3 +99,53 @@ def test_process_message_acks_after_processing(monkeypatch):
     consumer._process_message("5-0", {"payload": _order_payload("spot")})
 
     assert consumer._client.acked == ["5-0"]
+
+
+# --- _reclaim_stale_pending (XAUTOCLAIM-based retry for messages a prior
+# run left unacked - see the module docstring for why this exists) -------
+
+
+def test_reclaim_reprocesses_and_acks_a_claimed_message(monkeypatch):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(consumer, "open_option_group", lambda *a, **kw: None)
+    monkeypatch.setattr(consumer, "open_position", lambda *a, **kw: None)
+    claimed = [("9-0", {"payload": _order_payload("spot")})]
+    monkeypatch.setattr(consumer, "_client", FakeClient(autoclaim_pages=[("0-0", claimed)]))
+
+    consumer._reclaim_stale_pending()
+
+    assert consumer._client.acked == ["9-0"]
+
+
+def test_reclaim_walks_every_page_until_cursor_wraps_to_zero(monkeypatch):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(consumer, "open_option_group", lambda *a, **kw: None)
+    monkeypatch.setattr(consumer, "open_position", lambda *a, **kw: None)
+    pages = [
+        ("100-0", [("9-0", {"payload": _order_payload("spot")})]),
+        ("0-0", [("10-0", {"payload": _order_payload("spot")})]),
+    ]
+    monkeypatch.setattr(consumer, "_client", FakeClient(autoclaim_pages=pages))
+
+    consumer._reclaim_stale_pending()
+
+    assert consumer._client.acked == ["9-0", "10-0"]
+
+
+def test_reclaim_logs_and_continues_when_a_claimed_message_fails_again(monkeypatch):
+    # A reclaimed message that fails again (still-down dependency) must
+    # not crash the reclaim pass or the poll loop - it's left unacked
+    # again, to be picked up by the next reclaim pass once
+    # RECLAIM_MIN_IDLE_MS elapses again.
+    _patch_common(monkeypatch)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("still down")
+
+    monkeypatch.setattr(consumer, "open_position", _boom)
+    claimed = [("9-0", {"payload": _order_payload("spot")})]
+    monkeypatch.setattr(consumer, "_client", FakeClient(autoclaim_pages=[("0-0", claimed)]))
+
+    consumer._reclaim_stale_pending()  # must not raise
+
+    assert consumer._client.acked == []

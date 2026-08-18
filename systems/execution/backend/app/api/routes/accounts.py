@@ -1,9 +1,11 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.domain.models import AccountUpdate
+from app.domain.models import AccountUpdate, StrategyAccountCreate, StrategyAccountUpdate
 
 router = APIRouter()
 
@@ -70,3 +72,100 @@ def reset_account(segment: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return _to_out(row)
+
+
+# --- Optional per-strategy account override (execution.strategy_accounts) -
+# see that table's own comment in infra/postgres/init/02-execution.sql and
+# app/domain/position_manager.py's load_capital_account for the full
+# design: a strategy with a row here sizes/tracks P&L against it instead of
+# its segment's shared account above; every strategy without one keeps
+# sharing the segment account exactly as before this existed. -----------
+
+
+def _strategy_account_to_out(row: db_models.StrategyAccount) -> dict:
+    return {
+        "strategy_id": str(row.strategy_id),
+        "segment": row.segment,
+        "starting_balance": float(row.starting_balance),
+        "current_balance": float(row.current_balance),
+        "capital_per_trade": float(row.capital_per_trade),
+        "risk_per_trade_pct": float(row.risk_per_trade_pct),
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
+@router.get("/accounts/strategy")
+def list_strategy_accounts(db: Session = Depends(get_db)):
+    rows = db.query(db_models.StrategyAccount).all()
+    return [_strategy_account_to_out(r) for r in rows]
+
+
+@router.get("/accounts/strategy/{strategy_id}")
+def get_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
+    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+    return _strategy_account_to_out(row)
+
+
+@router.post("/accounts/strategy/{strategy_id}")
+def create_strategy_account(strategy_id: str, create: StrategyAccountCreate, db: Session = Depends(get_db)):
+    """starting_balance seeds current_balance too, same as
+    execution.accounts' own seed INSERT does for the segment accounts.
+    409s on an existing row - PUT is how you edit one, this is create-only,
+    same split GET/POST/PUT has for the segment routes above."""
+    strategy_uuid = uuid.UUID(strategy_id)
+    if db.get(db_models.StrategyAccount, strategy_uuid) is not None:
+        raise HTTPException(status_code=409, detail=f"strategy {strategy_id} already has a dedicated account")
+    row = db_models.StrategyAccount(
+        strategy_id=strategy_uuid,
+        segment=create.segment,
+        starting_balance=create.starting_balance,
+        current_balance=create.starting_balance,
+        capital_per_trade=create.capital_per_trade,
+        risk_per_trade_pct=create.risk_per_trade_pct,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _strategy_account_to_out(row)
+
+
+@router.put("/accounts/strategy/{strategy_id}")
+def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db: Session = Depends(get_db)):
+    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+    if update.capital_per_trade is not None:
+        row.capital_per_trade = update.capital_per_trade
+    if update.risk_per_trade_pct is not None:
+        row.risk_per_trade_pct = update.risk_per_trade_pct
+    db.commit()
+    db.refresh(row)
+    return _strategy_account_to_out(row)
+
+
+@router.delete("/accounts/strategy/{strategy_id}")
+def delete_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
+    """Removing the override doesn't touch any already-open position/group
+    - they keep resolving against whatever account they were opened
+    against (load_capital_account is called fresh at open/close time, not
+    stored on the position) only going forward does the strategy fall back
+    to sharing its segment account again."""
+    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted", "strategy_id": strategy_id}
+
+
+@router.post("/accounts/strategy/{strategy_id}/reset")
+def reset_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
+    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+    row.current_balance = row.starting_balance
+    db.commit()
+    db.refresh(row)
+    return _strategy_account_to_out(row)

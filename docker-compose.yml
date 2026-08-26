@@ -199,6 +199,28 @@ services:
     depends_on:
       - signal-generation-backend
 
+  # Manual Trading + Options OI, split out of signal-generation's frontend
+  # (see docs/architecture.md § "Manual Trading module split") - neither
+  # ever actually depended on signal-generation's own backend/DB, only on
+  # execution's (paper positions/checklist/trade images) and market-data's
+  # (option chain/OI), so this is frontend-only, no backend of its own.
+  # Gated behind the same profile as execution - it's non-functional
+  # without it, unlike signal-generation-frontend's other tabs.
+  manual-trading-frontend:
+    profiles: ["execution"]
+    build:
+      context: ./systems/manual-trading/frontend
+      args:
+        VITE_SIGNAL_GENERATION_PORT: ${SIGNAL_GENERATION_BACKEND_PORT}
+        VITE_SIGNAL_PROCESSING_PORT: ${SIGNAL_PROCESSING_BACKEND_PORT}
+        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+        VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
+    restart: unless-stopped
+    ports:
+      - "${MANUAL_TRADING_FRONTEND_PORT}:80"
+    depends_on:
+      - execution-backend
+
   # Static tab shell - not a system of its own, just nav + iframes onto
   # each system's already-independent frontend. See shell/README.md.
   shell:

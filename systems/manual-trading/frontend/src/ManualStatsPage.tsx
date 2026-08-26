@@ -210,10 +210,12 @@ export default function ManualStatsPage({ onBack }: ManualStatsPageProps) {
 
   if (error) {
     return (
-      <div className="manual-settings-page">
-        <button type="button" className="manual-settings-back" onClick={onBack}>
-          ← Back to Manual
-        </button>
+      <div className="manual-wide-page">
+        <div className="manual-page-header">
+          <button type="button" className="manual-settings-back" onClick={onBack}>
+            ← Back
+          </button>
+        </div>
         <p className="error">{error}</p>
       </div>
     );
@@ -221,10 +223,12 @@ export default function ManualStatsPage({ onBack }: ManualStatsPageProps) {
 
   if (trades == null) {
     return (
-      <div className="manual-settings-page">
-        <button type="button" className="manual-settings-back" onClick={onBack}>
-          ← Back to Manual
-        </button>
+      <div className="manual-wide-page">
+        <div className="manual-page-header">
+          <button type="button" className="manual-settings-back" onClick={onBack}>
+            ← Back
+          </button>
+        </div>
         <p className="muted">Loading...</p>
       </div>
     );
@@ -279,17 +283,22 @@ export default function ManualStatsPage({ onBack }: ManualStatsPageProps) {
   const selectedSessions = sessionsByDay.get(selectedDate) ?? [];
 
   return (
-    <div className="manual-settings-page">
-      <button type="button" className="manual-settings-back" onClick={onBack}>
-        ← Back to Manual
-      </button>
-      <h3>Trading Performance</h3>
+    <div className="manual-wide-page">
+      {/* Back + title on one row, not stacked - matches every other
+          compact header in this app (App.tsx's tabs row, OiSummaryPage's
+          tabs+expiry row). */}
+      <div className="manual-page-header">
+        <button type="button" className="manual-settings-back" onClick={onBack}>
+          ← Back
+        </button>
+        <h3>Trading Performance</h3>
+      </div>
 
-      <ManualCalendarFilter
-        selectedDate={selectedDate}
-        onSelectDate={setSelectedDate}
-        defaultOpen
-      />
+      {/* Collapsed by default (ManualCalendarFilter's own documented
+          default) - this page used to force it open, pushing a full
+          month grid above the actually useful stats/trade list every
+          time you opened Performance. Still one click away. */}
+      <ManualCalendarFilter selectedDate={selectedDate} onSelectDate={setSelectedDate} />
 
       {totalTrades === 0 ? (
         <p className="muted">No closed manual trades yet.</p>

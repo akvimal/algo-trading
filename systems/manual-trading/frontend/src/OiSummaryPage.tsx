@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { type OiBuildup, type OiSummary, fetchOiSummary, fetchOptionExpiries, resolveUnderlying } from "./api";
+import { type OiBuildup, type OiSummary, type OiSummaryLeg, fetchOiSummary, fetchOptionExpiries, resolveUnderlying } from "./api";
 import { OiBarChart } from "./OiBarChart";
 
 // Options only exist on NSE/MCX in this codebase (CRYPTO option chain/
@@ -108,6 +108,47 @@ function buildupBadge(b: OiBuildup | null) {
   );
 }
 
+// Toggleable strike-table columns - OI and Strike itself stay put as the
+// anchor columns (that's the whole point of an option chain: comparing
+// calls vs. puts at the same strike), everything else can be hidden to
+// cut down the wall of columns. Δ5m/Δ15m/IV default ON (existing
+// behaviour before Vol/Bid-Ask/Trend were added); the 3 new ones default
+// OFF so the table doesn't get wider than it already was without an
+// explicit opt-in.
+type ColumnKey = "oiChange5m" | "oiChange15m" | "iv" | "vol" | "bidAsk" | "trend";
+
+const COLUMN_DEFS: { key: ColumnKey; label: string }[] = [
+  { key: "oiChange5m", label: "Δ5m" },
+  { key: "oiChange15m", label: "Δ15m" },
+  { key: "iv", label: "IV" },
+  { key: "vol", label: "Vol" },
+  { key: "bidAsk", label: "Bid/Ask" },
+  { key: "trend", label: "Trend" },
+];
+
+const DEFAULT_VISIBLE_COLUMNS: Record<ColumnKey, boolean> = {
+  oiChange5m: true,
+  oiChange15m: true,
+  iv: true,
+  vol: false,
+  bidAsk: false,
+  trend: false,
+};
+
+// Per-viewer display preference, not app data - localStorage is the
+// right fit (survives reload, never round-trips to a backend).
+const VISIBLE_COLUMNS_STORAGE_KEY = "oiSummaryVisibleColumns";
+
+function loadVisibleColumns(): Record<ColumnKey, boolean> {
+  try {
+    const raw = localStorage.getItem(VISIBLE_COLUMNS_STORAGE_KEY);
+    if (!raw) return DEFAULT_VISIBLE_COLUMNS;
+    return { ...DEFAULT_VISIBLE_COLUMNS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_VISIBLE_COLUMNS;
+  }
+}
+
 export default function OiSummaryPage() {
   const [activeKey, setActiveKey] = useState(PRESETS[0].key);
   const [tabStates, setTabStates] = useState<Record<string, TabState>>({});
@@ -115,6 +156,20 @@ export default function OiSummaryPage() {
   // against - shared across tabs (not per-tab state) since it's a display
   // preference, not data tied to any one underlying.
   const [chartWindow, setChartWindow] = useState<"5m" | "15m">("5m");
+  const [visibleColumns, setVisibleColumns] = useState<Record<ColumnKey, boolean>>(loadVisibleColumns);
+
+  function toggleColumn(key: ColumnKey) {
+    setVisibleColumns((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        localStorage.setItem(VISIBLE_COLUMNS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // best-effort persistence only - a private/blocked storage context
+        // just means the toggle doesn't survive reload, not a real failure
+      }
+      return next;
+    });
+  }
 
   function updateTab(key: string, patch: Partial<TabState>) {
     setTabStates((prev) => ({ ...prev, [key]: { ...(prev[key] ?? EMPTY_TAB_STATE), ...patch } }));
@@ -183,6 +238,55 @@ export default function OiSummaryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeKey, activeState.loaded, activeState.expiry]);
 
+  function renderLegCells(leg: OiSummaryLeg | null, itmClass: string, keyPrefix: string) {
+    const cells = [<td key={`${keyPrefix}-oi`} className={itmClass}>{leg ? fmtOi(leg.oi) : "-"}</td>];
+    if (visibleColumns.oiChange5m) {
+      cells.push(
+        <td key={`${keyPrefix}-d5`} className={(leg ? changeClass(leg.oi_change_5m) : "") + itmClass}>
+          {leg ? fmtChange(leg.oi_change_5m) : "-"}
+        </td>,
+      );
+    }
+    if (visibleColumns.oiChange15m) {
+      cells.push(
+        <td key={`${keyPrefix}-d15`} className={(leg ? changeClass(leg.oi_change_15m) : "") + itmClass}>
+          {leg ? fmtChange(leg.oi_change_15m) : "-"}
+        </td>,
+      );
+    }
+    if (visibleColumns.iv) {
+      cells.push(
+        <td key={`${keyPrefix}-iv`} className={itmClass}>
+          {leg ? fmtIv(leg.implied_volatility) : "-"}
+        </td>,
+      );
+    }
+    if (visibleColumns.vol) {
+      cells.push(
+        <td key={`${keyPrefix}-vol`} className={itmClass}>
+          {leg ? fmtVol(leg.volume) : "-"}
+        </td>,
+      );
+    }
+    if (visibleColumns.bidAsk) {
+      cells.push(
+        <td key={`${keyPrefix}-ba`} className={itmClass}>
+          {leg ? fmtBidAsk(leg.top_bid_price, leg.top_ask_price) : "-"}
+        </td>,
+      );
+    }
+    if (visibleColumns.trend) {
+      cells.push(
+        <td key={`${keyPrefix}-tr`} className={itmClass}>
+          {leg ? buildupBadge(leg.buildup) : "-"}
+        </td>,
+      );
+    }
+    return cells;
+  }
+
+  const sideColSpan = 1 + COLUMN_DEFS.filter((c) => visibleColumns[c.key]).length;
+
   const summary = activeState.summary;
   let visibleStrikes = summary?.strikes ?? [];
   if (summary) {
@@ -193,33 +297,29 @@ export default function OiSummaryPage() {
   }
 
   return (
-    <div className="manual-settings-page">
-      <h3>Options OI Summary</h3>
-      <p className="muted">
-        Put/Call ratio, live OI change (5m/15m), IV, volume, bid/ask, and buildup trend per strike ({STRIKES_EACH_SIDE}{" "}
-        strikes either side of ATM) - via Dhan's option chain.
-      </p>
+    <div className="manual-wide-page">
+      <div className="oi-summary-tabs-row">
+        <nav className="tabs">
+          {PRESETS.map((p) => (
+            <button key={p.key} className={activeKey === p.key ? "active" : ""} onClick={() => setActiveKey(p.key)}>
+              {p.key}
+            </button>
+          ))}
+        </nav>
 
-      <nav className="tabs">
-        {PRESETS.map((p) => (
-          <button key={p.key} className={activeKey === p.key ? "active" : ""} onClick={() => setActiveKey(p.key)}>
-            {p.key}
-          </button>
-        ))}
-      </nav>
-
-      {activeState.expiries && activeState.expiries.length > 0 && (
-        <label className="oi-summary-expiry-picker">
-          Expiry
-          <select value={activeState.expiry ?? ""} onChange={(e) => updateTab(activeKey, { expiry: e.target.value })}>
-            {activeState.expiries.map((exp) => (
-              <option key={exp} value={exp}>
-                {exp}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+        {activeState.expiries && activeState.expiries.length > 0 && (
+          <label className="oi-summary-expiry-picker">
+            Expiry
+            <select value={activeState.expiry ?? ""} onChange={(e) => updateTab(activeKey, { expiry: e.target.value })}>
+              {activeState.expiries.map((exp) => (
+                <option key={exp} value={exp}>
+                  {exp}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
 
       {activeState.loadingExpiries && <p className="muted">Loading expiries...</p>}
 
@@ -230,6 +330,17 @@ export default function OiSummaryPage() {
       )}
 
       {activeState.error && <p className="error">{activeState.error}</p>}
+
+      {/* First load only - once summary exists, loadingSummary's own
+          "Refreshing..." indicator further down covers subsequent poll
+          ticks instead. Without this, the whole page was blank between
+          expiries resolving and the first chain fetch landing. */}
+      {activeState.loadingSummary && !summary && (
+        <div className="oi-summary-loading">
+          <span className="spinner spinner-lg" />
+          <span>Loading option chain...</span>
+        </div>
+      )}
 
       {summary && (
         <>
@@ -264,7 +375,11 @@ export default function OiSummaryPage() {
                 </span>
               </div>
             </div>
-            {activeState.loadingSummary && <p className="muted">Refreshing...</p>}
+            {activeState.loadingSummary && (
+              <p className="muted oi-summary-refreshing">
+                <span className="spinner" /> Refreshing...
+              </p>
+            )}
           </section>
 
           <section className="manual-settings-section">
@@ -305,30 +420,45 @@ export default function OiSummaryPage() {
               LB Long Buildup · SB Short Buildup · SC Short Covering · LU Long Unwinding (15m OI vs. premium change) · ITM
               strikes shaded
             </p>
+            <div className="oi-column-toggle-row">
+              <span className="muted oi-column-toggle-label">Columns</span>
+              <div className="oi-summary-window-toggle">
+                {COLUMN_DEFS.map((c) => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    className={visibleColumns[c.key] ? "active" : ""}
+                    onClick={() => toggleColumn(c.key)}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="manual-stats-table-wrap">
               <table className="manual-stats-table oi-summary-table">
                 <thead>
                   <tr>
-                    <th colSpan={7}>Calls</th>
+                    <th colSpan={sideColSpan}>Calls</th>
                     <th>Strike</th>
-                    <th colSpan={7}>Puts</th>
+                    <th colSpan={sideColSpan}>Puts</th>
                   </tr>
                   <tr>
                     <th>OI</th>
-                    <th>Δ5m</th>
-                    <th>Δ15m</th>
-                    <th>IV</th>
-                    <th>Vol</th>
-                    <th>Bid/Ask</th>
-                    <th>Trend</th>
+                    {visibleColumns.oiChange5m && <th>Δ5m</th>}
+                    {visibleColumns.oiChange15m && <th>Δ15m</th>}
+                    {visibleColumns.iv && <th>IV</th>}
+                    {visibleColumns.vol && <th>Vol</th>}
+                    {visibleColumns.bidAsk && <th>Bid/Ask</th>}
+                    {visibleColumns.trend && <th>Trend</th>}
                     <th></th>
                     <th>OI</th>
-                    <th>Δ5m</th>
-                    <th>Δ15m</th>
-                    <th>IV</th>
-                    <th>Vol</th>
-                    <th>Bid/Ask</th>
-                    <th>Trend</th>
+                    {visibleColumns.oiChange5m && <th>Δ5m</th>}
+                    {visibleColumns.oiChange15m && <th>Δ15m</th>}
+                    {visibleColumns.iv && <th>IV</th>}
+                    {visibleColumns.vol && <th>Vol</th>}
+                    {visibleColumns.bidAsk && <th>Bid/Ask</th>}
+                    {visibleColumns.trend && <th>Trend</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -338,32 +468,12 @@ export default function OiSummaryPage() {
                     const putItm = row.put?.moneyness === "ITM" ? " oi-itm-cell" : "";
                     return (
                       <tr key={row.strike} className={isAtm ? "selected-row" : ""}>
-                        <td className={callItm}>{row.call ? fmtOi(row.call.oi) : "-"}</td>
-                        <td className={(row.call ? changeClass(row.call.oi_change_5m) : "") + callItm}>
-                          {row.call ? fmtChange(row.call.oi_change_5m) : "-"}
-                        </td>
-                        <td className={(row.call ? changeClass(row.call.oi_change_15m) : "") + callItm}>
-                          {row.call ? fmtChange(row.call.oi_change_15m) : "-"}
-                        </td>
-                        <td className={callItm}>{row.call ? fmtIv(row.call.implied_volatility) : "-"}</td>
-                        <td className={callItm}>{row.call ? fmtVol(row.call.volume) : "-"}</td>
-                        <td className={callItm}>{row.call ? fmtBidAsk(row.call.top_bid_price, row.call.top_ask_price) : "-"}</td>
-                        <td className={callItm}>{row.call ? buildupBadge(row.call.buildup) : "-"}</td>
+                        {renderLegCells(row.call, callItm, `${row.strike}-call`)}
                         <td className="oi-summary-strike">
                           {row.strike}
                           {isAtm ? " (ATM)" : ""}
                         </td>
-                        <td className={putItm}>{row.put ? fmtOi(row.put.oi) : "-"}</td>
-                        <td className={(row.put ? changeClass(row.put.oi_change_5m) : "") + putItm}>
-                          {row.put ? fmtChange(row.put.oi_change_5m) : "-"}
-                        </td>
-                        <td className={(row.put ? changeClass(row.put.oi_change_15m) : "") + putItm}>
-                          {row.put ? fmtChange(row.put.oi_change_15m) : "-"}
-                        </td>
-                        <td className={putItm}>{row.put ? fmtIv(row.put.implied_volatility) : "-"}</td>
-                        <td className={putItm}>{row.put ? fmtVol(row.put.volume) : "-"}</td>
-                        <td className={putItm}>{row.put ? fmtBidAsk(row.put.top_bid_price, row.put.top_ask_price) : "-"}</td>
-                        <td className={putItm}>{row.put ? buildupBadge(row.put.buildup) : "-"}</td>
+                        {renderLegCells(row.put, putItm, `${row.strike}-put`)}
                       </tr>
                     );
                   })}

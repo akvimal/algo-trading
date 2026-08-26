@@ -14,8 +14,17 @@ import {
 
 const ALL_SEGMENTS: Segment[] = ["NSE", "MCX", "CRYPTO"];
 
-function fmt(n: number): string {
-  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Whole numbers (the common case here - capital/trade and risk amount
+// are almost always round configured/computed figures) show with no
+// decimals; only a genuinely fractional value (real paise from a
+// compounding balance) keeps its 2 decimals. Avoids "1,000,000.00"-style
+// noise for what's usually just a round number. `locale` defaults to
+// Indian digit grouping (10,00,000 not 1,000,000) to match every other
+// INR-denominated figure in this app - callers pass "en-US" for CRYPTO's
+// USD balances.
+function fmt(n: number, locale = "en-IN"): string {
+  const hasFraction = Math.round(n * 100) % 100 !== 0;
+  return n.toLocaleString(locale, hasFraction ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : { maximumFractionDigits: 0 });
 }
 
 type ManualSettingsPageProps = {
@@ -124,23 +133,25 @@ export default function ManualSettingsPage({
 
   return (
     <div className="manual-settings-page">
-      <button type="button" className="manual-settings-back" onClick={onBack}>
-        ← Back to Manual
-      </button>
-      <h3>Checklist & Risk Settings</h3>
+      <div className="manual-page-header">
+        <button type="button" className="manual-settings-back" onClick={onBack}>
+          ← Back
+        </button>
+        <h3>Checklist & Risk Settings</h3>
+      </div>
 
       <section className="manual-settings-section">
         <h4>Risk per trade / segment</h4>
-        <p className="manual-settings-hint">
-          Risk/trade caps a manual order's size (risk-based sizing, used whenever Lots isn't set explicitly). Min reward:risk
-          is the RR floor the Manual tab's Add/Update button enforces on Limit(or live LTP)/Target/SL Limit. Enforce
-          risk-based Lot locks the Lot field itself to what Risk/trade % computes (spot/future, once a stop-loss is set).
-        </p>
         {accountsError && <p className="error">{accountsError}</p>}
         <div className="manual-risk-grid">
           {ALL_SEGMENTS.map((seg) => {
             const account = accounts.find((a) => a.segment === seg);
-            const unit = seg === "CRYPTO" ? "USD" : "INR";
+            // Symbol prefix, not a trailing "INR"/"USD" repeated on every
+            // figure - shorter, and matches how every real trading app
+            // shows money. Indian lakh grouping for INR (fmt's own
+            // default), Western grouping for CRYPTO's USD.
+            const currency = seg === "CRYPTO" ? "$" : "₹";
+            const locale = seg === "CRYPTO" ? "en-US" : "en-IN";
             // Live preview from the DRAFT %, not the last-saved value -
             // so typing a new Risk/trade % shows what it'll actually mean
             // in absolute terms before hitting Save, same immediacy
@@ -153,16 +164,22 @@ export default function ManualSettingsPage({
                 <span className="manual-risk-card-title">{seg}</span>
                 {account && (
                   <span className="manual-risk-card-capital">
-                    Capital/trade {fmt(account.capital_per_trade)} {unit} &middot; Balance {fmt(account.current_balance)} {unit}
+                    Capital {currency}
+                    {fmt(account.capital_per_trade, locale)} &middot; Bal {currency}
+                    {fmt(account.current_balance, locale)}
                     {riskAmount != null && (
                       <>
                         {" "}
-                        &middot; Risk amount <strong>{fmt(riskAmount)} {unit}</strong>
+                        &middot; Risk{" "}
+                        <strong>
+                          {currency}
+                          {fmt(riskAmount, locale)}
+                        </strong>
                       </>
                     )}
                   </span>
                 )}
-                <label>
+                <label title="Caps a manual order's size - risk-based sizing, used whenever Lots isn't set explicitly.">
                   Risk/trade %
                   <input
                     type="number"
@@ -174,7 +191,7 @@ export default function ManualSettingsPage({
                     onChange={(e) => setDraftRisk((prev) => ({ ...prev, [seg]: e.target.value }))}
                   />
                 </label>
-                <label>
+                <label title="The RR floor the Manual tab's Add/Update button enforces on Limit (or live LTP)/Target/SL Limit.">
                   Min reward:risk (1:x)
                   <input
                     type="number"

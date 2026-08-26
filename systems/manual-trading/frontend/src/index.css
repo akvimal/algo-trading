@@ -22,43 +22,48 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  /* Themes native checkbox/radio ticks to match the rest of the app
+     instead of the browser's default (usually OS-blue, clashing with
+     --accent here) - the one native form-control look worth keeping
+     (a custom-drawn checkbox is more churn than this is worth). */
+  accent-color: var(--accent);
 }
 
 main {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 2.5rem 1.5rem;
+  /* No page-level header in this app (see App.tsx's own comment - the
+     shell's nav one row above already labels this "Manual Trading"), so
+     top padding stays tight rather than the fuller 2.5rem a page with
+     its own h1/subtitle would want. */
+  padding: 1.25rem 1.5rem 2.5rem;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 0.75rem;
 }
 
-header {
+/* Tabs + notification toggle share one row/border instead of the toggle
+   getting its own header row above them. */
+.app-top-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  border-bottom: 1px solid var(--border);
 }
 
-header h1 {
-  font-size: 1.5rem;
-  margin: 0 0 0.35rem;
-}
-
-.subtitle {
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  margin: 0;
+.app-top-row .tabs {
+  flex: 1;
+  border-bottom: none;
 }
 
 .signal-notifier {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 0.4rem 0.6rem;
-  flex-shrink: 0;
   max-width: 22rem;
-  justify-content: flex-end;
 }
 
 .signal-notifier .tiny-checkbox {
@@ -585,6 +590,12 @@ tbody tr:last-child td {
 }
 
 button {
+  /* appearance: none - without it, some browsers/OS accessibility modes
+     (e.g. Windows forced-colors) can render native button chrome (a
+     light system-color pill) instead of these custom colors, especially
+     for a transparent/bordered button like .secondary below. */
+  appearance: none;
+  font-family: inherit;
   background: var(--accent);
   color: #fff;
   border: none;
@@ -600,6 +611,14 @@ button:disabled {
   cursor: default;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 button.secondary {
   background: transparent;
   border: 1px solid var(--border);
@@ -607,9 +626,14 @@ button.secondary {
 }
 
 button.tiny {
-  padding: 0.2rem 0.55rem;
-  font-size: 0.75rem;
-  border-radius: 4px;
+  /* Was noticeably shorter than the 1.75rem .manual-icon-btn square it
+     often sits beside (e.g. the session bar's checklist/Check in/Check
+     out row) - padding bumped so the two align; radius matched to the
+     same 6px every other control on this page uses (was 4px, the one
+     outlier). */
+  padding: 0.32rem 0.65rem;
+  font-size: 0.78rem;
+  border-radius: 6px;
 }
 
 tbody tr {
@@ -866,11 +890,27 @@ tbody tr.selected-row {
   gap: 0.4rem;
 }
 
+/* Same look as every other input/select on this page (.manual-entry-
+   group's own select/input rule below) - these used to carry only
+   font-size/padding of their own, nothing for background/border/radius,
+   so they fell back to the browser's bare native control chrome instead
+   of matching the rest of the app's dark theme. */
 .manual-new-row-segment,
 .manual-new-row-symbol,
 .manual-new-row-instrument {
-  font-size: 0.8rem;
-  padding: 0.3rem 0.5rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+}
+
+.manual-new-row-segment:focus,
+.manual-new-row-symbol:focus,
+.manual-new-row-instrument:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .manual-new-row-symbol {
@@ -879,15 +919,17 @@ tbody tr.selected-row {
 
 .manual-add-instrument-btn {
   display: inline-flex;
-  align-self: flex-start;
+  align-self: center;
   align-items: center;
   gap: 0.35rem;
   background: var(--accent);
   color: #fff;
   border: none;
   border-radius: 6px;
-  padding: 0.3rem 0.7rem;
-  font-size: 0.8rem;
+  /* Matches the adjacent selects/input's own height (0.4rem/0.6rem
+     padding at 0.85rem font) - was noticeably shorter than them before. */
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -938,6 +980,9 @@ tbody tr.selected-row {
   font-size: 0.85rem;
   cursor: pointer;
   padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .manual-icon-btn {
@@ -1132,9 +1177,15 @@ tbody tr.selected-row {
   gap: 0.4rem;
 }
 
-.manual-price-mode-toggle {
-  transform: scale(0.85);
-  transform-origin: left center;
+/* Compact variant of .manual-toggle-group/.manual-toggle - real smaller
+   padding/font-size, not a CSS transform:scale() (which used to blur the
+   text and scale the gap/border along with it, visibly inconsistent
+   next to every other pill toggle on this page at native size). Sits
+   beside the "Limit" text label rather than under its own dedicated
+   label like Buy/Sell's toggle does, hence the smaller footprint. */
+.manual-price-mode-toggle .manual-toggle {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
 }
 
 .manual-toggle.active {
@@ -1651,22 +1702,32 @@ button.btn-exit {
   max-width: 48rem;
 }
 
+/* Back + page title on one row (Performance/Settings sub-pages) - was
+   two stacked lines plus a full-size heading, more top-of-page chrome
+   than a dense trading-terminal UI (Kite/Dhan) actually carries. */
+.manual-page-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.manual-page-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .manual-settings-back {
-  align-self: flex-start;
   background: transparent;
   border: none;
   color: var(--text-dim);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   cursor: pointer;
   padding: 0.2rem 0;
+  flex-shrink: 0;
 }
 
 .manual-settings-back:hover {
   color: var(--text);
-}
-
-.manual-settings-page h3 {
-  margin: 0;
 }
 
 .manual-settings-section {
@@ -1677,13 +1738,10 @@ button.btn-exit {
 
 .manual-settings-section h4 {
   margin: 0;
-  font-size: 0.9rem;
-}
-
-.manual-settings-hint {
-  margin: 0;
-  font-size: 0.78rem;
+  font-size: 0.85rem;
   color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .manual-risk-grid {
@@ -1693,6 +1751,13 @@ button.btn-exit {
 }
 
 .manual-risk-card {
+  /* Explicit basis/max-width - without it, the long "Capital/trade ...
+     Balance ... Risk amount ..." line below had nothing forcing it to
+     wrap, so it dragged the whole card out to ~full container width and
+     the 3 segments (NSE/MCX/CRYPTO) stacked one per row instead of
+     sitting side by side, despite .manual-risk-grid's own flex-wrap. */
+  flex: 1 1 14rem;
+  max-width: 15.5rem;
   display: flex;
   align-items: flex-end;
   flex-wrap: wrap;
@@ -1950,14 +2015,47 @@ button.btn-exit {
 }
 
 /* Options OI Summary page (fixed NIFTY/BANKNIFTY/GOLDM/CRUDEOILM tabs,
-   .tabs itself reused from the top-level nav - see App.tsx). */
-.oi-summary-expiry-picker {
+   .tabs itself reused from the top-level nav - see App.tsx). Its own
+   wrapper, NOT .manual-settings-page (that one's capped at 48rem for its
+   narrow settings-form content - fine there, but was forcing this page's
+   5 summary cards to wrap onto 2 rows despite room being available; this
+   page's own wide table/chart content wants closer to main's full width). */
+/* Alternate to .manual-settings-page for pages whose content is wide
+   (tables/charts), not the narrow settings-form 48rem's a good fit for -
+   originally OI-only, now shared with ManualStatsPage's own "By day"
+   table (was forcing an unnecessary horizontal scrollbar). */
+.manual-wide-page {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 1rem;
+}
+
+/* Underlying tabs + Expiry picker share one row/border (the picker used
+   to sit on its own row below - folded up here to cut top-of-page
+   height, see the "render only relevant info" pass this page went
+   through). */
+.oi-summary-tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.oi-summary-tabs-row .tabs {
+  border-bottom: none;
+}
+
+.oi-summary-expiry-picker {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.78rem;
   color: var(--text-dim);
   width: fit-content;
+  padding-bottom: 0.5rem;
 }
 
 /* Wider than the default .manual-stats-table columns (whitespace: nowrap
@@ -1984,6 +2082,50 @@ button.btn-exit {
 .oi-summary-legend-caption {
   margin-top: 0.15rem;
   font-size: 0.72rem;
+}
+
+/* Generic small spinner - reusable anywhere a loading state needs more
+   than plain text (first-used for the OI page's own first-load state,
+   which used to render nothing at all while the chain fetch was in
+   flight). */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner-lg {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-width: 3px;
+}
+
+.oi-summary-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 0;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.oi-summary-refreshing {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .oi-column-toggle-row {

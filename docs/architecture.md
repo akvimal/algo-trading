@@ -136,13 +136,15 @@ New columns: `execution.positions.open_fee/close_fee/margin_posted/liquidation_p
 
 ## The Manual tab: placing paper trades independent of any saved Strategy
 
-`signal-generation`'s frontend has a third tab, "Manual," alongside Strategies/Rules — a lightweight
-order-entry panel for opening real paper positions directly, without first configuring a Strategy.
-It's a genuinely different feature from the per-strategy "send test signal" mini-form (Strategies
-tab, kept as-is): that one still requires an existing Strategy and exercises its own real
-stop-loss method/conflict policy through the normal resolution pipeline; the Manual tab works for
-an arbitrary symbol/segment/action on the spot, walking up to execution with no Strategy at all for
-either spot/future or options (see below) — as of 2026-08-14, neither instrument type needs one.
+`manual-trading`'s frontend (its own system, `systems/manual-trading/frontend` — split out of
+`signal-generation`'s frontend 2026-08-26, see § "Manual Trading module split" below) has a
+"Manual" tab — a lightweight order-entry panel for opening real paper positions directly, without
+first configuring a Strategy. It's a genuinely different feature from the per-strategy "send test
+signal" mini-form (`signal-generation`'s own Strategies tab, kept as-is and NOT part of this split):
+that one still requires an existing Strategy and exercises its own real stop-loss method/conflict
+policy through the normal resolution pipeline; the Manual tab works for an arbitrary
+symbol/segment/action on the spot, walking up to execution with no Strategy at all for either
+spot/future or options (see below) — as of 2026-08-14, neither instrument type needs one.
 
 **Spot/future bypasses signal-generation/signal-processing entirely.** `execution` gained
 `POST /positions/manual` (`app/domain/position_manager.py`'s `open_manual_position`, mirroring
@@ -217,6 +219,56 @@ stays full-close-only.
 set once, at open time, from a Strategy's configured method. Generically useful, not manual-only;
 sets `stop_loss_price`/`combined_stop_loss_price` only, never the immutable
 `initial_stop_loss_price` audit column.
+
+## Manual Trading module split
+
+`systems/manual-trading/frontend` (2026-08-26) — a new system holding the Manual tab and the
+Options OI summary, split out of `signal-generation`'s frontend. Neither feature ever actually
+depended on `signal-generation`'s own backend/DB: Manual Trading only ever called `execution`
+directly (`POST /positions/manual`, `POST /option-groups/manual`, checklist/trade-image/trading-
+session endpoints, all described elsewhere in this doc), and Options OI only ever called
+`market-data`'s `GET /options/oi-summary`/`GET /options/chain`. Both were purely co-hosted in
+signal-generation's frontend bundle, not architecturally coupled to it — which is what made this a
+cheap extraction rather than a rearchitecture. `signal-generation`'s frontend keeps Strategies/Rules
+only; its `?tab=manual`/`?tab=oi` deep-links are gone (no longer valid tabs there) —
+`manual-trading`'s own `?tab=oi` now serves the equivalent jump within its own app, defaulting to
+Manual.
+
+**Frontend-only, no backend of its own** — same reasoning as the "no dependency" point above: there
+was no state to give a new backend ownership of, since both features' persistence already lives
+entirely in `execution`'s (positions/option groups/checklist/trade images/trading sessions) or
+nowhere at all (`market-data`'s OI figures stay in-memory-only, unchanged by this split — see
+"Why market-data is its own system" below for why that's deliberate). `src/api.ts` and
+`src/index.css` were copied wholesale from signal-generation's frontend rather than surgically
+split (the type/helper dependencies between Manual's own vocabulary — `Segment`, `StopLossMethod`,
+`OptionPositionStyle`, etc. — and Strategies/Rules' were tangled enough that tracing an exact
+minimal subset by hand risked missing one); Vite/Rollup tree-shakes the unused Strategies/Rules
+code back out of the production JS bundle automatically (confirmed: signal-generation's own bundle
+dropped from 317KB to 229KB after the components were removed from `App.tsx`, and the new module's
+bundle came in at 235KB — almost exactly the delta, not the full 317KB). CSS isn't tree-shaken the
+same way, so both frontends' `index.css` now carry some dead rules for tabs they don't render — a
+cosmetic follow-up, not a correctness issue.
+
+`SignalNotifier` (desktop notifications for new signals across all strategies) is duplicated, not
+shared or moved — it calls `signal-generation`'s and `signal-processing`'s backends directly
+(cross-origin, same pattern every frontend already uses for cross-system reads), small enough that
+copying it into `manual-trading`'s header too was simpler than either removing it from
+signal-generation (losing that feature there) or inventing a shared-code mechanism this codebase
+deliberately doesn't have (see "no direct imports between `systems/*` folders" in CLAUDE.md — that
+rule is about backends, but the same anti-shared-code spirit extends to frontends here).
+
+**Deployment**: `manual-trading-frontend` sits behind `profiles: ["execution"]` in
+`docker-compose.yml`, like `execution-{backend,frontend}` themselves — unlike signal-generation's
+other tabs, Manual Trading is genuinely non-functional without execution running, so there's no
+reason to keep it in the always-up infra tier. `shell/index.html` gained a real "Manual Trading" tab
+(its own iframe, `MANUAL_TRADING_FRONTEND_PORT`) replacing the old quick-jump button that used to
+force-navigate signal-generation's iframe to `?tab=manual`.
+
+**Deliberately deferred**: giving Options OI real persistence (history beyond `market-data`'s
+existing in-memory 20-minute buffer) — that's a separate decision (who owns the schema: a new
+backend under `manual-trading`, or `market-data` breaking its own "no DB" design) not needed just to
+relocate the existing feature into its own container. Also deferred: anything SaaS-shaped (auth,
+multi-tenancy, billing) — this split only addresses deployability/separation, not productization.
 
 ## Trade discipline checklist
 
@@ -760,7 +812,8 @@ algo-trading/
 │   ├── signal-generation/        # backend (strategy CRUD) + frontend; engine/backtesting/api integration not yet done
 │   ├── signal-processing/        # backend (FastAPI) + frontend (React/Vite)
 │   ├── execution/                # backend (FastAPI + Redis consumer + APScheduler) + frontend
-│   └── market-data/              # backend (FastAPI - provider credentials, quote lookup, live feed) + frontend (status dashboard)
+│   ├── market-data/              # backend (FastAPI - provider credentials, quote lookup, live feed) + frontend (status dashboard)
+│   └── manual-trading/           # frontend only (Manual Trading + Options OI) - calls execution/market-data directly
 ├── shared/
 │   ├── python-libs/algotrading_common/
 │   └── ts-libs/ui-kit/

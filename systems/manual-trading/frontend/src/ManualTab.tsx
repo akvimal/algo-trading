@@ -1906,9 +1906,6 @@ export default function ManualTab() {
 
   return (
     <>
-      <p className="muted manual-intraday-subtitle">
-        Intraday manual trading - confirm today&apos;s checklist once per segment, plan every trade, review every close.
-      </p>
       <div className="manual-toolbar">
         <span className="manual-add-instrument-group">
           <select
@@ -2027,20 +2024,22 @@ export default function ManualTab() {
               <span className="muted">This trade&apos;s own card was removed - review it directly here instead.</span>
               <div className="manual-review-banner-row">
                 <span>Did you follow your full plan without deviation?</span>
-                <button
-                  type="button"
-                  className={`manual-toggle ${inlineReviewFollowedPlan === true ? "active-buy" : ""}`}
-                  onClick={() => setInlineReviewFollowedPlan(true)}
-                >
-                  Yes
-                </button>
-                <button
-                  type="button"
-                  className={`manual-toggle ${inlineReviewFollowedPlan === false ? "active-sell" : ""}`}
-                  onClick={() => setInlineReviewFollowedPlan(false)}
-                >
-                  No
-                </button>
+                <span className="manual-toggle-group">
+                  <button
+                    type="button"
+                    className={`manual-toggle ${inlineReviewFollowedPlan === true ? "active-buy" : ""}`}
+                    onClick={() => setInlineReviewFollowedPlan(true)}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    className={`manual-toggle ${inlineReviewFollowedPlan === false ? "active-sell" : ""}`}
+                    onClick={() => setInlineReviewFollowedPlan(false)}
+                  >
+                    No
+                  </button>
+                </span>
               </div>
               {inlineReviewFollowedPlan === false && (
                 <textarea
@@ -2302,10 +2301,17 @@ export default function ManualTab() {
                   <button
                     type="button"
                     className="manual-pnl-toggle"
-                    title="Today's realized PnL - click to view trade history"
+                    title="This position's live unrealized PnL, plus today's realized PnL on this row - click to view trade history"
                     onClick={() => setExpandedHistory((prev) => ({ ...prev, [row.id]: !prev[row.id] }))}
                   >
-                    <span className={pnlClass(pnlSummary.realized)}>{fmt(pnlSummary.realized)}</span>
+                    {pnlSummary.unrealized != null ? (
+                      <>
+                        <span className={pnlClass(pnlSummary.unrealized)}>Unrealized {fmt(pnlSummary.unrealized)}</span>
+                        <span className={pnlClass(pnlSummary.realized)}>Realized {fmt(pnlSummary.realized)}</span>
+                      </>
+                    ) : (
+                      <span className={pnlClass(pnlSummary.realized)}>{fmt(pnlSummary.realized)}</span>
+                    )}
                   </button>
                   {row.symbol && (
                     <span className="manual-ltp-live">
@@ -2929,20 +2935,22 @@ export default function ManualTab() {
                           <div className="manual-inline-review">
                             <div className="manual-review-banner-row">
                               <span>Did you follow your full plan without deviation?</span>
-                              <button
-                                type="button"
-                                className={`manual-toggle ${inlineReviewFollowedPlan === true ? "active-buy" : ""}`}
-                                onClick={() => setInlineReviewFollowedPlan(true)}
-                              >
-                                Yes
-                              </button>
-                              <button
-                                type="button"
-                                className={`manual-toggle ${inlineReviewFollowedPlan === false ? "active-sell" : ""}`}
-                                onClick={() => setInlineReviewFollowedPlan(false)}
-                              >
-                                No
-                              </button>
+                              <span className="manual-toggle-group">
+                                <button
+                                  type="button"
+                                  className={`manual-toggle ${inlineReviewFollowedPlan === true ? "active-buy" : ""}`}
+                                  onClick={() => setInlineReviewFollowedPlan(true)}
+                                >
+                                  Yes
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`manual-toggle ${inlineReviewFollowedPlan === false ? "active-sell" : ""}`}
+                                  onClick={() => setInlineReviewFollowedPlan(false)}
+                                >
+                                  No
+                                </button>
+                              </span>
                             </div>
                             {inlineReviewFollowedPlan === false && (
                               <textarea

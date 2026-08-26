@@ -71,12 +71,10 @@ import {
   updateStrategy,
 } from "./api";
 import { chartinkWebhookUrls, executionUrl, processingUrl } from "./links";
-import ManualTab from "./ManualTab";
-import OiSummaryPage from "./OiSummaryPage";
 
 const POLL_INTERVAL_MS = 5000;
 
-type TabId = "strategies" | "rules" | "manual" | "oi";
+type TabId = "strategies" | "rules";
 
 // A performance advisory (not a real data-availability limit) for the
 // Backtest tab's From/To range - finer intervals mean far more bars to
@@ -3670,14 +3668,13 @@ function StrategiesTab() {
   );
 }
 
-const VALID_TABS: TabId[] = ["strategies", "rules", "manual", "oi"];
+const VALID_TABS: TabId[] = ["strategies", "rules"];
 
 export default function App() {
-  // Deep-link support (?tab=manual) - the shell's top nav (shell/index.html)
-  // jumps straight into the Manual tab this way rather than always
-  // landing on the Strategies default, since Manual is its own frequent,
-  // distinct workflow. Falls back to the default for a missing/invalid
-  // value, same as if the param weren't there at all.
+  // Deep-link support (?tab=rules) - falls back to the Strategies default
+  // for a missing/invalid value, same as if the param weren't there at
+  // all. Manual/Options OI used to live here too - split into their own
+  // module, see docs/architecture.md § "Manual Trading module split".
   const [tab, setTab] = useState<TabId>(() => {
     const requested = new URLSearchParams(window.location.search).get("tab");
     return (VALID_TABS as string[]).includes(requested ?? "") ? (requested as TabId) : "strategies";
@@ -3700,18 +3697,10 @@ export default function App() {
         <button className={tab === "rules" ? "active" : ""} onClick={() => setTab("rules")}>
           Rules
         </button>
-        <button className={tab === "manual" ? "active" : ""} onClick={() => setTab("manual")}>
-          Manual
-        </button>
-        <button className={tab === "oi" ? "active" : ""} onClick={() => setTab("oi")}>
-          Options OI
-        </button>
       </nav>
 
       {tab === "strategies" && <StrategiesTab />}
       {tab === "rules" && <RulesTab />}
-      {tab === "manual" && <ManualTab />}
-      {tab === "oi" && <OiSummaryPage />}
     </main>
   );
 }

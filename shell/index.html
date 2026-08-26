@@ -116,6 +116,7 @@
       { id: "signal-processing", label: "Signal Processing", port: 8080, built: true },
       { id: "execution", label: "Execution", port: 8081, built: true },
       { id: "market-data", label: "Market Data", port: 8083, built: true },
+      { id: "manual-trading", label: "Manual Trading", port: 8084, built: true },
     ];
 
     const tabsEl = document.getElementById("tabs");
@@ -147,28 +148,6 @@
         frameWrap.appendChild(placeholder);
       }
     });
-
-    // Quick-jump straight into signal-generation's own Manual tab (see
-    // App.tsx's ?tab=manual deep-link support) rather than making every
-    // trip there go through Strategies first - reuses the SAME iframe as
-    // the "Signal Generation" tab button above (frame-signal-generation),
-    // just forces its src to include the query param and activates it.
-    // A second click re-navigates the iframe even if it's already
-    // showing signal-generation on a different sub-tab - a deliberate
-    // "jump to Manual now" shortcut, not a state-preserving tab switch.
-    const manualBtn = document.createElement("button");
-    manualBtn.textContent = "Manual Trading";
-    // Shares signal-generation's own dataset.tab so activate() highlights
-    // BOTH this button and "Signal Generation" together whenever that
-    // iframe is the one showing - accurate either way you got there.
-    manualBtn.dataset.tab = "signal-generation";
-    manualBtn.onclick = () => {
-      const iframe = document.getElementById("frame-signal-generation");
-      const base = `http://${location.hostname}:${8082 + PORT_OFFSET}`;
-      iframe.src = `${base}/?tab=manual`;
-      activate("signal-generation");
-    };
-    tabsEl.appendChild(manualBtn);
 
     function activate(id) {
       document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === id));

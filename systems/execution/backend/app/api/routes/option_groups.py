@@ -20,7 +20,7 @@ from app.adapters.quotes.client import (
     resolve_symbol_by_security_id,
     resolve_underlying,
 )
-from app.domain.models import ManualOptionPositionCreate, ReviewSubmit, SpotStopLossUpdate, StopLossUpdate
+from app.domain.models import ManualOptionPositionCreate, ReviewSubmit, SpotStopLossUpdate, SquareOffTimeUpdate, StopLossUpdate
 from app.domain.option_position_manager import (
     check_option_group_exits,
     compute_group_unrealized_pnl,
@@ -31,6 +31,7 @@ from app.domain.option_position_manager import (
     square_off_option_group,
     submit_option_group_review,
     update_group_spot_stop_loss,
+    update_group_square_off_time,
     update_group_stop_loss,
 )
 from app.domain.position_manager import (
@@ -249,6 +250,7 @@ def open_manual(payload: ManualOptionPositionCreate, db: Session = Depends(get_d
         get_lot_size,
         [a.model_dump() for a in payload.plan_checklist],
         payload.order_type,
+        payload.square_off_time,
     )
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
@@ -321,6 +323,26 @@ def edit_group_spot_stop_loss(group_id: str, payload: SpotStopLossUpdate, db: Se
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
 
     row = update_group_spot_stop_loss(db, parsed_id, payload.spot_stop_loss_price)
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/square-off-time")
+def edit_group_square_off_time(group_id: str, payload: SquareOffTimeUpdate, db: Session = Depends(get_db)):
+    """Option-group counterpart to PUT /positions/{id}/square-off-time -
+    identical rules/status-codes, see that route's own docstring."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
+
+    row = update_group_square_off_time(db, parsed_id, payload.square_off_time)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 

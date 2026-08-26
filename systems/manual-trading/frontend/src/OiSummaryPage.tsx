@@ -30,6 +30,11 @@ const STRIKES_EACH_SIDE = 10;
 // faster than that just re-renders the same cached response.
 const POLL_INTERVAL_MS = 30000;
 
+// Background (non-active) tabs refresh once every this-many ticks -
+// 3 x 30s = 90s - see the poll-loop effect's own comment for why this
+// isn't 1 (every tick, same as the active tab).
+const BACKGROUND_TICK_DIVISOR = 3;
+
 type TabState = {
   // The RESOLVED chart symbol/exchange (via resolveUnderlying), not
   // necessarily the preset's own symbol: an index (NIFTY/BANKNIFTY)
@@ -87,6 +92,10 @@ function fmtBidAsk(bid: number, ask: number): string {
   return `${bid.toFixed(2)}/${ask.toFixed(2)}`;
 }
 
+function fmtLtp(n: number): string {
+  return n.toFixed(2);
+}
+
 // (price up/down x OI up/down) - see market-data's oi_summary.py
 // _classify_buildup for the exact rule. icon+short label kept compact
 // since the table's already wide; full phrase + rationale is the
@@ -111,16 +120,19 @@ function buildupBadge(b: OiBuildup | null) {
 // Toggleable strike-table columns - OI and Strike itself stay put as the
 // anchor columns (that's the whole point of an option chain: comparing
 // calls vs. puts at the same strike), everything else can be hidden to
-// cut down the wall of columns. Δ5m/Δ15m/IV default ON (existing
-// behaviour before Vol/Bid-Ask/Trend were added); the 3 new ones default
-// OFF so the table doesn't get wider than it already was without an
-// explicit opt-in.
-type ColumnKey = "oiChange5m" | "oiChange15m" | "iv" | "vol" | "bidAsk" | "trend";
+// cut down the wall of columns. Δ5m/Δ15m/IV/LTP default ON (LTP - the
+// option leg's own last traded premium, not the underlying's spot LTP
+// already shown in the SPOT card above - was missing entirely until
+// flagged live 2026-08-26, despite the data already being fetched);
+// Vol/Bid-Ask/Trend default OFF so the table doesn't get wider than it
+// already was without an explicit opt-in.
+type ColumnKey = "oiChange5m" | "oiChange15m" | "iv" | "ltp" | "vol" | "bidAsk" | "trend";
 
 const COLUMN_DEFS: { key: ColumnKey; label: string }[] = [
   { key: "oiChange5m", label: "Δ5m" },
   { key: "oiChange15m", label: "Δ15m" },
   { key: "iv", label: "IV" },
+  { key: "ltp", label: "LTP" },
   { key: "vol", label: "Vol" },
   { key: "bidAsk", label: "Bid/Ask" },
   { key: "trend", label: "Trend" },
@@ -130,6 +142,7 @@ const DEFAULT_VISIBLE_COLUMNS: Record<ColumnKey, boolean> = {
   oiChange5m: true,
   oiChange15m: true,
   iv: true,
+  ltp: true,
   vol: false,
   bidAsk: false,
   trend: false,
@@ -201,24 +214,17 @@ export default function OiSummaryPage() {
     }
   }
 
-  // Loads a tab's expiries the first time it's visited - not on every
-  // switch back to an already-loaded tab. Deliberately depends on
-  // activeKey ONLY (not tabStates) so the async load's own state update
-  // doesn't retrigger this effect - see loadExpiries's mount-only
-  // counterpart pattern elsewhere in this app (e.g. ManualTab.tsx).
+  // Loads every tab's expiries once, in the background, on mount - not
+  // lazily on first click anymore (that used to mean switching to a tab
+  // you hadn't visited yet always paid a full "resolve underlying then
+  // fetch expiries then fetch summary" round trip before showing
+  // anything, the "why is this fetching every time I switch tabs"
+  // complaint). All 4 start loading immediately instead.
   useEffect(() => {
-    const preset = PRESETS.find((p) => p.key === activeKey)!;
-    const state = tabStates[activeKey];
-    if (!state?.loaded && !state?.loadingExpiries) void loadExpiriesForTab(preset);
+    for (const preset of PRESETS) void loadExpiriesForTab(preset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey]);
+  }, []);
 
-  // Fetches the active tab's summary as soon as it has a (loaded,
-  // expiry) pair (first load, expiry dropdown change, or tab switch),
-  // then again every POLL_INTERVAL_MS - only the ACTIVE tab polls, not
-  // all 4 at once. Refs avoid the interval callback closing over a
-  // stale tab/expiry if the user switches tabs between ticks, same
-  // pattern ManualTab.tsx's own poll loop uses.
   const activeKeyRef = useRef(activeKey);
   activeKeyRef.current = activeKey;
   const tabStatesRef = useRef(tabStates);
@@ -226,17 +232,44 @@ export default function OiSummaryPage() {
 
   const activeState = tabStates[activeKey] ?? EMPTY_TAB_STATE;
 
+  // Fires each tab's very first summary fetch as soon as ITS OWN expiries
+  // land (staggered naturally, not synchronized) - guarded on summary
+  // still being null so it only ever fires once per tab; the Expiry
+  // dropdown's own onChange handles a later expiry change directly
+  // instead of relying on this effect re-firing.
   useEffect(() => {
-    if (!activeState.loaded || !activeState.expiry) return;
-    void loadSummaryForTab(activeKey, activeState.loaded, activeState.expiry);
+    for (const preset of PRESETS) {
+      const state = tabStates[preset.key];
+      if (state?.loaded && state.expiry && state.summary == null && !state.loadingSummary) {
+        void loadSummaryForTab(preset.key, state.loaded, state.expiry);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabStates]);
+
+  // Shared poll loop, every tab that's ready - not just the active one
+  // (see the mount effect above for why). The active tab still refreshes
+  // every tick (POLL_INTERVAL_MS); background tabs refresh at 1/
+  // BACKGROUND_TICK_DIVISOR that rate instead of the same cadence, since
+  // polling all 4 at full speed would roughly quadruple this page's own
+  // Dhan-call volume - 2 of the 4 presets are MCX, sharing the same
+  // tight per-account rate budget the Manual tab's own LTP polling
+  // already contends with (see the 429s traced there this session).
+  useEffect(() => {
+    let tick = 0;
     const id = setInterval(() => {
-      const curKey = activeKeyRef.current;
-      const curState = tabStatesRef.current[curKey];
-      if (curState?.loaded && curState?.expiry) void loadSummaryForTab(curKey, curState.loaded, curState.expiry);
+      tick += 1;
+      for (const preset of PRESETS) {
+        const state = tabStatesRef.current[preset.key];
+        if (!state?.loaded || !state.expiry) continue;
+        const isActive = preset.key === activeKeyRef.current;
+        if (isActive || tick % BACKGROUND_TICK_DIVISOR === 0) {
+          void loadSummaryForTab(preset.key, state.loaded, state.expiry);
+        }
+      }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey, activeState.loaded, activeState.expiry]);
+  }, []);
 
   function renderLegCells(leg: OiSummaryLeg | null, itmClass: string, keyPrefix: string) {
     const cells = [<td key={`${keyPrefix}-oi`} className={itmClass}>{leg ? fmtOi(leg.oi) : "-"}</td>];
@@ -258,6 +291,13 @@ export default function OiSummaryPage() {
       cells.push(
         <td key={`${keyPrefix}-iv`} className={itmClass}>
           {leg ? fmtIv(leg.implied_volatility) : "-"}
+        </td>,
+      );
+    }
+    if (visibleColumns.ltp) {
+      cells.push(
+        <td key={`${keyPrefix}-ltp`} className={itmClass}>
+          {leg ? fmtLtp(leg.last_price) : "-"}
         </td>,
       );
     }
@@ -310,7 +350,18 @@ export default function OiSummaryPage() {
         {activeState.expiries && activeState.expiries.length > 0 && (
           <label className="oi-summary-expiry-picker">
             Expiry
-            <select value={activeState.expiry ?? ""} onChange={(e) => updateTab(activeKey, { expiry: e.target.value })}>
+            <select
+              value={activeState.expiry ?? ""}
+              onChange={(e) => {
+                const exp = e.target.value;
+                updateTab(activeKey, { expiry: exp });
+                // Explicit fetch here rather than leaning on an effect
+                // keyed to tabStates - that effect only fires a tab's
+                // very first summary load (guarded on summary == null),
+                // so a later expiry change needs its own trigger.
+                if (activeState.loaded) void loadSummaryForTab(activeKey, activeState.loaded, exp);
+              }}
+            >
               {activeState.expiries.map((exp) => (
                 <option key={exp} value={exp}>
                   {exp}
@@ -448,6 +499,7 @@ export default function OiSummaryPage() {
                     {visibleColumns.oiChange5m && <th>Δ5m</th>}
                     {visibleColumns.oiChange15m && <th>Δ15m</th>}
                     {visibleColumns.iv && <th>IV</th>}
+                    {visibleColumns.ltp && <th>LTP</th>}
                     {visibleColumns.vol && <th>Vol</th>}
                     {visibleColumns.bidAsk && <th>Bid/Ask</th>}
                     {visibleColumns.trend && <th>Trend</th>}
@@ -456,6 +508,7 @@ export default function OiSummaryPage() {
                     {visibleColumns.oiChange5m && <th>Δ5m</th>}
                     {visibleColumns.oiChange15m && <th>Δ15m</th>}
                     {visibleColumns.iv && <th>IV</th>}
+                    {visibleColumns.ltp && <th>LTP</th>}
                     {visibleColumns.vol && <th>Vol</th>}
                     {visibleColumns.bidAsk && <th>Bid/Ask</th>}
                     {visibleColumns.trend && <th>Trend</th>}

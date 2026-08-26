@@ -390,6 +390,17 @@ class ManualPositionCreate(BaseModel):
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
     trailing_stop_enabled: bool = False
+    # Per-position override of the segment's own execution.accounts.
+    # square_off_time - omitted (the normal case) means this position
+    # inherits the segment default exactly as before. Given explicitly,
+    # it takes precedence for THIS position only - the segment default
+    # itself (and every other position already open) is untouched. Lets a
+    # position be squared off ahead of a segment's own cutoff (e.g. MCX's
+    # 18:00 volatility-regime change, well before its 22:00-ish full
+    # close) while still allowing new positions after that time - see
+    # docs/architecture.md § "Square-off redesign" for why this is
+    # per-position and not a second segment-wide setting.
+    square_off_time: Optional[time] = None
     # Trade discipline checklist (see ChecklistAnswer above) - the row's
     # own snapshot of every currently-active execution.checklist_items row
     # and whether it was checked. validate_plan_checklist (position_
@@ -463,6 +474,10 @@ class ManualOptionPositionCreate(BaseModel):
     # crosses it, then resolve legs at whatever premium is live then),
     # never the option's own premium.
     order_type: Literal["market", "limit"] = "market"
+    # Per-position override of the segment's own square_off_time - see
+    # ManualPositionCreate.square_off_time's own comment, identical
+    # meaning here (applied to the group and every one of its legs).
+    square_off_time: Optional[time] = None
 
 
 class StopLossUpdate(BaseModel):
@@ -503,6 +518,20 @@ class StopLossUpdate(BaseModel):
             self.trailing_stop_enabled,
         )
         return self
+
+
+class SquareOffTimeUpdate(BaseModel):
+    """PUT /positions/{id}/square-off-time and PUT /option-groups/{id}/
+    square-off-time - edits an already-open position's/group's own
+    square_off_time (see ManualPositionCreate.square_off_time's own
+    comment for what this means). `None` clears the override back to
+    "never force-closed by this row's own value" - NOT back to the
+    segment's current default, since that was already baked in at open
+    time and this endpoint has no way to distinguish "explicitly want no
+    time cutoff at all" from "want the segment default"; re-open the
+    position to pick up a changed segment default instead."""
+
+    square_off_time: Optional[time] = None
 
 
 class SpotStopLossUpdate(BaseModel):

@@ -1148,6 +1148,7 @@ def open_manual_position(
     trailing_stop_enabled: bool = False,
     plan_checklist: Optional[list[dict]] = None,
     order_type: Optional[str] = None,
+    square_off_time: Optional[time] = None,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -1158,8 +1159,10 @@ def open_manual_position(
     function alongside this one); `quantity`, if given, bypasses
     auto-sizing entirely - same precedence pattern already used for
     Strategy.fixed_lots in open_position/open_option_group. square_off_time
-    is no longer a caller-supplied parameter - like open_position, it's
-    looked up from the segment's own account row below.
+    defaults to the segment's own account row (same as open_position) but,
+    unlike open_position, can be overridden per-call - the Manual tab's own
+    order form, not a Strategy - to close THIS position ahead of the
+    segment's usual cutoff without changing the segment default itself.
 
     Stop-loss: the caller passes EITHER a raw `stop_loss_price` (fixed at
     entry, `stop_loss_method` left None - the original manual-tab
@@ -1366,7 +1369,7 @@ def open_manual_position(
         stop_loss_percent=stop_loss_percent,
         stop_loss_indicator_type=stop_loss_indicator_type,
         stop_loss_indicator_params=stop_loss_indicator_params,
-        square_off_time=account.square_off_time,
+        square_off_time=square_off_time if square_off_time is not None else account.square_off_time,
         open_fee=open_fee,
         margin_posted=margin_posted,
         liquidation_price=liquidation_price,
@@ -1374,6 +1377,21 @@ def open_manual_position(
         order_type=order_type,
     )
     db.add(row)
+    db.commit()
+    return row
+
+
+def update_square_off_time(db: Session, position_id: uuid.UUID, square_off_time: Optional[time]) -> Optional[db_models.Position]:
+    """PUT /positions/{id}/square-off-time - edits an already-open
+    position's own square_off_time (see ManualPositionCreate.
+    square_off_time's own comment). Deliberately as small as
+    SpotStopLossUpdate's own update_group_spot_stop_loss - a single-column
+    write, no recompute needed (unlike update_stop_loss, which may
+    re-derive a price from a method)."""
+    row = db.get(db_models.Position, position_id)
+    if row is None or row.status != "OPEN":
+        return None
+    row.square_off_time = square_off_time
     db.commit()
     return row
 

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
-from app.domain.models import ManualPositionCreate, ReviewSubmit, StopLossUpdate
+from app.domain.models import ManualPositionCreate, ReviewSubmit, SquareOffTimeUpdate, StopLossUpdate
 from app.domain.position_manager import (
     check_exits,
     compute_unrealized_pnl,
@@ -18,6 +18,7 @@ from app.domain.position_manager import (
     square_off_due_positions,
     square_off_position,
     submit_position_review,
+    update_square_off_time,
     update_stop_loss,
     validate_plan_checklist,
 )
@@ -205,6 +206,7 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
         payload.trailing_stop_enabled,
         [a.model_dump() for a in payload.plan_checklist],
         payload.order_type,
+        payload.square_off_time,
     )
     return _position_to_out(row)
 
@@ -270,6 +272,30 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, db: Session = Depe
     )
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/square-off-time")
+def edit_square_off_time(position_id: str, payload: SquareOffTimeUpdate, db: Session = Depends(get_db)):
+    """Edits an already-open position's own square_off_time - lets a
+    position be closed ahead of (or, given a later time, past) its
+    segment's usual cutoff, e.g. squaring an MCX position out before
+    18:00's volatility-regime change without touching MCX's own
+    execution.accounts.square_off_time or any other open MCX position.
+    404 if missing, 409 if not OPEN. `null` clears it (never force-closed
+    by time, same as CRYPTO's own segment default)."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
+
+    row = update_square_off_time(db, parsed_id, payload.square_off_time)
     return _position_to_out(row)
 
 

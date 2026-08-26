@@ -1161,12 +1161,22 @@ tbody tr.selected-row {
   gap: 0.5rem;
 }
 
-/* "= 0.1 total" next to the Lot input - see lotConversionHint. */
+/* "= 0.1 total" next to the Lot input - see lotConversionHint. Also
+   reused for the Close-by field's "now HH:MM" hint. */
 .manual-lot-hint {
   font-size: 0.72rem;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* Close-by input + its "now HH:MM" hint side by side, not stacked -
+   .manual-field-group's own column layout only applies above this row
+   (the "Close by" label text), not within it. */
+.manual-closeby-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 /* The Limit label plus its "MKT" quick-fill link, side by side above the

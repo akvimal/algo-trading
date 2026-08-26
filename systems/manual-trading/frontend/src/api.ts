@@ -1421,6 +1421,11 @@ export async function createManualPosition(
     quantity?: number;
     plan_checklist: ChecklistAnswer[];
     order_type?: "market" | "limit";
+    // Per-position override of the segment's own square_off_time -
+    // "HH:MM" or "HH:MM:SS", omitted means inherit the segment default
+    // (unchanged behavior). See execution's ManualPositionCreate.
+    // square_off_time's own comment.
+    square_off_time?: string;
   } & ManualStopLossConfig,
 ): Promise<ManualPosition> {
   const res = await fetch(`${EXECUTION_BASE_URL}/positions/manual`, {
@@ -1469,6 +1474,29 @@ export async function updateOptionGroupSpotStopLoss(groupId: string, spotStopLos
     body: JSON.stringify({ spot_stop_loss_price: spotStopLossPrice }),
   });
   return asJson(res, "PUT /option-groups/{id}/spot-stop-loss");
+}
+
+// Edits an already-open position's own square_off_time - lets it be
+// closed ahead of (or past) its segment's usual cutoff without touching
+// the segment default or any other open position in that segment.
+// `squareOffTime` null clears it back to "never force-closed by time".
+export async function updatePositionSquareOffTime(positionId: string, squareOffTime: string | null): Promise<ManualPosition> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off-time`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ square_off_time: squareOffTime }),
+  });
+  return asJson(res, "PUT /positions/{id}/square-off-time");
+}
+
+// Option-group counterpart - see updatePositionSquareOffTime's own comment.
+export async function updateOptionGroupSquareOffTime(groupId: string, squareOffTime: string | null): Promise<ManualOptionGroup> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off-time`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ square_off_time: squareOffTime }),
+  });
+  return asJson(res, "PUT /option-groups/{id}/square-off-time");
 }
 
 export async function fetchExecPositions(
@@ -1567,6 +1595,8 @@ export async function createManualOptionGroup(payload: {
   option_fixed_lots?: number;
   plan_checklist: ChecklistAnswer[];
   order_type?: "market" | "limit";
+  // See createManualPosition's own comment - identical meaning here.
+  square_off_time?: string;
 }): Promise<ManualOptionGroup> {
   const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {
     method: "POST",

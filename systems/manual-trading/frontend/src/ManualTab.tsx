@@ -44,6 +44,8 @@ import {
   submitPositionReview,
   tradeImageUrl,
   updateOptionGroupSpotStopLoss,
+  updateOptionGroupSquareOffTime,
+  updatePositionSquareOffTime,
   updateStopLoss,
   uploadOptionGroupImage,
   uploadPositionImage,
@@ -160,6 +162,14 @@ type OrderInstance = {
   stopLossPrice?: number | null;
   stopLossMethod?: StopLossMethod | null;
   trailingStopEnabled?: boolean;
+  // Per-position override of the segment's own execution.accounts.
+  // square_off_time - REAL, backend-enforced (execution's own square-off
+  // scheduler reads it off the position/group row itself, same mechanism
+  // as the segment default), not a browser-side watch like targetPrice/
+  // slLimitPrice above. "HH:MM" (or "HH:MM:SS" as returned by the API) -
+  // undefined means this position just inherited the segment's own
+  // default at open time, same as before this feature existed.
+  squareOffTime?: string | null;
   // Trade discipline checklist snapshot, captured once at placeOrder time
   // (not re-derived later) - see ManualRow.checklistChecked's own comment
   // for why. Sent to createManualPosition/createManualOptionGroup by
@@ -247,6 +257,11 @@ type ManualRow = {
   draftPendingPrice: string; // while current.state==="pending" - editable trigger-price watch, see updatePendingTriggerPrice
   draftTarget: string; // "Spot Target"
   draftSlLimit: string; // "Spot SL Limit" - option rows only, see trailSlEnabled below
+  // "Close by" - HTML <input type="time"> value ("HH:MM"), the per-
+  // position square_off_time override (see OrderInstance.squareOffTime's
+  // own comment). Blank means inherit the segment's own default, same as
+  // before this field existed.
+  draftCloseByTime: string;
   // "Trail SL" - spot/future rows only (options keep draftSlLimit's
   // client-side watch above instead, execution has no method-based SL
   // concept for options). Off = a flat, fixed draftStopLossPrice (the
@@ -299,6 +314,7 @@ function newRow(segment: Segment = "NSE", symbol = "", instrumentType: Instrumen
     draftPendingPrice: "",
     draftTarget: "",
     draftSlLimit: "",
+    draftCloseByTime: "",
     trailSlEnabled: false,
     draftStopLossPrice: "",
     draftSlMethod: "percent",
@@ -325,7 +341,15 @@ function newRow(segment: Segment = "NSE", symbol = "", instrumentType: Instrumen
 // too (see clearDraftPrices) rather than surfacing a stale value left
 // over from a previous, already-closed trade on this same row.
 function clearDraftPrices<T extends ManualRow>(r: T): T {
-  return { ...r, priceMode: "market", draftLimitPrice: "", draftTarget: "", draftSlLimit: "", draftStopLossPrice: "" };
+  return {
+    ...r,
+    priceMode: "market",
+    draftLimitPrice: "",
+    draftTarget: "",
+    draftSlLimit: "",
+    draftStopLossPrice: "",
+    draftCloseByTime: "",
+  };
 }
 
 function loadRows(): ManualRow[] {
@@ -576,6 +600,14 @@ export default function ManualTab() {
   // the whole tab's event loop, including this same click handler's own
   // follow-up work). Only one row confirms removal at a time.
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+
+  // Same in-page Yes/No pattern as confirmRemoveId above, for the open-
+  // position table's own × (square off a REAL position, not just remove
+  // a UI card) - the leg-table redesign's single combined × replaced the
+  // old per-leg Status/Qty grid's own Exit button, and neither ever
+  // asked for confirmation before firing a real square-off; added after
+  // being flagged live 2026-08-26.
+  const [confirmExitId, setConfirmExitId] = useState<string | null>(null);
 
   // Transient "Saved" confirmation next to a row's own Save button (Spot
   // Target/SL Limit/trailing-SL config) - handleSave previously only
@@ -1380,6 +1412,11 @@ export default function ManualTab() {
     const limitPrice = row.priceMode === "limit" && row.draftLimitPrice ? Number(row.draftLimitPrice) : undefined;
     const target = row.draftTarget ? Number(row.draftTarget) : undefined;
     const slLimit = row.draftSlLimit ? Number(row.draftSlLimit) : undefined;
+    // "HH:MM" from the <input type="time"> -> "HH:MM:SS" for execution's
+    // own TIME column/Pydantic time field. Snapshotted here (not
+    // re-derived when a pending trigger later fires) - same reasoning
+    // planChecklist below already follows.
+    const closeByTime = row.draftCloseByTime ? `${row.draftCloseByTime}:00` : undefined;
     // Snapshotted NOW, not re-derived when a pending trigger later fires -
     // matches execution's own plan_checklist column, a frozen record of
     // what was planned at ORDER time, not whatever the master list looks
@@ -1389,17 +1426,35 @@ export default function ManualTab() {
       checked: !!row.checklistChecked[item.id],
     }));
 
-    // Cleared immediately after being captured onto the new instance below
-    // (same reasoning draftLimitPrice already had) - checkExitTrigger has
-    // no "starting side" guard the way the entry trigger's
-    // startedAboveTarget does, so a leftover Target/SL Limit value from a
-    // PREVIOUS trade on this row (never cleared before this fix) would
-    // silently attach to the fresh position and could fire on the very
-    // first poll tick if the current spot price already sat past it -
-    // reproduced live 2026-08-21 as an order that "closed immediately."
-    // checklistChecked resets too - re-plan every trade, see its own
-    // comment on ManualRow.
-    updateRow(row.id, { priceMode: "market", draftLimitPrice: "", draftTarget: "", draftSlLimit: "", rowError: undefined, checklistChecked: {} });
+    // draftLimitPrice still clears outright (priceMode flips back to
+    // "market" - there's no live position for a leftover Limit value to
+    // mean anything against). draftTarget/draftSlLimit do NOT clear to ""
+    // though - re-seeded from the same target/slLimit just captured onto
+    // the new instance below instead. They used to reset to "" here,
+    // which fixed the original bug (a leftover value from a PREVIOUS
+    // trade on this row silently reattaching to a fresh position and
+    // firing on the very first poll tick - reproduced live 2026-08-21 as
+    // an order that "closed immediately") but broke a different way: the
+    // SL Limit/Target inputs stay bound to these same draft fields once
+    // a position is open (so Update can edit them), so blanking them here
+    // wiped out exactly what the user just typed the instant the order
+    // placed - reported live 2026-08-26. Re-seeding with THIS trade's own
+    // just-captured values keeps both fixes: never a stale value from an
+    // OLDER trade, but the values that actually belong to this one still
+    // show. checklistChecked resets too - re-plan every trade, see its
+    // own comment on ManualRow.
+    updateRow(row.id, {
+      priceMode: "market",
+      draftLimitPrice: "",
+      draftTarget: target != null ? String(target) : "",
+      draftSlLimit: slLimit != null ? String(slLimit) : "",
+      // Same re-seed-not-blank reasoning as draftTarget/draftSlLimit
+      // above - draftCloseByTime stays in "HH:MM" form (the <input
+      // type="time"> value), not closeByTime's own "HH:MM:SS".
+      draftCloseByTime: row.draftCloseByTime,
+      rowError: undefined,
+      checklistChecked: {},
+    });
 
     const instance: OrderInstance = {
       id: crypto.randomUUID(),
@@ -1410,6 +1465,7 @@ export default function ManualTab() {
       quantity,
       targetPrice: target,
       slLimitPrice: slLimit,
+      squareOffTime: closeByTime,
       planChecklist,
     };
 
@@ -1454,6 +1510,7 @@ export default function ManualTab() {
           option_fixed_lots: instance.quantity,
           plan_checklist: instance.planChecklist ?? [],
           order_type: orderType,
+          square_off_time: instance.squareOffTime ?? undefined,
         });
         if (created.status === "REJECTED") {
           setRows((prev) =>
@@ -1472,6 +1529,7 @@ export default function ManualTab() {
           entryPrice: created.net_debit ?? undefined,
           quantityLive: created.quantity ?? undefined,
           legs: created.legs,
+          squareOffTime: created.square_off_time,
         });
       } else {
         const created = await createManualPosition({
@@ -1483,6 +1541,7 @@ export default function ManualTab() {
           quantity: instance.quantity,
           plan_checklist: instance.planChecklist ?? [],
           order_type: orderType,
+          square_off_time: instance.squareOffTime ?? undefined,
           ...buildStopLossConfig(row),
         });
         if (created.status === "REJECTED") {
@@ -1504,6 +1563,7 @@ export default function ManualTab() {
           stopLossPrice: created.stop_loss_price,
           stopLossMethod: created.stop_loss_method,
           trailingStopEnabled: created.trailing_stop_enabled,
+          squareOffTime: created.square_off_time,
         });
       }
     } catch (err) {
@@ -1572,6 +1632,7 @@ export default function ManualTab() {
           unrealizedPnl: group.unrealized_pnl ?? undefined,
           quantityLive: group.quantity ?? undefined,
           legs: group.legs,
+          squareOffTime: group.square_off_time,
         };
         updateCurrent(row.id, instance.id, updated);
         return updated;
@@ -1617,6 +1678,7 @@ export default function ManualTab() {
           stopLossPrice: pos.stop_loss_price,
           stopLossMethod: pos.stop_loss_method,
           trailingStopEnabled: pos.trailing_stop_enabled,
+          squareOffTime: pos.square_off_time,
         };
         updateCurrent(row.id, instance.id, updated);
         return updated;
@@ -1686,6 +1748,7 @@ export default function ManualTab() {
     if (!row.current) return;
     const target = row.draftTarget ? Number(row.draftTarget) : undefined;
     const slLimit = row.draftSlLimit ? Number(row.draftSlLimit) : undefined;
+    const closeByTime = row.draftCloseByTime ? `${row.draftCloseByTime}:00` : null;
     updateCurrent(row.id, row.current.id, { targetPrice: target, slLimitPrice: slLimit });
 
     let ok = true;
@@ -1730,6 +1793,27 @@ export default function ManualTab() {
         ok = false;
         updateCurrent(row.id, row.current.id, {
           error: err instanceof Error ? err.message : "failed to update spot stop-loss",
+        });
+      }
+    }
+
+    // "Close by" - real, backend-enforced (execution's own square-off
+    // scheduler), open only (a pending order has no positionId/groupId
+    // yet to attach it to - see placeOrder's own instance.squareOffTime,
+    // captured once at order-placement time, for that case instead).
+    if (row.current.state === "open" && closeByTime !== (row.current.squareOffTime ?? null)) {
+      try {
+        if (row.instrumentType === "option" && row.current.groupId) {
+          const updated = await updateOptionGroupSquareOffTime(row.current.groupId, closeByTime);
+          updateCurrent(row.id, row.current.id, { squareOffTime: updated.square_off_time, error: undefined });
+        } else if (row.instrumentType !== "option" && row.current.positionId) {
+          const updated = await updatePositionSquareOffTime(row.current.positionId, closeByTime);
+          updateCurrent(row.id, row.current.id, { squareOffTime: updated.square_off_time, error: undefined });
+        }
+      } catch (err) {
+        ok = false;
+        updateCurrent(row.id, row.current.id, {
+          error: err instanceof Error ? err.message : "failed to update close-by time",
         });
       }
     }
@@ -2653,6 +2737,31 @@ export default function ManualTab() {
                     )}
                   </span>
                 )}
+                {showEntrySlTarget && (
+                  <span className="manual-field-group">
+                    <span className="manual-field-label">Close by</span>
+                    <span
+                      className="manual-closeby-row"
+                      title="Real, backend-enforced - execution's own square-off scheduler closes this position at this time, or on SL, whichever happens first. Leave blank to keep the segment's own default cutoff for this position."
+                    >
+                      <input
+                        type="time"
+                        value={row.draftCloseByTime}
+                        onChange={(e) => updateRow(row.id, { draftCloseByTime: e.target.value })}
+                      />
+                      {/* The currently-EFFECTIVE time (segment default or
+                          an override already saved) - shown even while the
+                          override field is blank, so leaving it blank
+                          doesn't look like "no cutoff at all" when one's
+                          actually inherited from the segment. */}
+                      {row.current?.squareOffTime && (
+                        <span className="manual-lot-hint" title="Currently in effect for this position">
+                          now {row.current.squareOffTime.slice(0, 5)}
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                )}
               </div>
               <div className="manual-action-group">
                 <button
@@ -2751,9 +2860,28 @@ export default function ManualTab() {
                                 <td className={pnlClass(leg.unrealized_pnl)}>{fmtPnlWithPercent(leg.unrealized_pnl, leg.entry_price, leg.quantity)}</td>
                                 {i === 0 && (
                                   <td rowSpan={legs.length} className="manual-open-table-close">
-                                    <button type="button" className="manual-icon-btn" title="Exit position" onClick={() => handleExitClick(row)}>
-                                      &#215;
-                                    </button>
+                                    {confirmExitId === row.id ? (
+                                      <span className="manual-confirm-remove">
+                                        <span className="muted">Close?</span>
+                                        <button
+                                          type="button"
+                                          className="tiny btn-exit"
+                                          onClick={() => {
+                                            setConfirmExitId(null);
+                                            handleExitClick(row);
+                                          }}
+                                        >
+                                          Yes
+                                        </button>
+                                        <button type="button" className="tiny secondary" onClick={() => setConfirmExitId(null)}>
+                                          No
+                                        </button>
+                                      </span>
+                                    ) : (
+                                      <button type="button" className="manual-icon-btn" title="Exit position" onClick={() => setConfirmExitId(row.id)}>
+                                        &#215;
+                                      </button>
+                                    )}
                                   </td>
                                 )}
                               </tr>
@@ -2771,9 +2899,28 @@ export default function ManualTab() {
                               {fmtPnlWithPercent(row.current.unrealizedPnl, row.current.entryPrice, row.current.quantityLive ?? row.current.quantity)}
                             </td>
                             <td className="manual-open-table-close">
-                              <button type="button" className="manual-icon-btn" title="Exit position" onClick={() => handleExitClick(row)}>
-                                &#215;
-                              </button>
+                              {confirmExitId === row.id ? (
+                                <span className="manual-confirm-remove">
+                                  <span className="muted">Close?</span>
+                                  <button
+                                    type="button"
+                                    className="tiny btn-exit"
+                                    onClick={() => {
+                                      setConfirmExitId(null);
+                                      handleExitClick(row);
+                                    }}
+                                  >
+                                    Yes
+                                  </button>
+                                  <button type="button" className="tiny secondary" onClick={() => setConfirmExitId(null)}>
+                                    No
+                                  </button>
+                                </span>
+                              ) : (
+                                <button type="button" className="manual-icon-btn" title="Exit position" onClick={() => setConfirmExitId(row.id)}>
+                                  &#215;
+                                </button>
+                              )}
                             </td>
                           </tr>
                         )}

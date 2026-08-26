@@ -34,7 +34,7 @@ direction for reporting."""
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
 from typing import Callable, Optional
@@ -586,6 +586,7 @@ def open_manual_option_group(
     get_lot_size: GetLotSize,
     plan_checklist: Optional[list[dict]] = None,
     order_type: Optional[str] = None,
+    square_off_time: Optional[time] = None,
 ) -> db_models.OptionPositionGroup:
     """Manual tab (signal-generation's frontend) - option orders, bypassing
     signal-generation/signal-processing entirely (no auto-provisioned
@@ -803,6 +804,7 @@ def open_manual_option_group(
         # identical conversion).
         account.current_balance = float(account.current_balance) - open_fee * settings.usdinr_rate
 
+    effective_square_off_time = square_off_time if square_off_time is not None else account.square_off_time
     group_id = uuid.uuid4()
     group = db_models.OptionPositionGroup(
         id=group_id,
@@ -819,7 +821,7 @@ def open_manual_option_group(
         sl_scope=sl_scope,
         entry_spot_price=entry_spot_price,
         status="OPEN",
-        square_off_time=account.square_off_time,
+        square_off_time=effective_square_off_time,
         open_fee=open_fee,
         plan_checklist=plan_checklist,
         order_type=order_type,
@@ -843,7 +845,7 @@ def open_manual_option_group(
                 quantity=quantity,
                 entry_price=premium,
                 status="OPEN",
-                square_off_time=account.square_off_time,
+                square_off_time=effective_square_off_time,
                 option_group_id=group_id,
             )
         )
@@ -1082,6 +1084,23 @@ def update_group_spot_stop_loss(db: Session, group_id: uuid.UUID, new_price: flo
         return None
     row.spot_stop_loss_price = new_price
     row.spot_stop_loss_trailing_enabled = False
+    db.commit()
+    return row
+
+
+def update_group_square_off_time(db: Session, group_id: uuid.UUID, square_off_time: Optional[time]) -> Optional[db_models.OptionPositionGroup]:
+    """PUT /option-groups/{id}/square-off-time - see position_manager.
+    update_square_off_time's own comment, identical meaning here.
+    square_off_due_option_groups only ever reads the GROUP's own field
+    (not its legs'), but the legs' copies are kept in sync anyway - same
+    reasoning open_manual_option_group already keeps them in sync at
+    create time, for consistency if anything else ever reads a leg's own
+    value."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None or row.status != "OPEN":
+        return None
+    row.square_off_time = square_off_time
+    db.query(db_models.Position).filter_by(option_group_id=group_id, status="OPEN").update({"square_off_time": square_off_time})
     db.commit()
     return row
 

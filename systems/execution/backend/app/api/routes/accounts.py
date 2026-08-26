@@ -19,6 +19,8 @@ def _to_out(row: db_models.Account) -> dict:
         "current_balance": float(row.current_balance),
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
+        "min_reward_risk_ratio": float(row.min_reward_risk_ratio),
+        "enforce_risk_based_lots": row.enforce_risk_based_lots,
         "leverage": float(row.leverage),
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "updated_at": row.updated_at.isoformat(),
@@ -35,8 +37,9 @@ def list_accounts(db: Session = Depends(get_db)):
 
 @router.put("/accounts/{segment}")
 def update_account(segment: str, update: AccountUpdate, db: Session = Depends(get_db)):
-    """capital_per_trade/risk_per_trade_pct/leverage/square_off_time are
-    editable here - use POST /accounts/{segment}/reset to touch
+    """capital_per_trade/risk_per_trade_pct/min_reward_risk_ratio/
+    enforce_risk_based_lots/leverage/square_off_time are editable here -
+    use POST /accounts/{segment}/reset to touch
     current_balance, a deliberately separate action so it's never a side
     effect of a sizing tweak. square_off_time is the one field where
     `null` is itself a meaningful value (never force-close, e.g. CRYPTO),
@@ -51,6 +54,10 @@ def update_account(segment: str, update: AccountUpdate, db: Session = Depends(ge
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
         row.risk_per_trade_pct = update.risk_per_trade_pct
+    if update.min_reward_risk_ratio is not None:
+        row.min_reward_risk_ratio = update.min_reward_risk_ratio
+    if update.enforce_risk_based_lots is not None:
+        row.enforce_risk_based_lots = update.enforce_risk_based_lots
     if update.leverage is not None:
         row.leverage = update.leverage
     if "square_off_time" in update.model_fields_set:

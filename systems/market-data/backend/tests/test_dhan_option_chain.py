@@ -11,7 +11,7 @@ import time
 import responses
 
 from app.config import settings
-from app.providers.dhan import NSE_INDEX, OPTION_CHAIN_URL, OPTION_EXPIRY_LIST_URL, DhanProvider
+from app.providers.dhan import LTP_URL, NSE_INDEX, OPTION_CHAIN_URL, OPTION_EXPIRY_LIST_URL, DhanProvider
 
 
 def _leg(security_id: str, last_price: float, oi: int, delta: float) -> dict:
@@ -144,13 +144,22 @@ def test_get_option_chain_second_call_within_ttl_hits_cache_not_network(monkeypa
     monkeypatch.setattr(settings, "dhan_client_id", "test-client")
     monkeypatch.setattr(settings, "dhan_access_token", "test-token")
     responses.add(responses.POST, OPTION_CHAIN_URL, body=json.dumps(FAKE_CHAIN_RESPONSE), status=200)
+    # get_option_chain also fetches a fresh, independent LTP to override
+    # the optionchain response's own (sometimes stale/wrong - see
+    # get_option_chain's own comment) `last_price` - one extra network
+    # call on an actual (non-cached) fetch.
+    responses.add(
+        responses.POST, LTP_URL, body=json.dumps({"data": {"IDX_I": {"13": {"last_price": 24000.0}}}}), status=200
+    )
 
     provider = _provider_with_nifty()
     first = provider.get_option_chain("NIFTY", "2026-08-14")
     second = provider.get_option_chain("NIFTY", "2026-08-14")
 
     assert first is second
-    assert len(responses.calls) == 1
+    # 1 optionchain POST + 1 LTP POST for the first (real) fetch; the
+    # second call is served entirely from cache, adding none of either.
+    assert len(responses.calls) == 2
 
 
 def test_get_option_chain_without_credentials_raises(monkeypatch):
@@ -180,3 +189,92 @@ def test_get_option_chain_fails_fast_when_throttle_queue_too_deep(monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "backed up" in str(exc)
+
+
+@responses.activate
+def test_get_option_chain_records_oi_history_on_real_fetch_only(monkeypatch):
+    monkeypatch.setattr(settings, "dhan_client_id", "test-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "test-token")
+    responses.add(responses.POST, OPTION_CHAIN_URL, body=json.dumps(FAKE_CHAIN_RESPONSE), status=200)
+    responses.add(
+        responses.POST, LTP_URL, body=json.dumps({"data": {"IDX_I": {"13": {"last_price": 24000.0}}}}), status=200
+    )
+
+    provider = _provider_with_nifty()
+    provider.get_option_chain("NIFTY", "2026-08-14")
+    key = ("NIFTY", "2026-08-14", 24000.0, "CE")
+    assert len(provider._oi_history[key]) == 1
+    assert provider._oi_history[key][0][1] == 800000
+    assert len(provider._price_history[key]) == 1
+
+    # Second call is served from cache (see the TTL test above) - must NOT
+    # append a second, redundant sample for the same unchanged OI.
+    provider.get_option_chain("NIFTY", "2026-08-14")
+    assert len(provider._oi_history[key]) == 1
+    assert len(provider._price_history[key]) == 1
+
+
+def test_get_oi_changes_no_history_returns_none():
+    provider = _provider_with_nifty()
+    change_5m, change_15m = provider.get_oi_changes("NIFTY", "2026-08-14", 24000.0, "CE", current_oi=800000)
+    assert change_5m is None
+    assert change_15m is None
+
+
+def test_get_oi_changes_diffs_against_closest_sample_at_or_before_target(monkeypatch):
+    provider = _provider_with_nifty()
+    key = ("NIFTY", "2026-08-14", 24000.0, "CE")
+    now = time.time()
+    # Oldest first, matching how _record_oi_history actually appends.
+    provider._oi_history[key] = [
+        (now - 20 * 60, 700000),  # 20 min ago - anchor for the 15m window (nothing between this and 14m ago)
+        (now - 14 * 60, 750000),  # 14 min ago - too recent for the 15m window
+        (now - 6 * 60, 770000),  # 6 min ago - anchor for the 5m window
+        (now - 4 * 60, 780000),  # 4 min ago - too recent for the 5m window
+    ]
+    monkeypatch.setattr(time, "time", lambda: now)
+
+    change_5m, change_15m = provider.get_oi_changes("NIFTY", "2026-08-14", 24000.0, "CE", current_oi=800000)
+
+    assert change_5m == 800000 - 770000
+    assert change_15m == 800000 - 700000
+
+
+def test_get_oi_changes_scoped_to_symbol_expiry_strike_and_option_type():
+    provider = _provider_with_nifty()
+    now = time.time()
+    provider._oi_history[("NIFTY", "2026-08-14", 24000.0, "CE")] = [(now - 20 * 60, 700000)]
+    # A PE at the same strike/expiry, and a CE at a different strike -
+    # neither should leak into the CE@24000 lookup above.
+    provider._oi_history[("NIFTY", "2026-08-14", 24000.0, "PE")] = [(now - 20 * 60, 111111)]
+    provider._oi_history[("NIFTY", "2026-08-14", 24050.0, "CE")] = [(now - 20 * 60, 222222)]
+
+    change_5m, change_15m = provider.get_oi_changes("NIFTY", "2026-08-14", 24000.0, "CE", current_oi=900000)
+
+    assert change_5m == 900000 - 700000
+    assert change_15m == 900000 - 700000
+
+
+def test_get_price_changes_no_history_returns_none():
+    provider = _provider_with_nifty()
+    change_5m, change_15m = provider.get_price_changes("NIFTY", "2026-08-14", 24000.0, "CE", current_price=150.0)
+    assert change_5m is None
+    assert change_15m is None
+
+
+def test_get_price_changes_diffs_against_closest_sample_at_or_before_target(monkeypatch):
+    provider = _provider_with_nifty()
+    key = ("NIFTY", "2026-08-14", 24000.0, "CE")
+    now = time.time()
+    provider._price_history[key] = [
+        (now - 20 * 60, 120.0),  # anchor for the 15m window
+        (now - 14 * 60, 130.0),  # too recent for the 15m window
+        (now - 6 * 60, 140.0),  # anchor for the 5m window
+        (now - 4 * 60, 145.0),  # too recent for the 5m window
+    ]
+    monkeypatch.setattr(time, "time", lambda: now)
+
+    change_5m, change_15m = provider.get_price_changes("NIFTY", "2026-08-14", 24000.0, "CE", current_price=150.0)
+
+    assert change_5m == 150.0 - 140.0
+    assert change_15m == 150.0 - 120.0

@@ -3,11 +3,15 @@ import { Fragment, useEffect, useState } from "react";
 import {
   type Account,
   type OptionGroup,
+  type OptionGroupPnlSnapshot,
   type Position,
+  type PositionPnlSnapshot,
   checkExitsNow,
   checkOptionGroupExitsNow,
   clearPositions,
+  fetchOptionGroupPnlHistory,
   fetchOptionGroups,
+  fetchPositionPnlHistory,
   fetchPositions,
   fetchStrategyNames,
   squareOffNow,
@@ -18,7 +22,8 @@ import {
   updateOptionGroupStopLoss,
 } from "./api";
 import Nav from "./Nav";
-import { SEGMENTS, formatPct, formatTime, localDateStr, pnlPercent, todayLocalDate } from "./format";
+import { PnlChart, type PnlPoint } from "./PnlChart";
+import { SEGMENTS, formatPct, formatTime, localDateStr, money, moneySigned, pnlPercent, todayLocalDate } from "./format";
 
 function combinedExitPrice(g: OptionGroup): number | null {
   const buyLeg = g.legs.find((l) => l.action === "BUY");
@@ -42,6 +47,33 @@ function groupValue(g: OptionGroup): number | null {
 function signalLabel(g: OptionGroup, strategyNames: Record<string, string>): string {
   if (g.strategy_id == null) return "Manual";
   return strategyNames[g.strategy_id] ?? g.strategy_id;
+}
+
+// Builds a PnlChart's points series for one position: its own entry_time
+// (pnl=0, the trade's actual starting point - the first real snapshot may
+// already be nonzero if some time passed before the first exit-monitor
+// tick) leads, the fetched history in between, and - once CLOSED - the
+// position's own exit_time/pnl trailing (both already known from the
+// Position object itself, no extra fetch needed for just this). Returns
+// just the two endpoints (no history yet, or none fetched) rather than
+// blocking - PnlChart itself shows a "not enough history" message for a
+// too-short series.
+function buildPositionPoints(p: Position, history: PositionPnlSnapshot[] | undefined): PnlPoint[] {
+  const points: PnlPoint[] = [{ recordedAt: p.entry_time, unrealizedPnl: 0 }];
+  for (const h of history ?? []) points.push({ recordedAt: h.recorded_at, unrealizedPnl: h.unrealized_pnl });
+  if (p.status === "CLOSED" && p.exit_time != null && p.pnl != null) {
+    points.push({ recordedAt: p.exit_time, unrealizedPnl: p.pnl });
+  }
+  return points;
+}
+
+function buildGroupPoints(g: OptionGroup, history: OptionGroupPnlSnapshot[] | undefined): PnlPoint[] {
+  const points: PnlPoint[] = [{ recordedAt: g.entry_time, unrealizedPnl: 0 }];
+  for (const h of history ?? []) points.push({ recordedAt: h.recorded_at, unrealizedPnl: h.unrealized_pnl });
+  if (g.status === "CLOSED" && g.exit_time != null && g.pnl != null) {
+    points.push({ recordedAt: g.exit_time, unrealizedPnl: g.pnl });
+  }
+  return points;
 }
 
 // % distance of a price from some base (net debit for the premium SL/
@@ -75,6 +107,15 @@ export default function PositionsPage() {
   const [editingSlGroupId, setEditingSlGroupId] = useState<string | null>(null);
   const [editingSpotSlGroupId, setEditingSpotSlGroupId] = useState<string | null>(null);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  // P&L-history chart state - separate from expandedGroupId's own legs
+  // toggle for plain positions (which have no other expand affordance at
+  // all); option groups reuse expandedGroupId itself (the chart renders
+  // inside the SAME expanded panel as the legs detail, see handleToggleGroup).
+  // History is fetched on demand per id, cached here so re-expanding the
+  // same row doesn't re-fetch.
+  const [expandedPositionId, setExpandedPositionId] = useState<string | null>(null);
+  const [positionPnlHistory, setPositionPnlHistory] = useState<Record<string, PositionPnlSnapshot[]>>({});
+  const [groupPnlHistory, setGroupPnlHistory] = useState<Record<string, OptionGroupPnlSnapshot[]>>({});
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [instrumentTab, setInstrumentTab] = useState<"spot" | "derivatives">("spot");
   const [subTab, setSubTab] = useState<"positions" | "orders">("positions");
@@ -129,6 +170,47 @@ export default function PositionsPage() {
       clearInterval(id);
     };
   }, [signalIdFilter]);
+
+  // Keeps an expanded P&L chart's history fresh while it stays open -
+  // handleTogglePositionChart/handleToggleGroup only fetch ONCE, on the
+  // toggle itself, so without this the chart would go stale the moment
+  // new snapshots land (every 30s, the exit-monitor tick's own cadence -
+  // see execution/backend/app/domain/position_manager.py's
+  // record_position_pnl_snapshots) instead of ever showing them. Same
+  // POLL_INTERVAL_MS as the rest of this page, not a second magic number.
+  useEffect(() => {
+    if (!expandedPositionId) return;
+    let cancelled = false;
+    const id = setInterval(async () => {
+      try {
+        const history = await fetchPositionPnlHistory(expandedPositionId);
+        if (!cancelled) setPositionPnlHistory((prev) => ({ ...prev, [expandedPositionId]: history }));
+      } catch {
+        // keep showing the last known chart rather than clearing on a blip
+      }
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [expandedPositionId]);
+
+  useEffect(() => {
+    if (!expandedGroupId) return;
+    let cancelled = false;
+    const id = setInterval(async () => {
+      try {
+        const history = await fetchOptionGroupPnlHistory(expandedGroupId);
+        if (!cancelled) setGroupPnlHistory((prev) => ({ ...prev, [expandedGroupId]: history }));
+      } catch {
+        // same as above
+      }
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [expandedGroupId]);
 
   async function refreshAll() {
     const [freshPositions, freshGroups] = await Promise.all([
@@ -192,6 +274,32 @@ export default function PositionsPage() {
       setActionMessage(err instanceof Error ? err.message : "Failed to clear positions");
     } finally {
       setClearing(false);
+    }
+  }
+
+  async function handleTogglePositionChart(positionId: string) {
+    const next = expandedPositionId === positionId ? null : positionId;
+    setExpandedPositionId(next);
+    if (next && !(next in positionPnlHistory)) {
+      try {
+        const history = await fetchPositionPnlHistory(next);
+        setPositionPnlHistory((prev) => ({ ...prev, [next]: history }));
+      } catch {
+        // leave it uncached - PnlChart's own "not enough history" message covers this
+      }
+    }
+  }
+
+  async function handleToggleGroup(g: OptionGroup) {
+    const next = expandedGroupId === g.id ? null : g.id;
+    setExpandedGroupId(next);
+    if (next && !(next in groupPnlHistory)) {
+      try {
+        const history = await fetchOptionGroupPnlHistory(next);
+        setGroupPnlHistory((prev) => ({ ...prev, [next]: history }));
+      } catch {
+        // same as handleTogglePositionChart above
+      }
     }
   }
 
@@ -272,6 +380,15 @@ export default function PositionsPage() {
   // premium stop above (see updateOptionGroupSpotStopLoss's own comment).
   // Direction-aware same as the premium version: BUY closes if spot FALLS
   // to/through the stop, SELL if it RISES to/through it.
+  //
+  // Accepts EITHER a %-away-from-entry-spot (trailing "%", e.g. "1%") OR
+  // an absolute spot price (a bare number, e.g. "76800") in the same
+  // prompt - the backend (PUT /option-groups/{id}/spot-stop-loss) always
+  // takes an absolute price, so this is purely a frontend input-mode
+  // convention (trailing "%" is the only disambiguator, since a bare
+  // number is ambiguous between "1% away" and "an absolute price of 1").
+  // Defaults to the current stop expressed as a %, matching the prior
+  // percent-only behavior when the user doesn't change the prefill.
   async function handleEditGroupSpotSl(g: OptionGroup) {
     if (g.entry_spot_price == null) {
       setActionMessage(`No entry spot price recorded for ${g.underlying_symbol} - can't set a spot-based stop-loss.`);
@@ -281,22 +398,39 @@ export default function PositionsPage() {
     const direction = g.action === "BUY" ? "falls to/through" : "rises to/through";
     const examplePrice = g.action === "BUY" ? g.entry_spot_price * 0.99 : g.entry_spot_price * 1.01;
     const input = window.prompt(
-      `New stop-loss for ${g.underlying_symbol}, as % away from entry spot (${g.entry_spot_price.toFixed(2)}). ` +
-        `Closes when spot ${direction} it. E.g. 1 = ${examplePrice.toFixed(2)}.`,
-      currentPct != null ? Math.abs(currentPct).toFixed(2) : "",
+      `New stop-loss for ${g.underlying_symbol} (entry spot ${g.entry_spot_price.toFixed(2)}). ` +
+        `Closes when spot ${direction} it. Enter a % away from entry (e.g. "1%" = ${examplePrice.toFixed(2)}) ` +
+        `or an absolute price (e.g. "${examplePrice.toFixed(2)}").`,
+      currentPct != null ? `${Math.abs(currentPct).toFixed(2)}%` : "",
     );
     if (input == null || input.trim() === "") return;
-    const pct = Number(input);
-    if (!Number.isFinite(pct)) {
-      setActionMessage("Enter a valid number for stop-loss %.");
-      return;
+    const trimmed = input.trim();
+
+    let newPrice: number;
+    let appliedDescription: string;
+    if (trimmed.endsWith("%")) {
+      const pct = Number(trimmed.slice(0, -1));
+      if (!Number.isFinite(pct)) {
+        setActionMessage("Enter a valid number for stop-loss %.");
+        return;
+      }
+      newPrice = g.action === "BUY" ? g.entry_spot_price * (1 - pct / 100) : g.entry_spot_price * (1 + pct / 100);
+      appliedDescription = `${pct}% from entry spot`;
+    } else {
+      const price = Number(trimmed);
+      if (!Number.isFinite(price) || price <= 0) {
+        setActionMessage('Enter a valid stop-loss - either a percent (e.g. "1%") or an absolute price.');
+        return;
+      }
+      newPrice = price;
+      appliedDescription = "absolute price";
     }
-    const newPrice = g.action === "BUY" ? g.entry_spot_price * (1 - pct / 100) : g.entry_spot_price * (1 + pct / 100);
+
     setEditingSpotSlGroupId(g.id);
     setActionMessage(null);
     try {
       await updateOptionGroupSpotStopLoss(g.id, newPrice);
-      setActionMessage(`Updated ${g.underlying_symbol} stop-loss to ${newPrice.toFixed(2)} (${pct}% from entry spot).`);
+      setActionMessage(`Updated ${g.underlying_symbol} stop-loss to ${newPrice.toFixed(2)} (${appliedDescription}).`);
       await refreshAll();
     } catch (err) {
       setActionMessage(err instanceof Error ? err.message : "Failed to update stop-loss");
@@ -328,9 +462,7 @@ export default function PositionsPage() {
   const orders = [...closed, ...rejected].sort(
     (a, b) => new Date(b.exit_time ?? b.entry_time).getTime() - new Date(a.exit_time ?? a.entry_time).getTime(),
   );
-  const totalPnl = closed.reduce((sum, p) => sum + (p.pnl ?? 0), 0);
   const openWithLivePnl = open.filter((p) => p.unrealized_pnl != null);
-  const totalUnrealizedPnl = openWithLivePnl.reduce((sum, p) => sum + (p.unrealized_pnl ?? 0), 0);
 
   const groupDateFiltered = signalIdFilter
     ? optionGroups
@@ -344,18 +476,44 @@ export default function PositionsPage() {
   const groupOrders = [...closedGroups, ...rejectedGroups].sort(
     (a, b) => new Date(b.exit_time ?? b.entry_time).getTime() - new Date(a.exit_time ?? a.entry_time).getTime(),
   );
-  const totalGroupPnl = closedGroups.reduce((sum, g) => sum + (g.pnl ?? 0), 0);
   const openGroupsWithLivePnl = openGroups.filter((g) => g.unrealized_pnl != null);
-  const totalGroupUnrealizedPnl = openGroupsWithLivePnl.reduce((sum, g) => sum + (g.unrealized_pnl ?? 0), 0);
 
-  // Summary stats fold plain positions and option groups together - one
-  // "Open"/"Closed"/"Rejected"/P&L figure for the whole account view.
+  // Summary stats fold plain positions and option groups together for the
+  // "Open"/"Closed"/"Rejected" counts (currency-agnostic), but P&L is kept
+  // as separate per-currency totals - CRYPTO's pnl/unrealized_pnl are raw
+  // USD (never converted, see docs/architecture.md's USDINR section)
+  // while every other segment is INR, so summing them into one blended
+  // figure would silently add two different currencies together.
   const combinedOpenCount = open.length + openGroups.length;
   const combinedClosedCount = closed.length + closedGroups.length;
   const combinedRejectedCount = rejected.length + rejectedGroups.length;
-  const combinedTotalPnl = totalPnl + totalGroupPnl;
-  const combinedOpenWithLivePnlCount = openWithLivePnl.length + openGroupsWithLivePnl.length;
-  const combinedTotalUnrealizedPnl = totalUnrealizedPnl + totalGroupUnrealizedPnl;
+
+  const isCrypto = (segment: string) => segment === "CRYPTO";
+  const sumPnl = (rows: { pnl: number | null }[]) => rows.reduce((sum, r) => sum + (r.pnl ?? 0), 0);
+  const sumUnrealized = (rows: { unrealized_pnl: number | null }[]) => rows.reduce((sum, r) => sum + (r.unrealized_pnl ?? 0), 0);
+
+  const totalPnlInr = sumPnl(closed.filter((p) => !isCrypto(p.segment))) + sumPnl(closedGroups.filter((g) => !isCrypto(g.segment)));
+  const totalPnlUsd = sumPnl(closed.filter((p) => isCrypto(p.segment))) + sumPnl(closedGroups.filter((g) => isCrypto(g.segment)));
+
+  const openCountInr = open.filter((p) => !isCrypto(p.segment)).length + openGroups.filter((g) => !isCrypto(g.segment)).length;
+  const openCountUsd = open.filter((p) => isCrypto(p.segment)).length + openGroups.filter((g) => isCrypto(g.segment)).length;
+  const openWithLivePnlCountInr =
+    openWithLivePnl.filter((p) => !isCrypto(p.segment)).length + openGroupsWithLivePnl.filter((g) => !isCrypto(g.segment)).length;
+  const openWithLivePnlCountUsd =
+    openWithLivePnl.filter((p) => isCrypto(p.segment)).length + openGroupsWithLivePnl.filter((g) => isCrypto(g.segment)).length;
+  const totalUnrealizedPnlInr =
+    sumUnrealized(openWithLivePnl.filter((p) => !isCrypto(p.segment))) + sumUnrealized(openGroupsWithLivePnl.filter((g) => !isCrypto(g.segment)));
+  const totalUnrealizedPnlUsd =
+    sumUnrealized(openWithLivePnl.filter((p) => isCrypto(p.segment))) + sumUnrealized(openGroupsWithLivePnl.filter((g) => isCrypto(g.segment)));
+
+  // Only show the $ stats at all when there's actually some CRYPTO
+  // activity in view - a pure NSE/MCX trader shouldn't see a permanent
+  // "$0.00" stat cluttering the summary.
+  const hasCryptoActivity =
+    open.some((p) => isCrypto(p.segment)) ||
+    closed.some((p) => isCrypto(p.segment)) ||
+    openGroups.some((g) => isCrypto(g.segment)) ||
+    closedGroups.some((g) => isCrypto(g.segment));
 
   return (
     <main>
@@ -427,21 +585,38 @@ export default function PositionsPage() {
           <span className="stat-value">{combinedRejectedCount}</span>
         </div>
         <div className="stat">
-          <span className="stat-label">Realized P&amp;L</span>
-          <span className={`stat-value num ${combinedTotalPnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
-            {combinedTotalPnl >= 0 ? "+" : ""}
-            {combinedTotalPnl.toFixed(2)}
+          <span className="stat-label">Realized P&amp;L (₹)</span>
+          <span className={`stat-value num ${totalPnlInr >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+            {totalPnlInr >= 0 ? "+" : ""}
+            {totalPnlInr.toFixed(2)}
           </span>
         </div>
+        {hasCryptoActivity && (
+          <div className="stat">
+            <span className="stat-label">Realized P&amp;L ($)</span>
+            <span className={`stat-value num ${totalPnlUsd >= 0 ? "pnl-positive" : "pnl-negative"}`}>{moneySigned(totalPnlUsd, "CRYPTO")}</span>
+          </div>
+        )}
         <div className="stat">
-          <span className="stat-label">Unrealized P&amp;L (live)</span>
-          <span className={`stat-value num ${combinedTotalUnrealizedPnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
-            {combinedOpenCount === 0 ? "-" : `${combinedTotalUnrealizedPnl >= 0 ? "+" : ""}${combinedTotalUnrealizedPnl.toFixed(2)}`}
-            {combinedOpenCount > combinedOpenWithLivePnlCount && (
-              <span className="muted"> ({combinedOpenCount - combinedOpenWithLivePnlCount} quote unavailable)</span>
+          <span className="stat-label">Unrealized P&amp;L (live, ₹)</span>
+          <span className={`stat-value num ${totalUnrealizedPnlInr >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+            {openCountInr === 0 ? "-" : `${totalUnrealizedPnlInr >= 0 ? "+" : ""}${totalUnrealizedPnlInr.toFixed(2)}`}
+            {openCountInr > openWithLivePnlCountInr && (
+              <span className="muted"> ({openCountInr - openWithLivePnlCountInr} quote unavailable)</span>
             )}
           </span>
         </div>
+        {hasCryptoActivity && (
+          <div className="stat">
+            <span className="stat-label">Unrealized P&amp;L (live, $)</span>
+            <span className={`stat-value num ${totalUnrealizedPnlUsd >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+              {openCountUsd === 0 ? "-" : moneySigned(totalUnrealizedPnlUsd, "CRYPTO")}
+              {openCountUsd > openWithLivePnlCountUsd && (
+                <span className="muted"> ({openCountUsd - openWithLivePnlCountUsd} quote unavailable)</span>
+              )}
+            </span>
+          </div>
+        )}
       </section>
 
       <nav className="tabs">
@@ -484,18 +659,22 @@ export default function PositionsPage() {
               <th>Unrealized P&amp;L</th>
               <th>Stop-loss</th>
               <th></th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {open.length === 0 && !error && (
               <tr>
-                <td colSpan={10} className="empty">
+                <td colSpan={11} className="empty">
                   {signalIdFilter ? "No open position found for that signal." : "No open positions."}
                 </td>
               </tr>
             )}
-            {open.map((p) => (
-              <tr key={p.id}>
+            {open.map((p) => {
+              const chartExpanded = expandedPositionId === p.id;
+              return (
+              <Fragment key={p.id}>
+              <tr>
                 <td>{formatTime(p.entry_time)}</td>
                 <td className="symbol">{p.symbol}</td>
                 <td>{p.segment}</td>
@@ -503,18 +682,29 @@ export default function PositionsPage() {
                   <span className={`badge ${p.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{p.action}</span>
                 </td>
                 <td className="num">{p.quantity ?? "-"}</td>
-                <td className="num">{p.entry_price.toFixed(2)}</td>
-                <td className="num">{p.live_price?.toFixed(2) ?? "-"}</td>
+                <td className="num">{money(p.entry_price, p.segment)}</td>
+                <td className="num">{p.live_price != null ? money(p.live_price, p.segment) : "-"}</td>
                 <td
                   className={`num ${p.unrealized_pnl != null ? (p.unrealized_pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""} pnl-live`}
                   title="Unrealized - not yet closed"
                 >
-                  {p.unrealized_pnl != null ? `${p.unrealized_pnl >= 0 ? "+" : ""}${p.unrealized_pnl.toFixed(2)}` : "-"}
+                  {p.unrealized_pnl != null ? moneySigned(p.unrealized_pnl, p.segment) : "-"}
                   {formatPct(pnlPercent(p.unrealized_pnl, p.entry_price, p.quantity))}
                 </td>
                 <td className="num" title={p.trailing_stop_enabled ? "Trailing" : undefined}>
-                  {p.stop_loss_price != null ? p.stop_loss_price.toFixed(2) : "-"}
+                  {p.stop_loss_price != null ? money(p.stop_loss_price, p.segment) : "-"}
                   {p.stop_loss_price != null && p.trailing_stop_enabled && <span className="muted"> &#8599;</span>}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className="icon-btn secondary"
+                    onClick={() => handleTogglePositionChart(p.id)}
+                    title={chartExpanded ? "Hide P&L chart" : "Show P&L chart"}
+                    aria-label={chartExpanded ? "Hide P&L chart" : "Show P&L chart"}
+                  >
+                    {chartExpanded ? "▾" : "▸"}
+                  </button>
                 </td>
                 <td>
                   <button
@@ -527,7 +717,18 @@ export default function PositionsPage() {
                   </button>
                 </td>
               </tr>
-            ))}
+              {chartExpanded && (
+                <tr className="legs-row">
+                  <td colSpan={11}>
+                    <div className="legs-detail">
+                      <PnlChart points={buildPositionPoints(p, positionPnlHistory[p.id])} segment={p.segment} />
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -547,19 +748,25 @@ export default function PositionsPage() {
               <th>Entry Px</th>
               <th>Exit Px</th>
               <th>P&amp;L</th>
+              <th>Fees</th>
               <th>Status</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {orders.length === 0 && !error && (
               <tr>
-                <td colSpan={10} className="empty">
+                <td colSpan={12} className="empty">
                   {signalIdFilter ? "No order found for that signal." : "No orders yet."}
                 </td>
               </tr>
             )}
-            {orders.map((p) => (
-              <tr key={p.id}>
+            {orders.map((p) => {
+              const totalFees = (p.open_fee ?? 0) + (p.close_fee ?? 0);
+              const chartExpanded = expandedPositionId === p.id;
+              return (
+              <Fragment key={p.id}>
+              <tr>
                 <td>{formatTime(p.entry_time)}</td>
                 <td>{p.exit_time ? formatTime(p.exit_time) : "-"}</td>
                 <td className="symbol">{p.symbol}</td>
@@ -568,18 +775,52 @@ export default function PositionsPage() {
                   <span className={`badge ${p.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{p.action}</span>
                 </td>
                 <td className="num">{p.quantity ?? "-"}</td>
-                <td className="num">{p.entry_price.toFixed(2)}</td>
-                <td className="num">{p.exit_price?.toFixed(2) ?? "-"}</td>
+                <td className="num">{money(p.entry_price, p.segment)}</td>
+                <td className="num">{p.exit_price != null ? money(p.exit_price, p.segment) : "-"}</td>
                 <td className={`num ${p.pnl != null ? (p.pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
-                  {p.pnl != null ? `${p.pnl >= 0 ? "+" : ""}${p.pnl.toFixed(2)}` : "-"}
+                  {p.pnl != null ? moneySigned(p.pnl, p.segment) : "-"}
                   {formatPct(pnlPercent(p.pnl, p.entry_price, p.quantity))}
+                </td>
+                <td
+                  className="num"
+                  title={
+                    p.open_fee != null
+                      ? `Open: ${money(p.open_fee, p.segment)}${p.close_fee != null ? `, ${p.exit_reason === "liquidation" ? "Liquidation" : "Close"}: ${money(p.close_fee, p.segment)}` : ""}${p.margin_posted != null ? ` · Margin posted: ${money(p.margin_posted, p.segment)}` : ""}`
+                      : undefined
+                  }
+                >
+                  {p.open_fee != null ? money(totalFees, p.segment) : "-"}
                 </td>
                 <td title={p.rejection_reason ?? p.exit_reason ?? undefined}>
                   {p.status}
                   {p.exit_reason && <span className="muted"> ({p.exit_reason.replace("_", " ")})</span>}
                 </td>
+                <td>
+                  {p.status === "CLOSED" && (
+                    <button
+                      type="button"
+                      className="icon-btn secondary"
+                      onClick={() => handleTogglePositionChart(p.id)}
+                      title={chartExpanded ? "Hide P&L chart" : "Show P&L chart"}
+                      aria-label={chartExpanded ? "Hide P&L chart" : "Show P&L chart"}
+                    >
+                      {chartExpanded ? "▾" : "▸"}
+                    </button>
+                  )}
+                </td>
               </tr>
-            ))}
+              {chartExpanded && (
+                <tr className="legs-row">
+                  <td colSpan={12}>
+                    <div className="legs-detail">
+                      <PnlChart points={buildPositionPoints(p, positionPnlHistory[p.id])} segment={p.segment} />
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -622,7 +863,7 @@ export default function PositionsPage() {
                       <button
                         type="button"
                         className="icon-btn secondary"
-                        onClick={() => setExpandedGroupId(expanded ? null : g.id)}
+                        onClick={() => handleToggleGroup(g)}
                         title={expanded ? "Hide legs" : "Show legs"}
                         aria-label={expanded ? "Hide legs" : "Show legs"}
                       >
@@ -637,12 +878,12 @@ export default function PositionsPage() {
                       <span className={`badge ${g.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{g.action}</span>
                     </td>
                     <td className="num">{g.quantity ?? "-"}</td>
-                    <td className="num">{groupValue(g)?.toFixed(2) ?? "-"}</td>
-                    <td className="num">{g.live_spot_price != null ? g.live_spot_price.toFixed(2) : "-"}</td>
+                    <td className="num">{groupValue(g) != null ? money(groupValue(g)!, g.segment) : "-"}</td>
+                    <td className="num">{g.live_spot_price != null ? money(g.live_spot_price, g.segment) : "-"}</td>
                     <td className="num">
                       {g.spot_stop_loss_price != null ? (
                         <>
-                          {g.spot_stop_loss_price.toFixed(2)}
+                          {money(g.spot_stop_loss_price, g.segment)}
                           {formatPct(spotSlPct)}
                         </>
                       ) : (
@@ -663,7 +904,7 @@ export default function PositionsPage() {
                       className={`num ${g.unrealized_pnl != null ? (g.unrealized_pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""} pnl-live`}
                       title="Unrealized - not yet closed"
                     >
-                      {g.unrealized_pnl != null ? `${g.unrealized_pnl >= 0 ? "+" : ""}${g.unrealized_pnl.toFixed(2)}` : "-"}
+                      {g.unrealized_pnl != null ? moneySigned(g.unrealized_pnl, g.segment) : "-"}
                       {formatPct(pnlPercent(g.unrealized_pnl, g.net_debit, g.quantity))}
                     </td>
                     <td>
@@ -707,15 +948,15 @@ export default function PositionsPage() {
                                     <span className={`badge ${leg.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{leg.action}</span>
                                   </td>
                                   <td className="symbol">{leg.symbol}</td>
-                                  <td className="num">{leg.entry_price.toFixed(2)}</td>
-                                  <td className="num">{leg.live_price != null ? leg.live_price.toFixed(2) : "-"}</td>
+                                  <td className="num">{money(leg.entry_price, g.segment)}</td>
+                                  <td className="num">{leg.live_price != null ? money(leg.live_price, g.segment) : "-"}</td>
                                   <td
                                     className={`num ${leg.unrealized_pnl != null ? (leg.unrealized_pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}
                                   >
-                                    {leg.unrealized_pnl != null ? `${leg.unrealized_pnl >= 0 ? "+" : ""}${leg.unrealized_pnl.toFixed(2)}` : "-"}
+                                    {leg.unrealized_pnl != null ? moneySigned(leg.unrealized_pnl, g.segment) : "-"}
                                   </td>
-                                  <td className="num">{leg.stop_loss_price != null ? leg.stop_loss_price.toFixed(2) : "-"}</td>
-                                  <td className="num">{leg.target_price != null ? leg.target_price.toFixed(2) : "-"}</td>
+                                  <td className="num">{leg.stop_loss_price != null ? money(leg.stop_loss_price, g.segment) : "-"}</td>
+                                  <td className="num">{leg.target_price != null ? money(leg.target_price, g.segment) : "-"}</td>
                                   <td>{leg.status}</td>
                                 </tr>
                               ))}
@@ -723,19 +964,19 @@ export default function PositionsPage() {
                           </table>
                           <div className="legs-detail-footer">
                             <span>
-                              Live combined px: <strong>{g.live_combined_price?.toFixed(2) ?? "-"}</strong>
+                              Live combined px: <strong>{g.live_combined_price != null ? money(g.live_combined_price, g.segment) : "-"}</strong>
                             </span>
                             <span>
                               Premium SL:{" "}
                               <strong>
-                                {g.combined_stop_loss_price != null ? g.combined_stop_loss_price.toFixed(2) : "-"}
+                                {g.combined_stop_loss_price != null ? money(g.combined_stop_loss_price, g.segment) : "-"}
                                 {formatPct(premiumSlPct)}
                               </strong>
                             </span>
                             <span>
                               Premium target:{" "}
                               <strong>
-                                {g.combined_target_price != null ? g.combined_target_price.toFixed(2) : "-"}
+                                {g.combined_target_price != null ? money(g.combined_target_price, g.segment) : "-"}
                                 {formatPct(premiumTargetPct)}
                               </strong>
                             </span>
@@ -750,6 +991,7 @@ export default function PositionsPage() {
                               </button>
                             )}
                           </div>
+                          <PnlChart points={buildGroupPoints(g, groupPnlHistory[g.id])} segment={g.segment} />
                         </div>
                       </td>
                     </tr>
@@ -772,17 +1014,18 @@ export default function PositionsPage() {
               <th>Underlying</th>
               <th>Signal</th>
               <th>Strategy</th>
-              <th>Lots</th>
+              <th>Qty</th>
               <th>Value</th>
               <th>Exit</th>
               <th>P&amp;L</th>
+              <th>Fees</th>
               <th>Status</th>
             </tr>
           </thead>
           <tbody>
             {groupOrders.length === 0 && !error && (
               <tr>
-                <td colSpan={10} className="empty">
+                <td colSpan={11} className="empty">
                   {signalIdFilter ? "No option order found for that signal." : "No option orders yet."}
                 </td>
               </tr>
@@ -798,7 +1041,7 @@ export default function PositionsPage() {
                         <button
                           type="button"
                           className="icon-btn secondary"
-                          onClick={() => setExpandedGroupId(expanded ? null : g.id)}
+                          onClick={() => handleToggleGroup(g)}
                           title={expanded ? "Hide legs" : "Show legs"}
                           aria-label={expanded ? "Hide legs" : "Show legs"}
                         >
@@ -813,11 +1056,21 @@ export default function PositionsPage() {
                     <td>{signalLabel(g, strategyNames)}</td>
                     <td>{g.strategy_type}</td>
                     <td className="num">{g.quantity ?? "-"}</td>
-                    <td className="num">{groupValue(g)?.toFixed(2) ?? "-"}</td>
+                    <td className="num">{groupValue(g) != null ? money(groupValue(g)!, g.segment) : "-"}</td>
                     <td>{g.exit_time ? formatTime(g.exit_time) : "-"}</td>
                     <td className={`num ${g.pnl != null ? (g.pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
-                      {g.pnl != null ? `${g.pnl >= 0 ? "+" : ""}${g.pnl.toFixed(2)}` : "-"}
+                      {g.pnl != null ? moneySigned(g.pnl, g.segment) : "-"}
                       {formatPct(pnlPercent(g.pnl, g.net_debit, g.quantity))}
+                    </td>
+                    <td
+                      className="num"
+                      title={
+                        g.open_fee != null
+                          ? `Open: ${money(g.open_fee, g.segment)}${g.close_fee != null ? `, Close: ${money(g.close_fee, g.segment)}` : ""}`
+                          : undefined
+                      }
+                    >
+                      {g.open_fee != null ? money((g.open_fee ?? 0) + (g.close_fee ?? 0), g.segment) : "-"}
                     </td>
                     <td title={g.rejection_reason ?? g.exit_reason ?? undefined}>
                       {g.status}
@@ -826,7 +1079,7 @@ export default function PositionsPage() {
                   </tr>
                   {expanded && hasLegs && (
                     <tr className="legs-row">
-                      <td colSpan={10}>
+                      <td colSpan={11}>
                         <div className="legs-detail">
                           <table className="legs-table">
                             <thead>
@@ -846,10 +1099,10 @@ export default function PositionsPage() {
                                     <span className={`badge ${leg.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{leg.action}</span>
                                   </td>
                                   <td className="symbol">{leg.symbol}</td>
-                                  <td className="num">{leg.entry_price.toFixed(2)}</td>
-                                  <td className="num">{leg.exit_price != null ? leg.exit_price.toFixed(2) : "-"}</td>
+                                  <td className="num">{money(leg.entry_price, g.segment)}</td>
+                                  <td className="num">{leg.exit_price != null ? money(leg.exit_price, g.segment) : "-"}</td>
                                   <td className={`num ${leg.pnl != null ? (leg.pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
-                                    {leg.pnl != null ? `${leg.pnl >= 0 ? "+" : ""}${leg.pnl.toFixed(2)}` : "-"}
+                                    {leg.pnl != null ? moneySigned(leg.pnl, g.segment) : "-"}
                                   </td>
                                   <td>{leg.status}</td>
                                 </tr>
@@ -858,9 +1111,10 @@ export default function PositionsPage() {
                           </table>
                           <div className="legs-detail-footer">
                             <span>
-                              Exit combined px: <strong>{combinedExitPrice(g)?.toFixed(2) ?? "-"}</strong>
+                              Exit combined px: <strong>{combinedExitPrice(g) != null ? money(combinedExitPrice(g)!, g.segment) : "-"}</strong>
                             </span>
                           </div>
+                          <PnlChart points={buildGroupPoints(g, groupPnlHistory[g.id])} segment={g.segment} />
                         </div>
                       </td>
                     </tr>

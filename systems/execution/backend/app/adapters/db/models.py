@@ -6,8 +6,8 @@ update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Numeric, SmallInteger, Text, Time, func
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
 from app.config import settings
@@ -36,6 +36,21 @@ class Account(Base):
     current_balance = Column(Numeric, nullable=False)  # debited/credited by realized P&L on close
     capital_per_trade = Column(Numeric, nullable=False)
     risk_per_trade_pct = Column(Numeric, nullable=False)
+    # Manual tab only (ManualTab.tsx's computeRR) - minimum reward:risk a
+    # manual order's Limit(or LTP)/Target/SL Limit must clear before the
+    # Add/Update button will place/update it. Not read by the automated
+    # Strategy-resolved order path at all.
+    min_reward_risk_ratio = Column(Numeric, nullable=False, default=4)
+    # Manual tab only (ManualTab.tsx) - spot/future rows only (options
+    # have no comparable premium-vs-spot risk figure, same reasoning
+    # min_reward_risk_ratio's own RR calc already excludes them for). When
+    # true and a flat stop-loss + entry price are both known, the Lot
+    # field auto-computes from risk_per_trade_pct/capital_per_trade (same
+    # formula position_manager.compute_risk_based_quantity uses
+    # server-side) and locks to that value - the computed count is then
+    # sent as an explicit quantity at order time, same as a manually
+    # typed one, so this needs no new server-side enforcement of its own.
+    enforce_risk_based_lots = Column(Boolean, nullable=False, default=False)
     # CRYPTO only, harmlessly unused for NSE/MCX - see app/domain/models.py's AccountOut.leverage.
     leverage = Column(Numeric, nullable=False, default=1)
     # NULL means never force-closed (CRYPTO's default) - see app/domain/models.py's AccountOut.square_off_time.
@@ -59,6 +74,91 @@ class StrategyAccount(Base):
     capital_per_trade = Column(Numeric, nullable=False)
     risk_per_trade_pct = Column(Numeric, nullable=False)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class ChecklistItem(Base):
+    """One row per pre-trade discipline checklist item (Manual tab only) -
+    see infra/postgres/init/02-execution.sql's own comment on this table
+    for the full design, including why it's edited in place rather than
+    referenced by id from Position/OptionPositionGroup.plan_checklist."""
+
+    __tablename__ = "checklist_items"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    label = Column(Text, nullable=False)
+    # 'plan' (pre-trade, gates ManualTab.tsx's own Add button), 'review'
+    # (post-trade, self-assessed in the review banner - not required to
+    # all be checked), or 'day' (once per calendar day per segment, via
+    # GET/PUT /daily-checklist - see execution.daily_checklist_log). See
+    # infra/postgres/init/02-execution.sql's own comment on this table.
+    phase = Column(Text, nullable=False, default="plan")
+    # Empty list (default) = applies to every segment - see that column's
+    # own comment on execution.checklist_items.
+    segments = Column(ARRAY(Text), nullable=False, default=list)
+    sort_order = Column(Integer, nullable=False, default=0)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class DailyChecklistLog(Base):
+    """One row per (calendar day, segment) submission of the 'day'-phase
+    checklist - see infra/postgres/init/02-execution.sql's own comment on
+    this table for the full design."""
+
+    __tablename__ = "daily_checklist_log"
+    __table_args__ = {"schema": SCHEMA}
+
+    log_date = Column(Date, primary_key=True)
+    segment = Column(Text, primary_key=True)
+    answers = Column(JSONB(none_as_null=True), nullable=False)
+    # One free-text observation for the whole (day, segment) submission,
+    # not per item - see infra/postgres/init/02-execution.sql's own
+    # comment on this table.
+    notes = Column(Text)
+    submitted_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class TradingSession(Base):
+    """One row per check-in/check-out INSTANCE (not per day - a
+    (log_date, segment) can have several, e.g. checked in, broke for
+    lunch, checked in again) - see infra/postgres/init/02-execution.sql's
+    own comment on this table for the full design. Deliberately separate
+    from DailyChecklistLog above (a different concept) rather than two
+    more columns there - that table's `answers` is NOT NULL (a checklist
+    snapshot only exists once actually submitted), but a session can
+    start with no checklist submission at all.
+    `checked_out_at` NULL means this is the currently OPEN session for
+    its (log_date, segment) - check_in_trading_session refuses to open a
+    second one while one's already open, and check_out_trading_session
+    always targets this one row."""
+
+    __tablename__ = "trading_sessions"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    log_date = Column(Date, nullable=False)
+    segment = Column(Text, nullable=False)
+    checked_in_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    checked_out_at = Column(TIMESTAMP(timezone=True))
+
+
+class TradeImage(Base):
+    """A screenshot/chart snapshot attached to a closed manual trade for
+    future review - see infra/postgres/init/02-execution.sql's own
+    comment on this table for the full design, including why exactly one
+    of position_id/option_group_id is set and why bytea over a filesystem
+    path."""
+
+    __tablename__ = "trade_images"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    position_id = Column(UUID(as_uuid=True), nullable=True)
+    option_group_id = Column(UUID(as_uuid=True), nullable=True)
+    content_type = Column(Text, nullable=False)
+    image_data = Column(LargeBinary, nullable=False)
+    uploaded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class OptionPositionGroup(Base):
@@ -92,12 +192,37 @@ class OptionPositionGroup(Base):
     # _evaluate_option_group_exits. See infra/postgres/init/02-execution.sql.
     entry_spot_price = Column(Numeric)
     spot_stop_loss_price = Column(Numeric)
+    # Trailing/auto-compute bookkeeping for spot_stop_loss_price - see
+    # infra/postgres/init/02-execution.sql's own comment on this column
+    # group for why it's separate from combined_stop_loss_price/sl_scope
+    # above.
+    spot_stop_loss_trailing_enabled = Column(Boolean, nullable=False, default=False)
+    spot_stop_loss_indicator_type = Column(Text)
+    spot_stop_loss_indicator_params = Column(JSONB(none_as_null=True))
+    spot_stop_loss_interval = Column(Text)
+    stop_loss_future_symbol = Column(Text)
+    stop_loss_future_exchange = Column(Text)
+    # Delta Exchange trading-fee simulation (app/domain/delta_fees.py) -
+    # CRYPTO only, combined across both legs. See infra/postgres/init/
+    # 02-execution.sql's own comment on this column group.
+    open_fee = Column(Numeric)
+    close_fee = Column(Numeric)
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
     exit_reason = Column(Text)
     exit_time = Column(TIMESTAMP(timezone=True))
     pnl = Column(Numeric)
     square_off_time = Column(Time)
+    # Trade discipline checklist (Manual tab only) - see infra/postgres/
+    # init/02-execution.sql's own comment on these 4 columns.
+    plan_checklist = Column(JSONB(none_as_null=True))
+    reviewed_at = Column(TIMESTAMP(timezone=True))
+    review_violation = Column(Boolean)
+    review_notes = Column(Text)
+    review_checklist = Column(JSONB(none_as_null=True))
+    # 'market' | 'limit' - see infra/postgres/init/02-execution.sql's own
+    # comment on this column. NULL for every Strategy-driven group.
+    order_type = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -150,8 +275,60 @@ class Position(Base):
     # copied at open time, never changed afterward. NULL only for
     # REJECTED rows that never got this far. See position_manager.open_position.
     square_off_time = Column(Time)
+    # Delta Exchange fee/liquidation simulation (app/domain/delta_fees.py) -
+    # CRYPTO + instrument_type='future' only, NULL otherwise. See
+    # infra/postgres/init/02-execution.sql's own comment on this column group.
+    open_fee = Column(Numeric)
+    close_fee = Column(Numeric)
+    margin_posted = Column(Numeric)
+    liquidation_price = Column(Numeric)
+    # Trade discipline checklist (Manual tab only) - see infra/postgres/
+    # init/02-execution.sql's own comment on these 4 columns. NULL for
+    # every Strategy-driven (non-manual) position and for every leg of a
+    # manual OPTION order - the checklist/review gate lives on the option
+    # GROUP row instead (OptionPositionGroup.plan_checklist etc. above),
+    # not on each individual leg Position.
+    plan_checklist = Column(JSONB(none_as_null=True))
+    reviewed_at = Column(TIMESTAMP(timezone=True))
+    review_violation = Column(Boolean)
+    review_notes = Column(Text)
+    review_checklist = Column(JSONB(none_as_null=True))
+    # 'market' | 'limit' - see infra/postgres/init/02-execution.sql's own
+    # comment on this column. NULL for every Strategy-driven position and
+    # every individual option leg, same scoping as plan_checklist above.
+    order_type = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     # Which option_position_groups row this leg belongs to - NULL for
     # every ordinary spot/future position. See docs/architecture.md
     # Phase 4d.
     option_group_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.option_position_groups.id"))
+
+
+class PositionPnlSnapshot(Base):
+    """Unrealized-P&L time series for one Position, recorded every
+    exit-monitor tick while it's OPEN - see infra/postgres/init/
+    02-execution.sql's own comment on this table for the full design."""
+
+    __tablename__ = "position_pnl_snapshots"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    position_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.positions.id", ondelete="CASCADE"), nullable=False)
+    cmp = Column(Numeric, nullable=False)
+    unrealized_pnl = Column(Numeric, nullable=False)
+    recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class OptionGroupPnlSnapshot(Base):
+    """Combined-premium unrealized-P&L time series for one
+    OptionPositionGroup - the group-level counterpart to
+    PositionPnlSnapshot above."""
+
+    __tablename__ = "option_group_pnl_snapshots"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    option_group_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.option_position_groups.id", ondelete="CASCADE"), nullable=False)
+    combined_price = Column(Numeric, nullable=False)
+    unrealized_pnl = Column(Numeric, nullable=False)
+    recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

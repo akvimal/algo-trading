@@ -60,25 +60,45 @@ def compute_sma(values: list[Optional[float]], period: int) -> list[Optional[flo
     return result
 
 
-def compute_indicator(indicator_type: str, params: dict, closes: list[float]) -> list[Optional[float]]:
+def compute_indicator(indicator_type: str, params: dict, candles: "list[CandleClose]") -> list[Optional[float]]:
     """The indicator's own primary value series - dispatches to the right
     compute_* function for an Indicator's `type`. The one place that
     needs a new branch when a second indicator type is added
-    (app/domain/models.py's IndicatorParams union is the other)."""
+    (app/domain/models.py's IndicatorParams union is the other).
+
+    Takes full candles (not just closes) - added for "supertrend" (see
+    below), which needs high/low too. Signature widened from a bare
+    `closes: list[float]` accordingly; rsi still only reads .close off
+    each one."""
     if indicator_type == "rsi":
+        closes = [c.close for c in candles]
         return compute_rsi(closes, params["period"])
+    if indicator_type == "supertrend":
+        # The crossover VALUE series is just price itself - "value crosses
+        # signal" against compute_indicator_signal's ST line below is
+        # exactly the standard "SuperTrend flip" entry signal (close
+        # crossing from one side of the line to the other).
+        return [c.close for c in candles]
     raise ValueError(f"no compute rule for indicator type {indicator_type!r}")
 
 
-def compute_indicator_signal(indicator_type: str, params: dict, closes: list[float]) -> list[Optional[float]]:
+def compute_indicator_signal(indicator_type: str, params: dict, candles: "list[CandleClose]") -> list[Optional[float]]:
     """The indicator's own signal line, if it has one - for RSI, the SMA
     of its own value series (`sma_period`), matching how TradingView's
     RSI script bundles its "MA Length" setting into the RSI indicator
-    itself rather than a separate rule parameter. rules.evaluate_crossover
-    compares this against compute_indicator()'s output directly - neither
-    function needs to know indicator_type is "rsi" specifically."""
+    itself rather than a separate rule parameter. For SuperTrend, the ST
+    line itself (app/domain/regime.py's compute_supertrend - lazily
+    imported, same reasoning as evaluate_regime_indicator's own import
+    below, to avoid a circular import with rules.py). rules.
+    evaluate_crossover compares this against compute_indicator()'s output
+    directly - neither function needs to know indicator_type specifically."""
     if indicator_type == "rsi":
+        closes = [c.close for c in candles]
         return compute_sma(compute_rsi(closes, params["period"]), params["sma_period"])
+    if indicator_type == "supertrend":
+        from app.domain.regime import compute_supertrend
+
+        return compute_supertrend(candles, params["period"], params["multiplier"])
     raise ValueError(f"no signal rule for indicator type {indicator_type!r}")
 
 
@@ -88,6 +108,8 @@ def indicator_warmup(indicator_type: str, params: dict) -> int:
     rules.bars_needed to size a history request/backtest warm-up prefix."""
     if indicator_type == "rsi":
         return params["period"] + params["sma_period"]
+    if indicator_type == "supertrend":
+        return params["period"] + 1  # single ATR smoothing pass, same settle as compute_atr/regime_indicator_warmup's own supertrend case
     raise ValueError(f"no warmup rule for indicator type {indicator_type!r}")
 
 

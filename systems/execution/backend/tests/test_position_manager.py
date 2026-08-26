@@ -9,6 +9,7 @@ from app.domain.position_manager import (
     _apply_realized_pnl,
     _evaluate_exits,
     _evaluate_square_off_due,
+    _net_pnl_with_fees,
     _resolve_capital_account,
     _resolve_signal_conflicts,
     _resolve_stop_loss,
@@ -50,6 +51,10 @@ class FakePosition:
     exit_reason: Optional[str] = None
     square_off_time: Optional[time] = None
     strategy_id: Optional[str] = None
+    open_fee: Optional[float] = None
+    close_fee: Optional[float] = None
+    margin_posted: Optional[float] = None
+    liquidation_price: Optional[float] = None
 
 
 @dataclass
@@ -397,6 +402,175 @@ def test_evaluate_exits_leaves_position_open_when_neither_hit():
     assert result["closed_stop_loss"] == 0
     assert result["closed_target"] == 0
     assert positions[0].status == "OPEN"
+
+
+# --- Delta Exchange fee/liquidation simulation (CRYPTO futures only, added 2026-08-21) ------------
+
+
+def test_net_pnl_with_fees_returns_raw_pnl_unchanged_when_open_fee_is_none():
+    # Every non-CRYPTO-future position (open_fee never set) - zero behavior
+    # change from before this feature existed.
+    pos = FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY", entry_price=100.0, quantity=10)
+    assert _net_pnl_with_fees(pos, 105.0, raw_pnl=50.0) == 50.0
+    assert pos.close_fee is None
+
+
+def test_net_pnl_with_fees_nets_open_and_close_fee():
+    from app.domain.delta_fees import compute_futures_trading_fee
+
+    pos = FakePosition(
+        id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY",
+        entry_price=70_000.0, quantity=0.1, open_fee=4.13,
+    )
+    expected_close_fee = compute_futures_trading_fee(72_000.0 * 0.1)
+    net = _net_pnl_with_fees(pos, exit_price=72_000.0, raw_pnl=200.0)
+
+    assert pos.close_fee == pytest.approx(expected_close_fee)
+    assert net == pytest.approx(200.0 - 4.13 - expected_close_fee)
+
+
+def test_evaluate_exits_liquidation_wipes_full_margin_and_fee():
+    # BTCUSD long, margin_posted=$1,000 (entry $72,000 * qty 0.1389 / margin
+    # derives leverage back out to ~10x internally) - CMP has crossed the
+    # stored liquidation_price.
+    positions = [
+        FakePosition(
+            id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY", segment="CRYPTO",
+            entry_price=72_000.0, quantity=0.138888889, open_fee=5.90, margin_posted=1_000.0,
+            liquidation_price=65_160.0, stop_loss_price=68_000.0,
+        ),
+    ]
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"BTCUSD": 65_000.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="CRYPTO"),
+    )
+
+    assert result["closed_stop_loss"] == 1  # liquidation counts as a stop_loss-family close in the summary
+    assert positions[0].status == "CLOSED"
+    assert positions[0].exit_reason == "liquidation"
+    assert positions[0].exit_price == 65_000.0
+    # pnl = -(margin_posted) - liquidation_fee, NOT the raw price-distance loss
+    assert positions[0].pnl < -1_000.0
+    assert positions[0].close_fee is not None and positions[0].close_fee > 0
+
+
+def test_evaluate_exits_liquidation_takes_priority_over_stop_loss():
+    # stop_loss_price (68,000) would also trip at this CMP - liquidation
+    # must win the exit_reason, matching a real exchange force-closing
+    # regardless of the strategy's own configured stop.
+    positions = [
+        FakePosition(
+            id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY", segment="CRYPTO",
+            entry_price=72_000.0, quantity=0.138888889, open_fee=5.90, margin_posted=1_000.0,
+            liquidation_price=65_160.0, stop_loss_price=68_000.0,
+        ),
+    ]
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"BTCUSD": 64_000.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="CRYPTO"),
+    )
+
+    assert positions[0].exit_reason == "liquidation"
+    assert result["closed_stop_loss"] == 1
+
+
+def test_evaluate_exits_no_liquidation_when_price_above_threshold():
+    positions = [
+        FakePosition(
+            id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY", segment="CRYPTO",
+            entry_price=72_000.0, quantity=0.138888889, open_fee=5.90, margin_posted=1_000.0,
+            liquidation_price=65_160.0,
+        ),
+    ]
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"BTCUSD": 70_000.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="CRYPTO"),
+    )
+
+    assert result["closed_stop_loss"] == 0
+    assert positions[0].status == "OPEN"
+
+
+def test_evaluate_exits_nets_fees_on_stop_loss_close():
+    positions = [
+        FakePosition(
+            id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY", segment="CRYPTO",
+            entry_price=72_000.0, quantity=0.1, stop_loss_price=70_000.0, open_fee=4.25,
+        ),
+    ]
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"BTCUSD": 69_000.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="CRYPTO"),
+    )
+
+    assert result["closed_stop_loss"] == 1
+    raw_pnl = compute_pnl("BUY", 72_000.0, 69_000.0, 0.1)
+    assert positions[0].close_fee is not None
+    assert positions[0].pnl == pytest.approx(raw_pnl - 4.25 - positions[0].close_fee)
+
+
+# --- CRYPTO USD -> INR conversion on balance credit (added 2026-08-21) ----------------------------
+#
+# current_balance is always INR-denominated (every segment) but a CRYPTO
+# position's own pnl/fees are raw USD (entry_price/exit_price never get
+# converted - see docs/architecture.md's USDINR section) - _apply_realized_
+# pnl must convert through usdinr_rate for the BALANCE credit while leaving
+# the stored pos.pnl itself in native USD (so it stays a meaningful ratio
+# against entry_price for %-of-entry displays).
+
+
+def test_apply_realized_pnl_converts_usd_to_inr_for_crypto():
+    pos = FakePosition(id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY", segment="CRYPTO", entry_price=70_000.0, quantity=0.1)
+    account = FakeAccount(segment="CRYPTO", starting_balance=200_000.0, current_balance=200_000.0)
+
+    _apply_realized_pnl(pos, account, pnl=100.0, usdinr_rate=90.0)
+
+    assert pos.pnl == 100.0  # stored pnl stays raw USD, unconverted
+    assert account.current_balance == pytest.approx(200_000.0 + 100.0 * 90.0)  # balance credit IS converted
+
+
+def test_apply_realized_pnl_leaves_non_crypto_pnl_unconverted():
+    pos = FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY", segment="NSE", entry_price=100.0, quantity=10)
+    account = FakeAccount(segment="NSE", starting_balance=1_000_000.0, current_balance=1_000_000.0)
+
+    _apply_realized_pnl(pos, account, pnl=50.0, usdinr_rate=90.0)  # a stray usdinr_rate must be ignored for NSE
+
+    assert pos.pnl == 50.0
+    assert account.current_balance == 1_000_000.0 + 50.0
+
+
+def test_apply_realized_pnl_crypto_without_rate_falls_back_to_unconverted():
+    # Defensive fallback only - every real CRYPTO open path already
+    # refuses to open at all without a configured rate, so this shouldn't
+    # be reachable in practice.
+    pos = FakePosition(id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY", segment="CRYPTO", entry_price=70_000.0, quantity=0.1)
+    account = FakeAccount(segment="CRYPTO", starting_balance=200_000.0, current_balance=200_000.0)
+
+    _apply_realized_pnl(pos, account, pnl=100.0, usdinr_rate=None)
+
+    assert account.current_balance == 200_100.0
+
+
+def test_evaluate_exits_liquidation_credits_inr_converted_loss():
+    positions = [
+        FakePosition(
+            id="p1", status="OPEN", exchange="CRYPTO", symbol="BTCUSD", action="BUY", segment="CRYPTO",
+            entry_price=72_000.0, quantity=0.138888889, open_fee=5.90, margin_posted=1_000.0,
+            liquidation_price=65_160.0,
+        ),
+    ]
+    accounts = _accounts(balance=200_000.0, segment="CRYPTO")
+    result = _evaluate_exits(
+        positions, get_ltp_batch=lambda ex, syms: {"BTCUSD": 65_000.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=accounts, usdinr_rate=90.0,
+    )
+
+    assert result["closed_stop_loss"] == 1
+    assert positions[0].exit_reason == "liquidation"
+    # pos.pnl (USD) stays unconverted; the account (INR) is credited at 90x it.
+    usd_loss = positions[0].pnl
+    assert usd_loss < 0
+    assert accounts["CRYPTO"].current_balance == pytest.approx(200_000.0 + usd_loss * 90.0)
 
 
 def test_evaluate_exits_skips_position_when_quote_missing():

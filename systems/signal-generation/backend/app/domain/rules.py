@@ -15,6 +15,7 @@ later means adding a new evaluate_* function and a new RuleConfig variant
 indicator type means a change in indicators.py only, not here."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Literal, Optional
 
 from app.domain.indicators import compute_indicator, compute_indicator_signal, indicator_warmup
@@ -111,6 +112,47 @@ def evaluate_crossover_at(
     return "bullish" if curr_above else "bearish"
 
 
+def find_crossovers_since(
+    rule: RuleConfig, indicator_type: str, indicator_params: dict, candles: list[CandleClose], since_ts: Optional[datetime]
+) -> list[tuple[int, Bias]]:
+    """Every crossover on a bar strictly after `since_ts` (None = only ever
+    check the single latest bar, same as evaluate()'s own scope - so
+    activating a strategy for the first time never replays its whole
+    fetched history as a burst of backdated signals), in chronological
+    order as (candle index, bias) pairs.
+
+    Exists because a live engine tick's own 60s poll cadence isn't
+    guaranteed to align with the candle cadence - if 2+ candles complete
+    between one tick and the next (processing lag, or plain phase drift
+    between the poll timer and the exchange's minute boundaries), comparing
+    only the newest bar-pair (evaluate()'s own behavior, still what
+    build_crossover_bias_fn's backtest callers use - a sliding window that
+    never skips a bar) can silently miss a crossover-then-reversal that
+    happened entirely within the skipped bars - reproduced live 2026-08-21
+    (RSI crossed back within the very next 1min bar after a signal, and
+    that reversal was never posted). engine.py's _run_one is the only
+    caller - it acts on EVERY crossover this returns, not just the last."""
+    if not isinstance(rule, CrossoverRuleConfig):
+        raise ValueError(f"no crossover scan for rule type {type(rule).__name__}")  # pragma: no cover
+    if not candles:
+        return []
+
+    value_series = compute_indicator(indicator_type, indicator_params, candles)
+    signal_series = compute_indicator_signal(indicator_type, indicator_params, candles)
+
+    if since_ts is None:
+        start = len(candles) - 1
+    else:
+        start = next((i for i, c in enumerate(candles) if datetime.fromisoformat(c.timestamp) > since_ts), len(candles))
+
+    found: list[tuple[int, Bias]] = []
+    for i in range(max(start, 1), len(candles)):
+        bias = evaluate_crossover_at(value_series, signal_series, i)
+        if bias is not None:
+            found.append((i, bias))
+    return found
+
+
 def bars_needed(rule: RuleConfig, indicator_type: str, indicator_params: dict) -> int:
     """How many candles a (rule, indicator) pair needs before it can
     produce its first evaluation - used to size a history request
@@ -126,9 +168,8 @@ def evaluate(rule: RuleConfig, indicator_type: str, indicator_params: dict, cand
     first - the one place that needs a new branch when a second rule type
     ships."""
     if isinstance(rule, CrossoverRuleConfig):
-        closes = [c.close for c in candles]
-        value_series = compute_indicator(indicator_type, indicator_params, closes)
-        signal_series = compute_indicator_signal(indicator_type, indicator_params, closes)
+        value_series = compute_indicator(indicator_type, indicator_params, candles)
+        signal_series = compute_indicator_signal(indicator_type, indicator_params, candles)
         return evaluate_crossover(value_series, signal_series)
     raise ValueError(f"no evaluator for rule type {type(rule).__name__}")  # pragma: no cover
 
@@ -143,20 +184,20 @@ def build_crossover_bias_fn(
     parameter) that does an O(1) lookup per bar via evaluate_crossover_at
     instead of evaluate()'s own recompute-the-whole-series-from-scratch
     behavior. Safe because every indicator this can dispatch to
-    (compute_rsi, compute_sma) is causal - index i's value only ever
-    depends on closes[0..i], never future data - so precomputing over the
-    FULL series and later reading index i produces exactly what
-    evaluate() would compute fresh from just candles[:i+1], not an
-    approximation. evaluate() itself is untouched and still what the live
-    engine tick (engine.py) uses, which only ever evaluates one fixed
-    window once per tick - its own per-call recompute cost was never
-    accumulated in a loop there, so it was never worth this complexity."""
+    (compute_rsi, compute_sma, compute_supertrend) is causal - index i's
+    value only ever depends on candles[0..i], never future data - so
+    precomputing over the FULL series and later reading index i produces
+    exactly what evaluate() would compute fresh from just candles[:i+1],
+    not an approximation. evaluate() itself is untouched and still what
+    the live engine tick (engine.py) uses, which only ever evaluates one
+    fixed window once per tick - its own per-call recompute cost was
+    never accumulated in a loop there, so it was never worth this
+    complexity."""
     if not isinstance(rule, CrossoverRuleConfig):
         raise ValueError(f"no crossover bias_fn for rule type {type(rule).__name__}")  # pragma: no cover
 
-    closes = [c.close for c in candles]
-    value_series = compute_indicator(indicator_type, indicator_params, closes)
-    signal_series = compute_indicator_signal(indicator_type, indicator_params, closes)
+    value_series = compute_indicator(indicator_type, indicator_params, candles)
+    signal_series = compute_indicator_signal(indicator_type, indicator_params, candles)
 
     def bias_fn(window: list[CandleClose]) -> Optional[Bias]:
         return evaluate_crossover_at(value_series, signal_series, len(window) - 1)

@@ -2,7 +2,7 @@
 side) plus execution's own domain types. If the contract changes, change
 this too."""
 
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -151,6 +151,10 @@ class AccountOut(BaseModel):
     current_balance: float
     capital_per_trade: float
     risk_per_trade_pct: float
+    # Manual tab only - see Account.min_reward_risk_ratio's own comment.
+    min_reward_risk_ratio: float
+    # Manual tab only - see Account.enforce_risk_based_lots's own comment.
+    enforce_risk_based_lots: bool
     # CRYPTO only - a margin multiplier applied to effective_capital before
     # sizing (Delta Exchange India trades perpetual futures on margin).
     # Defaults to 1 (no leverage) - harmlessly present but unused for
@@ -172,6 +176,8 @@ class AccountUpdate(BaseModel):
 
     capital_per_trade: Optional[float] = Field(default=None, gt=0)
     risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
+    min_reward_risk_ratio: Optional[float] = Field(default=None, gt=0)
+    enforce_risk_based_lots: Optional[bool] = None
     leverage: Optional[float] = Field(default=None, gt=0)
     # Explicitly settable back to null (never force-close) - unlike most
     # other fields here, None is a real, meaningful value for this one, not
@@ -216,6 +222,134 @@ class StrategyAccountUpdate(BaseModel):
     risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
 
 
+class ChecklistItemOut(BaseModel):
+    """One row of execution.checklist_items - see infra/postgres/init/
+    02-execution.sql's own comment on that table."""
+
+    id: str
+    label: str
+    phase: Literal["plan", "review", "day"]
+    # Empty = every segment - see that column's own comment.
+    segments: list[Literal["NSE", "MCX", "CRYPTO"]]
+    sort_order: int
+    active: bool
+
+
+class ChecklistItemCreate(BaseModel):
+    """POST /checklist-items - sort_order defaults to sort after every
+    existing item IN THE SAME PHASE (computed in the route, not here) when
+    omitted."""
+
+    label: str = Field(min_length=1)
+    phase: Literal["plan", "review", "day"] = "plan"
+    segments: list[Literal["NSE", "MCX", "CRYPTO"]] = []
+    sort_order: Optional[int] = None
+
+
+class ChecklistItemUpdate(BaseModel):
+    """PUT /checklist-items/{id} - all fields optional, only what's
+    provided changes. `active=false` hides an item from future trades'
+    checklists without deleting it (past trades' plan_checklist/
+    review_checklist snapshots are unaffected either way - see those
+    columns' own comments). `segments`, if provided at all (even `[]`,
+    meaning "clear back to every segment"), replaces the existing list
+    wholesale - there's no meaningful "unset" state distinct from `[]` to
+    preserve, unlike e.g. Strategy.fixed_lots."""
+
+    label: Optional[str] = Field(default=None, min_length=1)
+    phase: Optional[Literal["plan", "review", "day"]] = None
+    segments: Optional[list[Literal["NSE", "MCX", "CRYPTO"]]] = None
+    sort_order: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class ChecklistAnswer(BaseModel):
+    """One item of ManualPositionCreate/ManualOptionPositionCreate's own
+    plan_checklist, ReviewSubmit's own checklist, or DailyChecklistSubmit's
+    own answers - a full {label, checked} SNAPSHOT of one
+    execution.checklist_items row at order/review/day-submission time, not
+    a reference by id - see those fields' own comments for why. `label` is
+    trusted as sent by the frontend (which always renders from a fresh
+    GET /checklist-items first) - validate_plan_checklist
+    (position_manager.py) only checks the COUNT against currently-active
+    'plan'-phase items and that every `checked` is true, not that labels
+    match verbatim; ReviewSubmit.checklist ('review'-phase) and
+    DailyChecklistSubmit.answers ('day'-phase) aren't count/all-checked
+    validated at all - see those fields' own comments."""
+
+    label: str
+    checked: bool
+
+
+class DailyChecklistSubmit(BaseModel):
+    """PUT /daily-checklist - upserts today's (server-computed date,
+    `segment`) row. `answers` (plain {label, checked} - same shape as
+    ChecklistAnswer, no per-item notes) isn't count/all-checked validated
+    against the currently-active 'day'-phase items scoped to `segment`
+    (same "record honestly" reasoning as ReviewSubmit.checklist) -
+    submitting at all is what clears position_manager.
+    find_missing_daily_checklist's gate for this segment for the rest of
+    today. `notes`: ONE free-text observation for the whole submission,
+    not per item - see execution.daily_checklist_log's own comment."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    answers: list[ChecklistAnswer] = []
+    notes: Optional[str] = None
+
+
+class DailyChecklistOut(BaseModel):
+    """GET /daily-checklist response - `answers`/`submitted_at` are None
+    when nothing has been submitted yet today for this segment (the gate
+    is still active in that case)."""
+
+    log_date: date
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    answers: Optional[list[ChecklistAnswer]] = None
+    notes: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+
+
+class TradingSessionOut(BaseModel):
+    """Response shape for POST /trading-sessions/check-in, /check-out,
+    and GET /trading-sessions - one row per session INSTANCE (a
+    (log_date, segment) can have several - see execution.trading_sessions'
+    own comment). `checked_out_at` None means this session is still
+    open."""
+
+    id: str
+    log_date: date
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    checked_in_at: datetime
+    checked_out_at: Optional[datetime] = None
+
+
+class ReviewSubmit(BaseModel):
+    """PUT /positions/{id}/review and PUT /option-groups/{id}/review - the
+    Complete step of the discipline checklist, submitted once a manual
+    trade closes. `violation`: did this trade deviate from its own plan
+    checklist - required `notes` when true. `accepted_loss`: the "I accept
+    this loss" acknowledgement - the route computes the trade's actual
+    outcome from its own pnl (never trusts a client-supplied label) and
+    rejects with a 422 if pnl < 0 and this isn't set. `checklist`: the
+    'review'-phase items (self-assessed execution fidelity - e.g. "stayed
+    per plan, not adjusted mid-trade") as a {label, checked} snapshot,
+    same shape as plan_checklist - deliberately NOT required to be fully
+    checked or even present (unlike plan_checklist): an unchecked item
+    here IS the useful signal ("I didn't actually do this"), not something
+    to gate on."""
+
+    violation: bool
+    notes: Optional[str] = None
+    accepted_loss: bool = False
+    checklist: list[ChecklistAnswer] = []
+
+    @model_validator(mode="after")
+    def _check_notes_on_violation(self) -> "ReviewSubmit":
+        if self.violation and not (self.notes and self.notes.strip()):
+            raise ValueError("notes are required when violation=true")
+        return self
+
+
 class ManualPositionCreate(BaseModel):
     """POST /positions/manual - the Manual tab (signal-generation's
     frontend), spot/future only. Deliberately not a ResolvedOrder - see
@@ -236,6 +370,13 @@ class ManualPositionCreate(BaseModel):
     action: Literal["BUY", "SELL"]
     instrument_type: Literal["spot", "future"]
     price: float = Field(gt=0)
+    # Which of ManualTab.tsx's two entry modes placed this trade - stored
+    # as-is for future performance review (see execution.positions.order_type's
+    # own comment), never used to change how `price` itself is treated here:
+    # by the time this reaches the route, ManualTab.tsx has already
+    # resolved a concrete price either way (a fresh live LTP for 'market',
+    # the caller-typed trigger for 'limit').
+    order_type: Literal["market", "limit"] = "market"
     # Bypasses auto-sizing entirely when given - same precedence pattern
     # as Strategy.fixed_lots in open_position. Number of LOTS,
     # not raw underlying units - a no-op distinction for spot (lot_size is
@@ -249,6 +390,13 @@ class ManualPositionCreate(BaseModel):
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
     trailing_stop_enabled: bool = False
+    # Trade discipline checklist (see ChecklistAnswer above) - the row's
+    # own snapshot of every currently-active execution.checklist_items row
+    # and whether it was checked. validate_plan_checklist (position_
+    # manager.py) rejects with a 422 unless every one is checked and the
+    # count matches what's currently active - enforced at the route layer,
+    # not here, since it needs a DB query.
+    plan_checklist: list[ChecklistAnswer] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _check_stop_loss_config(self) -> "ManualPositionCreate":
@@ -261,6 +409,20 @@ class ManualPositionCreate(BaseModel):
             self.stop_loss_indicator_params,
             self.trailing_stop_enabled,
         )
+        return self
+
+    @model_validator(mode="after")
+    def _check_segment_instrument_type(self) -> "ManualPositionCreate":
+        # CRYPTO (Delta Exchange India) and MCX have no cash/spot market on
+        # this platform's providers - see position_manager.open_position's
+        # identical CRYPTO-sizing comment. 'spot' here used to size at
+        # lot_size=1 (one full raw-price underlying unit), permanently
+        # unaffordable for CRYPTO's fractional-lot perpetuals. Mirrors
+        # signal-generation's validate_segment_instrument_type for
+        # Strategy-driven orders - this is the Manual tab's equivalent
+        # entry point, which bypasses signal-generation entirely.
+        if self.segment in ("CRYPTO", "MCX") and self.instrument_type == "spot":
+            raise ValueError(f"segment='{self.segment}' has no spot market - use instrument_type='future' (or place an option order instead)")
         return self
 
 
@@ -291,6 +453,16 @@ class ManualOptionPositionCreate(BaseModel):
     # Bypasses auto-sizing entirely when given - same precedence pattern
     # as Strategy.fixed_lots in open_option_group.
     option_fixed_lots: Optional[float] = Field(default=None, gt=0)
+    # Trade discipline checklist - see ManualPositionCreate.plan_checklist's
+    # own comment, identical meaning here.
+    plan_checklist: list[ChecklistAnswer] = Field(min_length=1)
+    # Which of ManualTab.tsx's two entry modes placed this trade - see
+    # ManualPositionCreate.order_type's own comment. Means the same thing
+    # here despite there being no caller-supplied `price` field above:
+    # the Limit field is always a SPOT trigger (wait until the underlying
+    # crosses it, then resolve legs at whatever premium is live then),
+    # never the option's own premium.
+    order_type: Literal["market", "limit"] = "market"
 
 
 class StopLossUpdate(BaseModel):

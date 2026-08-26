@@ -9,7 +9,8 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.domain.models import OptionChain, OptionLegCandle
+from app.domain.models import OptionChain, OptionLegCandle, OptionOiSummary
+from app.domain.oi_summary import build_oi_summary
 from app.providers.router import get_provider
 
 router = APIRouter()
@@ -53,6 +54,44 @@ def get_chain(exchange: str, symbol: str, expiry: str):
     if chain is None:
         raise HTTPException(status_code=404, detail=f"unknown symbol '{symbol}' on exchange '{exchange}'")
     return chain
+
+
+@router.get("/options/oi-summary", response_model=OptionOiSummary)
+def get_oi_summary(exchange: str, symbol: str, expiry: str):
+    """PCR + chain-wide OI-change totals (5m/15m) + per-strike OI/IV
+    breakdown for one (exchange, symbol, expiry) - signal-generation's OI
+    Summary page, not used in the resolve/order-placement path. Reuses
+    the same DhanProvider.get_option_chain fetch/cache/throttle as
+    GET /options/chain above, then layers get_oi_changes's in-memory
+    history on top - see build_oi_summary for the aggregation itself."""
+    try:
+        provider = get_provider(exchange)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    resolver = getattr(provider, "get_option_chain", None)
+    changer = getattr(provider, "get_oi_changes", None)
+    price_changer = getattr(provider, "get_price_changes", None)
+    if resolver is None or changer is None:
+        raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
+
+    try:
+        chain = resolver(symbol, expiry)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if chain is None:
+        raise HTTPException(status_code=404, detail=f"unknown symbol '{symbol}' on exchange '{exchange}'")
+
+    def oi_changes(strike: float, option_type: str, current_oi: int):
+        return changer(symbol, expiry, strike, option_type, current_oi)
+
+    price_changes = None
+    if price_changer is not None:
+
+        def price_changes(strike: float, option_type: str, current_price: float):
+            return price_changer(symbol, expiry, strike, option_type, current_price)
+
+    return build_oi_summary(chain, oi_changes, price_changes)
 
 
 @router.get("/options/leg-history", response_model=list[OptionLegCandle])

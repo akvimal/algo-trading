@@ -16,9 +16,10 @@ from app.domain.models import (
     validate_active_weekdays,
     validate_active_windows,
     validate_contract_day_filter_fields,
+    validate_segment_instrument_type,
     validate_stop_loss_fields,
 )
-from app.domain.rule import BreakoutRuleConfig, RuleSummary, validate_rule_config
+from app.domain.rule import BreakoutRuleConfig, CrossoverRuleConfig, RuleSummary, validate_rule_config
 
 router = APIRouter()
 
@@ -80,6 +81,7 @@ def _load_rule_or_404(db: Session, rule_id: str) -> db_models.Rule:
 
 
 def _stop_loss_fields_for_rule(
+    db: Session,
     rule_row: Optional[db_models.Rule],
     stop_loss_method: Optional[str],
     stop_loss_interval: Optional[str],
@@ -98,10 +100,30 @@ def _stop_loss_fields_for_rule(
     must read the LTF series too, not HTF. Validates (422 if not) that
     ltf_interval is one of execution's supported stop-loss intervals -
     otherwise this strategy could never actually be supported live, even
-    with the reversal-exit gap accepted. Every other rule type passes the
-    requested fields through unchanged - only breakout forces this.
+    with the reversal-exit gap accepted. This forces the SL scheme
+    unconditionally, even over an explicitly-requested one - see
+    update_strategy's own comment on why breakout is special that way.
+
+    A strategy linked to a SuperTrend-backed crossover rule instead gets a
+    soft default (added 2026-08-21, see docs/architecture.md): if the
+    caller left stop_loss_method unset entirely, default to trailing off
+    the SAME SuperTrend line the crossover itself watches (period/
+    multiplier copied from the rule's own referenced Indicator row) -
+    "enter on the ST flip, protect with the ST line" is the standard way
+    this indicator is used, so a strategy shouldn't have to spell out
+    method='indicator'/indicator_type='supertrend'/trailing_stop_enabled=
+    True by hand every time. Unlike breakout above, this NEVER overrides
+    an explicitly-requested stop_loss_method - a caller that wants percent/
+    previous_candle/a different indicator on a SuperTrend-crossover
+    strategy still gets exactly that. Skipped (falls through to the
+    explicit fields unchanged, i.e. no stop-loss at all) if the rule's own
+    interval is 'daily' - not one of execution's supported stop-loss
+    intervals, so silently defaulting into an unusable strategy would be
+    worse than requiring the caller to pick something else explicitly.
+
     `rule_row` is None for an external strategy (no Rule at all) - passes
-    fields through unchanged, same as any other non-breakout rule."""
+    fields through unchanged, same as any other non-breakout,
+    non-SuperTrend-crossover rule."""
     if rule_row is not None and rule_row.rule_config is not None:
         rule = validate_rule_config(rule_row.rule_config)
         if isinstance(rule, BreakoutRuleConfig):
@@ -114,6 +136,14 @@ def _stop_loss_fields_for_rule(
                     ),
                 )
             return "previous_candle", rule.ltf_interval, None, False, None, None
+        if (
+            isinstance(rule, CrossoverRuleConfig)
+            and stop_loss_method is None
+            and rule_row.interval in get_args(StopLossInterval)
+        ):
+            indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
+            if indicator is not None and indicator.type == "supertrend":
+                return "indicator", rule_row.interval, None, True, "supertrend", dict(indicator.params)
     return stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled, stop_loss_indicator_type, stop_loss_indicator_params
 
 
@@ -125,6 +155,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
 
     stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled, stop_loss_indicator_type, stop_loss_indicator_params = (
         _stop_loss_fields_for_rule(
+            db,
             rule_row,
             payload.stop_loss_method,
             payload.stop_loss_interval,
@@ -314,6 +345,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
             row.stop_loss_indicator_params,
         )
         validate_contract_day_filter_fields(row.contract_day_filter, row.instrument_type)
+        validate_segment_instrument_type(row.segment, row.instrument_type)
         validate_active_windows(row.active_windows)
         validate_active_weekdays(row.active_weekdays)
     except ValueError as exc:
@@ -333,6 +365,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.stop_loss_indicator_type,
         row.stop_loss_indicator_params,
     ) = _stop_loss_fields_for_rule(
+        db,
         rule_row,
         row.stop_loss_method,
         row.stop_loss_interval,

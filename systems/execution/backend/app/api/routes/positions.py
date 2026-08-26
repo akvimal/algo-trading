@@ -7,16 +7,19 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
-from app.domain.models import ManualPositionCreate, StopLossUpdate
+from app.domain.models import ManualPositionCreate, ReviewSubmit, StopLossUpdate
 from app.domain.position_manager import (
     check_exits,
     compute_unrealized_pnl,
+    find_missing_daily_checklist,
     load_settings,
     open_manual_position,
     square_off_all_open,
     square_off_due_positions,
     square_off_position,
+    submit_position_review,
     update_stop_loss,
+    validate_plan_checklist,
 )
 
 router = APIRouter()
@@ -55,6 +58,23 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         "exit_reason": row.exit_reason,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "option_group_id": str(row.option_group_id) if row.option_group_id is not None else None,
+        # Delta Exchange fee/liquidation simulation (app/domain/delta_fees.py)
+        # - CRYPTO + instrument_type='future' only, null for every other
+        # position.
+        "open_fee": float(row.open_fee) if row.open_fee is not None else None,
+        "close_fee": float(row.close_fee) if row.close_fee is not None else None,
+        "margin_posted": float(row.margin_posted) if row.margin_posted is not None else None,
+        "liquidation_price": float(row.liquidation_price) if row.liquidation_price is not None else None,
+        # Trade discipline checklist (Manual tab only) - null for every
+        # Strategy-driven position, see infra/postgres/init/
+        # 02-execution.sql's own comment on these 4 columns.
+        "plan_checklist": row.plan_checklist,
+        "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at is not None else None,
+        "review_violation": row.review_violation,
+        "review_notes": row.review_notes,
+        "review_checklist": row.review_checklist,
+        # 'market' | 'limit' | null - see execution.positions.order_type's own comment.
+        "order_type": row.order_type,
     }
 
 
@@ -62,17 +82,28 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
 def list_positions(
     status: Optional[str] = Query(default=None),
     signal_id: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    segment: Optional[str] = Query(default=None),
+    manual_only: bool = Query(default=False),
     limit: int = 100,
     with_live_pnl: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     """signal_id: exact match, for cross-system deep links (?signal_id=...
-    from signal-processing's frontend to this position's outcome).
-    with_live_pnl: mark-to-market OPEN positions in this response against
-    a fresh quote (one batched call per distinct exchange) - off by default
-    since it means extra Dhan calls on every request; the frontend opts in
-    for its own polling, other callers (cross-links, other systems) don't
-    pay for it unless they ask."""
+    from signal-processing's frontend to this position's outcome). symbol/
+    segment: exact match - backs ManualTab.tsx's own per-row trade-history
+    backfill (a row has no persisted identity beyond symbol+segment+
+    instrument_type, so this is how it re-finds its own past trades after
+    a reload, rather than only ever seeing closes detected live during the
+    current session). manual_only: strategy_id IS NULL - same "no live
+    watch on the client, and we only care about the Strategy-free path"
+    reasoning that call site adds, since a Strategy-driven position could
+    otherwise share the same symbol/segment and pollute a manual row's own
+    history. with_live_pnl: mark-to-market OPEN positions in this response
+    against a fresh quote (one batched call per distinct exchange) - off
+    by default since it means extra Dhan calls on every request; the
+    frontend opts in for its own polling, other callers (cross-links,
+    other systems) don't pay for it unless they ask."""
     q = db.query(db_models.Position)
     if status:
         q = q.filter_by(status=status.upper())
@@ -81,6 +112,12 @@ def list_positions(
             q = q.filter_by(signal_id=uuid.UUID(signal_id))
         except ValueError:
             return []  # not a valid UUID - no match rather than a 500
+    if symbol:
+        q = q.filter_by(symbol=symbol)
+    if segment:
+        q = q.filter_by(segment=segment)
+    if manual_only:
+        q = q.filter(db_models.Position.strategy_id.is_(None))
     rows = q.order_by(db_models.Position.entry_time.desc()).limit(limit).all()
 
     mtm = compute_unrealized_pnl(rows, get_ltp_batch) if with_live_pnl else {}
@@ -88,6 +125,31 @@ def list_positions(
     return [
         _position_to_out(r, live_price=mtm[r.id][0] if r.id in mtm else None, unrealized_pnl=mtm[r.id][1] if r.id in mtm else None)
         for r in rows
+    ]
+
+
+@router.get("/positions/{position_id}/pnl-history")
+def get_position_pnl_history(position_id: str, db: Session = Depends(get_db)):
+    """Oldest-first unrealized-P&L time series recorded by the exit-monitor
+    tick (see position_manager.record_position_pnl_snapshots) - lets the
+    frontend chart how this position's P&L actually moved while OPEN, not
+    just its entry/exit endpoints. Empty list (not 404) once the position
+    closes and its snapshot rows are still there - only a genuinely
+    unknown position_id 404s."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+    if db.get(db_models.Position, parsed_id) is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    rows = (
+        db.query(db_models.PositionPnlSnapshot)
+        .filter_by(position_id=parsed_id)
+        .order_by(db_models.PositionPnlSnapshot.recorded_at)
+        .all()
+    )
+    return [
+        {"recorded_at": r.recorded_at.isoformat(), "cmp": float(r.cmp), "unrealized_pnl": float(r.unrealized_pnl)} for r in rows
     ]
 
 
@@ -99,8 +161,29 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
     an auto-provisioned Strategy - see docs/architecture.md. Always
     200/201 regardless of whether the result is OPEN or REJECTED, matching
     the existing pipeline's own convention - a rejection is a legitimate
-    persisted outcome, not an HTTP error."""
+    persisted outcome, not an HTTP error.
+
+    Two discipline-checklist gates run BEFORE any of that, and are real
+    HTTP errors (not a persisted REJECTED row) since they're not a trade
+    attempt at all: 409 if today's 'day'-phase checklist hasn't been
+    submitted yet for this segment (find_missing_daily_checklist), 422 if
+    the submitted plan_checklist doesn't fully cover the currently-active
+    'plan'-phase items scoped to this segment (validate_plan_checklist).
+    See docs/architecture.md § 'Trade discipline checklist'. A THIRD gate
+    - 409 while any manual position/group sat CLOSED but unreviewed -
+    used to block here too; removed 2026-08-26 at the user's explicit
+    request ("don't need to restrict to complete review") - GET
+    /manual-trades/pending-review (find_pending_manual_review) still
+    surfaces the same trade as a reminder banner in the frontend, it just
+    no longer blocks placing a new one."""
     settings = load_settings(db)
+    daily_error = find_missing_daily_checklist(db, settings, payload.segment)
+    if daily_error is not None:
+        raise HTTPException(status_code=409, detail=daily_error)
+    checklist_error = validate_plan_checklist(db, payload.plan_checklist, payload.segment)
+    if checklist_error is not None:
+        raise HTTPException(status_code=422, detail=checklist_error)
+
     row = open_manual_position(
         payload.segment,
         payload.symbol,
@@ -120,7 +203,35 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
         payload.stop_loss_indicator_type,
         payload.stop_loss_indicator_params,
         payload.trailing_stop_enabled,
+        [a.model_dump() for a in payload.plan_checklist],
+        payload.order_type,
     )
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/review")
+def review_position(position_id: str, payload: ReviewSubmit, db: Session = Depends(get_db)):
+    """The Complete step of the discipline checklist - submitted once a
+    manually-opened position closes. 404 if missing, 409 if it's not a
+    CLOSED manual position or is already reviewed, 422 if it closed at a
+    loss and `accepted_loss` wasn't set. Clears this trade from GET
+    /manual-trades/pending-review (find_pending_manual_review), which the
+    frontend's own reminder banner reads - no longer a hard gate on new
+    orders (see POST /positions/manual's own docstring)."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row, reject_reason = submit_position_review(
+        db, parsed_id, payload.violation, payload.notes, payload.accepted_loss, [a.model_dump() for a in payload.checklist]
+    )
+    if reject_reason == "position not found":
+        raise HTTPException(status_code=404, detail=reject_reason)
+    if reject_reason == "must accept the loss before submitting this review":
+        raise HTTPException(status_code=422, detail=reject_reason)
+    if reject_reason is not None:
+        raise HTTPException(status_code=409, detail=reject_reason)
     return _position_to_out(row)
 
 

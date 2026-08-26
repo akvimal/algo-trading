@@ -117,6 +117,23 @@ Strategy carries no quantity/capital field on principle (see the section header 
 
 Delta Exchange India trades perpetual futures on margin — its own order screen shows a "Leverage" selector (1x by default) alongside "Funds req." (margin) vs. "Available Margin," where `funds_req = notional / leverage`. This platform previously had no leverage concept at all: sizing always assumed 1x (full notional backed by capital). `execution.accounts.leverage` (`NUMERIC NOT NULL DEFAULT 1`, `GET`/`PUT /accounts/{segment}`, editable on `execution`'s Accounts page — CRYPTO row only in the UI, though the column exists on every segment's row, same "shared table, segment-scoped meaning" convention as several Strategy `option_*` fields) is a margin multiplier applied to `effective_capital` *after* the USDINR conversion above, inside `open_position`'s existing `if order.segment == "CRYPTO":` branch — so the same INR capital affords proportionally more `quantity` at higher leverage, matching Delta's own margin model. Deliberately **does not touch `entry_price`/`stop_loss_price`/`target_price`, and `compute_pnl` needs no change at all** — PnL is `(exit_price - entry_price) * quantity` regardless of how much margin backed that quantity; leverage only changes how much capital was required to open it, not the price math. Scoped to `position_manager.open_position` only (spot/future CRYPTO orders) — `option_position_manager.open_option_group` is untouched, since options are paid for with full premium upfront, not margined the way perpetual futures are, and Delta's own option order screen has no leverage selector.
 
+### Delta Exchange fee/liquidation simulation (CRYPTO only, added 2026-08-21)
+
+Leverage above only ever affected **sizing** — no fee was ever deducted, and a leveraged position could never actually blow through its margin the way a real Delta account would. `execution/backend/app/domain/delta_fees.py` fixes both: a pure, DB-free module (config constants + formulas, one named rate per constant, no magic numbers, matching `position_manager.py`'s own `_STOP_LOSS_COMPUTE_FUNCS`/`_indicator_history_window` shape) implementing Delta's real trading-fee/liquidation-fee/liquidation-price rules from a rate spec the user provided (screenshots read 2026-08-21 — `DELTA_FEE_CONFIG_VERSION` marks that provenance; re-verify against Delta's live fee page periodically, several rates are promotional). `test_delta_fees.py` reproduces the spec's own worked regression case (BTC futures, $1,000 capital, 10x, entry $72,000 → liquidation ≈ $65,160, open fee $5.90, total_cost ≈ $1,011.80) exactly.
+
+**Scope, confirmed with the user before building:**
+- **Taker rate only, always** — every fill in this platform happens at a live LTP (`get_ltp_batch`), never a resting limit order, so there's no maker concept to wire up at all.
+- **Liquidation applies to CRYPTO futures only.** CRYPTO options (implemented since the crypto module's Phase 3/4) never carry liquidation risk in this platform *by construction*, regardless of what Delta's real rules say about option writers: `naked_call`/`naked_put` are long-only (`open_option_group` rejects a naked leg whose `action != "BUY"` — no margin/undefined-risk handling exists anywhere here), and a spread's short leg is always fully collateralized by its paired long leg. Options still get trading-fee simulation, just never a liquidation trigger.
+- **No margin-pool locking** — `capital_per_trade * leverage` sizing is untouched, concurrent positions still aren't constrained against each other's margin usage (same simplification that predates this feature). The only new cash outflows are real ones: trading fees (open + close, every CRYPTO position) and, on liquidation, the position's own posted margin.
+- **Liquidation wipes the full posted margin + a liquidation fee** (`compute_margin_posted` = `notional / leverage`, replacing the normal close fee entirely — never both), not the more lenient raw price-distance loss `compute_liquidation_price`'s own inputs would imply. This matches the spec's own worked-example numbers (Rule E `total_cost`), and is more conservative/realistic than treating the liquidation price as an exact exit fill.
+- **No real per-contract "max leverage" data exists anywhere** in this stack (`market-data`'s `DeltaProvider` only exposes `contract_value`/lot size) — the leverage-tiered liquidation-fee table (for any asset besides BTC/ETH/PAXG, which have a flat rate) approximates the contract's own max leverage off the *account's* configured `leverage` instead (the smallest documented tier ≥ that leverage), an explicit approximation in the same spirit as the spec's own caveat on Rule D.
+
+**Wiring, `position_manager.py` (CRYPTO + `instrument_type='future'` only):** `_open_delta_fee_fields` (called from both `open_position` and `open_manual_position`, right after `quantity` is finalized) computes `open_fee`/`margin_posted`/`liquidation_price` and debits `open_fee` from the account immediately — the first time this codebase ever touches balance at *open* time, not just close. `_evaluate_exits` gained a liquidation check, run **before** stop-loss/target/trailing on the CMP it already fetched (no extra provider call): a position whose `liquidation_price` has been crossed force-closes with `exit_reason='liquidation'`, pre-empting whatever stop-loss the strategy itself configured, same as a real exchange would. Every other close path (`_evaluate_exits`' stop/target branch, `square_off_all_open`, `square_off_position` — including its partial-close split, which prorates `open_fee`/`margin_posted` by the closed fraction — `_evaluate_square_off_due`, and the counter-signal close inside `open_position`/`open_manual_position`) nets `open_fee + close_fee` out of the raw `compute_pnl` result via the shared `_net_pnl_with_fees` helper, which is a no-op (`raw_pnl` unchanged) for every non-CRYPTO-future position — `open_fee is None` is the single gate the whole feature hangs off, so NSE/MCX and CRYPTO spot/option positions are byte-for-byte unaffected.
+
+**Wiring, `option_position_manager.py` (CRYPTO, fees only — no liquidation, see above):** `_open_delta_option_fee`/`_close_delta_option_fee` compute the combined fee **per leg** (each leg is its own trade with its own premium and fee cap, not one fee on the combined net debit), using the *underlying's* own notional (`entry_spot_price * quantity`, matching Delta's real options-fee methodology of a %-of-underlying-notional fee capped at %-of-premium — the cap would otherwise almost never bind, since the taker rate applied to premium alone stays far below 3.5%) with a graceful fallback to premium-based notional if the underlying spot quote is unavailable. Wired into `open_option_group`/`open_manual_option_group` at open time, and every group-close path (`_close_group_at_cmp` — shared by counter-signal closes, manual square-off, and bulk square-off-all — `_evaluate_option_group_square_off_due`, and `_evaluate_option_group_exits`' hit branch) at close time.
+
+New columns: `execution.positions.open_fee/close_fee/margin_posted/liquidation_price` and `execution.option_position_groups.open_fee/close_fee` (all `NULL` outside this feature's scope), plus `'liquidation'` added to `positions.exit_reason`'s `CHECK` constraint. Live-verified end to end against the running dev stack: a manual CRYPTO future open correctly computed and debited the fee, and a subsequent square-off correctly netted `open_fee + close_fee` into the credited realized P&L.
+
 ## The Manual tab: placing paper trades independent of any saved Strategy
 
 `signal-generation`'s frontend has a third tab, "Manual," alongside Strategies/Rules — a lightweight
@@ -200,6 +217,104 @@ stays full-close-only.
 set once, at open time, from a Strategy's configured method. Generically useful, not manual-only;
 sets `stop_loss_price`/`combined_stop_loss_price` only, never the immutable
 `initial_stop_loss_price` audit column.
+
+## Trade discipline checklist
+
+Added 2026-08-25, Manual tab only (intraday-focused — every manual order is already
+`horizon="intraday"`, see `open_manual_position`/`open_manual_option_group`) — a hand-built rulebook
+the user already followed in a spreadsheet (POI/order-block entries, fixed capital, 1% risk, minimum
+1:4 reward:risk, planned exits, a post-trade review) turned into three enforced checkpoints around
+every manual order, since a paper-trading sandbox with no friction around discipline defeats its own
+purpose as practice for real trading. Scoped entirely to `execution` + the Manual tab
+(`ManualTab.tsx`) — it never touches Rule/Strategy, since those are already systematic (a Rule's own
+condition decides entry, unlike a discretionary manual trade). `execution.checklist_items`
+(`app/adapters/db/models.py`'s `ChecklistItem`) is one small, user-editable list backing all three
+checkpoints (`GET`/`POST`/`PUT`/`DELETE /checklist-items`) — add, edit, deactivate, or delete any
+item freely, since the rulebook is expected to evolve — split by two independent axes: `phase`
+(which checkpoint an item belongs to) and `segments` (which segment(s) it applies to, `[]` meaning
+every segment — e.g. "OI change checked" is `['NSE']` only, since there's no OI data for MCX/CRYPTO
+on this platform's providers, so `appliesToSegment`/the equivalent SQLAlchemy filter drops it from
+every non-NSE row/day-checklist entirely).
+
+**Pre-trade Plan checklist (`phase='plan'`).** Every `ManualTab.tsx` row renders the currently-active
+`'plan'`-phase items scoped to **that row's own segment** as checkboxes next to its own "Add" button
+(one checklist per **row**, not one global one — each row represents an independent trade being
+planned, consistent with the tab's existing multi-instrument-card design) and won't submit an order
+until every one is checked. `ManualPositionCreate`/`ManualOptionPositionCreate.plan_checklist` is a
+full `{label, checked}[]` **snapshot**, not a list of item ids — `validate_plan_checklist`
+(`position_manager.py`, now segment-aware) only checks the count against currently-active,
+segment-matching items and that every one is `checked=true`, at order time; editing or deleting a
+`checklist_items` row afterward never rewrites a past trade's own record, which lives on
+`positions.plan_checklist`/`option_position_groups.plan_checklist` (`JSONB`, `NULL` for every
+Strategy-driven position/group — this whole mechanism is Manual-tab-only).
+
+**Post-trade Complete review (`phase='review'`), and the block-the-next-trade gate.** Once a manual
+position/group closes, `reviewed_at` stays `NULL` until `PUT /positions/{id}/review` /
+`PUT /option-groups/{id}/review` (`ReviewSubmit`: `violation` + required `notes` when true,
+`accepted_loss` — the route computes the real outcome from the trade's own `pnl`, never trusting a
+client-supplied label, and 422s a loss that hasn't been accepted; `checklist`, added alongside the
+day-level split below, is the self-assessed `'review'`-phase items — e.g. "position size stayed per
+plan, not adjusted mid-trade" — recorded as-is, not count/all-checked validated, since an unchecked
+one here IS the useful signal) is submitted for it. `find_pending_manual_review`
+(`position_manager.py`) looks for the earliest such row **across both `positions` and
+`option_position_groups`**, and `POST /positions/manual`/`POST /option-groups/manual` 409 immediately
+(before any of the normal sizing/gating logic, since this isn't a trade attempt at all — no row is
+persisted) while it returns non-`None`. This is deliberately **platform-wide, not per-row/per-symbol**
+— the tab supports several concurrent instrument cards, but the discipline gate still blocks every one
+of them until the single oldest unreviewed manual trade (anywhere) is reviewed, matching "any trade
+that doesn't meet the rules shouldn't allow the next trade" literally rather than diluting it per-row.
+
+**Once-per-day Day checklist (`phase='day'`), added same day.** Some items (e.g. "high-volatility
+session, no major news today", "POI marked") are facts/prep about the whole trading day, not one
+specific trade — moved here so they're confirmed once per **(calendar day, segment)** rather than
+re-answered on every single order (POI, drawn once during pre-market prep, is unscoped/every-segment;
+the news item is 3 separate `'day'`-phase rows, one per segment (`['NSE']`/`['MCX']`/`['CRYPTO']`),
+each with its own wording rather than one generic shared item — NSE's names results/RBI policy, MCX's
+names commodity-specific drivers (crude inventory, geopolitical/global cues), and CRYPTO's explains
+why "session" doesn't really apply (trades 24/7 - it's framed as a pure news-risk check instead)).
+`execution.daily_checklist_log` (PK `(log_date, segment)`) stores an `answers: {label, checked}[]`
+snapshot plus a separate `notes` column via `GET`/`PUT /daily-checklist?segment=X` — `notes` is ONE
+free-text observation for the whole (day, segment) submission, not per item (e.g. what the day's
+overall news/session call was actually based on) - the one checklist snapshot shape that carries any
+notes at all. "Today" is computed server-side from
+`execution.settings.timezone` (`position_manager._today_in_tz`), the same reference point
+`is_within_intraday_window` already uses, not the browser's own local date — so the checklist genuinely
+resets once a day account-wide, not once per browser session. `find_missing_daily_checklist` 409s
+`POST /positions/manual`/`POST /option-groups/manual` **per-segment** (not platform-wide, unlike the
+review gate above — an MCX day-checklist gap shouldn't block an NSE trade) until a row exists for
+today; a segment with zero active `'day'`-phase items scoped to it is never blocked at all. Existence
+only, not all-checked, same "record honestly" reasoning as the review checklist — submitting is what
+clears the gate, not what the answers say. `ManualTab.tsx` renders one box per segment that actually
+has applicable day items, above the row cards; `PUT`s upsert, so today's answers stay editable (not
+an immutable journal entry) for the rest of that same day.
+
+**Checklist & Risk Settings sub-page, added 2026-08-25.** The checklist-items editor (CRUD over
+`execution.checklist_items`) used to render inline on the Manual tab itself; it now lives in its own
+component, `ManualSettingsPage.tsx`, reached via a "Checklist & Risk Settings →" link next to "Add
+instrument" (`ManualTab.tsx`'s `view` state swaps the row list for this page and back — no route
+change, no new top-level nav tab). `checklistItems`/`planItems`/`dayItems`/`reviewItems`/
+`refreshChecklistItems` stay owned by `ManualTab.tsx` (its trading view needs the same data for the
+per-row plan checklist and the day-checklist boxes) and are passed down as props rather than
+re-fetched by the settings page. Gathered onto the same page: `execution.accounts.risk_per_trade_pct`
+(pre-existing, previously only editable from execution's own `AccountsPage.tsx`) and a new sibling
+column, `min_reward_risk_ratio` (`NUMERIC NOT NULL DEFAULT 4`, one per segment) — the RR floor
+`ManualTab.tsx`'s `computeRR`/`rrBelowMin` gate the Add/Update button on, previously a single
+hardcoded `MIN_REWARD_RISK_RATIO = 4` frontend constant shared by every segment. Both fields are
+edited here via `PUT /accounts/{segment}` (`api.ts`'s `updateAccount`) — the same cross-system direct
+call to `execution` the rest of the Manual tab already makes, not a new endpoint. Deliberately not
+duplicated: `capital_per_trade`/`leverage`/`square_off_time` stay execution `AccountsPage.tsx`-only,
+since those aren't Manual-tab-specific discipline knobs.
+
+**Cross-system entry point.** `shell/index.html`'s top nav gained a "Manual Trading" button, alongside
+the existing per-system tabs — it force-navigates the Signal Generation iframe to
+`?tab=manual` and activates it, a one-click jump straight into the Manual tab instead of always
+landing on Strategies first. `signal-generation`'s `App.tsx` reads that query param on mount
+(`VALID_TABS` allow-list, falls back to `"strategies"` for anything else) to pick the initial tab.
+
+One thing this pass deliberately leaves for later, noted rather than built speculatively: a same-day
+cooldown after a logged violation (today, submitting the review immediately unblocks the next trade
+regardless of what it says) — surfacing `plan_checklist`/`review_violation`/the day-checklist's own
+`notes` on `PositionsPage`/history rows is still open too.
 
 ## Why paper-trading accounts are per-segment, not per-strategy
 
@@ -550,6 +665,16 @@ A shared trading-analysis document recommended classifying market regime (`UPTRE
 `app/domain/engine.py`'s `_regime_confirmed(db, rule_row, bias, candles) -> bool` is the one shared gate, called from **all three** `_run_one*` live-tick functions (`_run_one` crossover, `_run_one_breakout`, `_run_one_range_breakout`) right before `post_signal` — resolving each id in `regime_indicator_ids` to its Indicator row and requiring `evaluate_regime_indicator(...)` to return `True` (not `False`, not `None`) for every one of them. This closes a pre-existing gap: the old Strategy-level toggle was only ever wired into two of the three rule types (crossover, range_breakout) — breakout never had regime filtering at all until this refactor. `_regime_warmup_bars` extends warm-up bar-count sizing (`bar_count = max(bar_count, ...)`) to cover the widest regime indicator's own warm-up, in all three functions now. `app/domain/backtest.py`'s `simulate_trades`/`replay`/`grid_search` take the same shape resolved once by the route layer — a `regime_indicators: list[tuple[indicator_type, params]]` — instead of a `bool`+`frozenset`; since regime now lives on the Rule itself, `POST /rules/{id}/backtest` can finally apply it for real (previously always hardcoded off, since no Strategy existed in that route's context to read a toggle from). Not extended to the breakout backtest path (`breakout.replay_breakout`, its own simulation engine with no regime hook at all) or the option backtest path (`option_backtest.py`'s `replay_options`, likewise) — both pre-existing scope boundaries this refactor didn't close, matching similarly-documented gaps elsewhere (e.g. no trailing-stop in the option backtest).
 
 **Single-timeframe by deliberate choice, unchanged**: every regime check still runs on the same candle series/interval the caller already has (`Rule.interval`) — no higher-timeframe fetch. The source document's own multi-timeframe design (e.g. 15m regime / execution-timeframe trigger) remains a documented future option, not built here.
+
+### SuperTrend as a crossover indicator, and defaulting its trailing stop to the same line
+
+`supertrend` (added 2026-08-15 as a regime-only `IndicatorType`, see above) was widened 2026-08-21 to also be valid in `CrossoverRuleConfig.indicator_id` — `CROSSOVER_INDICATOR_TYPES = {"rsi", "supertrend"}`, deliberately separate from `REGIME_INDICATOR_TYPES` since a saved SuperTrend `Indicator` row can back a crossover trigger, a regime filter, or both at once, independently. For a crossover, `compute_indicator("supertrend", ...)` returns the raw close-price series (the "value") and `compute_indicator_signal("supertrend", ...)` returns the ST line itself (the "signal") — `evaluate_crossover(value, signal)`, unchanged, then reduces to exactly the standard "SuperTrend flip" entry: close crossing from one side of the line to the other.
+
+A Strategy backed by such a rule gets a **soft default stop-loss**: if the caller leaves `stop_loss_method` unset entirely when creating/updating the Strategy, `app/api/routes/strategies.py`'s `_stop_loss_fields_for_rule` (the same helper that force-derives a breakout-linked Strategy's `previous_candle` scheme) fills in `stop_loss_method='indicator'`, `stop_loss_indicator_type='supertrend'`, `stop_loss_indicator_params` copied from the rule's own referenced Indicator (same period/multiplier the crossover itself watches), `stop_loss_interval` = the Rule's own `interval`, and `trailing_stop_enabled=True` — "enter on the flip, protect with the line" needing no manual configuration. Unlike breakout's default, this one is **overridable**: it only fires when `stop_loss_method` is genuinely unset (never overrides an explicit percent/previous_candle/different-indicator choice), and it's silently skipped (no default, no error) if the rule's own `interval` is `'daily'` (not a valid `StopLossInterval` at all). `rule_row.interval in get_args(StopLossInterval)` and a DB lookup of the rule's Indicator (`.type == "supertrend"`) gate the default; every other rule/indicator combination passes stop-loss fields through unchanged, same as before this existed.
+
+**Options can't run an indicator against their own premium** — a decaying, noisy series with no clean OHLC pattern for SuperTrend to read. So when a resolved option order carries `stop_loss_method='indicator'` + `stop_loss_indicator_type='supertrend'`, `execution`'s `open_option_group` (`option_position_manager.py`) instead resolves the underlying's own **nearest tradeable future contract** (`resolve_underlying(segment, symbol)["trade_symbol"]`/`["trade_exchange"]` — market-data's existing future-resolution, the same one `position_manager.open_position`/`open_manual_position` already use for `instrument_type='future'` orders), fetches that future's own candle history, and computes the SuperTrend line off it (reusing `position_manager`'s `_supertrend_stop_value`/`_STOP_LOSS_COMPUTE_FUNCS`/`_indicator_history_window` — same-system import, not a cross-`systems/*` one). The result is stored on `OptionPositionGroup.spot_stop_loss_price` — the pre-existing "a third, orthogonal stop, independent of `sl_scope`/the combined premium SL" mechanism (see the Manual tab section below) — alongside `stop_loss_future_symbol`/`stop_loss_future_exchange` (pinned once at open, not re-resolved every tick, so a trailing job can't silently switch contracts mid-trade around an expiry rollover) and `spot_stop_loss_trailing_enabled`/`spot_stop_loss_indicator_type`/`spot_stop_loss_indicator_params`/`spot_stop_loss_interval` (copied from the order, mirroring `positions.trailing_stop_enabled`/`stop_loss_indicator_type` etc.). Same wrong-side-of-entry rejection `position_manager._resolve_stop_loss` already has for spot/future: a computed level that isn't on the protective side of the future's own current LTP rejects the whole group open rather than silently trading unprotected.
+
+`_evaluate_option_group_exits` checks `spot_stop_loss_price` against the **future's** own fresh LTP whenever `stop_loss_future_symbol` is set (a user-set one via `PUT /option-groups/{id}/stop-loss` still checks against the underlying's own spot LTP, unchanged) and, for a trailing-enabled group, re-anchors it to the future's latest SuperTrend value each tick — only if more favorable, mirroring `position_manager._evaluate_exits`' own indicator-trailing block exactly (`get_candle_history` threaded through `check_option_group_exits`/the scheduler/the manual-trigger route the same way `check_exits` already had it). A manual `PUT` edit turns `spot_stop_loss_trailing_enabled` back off so an explicit override sticks rather than being silently overwritten by the next auto-trail tick; it leaves `stop_loss_future_symbol` alone (only the price changes, not what it's checked against). `open_manual_option_group` (the Manual tab's option path) is unaffected — it never carries a Strategy or a `stop_loss_method` at all.
 
 ### Backtest simulates stop-loss/target/square-off, not just raw signal timing
 

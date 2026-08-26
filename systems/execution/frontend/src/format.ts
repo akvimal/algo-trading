@@ -32,3 +32,18 @@ export function formatPct(pct: number | null): string {
   if (pct == null) return "";
   return ` (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
 }
+
+// CRYPTO prices/pnl/fees are raw USD - Delta Exchange's own native
+// pricing, never converted to INR (see docs/architecture.md's USDINR
+// section: only the CAPITAL figure gets converted, at sizing time, never
+// entry_price/exit_price/pnl/fees themselves). Every other segment is
+// already implicitly INR throughout this app (no prefix at all) - this
+// only disambiguates CRYPTO rows so their numbers can't be mistaken for
+// the same currency as an NSE/MCX row sitting right next to them.
+export function money(value: number, segment: string): string {
+  return `${segment === "CRYPTO" ? "$" : ""}${value.toFixed(2)}`;
+}
+
+export function moneySigned(value: number, segment: string): string {
+  return `${value >= 0 ? "+" : ""}${money(value, segment)}`;
+}

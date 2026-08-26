@@ -29,7 +29,7 @@ export type Position = {
   // closed ahead of its own SL/target/square-off because an
   // opposite-direction signal arrived and its Strategy's
   // counter_signal_policy='close_and_flip'.
-  exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | null;
+  exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | "liquidation" | null;
   // This position's segment's own square-off time (Account.square_off_time
   // below), copied at open time - null means never force-closed (e.g.
   // CRYPTO), same as null for REJECTED rows that never got this far.
@@ -38,6 +38,14 @@ export type Position = {
   // rendered/closed as part of its OptionGroup instead of as a standalone
   // row, see PositionsPage's leg filtering.
   option_group_id: string | null;
+  // Delta Exchange fee/liquidation simulation - CRYPTO + instrument_type=
+  // 'future' only, null for every other position. margin_posted/
+  // liquidation_price are computed once at open time off the account's
+  // leverage at that moment.
+  open_fee: number | null;
+  close_fee: number | null;
+  margin_posted: number | null;
+  liquidation_price: number | null;
 };
 
 // One leg of a multi-leg option order - see OptionGroup below. Strike/
@@ -95,6 +103,14 @@ export type OptionGroup = {
   // armed (never auto-set, only via updateOptionGroupSpotStopLoss).
   entry_spot_price: number | null;
   spot_stop_loss_price: number | null;
+  // Non-null only for an auto-computed (stop_loss_method='indicator')
+  // spot_stop_loss_price - see option_position_manager.py's
+  // open_option_group/_evaluate_option_group_exits. A user-set one (PUT
+  // /option-groups/{id}/stop-loss) leaves all three null and stays checked
+  // against the underlying's own spot LTP instead of a future contract's.
+  spot_stop_loss_trailing_enabled: boolean;
+  spot_stop_loss_indicator_type: string | null;
+  stop_loss_future_symbol: string | null;
   // Only populated when fetchOptionGroups({ withLivePnl: true }).
   live_combined_price: number | null;
   // Fresh underlying LTP - distinct from entry_spot_price (frozen at
@@ -106,6 +122,11 @@ export type OptionGroup = {
   exit_reason: string | null;
   pnl: number | null; // realized, once CLOSED
   square_off_time: string | null;
+  // Delta Exchange option trading-fee simulation (app/domain/delta_fees.py)
+  // - CRYPTO only, null for NSE/MCX groups. No liquidation fields here at
+  // all - CRYPTO options never carry liquidation risk in this platform.
+  open_fee: number | null;
+  close_fee: number | null;
   legs: OptionLeg[];
 };
 
@@ -190,6 +211,17 @@ export async function fetchPositions(
 
   const res = await fetch(`${API_BASE}/positions?${params}`);
   return asJson(res, "GET /positions");
+}
+
+// Oldest-first unrealized-P&L time series recorded by the exit-monitor's
+// own 30s tick (execution/backend/app/domain/position_manager.py's
+// record_position_pnl_snapshots) - fetched on demand when a Positions-grid
+// row is expanded, not prefetched for every row.
+export type PositionPnlSnapshot = { recorded_at: string; cmp: number; unrealized_pnl: number };
+
+export async function fetchPositionPnlHistory(positionId: string): Promise<PositionPnlSnapshot[]> {
+  const res = await fetch(`${API_BASE}/positions/${positionId}/pnl-history`);
+  return asJson(res, "GET /positions/{id}/pnl-history");
 }
 
 export async function fetchAccounts(): Promise<Account[]> {
@@ -427,6 +459,13 @@ export async function fetchOptionGroups(
 
   const res = await fetch(`${API_BASE}/option-groups?${params}`);
   return asJson(res, "GET /option-groups");
+}
+
+export type OptionGroupPnlSnapshot = { recorded_at: string; combined_price: number; unrealized_pnl: number };
+
+export async function fetchOptionGroupPnlHistory(groupId: string): Promise<OptionGroupPnlSnapshot[]> {
+  const res = await fetch(`${API_BASE}/option-groups/${groupId}/pnl-history`);
+  return asJson(res, "GET /option-groups/{id}/pnl-history");
 }
 
 export type SquareOffGroupResult = {

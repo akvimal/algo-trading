@@ -32,7 +32,7 @@ from app.domain.rule import (
     validate_indicator_params,
     validate_rule_config,
 )
-from app.domain.rules import Bias, CandleClose, bars_needed, evaluate
+from app.domain.rules import Bias, CandleClose, bars_needed, find_crossovers_since
 
 logger = logging.getLogger(__name__)
 
@@ -348,8 +348,9 @@ def _run_one_range_breakout(
     """The live tick's single-timeframe range-breakout path - mirrors
     _run_one's own shape closely (resolve -> fetch -> dedupe-check ->
     evaluate -> regime filter -> LTP fetch -> post_signal), just with
-    range_breakout.evaluate_range_breakout_live instead of an
-    indicator-based evaluate() call, and no Indicator lookup."""
+    range_breakout.evaluate_range_breakout_live (single latest-bar check
+    only, no multi-bar backfill scan) instead of find_crossovers_since,
+    and no Indicator lookup."""
     resolved = resolve_underlying(strategy.segment, symbol)
     if resolved is None:
         logger.warning(
@@ -480,70 +481,104 @@ def _run_one(
     if not candles:
         return False
 
-    latest_ts = datetime.fromisoformat(candles[-1].timestamp)
-
     run = db.get(db_models.EngineRun, (strategy.id, symbol))
     if run is None:
         run = db_models.EngineRun(strategy_id=strategy.id, symbol=symbol)
         db.add(run)
     run.last_checked_at = datetime.now(timezone.utc)
 
-    if run.last_signal_candle_ts is not None and run.last_signal_candle_ts == latest_ts:
-        return False  # already acted on this exact completed bar
-
-    bias = evaluate(rule, indicator.type, indicator_params, candles)
-    if bias is None:
+    # Every crossover since the last one actually signaled, not just the
+    # newest bar - a 60s poll tick isn't guaranteed to align with the
+    # candle cadence (processing lag, or plain phase drift against the
+    # exchange's minute boundaries), so 2+ candles can complete between
+    # one tick and the next; comparing only the latest bar-pair would
+    # silently miss a crossover-then-reversal entirely contained in the
+    # skipped bars. Naturally bounded by this tick's own `candles` fetch
+    # (sized off the indicator's warmup, see bar_count above) - a strategy
+    # reactivated after a long pause backfills at most that window, not
+    # its entire history. See find_crossovers_since's own docstring
+    # (reproduced live 2026-08-21).
+    crossovers = find_crossovers_since(rule, indicator.type, indicator_params, candles, run.last_signal_candle_ts)
+    if not crossovers:
         return False
 
-    if not _regime_confirmed(db, rule_row, bias, candles):
-        return False  # crossover fired, but the regime doesn't confirm its direction
+    latest_index = len(candles) - 1
+    signaled_any = False
+    for index, bias in crossovers:
+        # Regime state AS OF that bar, not as of now - a retroactively
+        # discovered crossover is judged by what the regime looked like
+        # when it actually happened, not by today's tick's own regime
+        # snapshot. Doesn't advance last_signal_candle_ts on rejection -
+        # a later tick re-checks this same bar in case a since-added
+        # regime indicator (or its own warmup finishing) confirms it by
+        # then, same as the single-bar design this replaces.
+        if not _regime_confirmed(db, rule_row, bias, candles[: index + 1]):
+            continue
 
-    # The completed candle that drove the signal is on the CHARTED
-    # instrument (resolved.chart_symbol - an index spot, for NSE
-    # indices) - the actual trade is resolved.trade_symbol (e.g. the
-    # active-month future), a different instrument with its own price.
-    # Posting the chart candle's close as the entry price would silently
-    # record the wrong instrument's price on the real position - fetch
-    # the traded instrument's own current price instead.
-    trade_price = get_ltp(resolved.trade_exchange, resolved.trade_symbol)
-    if trade_price is None:
-        logger.warning("could not fetch LTP for trade symbol %s (%s) - skipping signal", resolved.trade_symbol, resolved.trade_exchange)
-        return False
+        if index == latest_index:
+            # The current bar - the completed candle that drove the
+            # signal is on the CHARTED instrument (resolved.chart_symbol -
+            # an index spot, for NSE indices), but the actual trade is
+            # resolved.trade_symbol (e.g. the active-month future), a
+            # different instrument with its own price. A live quote on the
+            # TRADED instrument is the accurate fill price here.
+            price = get_ltp(resolved.trade_exchange, resolved.trade_symbol)
+            if price is None:
+                logger.warning(
+                    "could not fetch LTP for trade symbol %s (%s) - skipping signal", resolved.trade_symbol, resolved.trade_exchange
+                )
+                continue
+        else:
+            # A crossover discovered retroactively (this tick's candle
+            # fetch already contains bars newer than this one) - there's
+            # no live quote for a bar that's already in the past, so its
+            # own candle close on the charted instrument is the best
+            # available fill price, the same approximation
+            # app/domain/backtest.py's replay already uses for every
+            # simulated trade.
+            price = candles[index].close
 
-    post_signal(
-        {
-            "strategy_id": str(strategy.id),
-            # For instrument_type='option', signal-processing's
-            # choose_strategy re-resolves the underlying itself (it needs
-            # a fresh option chain, not the future/spot instrument this
-            # engine would otherwise trade) - it calls resolve_underlying
-            # again with THIS symbol, so it must be the bare underlying
-            # name (e.g. "GOLDM"), not resolved.trade_symbol (e.g.
-            # "GOLDM-04Sep2026-FUT" - a real MCX contract symbol, not a
-            # valid "underlying" resolve_underlying can look up) - see
-            # signal-processing's app/domain/resolution/strategy.py
-            # choose_strategy's own docstring for the chart_symbol vs
-            # bare-underlying distinction this mirrors. Reproduced live:
-            # an in-house option strategy on GOLDM was rejected with
-            # "could not resolve underlying 'GOLDM-04Sep2026-FUT' ...for
-            # options" before this fix. Spot/future are unaffected - they
-            # trade resolved.trade_symbol directly, exactly as before.
-            "symbol": symbol if strategy.instrument_type == "option" else resolved.trade_symbol,
-            "exchange": resolved.trade_exchange,
-            "action": "BUY" if bias == "bullish" else "SELL",
-            "price": trade_price,
-            "source": "in_house",
-            "source_meta": {
-                "underlying": symbol,
-                "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
-                "symbol_list": rule_row.underlying if rule_row.underlying_type == "symbol_list" else None,
-                "indicator": indicator.name,
-                "chart_symbol": resolved.chart_symbol,
-            },
-        }
-    )
-    run.last_signal_candle_ts = latest_ts
-    return True
+        post_signal(
+            {
+                "strategy_id": str(strategy.id),
+                # For instrument_type='option', signal-processing's
+                # choose_strategy re-resolves the underlying itself (it
+                # needs a fresh option chain, not the future/spot
+                # instrument this engine would otherwise trade) - it calls
+                # resolve_underlying again with THIS symbol, so it must be
+                # the bare underlying name (e.g. "GOLDM"), not
+                # resolved.trade_symbol (e.g. "GOLDM-04Sep2026-FUT" - a
+                # real MCX contract symbol, not a valid "underlying"
+                # resolve_underlying can look up) - see signal-processing's
+                # app/domain/resolution/strategy.py choose_strategy's own
+                # docstring for the chart_symbol vs bare-underlying
+                # distinction this mirrors. Reproduced live: an in-house
+                # option strategy on GOLDM was rejected with "could not
+                # resolve underlying 'GOLDM-04Sep2026-FUT' ...for options"
+                # before this fix. Spot/future are unaffected - they trade
+                # resolved.trade_symbol directly, exactly as before.
+                "symbol": symbol if strategy.instrument_type == "option" else resolved.trade_symbol,
+                "exchange": resolved.trade_exchange,
+                "action": "BUY" if bias == "bullish" else "SELL",
+                "price": price,
+                "source": "in_house",
+                "source_meta": {
+                    "underlying": symbol,
+                    "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
+                    "symbol_list": rule_row.underlying if rule_row.underlying_type == "symbol_list" else None,
+                    "indicator": indicator.name,
+                    "chart_symbol": resolved.chart_symbol,
+                },
+            }
+        )
+        # Advances only on an actual post, one bar at a time, in
+        # chronological order - so a failure partway through this loop
+        # (a rejected regime check, a failed LTP fetch) never causes an
+        # earlier, already-posted bar to be silently skipped or re-signaled.
+        run.last_signal_candle_ts = datetime.fromisoformat(candles[index].timestamp)
+        signaled_any = True
+
+    return signaled_any
 
 
 def run_live_tick(

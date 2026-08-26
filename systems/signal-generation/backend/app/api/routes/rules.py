@@ -29,6 +29,7 @@ from app.domain.engine import history_window
 from app.domain.indicators import regime_indicator_warmup
 from app.domain.option_backtest import MAX_OPTION_BACKTEST_DAYS, OPTION_HISTORY_INTERVAL, replay_options
 from app.domain.rule import (
+    CROSSOVER_INDICATOR_TYPES,
     REGIME_INDICATOR_TYPES,
     BreakoutRuleConfig,
     CrossoverRuleConfig,
@@ -77,13 +78,14 @@ def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict])
     second, later line of defense for an indicator deleted *after* a rule
     already referenced it, not this primary check. BreakoutRuleConfig/
     RangeBreakoutRuleConfig have no indicator_id at all - nothing to
-    check. Also rejects a non-"rsi" indicator here (a regime type, e.g.
-    "adx") - harmless with only one IndicatorType, but now that
-    REGIME_INDICATOR_TYPES exist too, app/domain/indicators.py's
+    check. Also rejects an indicator whose type isn't in
+    CROSSOVER_INDICATOR_TYPES here - app/domain/indicators.py's
     compute_indicator/compute_indicator_signal only know how to dispatch
-    "rsi" - a crossover rule referencing anything else would 500 at
-    evaluation time instead of failing validation here, the same
-    reasoning _check_regime_indicator_ids applies in reverse."""
+    a subset of IndicatorTypes ("rsi", "supertrend"), so a crossover rule
+    referencing anything else would 500 at evaluation time instead of
+    failing validation here. Membership in CROSSOVER_INDICATOR_TYPES is
+    checked directly (not "not a regime type") since "supertrend" is
+    deliberately valid for both - see that set's own docstring."""
     if rule_config is None:
         return
     rule = validate_rule_config(rule_config)
@@ -92,7 +94,7 @@ def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict])
     indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
     if indicator is None:
         raise HTTPException(status_code=422, detail=f"no indicator with id '{rule.indicator_id}'")
-    if indicator.type in REGIME_INDICATOR_TYPES:
+    if indicator.type not in CROSSOVER_INDICATOR_TYPES:
         raise HTTPException(
             status_code=422, detail=f"indicator '{rule.indicator_id}' has type '{indicator.type}', not a crossover-compatible type"
         )

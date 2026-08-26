@@ -121,6 +121,21 @@ def validate_contract_day_filter_fields(contract_day_filter: str, instrument_typ
         raise ValueError("contract_day_filter='start' requires instrument_type='option' - not reliably computable for futures")
 
 
+def validate_segment_instrument_type(segment: str, instrument_type: str) -> None:
+    """CRYPTO (Delta Exchange India) and MCX (commodities) have no cash/
+    spot market on this platform's providers - Delta only quotes
+    perpetual futures, and Dhan's MCX coverage is F&O-only. instrument_
+    type='spot' on either segment used to silently pass validation and
+    only surface as a permanent execution-side rejection (position_
+    manager.open_position sizes 'spot' at lot_size=1, i.e. one full raw-
+    price underlying unit - unaffordable for CRYPTO's fractional-lot
+    perpetuals, reproduced live 2026-08-21 where a CRYPTO strategy sized
+    against $69k+ BTC 'spot' against a few-hundred-dollar account).
+    Rejected at strategy save time instead so this can't happen again."""
+    if segment in ("CRYPTO", "MCX") and instrument_type == "spot":
+        raise ValueError(f"segment='{segment}' has no spot market - use instrument_type='future' or 'option'")
+
+
 class ActiveWindow(BaseModel):
     """One [start, end) slice of a Strategy's optional signal-acceptance
     window - see Strategy.active_windows below. No overnight wraparound
@@ -296,6 +311,11 @@ class StrategyCreate(BaseModel):
     @model_validator(mode="after")
     def _check_contract_day_filter_consistency(self) -> "StrategyCreate":
         validate_contract_day_filter_fields(self.contract_day_filter, self.instrument_type)
+        return self
+
+    @model_validator(mode="after")
+    def _check_segment_instrument_type(self) -> "StrategyCreate":
+        validate_segment_instrument_type(self.segment, self.instrument_type)
         return self
 
 

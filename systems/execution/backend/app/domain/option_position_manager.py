@@ -43,17 +43,22 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
+from app.domain.delta_fees import compute_option_trading_fee
 from app.domain.models import ExecutionSettings, ResolvedOrder
 from app.domain.option_templates import bear_put_spread, bull_call_spread, naked_call, naked_put
 from app.domain.position_manager import (
+    GetCandleHistory,
     GetLotSize,
     GetLtpBatch,
     _accounts_by_segment,
     _apply_realized_pnl,
+    _indicator_history_window,
     _quotes_by_exchange,
     _resolve_capital_account,
     _resolve_signal_conflicts,
     _strategy_accounts_by_id,
+    _STOP_LOSS_COMPUTE_FUNCS,
+    _supertrend_stop_value,
     compute_pnl,
     compute_quantity,
     compute_risk_based_quantity,
@@ -95,6 +100,44 @@ def legs_by_group(db: Session, groups: list) -> dict:
     return result
 
 
+def _open_delta_option_fee(
+    segment: str, entry_spot_price: Optional[float], quantity: float, long_premium: float, short_premium: float = 0.0
+) -> Optional[float]:
+    """Delta Exchange option trading-fee simulation (app/domain/delta_fees.py)
+    - CRYPTO only, None for NSE/MCX (zero behavior change there). Summed
+    per LEG (each leg is its own trade with its own premium/fee-cap, not
+    one fee on the combined net debit) - short_premium<=0 is this module's
+    existing "no short leg" sentinel (see open_option_group's own
+    short_premium default). notional_value is the UNDERLYING's own notional
+    (entry_spot_price * quantity), not the premium - matching Delta's real
+    options fee methodology (a %-of-underlying-notional fee capped at
+    %-of-premium; the cap would otherwise almost never bind, since the
+    taker rate applied to the premium alone stays far below it). Falls back
+    to premium-based notional if entry_spot_price is unavailable
+    (best-effort - see entry_spot_price's own comment) rather than skipping
+    the fee entirely."""
+    if segment != "CRYPTO":
+        return None
+    underlying_notional = entry_spot_price * quantity if entry_spot_price is not None else None
+    long_premium_amount = long_premium * quantity
+    fee = compute_option_trading_fee(underlying_notional if underlying_notional is not None else long_premium_amount, long_premium_amount)
+    if short_premium > 0:
+        short_premium_amount = short_premium * quantity
+        fee += compute_option_trading_fee(
+            underlying_notional if underlying_notional is not None else short_premium_amount, short_premium_amount
+        )
+    return fee
+
+
+def _close_delta_option_fee(segment: str, spot_price: Optional[float], quantity: float, long_price: float, short_price: float = 0.0) -> Optional[float]:
+    """Close-time counterpart to _open_delta_option_fee - same formula,
+    called with the legs' exit quotes instead of entry premiums. `spot_price`
+    is whatever fresh underlying quote the caller already fetched for this
+    close (None is handled the same "fall back to premium-based notional"
+    way as at open)."""
+    return _open_delta_option_fee(segment, spot_price, quantity, long_price, short_price)
+
+
 def _reject_group(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str) -> db_models.OptionPositionGroup:
     """No leg Position rows are created for a rejected group - mirrors
     position_manager._reject's 'never really opened' philosophy, just
@@ -123,6 +166,8 @@ def open_option_group(
     get_ltp_batch: GetLtpBatch,
     resolve_symbol_by_security_id: ResolveSymbolBySecurityId,
     get_lot_size: GetLotSize,
+    resolve_underlying: ResolveUnderlying,
+    get_candle_history: GetCandleHistory,
 ) -> db_models.OptionPositionGroup:
     """Idempotent: a signal_id already processed (Redis redelivery) returns
     the existing group rather than double-opening. Rejects (own group row,
@@ -176,6 +221,84 @@ def open_option_group(
         )
         db.commit()
         return row
+
+    # stop_loss_method='indicator' - SuperTrend only today (see
+    # docs/architecture.md). An option premium is too noisy/decaying a
+    # series to run an indicator against directly, so this is computed off
+    # the underlying's own nearest-expiry FUTURE contract instead (the
+    # same "chart on the future, manage the option" convention traders
+    # already use for index/stock options) and stored on
+    # spot_stop_loss_price - the existing "a third, orthogonal stop,
+    # independent of sl_scope" mechanism _evaluate_option_group_exits
+    # already checks, just checked against the future's own LTP
+    # (stop_loss_future_symbol/exchange) instead of the underlying spot LTP
+    # a user-set spot_stop_loss_price uses. Any other stop_loss_method
+    # (None, 'percent') leaves every field below at its default - unchanged
+    # from before this feature existed.
+    spot_stop_loss_price: Optional[float] = None
+    spot_stop_loss_trailing_enabled = False
+    spot_stop_loss_indicator_type: Optional[str] = None
+    spot_stop_loss_indicator_params: Optional[dict] = None
+    spot_stop_loss_interval: Optional[str] = None
+    stop_loss_future_symbol: Optional[str] = None
+    stop_loss_future_exchange: Optional[str] = None
+    if order.stop_loss_method == "indicator" and order.stop_loss_indicator_type == "supertrend":
+        resolved_future = resolve_underlying(order.segment, order.symbol)
+        if resolved_future is None:
+            row = _reject_group(
+                db, order, signal_id,
+                f"could not resolve underlying '{order.symbol}' future on {order.segment} for a SuperTrend stop-loss",
+            )
+            db.commit()
+            return row
+        stop_loss_future_symbol = resolved_future["trade_symbol"]
+        stop_loss_future_exchange = resolved_future["trade_exchange"]
+
+        warmup_from, warmup_to = _indicator_history_window(
+            (order.stop_loss_indicator_params or {}).get("period", 20), order.stop_loss_interval
+        )
+        future_history = get_candle_history(
+            stop_loss_future_exchange, stop_loss_future_symbol, order.stop_loss_interval, warmup_from, warmup_to
+        )
+        future_stop_candidate = _supertrend_stop_value(future_history, order.stop_loss_indicator_params or {})
+        if future_stop_candidate is None:
+            row = _reject_group(
+                db, order, signal_id,
+                f"stop_loss_method='indicator' (supertrend) but not enough {order.stop_loss_interval} history "
+                f"available for future {stop_loss_future_symbol} yet",
+            )
+            db.commit()
+            return row
+
+        future_quotes = get_ltp_batch(stop_loss_future_exchange, [stop_loss_future_symbol])
+        future_cmp = future_quotes.get(stop_loss_future_symbol)
+        if future_cmp is None:
+            row = _reject_group(
+                db, order, signal_id, f"could not fetch a live quote for future {stop_loss_future_symbol}"
+            )
+            db.commit()
+            return row
+        # Same wrong-side guard as position_manager._resolve_stop_loss's
+        # own indicator branch - a raw indicator value has no direction
+        # concept, so one on the wrong side of the future's current price
+        # isn't a protective stop at all.
+        if (order.action == "BUY" and future_stop_candidate >= future_cmp) or (
+            order.action == "SELL" and future_stop_candidate <= future_cmp
+        ):
+            row = _reject_group(
+                db, order, signal_id,
+                f"stop_loss_method='indicator' (supertrend) computed {future_stop_candidate} on future "
+                f"{stop_loss_future_symbol} - not on the protective side of its current price ({future_cmp}) "
+                f"for a {order.action}, not usable as a stop-loss",
+            )
+            db.commit()
+            return row
+
+        spot_stop_loss_price = future_stop_candidate
+        spot_stop_loss_trailing_enabled = order.trailing_stop_enabled
+        spot_stop_loss_indicator_type = order.stop_loss_indicator_type
+        spot_stop_loss_indicator_params = order.stop_loss_indicator_params
+        spot_stop_loss_interval = order.stop_loss_interval
 
     account = load_account(db, order.segment)
     if account is None:
@@ -249,7 +372,9 @@ def open_option_group(
             closed = (
                 grp_legs is not None
                 and "BUY" in grp_legs
-                and _close_group_at_cmp(grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, capital_account, "counter_signal")
+                and _close_group_at_cmp(
+                    grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, capital_account, "counter_signal", settings.usdinr_rate
+                )
             )
             if not closed:
                 row = _reject_group(
@@ -349,6 +474,15 @@ def open_option_group(
     else:
         quantity = compute_quantity(effective_capital, net_debit, lot_size)
 
+    open_fee = _open_delta_option_fee(order.segment, entry_spot_price, quantity, long_premium, short_premium)
+    if open_fee is not None:
+        # open_fee is raw USD (see _open_delta_option_fee's own docstring) -
+        # current_balance is always INR-denominated, convert before
+        # debiting (settings.usdinr_rate is guaranteed set here - CRYPTO
+        # sizing above this point already rejects the whole order without
+        # one).
+        capital_account.current_balance = float(capital_account.current_balance) - open_fee * settings.usdinr_rate
+
     group_id = uuid.uuid4()
     group = db_models.OptionPositionGroup(
         id=group_id,
@@ -366,6 +500,14 @@ def open_option_group(
         combined_target_price=combined_target_price,
         sl_scope=sl_scope,
         entry_spot_price=entry_spot_price,
+        spot_stop_loss_price=spot_stop_loss_price,
+        spot_stop_loss_trailing_enabled=spot_stop_loss_trailing_enabled,
+        spot_stop_loss_indicator_type=spot_stop_loss_indicator_type,
+        spot_stop_loss_indicator_params=spot_stop_loss_indicator_params,
+        spot_stop_loss_interval=spot_stop_loss_interval,
+        stop_loss_future_symbol=stop_loss_future_symbol,
+        stop_loss_future_exchange=stop_loss_future_exchange,
+        open_fee=open_fee,
         status="OPEN",
         square_off_time=account.square_off_time,
     )
@@ -442,6 +584,8 @@ def open_manual_option_group(
     get_ltp_batch: GetLtpBatch,
     resolve_symbol_by_security_id: ResolveSymbolBySecurityId,
     get_lot_size: GetLotSize,
+    plan_checklist: Optional[list[dict]] = None,
+    order_type: Optional[str] = None,
 ) -> db_models.OptionPositionGroup:
     """Manual tab (signal-generation's frontend) - option orders, bypassing
     signal-generation/signal-processing entirely (no auto-provisioned
@@ -463,7 +607,13 @@ def open_manual_option_group(
     established (account loading, conflict resolution, quoting, sizing,
     the combined-premium-as-BUY-price identity) - only leg SELECTION
     differs, via this module's own option_templates.py port instead of
-    signal-processing's."""
+    signal-processing's.
+
+    `order_type` ('market'/'limit'/None) is stored as-is on the resulting
+    group for future performance review, same "just a caller-resolved
+    label" reasoning as open_manual_position's own copy of this
+    docstring note - it never changes leg selection/pricing here, which
+    is always resolved fresh from a live quote regardless."""
     signal_id = uuid.uuid4()
     strategy_type_for_rejection = f"{option_position_style}_{action.lower()}"  # best-effort label pre-leg-selection
 
@@ -605,7 +755,9 @@ def open_manual_option_group(
             closed = (
                 grp_legs is not None
                 and "BUY" in grp_legs
-                and _close_group_at_cmp(grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, account, "counter_signal")
+                and _close_group_at_cmp(
+                    grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, account, "counter_signal", settings.usdinr_rate
+                )
             )
             if not closed:
                 row = _reject_manual_group(
@@ -644,6 +796,13 @@ def open_manual_option_group(
     # any other already-open group.
     quantity = option_fixed_lots * lot_size if option_fixed_lots is not None else compute_quantity(effective_capital, net_debit, lot_size)
 
+    open_fee = _open_delta_option_fee(segment, entry_spot_price, quantity, long_premium, short_premium)
+    if open_fee is not None:
+        # open_fee is raw USD - current_balance is always INR-denominated,
+        # convert before debiting (same reasoning as open_option_group's
+        # identical conversion).
+        account.current_balance = float(account.current_balance) - open_fee * settings.usdinr_rate
+
     group_id = uuid.uuid4()
     group = db_models.OptionPositionGroup(
         id=group_id,
@@ -661,6 +820,9 @@ def open_manual_option_group(
         entry_spot_price=entry_spot_price,
         status="OPEN",
         square_off_time=account.square_off_time,
+        open_fee=open_fee,
+        plan_checklist=plan_checklist,
+        order_type=order_type,
     )
     db.add(group)
 
@@ -689,7 +851,39 @@ def open_manual_option_group(
     return group
 
 
-def _close_group_at_cmp(group, long_leg, short_leg: Optional[object], get_ltp_batch: GetLtpBatch, account, exit_reason: str) -> bool:
+def submit_option_group_review(
+    db: Session,
+    group_id: uuid.UUID,
+    violation: bool,
+    notes: Optional[str],
+    accepted_loss: bool,
+    review_checklist: Optional[list[dict]] = None,
+) -> tuple[Optional[db_models.OptionPositionGroup], Optional[str]]:
+    """PUT /option-groups/{id}/review - option-group counterpart to
+    position_manager.submit_position_review, identical rules/reasons."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None:
+        return None, "option group not found"
+    if row.strategy_id is not None:
+        return None, "only manually-opened option groups have a discipline review"
+    if row.status != "CLOSED":
+        return None, f"option group is {row.status}, not CLOSED"
+    if row.reviewed_at is not None:
+        return None, "option group already reviewed"
+    if row.pnl is not None and float(row.pnl) < 0 and not accepted_loss:
+        return None, "must accept the loss before submitting this review"
+    row.reviewed_at = datetime.now(dt_timezone.utc)
+    row.review_violation = violation
+    row.review_notes = notes
+    row.review_checklist = review_checklist
+    db.commit()
+    return row, None
+
+
+def _close_group_at_cmp(
+    group, long_leg, short_leg: Optional[object], get_ltp_batch: GetLtpBatch, account, exit_reason: str,
+    usdinr_rate: Optional[float] = None,
+) -> bool:
     """Pure logic (no DB query/commit) - closes `group` and its 1-2 already-
     fetched legs at current market prices, mutating them in place. `short_leg`
     is None for a naked (1-leg) group - contributes 0 to the combined price,
@@ -717,11 +911,19 @@ def _close_group_at_cmp(group, long_leg, short_leg: Optional[object], get_ltp_ba
         pos.exit_reason = exit_reason
 
     combined_price = long_cmp - short_cmp
-    combined_pnl = (combined_price - float(group.net_debit)) * float(group.quantity)
+    raw_pnl = (combined_price - float(group.net_debit)) * float(group.quantity)
+    # No fresh underlying-spot quote fetched here (would be a second
+    # get_ltp_batch call just for the fee's notional basis) - falls back to
+    # premium-based notional, same graceful degradation
+    # _open_delta_option_fee already has for a missing entry_spot_price.
+    close_fee = _close_delta_option_fee(group.segment, None, float(group.quantity), long_cmp, short_cmp)
+    if close_fee is not None:
+        group.close_fee = close_fee
+    combined_pnl = raw_pnl - float(group.open_fee or 0) - (close_fee or 0)
     group.exit_time = now
     group.status = "CLOSED"
     group.exit_reason = exit_reason
-    _apply_realized_pnl(group, account, combined_pnl)
+    _apply_realized_pnl(group, account, combined_pnl, usdinr_rate)
     return True
 
 
@@ -779,11 +981,32 @@ def compute_group_unrealized_pnl(groups: list, legs: dict, get_ltp_batch: GetLtp
     return result
 
 
+def record_option_group_pnl_snapshots(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
+    """Persists one OptionGroupPnlSnapshot row per OPEN group with a live
+    combined price this tick - the write counterpart to
+    compute_group_unrealized_pnl above (reused as-is, unchanged). See
+    position_manager.record_position_pnl_snapshots' own docstring for the
+    full design/scope notes - this is its group-level mirror, called from
+    the same app/scheduler.py run_check_exits tick."""
+    open_groups = db.query(db_models.OptionPositionGroup).filter_by(status="OPEN").all()
+    legs = legs_by_group(db, open_groups)
+    live = compute_group_unrealized_pnl(open_groups, legs, get_ltp_batch)
+    for group_id, data in live.items():
+        db.add(
+            db_models.OptionGroupPnlSnapshot(
+                option_group_id=group_id, combined_price=data["combined_price"], unrealized_pnl=data["unrealized_pnl"]
+            )
+        )
+    db.commit()
+    return {"recorded": len(live), "checked": len(open_groups)}
+
+
 def square_off_all_open_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     open_groups = db.query(db_models.OptionPositionGroup).filter_by(status="OPEN").all()
     legs = legs_by_group(db, open_groups)
     accounts = _accounts_by_segment(db, open_groups)
     strategy_accounts = _strategy_accounts_by_id(db, open_groups)
+    usdinr_rate = load_settings(db).usdinr_rate
     closed = 0
     failed = 0
     for group in open_groups:
@@ -793,7 +1016,7 @@ def square_off_all_open_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -
             and "BUY" in group_legs
             and _close_group_at_cmp(
                 group, group_legs["BUY"], group_legs.get("SELL"), get_ltp_batch,
-                _resolve_capital_account(group, accounts, strategy_accounts), "square_off",
+                _resolve_capital_account(group, accounts, strategy_accounts), "square_off", usdinr_rate,
             )
         ):
             closed += 1
@@ -812,10 +1035,11 @@ def square_off_option_group(db: Session, group_id: uuid.UUID, get_ltp_batch: Get
 
     group_legs = legs_by_group(db, [group]).get(group.id)
     account = load_capital_account(db, group.segment, group.strategy_id)
+    usdinr_rate = load_settings(db).usdinr_rate
     if (
         group_legs is None
         or "BUY" not in group_legs
-        or not _close_group_at_cmp(group, group_legs["BUY"], group_legs.get("SELL"), get_ltp_batch, account, "manual")
+        or not _close_group_at_cmp(group, group_legs["BUY"], group_legs.get("SELL"), get_ltp_batch, account, "manual", usdinr_rate)
     ):
         return {"status": "quote_unavailable"}
     db.commit()
@@ -845,12 +1069,19 @@ def update_group_spot_stop_loss(db: Session, group_id: uuid.UUID, new_price: flo
     _evaluate_option_group_exits checks both, whichever trips first closes
     the group. Unlike update_group_stop_loss, not restricted to
     sl_scope='combined' - a spot-based stop is orthogonal to how the
-    premium side is monitored. Never auto-computed at open (see
-    entry_spot_price's own comment) - always an explicit user action."""
+    premium side is monitored. Turns off spot_stop_loss_trailing_enabled
+    (if it was on) so this explicit edit sticks rather than getting
+    silently overwritten by the next auto-trail tick - same "an explicit
+    caller action wins" reasoning update_stop_loss (position_manager.py)
+    doesn't need since it has no separate manual-edit endpoint at all.
+    stop_loss_future_symbol/exchange (what the stop is checked against) is
+    deliberately left as-is - this only changes the price, not the
+    reference instrument."""
     row = db.get(db_models.OptionPositionGroup, group_id)
     if row is None:
         return None
     row.spot_stop_loss_price = new_price
+    row.spot_stop_loss_trailing_enabled = False
     db.commit()
     return row
 
@@ -862,6 +1093,7 @@ def _evaluate_option_group_square_off_due(
     now_local,
     accounts_by_segment: dict,
     strategy_accounts: Optional[dict] = None,
+    usdinr_rate: Optional[float] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mirrors
     position_manager._evaluate_square_off_due at the group level.
@@ -898,11 +1130,15 @@ def _evaluate_option_group_square_off_due(
             pos.exit_reason = "square_off"
 
         combined_price = long_cmp - short_cmp
-        combined_pnl = (combined_price - float(group.net_debit)) * float(group.quantity)
+        raw_pnl = (combined_price - float(group.net_debit)) * float(group.quantity)
+        close_fee = _close_delta_option_fee(group.segment, None, float(group.quantity), long_cmp, short_cmp)
+        if close_fee is not None:
+            group.close_fee = close_fee
+        combined_pnl = raw_pnl - float(group.open_fee or 0) - (close_fee or 0)
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = "square_off"
-        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl)
+        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, usdinr_rate)
         closed += 1
 
     return {"closed": closed, "failed": failed, "checked": len(due)}
@@ -915,7 +1151,9 @@ def square_off_due_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -> dic
     legs = legs_by_group(db, open_groups)
     accounts = _accounts_by_segment(db, open_groups)
     strategy_accounts = _strategy_accounts_by_id(db, open_groups)
-    result = _evaluate_option_group_square_off_due(open_groups, legs, get_ltp_batch, now_local, accounts, strategy_accounts)
+    result = _evaluate_option_group_square_off_due(
+        open_groups, legs, get_ltp_batch, now_local, accounts, strategy_accounts, exec_settings.usdinr_rate
+    )
     db.commit()
     return result
 
@@ -926,13 +1164,15 @@ def _evaluate_option_group_exits(
     get_ltp_batch: GetLtpBatch,
     accounts_by_segment: dict,
     strategy_accounts: Optional[dict] = None,
+    get_candle_history: Optional[GetCandleHistory] = None,
+    usdinr_rate: Optional[float] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mirrors position_manager
-    ._evaluate_exits at the group level (no trailing, no previous_candle -
-    see module docstring's scope notes). `legs`: group.id -> {'BUY':
-    Position, 'SELL': Position}, pre-queried by the caller
-    (check_option_group_exits). strategy_accounts is optional (default {})
-    - see position_manager._evaluate_exits' own docstring for why.
+    ._evaluate_exits at the group level (no previous_candle - see module
+    docstring's scope notes). `legs`: group.id -> {'BUY': Position,
+    'SELL': Position}, pre-queried by the caller (check_option_group_exits).
+    strategy_accounts is optional (default {}) - see position_manager.
+    _evaluate_exits' own docstring for why.
 
     sl_scope='combined' (default) checks the group's own combined_stop_loss_price/
     combined_target_price against the combined (long-short) price, exactly
@@ -945,19 +1185,39 @@ def _evaluate_option_group_exits(
     (combined_price - net_debit) * quantity - the trigger condition never
     changes what the position was actually worth at exit.
 
-    spot_stop_loss_price is checked independently of all the above,
-    against the UNDERLYING's own fresh quote (not either leg's) - a third,
-    orthogonal way to trip the same close. group.action-aware, same
-    direction convention compute_stop_loss_percent_price uses: BUY closes
-    when spot falls to/through it, SELL when spot rises to/through it."""
+    spot_stop_loss_price is checked independently of all the above - a
+    third, orthogonal way to trip the same close - against either the
+    UNDERLYING's own fresh quote (a user-set stop, stop_loss_future_symbol
+    is None) or the underlying's nearest FUTURE contract's fresh quote
+    (an auto-computed SuperTrend stop, see open_option_group), whichever
+    this group actually carries. group.action-aware, same direction
+    convention compute_stop_loss_percent_price uses: BUY closes when the
+    reference price falls to/through it, SELL when it rises to/through it.
+
+    Trailing (only spot_stop_loss_trailing_enabled groups, mirrors
+    position_manager._evaluate_exits' own trailing block) re-anchors
+    spot_stop_loss_price to the future's latest SuperTrend line value each
+    tick, only if the new candidate is MORE favorable than the stored
+    value - it never loosens. get_candle_history is Optional (default
+    None) purely so existing callers/tests that only ever exercise
+    non-trailing groups don't need updating - a trailing-enabled group
+    with no get_candle_history supplied is simply skipped for trailing,
+    same as a candle fetch failure below."""
     if not groups:
-        return {"closed_stop_loss": 0, "closed_target": 0, "checked": 0}
+        return {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 0}
 
     all_legs = [pos for g in groups for pos in legs.get(g.id, {}).values()]
     underlying_probes = [SimpleNamespace(exchange=g.exchange, symbol=g.underlying_symbol) for g in groups]
-    quotes = _quotes_by_exchange(all_legs + underlying_probes, get_ltp_batch)
+    future_probes = [
+        SimpleNamespace(exchange=g.stop_loss_future_exchange, symbol=g.stop_loss_future_symbol)
+        for g in groups
+        if g.stop_loss_future_symbol is not None
+    ]
+    quotes = _quotes_by_exchange(all_legs + underlying_probes + future_probes, get_ltp_batch)
     closed_stop_loss = 0
     closed_target = 0
+    trailed = 0
+    candle_history_cache: dict[tuple[str, str, str], list[dict]] = {}
     now = datetime.now(dt_timezone.utc)
 
     for group in groups:
@@ -984,12 +1244,57 @@ def _evaluate_option_group_exits(
             sl_hit = group.combined_stop_loss_price is not None and combined_price <= float(group.combined_stop_loss_price)
             target_hit = group.combined_target_price is not None and combined_price >= float(group.combined_target_price)
 
-        spot_cmp = quotes.get((group.exchange, group.underlying_symbol))
+        if group.stop_loss_future_symbol is not None:
+            spot_cmp = quotes.get((group.stop_loss_future_exchange, group.stop_loss_future_symbol))
+        else:
+            spot_cmp = quotes.get((group.exchange, group.underlying_symbol))
         spot_sl_hit = group.spot_stop_loss_price is not None and spot_cmp is not None and (
             (group.action == "BUY" and spot_cmp <= float(group.spot_stop_loss_price))
             or (group.action == "SELL" and spot_cmp >= float(group.spot_stop_loss_price))
         )
         if not (sl_hit or target_hit or spot_sl_hit):
+            if (
+                group.spot_stop_loss_trailing_enabled
+                and group.spot_stop_loss_price is not None
+                and group.spot_stop_loss_indicator_type is not None
+                and group.stop_loss_future_symbol is not None
+                and get_candle_history is not None
+            ):
+                key = (group.stop_loss_future_exchange, group.stop_loss_future_symbol, group.spot_stop_loss_interval)
+                if key not in candle_history_cache:
+                    try:
+                        params = group.spot_stop_loss_indicator_params or {}
+                        warmup_from, warmup_to = _indicator_history_window(params.get("period", 20), group.spot_stop_loss_interval)
+                        candle_history_cache[key] = get_candle_history(
+                            group.stop_loss_future_exchange,
+                            group.stop_loss_future_symbol,
+                            group.spot_stop_loss_interval,
+                            warmup_from,
+                            warmup_to,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "failed to fetch trailing candle history for option group %s future %s",
+                            group.id, group.stop_loss_future_symbol,
+                        )
+                        candle_history_cache[key] = []
+                compute = _STOP_LOSS_COMPUTE_FUNCS.get(group.spot_stop_loss_indicator_type)
+                # spot_cmp above is already the future's own fresh quote
+                # whenever stop_loss_future_symbol is set (the same
+                # condition gating this whole block).
+                if compute is not None and candle_history_cache[key] and spot_cmp is not None:
+                    raw_candidate = compute(candle_history_cache[key], group.spot_stop_loss_indicator_params or {})
+                    # Same wrong-side guard as position_manager._evaluate_exits'
+                    # own trailing block - discard a candidate that isn't on
+                    # the protective side of the future's CURRENT price.
+                    if raw_candidate is not None and (
+                        (group.action == "BUY" and raw_candidate < spot_cmp) or (group.action == "SELL" and raw_candidate > spot_cmp)
+                    ):
+                        current_stop = float(group.spot_stop_loss_price)
+                        more_favorable = raw_candidate > current_stop if group.action == "BUY" else raw_candidate < current_stop
+                        if more_favorable:
+                            group.spot_stop_loss_price = raw_candidate
+                            trailed += 1
             continue
 
         if sl_hit:
@@ -1016,21 +1321,25 @@ def _evaluate_option_group_exits(
             pos.status = "CLOSED"
             pos.exit_reason = leg_reason
 
-        combined_pnl = (combined_price - float(group.net_debit)) * float(group.quantity)
+        raw_pnl = (combined_price - float(group.net_debit)) * float(group.quantity)
+        close_fee = _close_delta_option_fee(group.segment, None, float(group.quantity), long_cmp, short_cmp)
+        if close_fee is not None:
+            group.close_fee = close_fee
+        combined_pnl = raw_pnl - float(group.open_fee or 0) - (close_fee or 0)
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = group_reason
-        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl)
+        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, usdinr_rate)
 
         if sl_hit or spot_sl_hit:
             closed_stop_loss += 1
         else:
             closed_target += 1
 
-    return {"closed_stop_loss": closed_stop_loss, "closed_target": closed_target, "checked": len(groups)}
+    return {"closed_stop_loss": closed_stop_loss, "closed_target": closed_target, "trailed": trailed, "checked": len(groups)}
 
 
-def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
+def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch, get_candle_history: Optional[GetCandleHistory] = None) -> dict:
     candidates = (
         db.query(db_models.OptionPositionGroup)
         .filter(db_models.OptionPositionGroup.status == "OPEN")
@@ -1052,6 +1361,7 @@ def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     legs = legs_by_group(db, candidates)
     accounts = _accounts_by_segment(db, candidates)
     strategy_accounts = _strategy_accounts_by_id(db, candidates)
-    result = _evaluate_option_group_exits(candidates, legs, get_ltp_batch, accounts, strategy_accounts)
+    usdinr_rate = load_settings(db).usdinr_rate
+    result = _evaluate_option_group_exits(candidates, legs, get_ltp_batch, accounts, strategy_accounts, get_candle_history, usdinr_rate)
     db.commit()
     return result

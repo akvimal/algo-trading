@@ -10,6 +10,14 @@ from app.domain.indicators import (
     indicator_warmup,
     regime_indicator_warmup,
 )
+from app.domain.regime import compute_supertrend
+from app.domain.rules import CandleClose
+
+
+def _candles(closes: list[float]) -> list[CandleClose]:
+    # high=low=close - matches test_rules.py's own helper; only supertrend
+    # cares about high/low, exercised separately below with real ones.
+    return [CandleClose(timestamp=f"t{i}", close=c, high=c, low=c) for i, c in enumerate(closes)]
 
 
 def test_compute_rsi_warmup_period_is_none():
@@ -68,12 +76,20 @@ def test_compute_sma_skips_windows_containing_none():
 
 def test_compute_indicator_dispatches_rsi():
     closes = [10.0, 11.0, 10.0, 13.0, 20.0]
-    assert compute_indicator("rsi", {"period": 2}, closes) == compute_rsi(closes, period=2)
+    assert compute_indicator("rsi", {"period": 2}, _candles(closes)) == compute_rsi(closes, period=2)
+
+
+def test_compute_indicator_dispatches_supertrend_to_close_series():
+    # SuperTrend's crossover VALUE series is just price itself - "value
+    # crosses signal" against the ST line (compute_indicator_signal below)
+    # is the standard "SuperTrend flip" entry signal.
+    closes = [10.0, 11.0, 10.0, 13.0, 20.0]
+    assert compute_indicator("supertrend", {"period": 2, "multiplier": 3.0}, _candles(closes)) == closes
 
 
 def test_compute_indicator_unknown_type_raises():
     with pytest.raises(ValueError, match="no compute rule"):
-        compute_indicator("macd", {}, [10.0, 11.0])
+        compute_indicator("macd", {}, _candles([10.0, 11.0]))
 
 
 def test_compute_indicator_signal_dispatches_rsi_sma():
@@ -82,16 +98,33 @@ def test_compute_indicator_signal_dispatches_rsi_sma():
     closes = [10.0, 11.0, 10.0, 13.0, 20.0]
     rsi = compute_rsi(closes, period=2)
     expected = compute_sma(rsi, period=2)
-    assert compute_indicator_signal("rsi", {"period": 2, "sma_period": 2}, closes) == expected
+    assert compute_indicator_signal("rsi", {"period": 2, "sma_period": 2}, _candles(closes)) == expected
+
+
+def test_compute_indicator_signal_dispatches_supertrend_line():
+    # Real high/low (not high=low=close) since SuperTrend's ATR needs a
+    # genuine range - mirrors test_regime.py's own compute_supertrend fixtures.
+    candles = [
+        CandleClose(timestamp="t0", close=10.0, high=11.0, low=9.0),
+        CandleClose(timestamp="t1", close=11.0, high=12.0, low=10.0),
+        CandleClose(timestamp="t2", close=12.0, high=13.0, low=11.0),
+        CandleClose(timestamp="t3", close=9.0, high=10.0, low=8.0),
+    ]
+    params = {"period": 2, "multiplier": 3.0}
+    assert compute_indicator_signal("supertrend", params, candles) == compute_supertrend(candles, period=2, multiplier=3.0)
 
 
 def test_compute_indicator_signal_unknown_type_raises():
     with pytest.raises(ValueError, match="no signal rule"):
-        compute_indicator_signal("macd", {}, [10.0, 11.0])
+        compute_indicator_signal("macd", {}, _candles([10.0, 11.0]))
 
 
 def test_indicator_warmup_rsi_is_period_plus_sma_period():
     assert indicator_warmup("rsi", {"period": 14, "sma_period": 9}) == 23
+
+
+def test_indicator_warmup_supertrend_is_period_plus_one():
+    assert indicator_warmup("supertrend", {"period": 10, "multiplier": 3.0}) == 11
 
 
 def test_indicator_warmup_unknown_type_raises():

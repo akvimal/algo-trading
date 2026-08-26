@@ -11,7 +11,14 @@ from app.domain.models import (
 
 
 def _base(**overrides) -> dict:
-    payload = dict(segment="NSE", symbol="RELIANCE", action="BUY", instrument_type="spot", price=100.0)
+    payload = dict(
+        segment="NSE",
+        symbol="RELIANCE",
+        action="BUY",
+        instrument_type="spot",
+        price=100.0,
+        plan_checklist=[{"label": "Capital fixed", "checked": True}],
+    )
     payload.update(overrides)
     return payload
 

@@ -17,7 +17,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
-from app.domain.models import ExecutionSettings, ResolvedOrder
+from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
+from app.domain.models import ChecklistAnswer, ExecutionSettings, ResolvedOrder
 
 logger = logging.getLogger(__name__)
 
@@ -368,17 +369,54 @@ def _accounts_by_segment(db: Session, positions: list) -> dict[str, db_models.Ac
     return {row.segment: row for row in rows}
 
 
-def _apply_realized_pnl(pos, account, pnl: float) -> None:
-    """Sets pos.pnl and, if an account was found, credits/debits its
-    current_balance by the same amount - the one piece of bookkeeping
-    every closing path shares. account may be None (shouldn't happen -
-    positions.segment is NOT NULL + FK-enforced - but defended rather
-    than crashing a close over a bookkeeping gap)."""
+def _net_pnl_with_fees(pos, exit_price: float, raw_pnl: float) -> float:
+    """Delta Exchange fee simulation, Rule F - nets pos.open_fee/close_fee
+    out of the raw price-distance pnl for a CRYPTO-future position that
+    went through _open_delta_fee_fields (pos.open_fee is not None). Returns
+    raw_pnl completely unchanged for every other position (pos.open_fee is
+    None) - zero behavior change from before this feature existed. Sets
+    pos.close_fee as a side effect (audit trail, mirrors pos.open_fee) -
+    every one of this function's callers is about to persist `pos` anyway.
+    Shared by every close path EXCEPT the liquidation branch in
+    _evaluate_exits, which uses its own Rule E total_cost formula instead
+    of this Rule F one (see that branch's own comment)."""
+    if pos.open_fee is None:
+        return raw_pnl
+    close_fee = compute_futures_trading_fee(exit_price * float(pos.quantity))
+    pos.close_fee = close_fee
+    return raw_pnl - float(pos.open_fee) - close_fee
+
+
+def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] = None) -> None:
+    """Sets pos.pnl (always in the position's own native currency - raw
+    USD for CRYPTO, INR for NSE/MCX, matching entry_price/exit_price so
+    pnl stays a meaningful ratio against them for %-of-entry displays) and,
+    if an account was found, credits/debits its current_balance - which is
+    ALWAYS INR-denominated, every segment, unlike pnl itself - by the same
+    amount, converted through usdinr_rate first for a CRYPTO position (the
+    one segment priced in a foreign currency, see docs/architecture.md's
+    USDINR section). account may be None (shouldn't happen - positions.
+    segment is NOT NULL + FK-enforced - but defended rather than crashing a
+    close over a bookkeeping gap).
+
+    usdinr_rate is None for every non-CRYPTO caller (never read - a plain
+    coincidental no-op) and should never be None for a CRYPTO one in
+    practice (every CRYPTO open path already refuses to open at all
+    without a configured rate) - defended anyway (logs and falls back to
+    crediting the raw USD figure unconverted, same as this bug's pre-fix
+    behavior) rather than leaving a position permanently stuck OPEN over a
+    rate that was cleared out from under it after it opened."""
     pos.pnl = pnl
     if account is None:
         logger.error("no account found for segment %s - position %s closed without a balance update", pos.segment, pos.id)
         return
-    account.current_balance = float(account.current_balance) + pnl
+    credit = pnl
+    if pos.segment == "CRYPTO":
+        if usdinr_rate is None:
+            logger.error("CRYPTO pnl credited without a usdinr_rate conversion for position %s - balance is in raw USD, not INR", pos.id)
+        else:
+            credit = pnl * usdinr_rate
+    account.current_balance = float(account.current_balance) + credit
 
 
 def _reject(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str) -> db_models.Position:
@@ -432,6 +470,323 @@ def _reject_manual(
     )
     db.add(row)
     return row
+
+
+# --- Trade discipline checklist (Manual tab only) ---------------------
+#
+# list_checklist_items/create_checklist_item/update_checklist_item/
+# delete_checklist_item back GET/POST/PUT/DELETE /checklist-items - the
+# user-editable master list of pre-trade Plan items (see infra/postgres/
+# init/02-execution.sql's own comment on execution.checklist_items).
+# validate_plan_checklist/find_pending_manual_review/submit_position_review
+# are the two enforcement halves: the former gates a fresh manual order
+# (every active item must be answered `checked=true`), the latter gates
+# the NEXT one (a manual position/group that's CLOSED but not yet
+# reviewed blocks every future POST /positions/manual and
+# POST /option-groups/manual with a 409, until PUT .../review is
+# submitted for it) - see docs/architecture.md § 'Trade discipline
+# checklist'.
+
+
+def list_checklist_items(
+    db: Session, active_only: bool = False, phase: Optional[str] = None
+) -> list[db_models.ChecklistItem]:
+    q = db.query(db_models.ChecklistItem)
+    if active_only:
+        q = q.filter_by(active=True)
+    if phase is not None:
+        q = q.filter_by(phase=phase)
+    return q.order_by(db_models.ChecklistItem.sort_order, db_models.ChecklistItem.created_at).all()
+
+
+def create_checklist_item(
+    db: Session, label: str, phase: str, segments: list[str], sort_order: Optional[int]
+) -> db_models.ChecklistItem:
+    if sort_order is None:
+        # Sort after every existing item IN THE SAME PHASE (active or
+        # not) by default - a freshly-added item shows up at the bottom
+        # of its own list, not wherever sort_order=0 happens to land it,
+        # and doesn't jump ahead of/behind items in the OTHER phase's
+        # unrelated ordering.
+        max_order = (
+            db.query(db_models.ChecklistItem.sort_order)
+            .filter_by(phase=phase)
+            .order_by(db_models.ChecklistItem.sort_order.desc())
+            .first()
+        )
+        sort_order = (max_order[0] + 10) if max_order else 10
+    row = db_models.ChecklistItem(label=label, phase=phase, segments=segments, sort_order=sort_order)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def update_checklist_item(
+    db: Session,
+    item_id: uuid.UUID,
+    label: Optional[str],
+    phase: Optional[str],
+    segments: Optional[list[str]],
+    sort_order: Optional[int],
+    active: Optional[bool],
+) -> Optional[db_models.ChecklistItem]:
+    row = db.get(db_models.ChecklistItem, item_id)
+    if row is None:
+        return None
+    if label is not None:
+        row.label = label
+    if phase is not None:
+        row.phase = phase
+    if segments is not None:
+        row.segments = segments
+    if sort_order is not None:
+        row.sort_order = sort_order
+    if active is not None:
+        row.active = active
+    db.commit()
+    return row
+
+
+def delete_checklist_item(db: Session, item_id: uuid.UUID) -> bool:
+    """Hard delete - past trades keep their own {label, checked} snapshot
+    regardless (Position/OptionPositionGroup.plan_checklist), so removing
+    the master row here never rewrites history. Returns False if the id
+    didn't exist (the route 404s), True on success."""
+    row = db.get(db_models.ChecklistItem, item_id)
+    if row is None:
+        return False
+    db.delete(row)
+    db.commit()
+    return True
+
+
+def _today_in_tz(timezone: str) -> date:
+    """Server-side "today", in execution.settings.timezone - same
+    reference point is_within_intraday_window's own local-time check
+    already uses, NOT the browser's own local date. The 'day'-phase
+    checklist's whole point is a boundary that doesn't reset just because
+    someone's laptop clock/timezone differs from the account's."""
+    return datetime.now(ZoneInfo(timezone)).date()
+
+
+def get_daily_checklist(db: Session, settings: ExecutionSettings, segment: str) -> Optional[db_models.DailyChecklistLog]:
+    """None if nothing has been submitted yet today for `segment` - the
+    gate is still active in that case (see find_missing_daily_checklist)."""
+    return db.get(db_models.DailyChecklistLog, (_today_in_tz(settings.timezone), segment))
+
+
+def submit_daily_checklist(
+    db: Session, settings: ExecutionSettings, segment: str, answers: list[dict], notes: Optional[str]
+) -> db_models.DailyChecklistLog:
+    """PUT /daily-checklist - upserts today's (server-computed date,
+    segment) row; answered once, editable the rest of that same day (not
+    an immutable journal entry) - see execution.daily_checklist_log's own
+    comment. `notes` is ONE observation for the whole submission, not
+    per item."""
+    today = _today_in_tz(settings.timezone)
+    row = db.get(db_models.DailyChecklistLog, (today, segment))
+    if row is None:
+        row = db_models.DailyChecklistLog(log_date=today, segment=segment, answers=answers, notes=notes)
+        db.add(row)
+    else:
+        row.answers = answers
+        row.notes = notes
+        row.submitted_at = datetime.now(dt_timezone.utc)
+    db.commit()
+    return row
+
+
+def _open_trading_session(db: Session, today, segment: str) -> Optional[db_models.TradingSession]:
+    """The currently-open (checked_out_at IS NULL) session row for
+    today's (log_date, segment), if any - there can be at most one, since
+    check_in_trading_session refuses to start a second one while this
+    exists."""
+    return (
+        db.query(db_models.TradingSession)
+        .filter_by(log_date=today, segment=segment, checked_out_at=None)
+        .one_or_none()
+    )
+
+
+def check_in_trading_session(db: Session, settings: ExecutionSettings, segment: str) -> db_models.TradingSession:
+    """POST /trading-sessions/check-in - starts a NEW session row for
+    today (server-computed date), unless one's already open for this
+    (log_date, segment), in which case that same open row is returned
+    unchanged - a real trading day can have several sessions (checked in,
+    broke for lunch, checked in again), but never two open at once. The
+    route layer disables the Check In button while one's open, this is
+    just the server-side mirror of that same gate."""
+    today = _today_in_tz(settings.timezone)
+    open_row = _open_trading_session(db, today, segment)
+    if open_row is not None:
+        return open_row
+    row = db_models.TradingSession(log_date=today, segment=segment, checked_in_at=datetime.now(dt_timezone.utc))
+    db.add(row)
+    db.commit()
+    return row
+
+
+def check_out_trading_session(db: Session, settings: ExecutionSettings, segment: str) -> Optional[db_models.TradingSession]:
+    """POST /trading-sessions/check-out - closes today's currently-open
+    session (sets its checked_out_at to now), or None if none is open
+    (nothing to close - the route layer disables the Check Out button in
+    that state, this mirrors it server-side rather than silently
+    fabricating a row)."""
+    today = _today_in_tz(settings.timezone)
+    row = _open_trading_session(db, today, segment)
+    if row is None:
+        return None
+    row.checked_out_at = datetime.now(dt_timezone.utc)
+    db.commit()
+    return row
+
+
+def list_trading_sessions(db: Session, segment: Optional[str] = None) -> list[db_models.TradingSession]:
+    """GET /trading-sessions - the whole table is small (every check-in/
+    check-out instance ever recorded), so this returns everything rather
+    than needing a date-range param - ManualTab.tsx filters to today
+    client-side for its own session bar, ManualStatsPage.tsx keys the
+    rest by day for its own by-day/per-trade-day display."""
+    q = db.query(db_models.TradingSession)
+    if segment:
+        q = q.filter_by(segment=segment)
+    return q.order_by(db_models.TradingSession.checked_in_at.desc()).all()
+
+
+def find_missing_daily_checklist(db: Session, settings: ExecutionSettings, segment: str) -> Optional[str]:
+    """None if `segment` has no active 'day'-phase items scoped to it (or
+    'unscoped', i.e. every-segment) at all, or today's checklist has
+    already been submitted for it; otherwise a reject reason (route layer
+    turns it into a 409) - checked BEFORE validate_plan_checklist in
+    open_manual/open_manual_option, same "not a trade attempt, no row
+    persisted" reasoning as find_pending_manual_review."""
+    active_day_items = [
+        i for i in list_checklist_items(db, active_only=True, phase="day") if not i.segments or segment in i.segments
+    ]
+    if not active_day_items:
+        return None
+    if get_daily_checklist(db, settings, segment) is None:
+        return f"complete today's day checklist for {segment} first"
+    return None
+
+
+def validate_plan_checklist(db: Session, answers: list[ChecklistAnswer], segment: str) -> Optional[str]:
+    """None if `answers` is a valid, fully-checked submission against the
+    CURRENTLY active 'plan'-phase checklist items SCOPED TO `segment`
+    (empty `segments` on an item means every segment - e.g. OI change is
+    NSE-only, so a CRYPTO/MCX order isn't required to answer it);
+    otherwise a reject reason (route layer turns it into a 422). Matched
+    by count, not by label text - the frontend always renders from a
+    fresh GET /checklist-items immediately before showing the form (and
+    applies the identical segment filter client-side), so a mismatch here
+    means the list or `segment` changed since it was fetched, not a
+    malicious/malformed request. 'review'/'day'-phase items are irrelevant
+    here entirely - see ReviewSubmit.checklist/DailyChecklistSubmit's own
+    comments for why those aren't validated the same way."""
+    active_items = [
+        i for i in list_checklist_items(db, active_only=True, phase="plan") if not i.segments or segment in i.segments
+    ]
+    if len(answers) != len(active_items):
+        return "trade plan checklist is out of date - refresh and try again"
+    if not all(a.checked for a in answers):
+        return "complete every item in the trade plan checklist before placing this order"
+    return None
+
+
+def find_pending_manual_review(db: Session) -> Optional[dict]:
+    """The earliest-closed manual (strategy_id IS NULL) position OR option
+    group that's CLOSED but still has reviewed_at IS NULL, across BOTH
+    tables - or None if there's nothing pending. `pending_count` is the
+    TOTAL across both tables, not just this one - the frontend's own
+    reminder banner shows only that count now (not this trade's own
+    symbol/action/pnl - see ManualTab.tsx, changed 2026-08-26 at the
+    user's explicit request), this function still needs to identify the
+    earliest one for its review icon to point at once a card is opened.
+    This gate no longer blocks POST /positions/manual or POST
+    /option-groups/manual at all (see those routes' own docstrings for
+    why - removed the same day) - it's purely a reminder now."""
+    pending: list[dict] = []
+    pos = (
+        db.query(db_models.Position)
+        .filter_by(strategy_id=None, status="CLOSED", reviewed_at=None, option_group_id=None)
+        .order_by(db_models.Position.exit_time)
+        .first()
+    )
+    if pos is not None:
+        pending.append(
+            {
+                "kind": "position",
+                "id": str(pos.id),
+                "symbol": pos.symbol,
+                "segment": pos.segment,
+                "action": pos.action,
+                "pnl": float(pos.pnl) if pos.pnl is not None else None,
+                "exit_time": pos.exit_time,
+            }
+        )
+    group = (
+        db.query(db_models.OptionPositionGroup)
+        .filter_by(strategy_id=None, status="CLOSED", reviewed_at=None)
+        .order_by(db_models.OptionPositionGroup.exit_time)
+        .first()
+    )
+    if group is not None:
+        pending.append(
+            {
+                "kind": "option_group",
+                "id": str(group.id),
+                "symbol": group.underlying_symbol,
+                "segment": group.segment,
+                "action": group.action,
+                "pnl": float(group.pnl) if group.pnl is not None else None,
+                "exit_time": group.exit_time,
+            }
+        )
+    if not pending:
+        return None
+    pending.sort(key=lambda p: p["exit_time"] or datetime.min.replace(tzinfo=dt_timezone.utc))
+    earliest = pending[0]
+    earliest["exit_time"] = earliest["exit_time"].isoformat() if earliest["exit_time"] else None
+    earliest["pending_count"] = (
+        db.query(db_models.Position).filter_by(strategy_id=None, status="CLOSED", reviewed_at=None, option_group_id=None).count()
+        + db.query(db_models.OptionPositionGroup).filter_by(strategy_id=None, status="CLOSED", reviewed_at=None).count()
+    )
+    return earliest
+
+
+def submit_position_review(
+    db: Session,
+    position_id: uuid.UUID,
+    violation: bool,
+    notes: Optional[str],
+    accepted_loss: bool,
+    review_checklist: Optional[list[dict]] = None,
+) -> tuple[Optional[db_models.Position], Optional[str]]:
+    """PUT /positions/{id}/review - the Complete step. Returns (row, reject_
+    reason); reject_reason is set (row left untouched) if the position
+    isn't a CLOSED manual one, is already reviewed, or is a loss that
+    hasn't been accepted yet. `review_checklist` is the 'review'-phase
+    {label, checked} snapshot (see ReviewSubmit.checklist's own comment) -
+    stored as-is, never validated for completeness."""
+    row = db.get(db_models.Position, position_id)
+    if row is None:
+        return None, "position not found"
+    if row.strategy_id is not None:
+        return None, "only manually-opened positions have a discipline review"
+    if row.option_group_id is not None:
+        return None, "this is an option leg - review the option group instead (PUT /option-groups/{id}/review)"
+    if row.status != "CLOSED":
+        return None, f"position is {row.status}, not CLOSED"
+    if row.reviewed_at is not None:
+        return None, "position already reviewed"
+    if row.pnl is not None and float(row.pnl) < 0 and not accepted_loss:
+        return None, "must accept the loss before submitting this review"
+    row.reviewed_at = datetime.now(dt_timezone.utc)
+    row.review_violation = violation
+    row.review_notes = notes
+    row.review_checklist = review_checklist
+    db.commit()
+    return row, None
 
 
 def _resolve_stop_loss(
@@ -502,6 +857,52 @@ def _resolve_stop_loss(
     return candidate, None
 
 
+def _open_delta_fee_fields(
+    segment: str,
+    instrument_type: str,
+    action: str,
+    price: float,
+    quantity: float,
+    account: db_models.Account,
+    capital_account,
+    usdinr_rate: Optional[float] = None,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Delta Exchange fee/liquidation simulation (app/domain/delta_fees.py) -
+    CRYPTO + instrument_type='future' only, (None, None, None) for every
+    other position (unaffected by this feature entirely). Debits the
+    computed open_fee from capital_account.current_balance immediately - a
+    real cash outflow, independent of realized P&L, the first time this
+    codebase ever touches balance at OPEN time. account.leverage (used for
+    margin_posted/liquidation_price) is always the SEGMENT account's own
+    value even when capital_account is a strategy's own dedicated one -
+    leverage stays segment-only, same as square_off_time (see
+    load_capital_account's own docstring). Shared by open_position and
+    open_manual_position so both compute this identically.
+
+    open_fee/margin_posted/liquidation_price are all returned/stored in
+    raw USD (matching entry_price, which never gets converted - see
+    docs/architecture.md's USDINR section) - only the actual balance DEBIT
+    below is converted through usdinr_rate first, since current_balance is
+    always INR-denominated. Every caller already guarantees usdinr_rate is
+    set before reaching here (CRYPTO sizing above this call already
+    rejects the whole order if it's None) - None is only a defensive
+    fallback (debits the raw USD figure unconverted, logged) that should
+    never actually trigger."""
+    if segment != "CRYPTO" or instrument_type != "future":
+        return None, None, None
+    notional = price * quantity
+    open_fee = compute_futures_trading_fee(notional)
+    margin_posted = compute_margin_posted(notional, float(account.leverage))
+    liquidation_price = compute_liquidation_price(action, price, float(account.leverage))
+    if usdinr_rate is None:
+        logger.error("CRYPTO open_fee debited without a usdinr_rate conversion - balance is in raw USD, not INR")
+        debit = open_fee
+    else:
+        debit = open_fee * usdinr_rate
+    capital_account.current_balance = float(capital_account.current_balance) - debit
+    return open_fee, margin_posted, liquidation_price
+
+
 def open_position(
     order: ResolvedOrder,
     settings: ExecutionSettings,
@@ -565,9 +966,8 @@ def open_position(
     for pos in positions_to_close:
         pos.exit_price = order.price
         pos.exit_time = datetime.now(dt_timezone.utc)
-        _apply_realized_pnl(
-            pos, capital_account, compute_pnl(pos.action, float(pos.entry_price), order.price, float(pos.quantity))
-        )
+        raw_pnl = compute_pnl(pos.action, float(pos.entry_price), order.price, float(pos.quantity))
+        _apply_realized_pnl(pos, capital_account, _net_pnl_with_fees(pos, order.price, raw_pnl), settings.usdinr_rate)
         pos.status = "CLOSED"
         pos.exit_reason = "counter_signal"
 
@@ -692,6 +1092,10 @@ def open_position(
     else:
         quantity = compute_quantity(effective_capital, order.price, lot_size)
 
+    open_fee, margin_posted, liquidation_price = _open_delta_fee_fields(
+        order.segment, order.instrument_type, order.action, order.price, quantity, account, capital_account, settings.usdinr_rate
+    )
+
     row = db_models.Position(
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
@@ -714,6 +1118,9 @@ def open_position(
         stop_loss_indicator_type=order.stop_loss_indicator_type,
         stop_loss_indicator_params=order.stop_loss_indicator_params,
         square_off_time=account.square_off_time,
+        open_fee=open_fee,
+        margin_posted=margin_posted,
+        liquidation_price=liquidation_price,
     )
     db.add(row)
     db.commit()
@@ -739,6 +1146,8 @@ def open_manual_position(
     stop_loss_indicator_type: Optional[str] = None,
     stop_loss_indicator_params: Optional[dict] = None,
     trailing_stop_enabled: bool = False,
+    plan_checklist: Optional[list[dict]] = None,
+    order_type: Optional[str] = None,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -784,7 +1193,13 @@ def open_manual_position(
     "BANKNIFTY" bare IS a real, resolvable Dhan symbol (the index SPOT,
     lot_size=1 by definition), so the old get_lot_size(segment, symbol)
     call silently succeeded against the WRONG instrument instead of
-    failing loudly."""
+    failing loudly.
+
+    `order_type` ('market'/'limit'/None) is stored as-is on the resulting
+    row for future performance review - it's purely a label the caller
+    (ManualTab.tsx) already resolved before calling this function; `price`
+    above is the same real number either way (a fresh live LTP for
+    'market', the caller-typed trigger for 'limit')."""
     signal_id = uuid.uuid4()
 
     if not is_supported("intraday", instrument_type):
@@ -864,7 +1279,8 @@ def open_manual_position(
     for pos in positions_to_close:
         pos.exit_price = price
         pos.exit_time = datetime.now(dt_timezone.utc)
-        _apply_realized_pnl(pos, account, compute_pnl(pos.action, float(pos.entry_price), price, float(pos.quantity)))
+        raw_pnl = compute_pnl(pos.action, float(pos.entry_price), price, float(pos.quantity))
+        _apply_realized_pnl(pos, account, _net_pnl_with_fees(pos, price, raw_pnl), settings.usdinr_rate)
         pos.status = "CLOSED"
         pos.exit_reason = "counter_signal"
 
@@ -926,6 +1342,10 @@ def open_manual_position(
         else:
             final_quantity = compute_quantity(effective_capital, price, lot_size)
 
+    open_fee, margin_posted, liquidation_price = _open_delta_fee_fields(
+        segment, instrument_type, action, price, final_quantity, account, account, settings.usdinr_rate
+    )
+
     row = db_models.Position(
         signal_id=signal_id,
         strategy_id=None,
@@ -947,6 +1367,11 @@ def open_manual_position(
         stop_loss_indicator_type=stop_loss_indicator_type,
         stop_loss_indicator_params=stop_loss_indicator_params,
         square_off_time=account.square_off_time,
+        open_fee=open_fee,
+        margin_posted=margin_posted,
+        liquidation_price=liquidation_price,
+        plan_checklist=plan_checklist,
+        order_type=order_type,
     )
     db.add(row)
     db.commit()
@@ -1073,6 +1498,24 @@ def compute_unrealized_pnl(positions: list, get_ltp_batch: GetLtpBatch) -> dict:
     return result
 
 
+def record_position_pnl_snapshots(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
+    """Persists one PositionPnlSnapshot row per OPEN position with a live
+    quote this tick - the write counterpart to compute_unrealized_pnl
+    above (reused as-is, unchanged). Called from app/scheduler.py's
+    run_check_exits, piggybacking on the exit-monitor's own 30s tick, but
+    deliberately against EVERY open position (not just the stop-loss/
+    target/liquidation-having subset check_exits itself scopes its own
+    candidate query to) - a plain capital-sized position still gets a P&L
+    history. See infra/postgres/init/02-execution.sql's own comment on
+    position_pnl_snapshots for the full design/scope notes."""
+    open_positions = db.query(db_models.Position).filter_by(status="OPEN").all()
+    live = compute_unrealized_pnl(open_positions, get_ltp_batch)
+    for position_id, (cmp_price, unrealized_pnl) in live.items():
+        db.add(db_models.PositionPnlSnapshot(position_id=position_id, cmp=cmp_price, unrealized_pnl=unrealized_pnl))
+    db.commit()
+    return {"recorded": len(live), "checked": len(open_positions)}
+
+
 def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     """Closes every OPEN position at CMP. One quote fetch per distinct
     exchange among the open positions. A position whose quote fetch fails
@@ -1083,6 +1526,7 @@ def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     quotes = _quotes_by_exchange(open_positions, get_ltp_batch)
     accounts = _accounts_by_segment(db, open_positions)
     strategy_accounts = _strategy_accounts_by_id(db, open_positions)
+    usdinr_rate = load_settings(db).usdinr_rate
     closed = 0
     failed = 0
 
@@ -1094,10 +1538,9 @@ def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
 
         pos.exit_price = cmp_price
         pos.exit_time = datetime.now(dt_timezone.utc)
+        raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
         _apply_realized_pnl(
-            pos,
-            _resolve_capital_account(pos, accounts, strategy_accounts),
-            compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)),
+            pos, _resolve_capital_account(pos, accounts, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl), usdinr_rate
         )
         pos.status = "CLOSED"
         pos.exit_reason = "square_off"
@@ -1142,12 +1585,13 @@ def square_off_position(
         return {"status": "quote_unavailable"}
 
     account = load_capital_account(db, pos.segment, pos.strategy_id)
-    pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, close_quantity)
+    usdinr_rate = load_settings(db).usdinr_rate
+    raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, close_quantity)
 
     if close_quantity == held_quantity:
         pos.exit_price = cmp_price
         pos.exit_time = datetime.now(dt_timezone.utc)
-        _apply_realized_pnl(pos, account, pnl)
+        _apply_realized_pnl(pos, account, _net_pnl_with_fees(pos, cmp_price, raw_pnl), usdinr_rate)
         pos.status = "CLOSED"
         pos.exit_reason = "manual"
         db.commit()
@@ -1162,6 +1606,18 @@ def square_off_position(
         }
 
     remaining_quantity = held_quantity - close_quantity
+    # open_fee/margin_posted were both computed off the FULL original
+    # quantity at open time (_open_delta_fee_fields) - a partial close must
+    # split them by the same ratio it splits quantity, or either portion
+    # would double-count (or lose) part of the original figures.
+    # liquidation_price is a PRICE level, not quantity-dependent, so it's
+    # left as-is on `pos` and simply not copied onto closed_row (a CLOSED
+    # row never needs one).
+    close_fraction = close_quantity / held_quantity
+    closed_open_fee = float(pos.open_fee) * close_fraction if pos.open_fee is not None else None
+    if pos.open_fee is not None:
+        pos.open_fee = float(pos.open_fee) - closed_open_fee
+        pos.margin_posted = float(pos.margin_posted) * (1 - close_fraction)
     pos.quantity = remaining_quantity
     closed_row = db_models.Position(
         signal_id=uuid.uuid4(),
@@ -1180,8 +1636,9 @@ def square_off_position(
         status="CLOSED",
         exit_reason="manual",
         square_off_time=pos.square_off_time,
+        open_fee=closed_open_fee,
     )
-    _apply_realized_pnl(closed_row, account, pnl)
+    _apply_realized_pnl(closed_row, account, _net_pnl_with_fees(closed_row, cmp_price, raw_pnl), usdinr_rate)
     db.add(closed_row)
     db.commit()
     return {
@@ -1201,6 +1658,7 @@ def _evaluate_square_off_due(
     now_local: time,
     accounts_by_segment: dict,
     strategy_accounts: Optional[dict] = None,
+    usdinr_rate: Optional[float] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - closes positions in place whose
     own square_off_time has already passed the given local time. Mirrors
@@ -1226,10 +1684,10 @@ def _evaluate_square_off_due(
 
         pos.exit_price = cmp_price
         pos.exit_time = datetime.now(dt_timezone.utc)
+        raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
         _apply_realized_pnl(
-            pos,
-            _resolve_capital_account(pos, accounts_by_segment, strategy_accounts),
-            compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)),
+            pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl),
+            usdinr_rate,
         )
         pos.status = "CLOSED"
         pos.exit_reason = "square_off"
@@ -1251,7 +1709,7 @@ def square_off_due_positions(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     open_positions = db.query(db_models.Position).filter_by(status="OPEN").all()
     accounts = _accounts_by_segment(db, open_positions)
     strategy_accounts = _strategy_accounts_by_id(db, open_positions)
-    result = _evaluate_square_off_due(open_positions, get_ltp_batch, now_local, accounts, strategy_accounts)
+    result = _evaluate_square_off_due(open_positions, get_ltp_batch, now_local, accounts, strategy_accounts, exec_settings.usdinr_rate)
     db.commit()
     return result
 
@@ -1263,6 +1721,7 @@ def _evaluate_exits(
     accounts_by_segment: dict,
     get_candle_history: Optional[GetCandleHistory] = None,
     strategy_accounts: Optional[dict] = None,
+    usdinr_rate: Optional[float] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mutates the given position
     objects in place (closing them, or trailing stop_loss_price) and
@@ -1271,11 +1730,14 @@ def _evaluate_exits(
     compute_unrealized_pnl takes a plain `positions: list` instead of a
     Session.
 
-    Only positions with a stop_loss_price or target_price set should be
-    passed in - plain capital-sized positions (neither set) aren't
-    monitored at all, no added overhead for them (check_exits filters
-    before calling this). SL takes priority over target if both would
-    fire in the same tick (gappy price).
+    Only positions with a stop_loss_price, target_price, or liquidation_price
+    set should be passed in - plain capital-sized positions (none set)
+    aren't monitored at all, no added overhead for them (check_exits filters
+    before calling this). Liquidation takes priority over SL/target if
+    multiple would fire in the same tick (a real exchange force-closes a
+    liquidated position regardless of what stop-loss the strategy itself
+    configured); SL takes priority over target if both would fire (gappy
+    price).
 
     Trailing (only trailing_stop_enabled positions, stop-loss only, never
     the target - see docs/architecture.md) ratchets stop_loss_price using
@@ -1307,6 +1769,37 @@ def _evaluate_exits(
         if cmp_price is None:
             continue
 
+        liquidated = pos.liquidation_price is not None and (
+            (pos.action == "BUY" and cmp_price <= float(pos.liquidation_price))
+            or (pos.action == "SELL" and cmp_price >= float(pos.liquidation_price))
+        )
+        if liquidated:
+            # Delta Exchange liquidation simulation, Rule E - wipes the
+            # FULL posted margin + a liquidation fee (which REPLACES the
+            # normal close fee entirely, never both), not the more lenient
+            # raw price-distance loss compute_pnl would give - see
+            # delta_fees.compute_liquidation_price's own docstring on why.
+            # Pre-empts stop-loss/target/trailing below for this tick, same
+            # as a real exchange force-closing regardless of the strategy's
+            # own configured stop.
+            # leverage isn't stored directly on the position - back-derive
+            # it from what IS stored (margin_posted = notional_at_open /
+            # leverage, and notional_at_open = entry_price * quantity,
+            # quantity never changing between open and a full liquidation).
+            leverage = (float(pos.entry_price) * float(pos.quantity)) / float(pos.margin_posted)
+            liquidation_fee = compute_futures_liquidation_fee(pos.symbol, cmp_price * float(pos.quantity), leverage)
+            pos.exit_price = cmp_price
+            pos.exit_time = datetime.now(dt_timezone.utc)
+            pos.close_fee = liquidation_fee
+            _apply_realized_pnl(
+                pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), -float(pos.margin_posted) - liquidation_fee,
+                usdinr_rate,
+            )
+            pos.status = "CLOSED"
+            pos.exit_reason = "liquidation"
+            closed_stop_loss += 1
+            continue
+
         sl_hit = pos.stop_loss_price is not None and (
             (pos.action == "BUY" and cmp_price <= float(pos.stop_loss_price))
             or (pos.action == "SELL" and cmp_price >= float(pos.stop_loss_price))
@@ -1319,10 +1812,10 @@ def _evaluate_exits(
         if sl_hit or target_hit:
             pos.exit_price = cmp_price
             pos.exit_time = datetime.now(dt_timezone.utc)
+            raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
             _apply_realized_pnl(
-                pos,
-                _resolve_capital_account(pos, accounts_by_segment, strategy_accounts),
-                compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity)),
+                pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl),
+                usdinr_rate,
             )
             pos.status = "CLOSED"
             if sl_hit:
@@ -1399,11 +1892,20 @@ def check_exits(
     candidates = (
         db.query(db_models.Position)
         .filter(db_models.Position.status == "OPEN")
-        .filter((db_models.Position.stop_loss_price.isnot(None)) | (db_models.Position.target_price.isnot(None)))
+        .filter(
+            (db_models.Position.stop_loss_price.isnot(None))
+            | (db_models.Position.target_price.isnot(None))
+            # A leveraged CRYPTO future can carry a liquidation_price with
+            # no stop_loss_price/target_price configured at all (e.g. no
+            # Strategy stop-loss method set) - still must be checked every
+            # tick, see _evaluate_exits' liquidation branch.
+            | (db_models.Position.liquidation_price.isnot(None))
+        )
         .all()
     )
     accounts = _accounts_by_segment(db, candidates)
     strategy_accounts = _strategy_accounts_by_id(db, candidates)
-    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts)
+    usdinr_rate = load_settings(db).usdinr_rate
+    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts, usdinr_rate)
     db.commit()
     return result

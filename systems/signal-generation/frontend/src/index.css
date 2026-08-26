@@ -33,6 +33,13 @@ main {
   gap: 1.25rem;
 }
 
+header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 header h1 {
   font-size: 1.5rem;
   margin: 0 0 0.35rem;
@@ -42,6 +49,18 @@ header h1 {
   color: var(--text-dim);
   font-size: 0.9rem;
   margin: 0;
+}
+
+.signal-notifier {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.signal-notifier .tiny-checkbox {
+  font-size: 0.8rem;
+  color: var(--text-dim);
 }
 
 .error {
@@ -777,19 +796,75 @@ tbody tr.selected-row {
    instrument header, entry controls left, spot-price exit-watch controls
    right, closed trades collapsed below), see ManualTab.tsx's own comments
    for the interaction model. */
-.manual-card-header {
+
+/* Every card's own top row - collapse/remove clustered at the far right
+   (manual-card-actions), always visible even when the rest of the card
+   is hidden; identity/PnL/LTP (or, when collapsed, the collapsed
+   summary) fills the remaining space on the left, all on ONE line -
+   used to be a separate two-row header with PnL/LTP stacked vertically,
+   compacted into this single row at the user's explicit request. See
+   ManualRow.collapsed's own comment. */
+.manual-card-top-row {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
+  align-items: center;
+  gap: 0.75rem;
   flex-wrap: wrap;
 }
 
-.manual-card-fields {
+.manual-card-actions {
   display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.manual-collapse-toggle {
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.manual-card-collapsed-summary {
+  display: flex;
+  align-items: center;
   gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A row whose segment isn't currently checked in - trading form replaced
+   by manual-checkin-required below, see ManualTab.tsx's own gate. */
+.manual-card-gated {
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.manual-checkin-required {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+
+.manual-add-instrument-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.manual-new-row-segment,
+.manual-new-row-symbol,
+.manual-new-row-instrument {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.manual-new-row-symbol {
+  width: 9rem;
 }
 
 .manual-add-instrument-btn {
@@ -814,35 +889,21 @@ tbody tr.selected-row {
   font-size: 0.82rem;
 }
 
-.manual-card-fields label {
+/* Segment/Symbol/Instrument - fixed at creation time via "+ Add
+   instrument"'s own picker now (see ManualTab.tsx's own comment), so
+   this is a plain read-only summary line, not a form. */
+.manual-card-identity {
   display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.78rem;
-  color: var(--text-dim);
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
 }
 
-.manual-card-fields select,
-.manual-card-fields input {
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text);
-  padding: 0.35rem 0.8rem;
-  font-size: 0.85rem;
-  min-width: 8rem;
-}
-
-/* Live LTP readout - far right of the order row (same row as the Add
-   button), just before Square off - refreshed immediately on a Segment/
-   Symbol change (refreshLtp in ManualTab.tsx) and every poll tick after
-   that, same lastKnownLtp already used for the order-value preview.
-   margin-left: auto pushes it to the row's right edge - kept alongside
-   .manual-squareoff-btn's own auto margin (not removed) so Square off
-   still lands at the far right even when this span isn't rendered at all
-   (no symbol typed yet). */
+/* Live LTP readout, refreshed immediately on a Segment/Symbol change
+   (refreshLtp in ManualTab.tsx) and every poll tick after that - same
+   lastKnownLtp already used for the order-value preview and, when Limit
+   is blank, as computeRR's effective entry price. */
 .manual-ltp-live {
-  margin-left: auto;
   display: inline-flex;
   align-items: baseline;
   gap: 0.3rem;
@@ -859,12 +920,6 @@ tbody tr.selected-row {
   color: var(--text-dim);
 }
 
-.manual-card-summary {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
 .manual-pnl-toggle {
   background: none;
   border: none;
@@ -876,6 +931,7 @@ tbody tr.selected-row {
 }
 
 .manual-icon-btn {
+  position: relative;
   background: transparent;
   border: 1px solid var(--accent);
   color: var(--accent);
@@ -896,9 +952,32 @@ tbody tr.selected-row {
   opacity: 1;
 }
 
-.manual-lock-btn.active {
+.manual-icon-btn.active {
   background: var(--accent);
   color: #fff;
+}
+
+/* Attached-image count on the row-level toggle - small enough to stay
+   out of the way, only shown once there's at least one image. */
+.manual-icon-btn-count {
+  position: absolute;
+  bottom: -0.3rem;
+  right: -0.3rem;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.15rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1rem;
+  text-align: center;
+}
+
+.manual-icon-btn.active .manual-icon-btn-count {
+  background: #fff;
+  color: var(--accent);
 }
 
 .manual-field-group {
@@ -940,10 +1019,6 @@ tbody tr.selected-row {
   color: #2b0a0e;
 }
 
-.manual-squareoff-btn {
-  margin-left: auto;
-}
-
 .manual-order-row {
   display: flex;
   justify-content: space-between;
@@ -955,16 +1030,14 @@ tbody tr.selected-row {
   border-top: 1px solid var(--border);
 }
 
-.manual-entry-group,
-.manual-exit-group {
+.manual-entry-group {
   display: flex;
   align-items: flex-end;
   gap: 0.6rem;
   flex-wrap: wrap;
 }
 
-.manual-entry-group label,
-.manual-exit-group label {
+.manual-entry-group label {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -973,21 +1046,90 @@ tbody tr.selected-row {
 }
 
 .manual-entry-group select,
-.manual-entry-group input,
-.manual-exit-group select,
-.manual-exit-group input {
+.manual-entry-group input {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
   padding: 0.4rem 0.6rem;
   font-size: 0.85rem;
-  min-width: 6rem;
+  min-width: 5.5rem;
 }
 
-.manual-entry-group input[type="number"],
-.manual-exit-group input[type="number"] {
-  min-width: 5.5rem;
+/* Plain numeric fields (Lot, SL %, Period, Multiplier, etc.) carry no
+   long text - a bit narrower than the wider default selects need for
+   their option text (e.g. "Bull Call Spread"), but still a comfortable
+   size to read/type into, not the bare minimum. */
+.manual-entry-group input[type="number"] {
+  min-width: 4.5rem;
+  width: 4.5rem;
+}
+
+/* Limit/SL Limit/Target carry real price values (up to 6 digits plus
+   paise, e.g. "999999.99") - wide enough to show the whole number
+   without scrolling/clipping. */
+.manual-entry-group input.manual-price-input {
+  min-width: 7rem;
+  width: 7rem;
+}
+
+.manual-entry-group input.manual-price-input:disabled {
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* The Target field plus its RR readout, stacked so "RR 1:x" sits directly
+   under the input it's derived from rather than trailing off to the side. */
+.manual-target-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+/* Computed reward:risk for the effective entry (Limit, or live LTP when
+   Limit is blank)/Target/SL Limit the user's typed in (see computeRR) -
+   shown right under the Target field so the number driving the Add
+   button's own gate is actually visible, not just enforced silently. */
+.manual-rr-indicator {
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The consolidated Add/Update + Exit button pair, trailing the field
+   groups on the same row. */
+.manual-action-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* "= 0.1 total" next to the Lot input - see lotConversionHint. */
+.manual-lot-hint {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The Limit label plus its "MKT" quick-fill link, side by side above the
+   input - see the label's own "Set Limit to the current LTP" button. */
+.manual-field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.manual-price-mode-toggle {
+  transform: scale(0.85);
+  transform-origin: left center;
+}
+
+.manual-toggle.active {
+  background: var(--accent);
+  color: #fff;
 }
 
 button.btn-add {
@@ -1011,20 +1153,146 @@ button.btn-exit {
   color: var(--text-dim);
 }
 
+/* An open option group's actual resolved leg(s) (real symbol, e.g.
+   "GOLDM25AUG161000CE") - naked has 1, spread has 2 (CE+PE) - shown as a
+   title line ABOVE the combined Status/Qty/Net Entry/Net CMP/P&L grid,
+   not as its own separate per-leg Qty/Entry/CMP/P&L breakdown below it
+   (removed - those figures duplicated the grid's own combined ones,
+   most visibly for a naked single-leg position where they were
+   identical). */
+.manual-leg-buy {
+  color: var(--buy);
+  font-weight: 600;
+}
+
+.manual-leg-sell {
+  color: var(--sell);
+  font-weight: 600;
+}
+
+/* An open position's leg(s) - naked has 1 row, spread has 2 (CE+PE),
+   spot/future always 1 - as a compact table (Leg/Trade/Strike or Symbol/
+   Qty/Entry/LTP/PnL) with a single × to exit the whole position spanning
+   every leg row, replacing the old separate leg-title-line + Status/Qty/
+   Net Entry/Net CMP/P&L grid combo per the user's own mockup. */
+.manual-open-table-wrap {
+  margin-top: 0.4rem;
+}
+
+.manual-open-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.manual-open-table th,
+.manual-open-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  white-space: nowrap;
+}
+
+.manual-open-table th {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.manual-open-table tbody tr:not(:last-child) td {
+  border-bottom: 1px solid var(--border);
+}
+
+/* The × cell reuses .manual-icon-btn's own existing look (same as every
+   other icon button on this page) rather than a bespoke style - only
+   alignment is bespoke here. */
+.manual-open-table-close {
+  text-align: center !important;
+  vertical-align: middle;
+}
+
+.manual-open-table-sl {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+}
+
+/* A still-pending entry watch's own detail row - Symbol/Action/Qty read
+   only, Trigger (spot) editable in place (updatePendingTriggerPrice) with
+   Update/Cancel actions alongside - replaces the plain "Pending @ price"
+   text so a pending order's own price is visibly changeable and
+   cancelable without hunting for the row's other controls. */
+.manual-pending-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
+  align-items: end;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.manual-pending-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.manual-pending-value {
+  font-size: 0.85rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.manual-pending-cell input[type="number"] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  min-width: 5.5rem;
+}
+
+.manual-pending-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .manual-divider {
   display: flex;
   align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: 100%;
   margin: 1rem 0 0.5rem;
+  border: none;
   border-top: 1px solid var(--border);
-  padding-top: 0.5rem;
+  border-radius: 0;
+  background: none;
+  padding: 0.5rem 0 0;
+  cursor: pointer;
 }
 
 .manual-divider span {
-  margin: 0 auto;
   font-size: 0.75rem;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.manual-divider:hover span {
+  color: var(--text);
 }
 
 .manual-history-list {
@@ -1047,4 +1315,798 @@ button.btn-exit {
   display: flex;
   gap: 0.75rem;
   align-items: center;
+}
+
+.manual-order-type-badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.manual-history-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The upload icon is a <label> wrapping a hidden file input, not a real
+   <button> (native file pickers only open from a label/input, not a
+   click handler alone) - .manual-icon-btn's own flex/border/color rules
+   apply regardless of element type, this just adds the pointer cursor a
+   real button gets for free. */
+.manual-icon-btn {
+  cursor: pointer;
+}
+
+.manual-file-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The expandable "attached screenshots" panel under a history row - see
+   expandedImagesId's own comment on why the actual upload control lives
+   here, not in the always-visible summary row. */
+.manual-history-images-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem 0.6rem;
+}
+
+.manual-image-upload-label {
+  align-self: flex-start;
+  cursor: pointer;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.manual-history-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.manual-history-image-thumb {
+  position: relative;
+  display: inline-flex;
+}
+
+.manual-history-image-thumb img {
+  width: 4.5rem;
+  height: 4.5rem;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.manual-history-image-remove {
+  position: absolute;
+  top: -0.4rem;
+  right: -0.4rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--sell);
+  color: #fff;
+  border: none;
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+/* A reviewed trade's own badge, replacing the plain review icon button -
+   green (buy-ish) to read as "done". Still a .manual-icon-btn (clickable -
+   toggles the read-only "what did I answer" view below), just recolored. */
+.manual-reviewed-badge.manual-icon-btn {
+  border-color: var(--buy);
+  color: var(--buy);
+}
+
+/* Read-only "what did I answer" view for an already-reviewed trade -
+   reuses .manual-inline-review's own neutral surface, no editable
+   controls (see manual-review-readonly-item below, plain text not a
+   checkbox). */
+.manual-review-readonly-notes {
+  margin: 0;
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.manual-review-readonly-item {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+/* Transient confirmation next to a row's own Save button (Spot Target/
+   SL Limit/trailing-SL config) - handleSave previously gave no visible
+   feedback at all on success (only on failure, via row.current.error).
+   Auto-clears a couple seconds after appearing - see justSaved's own
+   comment. */
+.manual-saved-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--buy);
+  font-size: 0.8rem;
+}
+
+/* A history row's own inline review form (see toggleInlineReview) -
+   reuses .manual-review-banner's own neutral surface rather than its red
+   "needs attention" tint, since opening this is optional/on-demand here,
+   not something blocking the page. */
+.manual-inline-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  margin: 0.3rem 0 0.5rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* Trade discipline checklist (Manual tab only) - see docs/architecture.md
+   § 'Trade discipline checklist'. .manual-checklist: per-row pre-trade
+   Plan checkboxes, reuses .regime-checks' wrapped-row layout. .manual-
+   review-banner: the platform-wide blocking post-trade review, styled
+   like .error since it genuinely blocks every row's Add button until
+   resolved. */
+.manual-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface-raised);
+  border-radius: 6px;
+}
+
+.manual-checklist-title {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.1rem;
+}
+
+.manual-checklist-items {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.15rem 1rem;
+}
+
+.manual-checklist-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.5rem 0 1rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--surface-raised);
+  border-radius: 6px;
+}
+
+.manual-checklist-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.manual-checklist-editor-row input[type="text"] {
+  flex: 1;
+}
+
+.manual-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.manual-toolbar-links {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.manual-settings-link {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.manual-settings-link:hover {
+  color: var(--text);
+}
+
+.manual-stats-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.manual-stats-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.7rem 1rem;
+  background: var(--surface-raised);
+  border-radius: 6px;
+  min-width: 8rem;
+}
+
+.manual-stats-card-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.manual-stats-card-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.manual-stats-table-wrap {
+  overflow-x: auto;
+}
+
+.manual-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.manual-stats-table th,
+.manual-stats-table td {
+  text-align: left;
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.manual-stats-table th {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.manual-stats-trade-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.manual-stats-trade-card {
+  background: var(--surface-raised);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.manual-stats-trade-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.manual-stats-trade-header strong {
+  flex: 1;
+}
+
+.manual-stats-trade-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.manual-settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 48rem;
+}
+
+.manual-settings-back {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.manual-settings-back:hover {
+  color: var(--text);
+}
+
+.manual-settings-page h3 {
+  margin: 0;
+}
+
+.manual-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.manual-settings-section h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.manual-settings-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.manual-risk-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.manual-risk-card {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--surface-raised);
+  border-radius: 6px;
+}
+
+.manual-risk-card-title {
+  flex-basis: 100%;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.manual-risk-card-capital {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.manual-risk-card-capital strong {
+  color: var(--text);
+}
+
+.manual-risk-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.manual-risk-card input[type="number"] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  width: 6rem;
+}
+
+.manual-risk-card-checkbox {
+  flex-basis: 100%;
+}
+
+.manual-review-banner {
+  background: rgba(232, 88, 106, 0.12);
+  border: 1px solid var(--sell);
+  color: var(--text);
+  padding: 0.8rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.manual-review-banner-title {
+  color: var(--sell);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.manual-review-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* Once-per-day, per-segment checklist (Manual tab, intraday-focused) -
+   see docs/architecture.md § 'Trade discipline checklist'. .pending
+   (not yet submitted today) reuses .manual-review-banner's own
+   attention-getting red tint; .submitted is a quieter neutral panel
+   (still visible, no longer demanding action). */
+.manual-day-checklist-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.manual-day-checklist-notes {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+/* The once-a-day discipline checklist, collapsed into a section of its
+   own segment's session bar below (toggled by the icon button ahead of
+   Check in/out) rather than a separate box. */
+.manual-day-checklist-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.manual-day-checklist-status {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+/* Explicit per-day per-segment check-in/check-out bookend, plus (see
+   manual-day-checklist-body above) that segment's own once-a-day
+   discipline checklist - a different concept from the plan/review
+   checklist (see execution.trading_sessions' own comment), sharing this
+   one panel per segment now instead of two separate boxes. `.pending` =
+   this segment has day-phase checklist items that aren't submitted yet
+   today, same red-tinted treatment the old standalone box used. */
+.manual-session-bar {
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.manual-session-bar.pending {
+  background: rgba(232, 88, 106, 0.12);
+  border-color: var(--sell);
+}
+
+.manual-session-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.manual-session-bar-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.manual-session-bar-status {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  flex: 1;
+}
+
+.manual-session-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Per-item segment scoping, shown in the "Manage checklist" editor -
+   N/M/C toggle buttons (NSE/MCX/CRYPTO), active = this item is
+   restricted to that segment. None active means "every segment". */
+.manual-segment-toggle-group {
+  display: inline-flex;
+  gap: 0.15rem;
+}
+
+.manual-segment-toggle-group button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* ManualCalendarFilter - collapsible month calendar at the top of the
+   Manual tab's trading view, day cells tinted by that day's realized
+   manual-trade pnl (see dayBackground). */
+.manual-calendar {
+  margin-bottom: 0.75rem;
+}
+
+.manual-calendar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.manual-calendar-toggle:hover {
+  color: var(--text);
+}
+
+.manual-calendar-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.8rem;
+  background: var(--surface-raised);
+  border-radius: 8px;
+  max-width: 22rem;
+}
+
+.manual-calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.manual-calendar-month-label {
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.manual-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+}
+
+.manual-calendar-weekday {
+  text-align: center;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.manual-calendar-day {
+  aspect-ratio: 1;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  padding: 0;
+}
+
+.manual-calendar-day.today {
+  border-color: var(--accent);
+}
+
+.manual-calendar-day.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  font-weight: 700;
+}
+
+.manual-calendar-summary {
+  margin: 0;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* Options OI Summary page (fixed NIFTY/BANKNIFTY/GOLDM/CRUDEOILM tabs,
+   .tabs itself reused from the top-level nav - see App.tsx). */
+.oi-summary-expiry-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  width: fit-content;
+}
+
+/* Wider than the default .manual-stats-table columns (whitespace: nowrap
+   already handles horizontal scroll via .manual-stats-table-wrap) - the
+   strike column reads best centered between the Call/Put column groups. */
+.oi-summary-table th,
+.oi-summary-table td {
+  text-align: right;
+}
+
+.oi-summary-strike {
+  text-align: center !important;
+  font-weight: 600;
+  background: var(--surface-raised);
+}
+
+/* Light-background highlight for ITM cells (call side below spot, put
+   side above spot) - a quieter tint than .selected-row's ATM highlight
+   so the two stay visually distinct when both apply near the money. */
+.oi-itm-cell {
+  background: rgba(76, 139, 245, 0.1);
+}
+
+.oi-summary-legend-caption {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+}
+
+/* Buildup (long/short buildup, short covering, long unwinding) badges -
+   pictorial read of 15m OI-change x premium-change per leg, see
+   OiSummaryPage.tsx's BUILDUP_META. */
+.oi-buildup-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.oi-buildup-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.oi-buildup-long-buildup {
+  background: rgba(62, 207, 142, 0.18);
+  color: var(--buy);
+}
+
+.oi-buildup-short-covering {
+  background: rgba(62, 207, 142, 0.09);
+  color: var(--buy);
+}
+
+.oi-buildup-short-buildup {
+  background: rgba(232, 88, 106, 0.18);
+  color: var(--sell);
+}
+
+.oi-buildup-long-unwinding {
+  background: rgba(232, 88, 106, 0.09);
+  color: var(--sell);
+}
+
+/* OiBarChart.tsx - grouped Call/Put OI-by-strike bars + spot-price
+   marker, matching execution/frontend's .pnl-chart sizing/tooltip
+   conventions (this frontend has no chart of its own to reuse from). */
+.oi-bar-chart {
+  width: 100%;
+}
+
+.oi-bar-chart-tooltip {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  width: fit-content;
+}
+
+.oi-bar-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.oi-bar-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.oi-bar-chart-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+}
+
+.oi-bar-chart-swatch.put {
+  background: #3cb371;
+}
+
+.oi-bar-chart-swatch.call {
+  background: #e15b5b;
+}
+
+.oi-bar-chart-swatch.put.increase {
+  background: repeating-linear-gradient(45deg, #3cb371 0 2px, rgba(60, 179, 113, 0.25) 2px 4px);
+}
+
+.oi-bar-chart-swatch.call.increase {
+  background: repeating-linear-gradient(45deg, #e15b5b 0 2px, rgba(225, 91, 91, 0.25) 2px 4px);
+}
+
+.oi-bar-chart-swatch.put.decrease {
+  background: transparent;
+  border: 1.5px solid #3cb371;
+}
+
+.oi-bar-chart-swatch.call.decrease {
+  background: transparent;
+  border: 1.5px solid #e15b5b;
+}
+
+.oi-summary-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.oi-summary-window-toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.oi-summary-window-toggle button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.oi-summary-window-toggle button.active {
+  color: var(--text);
+  border-color: var(--accent);
 }

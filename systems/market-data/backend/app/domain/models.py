@@ -151,6 +151,73 @@ class OptionChain(BaseModel):
     strikes: list[OptionChainStrike]  # sorted ascending by strike
 
 
+class OptionOiLeg(BaseModel):
+    """One CE or PE leg's OI-analysis figures at one strike, for GET
+    /options/oi-summary - a lighter, analysis-focused sibling of
+    OptionLegQuote above (Phase 4b's leg-selection chain) rather than a
+    mutation of it, so this feature can evolve independently of what
+    execution/signal-processing's own option_templates.py mirrors already
+    depend on. oi_change_5m/15m are None until DhanProvider's in-memory OI
+    history buffer (see its own comment) has a sample old enough to diff
+    against - typically the first ~5/15 minutes after this backend last
+    restarted, or for a strike nobody has fetched before."""
+
+    oi: int
+    oi_change_5m: Optional[int] = None
+    oi_change_15m: Optional[int] = None
+    implied_volatility: float
+    last_price: float
+    volume: float
+    top_bid_price: float
+    top_ask_price: float
+    moneyness: Literal["ITM", "ATM", "OTM"]
+    # Premium change over the same 15m window oi_change_15m uses - None
+    # under the same "no old-enough sample yet" condition. Paired with
+    # oi_change_15m to derive `buildup` below; not shown as its own
+    # column, just the input to that classification.
+    price_change_15m: Optional[float] = None
+    # Classic OI-vs-price buildup read (price up/down x OI up/down) -
+    # None whenever either input change is None or exactly zero (nothing
+    # to classify yet, or between two flat samples). See
+    # app/domain/oi_summary.py's _classify_buildup for the mapping.
+    buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
+
+
+class OptionOiSummaryStrike(BaseModel):
+    strike: float
+    call: Optional[OptionOiLeg] = None
+    put: Optional[OptionOiLeg] = None
+
+
+class OptionOiSummary(BaseModel):
+    """GET /options/oi-summary - PCR + aggregate OI-change + per-strike
+    breakdown for one (exchange, symbol, expiry), built (app/domain/
+    oi_summary.py's build_oi_summary) from the same DhanProvider.
+    get_option_chain fetch GET /options/chain uses, plus its in-memory OI
+    history buffer. signal-generation's OI Summary page is the only
+    consumer - not used anywhere in the resolve/order-placement path."""
+
+    underlying_symbol: str
+    underlying_exchange: str
+    expiry: str
+    underlying_last_price: float
+    total_call_oi: int
+    total_put_oi: int
+    # total_put_oi / total_call_oi - the standard OI-based Put/Call
+    # Ratio. None only if total_call_oi is 0 (division undefined).
+    pcr: Optional[float] = None
+    # Summed leg-level changes across the whole chain - None (not 0) if
+    # NOT EVERY leg in the sum has a change figure yet, so a partially
+    # warmed-up buffer doesn't silently understate the true total.
+    total_call_oi_change_5m: Optional[int] = None
+    total_put_oi_change_5m: Optional[int] = None
+    total_call_oi_change_15m: Optional[int] = None
+    total_put_oi_change_15m: Optional[int] = None
+    atm_call_iv: Optional[float] = None
+    atm_put_iv: Optional[float] = None
+    strikes: list[OptionOiSummaryStrike]  # sorted ascending by strike
+
+
 class OptionLegCandle(BaseModel):
     """GET /options/leg-history - one completed bar of a single option
     leg's historical premium, tracked *relative to spot* (e.g. always the

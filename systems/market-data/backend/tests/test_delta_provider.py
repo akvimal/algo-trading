@@ -507,12 +507,53 @@ def test_get_lot_size_unknown_symbol_returns_none():
     assert provider.get_lot_size("NOPE") is None
 
 
-def test_get_lot_size_always_one_for_option_symbol_no_sync_needed():
+@responses.activate
+def test_get_lot_size_returns_real_contract_value_for_option_symbol():
+    # Confirmed live 2026-08-21 against Delta's own /v2/tickers (matching a
+    # Delta UI screenshot showing "1 Lot = 0.001 BTC" for a BTC option):
+    # options carry their own real contract_value too, same as perpetuals -
+    # this used to unconditionally `return 1` for any option symbol, a
+    # 1000x oversizing bug for every CRYPTO option position ever opened.
     # An option's own symbol is never in _symbol_to_product_id (only
     # perpetuals get synced) - shape-detected via _OPTION_SYMBOL_RE instead,
-    # no sync_instruments() call (and thus no HTTP call) needed at all.
+    # resolved via _fetch_option_rows(underlying_asset) - no sync_instruments()
+    # call needed at all.
+    responses.add(
+        responses.GET, _tickers_url(),
+        json={
+            "success": True,
+            "result": [_option_ticker("C-BTC-63600-130826", 146107, "call_options", 45.5, 63500.0, contract_value="0.001")],
+        },
+        status=200,
+        match=[matchers.query_param_matcher({"contract_types": "call_options,put_options", "underlying_asset_symbols": "BTC"})],
+    )
+
     provider = DeltaProvider()
-    assert provider.get_lot_size("C-BTC-63600-130826") == 1
+    assert provider.get_lot_size("C-BTC-63600-130826") == 0.001
+
+
+@responses.activate
+def test_get_lot_size_option_symbol_not_in_live_chain_returns_none():
+    responses.add(
+        responses.GET, _tickers_url(),
+        json={"success": True, "result": []},
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.get_lot_size("C-BTC-63600-130826") is None
+
+
+@responses.activate
+def test_get_lot_size_option_symbol_falls_back_to_one_when_contract_value_missing():
+    responses.add(
+        responses.GET, _tickers_url(),
+        json={"success": True, "result": [_option_ticker("C-BTC-63600-130826", 146107, "call_options", 45.5, 63500.0)]},
+        status=200,
+    )
+
+    provider = DeltaProvider()
+    assert provider.get_lot_size("C-BTC-63600-130826") == 1.0
 
 
 # --- list_live_symbols (backs the CRYPTO symbol picker on the Manual tab) ----------------------

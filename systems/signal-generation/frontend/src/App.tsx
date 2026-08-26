@@ -1,8 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { SignalNotifier } from "./SignalNotifier";
+
 import {
   ALL_WEEKDAYS,
+  CROSSOVER_INDICATOR_TYPES,
   DEFAULT_ACTIVE_WEEKDAYS,
   INDICATOR_TYPE_LABELS,
   REGIME_INDICATOR_TYPES,
@@ -69,10 +72,11 @@ import {
 } from "./api";
 import { chartinkWebhookUrls, executionUrl, processingUrl } from "./links";
 import ManualTab from "./ManualTab";
+import OiSummaryPage from "./OiSummaryPage";
 
 const POLL_INTERVAL_MS = 5000;
 
-type TabId = "strategies" | "rules" | "manual";
+type TabId = "strategies" | "rules" | "manual" | "oi";
 
 // A performance advisory (not a real data-availability limit) for the
 // Backtest tab's From/To range - finer intervals mean far more bars to
@@ -1686,12 +1690,15 @@ function RuleManager() {
                   Indicator
                   <select value={selectedIndicatorId} onChange={(e) => setSelectedIndicatorId(e.target.value)} required>
                     <option value="">&mdash;</option>
-                    {/* Crossover-eligible only - a regime type (SuperTrend, ADX, ...) is valid
-                        as a Regime filter (below) but not here, same distinction the backend's
-                        own _check_referenced_indicator_exists enforces; filtering it out here
-                        avoids a 422 after the fact for a choice that could never succeed. */}
+                    {/* Crossover-eligible only (CROSSOVER_INDICATOR_TYPES) - a regime-only type
+                        (ADX, structure, ...) is valid as a Regime filter (below) but not here,
+                        same distinction the backend's own _check_referenced_indicator_exists
+                        enforces; filtering it out here avoids a 422 after the fact for a choice
+                        that could never succeed. SuperTrend is valid in BOTH lists - a saved
+                        SuperTrend indicator can back the crossover trigger itself (price
+                        crossing the ST line) as well as a separate regime filter. */}
                     {indicators
-                      .filter((ind) => !REGIME_INDICATOR_TYPES.includes(ind.type))
+                      .filter((ind) => CROSSOVER_INDICATOR_TYPES.includes(ind.type))
                       .map((ind) => (
                         <option key={ind.id} value={ind.id}>
                           {ind.name}
@@ -2351,6 +2358,12 @@ function RuleManager() {
           <>
           {selectedIsBreakout || selectedIsRangeBreakout ? (
             <p className="hint">Grid search isn't supported for breakout/range-breakout rules yet.</p>
+          ) : selectedIndicator?.type === "supertrend" ? (
+            <p className="hint">
+              Grid search's Period/SMA period inputs only sweep RSI-shaped params - not supported for a
+              SuperTrend-backed rule yet. Use the Backtest tab to try different period/multiplier values one at a
+              time instead.
+            </p>
           ) : (
             <>
               <p className="hint">
@@ -2534,6 +2547,12 @@ function RulesTab() {
 function StrategyManager() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
+  // Indicators - only needed to resolve a crossover rule's own
+  // indicator_id to its type (for the SuperTrend-stop-loss default hint
+  // below, see selectedRuleCrossoverIndicator) - RuleManager fetches its
+  // own copy for a different purpose (building/editing rule_config), not
+  // shared here since the two components don't share state.
+  const [indicators, setIndicators] = useState<Indicator[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [signals, setSignals] = useState<ProviderSignal[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -2659,6 +2678,24 @@ function StrategyManager() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const data = await fetchIndicators();
+        if (!cancelled) setIndicators(data);
+      } catch {
+        // keep showing the last known indicators rather than clearing on a blip
+      }
+    }
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selected) {
       setSignals([]);
       return;
@@ -2690,6 +2727,62 @@ function StrategyManager() {
   // alphabetically by name.
   const createIsInHouse = sourceKind === "in_house";
   const createRuleOptions = [...rules].sort((a, b) => a.name.localeCompare(b.name));
+  // Drives the read-only stop-loss preview below (handleRuleChange picks
+  // segment off this same row) - see app/api/routes/strategies.py's
+  // _stop_loss_fields_for_rule (signal-generation backend) for what these
+  // actually do server-side; the backend enforces/defaults either way
+  // regardless of what's shown/submitted here, this just keeps the form
+  // from showing an editable value that can never actually take effect.
+  const selectedRule = createIsInHouse ? createRuleOptions.find((r) => r.id === ruleId) : undefined;
+  const selectedRuleConfig = selectedRule?.rule_config;
+  const selectedRuleIsBreakout = selectedRuleConfig?.type === "breakout";
+  const selectedRuleBreakoutLtfInterval = selectedRuleConfig?.type === "breakout" ? selectedRuleConfig.ltf_interval : undefined;
+  const selectedRuleCrossoverIndicator =
+    selectedRuleConfig?.type === "crossover" ? indicators.find((i) => i.id === selectedRuleConfig.indicator_id) : undefined;
+  const selectedRuleIsSupertrendCrossover = selectedRuleCrossoverIndicator?.type === "supertrend";
+  // The soft SuperTrend default only actually applies when: the crossover
+  // indicator is SuperTrend, the user hasn't picked a stop_loss_method of
+  // their own, AND the rule's own interval isn't 'daily' (unusable for a
+  // live stop-loss - see _stop_loss_fields_for_rule's own "silently
+  // skipped" case) - mirror that third condition here too, or this preview
+  // would show a default that the backend will never actually apply.
+  const showSupertrendDefaultPreview = selectedRuleIsSupertrendCrossover && !slMethod && selectedRule?.interval !== "daily";
+  const supertrendPreviewPeriod =
+    selectedRuleCrossoverIndicator && "period" in selectedRuleCrossoverIndicator.params
+      ? selectedRuleCrossoverIndicator.params.period
+      : undefined;
+  const supertrendPreviewMultiplier =
+    selectedRuleCrossoverIndicator && "multiplier" in selectedRuleCrossoverIndicator.params
+      ? selectedRuleCrossoverIndicator.params.multiplier
+      : undefined;
+
+  // What the SL section actually displays - real state, except when a
+  // breakout rule's forced scheme or the SuperTrend soft default overrides
+  // it purely for display (never mutated into state itself, so switching
+  // back to a plain rule instantly reveals whatever the user had actually
+  // set, not a stale forced value - see slFieldsReadOnly below).
+  const displayMethod: StopLossMethod | "" = selectedRuleIsBreakout ? "previous_candle" : showSupertrendDefaultPreview ? "indicator" : slMethod;
+  const displayInterval: StopLossInterval | "" = selectedRuleIsBreakout
+    ? ((selectedRuleBreakoutLtfInterval as StopLossInterval | undefined) ?? "")
+    : showSupertrendDefaultPreview
+      ? ((selectedRule?.interval as StopLossInterval | undefined) ?? "")
+      : slInterval;
+  const displayIndicatorType: StopLossIndicatorType = showSupertrendDefaultPreview ? "supertrend" : slIndicatorType;
+  const slFieldsReadOnly = selectedRuleIsBreakout || showSupertrendDefaultPreview;
+
+  // Picking a Rule pre-fills whatever Strategy fields it directly implies
+  // - today just Segment (Rule.segment - "which market this rule's
+  // condition/universe is evaluated against", see app/domain/rule.py).
+  // Still a plain pre-fill, not a lock: the user can change Segment
+  // afterward same as any other field, since Rule.segment and a linked
+  // Strategy's own segment are deliberately allowed to differ (see that
+  // field's own comment) - this just saves re-picking the common case
+  // where they match.
+  function handleRuleChange(newRuleId: string) {
+    setRuleId(newRuleId);
+    const picked = rules.find((r) => r.id === newRuleId);
+    if (picked) setSegment(picked.segment);
+  }
 
   // Shared by both fresh-create and cancel-edit - returns the form to its
   // blank/default state.
@@ -2840,13 +2933,27 @@ function StrategyManager() {
     }
   }
 
+  // The single symbol a "send test signal" should target, pre-filled and
+  // locked, when this strategy's own Rule scans exactly one symbol
+  // (underlying_type='symbol') - a 'universe'/'symbol_list' rule (or an
+  // external strategy with no Rule at all) has no one right answer, so
+  // the field stays free-typed for those. Looked up from `rules` (already
+  // fetched for the create-form's own Rule picker) since Strategy.rule is
+  // only a RuleSummary (id/name/segment) - no underlying_type/underlying.
+  function singleSymbolFor(s: Strategy): string | null {
+    if (s.rule_id == null) return null;
+    const rule = rules.find((r) => r.id === s.rule_id);
+    if (rule?.underlying_type !== "symbol" || !rule.underlying) return null;
+    return rule.underlying.toUpperCase();
+  }
+
   function handleToggleSendSignal(s: Strategy) {
     if (sendSignalId === s.id) {
       setSendSignalId(null);
       return;
     }
     setSendSignalId(s.id);
-    setSignalSymbol("");
+    setSignalSymbol(singleSymbolFor(s) ?? "");
     setSignalAction("BUY");
     setSignalPrice("");
     setSendSignalError(null);
@@ -2953,7 +3060,7 @@ function StrategyManager() {
                   {createIsInHouse && (
                     <label>
                       Rule (Platform&apos;s)
-                      <select value={ruleId} onChange={(e) => setRuleId(e.target.value)} required>
+                      <select value={ruleId} onChange={(e) => handleRuleChange(e.target.value)} required>
                         <option value="">&mdash;</option>
                         {createRuleOptions.map((r) => (
                           <option key={r.id} value={r.id}>
@@ -2973,7 +3080,19 @@ function StrategyManager() {
                 <div className="form-row">
                   <label>
                     Segment
-                    <select value={segment} onChange={(e) => setSegment(e.target.value as Segment)}>
+                    <select
+                      value={segment}
+                      onChange={(e) => {
+                        const next = e.target.value as Segment;
+                        setSegment(next);
+                        // CRYPTO/MCX have no spot market on this platform's
+                        // providers - see validate_segment_instrument_type
+                        // (signal-generation's app/domain/models.py). Bump off
+                        // 'spot' automatically rather than letting the save
+                        // 422 with the field still showing the invalid value.
+                        if ((next === "CRYPTO" || next === "MCX") && instrumentType === "spot") setInstrumentType("future");
+                      }}
+                    >
                       <option value="NSE">NSE</option>
                       <option value="MCX">MCX</option>
                       <option value="CRYPTO">Crypto</option>
@@ -2996,7 +3115,7 @@ function StrategyManager() {
                         if (next === "future" && contractDayFilter === "start") setContractDayFilter("any");
                       }}
                     >
-                      <option value="spot">Spot</option>
+                      {segment !== "CRYPTO" && segment !== "MCX" && <option value="spot">Spot</option>}
                       <option value="future">Future</option>
                       <option value="option">Option</option>
                     </select>
@@ -3096,7 +3215,8 @@ function StrategyManager() {
                   <label>
                     SL Type <span className="optional">(optional)</span>
                     <select
-                      value={slMethod}
+                      value={displayMethod}
+                      disabled={selectedRuleIsBreakout}
                       onChange={(e) => {
                         const next = e.target.value as StopLossMethod | "";
                         setSlMethod(next);
@@ -3115,12 +3235,16 @@ function StrategyManager() {
                     </select>
                   </label>
                 </div>
-                {slMethod && (
+                {displayMethod && (
                   <div className="sl-fields-box">
-                    {(slMethod === "previous_candle" || slMethod === "indicator") && (
+                    {(displayMethod === "previous_candle" || displayMethod === "indicator") && (
                       <label>
                         SL candle interval
-                        <select value={slInterval} onChange={(e) => setSlInterval(e.target.value as StopLossInterval | "")}>
+                        <select
+                          value={displayInterval}
+                          disabled={slFieldsReadOnly}
+                          onChange={(e) => setSlInterval(e.target.value as StopLossInterval | "")}
+                        >
                           <option value="">&mdash;</option>
                           <option value="1min">1 min</option>
                           <option value="3min">3 min</option>
@@ -3132,7 +3256,7 @@ function StrategyManager() {
                         </select>
                       </label>
                     )}
-                    {slMethod === "percent" && (
+                    {displayMethod === "percent" && (
                       <label>
                         SL %
                         <input
@@ -3146,33 +3270,39 @@ function StrategyManager() {
                         />
                       </label>
                     )}
-                    {slMethod === "indicator" && (
+                    {displayMethod === "indicator" && (
                       <>
                         <label>
                           Indicator type
-                          <select value={slIndicatorType} onChange={(e) => setSlIndicatorType(e.target.value as StopLossIndicatorType)}>
+                          <select
+                            value={displayIndicatorType}
+                            disabled={slFieldsReadOnly}
+                            onChange={(e) => setSlIndicatorType(e.target.value as StopLossIndicatorType)}
+                          >
                             <option value="ema">EMA</option>
                             <option value="supertrend">SuperTrend</option>
                           </select>
                         </label>
                         <label>
-                          {slIndicatorType === "supertrend" ? "ATR period" : "EMA period"}
+                          {displayIndicatorType === "supertrend" ? "ATR period" : "EMA period"}
                           <input
                             type="number"
                             min="2"
-                            value={slIndicatorPeriod}
+                            value={showSupertrendDefaultPreview ? (supertrendPreviewPeriod ?? "") : slIndicatorPeriod}
+                            disabled={slFieldsReadOnly}
                             onChange={(e) => setSlIndicatorPeriod(e.target.value)}
                             placeholder="e.g. 20"
                           />
                         </label>
-                        {slIndicatorType === "supertrend" && (
+                        {displayIndicatorType === "supertrend" && (
                           <label>
                             Multiplier
                             <input
                               type="number"
                               min="0"
                               step="0.1"
-                              value={slIndicatorMultiplier}
+                              value={showSupertrendDefaultPreview ? (supertrendPreviewMultiplier ?? "") : slIndicatorMultiplier}
+                              disabled={slFieldsReadOnly}
                               onChange={(e) => setSlIndicatorMultiplier(e.target.value)}
                               placeholder="e.g. 3"
                             />
@@ -3180,9 +3310,14 @@ function StrategyManager() {
                         )}
                       </>
                     )}
-                    {slMethod === "percent" && (
+                    {(displayMethod === "percent" || showSupertrendDefaultPreview) && (
                       <label className="checkbox-label">
-                        <input type="checkbox" checked={trailingEnabled} onChange={(e) => setTrailingEnabled(e.target.checked)} />
+                        <input
+                          type="checkbox"
+                          checked={showSupertrendDefaultPreview ? true : trailingEnabled}
+                          disabled={showSupertrendDefaultPreview}
+                          onChange={(e) => setTrailingEnabled(e.target.checked)}
+                        />
                         Trailing stop-loss
                       </label>
                     )}
@@ -3398,6 +3533,8 @@ function StrategyManager() {
                         value={signalSymbol}
                         onChange={(e) => setSignalSymbol(e.target.value.toUpperCase())}
                         placeholder="e.g. BTCUSD, TCS, GOLDM-04Sep2026-FUT"
+                        readOnly={singleSymbolFor(s) != null}
+                        title={singleSymbolFor(s) != null ? "This strategy's rule scans a single symbol - locked to it" : undefined}
                         autoFocus
                       />
                     </label>
@@ -3533,14 +3670,27 @@ function StrategiesTab() {
   );
 }
 
+const VALID_TABS: TabId[] = ["strategies", "rules", "manual", "oi"];
+
 export default function App() {
-  const [tab, setTab] = useState<TabId>("strategies");
+  // Deep-link support (?tab=manual) - the shell's top nav (shell/index.html)
+  // jumps straight into the Manual tab this way rather than always
+  // landing on the Strategies default, since Manual is its own frequent,
+  // distinct workflow. Falls back to the default for a missing/invalid
+  // value, same as if the param weren't there at all.
+  const [tab, setTab] = useState<TabId>(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    return (VALID_TABS as string[]).includes(requested ?? "") ? (requested as TabId) : "strategies";
+  });
 
   return (
     <main>
       <header>
-        <h1>signal-generation</h1>
-        <p className="subtitle">Strategies - external providers and in-house rules - that produce BUY/SELL ideas.</p>
+        <div>
+          <h1>signal-generation</h1>
+          <p className="subtitle">Strategies - external providers and in-house rules - that produce BUY/SELL ideas.</p>
+        </div>
+        <SignalNotifier />
       </header>
 
       <nav className="tabs">
@@ -3553,11 +3703,15 @@ export default function App() {
         <button className={tab === "manual" ? "active" : ""} onClick={() => setTab("manual")}>
           Manual
         </button>
+        <button className={tab === "oi" ? "active" : ""} onClick={() => setTab("oi")}>
+          Options OI
+        </button>
       </nav>
 
       {tab === "strategies" && <StrategiesTab />}
       {tab === "rules" && <RulesTab />}
       {tab === "manual" && <ManualTab />}
+      {tab === "oi" && <OiSummaryPage />}
     </main>
   );
 }

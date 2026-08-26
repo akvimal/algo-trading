@@ -26,8 +26,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.adapters.db.session import SessionLocal
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle
 from app.config import settings
-from app.domain.option_position_manager import check_option_group_exits, square_off_due_option_groups
-from app.domain.position_manager import check_exits, square_off_due_positions
+from app.domain.option_position_manager import check_option_group_exits, record_option_group_pnl_snapshots, square_off_due_option_groups
+from app.domain.position_manager import check_exits, record_position_pnl_snapshots, square_off_due_positions
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +52,17 @@ def run_square_off_due() -> dict:
 def run_check_exits() -> dict:
     with SessionLocal() as db:
         result = check_exits(db, get_ltp_batch, get_previous_candle, get_candle_history)
-        option_result = check_option_group_exits(db, get_ltp_batch)
+        option_result = check_option_group_exits(db, get_ltp_batch, get_candle_history)
+        # P&L history snapshots - piggybacks on this same 30s tick, but
+        # against EVERY open position/group (not just the stop-loss/
+        # target/liquidation-having subset check_exits itself scopes its
+        # own candidate query to) - see position_manager.
+        # record_position_pnl_snapshots' own docstring.
+        record_position_pnl_snapshots(db, get_ltp_batch)
+        record_option_group_pnl_snapshots(db, get_ltp_batch)
     if result["closed_stop_loss"] or result["closed_target"] or result["trailed"]:
         logger.info("exit-monitor run: %s", result)
-    if option_result["closed_stop_loss"] or option_result["closed_target"]:
+    if option_result["closed_stop_loss"] or option_result["closed_target"] or option_result["trailed"]:
         logger.info("option-group exit-monitor run: %s", option_result)
     return result
 

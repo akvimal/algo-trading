@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import (
+    get_candle_history,
     get_expiry_list,
     get_ltp_batch,
     get_lot_size,
@@ -19,7 +20,7 @@ from app.adapters.quotes.client import (
     resolve_symbol_by_security_id,
     resolve_underlying,
 )
-from app.domain.models import ManualOptionPositionCreate, SpotStopLossUpdate, StopLossUpdate
+from app.domain.models import ManualOptionPositionCreate, ReviewSubmit, SpotStopLossUpdate, StopLossUpdate
 from app.domain.option_position_manager import (
     check_option_group_exits,
     compute_group_unrealized_pnl,
@@ -28,10 +29,15 @@ from app.domain.option_position_manager import (
     square_off_all_open_option_groups,
     square_off_due_option_groups,
     square_off_option_group,
+    submit_option_group_review,
     update_group_spot_stop_loss,
     update_group_stop_loss,
 )
-from app.domain.position_manager import load_settings
+from app.domain.position_manager import (
+    find_missing_daily_checklist,
+    load_settings,
+    validate_plan_checklist,
+)
 
 router = APIRouter()
 
@@ -62,6 +68,14 @@ def _group_to_out(
         "sl_scope": row.sl_scope,
         "entry_spot_price": float(row.entry_spot_price) if row.entry_spot_price is not None else None,
         "spot_stop_loss_price": float(row.spot_stop_loss_price) if row.spot_stop_loss_price is not None else None,
+        # Non-null only for an auto-computed (stop_loss_method='indicator')
+        # spot_stop_loss_price - see open_option_group/
+        # _evaluate_option_group_exits. A user-set one (PUT
+        # /option-groups/{id}/stop-loss) leaves all of these null and stays
+        # checked against the underlying's own spot LTP instead.
+        "spot_stop_loss_trailing_enabled": row.spot_stop_loss_trailing_enabled,
+        "spot_stop_loss_indicator_type": row.spot_stop_loss_indicator_type,
+        "stop_loss_future_symbol": row.stop_loss_future_symbol,
         "live_combined_price": live_combined_price,
         # Fresh underlying LTP (with_live_pnl=true only) - distinct from
         # entry_spot_price (frozen at open) - lets the UI show "how far is
@@ -78,6 +92,20 @@ def _group_to_out(
         # Orders-grid sort reuse the same field names across both.
         "entry_time": row.created_at.isoformat() if row.created_at is not None else None,
         "exit_time": row.exit_time.isoformat() if row.exit_time is not None else None,
+        # Delta Exchange trading-fee simulation (app/domain/delta_fees.py) -
+        # CRYPTO only, null for NSE/MCX groups.
+        "open_fee": float(row.open_fee) if row.open_fee is not None else None,
+        "close_fee": float(row.close_fee) if row.close_fee is not None else None,
+        # Trade discipline checklist (Manual tab only) - null for every
+        # Strategy-driven group, see infra/postgres/init/02-execution.sql's
+        # own comment on these 4 columns.
+        "plan_checklist": row.plan_checklist,
+        "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at is not None else None,
+        "review_violation": row.review_violation,
+        "review_notes": row.review_notes,
+        "review_checklist": row.review_checklist,
+        # 'market' | 'limit' | null - see execution.option_position_groups.order_type's own comment.
+        "order_type": row.order_type,
         "legs": legs,
     }
 
@@ -109,14 +137,19 @@ def _leg_dict(
 def list_option_groups(
     status: Optional[str] = Query(default=None),
     signal_id: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    segment: Optional[str] = Query(default=None),
+    manual_only: bool = Query(default=False),
     limit: int = 100,
     with_live_pnl: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     """signal_id: exact match, for cross-system deep links, same as
-    GET /positions. with_live_pnl: mark-to-market OPEN groups against a
-    fresh combined quote - off by default, same reasoning as
-    GET /positions."""
+    GET /positions. symbol (matched against underlying_symbol)/segment/
+    manual_only: same ManualTab.tsx per-row trade-history backfill
+    reasoning as GET /positions' own identical filters. with_live_pnl:
+    mark-to-market OPEN groups against a fresh combined quote - off by
+    default, same reasoning as GET /positions."""
     q = db.query(db_models.OptionPositionGroup)
     if status:
         q = q.filter_by(status=status.upper())
@@ -125,6 +158,12 @@ def list_option_groups(
             q = q.filter_by(signal_id=uuid.UUID(signal_id))
         except ValueError:
             return []
+    if symbol:
+        q = q.filter_by(underlying_symbol=symbol)
+    if segment:
+        q = q.filter_by(segment=segment)
+    if manual_only:
+        q = q.filter(db_models.OptionPositionGroup.strategy_id.is_(None))
     rows = q.order_by(db_models.OptionPositionGroup.created_at.desc()).limit(limit).all()
 
     legs = legs_by_group(db, rows)
@@ -147,6 +186,29 @@ def list_option_groups(
     return result
 
 
+@router.get("/option-groups/{group_id}/pnl-history")
+def get_option_group_pnl_history(group_id: str, db: Session = Depends(get_db)):
+    """Oldest-first combined-premium unrealized-P&L time series - group-
+    level counterpart to GET /positions/{id}/pnl-history, see that route's
+    own docstring."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+    if db.get(db_models.OptionPositionGroup, parsed_id) is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    rows = (
+        db.query(db_models.OptionGroupPnlSnapshot)
+        .filter_by(option_group_id=parsed_id)
+        .order_by(db_models.OptionGroupPnlSnapshot.recorded_at)
+        .all()
+    )
+    return [
+        {"recorded_at": r.recorded_at.isoformat(), "combined_price": float(r.combined_price), "unrealized_pnl": float(r.unrealized_pnl)}
+        for r in rows
+    ]
+
+
 @router.post("/option-groups/manual")
 def open_manual(payload: ManualOptionPositionCreate, db: Session = Depends(get_db)):
     """The Manual tab (signal-generation's frontend) - option orders,
@@ -155,8 +217,19 @@ def open_manual(payload: ManualOptionPositionCreate, db: Session = Depends(get_d
     docs/architecture.md and open_manual_option_group's own docstring).
     Always 200/201 regardless of whether the result is OPEN or REJECTED,
     matching POST /positions/manual's own convention - a rejection is a
-    legitimate persisted outcome, not an HTTP error."""
+    legitimate persisted outcome, not an HTTP error.
+
+    Same two discipline-checklist gates as POST /positions/manual, run
+    BEFORE any of that - see that route's own docstring (including why
+    the pending-review gate that used to also run here was removed)."""
     settings = load_settings(db)
+    daily_error = find_missing_daily_checklist(db, settings, payload.segment)
+    if daily_error is not None:
+        raise HTTPException(status_code=409, detail=daily_error)
+    checklist_error = validate_plan_checklist(db, payload.plan_checklist, payload.segment)
+    if checklist_error is not None:
+        raise HTTPException(status_code=422, detail=checklist_error)
+
     row = open_manual_option_group(
         payload.segment,
         payload.symbol,
@@ -174,7 +247,31 @@ def open_manual(payload: ManualOptionPositionCreate, db: Session = Depends(get_d
         get_ltp_batch,
         resolve_symbol_by_security_id,
         get_lot_size,
+        [a.model_dump() for a in payload.plan_checklist],
+        payload.order_type,
     )
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/review")
+def review_group(group_id: str, payload: ReviewSubmit, db: Session = Depends(get_db)):
+    """Option-group counterpart to PUT /positions/{id}/review - identical
+    rules/status-codes, see that route's own docstring."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row, reject_reason = submit_option_group_review(
+        db, parsed_id, payload.violation, payload.notes, payload.accepted_loss, [a.model_dump() for a in payload.checklist]
+    )
+    if reject_reason == "option group not found":
+        raise HTTPException(status_code=404, detail=reject_reason)
+    if reject_reason == "must accept the loss before submitting this review":
+        raise HTTPException(status_code=422, detail=reject_reason)
+    if reject_reason is not None:
+        raise HTTPException(status_code=409, detail=reject_reason)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
@@ -246,7 +343,7 @@ def square_off_due_now(db: Session = Depends(get_db)):
 def check_exits_now(db: Session = Depends(get_db)):
     """Manual trigger - same combined SL/target logic the exit-monitor
     job runs for option groups."""
-    return check_option_group_exits(db, get_ltp_batch)
+    return check_option_group_exits(db, get_ltp_batch, get_candle_history)
 
 
 @router.post("/option-groups/{group_id}/square-off")

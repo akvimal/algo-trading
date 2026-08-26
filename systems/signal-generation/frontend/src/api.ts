@@ -114,6 +114,15 @@ export const REGIME_INDICATOR_TYPES: IndicatorType[] = [
   "ema_slope",
   "supertrend",
 ];
+
+// IndicatorTypes valid as CrossoverRuleConfig.indicator_id - mirrors the
+// backend's CROSSOVER_INDICATOR_TYPES (app/domain/rule.py). "supertrend"
+// is deliberately in both this list and REGIME_INDICATOR_TYPES above -
+// price crossing the SuperTrend line is a standard crossover entry
+// signal, independent of whether some other saved SuperTrend indicator
+// row also backs a regime filter/stop-loss elsewhere. "rsi" stays
+// crossover-only, same as before.
+export const CROSSOVER_INDICATOR_TYPES: IndicatorType[] = ["rsi", "supertrend"];
 export const INDICATOR_TYPE_LABELS: Record<IndicatorType, string> = {
   rsi: "RSI",
   structure: "Swing structure",
@@ -810,6 +819,15 @@ export async function fetchSignalsForStrategy(strategyId: string, limit = 20): P
   return asJson(res, "GET /signals?strategy_id=...");
 }
 
+// Global feed (no strategy_id filter - GET /signals's own param is
+// Optional) - used by SignalNotifier.tsx to watch for a fresh signal from
+// ANY strategy, not just whichever one's row happens to be expanded.
+export async function fetchRecentSignals(limit = 20): Promise<ProviderSignal[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${SIGNAL_PROCESSING_BASE_URL}/signals?${params}`);
+  return asJson(res, "GET /signals");
+}
+
 // Manually induces a signal for a strategy - a thin wrapper around
 // signal-processing's own generic POST /signals (the exact same ingest
 // path a real webhook/in-house-engine signal goes through, no bypass of
@@ -895,6 +913,72 @@ export async function fetchLotSize(exchange: string, symbol: string): Promise<nu
   const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/lot-size?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ lot_size: number }>(res, `GET /instruments/lot-size (${exchange}/${symbol})`);
   return data.lot_size;
+}
+
+// Available expiries for an NSE/MCX underlying, nearest first - backs the
+// OI Summary page's Expiry picker. NOT used by the Manual tab (removed
+// from there 2026-08-14 - see createManualOptionGroup's own comment,
+// this call proved slow/unreliable enough to leave a blocking dropdown
+// stuck on "Loading..." indefinitely); the OI Summary page isn't on any
+// order-placement critical path, so the same slowness is just a loading
+// spinner there, not a stuck trade flow.
+export async function fetchOptionExpiries(exchange: string, symbol: string): Promise<string[]> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/options/expiries?${new URLSearchParams({ exchange, symbol })}`);
+  const data = await asJson<{ expiries: string[] }>(res, "GET /options/expiries");
+  return data.expiries;
+}
+
+// One CE or PE leg's OI-analysis figures at one strike - oi_change_5m/15m
+// are null until market-data's in-memory OI history buffer has a sample
+// old enough to diff against (see DhanProvider.get_oi_changes's own
+// comment) - typically null for the first ~5/15 minutes after that
+// backend last restarted.
+export type OiBuildup = "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding";
+
+export type OiSummaryLeg = {
+  oi: number;
+  oi_change_5m: number | null;
+  oi_change_15m: number | null;
+  implied_volatility: number;
+  last_price: number;
+  volume: number;
+  top_bid_price: number;
+  top_ask_price: number;
+  moneyness: "ITM" | "ATM" | "OTM";
+  price_change_15m: number | null;
+  buildup: OiBuildup | null;
+};
+
+export type OiSummaryStrike = {
+  strike: number;
+  call: OiSummaryLeg | null;
+  put: OiSummaryLeg | null;
+};
+
+// GET /options/oi-summary response - PCR (total put OI / total call OI),
+// chain-wide OI-change totals, ATM IV, and the full per-strike breakdown.
+export type OiSummary = {
+  underlying_symbol: string;
+  underlying_exchange: string;
+  expiry: string;
+  underlying_last_price: number;
+  total_call_oi: number;
+  total_put_oi: number;
+  pcr: number | null;
+  total_call_oi_change_5m: number | null;
+  total_put_oi_change_5m: number | null;
+  total_call_oi_change_15m: number | null;
+  total_put_oi_change_15m: number | null;
+  atm_call_iv: number | null;
+  atm_put_iv: number | null;
+  strikes: OiSummaryStrike[];
+};
+
+export async function fetchOiSummary(exchange: string, symbol: string, expiry: string): Promise<OiSummary> {
+  const res = await fetch(
+    `${MARKET_DATA_BASE_URL}/options/oi-summary?${new URLSearchParams({ exchange, symbol, expiry })}`,
+  );
+  return asJson(res, "GET /options/oi-summary");
 }
 
 // Backs the Rules page's backtest form - what date range is actually
@@ -1010,6 +1094,18 @@ export type ManualPosition = {
   exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | null;
   square_off_time: string | null;
   option_group_id: string | null;
+  // Trade discipline checklist (Manual tab only) - null for every
+  // Strategy-driven position, see docs/architecture.md § 'Trade
+  // discipline checklist'.
+  plan_checklist: ChecklistAnswer[] | null;
+  reviewed_at: string | null;
+  review_violation: boolean | null;
+  review_notes: string | null;
+  review_checklist: ChecklistAnswer[] | null;
+  // Which of ManualTab.tsx's two entry modes placed this trade - null for
+  // every Strategy-driven position (added 2026-08-26, for future
+  // performance review - see execution.positions.order_type's own comment).
+  order_type: "market" | "limit" | null;
 };
 
 export type ManualOptionLeg = {
@@ -1023,6 +1119,12 @@ export type ManualOptionLeg = {
   status: string;
   stop_loss_price: number | null;
   target_price: number | null;
+  // with_live_pnl=true only (fetchOptionGroups' own withLivePnl param) -
+  // this leg's own live premium/P&L, not just the group's combined
+  // figure. Always null from createManualOptionGroup's response (POST
+  // has no with_live_pnl concept) - populates on the next poll tick.
+  live_price?: number | null;
+  unrealized_pnl?: number | null;
 };
 
 export type ManualOptionGroup = {
@@ -1047,8 +1149,20 @@ export type ManualOptionGroup = {
   status: "OPEN" | "CLOSED" | "REJECTED";
   rejection_reason: string | null;
   exit_reason: string | null;
+  exit_time: string | null;
   pnl: number | null;
   square_off_time: string | null;
+  // Trade discipline checklist (Manual tab only) - same meaning as
+  // ManualPosition's own copies above.
+  plan_checklist: ChecklistAnswer[] | null;
+  reviewed_at: string | null;
+  review_violation: boolean | null;
+  review_notes: string | null;
+  review_checklist: ChecklistAnswer[] | null;
+  // Which of ManualTab.tsx's two entry modes placed this trade - null for
+  // every Strategy-driven group, same meaning as ManualPosition's own
+  // copy above.
+  order_type: "market" | "limit" | null;
   legs: ManualOptionLeg[];
 };
 
@@ -1074,6 +1188,229 @@ export type ManualStopLossConfig = {
   trailing_stop_enabled?: boolean;
 };
 
+// Trade discipline checklist (Manual tab only, intraday-focused) - see
+// docs/architecture.md § 'Trade discipline checklist'. ChecklistItem is
+// the user-editable master list (GET/POST/PUT/DELETE /checklist-items),
+// split by `phase` into 'plan' (pre-trade, gates the Add button -
+// ManualTab.tsx filters to this client-side for each row's checkboxes),
+// 'review' (post-trade, self-assessed in the review banner - filtered to
+// that client-side too), and 'day' (once per calendar day PER SEGMENT,
+// via fetchDailyChecklist/submitDailyChecklist below - e.g. "no major
+// news today" doesn't need re-confirming on every single order).
+// `segments`: which segment(s) this item applies to - empty = every
+// segment (e.g. OI change is NSE-only, no OI data for MCX/CRYPTO on this
+// platform's providers) - ManualTab.tsx filters every checklist render by
+// `segments.length === 0 || segments.includes(row.segment)`.
+// ChecklistAnswer is the {label, checked} snapshot sent with each manual
+// order (plan_checklist) or review submission (ReviewSubmitPayload.
+// checklist) and stored verbatim on the resulting position/option group.
+export type ChecklistPhase = "plan" | "review" | "day";
+
+export type ChecklistItem = {
+  id: string;
+  label: string;
+  phase: ChecklistPhase;
+  segments: Segment[];
+  sort_order: number;
+  active: boolean;
+};
+
+export type ChecklistAnswer = {
+  label: string;
+  checked: boolean;
+};
+
+export async function fetchChecklistItems(activeOnly = false): Promise<ChecklistItem[]> {
+  const query = activeOnly ? "?active_only=true" : "";
+  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items${query}`);
+  return asJson(res, "GET /checklist-items");
+}
+
+export async function createChecklistItem(label: string, phase: ChecklistPhase, segments: Segment[] = []): Promise<ChecklistItem> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, phase, segments }),
+  });
+  return asJson(res, "POST /checklist-items");
+}
+
+export async function updateChecklistItem(
+  id: string,
+  payload: { label?: string; phase?: ChecklistPhase; segments?: Segment[]; sort_order?: number; active?: boolean },
+): Promise<ChecklistItem> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PUT /checklist-items/{id}");
+}
+
+export async function deleteChecklistItem(id: string): Promise<void> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`DELETE /checklist-items/{id} failed: ${await extractErrorDetail(res)}`);
+  }
+}
+
+// One row per segment (execution.accounts) - the Manual tab's own
+// "Checklist & Risk Settings" sub-page reads/writes risk_per_trade_pct,
+// min_reward_risk_ratio, and enforce_risk_based_lots from here directly
+// (same cross-system pattern the rest of the Manual tab already uses to
+// call execution). capital_per_trade/leverage/square_off_time also come
+// back but aren't shown there - those stay execution AccountsPage.tsx's
+// own concern.
+export type Account = {
+  segment: Segment;
+  starting_balance: number;
+  current_balance: number;
+  capital_per_trade: number;
+  risk_per_trade_pct: number;
+  min_reward_risk_ratio: number;
+  // Spot/future manual orders only - see ManualTab.tsx's own
+  // computeRiskBasedLots/riskLotsEnforced for what this actually drives
+  // (a purely client-side Lot auto-fill + lock, no server-side
+  // enforcement of its own).
+  enforce_risk_based_lots: boolean;
+  leverage: number;
+  square_off_time: string | null;
+  updated_at: string;
+};
+
+export async function fetchAccounts(): Promise<Account[]> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/accounts`);
+  return asJson(res, "GET /accounts");
+}
+
+export async function updateAccount(
+  segment: Segment,
+  update: Partial<Pick<Account, "risk_per_trade_pct" | "min_reward_risk_ratio" | "enforce_risk_based_lots">>,
+): Promise<Account> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/accounts/${segment}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  return asJson(res, "PUT /accounts/{segment}");
+}
+
+// GET /daily-checklist?segment=X - answers/submitted_at are null if
+// nothing's been submitted yet today for this segment (the gate is
+// still active in that case - see execution's own
+// find_missing_daily_checklist). `notes`: ONE free-text observation for
+// the whole (day, segment) submission, not per item.
+export type DailyChecklist = {
+  log_date: string;
+  segment: Segment;
+  answers: ChecklistAnswer[] | null;
+  notes: string | null;
+  submitted_at: string | null;
+};
+
+export async function fetchDailyChecklist(segment: Segment): Promise<DailyChecklist> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/daily-checklist?${new URLSearchParams({ segment })}`);
+  return asJson(res, "GET /daily-checklist");
+}
+
+// Upserts today's (server-computed date, segment) row - answered once,
+// editable the rest of that same day.
+export async function submitDailyChecklist(segment: Segment, answers: ChecklistAnswer[], notes?: string): Promise<DailyChecklist> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/daily-checklist`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ segment, answers, notes }),
+  });
+  return asJson(res, "PUT /daily-checklist");
+}
+
+// One check-in/check-out SESSION INSTANCE - a (log_date, segment) can
+// have several across a day (checked in, broke for lunch, checked in
+// again). checked_out_at null means this is the currently open one for
+// its (log_date, segment); check-in refuses to start a second one while
+// one's already open (returns that same open row instead), check-out
+// 409s if none is open.
+export type TradingSession = {
+  id: string;
+  log_date: string;
+  segment: Segment;
+  checked_in_at: string;
+  checked_out_at: string | null;
+};
+
+export async function fetchTradingSessions(segment?: Segment): Promise<TradingSession[]> {
+  const qs = segment ? `?${new URLSearchParams({ segment })}` : "";
+  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions${qs}`);
+  return asJson(res, "GET /trading-sessions");
+}
+
+export async function checkInTradingSession(segment: Segment): Promise<TradingSession> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions/check-in?${new URLSearchParams({ segment })}`, {
+    method: "POST",
+  });
+  return asJson(res, "POST /trading-sessions/check-in");
+}
+
+export async function checkOutTradingSession(segment: Segment): Promise<TradingSession> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions/check-out?${new URLSearchParams({ segment })}`, {
+    method: "POST",
+  });
+  return asJson(res, "POST /trading-sessions/check-out");
+}
+
+// The platform-wide post-trade review gate - non-null `pending` means
+// every ManualTab.tsx row's Add button should stay disabled until the
+// matching PUT .../review is submitted. See find_pending_manual_review's
+// own docstring (position_manager.py) for what "earliest" means across
+// positions/option_position_groups.
+export type PendingReview = {
+  kind: "position" | "option_group";
+  id: string;
+  symbol: string;
+  segment: Segment;
+  action: "BUY" | "SELL";
+  pnl: number | null;
+  exit_time: string | null;
+  // Total unreviewed manual trades across both positions/option_groups,
+  // not just this one (the earliest) - the frontend's own reminder
+  // banner shows just this count now, see its own comment.
+  pending_count: number;
+};
+
+export async function fetchPendingReview(): Promise<PendingReview | null> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/manual-trades/pending-review`);
+  const data = await asJson<{ pending: PendingReview | null }>(res, "GET /manual-trades/pending-review");
+  return data.pending;
+}
+
+export type ReviewSubmitPayload = {
+  violation: boolean;
+  notes?: string;
+  accepted_loss?: boolean;
+  // 'review'-phase items' self-assessed {label, checked} snapshot - not
+  // required to be present or fully checked, see execution's own
+  // ReviewSubmit.checklist comment.
+  checklist?: ChecklistAnswer[];
+};
+
+export async function submitPositionReview(positionId: string, payload: ReviewSubmitPayload): Promise<ManualPosition> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/review`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PUT /positions/{id}/review");
+}
+
+export async function submitOptionGroupReview(groupId: string, payload: ReviewSubmitPayload): Promise<ManualOptionGroup> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/review`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PUT /option-groups/{id}/review");
+}
+
 export async function createManualPosition(
   payload: {
     segment: Segment;
@@ -1082,6 +1419,8 @@ export async function createManualPosition(
     instrument_type: "spot" | "future";
     price: number;
     quantity?: number;
+    plan_checklist: ChecklistAnswer[];
+    order_type?: "market" | "limit";
   } & ManualStopLossConfig,
 ): Promise<ManualPosition> {
   const res = await fetch(`${EXECUTION_BASE_URL}/positions/manual`, {
@@ -1117,10 +1456,40 @@ export async function updateOptionStopLoss(groupId: string, stopLossPrice: numbe
   return asJson(res, "PUT /option-groups/{id}/stop-loss");
 }
 
-export async function fetchExecPositions(params: { signalId?: string; withLivePnl?: boolean } = {}): Promise<ManualPosition[]> {
+// A stop on the UNDERLYING's own spot price - independent of the
+// combined-premium stop-loss above (execution's
+// update_group_spot_stop_loss/_evaluate_option_group_exits), persisted
+// server-side (spot_stop_loss_price column) and polled by execution's own
+// exit-monitor every 30s, unlike the Manual tab's targetPrice/slLimitPrice
+// client-side-only watch fields - see ManualTab.tsx's handleSave.
+export async function updateOptionGroupSpotStopLoss(groupId: string, spotStopLossPrice: number): Promise<ManualOptionGroup> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/spot-stop-loss`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spot_stop_loss_price: spotStopLossPrice }),
+  });
+  return asJson(res, "PUT /option-groups/{id}/spot-stop-loss");
+}
+
+export async function fetchExecPositions(
+  params: {
+    signalId?: string;
+    withLivePnl?: boolean;
+    symbol?: string;
+    segment?: Segment;
+    status?: "OPEN" | "CLOSED" | "REJECTED";
+    manualOnly?: boolean;
+    limit?: number;
+  } = {},
+): Promise<ManualPosition[]> {
   const query = new URLSearchParams();
   if (params.signalId) query.set("signal_id", params.signalId);
   if (params.withLivePnl) query.set("with_live_pnl", "true");
+  if (params.symbol) query.set("symbol", params.symbol);
+  if (params.segment) query.set("segment", params.segment);
+  if (params.status) query.set("status", params.status);
+  if (params.manualOnly) query.set("manual_only", "true");
+  if (params.limit) query.set("limit", String(params.limit));
   const res = await fetch(`${EXECUTION_BASE_URL}/positions?${query}`);
   return asJson(res, "GET /positions");
 }
@@ -1145,10 +1514,25 @@ export async function squareOffManualPosition(positionId: string, quantity?: num
   return asJson(res, "POST /positions/{id}/square-off");
 }
 
-export async function fetchOptionGroups(params: { signalId?: string; withLivePnl?: boolean } = {}): Promise<ManualOptionGroup[]> {
+export async function fetchOptionGroups(
+  params: {
+    signalId?: string;
+    withLivePnl?: boolean;
+    symbol?: string;
+    segment?: Segment;
+    status?: "OPEN" | "CLOSED" | "REJECTED";
+    manualOnly?: boolean;
+    limit?: number;
+  } = {},
+): Promise<ManualOptionGroup[]> {
   const query = new URLSearchParams();
   if (params.signalId) query.set("signal_id", params.signalId);
   if (params.withLivePnl) query.set("with_live_pnl", "true");
+  if (params.symbol) query.set("symbol", params.symbol);
+  if (params.segment) query.set("segment", params.segment);
+  if (params.status) query.set("status", params.status);
+  if (params.manualOnly) query.set("manual_only", "true");
+  if (params.limit) query.set("limit", String(params.limit));
   const res = await fetch(`${EXECUTION_BASE_URL}/option-groups?${query}`);
   return asJson(res, "GET /option-groups");
 }
@@ -1181,6 +1565,8 @@ export async function createManualOptionGroup(payload: {
   option_strike_moneyness: OptionStrikeMoneyness;
   sl_scope?: OptionSlScope;
   option_fixed_lots?: number;
+  plan_checklist: ChecklistAnswer[];
+  order_type?: "market" | "limit";
 }): Promise<ManualOptionGroup> {
   const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {
     method: "POST",
@@ -1188,4 +1574,50 @@ export async function createManualOptionGroup(payload: {
     body: JSON.stringify(payload),
   });
   return asJson(res, "POST /option-groups/manual");
+}
+
+// Screenshots/chart snapshots attached to a closed manual trade for
+// future review (execution.trade_images) - image_data itself is never
+// sent over this JSON API, only fetched separately via imageUrl(id) as a
+// plain <img src>, same reasoning GET /images/{id} returns raw bytes
+// instead of a JSON-wrapped base64 blob.
+export type TradeImage = {
+  id: string;
+  content_type: string;
+  uploaded_at: string;
+};
+
+export function tradeImageUrl(id: string): string {
+  return `${EXECUTION_BASE_URL}/images/${id}`;
+}
+
+export async function fetchPositionImages(positionId: string): Promise<TradeImage[]> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`);
+  return asJson(res, "GET /positions/{id}/images");
+}
+
+export async function uploadPositionImage(positionId: string, file: File): Promise<TradeImage> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`, { method: "POST", body: form });
+  return asJson(res, "POST /positions/{id}/images");
+}
+
+export async function fetchOptionGroupImages(groupId: string): Promise<TradeImage[]> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`);
+  return asJson(res, "GET /option-groups/{id}/images");
+}
+
+export async function uploadOptionGroupImage(groupId: string, file: File): Promise<TradeImage> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`, { method: "POST", body: form });
+  return asJson(res, "POST /option-groups/{id}/images");
+}
+
+export async function deleteTradeImage(imageId: string): Promise<void> {
+  const res = await fetch(`${EXECUTION_BASE_URL}/images/${imageId}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`DELETE /images/{id} failed: ${await extractErrorDetail(res)}`);
+  }
 }

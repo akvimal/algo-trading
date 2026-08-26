@@ -12,10 +12,14 @@ from dataclasses import dataclass, field
 from datetime import time
 from typing import Optional
 
+import pytest
+
 from app.domain.option_position_manager import (
+    _close_delta_option_fee,
     _close_group_at_cmp,
     _evaluate_option_group_exits,
     _evaluate_option_group_square_off_due,
+    _open_delta_option_fee,
     compute_group_unrealized_pnl,
 )
 from app.domain.position_manager import _resolve_capital_account, _resolve_signal_conflicts
@@ -53,6 +57,14 @@ class FakeGroup:
     sl_scope: str = "combined"
     entry_spot_price: Optional[float] = None
     spot_stop_loss_price: Optional[float] = None
+    spot_stop_loss_trailing_enabled: bool = False
+    spot_stop_loss_indicator_type: Optional[str] = None
+    spot_stop_loss_indicator_params: Optional[dict] = None
+    spot_stop_loss_interval: Optional[str] = None
+    stop_loss_future_symbol: Optional[str] = None
+    stop_loss_future_exchange: Optional[str] = None
+    open_fee: Optional[float] = None
+    close_fee: Optional[float] = None
     square_off_time: Optional[time] = None
     exit_time: Optional[object] = None
     exit_reason: Optional[str] = None
@@ -164,7 +176,7 @@ def test_evaluate_option_group_exits_closes_on_combined_stop_loss():
     # combined = 25-10=15, below combined_stop_loss_price=18 -> SL hit
     result = _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0}, _accounts())
 
-    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "CLOSED"
     assert group.exit_reason == "combined_stop_loss"
 
@@ -177,7 +189,7 @@ def test_evaluate_option_group_exits_closes_on_combined_target():
     # combined = 45-8=37, above combined_target_price=35 -> target hit
     result = _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 8.0}, _accounts())
 
-    assert result == {"closed_stop_loss": 0, "closed_target": 1, "checked": 1}
+    assert result == {"closed_stop_loss": 0, "closed_target": 1, "trailed": 0, "checked": 1}
     assert group.exit_reason == "combined_target"
 
 
@@ -217,7 +229,7 @@ def test_evaluate_option_group_exits_leaves_open_when_neither_hit():
 
     result = _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 30.0, "NIFTY-CE-OTM": 10.0}, _accounts())
 
-    assert result == {"closed_stop_loss": 0, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "OPEN"
 
 
@@ -232,7 +244,7 @@ def test_evaluate_option_group_exits_closes_on_spot_stop_loss_buy():
         [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24750.0}, _accounts()
     )
 
-    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "CLOSED"
     assert group.exit_reason == "spot_stop_loss"
     assert long_leg.exit_reason == "stop_loss"
@@ -249,7 +261,7 @@ def test_evaluate_option_group_exits_closes_on_spot_stop_loss_sell():
         [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 25250.0}, _accounts()
     )
 
-    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.exit_reason == "spot_stop_loss"
 
 
@@ -262,7 +274,7 @@ def test_evaluate_option_group_exits_spot_stop_loss_not_hit_leaves_open():
         [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24750.0}, _accounts()
     )
 
-    assert result == {"closed_stop_loss": 0, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "OPEN"
 
 
@@ -278,7 +290,7 @@ def test_evaluate_option_group_exits_combined_stop_loss_takes_priority_over_spot
         [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24750.0}, _accounts()
     )
 
-    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.exit_reason == "combined_stop_loss"
 
 
@@ -289,7 +301,7 @@ def test_evaluate_option_group_exits_naked_group_closes_on_stop_loss():
 
     result = _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 25.0}, _accounts())
 
-    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "CLOSED"
     assert group.exit_reason == "combined_stop_loss"
     assert long_leg.status == "CLOSED"
@@ -325,7 +337,7 @@ def test_evaluate_option_group_exits_individual_short_leg_trips_closes_both_legs
         [group], legs, lambda ex, syms: {"NIFTY-CE": 31.0, "NIFTY-CE-OTM": 15.0}, _accounts()
     )
 
-    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "CLOSED"
     assert group.exit_reason == "individual_stop_loss"
     # Both legs close together even though only the short leg's own
@@ -351,7 +363,7 @@ def test_evaluate_option_group_exits_individual_mode_ignores_combined_price():
         [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 8.0}, _accounts()
     )
 
-    assert result == {"closed_stop_loss": 0, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "OPEN"
 
 
@@ -366,7 +378,7 @@ def test_evaluate_option_group_exits_individual_naked_matches_combined_trigger()
 
     result = _evaluate_option_group_exits([group], legs, lambda ex, syms: {"NIFTY-CE": 25.0}, _accounts())
 
-    assert result == {"closed_stop_loss": 1, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "CLOSED"
     assert group.exit_reason == "individual_stop_loss"
     assert long_leg.exit_reason == "stop_loss"
@@ -377,7 +389,7 @@ def test_evaluate_option_group_exits_skips_group_with_missing_legs():
 
     result = _evaluate_option_group_exits([group], {}, lambda ex, syms: {}, _accounts())
 
-    assert result == {"closed_stop_loss": 0, "closed_target": 0, "checked": 1}
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 1}
     assert group.status == "OPEN"
 
 
@@ -534,3 +546,177 @@ def test_resolve_signal_conflicts_close_and_flip_reused_against_option_groups():
 
     assert to_close == [opposite_group]
     assert reject_reason is None
+
+
+# --- future-referenced spot_stop_loss_price (auto-computed SuperTrend stop, added 2026-08-21) -----
+#
+# Same 20-bar steady-uptrend fixture test_position_manager.py's own
+# supertrend tests use: compute_supertrend(candles, period=5, multiplier=1.0)
+# settles to candles[-1]["close"] - 2.0 = 67.0.
+
+_ST_FUTURE_CANDLES = [{"close": 50 + i, "high": 50 + i + 1, "low": 50 + i - 1} for i in range(20)]
+
+
+def test_evaluate_option_group_exits_spot_stop_loss_checked_against_future_when_set():
+    # underlying's own spot quote (24750, well below the stop) would trip
+    # a plain spot_stop_loss_price - but this group carries
+    # stop_loss_future_symbol, so it must be checked against the FUTURE's
+    # own quote instead, which hasn't reached the stop yet.
+    group = _group(
+        net_debit=20.0, spot_stop_loss_price=25000.0,
+        stop_loss_future_symbol="NIFTY-FUT", stop_loss_future_exchange="NSE",
+    )
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs,
+        lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24700.0, "NIFTY-FUT": 25100.0},
+        _accounts(),
+    )
+
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 1}
+    assert group.status == "OPEN"
+
+
+def test_evaluate_option_group_exits_trails_future_supertrend_stop():
+    group = _group(
+        net_debit=20.0, action="BUY", spot_stop_loss_price=60.0,
+        spot_stop_loss_trailing_enabled=True, spot_stop_loss_indicator_type="supertrend",
+        spot_stop_loss_indicator_params={"period": 5, "multiplier": 1.0}, spot_stop_loss_interval="5min",
+        stop_loss_future_symbol="NIFTY-FUT", stop_loss_future_exchange="NSE",
+    )
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs,
+        lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY-FUT": 69.0},
+        _accounts(), get_candle_history=lambda *a: _ST_FUTURE_CANDLES,
+    )
+
+    assert result == {"closed_stop_loss": 0, "closed_target": 0, "trailed": 1, "checked": 1}
+    assert group.spot_stop_loss_price == pytest.approx(67.0)
+    assert group.status == "OPEN"
+
+
+def test_evaluate_option_group_exits_future_supertrend_trailing_never_loosens():
+    group = _group(
+        net_debit=20.0, action="BUY", spot_stop_loss_price=68.0,  # already tighter than the 67.0 candidate below
+        spot_stop_loss_trailing_enabled=True, spot_stop_loss_indicator_type="supertrend",
+        spot_stop_loss_indicator_params={"period": 5, "multiplier": 1.0}, spot_stop_loss_interval="5min",
+        stop_loss_future_symbol="NIFTY-FUT", stop_loss_future_exchange="NSE",
+    )
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs,
+        lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY-FUT": 69.0},
+        _accounts(), get_candle_history=lambda *a: _ST_FUTURE_CANDLES,
+    )
+
+    assert result["trailed"] == 0
+    assert group.spot_stop_loss_price == 68.0
+
+
+def test_evaluate_option_group_exits_future_supertrend_trailing_skipped_without_get_candle_history():
+    # get_candle_history defaults to None - a trailing-enabled group must
+    # not crash, same backward-compatibility guarantee position_manager's
+    # own _evaluate_exits has for its indicator trailing path.
+    group = _group(
+        net_debit=20.0, action="BUY", spot_stop_loss_price=60.0,
+        spot_stop_loss_trailing_enabled=True, spot_stop_loss_indicator_type="supertrend",
+        spot_stop_loss_indicator_params={"period": 5, "multiplier": 1.0}, spot_stop_loss_interval="5min",
+        stop_loss_future_symbol="NIFTY-FUT", stop_loss_future_exchange="NSE",
+    )
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs,
+        lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY-FUT": 69.0},
+        _accounts(),
+    )
+
+    assert result["trailed"] == 0
+    assert group.spot_stop_loss_price == 60.0
+
+
+# --- Delta Exchange option trading-fee simulation (CRYPTO only, added 2026-08-21) ------------------
+
+
+def test_open_delta_option_fee_none_for_non_crypto():
+    assert _open_delta_option_fee("NSE", entry_spot_price=25000.0, quantity=75, long_premium=30.0) is None
+
+
+def test_open_delta_option_fee_naked_uses_underlying_notional():
+    from app.domain.delta_fees import compute_option_trading_fee
+
+    fee = _open_delta_option_fee("CRYPTO", entry_spot_price=70_000.0, quantity=0.1, long_premium=1_500.0)
+    expected = compute_option_trading_fee(70_000.0 * 0.1, 1_500.0 * 0.1)
+    assert fee == pytest.approx(expected)
+
+
+def test_open_delta_option_fee_spread_sums_both_legs():
+    from app.domain.delta_fees import compute_option_trading_fee
+
+    fee = _open_delta_option_fee("CRYPTO", entry_spot_price=70_000.0, quantity=0.1, long_premium=1_500.0, short_premium=800.0)
+    expected_long = compute_option_trading_fee(70_000.0 * 0.1, 1_500.0 * 0.1)
+    expected_short = compute_option_trading_fee(70_000.0 * 0.1, 800.0 * 0.1)
+    assert fee == pytest.approx(expected_long + expected_short)
+
+
+def test_open_delta_option_fee_falls_back_to_premium_notional_when_spot_missing():
+    from app.domain.delta_fees import compute_option_trading_fee
+
+    fee = _open_delta_option_fee("CRYPTO", entry_spot_price=None, quantity=0.1, long_premium=1_500.0)
+    expected = compute_option_trading_fee(1_500.0 * 0.1, 1_500.0 * 0.1)
+    assert fee == pytest.approx(expected)
+
+
+def test_close_delta_option_fee_is_the_same_formula_at_exit_quotes():
+    assert _close_delta_option_fee("CRYPTO", 71_000.0, 0.1, 1_600.0) == pytest.approx(
+        _open_delta_option_fee("CRYPTO", 71_000.0, 0.1, 1_600.0)
+    )
+
+
+def test_close_group_at_cmp_nets_fees_for_crypto_group():
+    group = _group(net_debit=1_500.0, quantity=0.1, segment="CRYPTO", exchange="CRYPTO", open_fee=8.85)
+    long_leg = FakePosition(id="long", status="OPEN", exchange="CRYPTO", symbol="BTC-CALL", action="BUY", entry_price=1_500.0, quantity=0.1)
+    accounts = _accounts(segment="CRYPTO")
+
+    closed = _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"BTC-CALL": 1_800.0}, accounts["CRYPTO"], "manual")
+
+    assert closed is True
+    assert group.close_fee is not None and group.close_fee > 0
+    raw_pnl = (1_800.0 - 1_500.0) * 0.1
+    assert group.pnl == pytest.approx(raw_pnl - 8.85 - group.close_fee)
+
+
+def test_close_group_at_cmp_credits_inr_converted_pnl_for_crypto_group():
+    # group.pnl (the stored figure) stays raw USD - only the account (INR)
+    # credit is converted, same split _apply_realized_pnl enforces for
+    # plain positions (see test_position_manager.py's own currency tests).
+    group = _group(net_debit=1_500.0, quantity=0.1, segment="CRYPTO", exchange="CRYPTO", open_fee=8.85)
+    long_leg = FakePosition(id="long", status="OPEN", exchange="CRYPTO", symbol="BTC-CALL", action="BUY", entry_price=1_500.0, quantity=0.1)
+    accounts = _accounts(balance=200_000.0, segment="CRYPTO")
+
+    _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"BTC-CALL": 1_800.0}, accounts["CRYPTO"], "manual", usdinr_rate=90.0)
+
+    usd_pnl = group.pnl
+    assert accounts["CRYPTO"].current_balance == pytest.approx(200_000.0 + usd_pnl * 90.0)
+
+
+def test_close_group_at_cmp_unaffected_for_non_crypto_group():
+    # open_fee stays None for NSE/MCX - _net_pnl_with_fees-equivalent
+    # netting must be a complete no-op, matching every test above this one
+    # in the file (all written before this feature existed).
+    group = _group(net_debit=20.0, quantity=75)
+    long_leg, short_leg = _legs()
+    accounts = _accounts()
+
+    _close_group_at_cmp(group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 15.0}, accounts["NSE"], "manual")
+
+    assert group.close_fee is None
+    assert group.pnl == pytest.approx((45.0 - 15.0 - 20.0) * 75)

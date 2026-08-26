@@ -255,24 +255,42 @@ class DeltaProvider(QuoteProvider):
         )
 
     def get_lot_size(self, symbol: str) -> Optional[float]:
-        """Options still return 1 - naked/spread legs are priced and sized
-        directly per Delta's own option premium quotes, no separate
-        contract_value concept observed there (unlike perpetuals - see
-        below). An option's own symbol is never in _symbol_to_product_id
-        (that dict is only populated by sync_instruments()'s
-        perpetuals-only sync - option data is fetched live per-underlying-
-        asset, see _fetch_option_rows, never persisted into a sync-time
-        dict) - checked via _OPTION_SYMBOL_RE first, same shape-detection
-        get_ltp_batch uses, before falling back to the perpetual lookup.
+        """Options DO carry their own real per-contract contract_value too
+        (confirmed live against /v2/tickers 2026-08-21 - e.g. a BTC
+        option's own contract_value is 0.001, same as the BTCUSD
+        perpetual's) - fixed after a Delta UI screenshot showed "1 Lot =
+        0.001 BTC" for a BTC option contrasted with this platform's own
+        paper positions sizing as if 1 lot = 1 whole BTC, a 1000x
+        oversizing bug for every CRYPTO option position ever opened before
+        this fix (this used to `return 1` unconditionally for any option
+        symbol, on a mistaken "no separate contract_value concept observed
+        there" premise - it was never actually checked against the live
+        response). Options aren't in _symbol_to_product_id/
+        _symbol_to_contract_value at all (those two are only populated by
+        sync_instruments()'s perpetuals-only sync) - resolved instead via
+        _fetch_option_rows(underlying_asset) (the exact same cached,
+        30s-TTL data get_option_chain/get_expiry_list already fetch for
+        leg selection moments before this is called during a real option
+        order, so this essentially never costs a fresh API call in
+        practice), matched by exact symbol. None (not 1.0) if the symbol
+        isn't a currently-live contract in that response - same "unknown
+        symbol" semantics the perpetual branch below already has, rather
+        than silently defaulting to a wrong size.
 
-        Perpetuals return Delta's real contract_value (confirmed live
-        against /v2/products - e.g. BTCUSD=0.001, ETHUSD=0.01, varies per
-        symbol, some as large as 10000) instead of a hardcoded 1 - a
-        "quantity" from compute_quantity/compute_risk_based_quantity
+        Perpetuals still return Delta's real contract_value the same way
+        as before (confirmed live against /v2/products - e.g. BTCUSD=
+        0.001, ETHUSD=0.01, varies per symbol, some as large as 10000) -
+        a "quantity" from compute_quantity/compute_risk_based_quantity
         (execution) is lots * this value, in underlying-asset units, same
         as Delta's own "Funds req." calculation."""
-        if _OPTION_SYMBOL_RE.match(symbol):
-            return 1
+        option_match = _OPTION_SYMBOL_RE.match(symbol)
+        if option_match:
+            underlying_asset = option_match.group(2)
+            for row in self._fetch_option_rows(underlying_asset):
+                if row.get("symbol") == symbol:
+                    contract_value = row.get("contract_value")
+                    return float(contract_value) if contract_value is not None else 1.0
+            return None
         if not self._symbol_to_product_id:
             self.sync_instruments()
         if symbol not in self._symbol_to_product_id:

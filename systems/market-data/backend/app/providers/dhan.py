@@ -169,6 +169,12 @@ OPTION_CHAIN_CACHE_TTL_SECONDS = 30.0
 # multi-symbol option-strategy webhook call (~12s for 2 symbols).
 EXPIRY_LIST_CACHE_TTL_SECONDS = 300.0
 
+# How long GET /options/oi-summary's per-leg OI history is retained -
+# comfortably past the 15-minute window that endpoint's widest change
+# figure needs, so there's always a sample old enough to diff against
+# once the buffer's been running that long.
+OI_HISTORY_RETENTION_SECONDS = 20 * 60
+
 # Dhan doesn't separately document a rate limit for charts/rollingoption -
 # same conservative default as the option-chain family above, own
 # lock/timestamp (a distinct endpoint, no reason to serialize behind
@@ -645,6 +651,25 @@ class DhanProvider(QuoteProvider):
 
         self._expiry_list_cache: dict[str, tuple[list[str], float]] = {}
         self._expiry_list_cache_lock = threading.Lock()
+
+        # In-memory OI time series backing GET /options/oi-summary's
+        # 5m/15m change figures - see _record_oi_history's own comment.
+        # Deliberately NOT persisted (market-data holds no DB by design,
+        # in-memory cache only) - resets on every restart, same tradeoff
+        # this class's other caches already accept.
+        self._oi_history_lock = threading.Lock()
+        # (symbol, expiry, strike, option_type) -> [(unix ts, oi), ...] oldest first
+        self._oi_history: dict[tuple[str, str, float, str], list[tuple[float, int]]] = {}
+
+        # Same shape/lifecycle as _oi_history above, but for last_price -
+        # backs the buildup (long/short buildup, short covering, long
+        # unwinding) classification in app/domain/oi_summary.py, which
+        # needs a price direction alongside the OI direction. Kept as a
+        # separate dict/lock rather than widening _oi_history's tuples so
+        # the existing OI-only tests/call sites don't have to change.
+        self._price_history_lock = threading.Lock()
+        # (symbol, expiry, strike, option_type) -> [(unix ts, last_price), ...] oldest first
+        self._price_history: dict[tuple[str, str, float, str], list[tuple[float, float]]] = {}
 
     def status(self) -> dict:
         return {
@@ -1180,6 +1205,103 @@ class DhanProvider(QuoteProvider):
         with self._option_chain_cache_lock:
             self._option_chain_cache[(symbol, expiry)] = (chain, time.monotonic())
 
+    def _record_oi_history(self, symbol: str, expiry: str, chain: OptionChain) -> None:
+        """Appends one OI sample per leg from a freshly-fetched `chain` -
+        called only on a real cache miss inside get_option_chain (never on
+        a cache-hit return), since OI can't have changed between two
+        responses served from the same OPTION_CHAIN_CACHE_TTL_SECONDS-
+        cached fetch. Each leg's list is pruned to OI_HISTORY_RETENTION_
+        SECONDS on every append rather than by a separate sweep - this
+        dict has no background task, so pruning has to happen somewhere
+        every leg actually gets touched."""
+        now = time.time()
+        cutoff = now - OI_HISTORY_RETENTION_SECONDS
+        with self._oi_history_lock:
+            for row in chain.strikes:
+                for leg, option_type in ((row.ce, "CE"), (row.pe, "PE")):
+                    if leg is None:
+                        continue
+                    key = (symbol, expiry, row.strike, option_type)
+                    samples = self._oi_history.setdefault(key, [])
+                    samples.append((now, leg.oi))
+                    while samples and samples[0][0] < cutoff:
+                        samples.pop(0)
+
+    def get_oi_changes(
+        self, symbol: str, expiry: str, strike: float, option_type: str, current_oi: int
+    ) -> tuple[Optional[int], Optional[int]]:
+        """(change_5m, change_15m) for one leg, built from the history
+        _record_oi_history has been accumulating since this backend last
+        started. Each is `current_oi` minus the sample recorded closest
+        to (but not after) that many minutes ago - None if no sample is
+        old enough yet (a fresh restart, or a strike/expiry nobody's
+        fetched before). `current_oi` is passed in rather than read from
+        the buffer's own last sample so this always diffs against
+        whatever chain the caller actually has in hand, not a
+        theoretically-identical-but-separately-fetched one."""
+        with self._oi_history_lock:
+            samples = list(self._oi_history.get((symbol, expiry, strike, option_type), []))
+
+        now = time.time()
+
+        def anchor(minutes: float) -> Optional[int]:
+            target = now - minutes * 60
+            found: Optional[int] = None
+            for ts, oi in samples:
+                if ts <= target:
+                    found = oi
+                else:
+                    break
+            return found
+
+        anchor_5m = anchor(5)
+        anchor_15m = anchor(15)
+        change_5m = current_oi - anchor_5m if anchor_5m is not None else None
+        change_15m = current_oi - anchor_15m if anchor_15m is not None else None
+        return change_5m, change_15m
+
+    def _record_price_history(self, symbol: str, expiry: str, chain: OptionChain) -> None:
+        """Price-history sibling of _record_oi_history above - same
+        real-fetch-only call site, same retention/pruning."""
+        now = time.time()
+        cutoff = now - OI_HISTORY_RETENTION_SECONDS
+        with self._price_history_lock:
+            for row in chain.strikes:
+                for leg, option_type in ((row.ce, "CE"), (row.pe, "PE")):
+                    if leg is None:
+                        continue
+                    key = (symbol, expiry, row.strike, option_type)
+                    samples = self._price_history.setdefault(key, [])
+                    samples.append((now, leg.last_price))
+                    while samples and samples[0][0] < cutoff:
+                        samples.pop(0)
+
+    def get_price_changes(
+        self, symbol: str, expiry: str, strike: float, option_type: str, current_price: float
+    ) -> tuple[Optional[float], Optional[float]]:
+        """(change_5m, change_15m) for one leg's premium - price-history
+        sibling of get_oi_changes above, same anchor logic."""
+        with self._price_history_lock:
+            samples = list(self._price_history.get((symbol, expiry, strike, option_type), []))
+
+        now = time.time()
+
+        def anchor(minutes: float) -> Optional[float]:
+            target = now - minutes * 60
+            found: Optional[float] = None
+            for ts, price in samples:
+                if ts <= target:
+                    found = price
+                else:
+                    break
+            return found
+
+        anchor_5m = anchor(5)
+        anchor_15m = anchor(15)
+        change_5m = current_price - anchor_5m if anchor_5m is not None else None
+        change_15m = current_price - anchor_15m if anchor_15m is not None else None
+        return change_5m, change_15m
+
     @staticmethod
     def _parse_option_leg(raw: Optional[dict], strike: float, spot: float, option_type: str, strike_step: float) -> Optional[OptionLegQuote]:
         if raw is None:
@@ -1236,7 +1358,30 @@ class DhanProvider(QuoteProvider):
             raise RuntimeError(f"Dhan API error ({resp.status_code}): {resp.text[:200]}") from exc
 
         data = resp.json().get("data", {})
+        # Dhan's own optionchain response embeds an underlying `last_price`
+        # that can be meaningfully stale/wrong for some instruments -
+        # reproduced live 2026-08-25: MCX CRUDEOILM's optionchain reported
+        # 8138 while the same instrument's own real-time LTP (GET
+        # /quotes/ltp, backed by this provider's own get_ltp_batch) was
+        # ~7867 - a ~270-point/~3.4% gap that silently classified every
+        # strike's moneyness against the wrong spot, picking a CE/PE 3
+        # strikes further OTM than the real ATM (option_templates.py's
+        # _find_atm_index just returns whichever strike THIS classification
+        # marked "ATM" - it has no independent notion of spot to sanity-
+        # check against). Prefer a fresh, independently-fetched LTP (same
+        # quote path /quotes/ltp uses, and very likely already cached from
+        # a recent call on the same symbol - resolve_underlying/order
+        # placement fetch one moments before this in the real Manual tab
+        # flow) for spot when available; fall back to the optionchain
+        # response's own price only if that lookup fails for any reason,
+        # rather than fail the whole chain fetch over a transient LTP hiccup.
         spot = data.get("last_price", 0.0)
+        try:
+            live_ltp = self.get_ltp_batch([symbol]).get(symbol)
+            if live_ltp is not None:
+                spot = live_ltp
+        except Exception:
+            logger.warning("live LTP override for '%s' option-chain spot failed - using optionchain's own last_price", symbol)
         raw_strikes = data.get("oc", {})
         strike_prices = [float(s) for s in raw_strikes]
         strike_step = infer_strike_step(strike_prices) if len(strike_prices) >= 2 else 1.0
@@ -1258,6 +1403,8 @@ class DhanProvider(QuoteProvider):
             strikes=strikes,
         )
         self._store_option_chain(symbol, expiry, chain)
+        self._record_oi_history(symbol, expiry, chain)
+        self._record_price_history(symbol, expiry, chain)
         return chain
 
     def _rolling_option_instrument(self, underlying_symbol: str) -> Optional[str]:

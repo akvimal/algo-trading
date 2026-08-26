@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import accounts, health, option_groups, positions
+from app.api.routes import accounts, checklist, health, option_groups, positions, trade_images
 from app.api.routes import settings as settings_routes
 from app.consumers.orders_consumer import start_background as start_consumer
 from app.scheduler import start_scheduler
@@ -24,6 +24,8 @@ app.include_router(positions.router)
 app.include_router(option_groups.router)
 app.include_router(settings_routes.router)
 app.include_router(accounts.router)
+app.include_router(checklist.router)
+app.include_router(trade_images.router)
 
 _consumer_stop_event = None
 

@@ -58,6 +58,20 @@ REGIME_INDICATOR_TYPES: frozenset[str] = frozenset(
     {"structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope", "supertrend"}
 )
 
+# IndicatorTypes valid in CrossoverRuleConfig.indicator_id - i.e. ones
+# app/domain/indicators.py's compute_indicator/compute_indicator_signal
+# actually know how to turn into a (value_series, signal_series) pair.
+# "supertrend" is deliberately in BOTH this set and REGIME_INDICATOR_TYPES
+# above (added 2026-08-21) - close price crossing the SuperTrend line is
+# exactly the standard "SuperTrend flip" entry signal (value=close,
+# signal=the ST line itself, from compute_supertrend), which is a
+# perfectly good crossover trigger independently of whether some OTHER
+# saved SuperTrend Indicator row is also used as a regime filter/stop-loss
+# elsewhere - unlike "rsi", which stays crossover-only (never a regime
+# check). Shared by app/api/routes/rules.py's
+# _check_referenced_indicator_exists.
+CROSSOVER_INDICATOR_TYPES: frozenset[str] = frozenset({"rsi", "supertrend"})
+
 
 class RsiParams(BaseModel):
     """`sma_period` is RSI's own signal line (SMA of RSI) - bundled into

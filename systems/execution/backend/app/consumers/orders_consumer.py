@@ -28,6 +28,7 @@ from app.adapters.quotes.client import (
     get_ltp_batch,
     get_previous_candle,
     resolve_symbol_by_security_id,
+    resolve_underlying,
 )
 from app.config import settings
 from app.domain.models import ResolvedOrder
@@ -57,7 +58,8 @@ def _process_message(message_id: str, fields: dict) -> None:
             # spot/future below, so position_manager.is_supported/
             # open_position never need to know about options at all.
             open_option_group(
-                order, exec_settings, db, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size
+                order, exec_settings, db, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size,
+                resolve_underlying, get_candle_history,
             )
         else:
             open_position(order, exec_settings, db, get_previous_candle, get_lot_size, get_candle_history)

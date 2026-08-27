@@ -68,6 +68,10 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         "close_fee": float(row.close_fee) if row.close_fee is not None else None,
         "margin_posted": float(row.margin_posted) if row.margin_posted is not None else None,
         "liquidation_price": float(row.liquidation_price) if row.liquidation_price is not None else None,
+        # NSE MTF only - null for every other position. See
+        # infra/postgres/init/02-execution.sql's own comment.
+        "mtf_interest_rate_pct": float(row.mtf_interest_rate_pct) if row.mtf_interest_rate_pct is not None else None,
+        "interest_charged": float(row.interest_charged) if row.interest_charged is not None else None,
         # Trade discipline checklist (Manual tab only) - null for every
         # Strategy-driven position, see infra/postgres/init/
         # 02-execution.sql's own comment on these 4 columns.

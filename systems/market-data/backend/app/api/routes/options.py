@@ -63,13 +63,16 @@ def get_chain(exchange: str, symbol: str, expiry: str, user_id: Optional[UUID] =
 
 
 @router.get("/options/oi-summary", response_model=OptionOiSummary)
-def get_oi_summary(exchange: str, symbol: str, expiry: str):
+def get_oi_summary(exchange: str, symbol: str, expiry: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
     """PCR + chain-wide OI-change totals (5m/15m) + per-strike OI/IV
-    breakdown for one (exchange, symbol, expiry) - signal-generation's OI
-    Summary page, not used in the resolve/order-placement path. Reuses
-    the same DhanProvider.get_option_chain fetch/cache/throttle as
-    GET /options/chain above, then layers get_oi_changes's in-memory
-    history on top - see build_oi_summary for the aggregation itself."""
+    breakdown for one (exchange, symbol, expiry) - the OI Summary page,
+    not used in the resolve/order-placement path. Reuses the same
+    DhanProvider.get_option_chain fetch/cache/throttle as GET
+    /options/chain above (now BYO-credential-aware the same way, see
+    that route - originally left out of Phase 3's scope since the OI
+    Summary page wasn't itself Bearer-authenticated yet at the time),
+    then layers get_oi_changes's in-memory history on top - see
+    build_oi_summary for the aggregation itself."""
     try:
         provider = get_provider(exchange)
     except ValueError as exc:
@@ -82,7 +85,8 @@ def get_oi_summary(exchange: str, symbol: str, expiry: str):
         raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
 
     try:
-        chain = resolver(symbol, expiry)
+        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        chain = resolver(symbol, expiry, credentials=credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if chain is None:

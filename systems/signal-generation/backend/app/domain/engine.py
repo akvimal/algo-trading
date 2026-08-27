@@ -126,7 +126,23 @@ def _matches_contract_day_filter(
     return expiry is not None and today.isoformat() == expiry
 
 
-def _target_symbols(rule_row: db_models.Rule, get_universe_constituents: GetUniverseConstituents) -> list[str]:
+def resolve_watchlist_symbols(db: Session, name: Optional[str]) -> list[str]:
+    """underlying_type='watchlist' resolution, shared by the live engine
+    (_target_symbols below) and the backtest route
+    (app/api/routes/rules.py's _backtest_watchlist) - looks up
+    signal_generation.watchlists by its unique `name` and parses its
+    comma-separated `symbols` column (parse_symbol_list, same helper
+    'symbol_list' itself uses). Returns [] if no watchlist by that name
+    exists (deleted/renamed after a Rule referenced it) - callers treat
+    this the same as an unresolvable 'universe' key: logged and skipped
+    for the live engine, a 502 for backtest."""
+    row = db.query(db_models.Watchlist).filter_by(name=name).first()
+    if row is None:
+        return []
+    return parse_symbol_list(row.symbols)
+
+
+def _target_symbols(db: Session, rule_row: db_models.Rule, get_universe_constituents: GetUniverseConstituents) -> list[str]:
     """A plain symbol-scoped rule checks exactly its own underlying, same
     as before universes existed. A universe-scoped rule
     (underlying_type='universe') instead checks every constituent of the
@@ -139,7 +155,11 @@ def _target_symbols(rule_row: db_models.Rule, get_universe_constituents: GetUniv
     underlying_type='symbol_list' is the same fan-out, but the member list
     comes from parsing `underlying` itself (see parse_symbol_list) rather
     than a market-data lookup - for segments like MCX with no index/
-    universe concept, letting a rule scan a hand-picked set of symbols."""
+    universe concept, letting a rule scan a hand-picked set of symbols.
+    underlying_type='watchlist' is the same fan-out again, but the member
+    list comes from a signal_generation.watchlists row looked up by name
+    (see resolve_watchlist_symbols) - a named, user-managed, reusable
+    group, unlike 'symbol_list' (baked into this one rule)."""
     if rule_row.underlying_type == "universe":
         constituents = get_universe_constituents(rule_row.underlying)
         if not constituents:
@@ -148,6 +168,11 @@ def _target_symbols(rule_row: db_models.Rule, get_universe_constituents: GetUniv
         return constituents
     if rule_row.underlying_type == "symbol_list":
         return parse_symbol_list(rule_row.underlying)
+    if rule_row.underlying_type == "watchlist":
+        symbols = resolve_watchlist_symbols(db, rule_row.underlying)
+        if not symbols:
+            logger.warning("could not resolve watchlist %s for rule %s", rule_row.underlying, rule_row.id)
+        return symbols
     return [rule_row.underlying]
 
 
@@ -608,7 +633,7 @@ def run_live_tick(
             continue
         if not _matches_active_weekdays(today_ist, strategy.active_weekdays):
             continue
-        for symbol in _target_symbols(rule_row, get_universe_constituents):
+        for symbol in _target_symbols(db, rule_row, get_universe_constituents):
             checked += 1
             try:
                 if _run_one(db, strategy, rule_row, symbol, today_ist, resolve_underlying, get_candle_history, get_ltp, post_signal):

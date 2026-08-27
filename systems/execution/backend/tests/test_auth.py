@@ -13,7 +13,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_admin
 from app.config import settings
 
 
@@ -63,4 +63,33 @@ def test_get_current_user_rejects_bad_signature():
 def test_get_current_user_rejects_non_uuid_subject():
     with pytest.raises(HTTPException) as exc:
         get_current_user(_creds(_token("not-a-uuid")))
+    assert exc.value.status_code == 401
+
+
+def test_get_current_user_defaults_is_admin_false():
+    user = get_current_user(_creds(_token(str(uuid.uuid4()))))
+    assert user.is_admin is False
+
+
+def test_get_current_user_reads_is_admin_true_claim():
+    user = get_current_user(_creds(_token(str(uuid.uuid4()), is_admin=True)))
+    assert user.is_admin is True
+
+
+def test_require_admin_accepts_admin_token():
+    user_id = str(uuid.uuid4())
+    admin = require_admin(get_current_user(_creds(_token(user_id, is_admin=True))))
+    assert str(admin.id) == user_id
+    assert admin.is_admin is True
+
+
+def test_require_admin_rejects_non_admin_token():
+    with pytest.raises(HTTPException) as exc:
+        require_admin(get_current_user(_creds(_token(str(uuid.uuid4())))))
+    assert exc.value.status_code == 403
+
+
+def test_require_admin_rejects_missing_credentials():
+    with pytest.raises(HTTPException) as exc:
+        require_admin(get_current_user(None))
     assert exc.value.status_code == 401

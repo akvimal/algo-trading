@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   type Account,
   type DhanStatus,
+  type FeedStatus,
   type Settings,
   type StrategyAccount,
   type StrategySummary,
@@ -10,13 +11,18 @@ import {
   deleteStrategyAccount,
   fetchAccounts,
   fetchDhanStatus,
+  fetchFeedStatus,
+  fetchPlatformAccounts,
   fetchSettings,
   fetchStrategyAccounts,
   fetchStrategyNames,
+  renewDhanToken,
   resetAccount,
   resetStrategyAccount,
+  subscribeFeed,
   updateAccount,
   updateDhanCredentials,
+  updatePlatformAccount,
   updateSettings,
   updateStrategyAccount,
 } from "./api";
@@ -36,6 +42,19 @@ export default function AccountsPage() {
   const [resetting, setResetting] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  // Platform-wide (user_id IS NULL) accounts - the rows the automated
+  // Strategy-driven flow actually reads (see api.ts's own comment on
+  // fetchPlatformAccounts). Deliberately separate state from the per-caller
+  // `accounts`/`drafts` above - this is broker/platform config (leverage,
+  // MTF interest), not this admin's own personal paper-trading account.
+  const [platformAccounts, setPlatformAccounts] = useState<Account[]>([]);
+  const [platformDrafts, setPlatformDrafts] = useState<
+    Record<string, { leverage: number | ""; mtfInterestRate: number | "" }>
+  >({});
+  const [platformError, setPlatformError] = useState<string | null>(null);
+  const [savingPlatform, setSavingPlatform] = useState<string | null>(null);
+  const [platformMessage, setPlatformMessage] = useState<string | null>(null);
+
   const [settings, setSettings] = useState<Settings | null>(null);
   const [usdinrDraft, setUsdinrDraft] = useState<number | "">("");
   const [savingUsdinr, setSavingUsdinr] = useState(false);
@@ -53,6 +72,15 @@ export default function AccountsPage() {
   const [dhanAccessTokenDraft, setDhanAccessTokenDraft] = useState("");
   const [savingDhan, setSavingDhan] = useState(false);
   const [dhanMessage, setDhanMessage] = useState<string | null>(null);
+  const [renewingDhan, setRenewingDhan] = useState(false);
+
+  // Live tick feed status/subscribe (app/providers/dhan_feed.py) - same
+  // admin-only ops surface as the credentials block above.
+  const [feedStatus, setFeedStatus] = useState<FeedStatus | null>(null);
+  const [feedExchangeDraft, setFeedExchangeDraft] = useState("NSE");
+  const [feedSymbolDraft, setFeedSymbolDraft] = useState("");
+  const [subscribingFeed, setSubscribingFeed] = useState(false);
+  const [feedMessage, setFeedMessage] = useState<string | null>(null);
 
   // Optional per-strategy dedicated accounts (execution.strategy_accounts) -
   // strategies list comes from signal-generation directly (same
@@ -91,6 +119,11 @@ export default function AccountsPage() {
         // its own "couldn't load" state below rather than blocking the
         // rest of the page (accounts/USDINR are unrelated to it).
       });
+    fetchFeedStatus()
+      .then(setFeedStatus)
+      .catch(() => {
+        // Same "don't block the rest of the page" reasoning as above.
+      });
   }, []);
 
   async function handleSaveDhanCredentials() {
@@ -106,6 +139,35 @@ export default function AccountsPage() {
       setDhanMessage(err instanceof Error ? err.message : "Failed to save data provider keys");
     } finally {
       setSavingDhan(false);
+    }
+  }
+
+  async function handleRenewDhanToken() {
+    setRenewingDhan(true);
+    setDhanMessage(null);
+    try {
+      await renewDhanToken();
+      setDhanStatus(await fetchDhanStatus());
+      setDhanMessage("Token renewed.");
+    } catch (err) {
+      setDhanMessage(err instanceof Error ? err.message : "Failed to renew token");
+    } finally {
+      setRenewingDhan(false);
+    }
+  }
+
+  async function handleSubscribeFeed() {
+    if (!feedSymbolDraft.trim()) return;
+    setSubscribingFeed(true);
+    setFeedMessage(null);
+    try {
+      const updated = await subscribeFeed(feedExchangeDraft, feedSymbolDraft.trim());
+      setFeedStatus(updated);
+      setFeedMessage(`Subscribed to ${feedExchangeDraft}:${feedSymbolDraft.trim()}.`);
+    } catch (err) {
+      setFeedMessage(err instanceof Error ? err.message : "Failed to subscribe");
+    } finally {
+      setSubscribingFeed(false);
     }
   }
 
@@ -148,6 +210,36 @@ export default function AccountsPage() {
         setError(null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load accounts");
+      }
+    }
+
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const data = await fetchPlatformAccounts();
+        if (cancelled) return;
+        setPlatformAccounts(data);
+        setPlatformDrafts((prev) => {
+          const next = { ...prev };
+          for (const a of data) {
+            if (!(a.segment in next))
+              next[a.segment] = { leverage: a.leverage, mtfInterestRate: a.mtf_annual_interest_rate_pct ?? "" };
+          }
+          return next;
+        });
+        setPlatformError(null);
+      } catch (err) {
+        if (!cancelled) setPlatformError(err instanceof Error ? err.message : "Failed to load platform accounts");
       }
     }
 
@@ -301,6 +393,25 @@ export default function AccountsPage() {
     }
   }
 
+  async function handleSavePlatform(segment: Account["segment"]) {
+    const draft = platformDrafts[segment];
+    if (!draft || draft.leverage === "") return;
+    setSavingPlatform(segment);
+    setPlatformMessage(null);
+    try {
+      const updated = await updatePlatformAccount(segment, {
+        leverage: draft.leverage,
+        mtf_annual_interest_rate_pct: draft.mtfInterestRate === "" ? null : draft.mtfInterestRate,
+      });
+      setPlatformAccounts((prev) => prev.map((a) => (a.segment === segment ? updated : a)));
+      setPlatformMessage(`Platform ${segment} account saved.`);
+    } catch (err) {
+      setPlatformMessage(err instanceof Error ? err.message : `Failed to save platform ${segment} account`);
+    } finally {
+      setSavingPlatform(null);
+    }
+  }
+
   async function handleReset(segment: Account["segment"]) {
     const confirmed = window.confirm(
       `Reset the ${segment} account's balance back to its starting balance? This doesn't undo any positions.`,
@@ -363,6 +474,7 @@ export default function AccountsPage() {
           Client ID
           <input
             type="text"
+            autoComplete="off"
             placeholder="Dhan client ID"
             value={dhanClientIdDraft}
             onChange={(e) => setDhanClientIdDraft(e.target.value)}
@@ -372,6 +484,7 @@ export default function AccountsPage() {
           Access token
           <input
             type="password"
+            autoComplete="new-password"
             placeholder={dhanStatus?.has_access_token ? "Configured (hidden) - paste a new one to replace" : "Not set"}
             value={dhanAccessTokenDraft}
             onChange={(e) => setDhanAccessTokenDraft(e.target.value)}
@@ -385,6 +498,9 @@ export default function AccountsPage() {
         >
           {savingDhan ? "Saving..." : "Save"}
         </button>
+        <button type="button" className="secondary tiny" onClick={handleRenewDhanToken} disabled={renewingDhan}>
+          {renewingDhan ? "Renewing..." : "Renew token"}
+        </button>
       </div>
       {dhanMessage && <p className="action-message">{dhanMessage}</p>}
       {dhanStatus ? (
@@ -397,6 +513,36 @@ export default function AccountsPage() {
         <p className="subtitle">Could not reach market-data to check the current status.</p>
       )}
 
+      <h2>Live feed</h2>
+      {feedStatus ? (
+        <p className="subtitle">
+          {feedStatus.connected ? "Connected" : "Not connected"}
+          {feedStatus.last_message_at ? ` · last tick ${feedStatus.last_message_at}` : ""}
+          {feedStatus.reconnect_count > 0 ? ` · reconnected ${feedStatus.reconnect_count}x` : ""}
+          {feedStatus.last_error ? ` · last error: ${feedStatus.last_error}` : ""}
+        </p>
+      ) : (
+        <p className="subtitle">Could not reach market-data to check the feed status.</p>
+      )}
+      <div className="settings-row">
+        <label>
+          Exchange
+          <select value={feedExchangeDraft} onChange={(e) => setFeedExchangeDraft(e.target.value)}>
+            {/* Dhan-only feed (see app/providers/dhan_feed.py) - no CRYPTO here, unlike SEGMENTS elsewhere on this page. */}
+            <option value="NSE">NSE</option>
+            <option value="MCX">MCX</option>
+          </select>
+        </label>
+        <label>
+          Symbol
+          <input type="text" placeholder="e.g. RELIANCE" value={feedSymbolDraft} onChange={(e) => setFeedSymbolDraft(e.target.value)} />
+        </label>
+        <button type="button" className="secondary tiny" onClick={handleSubscribeFeed} disabled={subscribingFeed || !feedSymbolDraft.trim()}>
+          {subscribingFeed ? "Subscribing..." : "Subscribe"}
+        </button>
+      </div>
+      {feedMessage && <p className="action-message">{feedMessage}</p>}
+
       <div className="table-scroll">
         <table>
           <thead>
@@ -405,7 +551,7 @@ export default function AccountsPage() {
               <th>Balance</th>
               <th>Capital per trade (&#8377;)</th>
               <th>Risk per trade (%)</th>
-              <th>Leverage (CRYPTO only)</th>
+              <th>Leverage (CRYPTO)</th>
               <th>Square-off (blank = never)</th>
               <th></th>
             </tr>
@@ -498,6 +644,104 @@ export default function AccountsPage() {
                       disabled={resetting === segment}
                     >
                       {resetting === segment ? "Resetting..." : "Reset balance"}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Platform account (admin)</h2>
+      <p className="subtitle">
+        The platform-wide account the automated Strategy-driven flow actually sizes/holds against - separate from
+        this admin's own personal account above. Leverage/MTF interest configured here is broker/platform config,
+        not a per-SaaS-user setting - a Strategy opts in via its own <code>use_margin</code> field
+        (signal-generation) before this leverage ever applies to one of its orders.
+      </p>
+      {platformError && <p className="error">Could not reach the backend: {platformError}</p>}
+      {platformMessage && <p className="action-message">{platformMessage}</p>}
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Segment</th>
+              <th>Leverage</th>
+              <th>MTF interest %/yr (NSE)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {SEGMENTS.map((segment) => {
+              const account = platformAccounts.find((a) => a.segment === segment);
+              const draft = platformDrafts[segment] ?? { leverage: "", mtfInterestRate: "" };
+              return (
+                <tr key={segment}>
+                  <td className="symbol">{segment}</td>
+                  <td>
+                    {segment === "CRYPTO" ? (
+                      <select
+                        value={draft.leverage}
+                        onChange={(e) =>
+                          setPlatformDrafts((prev) => ({
+                            ...prev,
+                            [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
+                          }))
+                        }
+                      >
+                        {LEVERAGE_OPTIONS.map((lev) => (
+                          <option key={lev} value={lev}>
+                            {lev}x
+                          </option>
+                        ))}
+                      </select>
+                    ) : segment === "NSE" ? (
+                      <input
+                        type="number"
+                        min="1"
+                        step="0.1"
+                        title="Dhan MTF (margin trading facility) - only applies to a positional order from a Strategy with use_margin=true, never intraday or a Manual tab order."
+                        value={draft.leverage}
+                        onChange={(e) =>
+                          setPlatformDrafts((prev) => ({
+                            ...prev,
+                            [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
+                          }))
+                        }
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td>
+                    {segment === "NSE" ? (
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        placeholder="e.g. 18"
+                        title="Required before a positional use_margin order can use leverage > 1 above."
+                        value={draft.mtfInterestRate}
+                        onChange={(e) =>
+                          setPlatformDrafts((prev) => ({
+                            ...prev,
+                            [segment]: { ...draft, mtfInterestRate: e.target.value === "" ? "" : Number(e.target.value) },
+                          }))
+                        }
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="tiny"
+                      onClick={() => handleSavePlatform(segment)}
+                      disabled={savingPlatform === segment || !account}
+                    >
+                      {savingPlatform === segment ? "Saving..." : "Save"}
                     </button>
                   </td>
                 </tr>

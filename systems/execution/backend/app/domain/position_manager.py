@@ -253,14 +253,19 @@ def compute_risk_based_quantity(
 
 
 def is_supported(horizon: str, instrument_type: str) -> bool:
-    """Intraday spot or future positions are handled here - swing/
-    positional and options remain rejected until that resolution/
-    execution logic exists. `future` was added alongside the in-house
-    RSI/SMA(RSI) engine (Phase 3) - a deliberate pull-forward of one
-    piece of what was originally planned as Phase 4, so that engine's
-    signals are actually tradeable rather than permanently REJECTED. See
+    """Intraday spot or future positions are handled here - options remain
+    rejected outside `horizon='intraday'` until that resolution/execution
+    logic exists. `future` was added alongside the in-house RSI/SMA(RSI)
+    engine (Phase 3) - a deliberate pull-forward of one piece of what was
+    originally planned as Phase 4, so that engine's signals are actually
+    tradeable rather than permanently REJECTED. `positional` + `spot` was
+    added later for an external multi-day-hold strategy (optionally NSE
+    MTF-leveraged, see the CRYPTO-leverage-style block in open_position) -
+    `positional` + `future` stays unsupported (not asked for). See
     docs/architecture.md."""
-    return horizon == "intraday" and instrument_type in ("spot", "future")
+    if horizon == "intraday":
+        return instrument_type in ("spot", "future")
+    return horizon == "positional" and instrument_type == "spot"
 
 
 def is_within_intraday_window(now: datetime, square_off_time: Optional[time], tz_name: str) -> bool:
@@ -452,22 +457,47 @@ def _usdinr_rate_by_user(db: Session, positions: list) -> dict:
     return {uid: by_user.get(uid) for uid in user_ids}
 
 
-def _net_pnl_with_fees(pos, exit_price: float, raw_pnl: float) -> float:
-    """Delta Exchange fee simulation, Rule F - nets pos.open_fee/close_fee
-    out of the raw price-distance pnl for a CRYPTO-future position that
-    went through _open_delta_fee_fields (pos.open_fee is not None). Returns
-    raw_pnl completely unchanged for every other position (pos.open_fee is
-    None) - zero behavior change from before this feature existed. Sets
-    pos.close_fee as a side effect (audit trail, mirrors pos.open_fee) -
-    every one of this function's callers is about to persist `pos` anyway.
-    Shared by every close path EXCEPT the liquidation branch in
-    _evaluate_exits, which uses its own Rule E total_cost formula instead
-    of this Rule F one (see that branch's own comment)."""
-    if pos.open_fee is None:
-        return raw_pnl
-    close_fee = compute_futures_trading_fee(exit_price * float(pos.quantity))
-    pos.close_fee = close_fee
-    return raw_pnl - float(pos.open_fee) - close_fee
+def _net_pnl_with_costs(pos, exit_price: float, raw_pnl: float) -> float:
+    """Nets every position-lifecycle cost out of the raw price-distance
+    pnl, in place, for whichever of the two costs below (if either)
+    applies to `pos` - a no-op returning raw_pnl unchanged for a plain
+    position with neither. Every one of this function's callers is about
+    to persist `pos` anyway, so both branches set their own field(s) as a
+    side effect (audit trail). Shared by every close path EXCEPT the
+    liquidation branch in _evaluate_exits, which uses its own Rule E
+    total_cost formula instead (see that branch's own comment) - a
+    liquidated position can't also be NSE MTF (CRYPTO-future only).
+
+    Delta Exchange fee simulation, Rule F: nets pos.open_fee/close_fee for
+    a CRYPTO-future position that went through _open_delta_fee_fields
+    (pos.open_fee is not None). Zero behavior change from before this
+    function had a second cost to net out.
+
+    NSE MTF interest: for a positional NSE spot position opened with
+    leverage > 1 (pos.margin_posted is not None and pos.segment == "NSE" -
+    margin_posted is also set for a CRYPTO future, hence the segment
+    check), computed once here at close - not accrued daily - as
+    borrowed_amount * (annual rate / 365) * days_held, where borrowed_amount
+    is the notional at entry minus the trader's own capital already
+    frozen in margin_posted. days_held floors to 1 (an intraday-length MTF
+    hold still owes at least one day's interest) using calendar days
+    between entry_time/exit_time - a documented approximation, not
+    trading-day-precise. pos.exit_time is already set by every caller
+    before this function runs."""
+    if pos.open_fee is not None:
+        close_fee = compute_futures_trading_fee(exit_price * float(pos.quantity))
+        pos.close_fee = close_fee
+        raw_pnl = raw_pnl - float(pos.open_fee) - close_fee
+
+    if pos.segment == "NSE" and pos.margin_posted is not None:
+        notional_at_entry = float(pos.entry_price) * float(pos.quantity)
+        borrowed_amount = notional_at_entry - float(pos.margin_posted)
+        days_held = max(1, (pos.exit_time.date() - pos.entry_time.date()).days)
+        interest = borrowed_amount * (float(pos.mtf_interest_rate_pct) / 100 / 365) * days_held
+        pos.interest_charged = interest
+        raw_pnl = raw_pnl - interest
+
+    return raw_pnl
 
 
 def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] = None) -> None:
@@ -978,16 +1008,18 @@ def _resolve_stop_loss(
 def _open_delta_fee_fields(
     segment: str,
     instrument_type: str,
+    horizon: str,
     action: str,
     price: float,
     quantity: float,
     account: db_models.Account,
     capital_account,
     usdinr_rate: Optional[float] = None,
-) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    use_margin: bool = False,
+) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """Delta Exchange fee/liquidation simulation (app/domain/delta_fees.py) -
-    CRYPTO + instrument_type='future' only, (None, None, None) for every
-    other position (unaffected by this feature entirely). Debits the
+    CRYPTO + instrument_type='future' only, (None, None, None, None) for
+    every other position (unaffected by this feature entirely). Debits the
     computed open_fee from capital_account.current_balance immediately - a
     real cash outflow, independent of realized P&L, the first time this
     codebase ever touches balance at OPEN time. account.leverage (used for
@@ -995,7 +1027,9 @@ def _open_delta_fee_fields(
     value even when capital_account is a strategy's own dedicated one -
     leverage stays segment-only, same as square_off_time (see
     load_capital_account's own docstring). Shared by open_position and
-    open_manual_position so both compute this identically.
+    open_manual_position so both compute this identically - the manual
+    path always passes horizon='intraday' (Manual tab positions are always
+    intraday), so it can never hit the NSE MTF branch below.
 
     open_fee/margin_posted/liquidation_price are all returned/stored in
     raw USD (matching entry_price, which never gets converted - see
@@ -1005,20 +1039,38 @@ def _open_delta_fee_fields(
     set before reaching here (CRYPTO sizing above this call already
     rejects the whole order if it's None) - None is only a defensive
     fallback (debits the raw USD figure unconverted, logged) that should
-    never actually trigger."""
-    if segment != "CRYPTO" or instrument_type != "future":
-        return None, None, None
-    notional = price * quantity
-    open_fee = compute_futures_trading_fee(notional)
-    margin_posted = compute_margin_posted(notional, float(account.leverage))
-    liquidation_price = compute_liquidation_price(action, price, float(account.leverage))
-    if usdinr_rate is None:
-        logger.error("CRYPTO open_fee debited without a usdinr_rate conversion - balance is in raw USD, not INR")
-        debit = open_fee
-    else:
-        debit = open_fee * usdinr_rate
-    capital_account.current_balance = float(capital_account.current_balance) - debit
-    return open_fee, margin_posted, liquidation_price
+    never actually trigger.
+
+    Also computes NSE MTF's margin_posted (reused, not a new column - same
+    meaning either way: the trader's own capital actually posted,
+    notional/leverage) + mtf_interest_rate_pct for a horizon='positional'
+    NSE spot position opened with leverage > 1 - the caller (open_position)
+    already rejected the order before reaching here if no rate was
+    configured, so account.mtf_annual_interest_rate_pct is guaranteed
+    non-None in that branch. No open_fee/liquidation_price for this case -
+    MTF is a cash borrowing cost against a bought asset, not a leveraged
+    derivative with liquidation risk, and its cost (interest) only becomes
+    known at close (see _net_pnl_with_costs), unlike CRYPTO's point-in-time
+    open_fee."""
+    if segment == "CRYPTO" and instrument_type == "future":
+        notional = price * quantity
+        open_fee = compute_futures_trading_fee(notional)
+        margin_posted = compute_margin_posted(notional, float(account.leverage))
+        liquidation_price = compute_liquidation_price(action, price, float(account.leverage))
+        if usdinr_rate is None:
+            logger.error("CRYPTO open_fee debited without a usdinr_rate conversion - balance is in raw USD, not INR")
+            debit = open_fee
+        else:
+            debit = open_fee * usdinr_rate
+        capital_account.current_balance = float(capital_account.current_balance) - debit
+        return open_fee, margin_posted, liquidation_price, None
+
+    if segment == "NSE" and horizon == "positional" and instrument_type == "spot" and use_margin and float(account.leverage) > 1:
+        notional = price * quantity
+        margin_posted = notional / float(account.leverage)
+        return None, margin_posted, None, float(account.mtf_annual_interest_rate_pct)
+
+    return None, None, None, None
 
 
 def open_position(
@@ -1045,7 +1097,7 @@ def open_position(
             order,
             signal_id,
             f"unsupported horizon/instrument_type ({order.horizon}/{order.instrument_type}) - "
-            "only intraday spot/future is handled in this phase",
+            "only intraday spot/future, or positional spot, is handled in this phase",
         )
         db.commit()
         return row
@@ -1090,7 +1142,7 @@ def open_position(
         pos.exit_price = order.price
         pos.exit_time = datetime.now(dt_timezone.utc)
         raw_pnl = compute_pnl(pos.action, float(pos.entry_price), order.price, float(pos.quantity))
-        _apply_realized_pnl(pos, capital_account, _net_pnl_with_fees(pos, order.price, raw_pnl), settings.usdinr_rate)
+        _apply_realized_pnl(pos, capital_account, _net_pnl_with_costs(pos, order.price, raw_pnl), settings.usdinr_rate)
         pos.status = "CLOSED"
         pos.exit_reason = "counter_signal"
 
@@ -1123,6 +1175,32 @@ def open_position(
         # affords proportionally more quantity. entry_price/stop_loss_price/
         # target_price are unaffected (PnL is still (exit-entry)*quantity
         # regardless of how much margin backed that quantity).
+        effective_capital = effective_capital * float(account.leverage)
+    elif order.segment == "NSE" and order.horizon == "positional" and order.use_margin and float(account.leverage) > 1:
+        # Dhan MTF (margin trading facility) - borrows cash against NSE
+        # spot equity, unlike CRYPTO's derivative-margin leverage above,
+        # but the sizing math is the same shape: leverage scales
+        # effective_capital directly (no USDINR step needed - NSE is
+        # already INR-native). Requires an interest rate to be configured
+        # first - see _net_pnl_with_costs for where that rate gets charged
+        # back at close. account.mtf_annual_interest_rate_pct is a
+        # manually configured rate (GET/PUT /accounts/NSE), not a live
+        # feed - same "operator enters it" convention as
+        # settings.usdinr_rate. Only ever applies to a positional order
+        # with use_margin=True (Strategy-level opt-in) - an intraday NSE
+        # order (Strategy-driven or Manual tab) never reads leverage at
+        # all, and a positional order with use_margin=False always sizes
+        # on cash regardless of how leverage/the rate are configured, so
+        # this can't change behavior for either of those cases.
+        if account.mtf_annual_interest_rate_pct is None:
+            row = _reject(
+                db,
+                order,
+                signal_id,
+                "no MTF interest rate configured for NSE - set one in Accounts to use leverage > 1 on a positional order",
+            )
+            db.commit()
+            return row
         effective_capital = effective_capital * float(account.leverage)
 
     # Only futures carry a lot concept - spot (NSE cash equity) keeps
@@ -1215,8 +1293,17 @@ def open_position(
     else:
         quantity = compute_quantity(effective_capital, order.price, lot_size)
 
-    open_fee, margin_posted, liquidation_price = _open_delta_fee_fields(
-        order.segment, order.instrument_type, order.action, order.price, quantity, account, capital_account, settings.usdinr_rate
+    open_fee, margin_posted, liquidation_price, mtf_interest_rate_pct = _open_delta_fee_fields(
+        order.segment,
+        order.instrument_type,
+        order.horizon,
+        order.action,
+        order.price,
+        quantity,
+        account,
+        capital_account,
+        settings.usdinr_rate,
+        use_margin=order.use_margin,
     )
 
     row = db_models.Position(
@@ -1241,10 +1328,17 @@ def open_position(
         stop_loss_percent=order.stop_loss_percent,
         stop_loss_indicator_type=order.stop_loss_indicator_type,
         stop_loss_indicator_params=order.stop_loss_indicator_params,
-        square_off_time=account.square_off_time,
+        # NULL for a positional position - never force-closed by the
+        # square-off scheduler (same "NULL means never force-closed"
+        # convention CRYPTO's own square_off_time=None already relies on),
+        # since it's meant to be held across multiple sessions rather than
+        # closed same-day. Only intraday positions inherit the segment's
+        # real cutoff.
+        square_off_time=account.square_off_time if order.horizon == "intraday" else None,
         open_fee=open_fee,
         margin_posted=margin_posted,
         liquidation_price=liquidation_price,
+        mtf_interest_rate_pct=mtf_interest_rate_pct,
     )
     db.add(row)
     db.commit()
@@ -1408,7 +1502,7 @@ def open_manual_position(
         pos.exit_price = price
         pos.exit_time = datetime.now(dt_timezone.utc)
         raw_pnl = compute_pnl(pos.action, float(pos.entry_price), price, float(pos.quantity))
-        _apply_realized_pnl(pos, account, _net_pnl_with_fees(pos, price, raw_pnl), settings.usdinr_rate)
+        _apply_realized_pnl(pos, account, _net_pnl_with_costs(pos, price, raw_pnl), settings.usdinr_rate)
         pos.status = "CLOSED"
         pos.exit_reason = "counter_signal"
 
@@ -1470,8 +1564,11 @@ def open_manual_position(
         else:
             final_quantity = compute_quantity(effective_capital, price, lot_size)
 
-    open_fee, margin_posted, liquidation_price = _open_delta_fee_fields(
-        segment, instrument_type, action, price, final_quantity, account, account, settings.usdinr_rate
+    # horizon="intraday" hardcoded - every Manual tab position is intraday
+    # (see docs/architecture.md's Trade discipline checklist section), so
+    # this can never hit the NSE MTF branch inside _open_delta_fee_fields.
+    open_fee, margin_posted, liquidation_price, _mtf_interest_rate_pct = _open_delta_fee_fields(
+        segment, instrument_type, "intraday", action, price, final_quantity, account, account, settings.usdinr_rate, use_margin=False
     )
 
     row = db_models.Position(
@@ -1690,7 +1787,7 @@ def square_off_all_open(db: Session, user_id: uuid.UUID, get_ltp_batch: GetLtpBa
         pos.exit_time = datetime.now(dt_timezone.utc)
         raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
         _apply_realized_pnl(
-            pos, _resolve_capital_account(pos, accounts, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl), usdinr_rate
+            pos, _resolve_capital_account(pos, accounts, strategy_accounts), _net_pnl_with_costs(pos, cmp_price, raw_pnl), usdinr_rate
         )
         pos.status = "CLOSED"
         pos.exit_reason = "square_off"
@@ -1741,7 +1838,7 @@ def square_off_position(
     if close_quantity == held_quantity:
         pos.exit_price = cmp_price
         pos.exit_time = datetime.now(dt_timezone.utc)
-        _apply_realized_pnl(pos, account, _net_pnl_with_fees(pos, cmp_price, raw_pnl), usdinr_rate)
+        _apply_realized_pnl(pos, account, _net_pnl_with_costs(pos, cmp_price, raw_pnl), usdinr_rate)
         pos.status = "CLOSED"
         pos.exit_reason = "manual"
         db.commit()
@@ -1789,7 +1886,7 @@ def square_off_position(
         square_off_time=pos.square_off_time,
         open_fee=closed_open_fee,
     )
-    _apply_realized_pnl(closed_row, account, _net_pnl_with_fees(closed_row, cmp_price, raw_pnl), usdinr_rate)
+    _apply_realized_pnl(closed_row, account, _net_pnl_with_costs(closed_row, cmp_price, raw_pnl), usdinr_rate)
     db.add(closed_row)
     db.commit()
     return {
@@ -1843,7 +1940,7 @@ def _evaluate_square_off_due(
         pos.exit_time = datetime.now(dt_timezone.utc)
         raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
         _apply_realized_pnl(
-            pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl),
+            pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_costs(pos, cmp_price, raw_pnl),
             rates.get(pos.user_id),
         )
         pos.status = "CLOSED"
@@ -1981,7 +2078,7 @@ def _evaluate_exits(
             pos.exit_time = datetime.now(dt_timezone.utc)
             raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
             _apply_realized_pnl(
-                pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl),
+                pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_costs(pos, cmp_price, raw_pnl),
                 rates.get(pos.user_id),
             )
             pos.status = "CLOSED"

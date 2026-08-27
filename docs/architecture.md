@@ -62,6 +62,19 @@ The frontend's "Indicators" tab became "Rules" — full Rule CRUD (including the
 
 This is Phase B of a two-phase plan — the 3 existing rule types ship unchanged here. A later phase (not yet built) replaces them with a free-form condition-tree grammar (inspired by a reviewed reference screener project) for price-action/indicator/fundamental combinations beyond these 3 fixed shapes — crossover/breakout/range_breakout would become presets built from that grammar rather than separate code paths.
 
+### Watchlists: a named, reusable symbol group, alongside `universe`/`symbol_list`
+
+`Rule.underlying_type` gained a 4th value, `'watchlist'`, alongside the existing `'symbol'`/`'universe'`/`'symbol_list'` — requested so a user-defined group (e.g. "fundamentally strong stocks") can be scanned by a Rule the same way a fixed NSE index (`'universe'`) can, but created/edited by the user rather than sourced from `market-data`'s index-constituent API. A new `signal_generation.watchlists` table (`id`, `name` `UNIQUE`, `symbols` — comma-separated, same raw-string shape/parsing as `symbol_list`'s own `underlying`, via the existing `parse_symbol_list` helper reused rather than a parallel JSONB-array path) is fully local to signal-generation, never calling market-data — so like `symbol_list` (and unlike `universe`), it's segment-agnostic, valid for MCX/CRYPTO rules too.
+
+**Referenced by name, not id** — `Rule.underlying` stores the watchlist's `name` directly when `underlying_type='watchlist'`, exactly how it stores an index key for `'universe'`. Two deliberate differences from how `'universe'` behaves, though:
+
+- **The route layer validates the reference exists at Rule create/update time** (`app/api/routes/rules.py`'s `_check_watchlist_exists`, 404 if the named watchlist doesn't exist) — `'universe'` has no equivalent check today (an unresolvable universe key only fails silently, later, at scan time). Cheap to add here since the Watchlist table is local, not a market-data round-trip.
+- **A watchlist's `name` is immutable after creation** — `PUT /watchlists/{id}` only ever updates `symbols`. A rename would silently orphan every Rule already pointing at the old name (no FK from `rules.underlying` to `watchlists.name`, same as `'universe'`'s own index keys have no FK to anything); delete and recreate under a new name instead. **Deletion itself is unprotected** — a Rule still referencing a since-deleted watchlist degrades exactly like an unresolvable `'universe'` key already does (logged and skipped on the live engine's next tick, `502` on backtest), same precedent, no new guard code.
+
+**Resolution, mirroring `universe`/`symbol_list`'s existing fan-out shape exactly:** `app/domain/engine.py`'s `_target_symbols` (now taking a `db: Session` param, since resolution is a local DB query rather than a market-data call) gained a `watchlist` branch calling the new `resolve_watchlist_symbols(db, name)` helper — looked up by name, `parse_symbol_list`'d, empty list (logged) if not found. `app/api/routes/rules.py`'s backtest dispatch gained a matching `_backtest_watchlist`, structurally identical to `_backtest_symbol_list`, reusing the same `_backtest_pooled_symbols` every `universe`/`symbol_list` backtest already pools through.
+
+**Frontend**: a new self-contained `WatchlistManager` component (`systems/signal-generation/frontend/src/App.tsx`, mirroring `IndicatorsTab`'s own "list + inline create form" shape) renders above the Rule form in the Rules tab — name + comma-separated-symbols create, symbol-count list, delete. The Rule form's own Underlying Type selector gained a `"Watchlist (custom list)"` option that, like `"Universe"`, swaps the free-text underlying input for a dropdown of saved watchlist names.
+
 ## Why Chartink intake lives directly in signal-processing (not a separate service)
 
 Intake is: receive a provider webhook, archive the raw payload, normalize/fan-out into the canonical `signal-ingest` shape (including `strategy_id` from the query param), then run the exact same persist/resolve/publish logic `POST /signals` always has. None of that is business logic — what horizon/instrument a signal resolves to still lives in `systems/signal-processing/backend`'s resolution pipeline, unchanged — it's just plumbing, which is why it used to live in n8n (a separate always-up container, hand-imported workflows, untested JavaScript `Code` nodes) even though nothing about it required a separate service. It's now `app/domain/intake/chartink.py` (the parsing) + `app/api/routes/webhooks.py` (the route), calling the exact same `archive_raw_payload`/`create_signal_from_ingest` functions the generic `POST /ingest/raw`/`POST /signals` endpoints use — in-process, no self-HTTP hop — and, unlike the JS it replaced, has real `pytest` coverage (`tests/test_chartink_intake.py`).
@@ -128,11 +141,89 @@ Leverage above only ever affected **sizing** — no fee was ever deducted, and a
 - **Liquidation wipes the full posted margin + a liquidation fee** (`compute_margin_posted` = `notional / leverage`, replacing the normal close fee entirely — never both), not the more lenient raw price-distance loss `compute_liquidation_price`'s own inputs would imply. This matches the spec's own worked-example numbers (Rule E `total_cost`), and is more conservative/realistic than treating the liquidation price as an exact exit fill.
 - **No real per-contract "max leverage" data exists anywhere** in this stack (`market-data`'s `DeltaProvider` only exposes `contract_value`/lot size) — the leverage-tiered liquidation-fee table (for any asset besides BTC/ETH/PAXG, which have a flat rate) approximates the contract's own max leverage off the *account's* configured `leverage` instead (the smallest documented tier ≥ that leverage), an explicit approximation in the same spirit as the spec's own caveat on Rule D.
 
-**Wiring, `position_manager.py` (CRYPTO + `instrument_type='future'` only):** `_open_delta_fee_fields` (called from both `open_position` and `open_manual_position`, right after `quantity` is finalized) computes `open_fee`/`margin_posted`/`liquidation_price` and debits `open_fee` from the account immediately — the first time this codebase ever touches balance at *open* time, not just close. `_evaluate_exits` gained a liquidation check, run **before** stop-loss/target/trailing on the CMP it already fetched (no extra provider call): a position whose `liquidation_price` has been crossed force-closes with `exit_reason='liquidation'`, pre-empting whatever stop-loss the strategy itself configured, same as a real exchange would. Every other close path (`_evaluate_exits`' stop/target branch, `square_off_all_open`, `square_off_position` — including its partial-close split, which prorates `open_fee`/`margin_posted` by the closed fraction — `_evaluate_square_off_due`, and the counter-signal close inside `open_position`/`open_manual_position`) nets `open_fee + close_fee` out of the raw `compute_pnl` result via the shared `_net_pnl_with_fees` helper, which is a no-op (`raw_pnl` unchanged) for every non-CRYPTO-future position — `open_fee is None` is the single gate the whole feature hangs off, so NSE/MCX and CRYPTO spot/option positions are byte-for-byte unaffected.
+**Wiring, `position_manager.py` (CRYPTO + `instrument_type='future'` only):** `_open_delta_fee_fields` (called from both `open_position` and `open_manual_position`, right after `quantity` is finalized) computes `open_fee`/`margin_posted`/`liquidation_price` and debits `open_fee` from the account immediately — the first time this codebase ever touches balance at *open* time, not just close. `_evaluate_exits` gained a liquidation check, run **before** stop-loss/target/trailing on the CMP it already fetched (no extra provider call): a position whose `liquidation_price` has been crossed force-closes with `exit_reason='liquidation'`, pre-empting whatever stop-loss the strategy itself configured, same as a real exchange would. Every other close path (`_evaluate_exits`' stop/target branch, `square_off_all_open`, `square_off_position` — including its partial-close split, which prorates `open_fee`/`margin_posted` by the closed fraction — `_evaluate_square_off_due`, and the counter-signal close inside `open_position`/`open_manual_position`) nets `open_fee + close_fee` out of the raw `compute_pnl` result via the shared `_net_pnl_with_costs` helper (renamed from `_net_pnl_with_fees` when NSE MTF interest below became its second cost to net out), which is a no-op (`raw_pnl` unchanged) for every non-CRYPTO-future, non-leveraged-NSE position — `open_fee is None` is the gate this branch hangs off, so NSE/MCX-unleveraged and CRYPTO spot/option positions are byte-for-byte unaffected.
 
 **Wiring, `option_position_manager.py` (CRYPTO, fees only — no liquidation, see above):** `_open_delta_option_fee`/`_close_delta_option_fee` compute the combined fee **per leg** (each leg is its own trade with its own premium and fee cap, not one fee on the combined net debit), using the *underlying's* own notional (`entry_spot_price * quantity`, matching Delta's real options-fee methodology of a %-of-underlying-notional fee capped at %-of-premium — the cap would otherwise almost never bind, since the taker rate applied to premium alone stays far below 3.5%) with a graceful fallback to premium-based notional if the underlying spot quote is unavailable. Wired into `open_option_group`/`open_manual_option_group` at open time, and every group-close path (`_close_group_at_cmp` — shared by counter-signal closes, manual square-off, and bulk square-off-all — `_evaluate_option_group_square_off_due`, and `_evaluate_option_group_exits`' hit branch) at close time.
 
 New columns: `execution.positions.open_fee/close_fee/margin_posted/liquidation_price` and `execution.option_position_groups.open_fee/close_fee` (all `NULL` outside this feature's scope), plus `'liquidation'` added to `positions.exit_reason`'s `CHECK` constraint. Live-verified end to end against the running dev stack: a manual CRYPTO future open correctly computed and debited the fee, and a subsequent square-off correctly netted `open_fee + close_fee` into the credited realized P&L.
+
+### Positional spot holding + NSE MTF margin/interest (added for an external multi-day-hold strategy)
+
+Requested for a new external (webhook-driven) Strategy that buys NSE stock at spot, holds it 1-5
+days, and optionally uses Dhan's MTF (margin trading facility, ~4x) with interest on the borrowed
+portion — `is_supported()` previously hard-rejected any `horizon != "intraday"`. Investigation found
+the actual gap was narrower than it first looked: `signal-generation/frontend` already lets you
+create an `external`-source Strategy with `horizon="positional"`/`instrument_type="spot"` (both
+already in its dropdowns), and the provider's own independent buy/sell webhook URLs (Chartink's
+existing two-route pattern) already drive entry *and* exit — `_resolve_signal_conflicts`
+(counter-signal close) has no horizon check at all, so it works for positional unchanged. The whole
+feature is `execution`-only:
+
+- `is_supported()` now also accepts `horizon="positional"` + `instrument_type="spot"` (`future`
+  stays intraday-only — not asked for). Confirmed with the user: no max-hold-duration safety net —
+  purely signal-driven exit (the provider's own sell webhook, or stop-loss/target, both already
+  horizon-agnostic) is intentional, not an oversight.
+- A positional position opens with `square_off_time = NULL` instead of copying the segment's cutoff
+  — reuses the exact "NULL means never force-closed" convention CRYPTO's own square-off exemption
+  already relies on, so the square-off scheduler needs no code changes at all; it already only
+  touches non-null `square_off_time` rows.
+- **NSE MTF** mirrors the CRYPTO leverage pattern above rather than inventing a new mechanism:
+  `execution.accounts.leverage` (already segment-agnostic in the API layer, previously only ever
+  *applied* for CRYPTO) gets a second `elif order.segment == "NSE" and order.horizon ==
+  "positional" and order.use_margin and account.leverage > 1:` branch multiplying `effective_capital`
+  — no USDINR step, NSE is already INR-native. New `execution.accounts.mtf_annual_interest_rate_pct`
+  (manually configured, same "not a live feed" convention as `usdinr_rate`) is required before
+  leverage > 1 is accepted — a positional `use_margin=true` order without one configured is rejected,
+  same "no unmodeled cost" pattern the CRYPTO USDINR check already uses. `margin_posted` is
+  **reused**, not a new column — same meaning either way (the trader's own capital posted,
+  `notional / leverage`); a new `mtf_interest_rate_pct` column freezes the rate actually used at
+  **open** time (so a later rate change never retroactively changes an already-open position's own
+  economics, matching every other "frozen at open" field on this row), and `interest_charged` (new)
+  is the final rupee amount, computed once at **close** — not accrued daily, confirmed with the user
+  — inside the same `_net_pnl_with_costs` choke-point every close path already routes through:
+  `borrowed_amount * (annual_rate / 365) * days_held`, `days_held` flooring to 1 (calendar days
+  between `entry_time`/`exit_time`, a documented approximation, not trading-day-precise).
+- **Per-Strategy opt-in, not blanket-per-segment (refined after initial ship).** The first cut applied
+  `leverage > 1` to *every* positional NSE order unconditionally once the platform account was
+  configured — corrected per user feedback ("margin is optional when placing order") to a new
+  `signal_generation.strategies.use_margin` boolean (default `false`), threaded through
+  signal-processing → `ResolvedOrder.use_margin` unchanged, mirroring `fixed_lots`'s own
+  every-instrument-type/every-source_type pattern file-for-file. One positional strategy can now
+  trade a symbol on cash while another trades it on margin against the same shared platform account —
+  `use_margin=true` with the platform account still at `leverage=1` (not configured) is a harmless
+  no-op, not a rejection.
+- **Admin-only platform config, not per-SaaS-user (refined after initial ship).** Leverage/interest
+  are broker/platform config, not something a regular SaaS user should ever see or edit — the
+  self-service manual-trading Risk & Accounts page was inert for them anyway, since the automated
+  flow only ever reads the *platform-wide* (`user_id IS NULL`) account, never a SaaS user's own row.
+  Reverted that page's NSE leverage/interest fields (CRYPTO leverage, which the Manual tab's own
+  sizing *does* read per-caller, stays). `execution/app/auth.py` gained an `is_admin` claim on `User`
+  (read off the JWT, same claim `market-data`'s own `require_admin` already reads) and a
+  `require_admin` dependency; `GET /accounts/platform` + `PUT /accounts/platform/{segment}` (admin-
+  gated, `app/api/routes/accounts.py`) now read/write the platform-wide row directly — the first HTTP
+  route able to, replacing the raw `make psql UPDATE ... WHERE user_id IS NULL` the initial ship
+  needed. execution/frontend (already an admin-only console end-to-end, `AuthGate.tsx`) gained a
+  separate "Platform account (admin)" table against these routes; its existing per-caller Accounts
+  table lost the NSE leverage/interest columns it had briefly gained (an admin's own personal account
+  is equally irrelevant to the automated flow) — CRYPTO leverage stays there since the Manual tab
+  reads it.
+- Live-verified end to end against the running dev stack (a real Chartink-shaped buy/sell webhook
+  pair against throwaway external+positional+spot Strategies, cleaned up after): `is_supported()`
+  correctly accepted the combination; with `leverage=4`/`mtf_annual_interest_rate_pct=18` set on the
+  platform NSE account, a `use_margin=false` Strategy's buy sized on cash (no `margin_posted`) while a
+  `use_margin=true` Strategy's buy against the same symbol correctly computed `margin_posted`/froze
+  `mtf_interest_rate_pct`; the matching sell webhooks closed both via the existing counter-signal path
+  with `interest_charged`/net `pnl` matching hand-computed expected values. `PUT
+  /accounts/platform/NSE` 403'd a non-admin token and correctly read/wrote with an admin one. Caught a
+  real bug during this pass: `use_margin` reached `ResolvedOrderDraft` and the `resolve()` pipeline
+  correctly, but `app/domain/intake/core.py`'s `resolve_and_finalize_signal` builds the dict handed to
+  `publish_resolved_order` by listing each field out by name rather than dumping the model, so the new
+  field silently never reached execution (every order published `use_margin=false` regardless of the
+  Strategy's own value) until fixed there too — the exact "update every mirror" gotcha this file's own
+  "Contracts are the seam" section warns about, just one level deeper than the usual
+  Pydantic-mirror/JSON-schema pair. Added `tests/test_intake_core.py` asserting the published payload
+  contains every `ResolvedOrderDraft` field, not just `use_margin`, so a future field addition here
+  fails a test instead of shipping silently broken.
 
 ## The Manual tab: placing paper trades independent of any saved Strategy
 
@@ -338,15 +429,149 @@ CRYPTO needed no changes (fully public already). **Deliberately not done here** 
 same pattern as Phase 2's own flagged gaps): `execution`'s scheduler jobs (`square_off_due_positions`/
 `check_exits`) still run on the platform-default credential/rate budget, not split per owner;
 `manual-trading-frontend`'s ~10 direct-to-`market-data` browser calls (OI Summary, option chain
-preview, LTP) stay on the platform default until Phase 4 adds a bearer header there.
+preview, LTP) stay on the platform default until Phase 4 adds a bearer header there. **Follow-up fix
+(2026-08-27)**: Phase 4 added the bearer header to `EXECUTION_BASE_URL`/`ACCOUNTS_BASE_URL` calls only —
+the `market-data`-bound ones (`fetchLtp`, `fetchOptionExpiries`, `fetchOiSummary`) were still missed,
+so a user's own saved BYO Dhan credential (Phase 5's "My Credentials" page) had no way to actually reach
+`market-data`'s already-BYO-aware `GET /quotes/ltp`/`GET /options/expiries` routes — silently falling
+back to the platform default and surfacing as a confusing "token rejected" error even after saving a
+valid personal token. Fixed by switching those 3 `api.ts` functions to `authFetch`. Also discovered
+`GET /options/oi-summary` had never been made BYO-aware on the *backend* at all (unlike its sibling
+`GET /options/chain`, which reuses the exact same `DhanProvider.get_option_chain` call) — added the same
+`user_id`/`credentials` threading there too, plus the matching frontend header.
 
-**Not yet done**:
-- **Phase 4 — frontend auth**: `manual-trading/frontend`'s `api.ts` has 60 `fetch()` call sites with
-  no shared low-level request wrapper — adding an `Authorization` header means introducing one first,
-  then migrating every call site to it. Login/Signup as a simple conditional-render gate (no router
-  exists or is needed). Known deferred gap: `tradeImageUrl`'s plain `<img src>` can't carry a bearer
-  header, so authenticated trade-screenshot loading needs its own follow-up (signed URL or
-  blob-fetch) — acceptable to leave open past MVP given screenshots are low-sensitivity.
+**Phase 4 — frontend auth (shipped 2026-08-27)**: `execution/frontend` and `manual-trading/frontend`
+were both live-broken as of Phase 2 (every execution route 401ing, since neither sent a token) until
+this phase — real login/signup UI in both, independently (no shared frontend code across `systems/*`
+— each frontend gets its own `auth.ts`/`LoginPage.tsx`/`AuthGate.tsx`, duplicated rather than
+imported, matching `SignalNotifier.tsx`'s existing copy-not-share precedent). Neither frontend had a
+router, a modal/dialog component, or any token-storage precedent — this phase introduces all of that
+fresh, staying in each frontend's existing minimal style: a `?query=`-style full-page login gate (no
+modal), `localStorage` for the JWT (key `authToken`, plus a cached `authEmail` for display so the nav
+bar doesn't need its own `GET /auth/me` round-trip), and `window.location.reload()` on logout/401
+(matching the existing full-reload `<a href>` nav convention) rather than introducing client-side
+state management. Neither `api.ts` had a shared low-level request wrapper before this — both gained
+a small `authFetch()` sitting next to their existing base-URL constants, which layers a
+`Authorization: Bearer` header onto an otherwise-identical `fetch()` call and treats any `401` as
+"session expired" (execution never uses 401 for a domain error, so this is safe) by clearing the
+token and reloading; every call site targeting `execution`'s own backend was mechanically renamed
+`fetch(` → `authFetch(` (~24 in execution/frontend, ~30 in manual-trading/frontend) — calls to
+`market-data`/`signal-generation`/`signal-processing` stay on plain `fetch`, since only `execution`
+and `accounts` require a token. `accounts-backend` is called directly from the browser for
+login/signup/`GET /auth/me` (new `VITE_ACCOUNTS_PORT` build arg, `ACCOUNTS_BACKEND_PORT` reused, no
+new env var), the same direct-from-browser CORS pattern already used for market-data/signal-
+generation — not a new nginx proxy. The `tradeImageUrl` gap flagged when this phase was scoped
+(a plain `<img src>` can't carry a bearer header) was fixed rather than deferred: `fetchTradeImageBlob`
+(`manual-trading/frontend/src/api.ts`) does an authenticated fetch and returns a local `blob:` URL,
+`useTradeImageSrc.ts` owns that blob's lifecycle (revokes it on unmount/id-change), and a new
+`TradeImageThumb.tsx` component replaces the old `<a href=tradeImageUrl(id)><img src=tradeImageUrl(id)>`
+pair at both call sites (`ManualStatsPage.tsx`, `ManualTab.tsx`) — the `<a>` now also points at the
+`blob:` URL, since that needs no auth either (it's already-fetched local data), so "open full size in
+a new tab" keeps working too. Verified live: both frontends' login screens render (replacing what was
+a 401'd blank page), a previously-401ing call succeeds immediately after login (`GET /positions` /
+the Manual tab's checklist+session+position data), the nav bar shows the logged-in email, and Logout
+clears the session and returns to the login screen. **Known accepted limitation, not fixed**: each
+frontend is a separate browser origin (different port) with its own `localStorage` — logging into one
+frontend doesn't carry over to the other, so a user logs into each independently. This mirrors the
+pre-existing reality that these are already fully independent frontends with no shared session of any
+kind; solving it would mean a shared-domain/SSO mechanism, out of scope for this MVP.
+
+**Phase 5 — admin role, self-service credentials/account settings (shipped 2026-08-27)**: using the
+product surfaced two gaps. First, `execution/frontend` was never meant to be SaaS-user-facing — it's
+the platform operator's own admin/ops console (raw positions, the platform-wide Dhan data-provider
+credentials, per-strategy account overrides for the automated flow); `manual-trading/frontend` is the
+actual product. Second, there was no self-service way for a SaaS user to save their own BYO Dhan/Delta
+credentials or manage their own capital/leverage/square-off/USDINR settings — the backend routes for
+all of it already existed, but the only UI lived on the now-admin-only `execution/frontend`, and no UI
+at all existed for BYO credentials.
+
+A genuine `is_admin` concept was added from scratch — nothing like it existed anywhere in the repo
+before this. `accounts.users.is_admin` (`BOOLEAN NOT NULL DEFAULT false`, an idempotent inline
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, same convention `02-execution.sql` already uses) is
+embedded as an `is_admin` JWT claim at login/signup time (`create_access_token`) — checked completely
+stateless everywhere it matters, no DB round-trip, matching the JWT design's existing philosophy.
+There's no self-service promotion route; an admin is made by hand (`UPDATE accounts.users SET
+is_admin = true WHERE email = '...'` via `make psql`) — same "deliberate, not automatic" pattern this
+whole SaaS effort already uses for privileged state.
+
+`execution/frontend`'s `AuthGate.tsx` now requires `is_admin`, not just a valid login — a non-admin
+sees a plain "Admins only" screen with just a Logout button (not `LoginPage`, which would loop the
+same account right back). `execution-backend`'s own API is deliberately **not** admin-gated — it stays
+"any authenticated user, row-scoped by `user_id`" exactly as Phase 2 left it, since
+`manual-trading/frontend` depends on those same `/positions`/`/accounts`/`/settings` routes for every
+regular SaaS user's own legitimate data; only the frontend gate changed. `market-data`'s Dhan
+ops routes (`GET /dhan/token-status`, `PUT /dhan/credentials`, `POST /dhan/renew-token`,
+`GET /dhan/feed-status`, `POST /dhan/feed/subscribe` — the platform operator's own surface, never
+called by `manual-trading/frontend`) got real server-side gating via a new `require_admin` dependency
+in `app/auth.py` (401 no/invalid token, 403 valid-but-not-admin, reading the claim straight off the
+decoded JWT) — unlike the existing `get_optional_user_id` used by the SaaS product's own
+quote/candle/option-chain routes, which is untouched. `execution/frontend`'s Accounts page — now the
+de facto admin console, no new page/nav needed — also gained "Renew token" and a "Live feed"
+status/subscribe mini-form, since those routes already existed with no UI at all before this.
+
+The missing self-service UI landed in `manual-trading/frontend`'s existing "Checklist & Risk Settings"
+sub-page (`ManualSettingsPage.tsx`): its per-segment cards gained Capital/trade, Square-off time (an
+`<input type="time">` reconciled to/from the backend's `"HH:MM:SS"`/`null`, plus a "Never force-close"
+checkbox), and Leverage (CRYPTO-only, matching that field's actual backend scoping) — `updateAccount`'s
+TypeScript type had deliberately restricted these three to "execution AccountsPage.tsx's own concern"
+before this phase; that restriction is gone. A new USD/INR rate mini-section and a new "My broker
+credentials" section (Dhan client ID/access token, Delta API key/secret, each with its own
+has_dhan/has_delta status text, calling `accounts`'s existing `GET`/`PUT /credentials` through a new
+`ACCOUNTS_BASE_URL` constant) round it out.
+
+**A real bug was found and fixed during live verification, not just a known-gap note**: Chrome's
+password manager autofilled the new "Dhan client ID" field with the logged-in user's own email and the
+adjacent "Dhan access token" field with an unrelated saved password — a plain text-input-next-to-
+password-input pair reads as a login form to browser heuristics, regardless of label text. Had it gone
+unnoticed, saving would have sent a saved password to `accounts-backend` as a broker credential. Fixed
+with `autoComplete="off"` on the plain-text credential fields and `autoComplete="new-password"` on the
+secret fields, in both the new manual-trading/frontend form and the pre-existing (and equally
+vulnerable, just never noticed) Dhan block on execution/frontend's Accounts page.
+
+**Phase 6 — navigation restructuring: Intraday/OI top-level pages (shipped 2026-08-27)**: using the
+product surfaced an IA problem — `manual-trading/frontend`'s "Manual" tab was one ~3170-line component
+(`ManualTab.tsx`) with a 3-way internal view switch (trading workspace / "Checklist & Risk Settings" /
+Performance), and Phase 5 made the settings view considerably more cluttered by piling Capital/
+Leverage/Square-off + USD/INR + My Broker Credentials onto what used to be just Risk% + the checklist
+editor. This phase promotes "Intraday" and "OI" to top-level tabs (`App.tsx`, matching the domain's own
+`Horizon` concept — `intraday`/`positional`, "swing" merged into positional — with "Swing Trading" and
+"Positional" as top-level pages planned for **later**, not built in this pass), and gives Intraday a
+proper second-level nav (new `IntradayPage.tsx`, reusing the same `.tabs` class as the top-level nav via
+a `.subtabs` CSS modifier) across 6 sub-pages, each fetching its own data independently rather than
+sharing state — since `IntradayPage` only ever mounts one sub-page at a time (same pattern `App.tsx`'s
+own top-level tab switch already uses), switching sub-tabs remounts and refetches, so nothing needs
+lifting to a shared parent or a shared hook:
+
+- **Dashboard** (`DashboardPage.tsx`, new) — an overview, no order entry. Went through two corrections
+  right after this phase first shipped: the interactive session check-in/checklist UI moved to Workspace
+  (check-in belongs right where trades actually get placed, not a tab away), then even the read-only
+  session-status display that briefly replaced it was dropped too (redundant with Workspace's own,
+  explicitly requested). What's left: just an "Open positions" section — a combined table of every OPEN
+  spot/future position and option group (`fetchExecPositions`/`fetchOptionGroups` with `status:"OPEN",
+  withLivePnl:true`, both already supported this exact filter shape) plus a summary strip (open count,
+  total unrealized P&L), polled the same `POLL_INTERVAL_MS` as the rest of the app.
+- **Workspace** (`WorkspacePage.tsx`, `ManualTab.tsx` renamed) — the "+ Add instrument" toolbar, the
+  pending-review banner, the instrument-card workspace, **and the full interactive session check-in/
+  check-out + daily-checklist banner** (`dailyChecklists`/`tradingSessions` state, `checkIn`/`checkOut`/
+  `submitDailyForSegment`, the whole banner JSX) — this briefly moved to Dashboard-only when Phase 6
+  first shipped, then moved back here the same day at the user's explicit direction ("the session
+  checkin must be in workspace"): checking in is something done right before trading, not a separate
+  errand on another tab. The gated-placeholder card's copy is back to "Check in to NSE above to plan a
+  trade" (no more Dashboard link/prop).
+- **Risk & Accounts** (`RiskAccountsPage.tsx`, new) — the per-segment capital/risk%/min-RR/leverage/
+  square-off/enforce-lots cards plus the USD/INR rate section, extracted as-is from the old
+  `ManualSettingsPage.tsx` (Phase 5's additions included).
+- **My Credentials** (`MyCredentialsPage.tsx`, new) — the Dhan/Delta BYO credentials form, extracted
+  as-is.
+- **Trade Checklist** (`TradeChecklistPage.tsx`, new) — the plan/day/review item editor, extracted as-is,
+  now with its own `checklistItems` fetch (previously passed down as props from `ManualTab.tsx`).
+- **Performance** (`ManualStatsPage.tsx`, unchanged content) — dropped its `onBack`/"← Back" button prop,
+  since `IntradayPage`'s sub-nav now provides that navigation for every sub-page.
+
+`ManualSettingsPage.tsx` is deleted (content fully redistributed above). Verified live: sub-nav renders
+all 6 pages; checking in on Dashboard correctly un-gates Workspace's instrument cards after a sub-tab
+switch (remount picks up the fresh `tradingSessions` fetch); Risk & Accounts/My Credentials/Trade
+Checklist all save correctly (same underlying `execution`/`accounts` calls as Phase 5, just relocated).
 
 ## Trade discipline checklist
 

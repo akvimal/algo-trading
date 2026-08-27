@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
-from app.auth import User, get_current_user
+from app.auth import User, get_current_user, require_admin
 from app.domain.models import AccountUpdate, StrategyAccountCreate, StrategyAccountUpdate
 from app.domain.position_manager import load_account
 
@@ -24,6 +24,7 @@ def _to_out(row: db_models.Account) -> dict:
         "min_reward_risk_ratio": float(row.min_reward_risk_ratio),
         "enforce_risk_based_lots": row.enforce_risk_based_lots,
         "leverage": float(row.leverage),
+        "mtf_annual_interest_rate_pct": float(row.mtf_annual_interest_rate_pct) if row.mtf_annual_interest_rate_pct is not None else None,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "updated_at": row.updated_at.isoformat(),
     }
@@ -42,7 +43,8 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
 @router.put("/accounts/{segment}")
 def update_account(segment: str, update: AccountUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """capital_per_trade/risk_per_trade_pct/min_reward_risk_ratio/
-    enforce_risk_based_lots/leverage/square_off_time are editable here -
+    enforce_risk_based_lots/leverage/mtf_annual_interest_rate_pct/
+    square_off_time are editable here -
     use POST /accounts/{segment}/reset to touch
     current_balance, a deliberately separate action so it's never a side
     effect of a sizing tweak. square_off_time is the one field where
@@ -64,6 +66,53 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.enforce_risk_based_lots = update.enforce_risk_based_lots
     if update.leverage is not None:
         row.leverage = update.leverage
+    if "mtf_annual_interest_rate_pct" in update.model_fields_set:
+        row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
+    if "square_off_time" in update.model_fields_set:
+        row.square_off_time = update.square_off_time
+    db.commit()
+    db.refresh(row)
+    return _to_out(row)
+
+
+@router.get("/accounts/platform")
+def list_platform_accounts(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Admin-only view of the platform-wide (user_id IS NULL) accounts -
+    the rows the automated Strategy-driven flow actually reads (see
+    load_account's own docstring). Distinct from GET /accounts above,
+    which always returns the CALLER's own per-user rows - there was
+    previously no route at all that could read or write these, forcing a
+    raw `make psql` UPDATE to configure e.g. NSE MTF leverage/interest.
+    See docs/architecture.md's "Positional spot holding + NSE MTF" section."""
+    rows = {seg: load_account(db, None, seg) for seg in _SEGMENTS}
+    return [_to_out(rows[s]) for s in _SEGMENTS if rows[s] is not None]
+
+
+@router.put("/accounts/platform/{segment}")
+def update_platform_account(
+    segment: str, update: AccountUpdate, admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Same field-by-field update as PUT /accounts/{segment} above, just
+    against the platform-wide row (user_id IS NULL) instead of the
+    caller's own - the only route that can write it. Admin-gated since
+    this is broker/platform config (leverage, MTF interest rate, etc.),
+    not a per-SaaS-user setting - see the per-Strategy use_margin field
+    (signal-generation) for how a strategy opts into it."""
+    row = load_account(db, None, segment.upper())
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no platform account for segment {segment}")
+    if update.capital_per_trade is not None:
+        row.capital_per_trade = update.capital_per_trade
+    if update.risk_per_trade_pct is not None:
+        row.risk_per_trade_pct = update.risk_per_trade_pct
+    if update.min_reward_risk_ratio is not None:
+        row.min_reward_risk_ratio = update.min_reward_risk_ratio
+    if update.enforce_risk_based_lots is not None:
+        row.enforce_risk_based_lots = update.enforce_risk_based_lots
+    if update.leverage is not None:
+        row.leverage = update.leverage
+    if "mtf_annual_interest_rate_pct" in update.model_fields_set:
+        row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
         row.square_off_time = update.square_off_time
     db.commit()

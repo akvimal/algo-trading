@@ -55,6 +55,7 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule], last_sc
         option_strike_moneyness=row.option_strike_moneyness,
         option_sl_scope=row.option_sl_scope,
         fixed_lots=row.fixed_lots,
+        use_margin=row.use_margin,
         contract_day_filter=row.contract_day_filter,
         segment=row.segment,
         duplicate_signal_policy=row.duplicate_signal_policy,
@@ -184,6 +185,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         option_strike_moneyness=payload.option_strike_moneyness,
         option_sl_scope=payload.option_sl_scope,
         fixed_lots=payload.fixed_lots,
+        use_margin=payload.use_margin,
         contract_day_filter=payload.contract_day_filter,
         segment=payload.segment,
         duplicate_signal_policy=payload.duplicate_signal_policy,
@@ -318,6 +320,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     # it untouched exactly as before.
     if "fixed_lots" in payload.model_fields_set:
         row.fixed_lots = payload.fixed_lots
+    if payload.use_margin is not None:
+        row.use_margin = payload.use_margin
     if payload.contract_day_filter is not None:
         row.contract_day_filter = payload.contract_day_filter
     if payload.segment is not None:

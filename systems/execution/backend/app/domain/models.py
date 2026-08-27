@@ -121,6 +121,10 @@ class ResolvedOrder(BaseModel):
     # Every instrument_type - see docs/contracts/resolved-order.schema.json
     # and position_manager.open_position/option_position_manager.open_option_group.
     fixed_lots: Optional[int] = None
+    # segment='NSE'+horizon='positional'+instrument_type='spot' only - see
+    # docs/contracts/resolved-order.schema.json and
+    # position_manager.open_position/_open_delta_fee_fields.
+    use_margin: bool = False
 
 
 class ExecutionSettings(BaseModel):
@@ -155,11 +159,17 @@ class AccountOut(BaseModel):
     min_reward_risk_ratio: float
     # Manual tab only - see Account.enforce_risk_based_lots's own comment.
     enforce_risk_based_lots: bool
-    # CRYPTO only - a margin multiplier applied to effective_capital before
-    # sizing (Delta Exchange India trades perpetual futures on margin).
-    # Defaults to 1 (no leverage) - harmlessly present but unused for
-    # NSE/MCX. See position_manager.open_position.
+    # CRYPTO and NSE (MTF positional spot) only - a margin multiplier
+    # applied to effective_capital before sizing (Delta Exchange India
+    # trades perpetual futures on margin; Dhan's MTF borrows cash against
+    # NSE spot equity). Defaults to 1 (no leverage) - harmlessly present
+    # but unused for MCX. See position_manager.open_position.
     leverage: float
+    # NSE MTF only - the manually configured annualized interest rate on
+    # the borrowed portion of a leverage > 1 NSE positional position. NULL
+    # until set - such a position is REJECTED rather than opened with
+    # unmodeled interest cost. See position_manager.open_position.
+    mtf_annual_interest_rate_pct: Optional[float] = None
     # The one segment-wide square-off cutoff - any intraday position still
     # OPEN past this local time-of-day gets forcefully closed. NULL means
     # never force-closed (CRYPTO's default - crypto trades 24/7). Used to
@@ -179,6 +189,10 @@ class AccountUpdate(BaseModel):
     min_reward_risk_ratio: Optional[float] = Field(default=None, gt=0)
     enforce_risk_based_lots: Optional[bool] = None
     leverage: Optional[float] = Field(default=None, gt=0)
+    # Explicitly settable back to null (disables NSE MTF leverage>1 orders
+    # again) - same model_fields_set-distinguished pattern square_off_time
+    # below already uses.
+    mtf_annual_interest_rate_pct: Optional[float] = Field(default=None, ge=0)
     # Explicitly settable back to null (never force-close) - unlike most
     # other fields here, None is a real, meaningful value for this one, not
     # just "leave unchanged." Route layer uses model_fields_set (same

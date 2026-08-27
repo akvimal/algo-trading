@@ -26,7 +26,7 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="an account with this email already exists")
     db.refresh(user)
-    return TokenResponse(access_token=create_access_token(str(user.id), user.email))
+    return TokenResponse(access_token=create_access_token(str(user.id), user.email, user.is_admin))
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -35,7 +35,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid email or password")
-    return TokenResponse(access_token=create_access_token(str(user.id), user.email))
+    return TokenResponse(access_token=create_access_token(str(user.id), user.email, user.is_admin))
 
 
 @router.get("/me", response_model=UserOut)

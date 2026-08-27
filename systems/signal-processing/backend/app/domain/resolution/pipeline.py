@@ -124,4 +124,7 @@ def resolve(signal: SignalIngest) -> ResolvedOrderDraft:
         # sizing entirely in execution when set. See
         # docs/contracts/resolved-order.schema.json.
         fixed_lots=strategy.get("fixed_lots"),
+        # segment='NSE'+horizon='positional'+instrument_type='spot' only -
+        # see docs/contracts/resolved-order.schema.json.
+        use_margin=strategy.get("use_margin", False),
     )

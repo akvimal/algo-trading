@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import ManualSettingsPage from "./ManualSettingsPage";
-import ManualStatsPage from "./ManualStatsPage";
+import TradeImageThumb from "./TradeImageThumb";
 import {
   type Account,
   type ChecklistAnswer,
@@ -42,7 +41,6 @@ import {
   submitDailyChecklist,
   submitOptionGroupReview,
   submitPositionReview,
-  tradeImageUrl,
   updateOptionGroupSpotStopLoss,
   updateOptionGroupSquareOffTime,
   updatePositionSquareOffTime,
@@ -512,18 +510,6 @@ function pnlPercentLabel(h: HistoryEntry): string {
   return ` (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
 }
 
-// "Aug-15  12:24 PM" - compact, matching the redesigned collapsible list's
-// own density (App.tsx's shared formatDateTimeNoSeconds is a full
-// "8/15/2026, 12:24 PM" style, too wide for this one-line-per-trade list).
-function formatCompact(iso: string | null): string {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  const month = d.toLocaleString(undefined, { month: "short" });
-  const day = d.getDate().toString().padStart(2, "0");
-  const time = d.toLocaleString(undefined, { hour: "numeric", minute: "2-digit" });
-  return `${month}-${day}  ${time}`;
-}
-
 // Just the clock time (no date, no seconds) - the session bar only ever
 // shows TODAY's own check-in/out (see formatSessionSummary below), so a
 // date prefix is redundant there; seconds precision used to be needed to
@@ -557,6 +543,18 @@ function formatSessionSummary(sessions: TradingSession[]): string {
   return `${recent} · +${previous.length} earlier (${formatDurationMs(totalMs)})`;
 }
 
+// "Aug-15  12:24 PM" - compact, matching the redesigned collapsible list's
+// own density (App.tsx's shared formatDateTimeNoSeconds is a full
+// "8/15/2026, 12:24 PM" style, too wide for this one-line-per-trade list).
+function formatCompact(iso: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  const month = d.toLocaleString(undefined, { month: "short" });
+  const day = d.getDate().toString().padStart(2, "0");
+  const time = d.toLocaleString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${month}-${day}  ${time}`;
+}
+
 // Direction-aware crossing check for the spot-price exit watch - mirrors
 // the entry trigger's own startedAboveTarget crossing logic, but simpler:
 // the position's own `action` already fixes which side is "favorable"
@@ -573,7 +571,7 @@ function checkExitTrigger(instance: OrderInstance, ltp: number): ExitReason | nu
   return null;
 }
 
-export default function ManualTab() {
+export default function WorkspacePage() {
   const [rows, setRows] = useState<ManualRow[]>(() => loadRows());
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
@@ -647,16 +645,11 @@ export default function ManualTab() {
   const reviewItems = checklistItems.filter((i) => i.phase === "review");
   const dayItems = checklistItems.filter((i) => i.phase === "day");
   const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
-  // Which sub-view the Manual tab shows - "settings" swaps the row list
-  // for ManualSettingsPage (checklist items editor + per-segment risk
-  // knobs), leaving the day-checklist boxes/pending-review banner above it
-  // untouched either way.
-  const [view, setView] = useState<"trading" | "settings" | "stats">("trading");
   // Per-segment risk knobs (execution.accounts) - risk_per_trade_pct feeds
   // execution's own risk-based sizing, min_reward_risk_ratio gates this
   // row's own Add/Update button below (see computeRR/rrBelowMin). Both are
-  // edited from ManualSettingsPage; re-fetched here on mount and whenever
-  // that page is closed so a just-saved change takes effect immediately.
+  // edited from the Intraday > Risk & Accounts page; re-fetched here on
+  // mount so a just-saved change takes effect on next load.
   const [accounts, setAccounts] = useState<Account[]>([]);
 
   async function refreshAccounts() {
@@ -678,10 +671,10 @@ export default function ManualTab() {
   }
 
   // Today's day-checklist submission per segment (null = not submitted
-  // yet today - the gate is active for that segment, see
-  // dailySatisfied). Fetched for all 3 segments up front (cheap - one
-  // row max each) rather than lazily per row, so the gate/banner can
-  // render correctly even before any row happens to use a given segment.
+  // yet today - the gate is active for that segment, see dailySatisfied
+  // below). Fetched for all 3 segments up front (cheap - one row max
+  // each) rather than lazily per row, so the gate/banner can render
+  // correctly even before any row happens to use a given segment.
   const [dailyChecklists, setDailyChecklists] = useState<Record<Segment, DailyChecklist | null>>({
     NSE: null,
     MCX: null,
@@ -1968,26 +1961,6 @@ export default function ManualTab() {
     ? rows.find((r) => r.segment === pendingReview.segment && r.symbol === pendingReview.symbol)
     : undefined;
 
-  if (view === "settings") {
-    return (
-      <ManualSettingsPage
-        checklistItems={checklistItems}
-        planItems={planItems}
-        dayItems={dayItems}
-        reviewItems={reviewItems}
-        refreshChecklistItems={refreshChecklistItems}
-        onBack={() => {
-          setView("trading");
-          void refreshAccounts();
-        }}
-      />
-    );
-  }
-
-  if (view === "stats") {
-    return <ManualStatsPage onBack={() => setView("trading")} />;
-  }
-
   return (
     <>
       <div className="manual-toolbar">
@@ -2076,14 +2049,6 @@ export default function ManualTab() {
             }}
           >
             <PlusIcon /> Add instrument
-          </button>
-        </span>
-        <span className="manual-toolbar-links">
-          <button type="button" className="manual-settings-link" onClick={() => setView("stats")}>
-            Performance →
-          </button>
-          <button type="button" className="manual-settings-link" onClick={() => setView("settings")}>
-            Checklist & Risk Settings →
           </button>
         </span>
       </div>
@@ -2209,20 +2174,10 @@ export default function ManualTab() {
                     <ReviewIcon />
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="btn-save tiny"
-                  disabled={sessionActionLoading === seg || openSession}
-                  onClick={() => void checkIn(seg)}
-                >
+                <button type="button" className="btn-save tiny" disabled={sessionActionLoading === seg || openSession} onClick={() => void checkIn(seg)}>
                   Check in
                 </button>
-                <button
-                  type="button"
-                  className="btn-save tiny"
-                  disabled={sessionActionLoading === seg || !openSession}
-                  onClick={() => void checkOut(seg)}
-                >
+                <button type="button" className="btn-save tiny" disabled={sessionActionLoading === seg || !openSession} onClick={() => void checkOut(seg)}>
                   Check out
                 </button>
               </span>
@@ -2239,9 +2194,7 @@ export default function ManualTab() {
                       <input
                         type="checkbox"
                         checked={!!dayFormAnswers[seg][item.id]}
-                        onChange={(e) =>
-                          setDayFormAnswers((prev) => ({ ...prev, [seg]: { ...prev[seg], [item.id]: e.target.checked } }))
-                        }
+                        onChange={(e) => setDayFormAnswers((prev) => ({ ...prev, [seg]: { ...prev[seg], [item.id]: e.target.checked } }))}
                       />
                       {item.label}
                     </label>
@@ -3021,9 +2974,7 @@ export default function ManualTab() {
                               <div className="manual-history-images">
                                 {imagesByEntryId[h.id]!.map((img) => (
                                   <span className="manual-history-image-thumb" key={img.id}>
-                                    <a href={tradeImageUrl(img.id)} target="_blank" rel="noreferrer">
-                                      <img src={tradeImageUrl(img.id)} alt="attached chart" loading="lazy" />
-                                    </a>
+                                    <TradeImageThumb id={img.id} />
                                     <button
                                       type="button"
                                       className="manual-history-image-remove"

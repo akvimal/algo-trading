@@ -47,8 +47,13 @@ CREATE TABLE IF NOT EXISTS signal_generation.rules (
     -- explicit symbols (e.g. "GOLDM,SILVER,CRUDEOIL") - for segments like
     -- MCX with no index/universe concept, a rule can still scan a
     -- hand-picked set of symbols. Fully local (never calls market-data),
-    -- so unlike 'universe' it works on any segment.
-    underlying_type    TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe', 'symbol_list')),
+    -- so unlike 'universe' it works on any segment. 'watchlist': underlying
+    -- instead names a signal_generation.watchlists row (below) by its
+    -- unique name - a user-managed, reusable symbol group, unlike
+    -- 'symbol_list' (baked into this one rule, not shared) and unlike
+    -- 'universe' (fixed to whatever market-data's index API exposes).
+    -- Segment-agnostic like 'symbol_list' - no NSE restriction.
+    underlying_type    TEXT NOT NULL DEFAULT 'symbol' CHECK (underlying_type IN ('symbol', 'universe', 'symbol_list', 'watchlist')),
     -- Signal/candle cadence.
     interval           TEXT NOT NULL CHECK (interval IN ('1min', '3min', '5min', '15min', '30min', '60min', 'daily')),
     rule_config        JSONB NOT NULL,
@@ -69,6 +74,28 @@ CREATE TABLE IF NOT EXISTS signal_generation.rules (
     CONSTRAINT universe_requires_nse CHECK (
         underlying_type != 'universe' OR segment = 'NSE'
     )
+);
+
+-- A named, reusable, user-managed group of symbols - referenced by name from
+-- a Rule's own `underlying` when underlying_type='watchlist' (see the CHECK
+-- constraint above), exactly how 'universe' references a fixed NSE index
+-- key, except this group is created/edited by the user rather than fixed to
+-- whatever market-data's index API exposes. No FK from rules to this table -
+-- a Rule referencing a since-deleted/renamed watchlist name degrades
+-- exactly like an unresolvable 'universe' key already does (logged and
+-- skipped for that tick, 502 on backtest), same precedent, no new guard
+-- code. `name` is effectively immutable in practice: PUT /watchlists/{id}
+-- only ever updates `symbols`, never `name`, so no Rule reference can ever
+-- be silently orphaned by a rename.
+CREATE TABLE IF NOT EXISTS signal_generation.watchlists (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL UNIQUE,
+    -- Comma-separated, same raw-string shape/parsing as rules.underlying for
+    -- underlying_type='symbol_list' (parse_symbol_list, app/domain/rule.py) -
+    -- reuses that exact helper rather than a JSONB-array parallel path.
+    symbols     TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- A reusable indicator definition (e.g. "RSI 14", "ADX 14/20") - any
@@ -199,6 +226,14 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- not raw underlying units - a no-op distinction for spot (lot_size
     -- is always 1 there) but real for futures/options.
     fixed_lots INTEGER CHECK (fixed_lots > 0),
+    -- horizon='positional' + instrument_type='spot' + segment='NSE' only
+    -- (harmlessly ignored otherwise, same "shared table, segment-scoped
+    -- meaning" convention as option_sl_scope above) - opts this Strategy's
+    -- orders into execution.accounts' platform-wide NSE leverage (Dhan
+    -- MTF) when configured there, rather than every positional NSE order
+    -- getting leveraged sizing unconditionally. See execution's
+    -- position_manager.open_position and docs/architecture.md.
+    use_margin BOOLEAN NOT NULL DEFAULT false,
     -- Optional per-strategy time-of-day window (e.g. 09:15-11:00) during
     -- which this strategy accepts signals - a JSON array of
     -- {"start": "HH:MM:SS", "end": "HH:MM:SS"} objects, e.g.
@@ -266,6 +301,10 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
 
 CREATE INDEX IF NOT EXISTS idx_strategies_status ON signal_generation.strategies (status);
 CREATE INDEX IF NOT EXISTS idx_strategies_rule_id ON signal_generation.strategies (rule_id);
+
+-- Idempotent for existing volumes (init scripts don't re-run) - matches the
+-- same convention used in 02-execution.sql/04-accounts.sql.
+ALTER TABLE signal_generation.strategies ADD COLUMN IF NOT EXISTS use_margin BOOLEAN NOT NULL DEFAULT false;
 
 -- Runtime bookkeeping for the in-house engine's periodic tick - which
 -- completed candle a strategy last acted on, so the poll loop (running

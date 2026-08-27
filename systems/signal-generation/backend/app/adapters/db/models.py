@@ -33,6 +33,22 @@ class Rule(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class Watchlist(Base):
+    """A named, reusable, user-managed group of symbols - referenced by name
+    from Rule.underlying when underlying_type='watchlist'. See
+    app/domain/rule.py and infra/postgres/init/03-signal-generation.sql for
+    the full design."""
+
+    __tablename__ = "watchlists"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False, unique=True)
+    symbols = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
     __table_args__ = {"schema": SCHEMA}
@@ -64,6 +80,9 @@ class Strategy(Base):
     option_sl_scope = Column(Text, nullable=False, default="combined")
     # Every instrument_type, nullable - see fixed_lots in app/domain/models.py.
     fixed_lots = Column(Integer, nullable=True)
+    # horizon='positional'+instrument_type='spot'+segment='NSE' only - see
+    # use_margin in app/domain/models.py.
+    use_margin = Column(Boolean, nullable=False, default=False)
     # instrument_type in ('future', 'option') only - see ContractDayFilter in app/domain/models.py.
     contract_day_filter = Column(Text, nullable=False, default="any")
     segment = Column(Text, nullable=False, default="NSE")  # NSE/MCX/CRYPTO

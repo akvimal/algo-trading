@@ -62,8 +62,11 @@ class Account(Base):
     # sent as an explicit quantity at order time, same as a manually
     # typed one, so this needs no new server-side enforcement of its own.
     enforce_risk_based_lots = Column(Boolean, nullable=False, default=False)
-    # CRYPTO only, harmlessly unused for NSE/MCX - see app/domain/models.py's AccountOut.leverage.
+    # CRYPTO and NSE (MTF positional spot) only, harmlessly unused for MCX -
+    # see app/domain/models.py's AccountOut.leverage.
     leverage = Column(Numeric, nullable=False, default=1)
+    # NSE MTF only - see infra/postgres/init/02-execution.sql's own comment.
+    mtf_annual_interest_rate_pct = Column(Numeric, nullable=True)
     # NULL means never force-closed (CRYPTO's default) - see app/domain/models.py's AccountOut.square_off_time.
     square_off_time = Column(Time, nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -305,8 +308,13 @@ class Position(Base):
     # infra/postgres/init/02-execution.sql's own comment on this column group.
     open_fee = Column(Numeric)
     close_fee = Column(Numeric)
+    # Also reused (not CRYPTO-only) for an NSE MTF positional spot position's
+    # own capital posted - see infra/postgres/init/02-execution.sql.
     margin_posted = Column(Numeric)
     liquidation_price = Column(Numeric)
+    # NSE MTF only - see infra/postgres/init/02-execution.sql's own comment.
+    mtf_interest_rate_pct = Column(Numeric)
+    interest_charged = Column(Numeric)
     # Trade discipline checklist (Manual tab only) - see infra/postgres/
     # init/02-execution.sql's own comment on these 4 columns. NULL for
     # every Strategy-driven (non-manual) position and for every leg of a

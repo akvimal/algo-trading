@@ -46,7 +46,12 @@ Weekday = Literal["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # never calls market-data, so it works for any segment, not just NSE. Not
 # coupled to any Strategy's instrument_type - same as 'universe' above, a
 # symbol_list scan can back a spot, future, or option Strategy alike.
-UnderlyingType = Literal["symbol", "universe", "symbol_list"]
+# 'watchlist': underlying instead names a signal_generation.watchlists row
+# by its unique name - a user-managed, reusable symbol group (see
+# WatchlistCreate below), unlike 'symbol_list' (baked into this one rule)
+# and unlike 'universe' (fixed to market-data's index API). Segment-agnostic
+# like 'symbol_list' - see validate_rule_universe_fields, unaffected.
+UnderlyingType = Literal["symbol", "universe", "symbol_list", "watchlist"]
 
 IndicatorType = Literal["rsi", "structure", "efficiency_ratio", "adx", "dmi_direction", "ema_slope", "supertrend"]
 
@@ -407,6 +412,18 @@ def validate_rule_symbol_list_fields(underlying_type: str, underlying: Optional[
         raise ValueError("underlying_type='symbol_list' requires at least one comma-separated symbol in underlying")
 
 
+def validate_rule_watchlist_fields(underlying_type: str, underlying: Optional[str]) -> None:
+    """underlying_type='watchlist' needs a non-empty name in `underlying` -
+    shape only (min_length=1 on the field already covers this in practice,
+    this is defense-in-depth mirroring validate_rule_symbol_list_fields'
+    own shape). Whether a Watchlist by that name actually EXISTS is a
+    DB-backed check the route layer does instead (app/api/routes/rules.py),
+    same split regime_indicator_ids already has between shape-only Pydantic
+    validation here and existence/type checks there."""
+    if underlying_type == "watchlist" and not (underlying or "").strip():
+        raise ValueError("underlying_type='watchlist' requires a watchlist name in underlying")
+
+
 def validate_breakout_interval_consistency(interval: Optional[str], rule_config: Optional[dict]) -> None:
     """A BreakoutRuleConfig's own top-level `interval` must equal its
     rule_config's ltf_interval - `interval` is what the live engine and
@@ -452,6 +469,7 @@ class RuleCreate(BaseModel):
     def _check_underlying_type_consistency(self) -> "RuleCreate":
         validate_rule_universe_fields(self.underlying_type, self.segment)
         validate_rule_symbol_list_fields(self.underlying_type, self.underlying)
+        validate_rule_watchlist_fields(self.underlying_type, self.underlying)
         return self
 
     @model_validator(mode="after")

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, indicators, rules, saved_backtests, strategies
+from app.api.routes import health, indicators, rules, saved_backtests, strategies, watchlists
 from app.scheduler import start_scheduler
 
 app = FastAPI(title="signal-generation")
@@ -18,6 +18,7 @@ app.include_router(indicators.router)
 app.include_router(rules.router)
 app.include_router(saved_backtests.router)
 app.include_router(strategies.router)
+app.include_router(watchlists.router)
 
 
 @app.on_event("startup")

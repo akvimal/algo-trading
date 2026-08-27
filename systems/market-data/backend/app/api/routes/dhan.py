@@ -13,14 +13,22 @@ subscribing (idempotent - a no-op if the background thread's already
 running) rather than relying on app.main's startup handler to have started
 it already."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth import require_admin
 from app.config import settings
 from app.domain.models import DhanCredentialsUpdate, FeedSubscribeRequest
 from app.providers.dhan import current_access_token, renew_access_token, renew_token_status, set_manual_credentials
 from app.providers.dhan_feed import feed_status, start_feed, subscribe
 
-router = APIRouter()
+# The platform operator's own ops surface (Dhan data-provider credentials,
+# token renewal, live-feed status/subscribe) - not part of the SaaS
+# product, only ever called from execution/frontend's admin-only Accounts
+# page (see docs/architecture.md § "Manual Trading SaaS"). Every route
+# here requires a real admin JWT - unlike quotes.py/candles.py/options.py,
+# which stay on the optional get_optional_user_id so the SaaS product's
+# own quote/candle/option-chain calls are unaffected.
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 @router.post("/dhan/renew-token")

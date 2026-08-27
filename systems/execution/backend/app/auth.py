@@ -33,6 +33,11 @@ class User:
     # user_id (which would let anyone burn another user's Dhan quota just
     # by guessing a UUID).
     token: str
+    # Read straight off the JWT's is_admin claim (accounts' create_access_token
+    # already embeds it, market-data's require_admin already reads it) - not
+    # looked up anywhere, same stateless design as `id` above. Gates the
+    # platform-account routes (app/api/routes/accounts.py) - see require_admin.
+    is_admin: bool = False
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> User:
@@ -48,4 +53,15 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer
     except (KeyError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token payload")
 
-    return User(id=user_id, token=credentials.credentials)
+    return User(id=user_id, token=credentials.credentials, is_admin=payload.get("is_admin") is True)
+
+
+def require_admin(user: User = Depends(get_current_user)) -> User:
+    """For the platform-account routes (GET/PUT /accounts/platform*, app/api/
+    routes/accounts.py) - the platform operator/broker-config surface, not
+    part of the SaaS product. Same 401-then-403 shape as market-data's own
+    require_admin, but returns the full User (not a bare UUID) since callers
+    here already expect get_current_user's shape."""
+    if not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin access required")
+    return user

@@ -11,7 +11,7 @@ from typing import Optional
 from uuid import UUID
 
 import jwt
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import settings
@@ -27,3 +27,24 @@ def get_optional_user_id(credentials: Optional[HTTPAuthorizationCredentials] = D
         return UUID(payload["sub"])
     except (jwt.PyJWTError, KeyError, ValueError):
         return None
+
+
+def require_admin(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> UUID:
+    """Unlike get_optional_user_id above, this DOES raise - for the Dhan
+    platform-credentials/renew-token/feed-status routes (app/api/routes/
+    dhan.py), which are the platform operator's own ops surface, not part
+    of the SaaS product (see docs/architecture.md § "Manual Trading SaaS").
+    Reads the is_admin claim straight off the already-decoded JWT (no call
+    back to accounts - same stateless design get_optional_user_id already
+    uses) - accounts embeds it at login/signup time, see that service's
+    create_access_token."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        user_id = UUID(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
+    if payload.get("is_admin") is not True:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin access required")
+    return user_id

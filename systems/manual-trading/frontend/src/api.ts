@@ -1,3 +1,5 @@
+import { clearAuthToken, getAuthToken } from "./auth";
+
 // Free-form: only "in_house" is reserved/special (see backend
 // app/domain/models.py's SourceType) - anything else names an external
 // webhook provider (chartink, tradingview, or any new one).
@@ -875,7 +877,7 @@ export async function fetchCryptoSymbols(): Promise<string[]> {
 // (App.tsx's handleSendSignal) when the price field is left blank, same
 // direct-from-browser pattern as fetchUniverses above.
 export async function fetchLtp(exchange: string, symbol: string): Promise<number> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/quotes/ltp?${new URLSearchParams({ exchange, symbol })}`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/quotes/ltp?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ ltp: number }>(res, `GET /quotes/ltp (${exchange}/${symbol})`);
   return data.ltp;
 }
@@ -923,7 +925,7 @@ export async function fetchLotSize(exchange: string, symbol: string): Promise<nu
 // order-placement critical path, so the same slowness is just a loading
 // spinner there, not a stuck trade flow.
 export async function fetchOptionExpiries(exchange: string, symbol: string): Promise<string[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/options/expiries?${new URLSearchParams({ exchange, symbol })}`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/options/expiries?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ expiries: string[] }>(res, "GET /options/expiries");
   return data.expiries;
 }
@@ -975,7 +977,7 @@ export type OiSummary = {
 };
 
 export async function fetchOiSummary(exchange: string, symbol: string, expiry: string): Promise<OiSummary> {
-  const res = await fetch(
+  const res = await authFetch(
     `${MARKET_DATA_BASE_URL}/options/oi-summary?${new URLSearchParams({ exchange, symbol, expiry })}`,
   );
   return asJson(res, "GET /options/oi-summary");
@@ -1057,6 +1059,26 @@ export async function clearCandleCache(exchange: string, symbol: string, interva
 
 const EXECUTION_PORT = import.meta.env.VITE_EXECUTION_PORT ?? "8002";
 const EXECUTION_BASE_URL = `http://${location.hostname}:${EXECUTION_PORT}`;
+
+// Every execution route requires a Bearer token as of the multi-tenant SaaS
+// migration (Phase 2, see docs/architecture.md) - this wrapper layers the
+// stored token onto an otherwise-identical fetch() call. A 401 only ever
+// means "token missing/expired/invalid" here (execution never uses 401 for
+// a domain error), so it's safe to treat any 401 as "session expired" and
+// force back to the login screen - the reload re-mounts AuthGate, which
+// picks up the now-empty token and renders LoginPage.
+function authFetch(input: string, init?: RequestInit): Promise<Response> {
+  const token = getAuthToken();
+  const headers = new Headers(init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers }).then((res) => {
+    if (res.status === 401) {
+      clearAuthToken();
+      window.location.reload();
+    }
+    return res;
+  });
+}
 
 export type ManualPosition = {
   id: string;
@@ -1222,12 +1244,12 @@ export type ChecklistAnswer = {
 
 export async function fetchChecklistItems(activeOnly = false): Promise<ChecklistItem[]> {
   const query = activeOnly ? "?active_only=true" : "";
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items${query}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items${query}`);
   return asJson(res, "GET /checklist-items");
 }
 
 export async function createChecklistItem(label: string, phase: ChecklistPhase, segments: Segment[] = []): Promise<ChecklistItem> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, phase, segments }),
@@ -1239,7 +1261,7 @@ export async function updateChecklistItem(
   id: string,
   payload: { label?: string; phase?: ChecklistPhase; segments?: Segment[]; sort_order?: number; active?: boolean },
 ): Promise<ChecklistItem> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1248,19 +1270,20 @@ export async function updateChecklistItem(
 }
 
 export async function deleteChecklistItem(id: string): Promise<void> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /checklist-items/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
 // One row per segment (execution.accounts) - the Manual tab's own
-// "Checklist & Risk Settings" sub-page reads/writes risk_per_trade_pct,
-// min_reward_risk_ratio, and enforce_risk_based_lots from here directly
-// (same cross-system pattern the rest of the Manual tab already uses to
-// call execution). capital_per_trade/leverage/square_off_time also come
-// back but aren't shown there - those stay execution AccountsPage.tsx's
-// own concern.
+// "Checklist & Risk Settings" sub-page reads/writes every field below
+// directly (same cross-system pattern the rest of the Manual tab already
+// uses to call execution). execution/frontend's own AccountsPage.tsx has
+// the same fields too (that app is now the platform admin console, not
+// part of the SaaS product - see docs/architecture.md § "Manual Trading
+// SaaS") - a SaaS user manages their own capital/leverage/square-off from
+// here instead.
 export type Account = {
   segment: Segment;
   starting_balance: number;
@@ -1273,26 +1296,67 @@ export type Account = {
   // (a purely client-side Lot auto-fill + lock, no server-side
   // enforcement of its own).
   enforce_risk_based_lots: boolean;
+  // CRYPTO only from this SaaS surface - NSE's own leverage/MTF interest
+  // is admin/broker-config only now (execution/frontend's AccountsPage
+  // "Platform account (admin)" section), not editable per-SaaS-user, since
+  // the automated flow never reads a SaaS user's own account row at all -
+  // see docs/architecture.md's "Positional spot holding + NSE MTF" section.
   leverage: number;
+  // Admin/broker-config only (see leverage above) - present here only
+  // because GET /accounts returns every field on the row; RiskAccountsPage
+  // doesn't surface or edit it.
+  mtf_annual_interest_rate_pct: number | null;
   square_off_time: string | null;
   updated_at: string;
 };
 
 export async function fetchAccounts(): Promise<Account[]> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/accounts`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/accounts`);
   return asJson(res, "GET /accounts");
 }
 
 export async function updateAccount(
   segment: Segment,
-  update: Partial<Pick<Account, "risk_per_trade_pct" | "min_reward_risk_ratio" | "enforce_risk_based_lots">>,
+  update: Partial<
+    Pick<
+      Account,
+      | "risk_per_trade_pct"
+      | "min_reward_risk_ratio"
+      | "enforce_risk_based_lots"
+      | "capital_per_trade"
+      | "leverage"
+      | "square_off_time"
+    >
+  >,
 ): Promise<Account> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/accounts/${segment}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/accounts/${segment}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update),
   });
   return asJson(res, "PUT /accounts/{segment}");
+}
+
+// CRYPTO-only in practice (see execution's own AccountsPage.tsx) - the
+// manually configured INR-per-USD rate used to convert capital into
+// USD-equivalent before sizing a CRYPTO position.
+export type Settings = {
+  timezone: string;
+  usdinr_rate: number | null;
+};
+
+export async function fetchSettings(): Promise<Settings> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/settings`);
+  return asJson(res, "GET /settings");
+}
+
+export async function updateSettings(update: { usdinr_rate: number }): Promise<Settings> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  return asJson(res, "PUT /settings");
 }
 
 // GET /daily-checklist?segment=X - answers/submitted_at are null if
@@ -1309,14 +1373,14 @@ export type DailyChecklist = {
 };
 
 export async function fetchDailyChecklist(segment: Segment): Promise<DailyChecklist> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/daily-checklist?${new URLSearchParams({ segment })}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/daily-checklist?${new URLSearchParams({ segment })}`);
   return asJson(res, "GET /daily-checklist");
 }
 
 // Upserts today's (server-computed date, segment) row - answered once,
 // editable the rest of that same day.
 export async function submitDailyChecklist(segment: Segment, answers: ChecklistAnswer[], notes?: string): Promise<DailyChecklist> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/daily-checklist`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/daily-checklist`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ segment, answers, notes }),
@@ -1340,19 +1404,19 @@ export type TradingSession = {
 
 export async function fetchTradingSessions(segment?: Segment): Promise<TradingSession[]> {
   const qs = segment ? `?${new URLSearchParams({ segment })}` : "";
-  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions${qs}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/trading-sessions${qs}`);
   return asJson(res, "GET /trading-sessions");
 }
 
 export async function checkInTradingSession(segment: Segment): Promise<TradingSession> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions/check-in?${new URLSearchParams({ segment })}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/trading-sessions/check-in?${new URLSearchParams({ segment })}`, {
     method: "POST",
   });
   return asJson(res, "POST /trading-sessions/check-in");
 }
 
 export async function checkOutTradingSession(segment: Segment): Promise<TradingSession> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions/check-out?${new URLSearchParams({ segment })}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/trading-sessions/check-out?${new URLSearchParams({ segment })}`, {
     method: "POST",
   });
   return asJson(res, "POST /trading-sessions/check-out");
@@ -1378,7 +1442,7 @@ export type PendingReview = {
 };
 
 export async function fetchPendingReview(): Promise<PendingReview | null> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/manual-trades/pending-review`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/manual-trades/pending-review`);
   const data = await asJson<{ pending: PendingReview | null }>(res, "GET /manual-trades/pending-review");
   return data.pending;
 }
@@ -1394,7 +1458,7 @@ export type ReviewSubmitPayload = {
 };
 
 export async function submitPositionReview(positionId: string, payload: ReviewSubmitPayload): Promise<ManualPosition> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/review`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/review`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1403,7 +1467,7 @@ export async function submitPositionReview(positionId: string, payload: ReviewSu
 }
 
 export async function submitOptionGroupReview(groupId: string, payload: ReviewSubmitPayload): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/review`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/review`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1428,7 +1492,7 @@ export async function createManualPosition(
     square_off_time?: string;
   } & ManualStopLossConfig,
 ): Promise<ManualPosition> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/manual`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/manual`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1442,7 +1506,7 @@ export async function createManualPosition(
 // of stop_loss_price/stop_loss_method is required (unlike
 // createManualPosition, where "neither" just means no stop-loss at all).
 export async function updateStopLoss(positionId: string, config: ManualStopLossConfig): Promise<ManualPosition> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/stop-loss`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
@@ -1453,7 +1517,7 @@ export async function updateStopLoss(positionId: string, config: ManualStopLossC
 // Combined SL only (sl_scope='combined') - editing an individual leg's
 // own SL isn't supported by this endpoint.
 export async function updateOptionStopLoss(groupId: string, stopLossPrice: number): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/stop-loss`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stop_loss_price: stopLossPrice }),
@@ -1468,7 +1532,7 @@ export async function updateOptionStopLoss(groupId: string, stopLossPrice: numbe
 // exit-monitor every 30s, unlike the Manual tab's targetPrice/slLimitPrice
 // client-side-only watch fields - see ManualTab.tsx's handleSave.
 export async function updateOptionGroupSpotStopLoss(groupId: string, spotStopLossPrice: number): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/spot-stop-loss`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/spot-stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ spot_stop_loss_price: spotStopLossPrice }),
@@ -1481,7 +1545,7 @@ export async function updateOptionGroupSpotStopLoss(groupId: string, spotStopLos
 // the segment default or any other open position in that segment.
 // `squareOffTime` null clears it back to "never force-closed by time".
 export async function updatePositionSquareOffTime(positionId: string, squareOffTime: string | null): Promise<ManualPosition> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off-time`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off-time`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ square_off_time: squareOffTime }),
@@ -1491,7 +1555,7 @@ export async function updatePositionSquareOffTime(positionId: string, squareOffT
 
 // Option-group counterpart - see updatePositionSquareOffTime's own comment.
 export async function updateOptionGroupSquareOffTime(groupId: string, squareOffTime: string | null): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off-time`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off-time`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ square_off_time: squareOffTime }),
@@ -1518,7 +1582,7 @@ export async function fetchExecPositions(
   if (params.status) query.set("status", params.status);
   if (params.manualOnly) query.set("manual_only", "true");
   if (params.limit) query.set("limit", String(params.limit));
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions?${query}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions?${query}`);
   return asJson(res, "GET /positions");
 }
 
@@ -1538,7 +1602,7 @@ export type SquareOffPositionResult = {
 // position_manager.square_off_position's own docstring).
 export async function squareOffManualPosition(positionId: string, quantity?: number): Promise<SquareOffPositionResult> {
   const query = quantity != null ? `?${new URLSearchParams({ quantity: String(quantity) })}` : "";
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off${query}`, { method: "POST" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off${query}`, { method: "POST" });
   return asJson(res, "POST /positions/{id}/square-off");
 }
 
@@ -1561,7 +1625,7 @@ export async function fetchOptionGroups(
   if (params.status) query.set("status", params.status);
   if (params.manualOnly) query.set("manual_only", "true");
   if (params.limit) query.set("limit", String(params.limit));
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups?${query}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups?${query}`);
   return asJson(res, "GET /option-groups");
 }
 
@@ -1570,7 +1634,7 @@ export async function fetchOptionGroups(
 export async function squareOffOptionGroup(
   groupId: string,
 ): Promise<{ status: string; group_id: string; underlying_symbol: string; pnl: number }> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off`, { method: "POST" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off`, { method: "POST" });
   return asJson(res, "POST /option-groups/{id}/square-off");
 }
 
@@ -1598,7 +1662,7 @@ export async function createManualOptionGroup(payload: {
   // See createManualPosition's own comment - identical meaning here.
   square_off_time?: string;
 }): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1621,33 +1685,86 @@ export function tradeImageUrl(id: string): string {
   return `${EXECUTION_BASE_URL}/images/${id}`;
 }
 
+// GET /images/{id} requires a Bearer token like every other execution
+// route (see authFetch above) - a plain <img src={tradeImageUrl(id)}> can't
+// carry that header, so the image has to be fetched here and turned into a
+// local object: URL instead. See useTradeImageSrc.ts, the hook that owns
+// this blob's lifecycle (revokes it on unmount/id-change).
+export async function fetchTradeImageBlob(id: string): Promise<string> {
+  const res = await authFetch(tradeImageUrl(id));
+  if (!res.ok) throw new Error(`GET /images/${id} failed: ${await extractErrorDetail(res)}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 export async function fetchPositionImages(positionId: string): Promise<TradeImage[]> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`);
   return asJson(res, "GET /positions/{id}/images");
 }
 
 export async function uploadPositionImage(positionId: string, file: File): Promise<TradeImage> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`, { method: "POST", body: form });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`, { method: "POST", body: form });
   return asJson(res, "POST /positions/{id}/images");
 }
 
 export async function fetchOptionGroupImages(groupId: string): Promise<TradeImage[]> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`);
   return asJson(res, "GET /option-groups/{id}/images");
 }
 
 export async function uploadOptionGroupImage(groupId: string, file: File): Promise<TradeImage> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`, { method: "POST", body: form });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`, { method: "POST", body: form });
   return asJson(res, "POST /option-groups/{id}/images");
 }
 
 export async function deleteTradeImage(imageId: string): Promise<void> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/images/${imageId}`, { method: "DELETE" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/images/${imageId}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /images/{id} failed: ${await extractErrorDetail(res)}`);
   }
+}
+
+// ---------------------------------------------------------------------
+// BYO broker credentials (systems/accounts, see docs/architecture.md §
+// "Manual Trading SaaS") - a user's own Dhan/Delta keys, so market-data
+// resolves and uses THEIR OWN credentials/rate budget instead of the
+// platform default (Phase 3) once saved here. Never returns a decrypted
+// secret back - has_dhan/has_delta/dhan_client_id_masked only, matching
+// accounts' own CredentialsOut - the form always starts blank and shows
+// this status text instead, same UX convention execution/frontend's own
+// (now admin-only) Dhan-credentials block already established.
+// ---------------------------------------------------------------------
+
+const ACCOUNTS_PORT = import.meta.env.VITE_ACCOUNTS_PORT ?? "8004";
+const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
+
+export type CredentialsOut = {
+  has_dhan: boolean;
+  has_delta: boolean;
+  dhan_client_id_masked: string | null;
+};
+
+export type CredentialsUpdate = {
+  dhan_client_id?: string;
+  dhan_access_token?: string;
+  delta_api_key?: string;
+  delta_api_secret?: string;
+};
+
+export async function fetchCredentials(): Promise<CredentialsOut> {
+  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`);
+  return asJson(res, "GET /credentials");
+}
+
+export async function saveCredentials(update: CredentialsUpdate): Promise<CredentialsOut> {
+  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  return asJson(res, "PUT /credentials");
 }

@@ -30,6 +30,7 @@ class UserOut(BaseModel):
     id: uuid.UUID
     email: str
     created_at: datetime
+    is_admin: bool
 
 
 # All optional - PUT /credentials is a partial update, e.g. setting only

@@ -49,40 +49,77 @@ class FakeRule:
             self.id = str(uuid4())
 
 
+class FakeWatchlistQuery:
+    def __init__(self, row):
+        self._row = row
+
+    def filter_by(self, **kwargs):
+        return self
+
+    def first(self):
+        return self._row
+
+
+class FakeWatchlistDb:
+    """Stands in for a DB session - _target_symbols' watchlist branch only
+    calls db.query(db_models.Watchlist).filter_by(name=...).first()."""
+
+    def __init__(self, row=None):
+        self._row = row
+
+    def query(self, model):
+        return FakeWatchlistQuery(self._row)
+
+
 def test_target_symbols_symbol_scoped_returns_just_its_own_underlying():
     rule_row = FakeRule(underlying="RELIANCE", underlying_type="symbol")
-    result = _target_symbols(rule_row, get_universe_constituents=lambda key: ["SHOULD", "NOT", "BE", "CALLED"])
+    result = _target_symbols(None, rule_row, get_universe_constituents=lambda key: ["SHOULD", "NOT", "BE", "CALLED"])
     assert result == ["RELIANCE"]
 
 
 def test_target_symbols_universe_scoped_returns_constituents():
     rule_row = FakeRule(underlying="NIFTYBANK", underlying_type="universe")
-    result = _target_symbols(rule_row, get_universe_constituents=lambda key: ["HDFCBANK", "ICICIBANK"] if key == "NIFTYBANK" else None)
+    result = _target_symbols(None, rule_row, get_universe_constituents=lambda key: ["HDFCBANK", "ICICIBANK"] if key == "NIFTYBANK" else None)
     assert result == ["HDFCBANK", "ICICIBANK"]
 
 
 def test_target_symbols_unresolvable_universe_returns_empty_list():
     rule_row = FakeRule(underlying="NOT_A_REAL_INDEX", underlying_type="universe")
-    result = _target_symbols(rule_row, get_universe_constituents=lambda key: None)
+    result = _target_symbols(None, rule_row, get_universe_constituents=lambda key: None)
     assert result == []
 
 
 def test_target_symbols_empty_universe_constituents_returns_empty_list():
     rule_row = FakeRule(underlying="NIFTYBANK", underlying_type="universe")
-    result = _target_symbols(rule_row, get_universe_constituents=lambda key: [])
+    result = _target_symbols(None, rule_row, get_universe_constituents=lambda key: [])
     assert result == []
 
 
 def test_target_symbols_symbol_list_scoped_returns_parsed_list_without_calling_market_data():
     rule_row = FakeRule(underlying="GOLDM,SILVER,CRUDEOIL", underlying_type="symbol_list")
-    result = _target_symbols(rule_row, get_universe_constituents=lambda key: (_ for _ in ()).throw(AssertionError("should not call market-data")))
+    result = _target_symbols(None, rule_row, get_universe_constituents=lambda key: (_ for _ in ()).throw(AssertionError("should not call market-data")))
     assert result == ["GOLDM", "SILVER", "CRUDEOIL"]
 
 
 def test_target_symbols_symbol_list_strips_whitespace_and_drops_empty_entries():
     rule_row = FakeRule(underlying=" GOLDM , SILVER,,CRUDEOIL ", underlying_type="symbol_list")
-    result = _target_symbols(rule_row, get_universe_constituents=lambda key: None)
+    result = _target_symbols(None, rule_row, get_universe_constituents=lambda key: None)
     assert result == ["GOLDM", "SILVER", "CRUDEOIL"]
+
+
+def test_target_symbols_watchlist_scoped_returns_parsed_list_without_calling_market_data():
+    rule_row = FakeRule(underlying="fundamentally-strong", underlying_type="watchlist")
+    watchlist_row = db_models.Watchlist(name="fundamentally-strong", symbols="RELIANCE,TCS,INFY")
+    db = FakeWatchlistDb(row=watchlist_row)
+    result = _target_symbols(db, rule_row, get_universe_constituents=lambda key: (_ for _ in ()).throw(AssertionError("should not call market-data")))
+    assert result == ["RELIANCE", "TCS", "INFY"]
+
+
+def test_target_symbols_unresolvable_watchlist_returns_empty_list():
+    rule_row = FakeRule(underlying="deleted-list", underlying_type="watchlist")
+    db = FakeWatchlistDb(row=None)
+    result = _target_symbols(db, rule_row, get_universe_constituents=lambda key: None)
+    assert result == []
 
 
 # --- _is_within_active_window: run_live_tick's skip-outside-window optimization --------------

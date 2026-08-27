@@ -25,7 +25,7 @@ from app.domain.backtest import (
     grid_search,
     replay,
 )
-from app.domain.engine import history_window
+from app.domain.engine import history_window, resolve_watchlist_symbols
 from app.domain.indicators import regime_indicator_warmup
 from app.domain.option_backtest import MAX_OPTION_BACKTEST_DAYS, OPTION_HISTORY_INTERVAL, replay_options
 from app.domain.rule import (
@@ -47,6 +47,7 @@ from app.domain.rule import (
     validate_rule_in_house_fields,
     validate_rule_symbol_list_fields,
     validate_rule_universe_fields,
+    validate_rule_watchlist_fields,
 )
 from app.domain.rules import bars_needed, build_crossover_bias_fn, evaluate
 
@@ -123,6 +124,21 @@ def _check_regime_indicator_ids(db: Session, regime_indicator_ids: list[str]) ->
             )
 
 
+def _check_watchlist_exists(db: Session, underlying_type: str, underlying: Optional[str]) -> None:
+    """underlying_type='watchlist' must name a real signal_generation.watchlists
+    row at create/update time - unlike 'universe' (no equivalent check
+    today, fails silently at scan time instead), this is cheap to verify
+    since the Watchlist table is local to this same DB/system. Mirrors
+    _check_regime_indicator_ids' shape: shape-only validation already
+    happened in the Pydantic layer (validate_rule_watchlist_fields),
+    existence is checked here where a DB session is available."""
+    if underlying_type != "watchlist":
+        return
+    exists = db.query(db_models.Watchlist).filter_by(name=underlying).first() is not None
+    if not exists:
+        raise HTTPException(status_code=404, detail=f"no watchlist named '{underlying}'")
+
+
 def _resolve_regime_indicators(db: Session, rule_row: db_models.Rule) -> RegimeIndicators:
     """Rule.regime_indicator_ids resolved to (indicator_type, params)
     pairs, once per backtest request - fed into backtest.replay/
@@ -151,6 +167,7 @@ def _regime_warmup_bars(regime_indicators: RegimeIndicators) -> int:
 def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
     _check_referenced_indicator_exists(db, payload.rule_config)
     _check_regime_indicator_ids(db, payload.regime_indicator_ids)
+    _check_watchlist_exists(db, payload.underlying_type, payload.underlying)
     row = db_models.Rule(
         name=payload.name,
         description=payload.description,
@@ -218,11 +235,13 @@ def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)
         validate_rule_in_house_fields(row.underlying, row.rule_config, row.interval)
         validate_rule_universe_fields(row.underlying_type, row.segment)
         validate_rule_symbol_list_fields(row.underlying_type, row.underlying)
+        validate_rule_watchlist_fields(row.underlying_type, row.underlying)
         validate_breakout_interval_consistency(row.interval, row.rule_config)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _check_referenced_indicator_exists(db, row.rule_config)
     _check_regime_indicator_ids(db, row.regime_indicator_ids)
+    _check_watchlist_exists(db, row.underlying_type, row.underlying)
 
     db.commit()
     db.refresh(row)
@@ -586,6 +605,27 @@ def _backtest_symbol_list(
     return _backtest_pooled_symbols(db, rule_row, rule, payload, symbols, from_, to, regime_indicators)
 
 
+def _backtest_watchlist(
+    db: Session,
+    rule_row: db_models.Rule,
+    rule: RuleConfig,
+    payload: RuleBacktestRequest,
+    from_: date,
+    to: date,
+    regime_indicators: RegimeIndicators,
+) -> dict:
+    """Pooled backtest for a watchlist-scoped rule - see
+    _backtest_pooled_symbols for the shared pooling logic. The symbol list
+    comes from a signal_generation.watchlists row looked up by name (see
+    app/domain/engine.py's resolve_watchlist_symbols, reused here) rather
+    than parsing rule_row.underlying directly (unlike symbol_list) or
+    calling market-data (unlike universe)."""
+    symbols = resolve_watchlist_symbols(db, rule_row.underlying)
+    if not symbols:
+        raise HTTPException(status_code=502, detail=f"could not resolve watchlist '{rule_row.underlying}'")
+    return _backtest_pooled_symbols(db, rule_row, rule, payload, symbols, from_, to, regime_indicators)
+
+
 @router.post("/rules/{rule_id}/backtest")
 def backtest_rule(
     rule_id: str,
@@ -600,9 +640,10 @@ def backtest_rule(
     exit config/instrument_type/horizon (all Strategy-owned trading
     concepts) - `payload` supplies them as optional per-run overrides;
     omitting the exit-config fields reproduces ExitConfig()'s bare
-    opposite-signal/end-of-data-only defaults. underlying_type='universe'
-    or 'symbol_list' pools the same backtest across every constituent/
-    listed symbol - see _backtest_universe/_backtest_symbol_list.
+    opposite-signal/end-of-data-only defaults. underlying_type='universe',
+    'symbol_list', or 'watchlist' pools the same backtest across every
+    constituent/listed symbol - see _backtest_universe/_backtest_symbol_list/
+    _backtest_watchlist.
     Rule.regime_indicator_ids (if any) are resolved once here and applied
     for real - see _backtest_one_symbol's own docstring for which rule
     types/instrument types that does and doesn't cover."""
@@ -614,6 +655,8 @@ def backtest_rule(
         return _backtest_universe(db, rule_row, rule, payload, from_, to, regime_indicators)
     if rule_row.underlying_type == "symbol_list":
         return _backtest_symbol_list(db, rule_row, rule, payload, from_, to, regime_indicators)
+    if rule_row.underlying_type == "watchlist":
+        return _backtest_watchlist(db, rule_row, rule, payload, from_, to, regime_indicators)
     return _backtest_one_symbol(db, rule_row, rule, payload, rule_row.underlying, from_, to, regime_indicators)
 
 

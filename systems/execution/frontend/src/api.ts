@@ -1,3 +1,5 @@
+import { clearAuthToken, getAuthToken } from "./auth";
+
 export type Position = {
   id: string;
   signal_id: string;
@@ -136,10 +138,22 @@ export type Account = {
   current_balance: number;
   capital_per_trade: number;
   risk_per_trade_pct: number;
-  // CRYPTO only - a margin multiplier applied before sizing (Delta
-  // Exchange India trades perpetual futures on margin). Defaults to 1 -
-  // present but unused for NSE/MCX.
+  // CRYPTO and NSE (MTF positional spot) only - a margin multiplier
+  // applied before sizing (Delta Exchange India trades perpetual futures
+  // on margin; Dhan's MTF borrows cash against NSE spot equity). Defaults
+  // to 1 - present but unused for MCX. Only the PLATFORM account's own
+  // leverage is ever read by the automated flow (see the platform-account
+  // functions below) - editable here on the per-caller table for CRYPTO
+  // only; NSE's is admin/broker-config only now, edited exclusively via
+  // fetchPlatformAccounts/updatePlatformAccount below.
   leverage: number;
+  // NSE MTF only - the manually configured annualized interest rate
+  // charged on the borrowed portion of a leverage>1 NSE positional
+  // position. null until set - such an order is rejected rather than
+  // opened with unmodeled interest cost. Platform-account only (see
+  // leverage above) - present here only because GET /accounts returns
+  // every field on the row.
+  mtf_annual_interest_rate_pct: number | null;
   // The one segment-wide square-off cutoff - any intraday position still
   // OPEN past this local time-of-day gets forcefully closed. null means
   // never force-closed (CRYPTO's default - crypto trades 24/7).
@@ -195,6 +209,27 @@ export type CheckExitsResult = {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
+// Every execution route requires a Bearer token as of the multi-tenant SaaS
+// migration (Phase 2, see docs/architecture.md) - this wrapper layers the
+// stored token onto an otherwise-identical fetch() call. A 401 only ever
+// means "token missing/expired/invalid" here (execution never uses 401 for
+// a domain error), so it's safe to treat any 401 as "session expired" and
+// force back to the login screen - the reload re-mounts AuthGate, which
+// picks up the now-empty token and renders LoginPage, matching this
+// frontend's existing full-reload nav convention (Nav.tsx's <a href>).
+function authFetch(input: string, init?: RequestInit): Promise<Response> {
+  const token = getAuthToken();
+  const headers = new Headers(init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers }).then((res) => {
+    if (res.status === 401) {
+      clearAuthToken();
+      window.location.reload();
+    }
+    return res;
+  });
+}
+
 async function asJson<T>(res: Response, what: string): Promise<T> {
   if (!res.ok) {
     throw new Error(`${what} failed: ${res.status}`);
@@ -209,7 +244,7 @@ export async function fetchPositions(
   if (opts.signalId) params.set("signal_id", opts.signalId);
   if (opts.withLivePnl) params.set("with_live_pnl", "true");
 
-  const res = await fetch(`${API_BASE}/positions?${params}`);
+  const res = await authFetch(`${API_BASE}/positions?${params}`);
   return asJson(res, "GET /positions");
 }
 
@@ -220,20 +255,20 @@ export async function fetchPositions(
 export type PositionPnlSnapshot = { recorded_at: string; cmp: number; unrealized_pnl: number };
 
 export async function fetchPositionPnlHistory(positionId: string): Promise<PositionPnlSnapshot[]> {
-  const res = await fetch(`${API_BASE}/positions/${positionId}/pnl-history`);
+  const res = await authFetch(`${API_BASE}/positions/${positionId}/pnl-history`);
   return asJson(res, "GET /positions/{id}/pnl-history");
 }
 
 export async function fetchAccounts(): Promise<Account[]> {
-  const res = await fetch(`${API_BASE}/accounts`);
+  const res = await authFetch(`${API_BASE}/accounts`);
   return asJson(res, "GET /accounts");
 }
 
 export async function updateAccount(
   segment: Account["segment"],
-  update: Pick<Account, "capital_per_trade" | "risk_per_trade_pct" | "leverage" | "square_off_time">,
+  update: Partial<Pick<Account, "capital_per_trade" | "risk_per_trade_pct" | "leverage" | "square_off_time">>,
 ): Promise<Account> {
-  const res = await fetch(`${API_BASE}/accounts/${segment}`, {
+  const res = await authFetch(`${API_BASE}/accounts/${segment}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update),
@@ -241,13 +276,36 @@ export async function updateAccount(
   return asJson(res, `PUT /accounts/${segment}`);
 }
 
+// The platform-wide (user_id IS NULL) accounts - the rows the automated
+// Strategy-driven flow actually reads (see execution backend's load_account
+// docstring). Every caller of this frontend is already admin-gated
+// end-to-end (AuthGate.tsx), so no separate admin check is needed here -
+// these just hit the admin-only GET/PUT /accounts/platform* routes instead
+// of the per-caller ones above.
+export async function fetchPlatformAccounts(): Promise<Account[]> {
+  const res = await authFetch(`${API_BASE}/accounts/platform`);
+  return asJson(res, "GET /accounts/platform");
+}
+
+export async function updatePlatformAccount(
+  segment: Account["segment"],
+  update: Partial<Pick<Account, "leverage" | "mtf_annual_interest_rate_pct">>,
+): Promise<Account> {
+  const res = await authFetch(`${API_BASE}/accounts/platform/${segment}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  return asJson(res, `PUT /accounts/platform/${segment}`);
+}
+
 export async function resetAccount(segment: Account["segment"]): Promise<Account> {
-  const res = await fetch(`${API_BASE}/accounts/${segment}/reset`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/accounts/${segment}/reset`, { method: "POST" });
   return asJson(res, `POST /accounts/${segment}/reset`);
 }
 
 export async function fetchStrategyAccounts(): Promise<StrategyAccount[]> {
-  const res = await fetch(`${API_BASE}/accounts/strategy`);
+  const res = await authFetch(`${API_BASE}/accounts/strategy`);
   return asJson(res, "GET /accounts/strategy");
 }
 
@@ -255,7 +313,7 @@ export async function createStrategyAccount(
   strategyId: string,
   create: Pick<StrategyAccount, "segment" | "starting_balance" | "capital_per_trade" | "risk_per_trade_pct">,
 ): Promise<StrategyAccount> {
-  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
+  const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(create),
@@ -267,7 +325,7 @@ export async function updateStrategyAccount(
   strategyId: string,
   update: Pick<StrategyAccount, "capital_per_trade" | "risk_per_trade_pct">,
 ): Promise<StrategyAccount> {
-  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
+  const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update),
@@ -276,22 +334,22 @@ export async function updateStrategyAccount(
 }
 
 export async function deleteStrategyAccount(strategyId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`DELETE /accounts/strategy/${strategyId} failed: ${res.status}`);
 }
 
 export async function resetStrategyAccount(strategyId: string): Promise<StrategyAccount> {
-  const res = await fetch(`${API_BASE}/accounts/strategy/${strategyId}/reset`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}/reset`, { method: "POST" });
   return asJson(res, `POST /accounts/strategy/${strategyId}/reset`);
 }
 
 export async function fetchSettings(): Promise<Settings> {
-  const res = await fetch(`${API_BASE}/settings`);
+  const res = await authFetch(`${API_BASE}/settings`);
   return asJson(res, "GET /settings");
 }
 
 export async function updateSettings(update: { usdinr_rate: number }): Promise<Settings> {
-  const res = await fetch(`${API_BASE}/settings`, {
+  const res = await authFetch(`${API_BASE}/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update),
@@ -300,11 +358,14 @@ export async function updateSettings(update: { usdinr_rate: number }): Promise<S
 }
 
 // ---------------------------------------------------------------------
-// Data provider (Dhan) credentials - market-data's own backend, read/
-// written directly from the browser (CORS-enabled), same direct-from-
-// browser cross-system pattern signal-generation's frontend already uses
-// for its own market-data calls (fetchLtp etc. there) - NOT execution's
-// own /api proxy convention above, since this isn't execution's data.
+// Data provider (Dhan) ops - market-data's own backend, read/written
+// directly from the browser (CORS-enabled), same direct-from-browser
+// cross-system pattern signal-generation's frontend already uses for its
+// own market-data calls - NOT execution's own /api proxy convention above,
+// since this isn't execution's data. Admin-only on market-data's side
+// (require_admin, see docs/architecture.md) - this whole app is already
+// admin-gated (AuthGate.tsx), so every call here goes through authFetch
+// for the Bearer token.
 // ---------------------------------------------------------------------
 
 const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
@@ -321,7 +382,7 @@ export type DhanStatus = {
 };
 
 export async function fetchDhanStatus(): Promise<DhanStatus> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/dhan/token-status`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/token-status`);
   return asJson(res, "GET /dhan/token-status");
 }
 
@@ -329,12 +390,40 @@ export async function fetchDhanStatus(): Promise<DhanStatus> {
 // only on market-data's side (see set_manual_credentials' own docstring),
 // no restart needed, but also doesn't survive one.
 export async function updateDhanCredentials(clientId: string, accessToken: string): Promise<DhanStatus> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/dhan/credentials`, {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/credentials`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId, access_token: accessToken }),
   });
   return asJson(res, "PUT /dhan/credentials");
+}
+
+export async function renewDhanToken(): Promise<unknown> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/renew-token`, { method: "POST" });
+  return asJson(res, "POST /dhan/renew-token");
+}
+
+export type FeedStatus = {
+  connected: boolean;
+  connected_at: string | null;
+  last_message_at: string | null;
+  reconnect_count: number;
+  last_error: string | null;
+  ticks: Record<string, unknown>;
+};
+
+export async function fetchFeedStatus(): Promise<FeedStatus> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/feed-status`);
+  return asJson(res, "GET /dhan/feed-status");
+}
+
+export async function subscribeFeed(exchange: string, symbol: string): Promise<FeedStatus> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/feed/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ exchange, symbol }),
+  });
+  return asJson(res, "POST /dhan/feed/subscribe");
 }
 
 // ---------------------------------------------------------------------
@@ -364,17 +453,17 @@ export async function fetchStrategyNames(): Promise<StrategySummary[]> {
 }
 
 export async function squareOffNow(): Promise<SquareOffResult> {
-  const res = await fetch(`${API_BASE}/positions/square-off`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/positions/square-off`, { method: "POST" });
   return asJson(res, "POST /positions/square-off");
 }
 
 export async function squareOffDueNow(): Promise<SquareOffDueResult> {
-  const res = await fetch(`${API_BASE}/positions/square-off-due`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/positions/square-off-due`, { method: "POST" });
   return asJson(res, "POST /positions/square-off-due");
 }
 
 export async function checkExitsNow(): Promise<CheckExitsResult> {
-  const res = await fetch(`${API_BASE}/positions/check-exits`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/positions/check-exits`, { method: "POST" });
   return asJson(res, "POST /positions/check-exits");
 }
 
@@ -384,7 +473,7 @@ export type ClearPositionsResult = {
 };
 
 export async function clearPositions(): Promise<ClearPositionsResult> {
-  const res = await fetch(`${API_BASE}/positions`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE}/positions`, { method: "DELETE" });
   return asJson(res, "DELETE /positions");
 }
 
@@ -397,7 +486,7 @@ export type SquareOffOneResult = {
 };
 
 export async function squareOffPosition(id: string): Promise<SquareOffOneResult> {
-  const res = await fetch(`${API_BASE}/positions/${id}/square-off`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/positions/${id}/square-off`, { method: "POST" });
   if (!res.ok) {
     let detail = "";
     try {
@@ -418,12 +507,12 @@ export async function squareOffPosition(id: string): Promise<SquareOffOneResult>
 // (POST /positions/square-off and /positions/check-exits only ever touch
 // plain spot/future positions - a group is not a Position row itself).
 export async function squareOffOptionGroupsNow(): Promise<SquareOffResult> {
-  const res = await fetch(`${API_BASE}/option-groups/square-off`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/option-groups/square-off`, { method: "POST" });
   return asJson(res, "POST /option-groups/square-off");
 }
 
 export async function checkOptionGroupExitsNow(): Promise<{ closed_stop_loss: number; closed_target: number; checked: number }> {
-  const res = await fetch(`${API_BASE}/option-groups/check-exits`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/option-groups/check-exits`, { method: "POST" });
   return asJson(res, "POST /option-groups/check-exits");
 }
 
@@ -433,7 +522,7 @@ export async function checkOptionGroupExitsNow(): Promise<{ closed_stop_loss: nu
 // entry_spot_price and the group's action (same BUY/SELL direction
 // convention compute_stop_loss_percent_price uses).
 export async function updateOptionGroupSpotStopLoss(id: string, spotStopLossPrice: number): Promise<OptionGroup> {
-  const res = await fetch(`${API_BASE}/option-groups/${id}/spot-stop-loss`, {
+  const res = await authFetch(`${API_BASE}/option-groups/${id}/spot-stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ spot_stop_loss_price: spotStopLossPrice }),
@@ -457,14 +546,14 @@ export async function fetchOptionGroups(
   if (opts.signalId) params.set("signal_id", opts.signalId);
   if (opts.withLivePnl) params.set("with_live_pnl", "true");
 
-  const res = await fetch(`${API_BASE}/option-groups?${params}`);
+  const res = await authFetch(`${API_BASE}/option-groups?${params}`);
   return asJson(res, "GET /option-groups");
 }
 
 export type OptionGroupPnlSnapshot = { recorded_at: string; combined_price: number; unrealized_pnl: number };
 
 export async function fetchOptionGroupPnlHistory(groupId: string): Promise<OptionGroupPnlSnapshot[]> {
-  const res = await fetch(`${API_BASE}/option-groups/${groupId}/pnl-history`);
+  const res = await authFetch(`${API_BASE}/option-groups/${groupId}/pnl-history`);
   return asJson(res, "GET /option-groups/{id}/pnl-history");
 }
 
@@ -476,7 +565,7 @@ export type SquareOffGroupResult = {
 };
 
 export async function squareOffOptionGroup(id: string): Promise<SquareOffGroupResult> {
-  const res = await fetch(`${API_BASE}/option-groups/${id}/square-off`, { method: "POST" });
+  const res = await authFetch(`${API_BASE}/option-groups/${id}/square-off`, { method: "POST" });
   if (!res.ok) {
     let detail = "";
     try {
@@ -496,7 +585,7 @@ export async function squareOffOptionGroup(id: string): Promise<SquareOffGroupRe
 // uses (net_debit * (1 - pct/100), the combined position is always "BUY"-
 // direction - see option_position_manager.py's module docstring).
 export async function updateOptionGroupStopLoss(id: string, stopLossPrice: number): Promise<OptionGroup> {
-  const res = await fetch(`${API_BASE}/option-groups/${id}/stop-loss`, {
+  const res = await authFetch(`${API_BASE}/option-groups/${id}/stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stop_loss_price: stopLossPrice }),

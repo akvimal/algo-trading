@@ -38,7 +38,14 @@ def test_access_token_round_trip():
     payload = jwt.decode(token, options={"verify_signature": False})
     assert payload["sub"] == "abc-123"
     assert payload["email"] == "trader@example.com"
+    assert payload["is_admin"] is False
     assert payload["exp"] > payload["iat"]
+
+
+def test_access_token_carries_is_admin_claim():
+    token = create_access_token(user_id="abc-123", email="admin@example.com", is_admin=True)
+    payload = jwt.decode(token, options={"verify_signature": False})
+    assert payload["is_admin"] is True
 
 
 def test_access_token_rejects_tampered_signature():

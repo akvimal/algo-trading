@@ -43,11 +43,13 @@ import {
   type StrategyStatus,
   type UnderlyingType,
   type UniverseBacktestResult,
+  type Watchlist,
   type Weekday,
   backtestRule,
   backtestRuleGrid,
   createIndicator,
   createRule,
+  createWatchlist,
   clearCandleCache,
   createSavedBacktest,
   createStrategy,
@@ -55,6 +57,7 @@ import {
   deleteRule,
   deleteSavedBacktest,
   deleteStrategy,
+  deleteWatchlist,
   fetchCandleCacheStatus,
   fetchDataAvailability,
   fetchIndicators,
@@ -62,6 +65,7 @@ import {
   fetchRules,
   fetchSignalsForStrategy,
   fetchStrategies,
+  fetchWatchlists,
   getSavedBacktest,
   listSavedBacktests,
   sendManualSignal,
@@ -734,6 +738,131 @@ function IndicatorsTab() {
   );
 }
 
+function WatchlistManager() {
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newSymbols, setNewSymbols] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const data = await fetchWatchlists();
+        if (!cancelled) setWatchlists(data);
+      } catch {
+        // keep showing the last known watchlists rather than clearing on a blip
+      }
+    }
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  async function handleCreateWatchlist(e: React.FormEvent) {
+    e.preventDefault();
+    setCreating(true);
+    setError(null);
+    try {
+      const created = await createWatchlist({ name: newName.trim(), symbols: newSymbols });
+      setWatchlists((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewName("");
+      setNewSymbols("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create watchlist");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleDeleteWatchlist(w: Watchlist) {
+    const confirmed = window.confirm(
+      `Delete watchlist "${w.name}"? Any rule still referencing it will skip on its next engine tick instead of crashing, but won't produce signals until fixed.`,
+    );
+    if (!confirmed) return;
+    setDeletingId(w.id);
+    try {
+      await deleteWatchlist(w.id);
+      setWatchlists((prev) => prev.filter((x) => x.id !== w.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete watchlist");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2>Watchlists</h2>
+      <p className="hint">
+        Named, reusable symbol groups (e.g. "fundamentally strong stocks") - define one once, then reference it by
+        name from any in-house rule's Underlying Type ("Watchlist (custom list)"), instead of retyping the same
+        symbols into every rule.
+      </p>
+      {error && <p className="error">{error}</p>}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Symbols</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {watchlists.length === 0 && (
+            <tr>
+              <td colSpan={3} className="empty">
+                No watchlists yet - create one below.
+              </td>
+            </tr>
+          )}
+          {watchlists.map((w) => (
+            <tr key={w.id}>
+              <td className="symbol">{w.name}</td>
+              <td>{w.symbol_count} symbols</td>
+              <td className="edit-actions">
+                <button
+                  type="button"
+                  className="icon-btn danger"
+                  onClick={() => handleDeleteWatchlist(w)}
+                  disabled={deletingId === w.id}
+                  title={`Delete watchlist "${w.name}"`}
+                  aria-label={`Delete watchlist "${w.name}"`}
+                >
+                  <TrashIcon />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <form className="strategy-form" onSubmit={handleCreateWatchlist}>
+        <label>
+          Name
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} required placeholder="e.g. fundamentally-strong" />
+        </label>
+        <label>
+          Symbols (comma-separated)
+          <input
+            value={newSymbols}
+            onChange={(e) => setNewSymbols(e.target.value.toUpperCase())}
+            required
+            placeholder="e.g. RELIANCE,TCS,INFY"
+          />
+        </label>
+        <button type="submit" disabled={creating || !newName.trim() || !newSymbols.trim()}>
+          {creating ? "Creating..." : "Create watchlist"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
 function ruleSummary(r: Rule, indicators: Indicator[]): string {
   const ruleConfig = r.rule_config;
   if (!ruleConfig) return "";
@@ -769,6 +898,7 @@ function RuleManager() {
   rulesRef.current = rules;
   const [indicators, setIndicators] = useState<Indicator[]>([]);
   const [universes, setUniverses] = useState<string[]>([]);
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   // error: the rules-list poll's own connectivity status only - cleared
   // on every successful tick. actionError: create/edit/delete's own
@@ -785,6 +915,7 @@ function RuleManager() {
   const [underlying, setUnderlying] = useState("");
   const [underlyingType, setUnderlyingType] = useState<UnderlyingType>("symbol");
   const [selectedUniverse, setSelectedUniverse] = useState("");
+  const [selectedWatchlist, setSelectedWatchlist] = useState("");
   const [interval, setInterval_] = useState<Interval | "">("");
   const [ruleType, setRuleType] = useState<"crossover" | "breakout" | "range_breakout">("crossover");
   const [selectedIndicatorId, setSelectedIndicatorId] = useState("");
@@ -996,6 +1127,18 @@ function RuleManager() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  async function refreshWatchlists() {
+    try {
+      setWatchlists(await fetchWatchlists());
+    } catch {
+      // keep showing the last known watchlists rather than clearing on a blip
+    }
+  }
+
+  useEffect(() => {
+    void refreshWatchlists();
   }, []);
 
   useEffect(() => {
@@ -1290,6 +1433,7 @@ function RuleManager() {
     setUnderlying("");
     setUnderlyingType("symbol");
     setSelectedUniverse("");
+    setSelectedWatchlist("");
     setInterval_("");
     setRuleType("crossover");
     setSelectedIndicatorId("");
@@ -1314,7 +1458,8 @@ function RuleManager() {
       name,
       description: description.trim() || undefined,
       segment,
-      underlying: (underlyingType === "universe" ? selectedUniverse : underlying) || "",
+      underlying:
+        (underlyingType === "universe" ? selectedUniverse : underlyingType === "watchlist" ? selectedWatchlist : underlying) || "",
       underlying_type: underlyingType,
       interval: isBreakout ? ltfInterval : (interval as Interval),
       rule_config: buildRuleConfig(),
@@ -1349,10 +1494,16 @@ function RuleManager() {
     setUnderlyingType(r.underlying_type);
     if (r.underlying_type === "universe") {
       setSelectedUniverse(r.underlying ?? "");
+      setSelectedWatchlist("");
+      setUnderlying("");
+    } else if (r.underlying_type === "watchlist") {
+      setSelectedWatchlist(r.underlying ?? "");
+      setSelectedUniverse("");
       setUnderlying("");
     } else {
       setUnderlying(r.underlying ?? "");
       setSelectedUniverse("");
+      setSelectedWatchlist("");
     }
     setInterval_(r.interval ?? "");
     if (r.rule_config?.type === "breakout") {
@@ -1575,6 +1726,7 @@ function RuleManager() {
                   <option value="symbol">Single symbol</option>
                   <option value="symbol_list">Multiple symbols</option>
                   <option value="universe">Universe (NSE index constituents)</option>
+                  <option value="watchlist">Watchlist (custom list)</option>
                 </select>
               </label>
               {underlyingType === "universe" ? (
@@ -1585,6 +1737,18 @@ function RuleManager() {
                     {universes.map((u) => (
                       <option key={u} value={u}>
                         {u}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : underlyingType === "watchlist" ? (
+                <label>
+                  Watchlist
+                  <select value={selectedWatchlist} onChange={(e) => setSelectedWatchlist(e.target.value)} required>
+                    <option value="">&mdash;</option>
+                    {watchlists.map((w) => (
+                      <option key={w.id} value={w.name}>
+                        {w.name} ({w.symbol_count})
                       </option>
                     ))}
                   </select>
@@ -1744,6 +1908,7 @@ function RuleManager() {
                 (ruleType !== "breakout" && !interval) ||
                 (underlyingType === "symbol" && !underlying.trim()) ||
                 (underlyingType === "universe" && !selectedUniverse) ||
+                (underlyingType === "watchlist" && !selectedWatchlist) ||
                 (!isBreakout && !isRangeBreakout && !selectedIndicatorId)
               }
             >
@@ -1830,7 +1995,13 @@ function RuleManager() {
           </nav>
           {selectedRule && selectedRule.underlying_type !== "symbol" && (
             <p className="hint">
-              Data availability isn't shown for a {selectedRule.underlying_type === "universe" ? "universe" : "symbol list"} rule -
+              Data availability isn't shown for a{" "}
+              {selectedRule.underlying_type === "universe"
+                ? "universe"
+                : selectedRule.underlying_type === "watchlist"
+                  ? "watchlist"
+                  : "symbol list"}{" "}
+              rule -
               it covers multiple symbols, not one to check.
             </p>
           )}
@@ -2536,6 +2707,7 @@ function RulesTab() {
           overrides rather than reading them from a Strategy.
         </p>
       </InfoDisclosure>
+      <WatchlistManager />
       <RuleManager />
       <IndicatorsTab />
     </>
@@ -2591,6 +2763,9 @@ function StrategyManager() {
   // which used to be options-only) - see fixed_lots in api.ts. Labeled
   // "Qty" for spot, "Lots" for future/option (see fixedLotsLabel below).
   const [fixedLots, setFixedLots] = useState("");
+  // segment='NSE'+horizon='positional'+instrument_type='spot' only - see
+  // use_margin in api.ts.
+  const [useMargin, setUseMargin] = useState(false);
   // instrument_type in ('future', 'option') only - see ContractDayFilter in api.ts.
   const [contractDayFilter, setContractDayFilter] = useState<ContractDayFilter>("any");
   const [segment, setSegment] = useState<Segment>("NSE");
@@ -2800,6 +2975,7 @@ function StrategyManager() {
     setOptionStrikeMoneyness("ATM");
     setOptionSlScope("combined");
     setFixedLots("");
+    setUseMargin(false);
     setContractDayFilter("any");
     setSegment("NSE");
     setActiveWindows([]);
@@ -2834,6 +3010,7 @@ function StrategyManager() {
       option_strike_moneyness: instrumentType === "option" ? optionStrikeMoneyness : undefined,
       option_sl_scope: instrumentType === "option" ? optionSlScope : undefined,
       fixed_lots: fixedLots ? Number(fixedLots) : undefined,
+      use_margin: useMargin,
       contract_day_filter:
         instrumentType === "future" || instrumentType === "option" ? contractDayFilter : undefined,
       segment,
@@ -2897,6 +3074,7 @@ function StrategyManager() {
     setOptionStrikeMoneyness(s.option_strike_moneyness);
     setOptionSlScope(s.option_sl_scope);
     setFixedLots(s.fixed_lots != null ? String(s.fixed_lots) : "");
+    setUseMargin(s.use_margin);
     setContractDayFilter(s.contract_day_filter);
     setSegment(s.segment);
     setActiveWindows(s.active_windows.map((w) => ({ start: w.start.slice(0, 5), end: w.end.slice(0, 5) })));
@@ -3192,6 +3370,14 @@ function StrategyManager() {
                       onChange={(e) => setFixedLots(e.target.value)}
                     />
                   </label>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={useMargin}
+                      onChange={(e) => setUseMargin(e.target.checked)}
+                    />
+                    Use margin (NSE positional spot only)
+                  </label>
                 </div>
               </section>
 
@@ -3355,10 +3541,11 @@ function StrategyManager() {
             )}
           </div>
         </form>
-        {nonDefaultConfig && (
+        {nonDefaultConfig && (horizon !== "positional" || instrumentType !== "spot") && (
           <p className="hint">
-            Only intraday + spot/future is handled end-to-end by execution today - this will still resolve and
-            publish, but execution will reject anything else with "unsupported horizon/instrument_type".
+            Only intraday spot/future, or positional spot, is handled end-to-end by execution today - this will
+            still resolve and publish, but execution will reject anything else with "unsupported
+            horizon/instrument_type".
           </p>
         )}
         <InfoDisclosure summary="More info">

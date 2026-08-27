@@ -28,11 +28,18 @@ def verify_password(password: str, password_hash: str) -> bool:
 # --- JWT ---
 
 
-def create_access_token(user_id: str, email: str) -> str:
+def create_access_token(user_id: str, email: str, is_admin: bool = False) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "email": email,
+        # Embedded so admin-gated routes elsewhere (market-data's
+        # require_admin) can check it by decoding the token locally, no DB
+        # round-trip back to this service - same stateless-JWT design
+        # already used for "sub"/"email". Stale until re-login if an
+        # admin flag changes after a token was issued - same accepted
+        # tradeoff as JWT_SECRET rotation invalidating every session.
+        "is_admin": is_admin,
         "iat": now,
         "exp": now + timedelta(minutes=settings.jwt_expiry_minutes),
     }

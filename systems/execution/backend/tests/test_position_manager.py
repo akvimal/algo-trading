@@ -9,7 +9,7 @@ from app.domain.position_manager import (
     _apply_realized_pnl,
     _evaluate_exits,
     _evaluate_square_off_due,
-    _net_pnl_with_fees,
+    _net_pnl_with_costs,
     _resolve_capital_account,
     _resolve_signal_conflicts,
     _resolve_stop_loss,
@@ -45,6 +45,7 @@ class FakePosition:
     stop_loss_percent: Optional[float] = None
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
+    entry_time: Optional[object] = None
     exit_price: Optional[float] = None
     exit_time: Optional[object] = None
     pnl: Optional[float] = None
@@ -55,6 +56,8 @@ class FakePosition:
     close_fee: Optional[float] = None
     margin_posted: Optional[float] = None
     liquidation_price: Optional[float] = None
+    mtf_interest_rate_pct: Optional[float] = None
+    interest_charged: Optional[float] = None
     # None = the automated Strategy-driven flow's legacy convention (the
     # default every existing test predates and still exercises) - see
     # infra/postgres/init/02-execution.sql's own comment on this column.
@@ -134,7 +137,6 @@ def test_compute_quantity_fractional_lot_size_for_crypto():
 def test_is_supported_intraday_spot_or_future():
     assert is_supported("intraday", "spot") is True
     assert is_supported("intraday", "future") is True
-    assert is_supported("positional", "spot") is False
     assert is_supported("positional", "future") is False
     assert is_supported("intraday", "option") is False
 
@@ -414,15 +416,16 @@ def test_evaluate_exits_leaves_position_open_when_neither_hit():
 # --- Delta Exchange fee/liquidation simulation (CRYPTO futures only, added 2026-08-21) ------------
 
 
-def test_net_pnl_with_fees_returns_raw_pnl_unchanged_when_open_fee_is_none():
-    # Every non-CRYPTO-future position (open_fee never set) - zero behavior
-    # change from before this feature existed.
+def test_net_pnl_with_costs_returns_raw_pnl_unchanged_when_no_costs_apply():
+    # Every plain position (open_fee never set, margin_posted never set) -
+    # zero behavior change from before this feature existed.
     pos = FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY", entry_price=100.0, quantity=10)
-    assert _net_pnl_with_fees(pos, 105.0, raw_pnl=50.0) == 50.0
+    assert _net_pnl_with_costs(pos, 105.0, raw_pnl=50.0) == 50.0
     assert pos.close_fee is None
+    assert pos.interest_charged is None
 
 
-def test_net_pnl_with_fees_nets_open_and_close_fee():
+def test_net_pnl_with_costs_nets_open_and_close_fee():
     from app.domain.delta_fees import compute_futures_trading_fee
 
     pos = FakePosition(
@@ -430,10 +433,78 @@ def test_net_pnl_with_fees_nets_open_and_close_fee():
         entry_price=70_000.0, quantity=0.1, open_fee=4.13,
     )
     expected_close_fee = compute_futures_trading_fee(72_000.0 * 0.1)
-    net = _net_pnl_with_fees(pos, exit_price=72_000.0, raw_pnl=200.0)
+    net = _net_pnl_with_costs(pos, exit_price=72_000.0, raw_pnl=200.0)
 
     assert pos.close_fee == pytest.approx(expected_close_fee)
     assert net == pytest.approx(200.0 - 4.13 - expected_close_fee)
+
+
+# --- NSE MTF (margin trading facility) interest, added for positional spot holding ------------------
+
+
+def test_net_pnl_with_costs_charges_interest_on_leveraged_nse_position():
+    # capital posted (margin_posted) = notional/leverage - here notional =
+    # 100*1000=100000, leverage 4x -> margin_posted=25000, borrowed=75000.
+    # 2 calendar days held at 18%/yr -> 75000 * 0.18/365 * 2 = 73.97...
+    pos = FakePosition(
+        id="p1", status="OPEN", segment="NSE", exchange="NSE", symbol="RELIANCE", action="BUY",
+        entry_price=100.0, quantity=1000, margin_posted=25_000.0, mtf_interest_rate_pct=18.0,
+        entry_time=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        exit_time=datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc),
+    )
+    expected_interest = 75_000.0 * (18.0 / 100 / 365) * 2
+
+    net = _net_pnl_with_costs(pos, exit_price=105.0, raw_pnl=5000.0)
+
+    assert pos.interest_charged == pytest.approx(expected_interest)
+    assert net == pytest.approx(5000.0 - expected_interest)
+
+
+def test_net_pnl_with_costs_interest_floors_to_one_day_held():
+    # Entry and exit on the same calendar day - still owes at least one
+    # day's interest, not zero.
+    pos = FakePosition(
+        id="p1", status="OPEN", segment="NSE", exchange="NSE", symbol="RELIANCE", action="BUY",
+        entry_price=100.0, quantity=1000, margin_posted=25_000.0, mtf_interest_rate_pct=18.0,
+        entry_time=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        exit_time=datetime(2026, 8, 1, 14, 0, tzinfo=timezone.utc),
+    )
+    expected_interest = 75_000.0 * (18.0 / 100 / 365) * 1
+
+    net = _net_pnl_with_costs(pos, exit_price=105.0, raw_pnl=5000.0)
+
+    assert pos.interest_charged == pytest.approx(expected_interest)
+    assert net == pytest.approx(5000.0 - expected_interest)
+
+
+def test_net_pnl_with_costs_no_interest_for_unleveraged_nse_position():
+    # margin_posted is None (leverage was 1, or not NSE at all) - no
+    # interest, zero behavior change.
+    pos = FakePosition(
+        id="p1", status="OPEN", segment="NSE", exchange="NSE", symbol="RELIANCE", action="BUY",
+        entry_price=100.0, quantity=1000,
+        entry_time=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        exit_time=datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc),
+    )
+    assert _net_pnl_with_costs(pos, exit_price=105.0, raw_pnl=5000.0) == 5000.0
+    assert pos.interest_charged is None
+
+
+def test_is_supported_accepts_positional_spot():
+    assert is_supported("positional", "spot") is True
+
+
+def test_is_supported_rejects_positional_future():
+    assert is_supported("positional", "future") is False
+
+
+def test_is_supported_rejects_positional_option():
+    assert is_supported("positional", "option") is False
+
+
+def test_is_supported_still_accepts_intraday_spot_and_future():
+    assert is_supported("intraday", "spot") is True
+    assert is_supported("intraday", "future") is True
 
 
 def test_evaluate_exits_liquidation_wipes_full_margin_and_fee():

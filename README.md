@@ -12,7 +12,7 @@ Full architecture writeup: [`docs/architecture.md`](docs/architecture.md).
 | `signal-processing` | Chartink webhook intake (`?strategy_id=`, `app/api/routes/webhooks.py`), resolves each signal by looking up its Strategy (no more guessing), Postgres persistence, Redis publish |
 | `execution` | paper trading, intraday spot only — Redis consumer, capital-based position sizing, configurable square-off scheduler, CMP via market-data |
 | `market-data` | Dhan/NSE quote lookups + instrument-master sync; MCX and crypto routed but not implemented |
-| `accounts` | Turning Manual Trading + Options OI into a multi-tenant SaaS: signup/login (JWT) + encrypted BYO Dhan/Delta credential storage. Phases 1-3 shipped — `execution` is fully multi-tenant (every route requires a token) and `market-data` uses a caller's own Dhan credentials/rate budget when a verified token is present, else the platform default. Frontend auth (Phase 4) not yet done, see [`docs/architecture.md`](docs/architecture.md) § "Manual Trading SaaS" |
+| `accounts` | Turning Manual Trading + Options OI into a multi-tenant SaaS: signup/login (JWT) + encrypted BYO Dhan/Delta credential storage. 5 phases shipped — `execution` is fully multi-tenant, `market-data` uses a caller's own Dhan credentials/rate budget when present, both frontends have real login, `manual-trading/frontend` is the SaaS product (self-service BYO credentials + capital/leverage/square-off/USDINR settings) while `execution/frontend` is now an admin-only ops console, see [`docs/architecture.md`](docs/architecture.md) § "Manual Trading SaaS" |
 
 ## Quick start
 

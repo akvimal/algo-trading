@@ -264,6 +264,11 @@ class StrategyCreate(BaseModel):
     # units - a no-op distinction for spot (lot_size is always 1 there,
     # so this is really "quantity" for spot) but real for futures/options.
     fixed_lots: Optional[int] = Field(default=None, gt=0)
+    # horizon='positional'+instrument_type='spot'+segment='NSE' only
+    # (harmlessly ignored otherwise). Opts this strategy's orders into
+    # execution.accounts' platform-wide NSE leverage (Dhan MTF) + interest
+    # when the admin has configured it there - see docs/architecture.md.
+    use_margin: bool = False
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment = "NSE"
     # Every source_type carries these, same as stop_loss_* above -
@@ -360,6 +365,7 @@ class StrategyUpdate(BaseModel):
     option_strike_moneyness: Optional[OptionStrikeMoneyness] = None
     option_sl_scope: Optional[OptionSlScope] = None
     fixed_lots: Optional[int] = Field(default=None, gt=0)
+    use_margin: Optional[bool] = None
     contract_day_filter: Optional[ContractDayFilter] = None
     segment: Optional[Segment] = None
     duplicate_signal_policy: Optional[DuplicateSignalPolicy] = None
@@ -400,6 +406,7 @@ class StrategyOut(BaseModel):
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"
     fixed_lots: Optional[int] = None
+    use_margin: bool = False
     contract_day_filter: ContractDayFilter = "any"
     segment: Segment
     duplicate_signal_policy: DuplicateSignalPolicy = "skip"

@@ -103,6 +103,15 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     -- enforcement of this flag exists (or is needed).
     enforce_risk_based_lots BOOLEAN NOT NULL DEFAULT false,
     leverage            NUMERIC NOT NULL DEFAULT 1 CHECK (leverage > 0),
+    -- NSE MTF (margin trading facility) only - the manually configured
+    -- annualized interest rate charged on the borrowed portion of a
+    -- leveraged NSE positional spot position (leverage > 1). NULL by
+    -- default, same "not a live feed, operator-entered" convention as
+    -- execution.settings.usdinr_rate - a positional NSE order that would
+    -- use leverage > 1 is REJECTED rather than opened with unmodeled
+    -- interest cost until this is set. See position_manager.open_position/
+    -- _net_pnl_with_costs.
+    mtf_annual_interest_rate_pct NUMERIC CHECK (mtf_annual_interest_rate_pct >= 0),
     square_off_time     TIME,
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_accounts_user_segment UNIQUE NULLS NOT DISTINCT (user_id, segment)
@@ -114,6 +123,7 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
 -- (same pattern this file already uses elsewhere).
 ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS min_reward_risk_ratio NUMERIC NOT NULL DEFAULT 4 CHECK (min_reward_risk_ratio > 0);
 ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS enforce_risk_based_lots BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS mtf_annual_interest_rate_pct NUMERIC CHECK (mtf_annual_interest_rate_pct >= 0);
 
 -- Optional, purely additive per-STRATEGY capital pool - a strategy with a
 -- row here sizes/tracks P&L against IT instead of its segment's shared
@@ -240,8 +250,22 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- price-distance loss.
     open_fee          NUMERIC,
     close_fee         NUMERIC,
+    -- Also reused (not CRYPTO-only) for an NSE MTF positional spot position
+    -- opened with leverage > 1 - same meaning either way: the trader's own
+    -- capital actually posted (= notional / leverage), frozen at open.
     margin_posted     NUMERIC,
     liquidation_price NUMERIC,
+    -- NSE MTF only - the account's mtf_annual_interest_rate_pct AT OPEN
+    -- TIME, frozen here (not re-read from the account at close) so a later
+    -- rate change never retroactively changes an already-open position's
+    -- own economics - same "frozen at open" convention as everything else
+    -- on this row. interest_charged is the final rupee amount, computed
+    -- once at close from this rate + margin_posted + days held (see
+    -- position_manager._net_pnl_with_costs) and netted into pnl, same
+    -- point-in-time convention as close_fee above (not accrued daily).
+    -- Both NULL for every non-leveraged-NSE position.
+    mtf_interest_rate_pct NUMERIC,
+    interest_charged  NUMERIC,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -696,3 +720,5 @@ CREATE INDEX IF NOT EXISTS idx_trade_images_option_group ON execution.trade_imag
 -- plan_checklist - NULL for every individual option leg Position too.
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS order_type TEXT CHECK (order_type IN ('market', 'limit'));
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS order_type TEXT CHECK (order_type IN ('market', 'limit'));
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS mtf_interest_rate_pct NUMERIC;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS interest_charged NUMERIC;

@@ -12,6 +12,16 @@ CREATE TABLE IF NOT EXISTS accounts.users (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Platform-operator flag, not a self-service signup option - see
+-- app/domain/security.py's create_access_token (embedded as a JWT claim,
+-- checked stateless by market-data's require_admin) and
+-- docs/architecture.md's "Manual Trading SaaS" section. Promoted manually
+-- (UPDATE accounts.users SET is_admin = true WHERE email = '...') - no
+-- route grants this to anyone. ADD COLUMN IF NOT EXISTS so this is safe to
+-- (re-)run against both a fresh volume and one created before this column
+-- existed, same convention as every inline ALTER in 02-execution.sql.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT false;
+
 -- One row per user's BYO broker credentials (Dhan for NSE/MCX, Delta
 -- Exchange India for CRYPTO) - created lazily on first PUT /credentials,
 -- not at signup. All nullable: a user may only set up one provider, or

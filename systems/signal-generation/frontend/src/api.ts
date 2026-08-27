@@ -95,7 +95,11 @@ export type CounterSignalPolicy = "skip" | "close_and_flip";
 // holds a comma-separated list of explicit symbols (e.g.
 // "GOLDM,SILVER,CRUDEOIL") - for segments like MCX with no index/universe
 // concept, valid on any segment since it never calls market-data.
-export type UnderlyingType = "symbol" | "universe" | "symbol_list";
+// 'watchlist': underlying instead names a Watchlist (below) by its unique
+// name - a user-managed, reusable symbol group, unlike 'symbol_list' (baked
+// into this one rule) and unlike 'universe' (fixed to market-data's index
+// API). Valid on any segment, same as 'symbol_list'.
+export type UnderlyingType = "symbol" | "universe" | "symbol_list" | "watchlist";
 
 // Indicators are their own entity (backend: signal_generation.indicators)
 // so one definition (e.g. "RSI 14") can be reused by any number of
@@ -184,6 +188,32 @@ export type IndicatorCreate = {
 export type IndicatorUpdate = {
   name?: string;
   params?: IndicatorParams;
+};
+
+// A named, reusable, user-managed group of symbols - referenced by name
+// from a Rule's own `underlying` when underlying_type='watchlist' above,
+// exactly how 'universe' references a fixed NSE index key. See
+// docs/architecture.md's Watchlist section.
+export type Watchlist = {
+  id: string;
+  name: string;
+  // Comma-separated, same raw-string shape as symbol_list's own underlying.
+  symbols: string;
+  symbol_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WatchlistCreate = {
+  name: string;
+  symbols: string;
+};
+
+// name isn't editable after creation - see the backend's WatchlistUpdate
+// docstring (a rename would silently orphan every Rule already referencing
+// the old name).
+export type WatchlistUpdate = {
+  symbols: string;
 };
 
 // Names WHICH indicator a rule uses; "crosses its own signal line" needs
@@ -320,6 +350,11 @@ export type Strategy = {
   // always 1 there, so this is really "quantity" for spot) but real for
   // futures/options.
   fixed_lots: number | null;
+  // segment='NSE'+horizon='positional'+instrument_type='spot' only
+  // (harmlessly ignored otherwise). Opts this strategy's orders into
+  // execution's platform-wide NSE leverage (Dhan MTF) + interest when the
+  // admin has configured it there - see docs/architecture.md.
+  use_margin: boolean;
   contract_day_filter: ContractDayFilter;
   segment: Segment;
   duplicate_signal_policy: DuplicateSignalPolicy;
@@ -363,6 +398,7 @@ export type StrategyCreate = {
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
   fixed_lots?: number;
+  use_margin?: boolean;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   duplicate_signal_policy?: DuplicateSignalPolicy;
@@ -398,6 +434,7 @@ export type StrategyEdit = {
   // {fixed_lots: null} - see the backend's update_strategy
   // (model_fields_set-based).
   fixed_lots?: number | null;
+  use_margin?: boolean;
   contract_day_filter?: ContractDayFilter;
   segment?: Segment;
   duplicate_signal_policy?: DuplicateSignalPolicy;
@@ -689,6 +726,36 @@ export async function deleteIndicator(id: string): Promise<void> {
   const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/indicators/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /indicators/{id} failed: ${await extractErrorDetail(res)}`);
+  }
+}
+
+export async function fetchWatchlists(): Promise<Watchlist[]> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/watchlists`);
+  return asJson(res, "GET /watchlists");
+}
+
+export async function createWatchlist(payload: WatchlistCreate): Promise<Watchlist> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/watchlists`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "POST /watchlists");
+}
+
+export async function updateWatchlist(id: string, payload: WatchlistUpdate): Promise<Watchlist> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/watchlists/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PUT /watchlists/{id}");
+}
+
+export async function deleteWatchlist(id: string): Promise<void> {
+  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/watchlists/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`DELETE /watchlists/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 

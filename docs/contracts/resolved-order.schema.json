@@ -114,6 +114,10 @@
       "type": ["integer", "null"],
       "minimum": 1,
       "description": "From the resolved Strategy, every instrument_type (renamed from option_fixed_lots, which used to be options-only) - null if not set. When set, execution trades exactly this many LOTS instead of auto-sizing off capital_per_trade/risk_per_trade_pct - takes precedence over stop-loss-based (risk-%) sizing entirely, even when a stop-loss is also configured. The stop-loss price itself is still computed and stored as normal; only its role in sizing is bypassed. Number of lots, not raw underlying units - a no-op distinction for spot (lot_size is always 1 there) but real for futures/options. See docs/architecture.md."
+    },
+    "use_margin": {
+      "type": "boolean",
+      "description": "From the resolved Strategy. Only meaningful for segment='NSE'+horizon='positional'+instrument_type='spot' (harmlessly ignored otherwise). Opts this order into execution.accounts' platform-wide NSE leverage (Dhan MTF) and interest when the admin has configured leverage>1 there - false (default) always sizes/holds on cash regardless of that platform config. See docs/architecture.md."
     }
   }
 }

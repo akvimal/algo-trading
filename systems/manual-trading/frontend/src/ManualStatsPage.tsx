@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import ManualCalendarFilter from "./ManualCalendarFilter";
+import TradeImageThumb from "./TradeImageThumb";
 import {
   type ChecklistAnswer,
   type Segment,
@@ -11,12 +12,8 @@ import {
   fetchOptionGroups,
   fetchPositionImages,
   fetchTradingSessions,
-  tradeImageUrl,
 } from "./api";
 
-type ManualStatsPageProps = {
-  onBack: () => void;
-};
 
 // One closed manual trade, normalized from either a Position (spot/
 // future) or an OptionPositionGroup - stop_loss_price/exit_price stay
@@ -122,7 +119,7 @@ function formatSessionHistory(sessions: TradingSession[]): string {
     .join(", ");
 }
 
-export default function ManualStatsPage({ onBack }: ManualStatsPageProps) {
+export default function ManualStatsPage() {
   const [trades, setTrades] = useState<ClosedTrade[] | null>(null);
   const [error, setError] = useState<string | undefined>();
   const [selectedDate, setSelectedDate] = useState<string>(todayKey());
@@ -211,11 +208,6 @@ export default function ManualStatsPage({ onBack }: ManualStatsPageProps) {
   if (error) {
     return (
       <div className="manual-wide-page">
-        <div className="manual-page-header">
-          <button type="button" className="manual-settings-back" onClick={onBack}>
-            ← Back
-          </button>
-        </div>
         <p className="error">{error}</p>
       </div>
     );
@@ -224,11 +216,6 @@ export default function ManualStatsPage({ onBack }: ManualStatsPageProps) {
   if (trades == null) {
     return (
       <div className="manual-wide-page">
-        <div className="manual-page-header">
-          <button type="button" className="manual-settings-back" onClick={onBack}>
-            ← Back
-          </button>
-        </div>
         <p className="muted">Loading...</p>
       </div>
     );
@@ -284,13 +271,7 @@ export default function ManualStatsPage({ onBack }: ManualStatsPageProps) {
 
   return (
     <div className="manual-wide-page">
-      {/* Back + title on one row, not stacked - matches every other
-          compact header in this app (App.tsx's tabs row, OiSummaryPage's
-          tabs+expiry row). */}
       <div className="manual-page-header">
-        <button type="button" className="manual-settings-back" onClick={onBack}>
-          ← Back
-        </button>
         <h3>Trading Performance</h3>
       </div>
 
@@ -469,9 +450,7 @@ function ManualStatsTradeCard({
             <div className="manual-history-images">
               {images.map((img) => (
                 <span className="manual-history-image-thumb" key={img.id}>
-                  <a href={tradeImageUrl(img.id)} target="_blank" rel="noreferrer">
-                    <img src={tradeImageUrl(img.id)} alt="attached chart" loading="lazy" />
-                  </a>
+                  <TradeImageThumb id={img.id} />
                 </span>
               ))}
             </div>

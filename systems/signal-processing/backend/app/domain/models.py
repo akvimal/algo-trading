@@ -52,3 +52,6 @@ class ResolvedOrderDraft(BaseModel):
     option_sl_scope: Optional[Literal["combined", "individual"]] = None
     # Every instrument_type - see docs/contracts/resolved-order.schema.json.
     fixed_lots: Optional[int] = None
+    # segment='NSE'+horizon='positional'+instrument_type='spot' only - see
+    # docs/contracts/resolved-order.schema.json.
+    use_margin: bool = False

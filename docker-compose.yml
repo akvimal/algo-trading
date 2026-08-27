@@ -201,6 +201,10 @@ services:
         # (id -> name) - same direct-from-browser CORS pattern as above,
         # not execution's own /api proxy (this isn't execution's data).
         VITE_SIGNAL_GENERATION_PORT: ${SIGNAL_GENERATION_BACKEND_PORT}
+        # Login/signup (Phase 4, BYO Dhan/Delta credentials SaaS - see
+        # docs/architecture.md) - accounts-backend, same direct-from-
+        # browser CORS pattern as the two ports above.
+        VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
       - "${EXECUTION_FRONTEND_PORT}:80"
@@ -256,6 +260,10 @@ services:
         VITE_SIGNAL_PROCESSING_PORT: ${SIGNAL_PROCESSING_BACKEND_PORT}
         VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
         VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
+        # Login/signup (Phase 4, BYO Dhan/Delta credentials SaaS - see
+        # docs/architecture.md) - accounts-backend, same direct-from-
+        # browser CORS pattern as the ports above.
+        VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
       - "${MANUAL_TRADING_FRONTEND_PORT}:80"

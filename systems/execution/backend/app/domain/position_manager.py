@@ -297,18 +297,57 @@ def _resolve_signal_conflicts(open_positions: list, order: ResolvedOrder) -> tup
     return positions_to_close, None
 
 
-def load_settings(db: Session) -> ExecutionSettings:
-    row = db.get(db_models.Settings, 1)
+_DEFAULT_ACCOUNT_DEFAULTS: dict[str, dict] = {
+    "NSE": {"starting_balance": 200000, "square_off_time": time(15, 0)},
+    "MCX": {"starting_balance": 200000, "square_off_time": time(22, 0)},
+    "CRYPTO": {"starting_balance": 200000, "square_off_time": None},
+}
+
+
+def load_settings(db: Session, user_id: Optional[uuid.UUID] = None) -> ExecutionSettings:
+    """user_id=None (default) loads the legacy platform-wide row, read by
+    the automated Strategy-driven flow - always expected to already exist
+    (seeded in infra/postgres/init/02-execution.sql). A SaaS user's own
+    row (user_id set) is created lazily with sane defaults the first time
+    it's needed, same pattern load_account uses below."""
+    row = db.query(db_models.Settings).filter_by(user_id=user_id).one_or_none()
+    if row is None and user_id is not None:
+        row = db_models.Settings(user_id=user_id, timezone="Asia/Kolkata")
+        db.add(row)
+        db.commit()
     return ExecutionSettings(
         timezone=row.timezone, usdinr_rate=float(row.usdinr_rate) if row.usdinr_rate is not None else None
     )
 
 
-def load_account(db: Session, segment: str) -> Optional[db_models.Account]:
-    return db.get(db_models.Account, segment)
+def load_account(db: Session, user_id: Optional[uuid.UUID], segment: str) -> Optional[db_models.Account]:
+    """user_id=None loads the legacy platform-wide account for `segment`
+    (automated flow) - always expected to already exist, returns None if
+    somehow missing, same as before this function took a user_id at all.
+    A SaaS user's own account (user_id set) is created lazily, with the
+    same starting defaults the platform seed uses, the first time it's
+    needed - a new signup's first manual order shouldn't fail just
+    because they haven't visited a Settings page yet."""
+    row = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment).one_or_none()
+    if row is None and user_id is not None:
+        defaults = _DEFAULT_ACCOUNT_DEFAULTS.get(segment)
+        if defaults is None:
+            return None
+        row = db_models.Account(
+            user_id=user_id,
+            segment=segment,
+            starting_balance=defaults["starting_balance"],
+            current_balance=defaults["starting_balance"],
+            capital_per_trade=50000,
+            risk_per_trade_pct=1.0,
+            square_off_time=defaults["square_off_time"],
+        )
+        db.add(row)
+        db.commit()
+    return row
 
 
-def load_capital_account(db: Session, segment: str, strategy_id: Optional[str]):
+def load_capital_account(db: Session, user_id: Optional[uuid.UUID], segment: str, strategy_id: Optional[str]):
     """The account to size against and credit/debit realized P&L on - a
     strategy_id with a execution.strategy_accounts row of its own gets
     THAT (isolated capital pool), everything else (no strategy_id at all -
@@ -318,12 +357,15 @@ def load_capital_account(db: Session, segment: str, strategy_id: Optional[str]):
     square_off_time are NEVER read off what this returns - those two stay
     segment-only, callers that need them call load_account too. See
     infra/postgres/init/02-execution.sql's own comment on
-    execution.strategy_accounts."""
+    execution.strategy_accounts. Only ever called from the automated
+    Strategy-driven flow (open_position/open_option_group) - a manual
+    order has no strategy_id at all, so it calls load_account directly -
+    strategy_accounts itself carries no user_id at all for that reason."""
     if strategy_id is not None:
         strategy_account = db.get(db_models.StrategyAccount, uuid.UUID(str(strategy_id)))
         if strategy_account is not None:
             return strategy_account
-    return load_account(db, segment)
+    return load_account(db, user_id, segment)
 
 
 def _strategy_accounts_by_id(db: Session, positions: list) -> dict[str, db_models.StrategyAccount]:
@@ -353,20 +395,61 @@ def _resolve_capital_account(pos, accounts_by_segment: dict, strategy_accounts: 
         account = strategy_accounts.get(str(pos.strategy_id))
         if account is not None:
             return account
-    return accounts_by_segment.get(pos.segment)
+    return accounts_by_segment.get((pos.user_id, pos.segment))
 
 
-def _accounts_by_segment(db: Session, positions: list) -> dict[str, db_models.Account]:
-    """One query for the distinct segments among `positions` - mirrors
-    _quotes_by_exchange's per-distinct-key batching shape. Used by the
-    closing paths (square_off_due_positions, check_exits) so the pure
-    logic functions can credit/debit balances without querying the DB
-    themselves."""
-    segments = {pos.segment for pos in positions}
-    if not segments:
+def _accounts_by_segment(db: Session, positions: list) -> dict[tuple, db_models.Account]:
+    """One query (two, if both the platform-wide and per-user accounts are
+    both in play) for the distinct (user_id, segment) pairs among
+    `positions` - mirrors _quotes_by_exchange's per-distinct-key batching
+    shape. Used by the CROSS-TENANT closing paths (square_off_due_positions,
+    check_exits) which iterate every OPEN position regardless of owner, so
+    the pure logic functions can credit/debit balances without querying the
+    DB themselves. Keyed by (user_id, segment), not segment alone -
+    execution.accounts can now have several rows per segment (one per
+    user, plus the legacy NULL one), so segment alone is no longer unique.
+    Split into two queries (NULL user_id vs. real ones) since SQL tuple-IN
+    comparisons don't match NULL members."""
+    pairs = {(pos.user_id, pos.segment) for pos in positions}
+    if not pairs:
         return {}
-    rows = db.query(db_models.Account).filter(db_models.Account.segment.in_(segments)).all()
-    return {row.segment: row for row in rows}
+    null_segments = {segment for uid, segment in pairs if uid is None}
+    user_pairs = {(uid, segment) for uid, segment in pairs if uid is not None}
+
+    rows: list[db_models.Account] = []
+    if null_segments:
+        rows.extend(
+            db.query(db_models.Account)
+            .filter(db_models.Account.user_id.is_(None), db_models.Account.segment.in_(null_segments))
+            .all()
+        )
+    if user_pairs:
+        from sqlalchemy import tuple_
+
+        rows.extend(
+            db.query(db_models.Account).filter(tuple_(db_models.Account.user_id, db_models.Account.segment).in_(user_pairs)).all()
+        )
+    return {(row.user_id, row.segment): row for row in rows}
+
+
+def _usdinr_rate_by_user(db: Session, positions: list) -> dict:
+    """CROSS-TENANT batch counterpart to load_settings' own usdinr_rate -
+    each position in a scheduler-job batch may belong to a different user
+    with their own configured rate (or the automated flow's legacy
+    platform-wide one), unlike load_settings' single-user call shape.
+    Missing users fall back to None (same as load_settings returning a
+    freshly-created blank row would) rather than raising."""
+    user_ids = {pos.user_id for pos in positions}
+    if not user_ids:
+        return {}
+    real_ids = {uid for uid in user_ids if uid is not None}
+    rows: list[db_models.Settings] = []
+    if None in user_ids:
+        rows.extend(db.query(db_models.Settings).filter(db_models.Settings.user_id.is_(None)).all())
+    if real_ids:
+        rows.extend(db.query(db_models.Settings).filter(db_models.Settings.user_id.in_(real_ids)).all())
+    by_user = {row.user_id: (float(row.usdinr_rate) if row.usdinr_rate is not None else None) for row in rows}
+    return {uid: by_user.get(uid) for uid in user_ids}
 
 
 def _net_pnl_with_fees(pos, exit_price: float, raw_pnl: float) -> float:
@@ -421,9 +504,12 @@ def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] =
 
 def _reject(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str) -> db_models.Position:
     """quantity is left unset (NULL) - a rejected order was never sized,
-    it's not a real position."""
+    it's not a real position. user_id is always None here - only the
+    automated Strategy-driven flow calls this (see _reject_manual for the
+    manual/SaaS counterpart)."""
     logger.info("rejecting signal %s: %s", order.signal_id, reason)
     row = db_models.Position(
+        user_id=None,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         symbol=order.symbol,
@@ -442,6 +528,7 @@ def _reject(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str
 
 def _reject_manual(
     db: Session,
+    user_id: uuid.UUID,
     signal_id: uuid.UUID,
     symbol: str,
     exchange: str,
@@ -456,6 +543,7 @@ def _reject_manual(
     quantity is left unset (NULL), same "never sized" convention."""
     logger.info("rejecting manual order %s: %s", signal_id, reason)
     row = db_models.Position(
+        user_id=user_id,
         signal_id=signal_id,
         strategy_id=None,
         symbol=symbol,
@@ -488,10 +576,32 @@ def _reject_manual(
 # checklist'.
 
 
+def _ensure_user_checklist_items(db: Session, user_id: uuid.UUID) -> None:
+    """Clones the platform default template (user_id IS NULL rows) into
+    this user's own editable copies, the first time they have none of
+    their own yet - mirrors load_account's identical lazy-seed-on-first-
+    use pattern above. A no-op once the user has ANY row of their own
+    (even if they've since deleted some/all of the originally-cloned
+    items) - this only ever fires once per user, not "top up to match the
+    template every time"."""
+    has_own = db.query(db_models.ChecklistItem).filter_by(user_id=user_id).first() is not None
+    if has_own:
+        return
+    templates = db.query(db_models.ChecklistItem).filter_by(user_id=None).all()
+    for t in templates:
+        db.add(
+            db_models.ChecklistItem(
+                user_id=user_id, label=t.label, phase=t.phase, segments=t.segments, sort_order=t.sort_order, active=t.active
+            )
+        )
+    db.commit()
+
+
 def list_checklist_items(
-    db: Session, active_only: bool = False, phase: Optional[str] = None
+    db: Session, user_id: uuid.UUID, active_only: bool = False, phase: Optional[str] = None
 ) -> list[db_models.ChecklistItem]:
-    q = db.query(db_models.ChecklistItem)
+    _ensure_user_checklist_items(db, user_id)
+    q = db.query(db_models.ChecklistItem).filter_by(user_id=user_id)
     if active_only:
         q = q.filter_by(active=True)
     if phase is not None:
@@ -500,7 +610,7 @@ def list_checklist_items(
 
 
 def create_checklist_item(
-    db: Session, label: str, phase: str, segments: list[str], sort_order: Optional[int]
+    db: Session, user_id: uuid.UUID, label: str, phase: str, segments: list[str], sort_order: Optional[int]
 ) -> db_models.ChecklistItem:
     if sort_order is None:
         # Sort after every existing item IN THE SAME PHASE (active or
@@ -510,12 +620,12 @@ def create_checklist_item(
         # unrelated ordering.
         max_order = (
             db.query(db_models.ChecklistItem.sort_order)
-            .filter_by(phase=phase)
+            .filter_by(phase=phase, user_id=user_id)
             .order_by(db_models.ChecklistItem.sort_order.desc())
             .first()
         )
         sort_order = (max_order[0] + 10) if max_order else 10
-    row = db_models.ChecklistItem(label=label, phase=phase, segments=segments, sort_order=sort_order)
+    row = db_models.ChecklistItem(user_id=user_id, label=label, phase=phase, segments=segments, sort_order=sort_order)
     db.add(row)
     db.commit()
     return row
@@ -523,6 +633,7 @@ def create_checklist_item(
 
 def update_checklist_item(
     db: Session,
+    user_id: uuid.UUID,
     item_id: uuid.UUID,
     label: Optional[str],
     phase: Optional[str],
@@ -530,7 +641,7 @@ def update_checklist_item(
     sort_order: Optional[int],
     active: Optional[bool],
 ) -> Optional[db_models.ChecklistItem]:
-    row = db.get(db_models.ChecklistItem, item_id)
+    row = db.query(db_models.ChecklistItem).filter_by(id=item_id, user_id=user_id).one_or_none()
     if row is None:
         return None
     if label is not None:
@@ -547,12 +658,13 @@ def update_checklist_item(
     return row
 
 
-def delete_checklist_item(db: Session, item_id: uuid.UUID) -> bool:
+def delete_checklist_item(db: Session, user_id: uuid.UUID, item_id: uuid.UUID) -> bool:
     """Hard delete - past trades keep their own {label, checked} snapshot
     regardless (Position/OptionPositionGroup.plan_checklist), so removing
     the master row here never rewrites history. Returns False if the id
-    didn't exist (the route 404s), True on success."""
-    row = db.get(db_models.ChecklistItem, item_id)
+    didn't exist (or belongs to another user - the route 404s either way,
+    never revealing which), True on success."""
+    row = db.query(db_models.ChecklistItem).filter_by(id=item_id, user_id=user_id).one_or_none()
     if row is None:
         return False
     db.delete(row)
@@ -569,14 +681,16 @@ def _today_in_tz(timezone: str) -> date:
     return datetime.now(ZoneInfo(timezone)).date()
 
 
-def get_daily_checklist(db: Session, settings: ExecutionSettings, segment: str) -> Optional[db_models.DailyChecklistLog]:
+def get_daily_checklist(
+    db: Session, user_id: uuid.UUID, settings: ExecutionSettings, segment: str
+) -> Optional[db_models.DailyChecklistLog]:
     """None if nothing has been submitted yet today for `segment` - the
     gate is still active in that case (see find_missing_daily_checklist)."""
-    return db.get(db_models.DailyChecklistLog, (_today_in_tz(settings.timezone), segment))
+    return db.get(db_models.DailyChecklistLog, (user_id, _today_in_tz(settings.timezone), segment))
 
 
 def submit_daily_checklist(
-    db: Session, settings: ExecutionSettings, segment: str, answers: list[dict], notes: Optional[str]
+    db: Session, user_id: uuid.UUID, settings: ExecutionSettings, segment: str, answers: list[dict], notes: Optional[str]
 ) -> db_models.DailyChecklistLog:
     """PUT /daily-checklist - upserts today's (server-computed date,
     segment) row; answered once, editable the rest of that same day (not
@@ -584,9 +698,9 @@ def submit_daily_checklist(
     comment. `notes` is ONE observation for the whole submission, not
     per item."""
     today = _today_in_tz(settings.timezone)
-    row = db.get(db_models.DailyChecklistLog, (today, segment))
+    row = db.get(db_models.DailyChecklistLog, (user_id, today, segment))
     if row is None:
-        row = db_models.DailyChecklistLog(log_date=today, segment=segment, answers=answers, notes=notes)
+        row = db_models.DailyChecklistLog(user_id=user_id, log_date=today, segment=segment, answers=answers, notes=notes)
         db.add(row)
     else:
         row.answers = answers
@@ -596,44 +710,46 @@ def submit_daily_checklist(
     return row
 
 
-def _open_trading_session(db: Session, today, segment: str) -> Optional[db_models.TradingSession]:
-    """The currently-open (checked_out_at IS NULL) session row for
-    today's (log_date, segment), if any - there can be at most one, since
-    check_in_trading_session refuses to start a second one while this
-    exists."""
+def _open_trading_session(db: Session, user_id: uuid.UUID, today, segment: str) -> Optional[db_models.TradingSession]:
+    """The currently-open (checked_out_at IS NULL) session row for this
+    user's today's (log_date, segment), if any - there can be at most
+    one, since check_in_trading_session refuses to start a second one
+    while this exists."""
     return (
         db.query(db_models.TradingSession)
-        .filter_by(log_date=today, segment=segment, checked_out_at=None)
+        .filter_by(user_id=user_id, log_date=today, segment=segment, checked_out_at=None)
         .one_or_none()
     )
 
 
-def check_in_trading_session(db: Session, settings: ExecutionSettings, segment: str) -> db_models.TradingSession:
+def check_in_trading_session(db: Session, user_id: uuid.UUID, settings: ExecutionSettings, segment: str) -> db_models.TradingSession:
     """POST /trading-sessions/check-in - starts a NEW session row for
     today (server-computed date), unless one's already open for this
-    (log_date, segment), in which case that same open row is returned
-    unchanged - a real trading day can have several sessions (checked in,
-    broke for lunch, checked in again), but never two open at once. The
-    route layer disables the Check In button while one's open, this is
-    just the server-side mirror of that same gate."""
+    user's (log_date, segment), in which case that same open row is
+    returned unchanged - a real trading day can have several sessions
+    (checked in, broke for lunch, checked in again), but never two open
+    at once. The route layer disables the Check In button while one's
+    open, this is just the server-side mirror of that same gate."""
     today = _today_in_tz(settings.timezone)
-    open_row = _open_trading_session(db, today, segment)
+    open_row = _open_trading_session(db, user_id, today, segment)
     if open_row is not None:
         return open_row
-    row = db_models.TradingSession(log_date=today, segment=segment, checked_in_at=datetime.now(dt_timezone.utc))
+    row = db_models.TradingSession(user_id=user_id, log_date=today, segment=segment, checked_in_at=datetime.now(dt_timezone.utc))
     db.add(row)
     db.commit()
     return row
 
 
-def check_out_trading_session(db: Session, settings: ExecutionSettings, segment: str) -> Optional[db_models.TradingSession]:
+def check_out_trading_session(
+    db: Session, user_id: uuid.UUID, settings: ExecutionSettings, segment: str
+) -> Optional[db_models.TradingSession]:
     """POST /trading-sessions/check-out - closes today's currently-open
     session (sets its checked_out_at to now), or None if none is open
     (nothing to close - the route layer disables the Check Out button in
     that state, this mirrors it server-side rather than silently
     fabricating a row)."""
     today = _today_in_tz(settings.timezone)
-    row = _open_trading_session(db, today, segment)
+    row = _open_trading_session(db, user_id, today, segment)
     if row is None:
         return None
     row.checked_out_at = datetime.now(dt_timezone.utc)
@@ -641,19 +757,20 @@ def check_out_trading_session(db: Session, settings: ExecutionSettings, segment:
     return row
 
 
-def list_trading_sessions(db: Session, segment: Optional[str] = None) -> list[db_models.TradingSession]:
-    """GET /trading-sessions - the whole table is small (every check-in/
-    check-out instance ever recorded), so this returns everything rather
-    than needing a date-range param - ManualTab.tsx filters to today
-    client-side for its own session bar, ManualStatsPage.tsx keys the
-    rest by day for its own by-day/per-trade-day display."""
-    q = db.query(db_models.TradingSession)
+def list_trading_sessions(db: Session, user_id: uuid.UUID, segment: Optional[str] = None) -> list[db_models.TradingSession]:
+    """GET /trading-sessions - the whole table (for this user) is small
+    (every check-in/check-out instance they've ever recorded), so this
+    returns everything rather than needing a date-range param -
+    ManualTab.tsx filters to today client-side for its own session bar,
+    ManualStatsPage.tsx keys the rest by day for its own by-day/
+    per-trade-day display."""
+    q = db.query(db_models.TradingSession).filter_by(user_id=user_id)
     if segment:
         q = q.filter_by(segment=segment)
     return q.order_by(db_models.TradingSession.checked_in_at.desc()).all()
 
 
-def find_missing_daily_checklist(db: Session, settings: ExecutionSettings, segment: str) -> Optional[str]:
+def find_missing_daily_checklist(db: Session, user_id: uuid.UUID, settings: ExecutionSettings, segment: str) -> Optional[str]:
     """None if `segment` has no active 'day'-phase items scoped to it (or
     'unscoped', i.e. every-segment) at all, or today's checklist has
     already been submitted for it; otherwise a reject reason (route layer
@@ -661,16 +778,16 @@ def find_missing_daily_checklist(db: Session, settings: ExecutionSettings, segme
     open_manual/open_manual_option, same "not a trade attempt, no row
     persisted" reasoning as find_pending_manual_review."""
     active_day_items = [
-        i for i in list_checklist_items(db, active_only=True, phase="day") if not i.segments or segment in i.segments
+        i for i in list_checklist_items(db, user_id, active_only=True, phase="day") if not i.segments or segment in i.segments
     ]
     if not active_day_items:
         return None
-    if get_daily_checklist(db, settings, segment) is None:
+    if get_daily_checklist(db, user_id, settings, segment) is None:
         return f"complete today's day checklist for {segment} first"
     return None
 
 
-def validate_plan_checklist(db: Session, answers: list[ChecklistAnswer], segment: str) -> Optional[str]:
+def validate_plan_checklist(db: Session, user_id: uuid.UUID, answers: list[ChecklistAnswer], segment: str) -> Optional[str]:
     """None if `answers` is a valid, fully-checked submission against the
     CURRENTLY active 'plan'-phase checklist items SCOPED TO `segment`
     (empty `segments` on an item means every segment - e.g. OI change is
@@ -684,7 +801,7 @@ def validate_plan_checklist(db: Session, answers: list[ChecklistAnswer], segment
     here entirely - see ReviewSubmit.checklist/DailyChecklistSubmit's own
     comments for why those aren't validated the same way."""
     active_items = [
-        i for i in list_checklist_items(db, active_only=True, phase="plan") if not i.segments or segment in i.segments
+        i for i in list_checklist_items(db, user_id, active_only=True, phase="plan") if not i.segments or segment in i.segments
     ]
     if len(answers) != len(active_items):
         return "trade plan checklist is out of date - refresh and try again"
@@ -693,22 +810,22 @@ def validate_plan_checklist(db: Session, answers: list[ChecklistAnswer], segment
     return None
 
 
-def find_pending_manual_review(db: Session) -> Optional[dict]:
+def find_pending_manual_review(db: Session, user_id: uuid.UUID) -> Optional[dict]:
     """The earliest-closed manual (strategy_id IS NULL) position OR option
-    group that's CLOSED but still has reviewed_at IS NULL, across BOTH
-    tables - or None if there's nothing pending. `pending_count` is the
-    TOTAL across both tables, not just this one - the frontend's own
-    reminder banner shows only that count now (not this trade's own
-    symbol/action/pnl - see ManualTab.tsx, changed 2026-08-26 at the
-    user's explicit request), this function still needs to identify the
-    earliest one for its review icon to point at once a card is opened.
-    This gate no longer blocks POST /positions/manual or POST
-    /option-groups/manual at all (see those routes' own docstrings for
-    why - removed the same day) - it's purely a reminder now."""
+    group belonging to THIS user that's CLOSED but still has reviewed_at
+    IS NULL, across BOTH tables - or None if there's nothing pending.
+    `pending_count` is the TOTAL across both tables, not just this one -
+    the frontend's own reminder banner shows only that count now (not
+    this trade's own symbol/action/pnl - see ManualTab.tsx, changed
+    2026-08-26 at the user's explicit request), this function still needs
+    to identify the earliest one for its review icon to point at once a
+    card is opened. This gate no longer blocks POST /positions/manual or
+    POST /option-groups/manual at all (see those routes' own docstrings
+    for why - removed the same day) - it's purely a reminder now."""
     pending: list[dict] = []
     pos = (
         db.query(db_models.Position)
-        .filter_by(strategy_id=None, status="CLOSED", reviewed_at=None, option_group_id=None)
+        .filter_by(user_id=user_id, strategy_id=None, status="CLOSED", reviewed_at=None, option_group_id=None)
         .order_by(db_models.Position.exit_time)
         .first()
     )
@@ -726,7 +843,7 @@ def find_pending_manual_review(db: Session) -> Optional[dict]:
         )
     group = (
         db.query(db_models.OptionPositionGroup)
-        .filter_by(strategy_id=None, status="CLOSED", reviewed_at=None)
+        .filter_by(user_id=user_id, strategy_id=None, status="CLOSED", reviewed_at=None)
         .order_by(db_models.OptionPositionGroup.exit_time)
         .first()
     )
@@ -748,14 +865,15 @@ def find_pending_manual_review(db: Session) -> Optional[dict]:
     earliest = pending[0]
     earliest["exit_time"] = earliest["exit_time"].isoformat() if earliest["exit_time"] else None
     earliest["pending_count"] = (
-        db.query(db_models.Position).filter_by(strategy_id=None, status="CLOSED", reviewed_at=None, option_group_id=None).count()
-        + db.query(db_models.OptionPositionGroup).filter_by(strategy_id=None, status="CLOSED", reviewed_at=None).count()
+        db.query(db_models.Position).filter_by(user_id=user_id, strategy_id=None, status="CLOSED", reviewed_at=None, option_group_id=None).count()
+        + db.query(db_models.OptionPositionGroup).filter_by(user_id=user_id, strategy_id=None, status="CLOSED", reviewed_at=None).count()
     )
     return earliest
 
 
 def submit_position_review(
     db: Session,
+    user_id: uuid.UUID,
     position_id: uuid.UUID,
     violation: bool,
     notes: Optional[str],
@@ -764,12 +882,12 @@ def submit_position_review(
 ) -> tuple[Optional[db_models.Position], Optional[str]]:
     """PUT /positions/{id}/review - the Complete step. Returns (row, reject_
     reason); reject_reason is set (row left untouched) if the position
-    isn't a CLOSED manual one, is already reviewed, or is a loss that
-    hasn't been accepted yet. `review_checklist` is the 'review'-phase
-    {label, checked} snapshot (see ReviewSubmit.checklist's own comment) -
-    stored as-is, never validated for completeness."""
+    isn't a CLOSED manual one OWNED BY user_id, is already reviewed, or is
+    a loss that hasn't been accepted yet. `review_checklist` is the
+    'review'-phase {label, checked} snapshot (see ReviewSubmit.checklist's
+    own comment) - stored as-is, never validated for completeness."""
     row = db.get(db_models.Position, position_id)
-    if row is None:
+    if row is None or row.user_id != user_id:
         return None, "position not found"
     if row.strategy_id is not None:
         return None, "only manually-opened positions have a discipline review"
@@ -932,7 +1050,12 @@ def open_position(
         db.commit()
         return row
 
-    account = load_account(db, order.segment)
+    # user_id=None throughout this function - the automated Strategy-
+    # driven flow has no per-user concept at all (signal-generation isn't
+    # part of the manual-trading SaaS), so it always reads/writes the
+    # legacy platform-wide account/settings rows. See load_account's own
+    # comment and docs/architecture.md's "Manual Trading SaaS" section.
+    account = load_account(db, None, order.segment)
     if account is None:
         row = _reject(db, order, signal_id, f"no paper-trading account configured for segment {order.segment}")
         db.commit()
@@ -942,7 +1065,7 @@ def open_position(
     # one (execution.strategy_accounts), else the same shared segment
     # `account` above - leverage/square_off_time always stay segment-only
     # regardless (see load_capital_account's own docstring).
-    capital_account = load_capital_account(db, order.segment, order.strategy_id)
+    capital_account = load_capital_account(db, None, order.segment, order.strategy_id)
 
     # square_off_time is the SEGMENT's own configured cutoff now
     # (execution.accounts.square_off_time), not a per-Strategy value -
@@ -956,7 +1079,7 @@ def open_position(
         db.commit()
         return row
 
-    open_positions = db.query(db_models.Position).filter_by(symbol=order.symbol, status="OPEN").all()
+    open_positions = db.query(db_models.Position).filter_by(user_id=None, symbol=order.symbol, status="OPEN").all()
     positions_to_close, reject_reason = _resolve_signal_conflicts(open_positions, order)
     if reject_reason is not None:
         row = _reject(db, order, signal_id, reject_reason)
@@ -1097,6 +1220,7 @@ def open_position(
     )
 
     row = db_models.Position(
+        user_id=None,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         symbol=order.symbol,
@@ -1128,6 +1252,7 @@ def open_position(
 
 
 def open_manual_position(
+    user_id: uuid.UUID,
     segment: str,
     symbol: str,
     action: str,
@@ -1207,7 +1332,7 @@ def open_manual_position(
 
     if not is_supported("intraday", instrument_type):
         row = _reject_manual(
-            db, signal_id, symbol, segment, segment, action, instrument_type, price,
+            db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
             f"unsupported instrument_type ({instrument_type}) - only spot/future is handled here",
         )
         db.commit()
@@ -1218,7 +1343,7 @@ def open_manual_position(
         resolved = resolve_underlying(segment, symbol)
         if resolved is None:
             row = _reject_manual(
-                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
                 f"could not resolve underlying '{symbol}' on {segment} for futures",
             )
             db.commit()
@@ -1244,14 +1369,14 @@ def open_manual_position(
             get_candle_history,
         )
         if sl_reject_reason is not None:
-            row = _reject_manual(db, signal_id, symbol, segment, segment, action, instrument_type, price, sl_reject_reason)
+            row = _reject_manual(db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price, sl_reject_reason)
             db.commit()
             return row
 
-    account = load_account(db, segment)
+    account = load_account(db, user_id, segment)
     if account is None:
         row = _reject_manual(
-            db, signal_id, symbol, segment, segment, action, instrument_type, price,
+            db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
             f"no paper-trading account configured for segment {segment}",
         )
         db.commit()
@@ -1260,7 +1385,7 @@ def open_manual_position(
     now = datetime.now(dt_timezone.utc)
     if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
         row = _reject_manual(
-            db, signal_id, symbol, segment, segment, action, instrument_type, price,
+            db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
             f"received outside intraday window (square-off is {account.square_off_time})",
         )
         db.commit()
@@ -1272,10 +1397,10 @@ def open_manual_position(
     # duplicate_signal_policy. counter_signal_policy stays close_and_flip,
     # same as everywhere else.
     conflict_check = SimpleNamespace(action=action, duplicate_signal_policy="add_position", counter_signal_policy="close_and_flip")
-    open_positions = db.query(db_models.Position).filter_by(symbol=symbol, status="OPEN").all()
+    open_positions = db.query(db_models.Position).filter_by(user_id=user_id, symbol=symbol, status="OPEN").all()
     positions_to_close, reject_reason = _resolve_signal_conflicts(open_positions, conflict_check)
     if reject_reason is not None:
-        row = _reject_manual(db, signal_id, symbol, segment, segment, action, instrument_type, price, reject_reason)
+        row = _reject_manual(db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price, reject_reason)
         db.commit()
         return row
 
@@ -1291,7 +1416,7 @@ def open_manual_position(
     if segment == "CRYPTO":
         if settings.usdinr_rate is None:
             row = _reject_manual(
-                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
                 "no USDINR rate configured - set one in Settings to size a CRYPTO position",
             )
             db.commit()
@@ -1311,7 +1436,7 @@ def open_manual_position(
         required_cost = price * lot_size * quantity
         if effective_capital < required_cost:
             row = _reject_manual(
-                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
                 f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
                 f"need at least {required_cost} for {quantity} lot(s))",
             )
@@ -1324,7 +1449,7 @@ def open_manual_position(
         # is a real fraction (e.g. BTCUSD=0.001).
         if effective_capital < price * lot_size:
             row = _reject_manual(
-                db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
                 f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
                 f"need at least {price * lot_size} for 1 lot)",
             )
@@ -1334,7 +1459,7 @@ def open_manual_position(
             stop_distance = abs(price - stop_loss_price)
             if stop_distance <= 0:
                 row = _reject_manual(
-                    db, signal_id, symbol, segment, segment, action, instrument_type, price,
+                    db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
                     f"stop-loss price ({stop_loss_price}) equals entry price ({price}) - can't size by risk",
                 )
                 db.commit()
@@ -1350,6 +1475,7 @@ def open_manual_position(
     )
 
     row = db_models.Position(
+        user_id=user_id,
         signal_id=signal_id,
         strategy_id=None,
         symbol=symbol,
@@ -1381,7 +1507,9 @@ def open_manual_position(
     return row
 
 
-def update_square_off_time(db: Session, position_id: uuid.UUID, square_off_time: Optional[time]) -> Optional[db_models.Position]:
+def update_square_off_time(
+    db: Session, user_id: uuid.UUID, position_id: uuid.UUID, square_off_time: Optional[time]
+) -> Optional[db_models.Position]:
     """PUT /positions/{id}/square-off-time - edits an already-open
     position's own square_off_time (see ManualPositionCreate.
     square_off_time's own comment). Deliberately as small as
@@ -1389,7 +1517,7 @@ def update_square_off_time(db: Session, position_id: uuid.UUID, square_off_time:
     write, no recompute needed (unlike update_stop_loss, which may
     re-derive a price from a method)."""
     row = db.get(db_models.Position, position_id)
-    if row is None or row.status != "OPEN":
+    if row is None or row.user_id != user_id or row.status != "OPEN":
         return None
     row.square_off_time = square_off_time
     db.commit()
@@ -1398,6 +1526,7 @@ def update_square_off_time(db: Session, position_id: uuid.UUID, square_off_time:
 
 def update_stop_loss(
     db: Session,
+    user_id: uuid.UUID,
     position_id: uuid.UUID,
     stop_loss_price: Optional[float],
     stop_loss_method: Optional[str] = None,
@@ -1431,7 +1560,7 @@ def update_stop_loss(
     check_exits tick once trailing_stop_enabled is on, same as a freshly-
     opened position's own indicator stop would."""
     row = db.get(db_models.Position, position_id)
-    if row is None:
+    if row is None or row.user_id != user_id:
         return None, None
 
     if stop_loss_method is None:
@@ -1534,17 +1663,20 @@ def record_position_pnl_snapshots(db: Session, get_ltp_batch: GetLtpBatch) -> di
     return {"recorded": len(live), "checked": len(open_positions)}
 
 
-def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
-    """Closes every OPEN position at CMP. One quote fetch per distinct
-    exchange among the open positions. A position whose quote fetch fails
-    is left OPEN (not rejected - it's a real paper position, just not
+def square_off_all_open(db: Session, user_id: uuid.UUID, get_ltp_batch: GetLtpBatch) -> dict:
+    """Closes every OPEN position BELONGING TO user_id at CMP - only ever
+    reachable via the authenticated POST /positions/square-off route, so
+    always scoped to the caller's own positions (never the automated
+    flow's, whose positions always have user_id=None). One quote fetch per
+    distinct exchange among them. A position whose quote fetch fails is
+    left OPEN (not rejected - it's a real paper position, just not
     closeable right now) so the next scheduled run or a manual retry can
     close it."""
-    open_positions = db.query(db_models.Position).filter_by(status="OPEN").all()
+    open_positions = db.query(db_models.Position).filter_by(user_id=user_id, status="OPEN").all()
     quotes = _quotes_by_exchange(open_positions, get_ltp_batch)
     accounts = _accounts_by_segment(db, open_positions)
     strategy_accounts = _strategy_accounts_by_id(db, open_positions)
-    usdinr_rate = load_settings(db).usdinr_rate
+    usdinr_rate = load_settings(db, user_id).usdinr_rate
     closed = 0
     failed = 0
 
@@ -1569,7 +1701,7 @@ def square_off_all_open(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
 
 
 def square_off_position(
-    db: Session, position_id: uuid.UUID, get_ltp_batch: GetLtpBatch, quantity: Optional[float] = None
+    db: Session, user_id: uuid.UUID, position_id: uuid.UUID, get_ltp_batch: GetLtpBatch, quantity: Optional[float] = None
 ) -> dict:
     """Closes exactly one OPEN position by id - the per-row 'Square off'
     button in the frontend's Positions grid, as opposed to
@@ -1587,7 +1719,7 @@ def square_off_position(
     the full held quantity behaves exactly as before this parameter
     existed."""
     pos = db.get(db_models.Position, position_id)
-    if pos is None:
+    if pos is None or pos.user_id != user_id:
         return {"status": "not_found"}
     if pos.status != "OPEN":
         return {"status": "not_open", "position_status": pos.status}
@@ -1602,8 +1734,8 @@ def square_off_position(
     if cmp_price is None:
         return {"status": "quote_unavailable"}
 
-    account = load_capital_account(db, pos.segment, pos.strategy_id)
-    usdinr_rate = load_settings(db).usdinr_rate
+    account = load_capital_account(db, user_id, pos.segment, pos.strategy_id)
+    usdinr_rate = load_settings(db, user_id).usdinr_rate
     raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, close_quantity)
 
     if close_quantity == held_quantity:
@@ -1638,6 +1770,7 @@ def square_off_position(
         pos.margin_posted = float(pos.margin_posted) * (1 - close_fraction)
     pos.quantity = remaining_quantity
     closed_row = db_models.Position(
+        user_id=pos.user_id,
         signal_id=uuid.uuid4(),
         strategy_id=pos.strategy_id,
         symbol=pos.symbol,
@@ -1676,7 +1809,7 @@ def _evaluate_square_off_due(
     now_local: time,
     accounts_by_segment: dict,
     strategy_accounts: Optional[dict] = None,
-    usdinr_rate: Optional[float] = None,
+    usdinr_rate_by_user: Optional[dict] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - closes positions in place whose
     own square_off_time has already passed the given local time. Mirrors
@@ -1685,12 +1818,18 @@ def _evaluate_square_off_due(
     real Session). strategy_accounts is optional (defaults to {}, i.e.
     every position falls back to its segment account) so every existing
     caller/test that predates execution.strategy_accounts keeps working
-    unchanged - see _resolve_capital_account."""
+    unchanged - see _resolve_capital_account. usdinr_rate_by_user is
+    optional too (defaults to {}, i.e. no CRYPTO conversion for anyone) -
+    keyed by pos.user_id, since a cross-tenant batch can mix positions
+    from several users, each with their own configured rate (or the
+    automated flow's legacy platform-wide one) - unlike a single-user
+    call, which just passes one float."""
     due = [p for p in positions if p.square_off_time is not None and now_local >= p.square_off_time]
     if not due:
         return {"closed": 0, "failed": 0, "checked": 0}
 
     quotes = _quotes_by_exchange(due, get_ltp_batch)
+    rates = usdinr_rate_by_user or {}
     closed = 0
     failed = 0
 
@@ -1705,7 +1844,7 @@ def _evaluate_square_off_due(
         raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
         _apply_realized_pnl(
             pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl),
-            usdinr_rate,
+            rates.get(pos.user_id),
         )
         pos.status = "CLOSED"
         pos.exit_reason = "square_off"
@@ -1715,19 +1854,28 @@ def _evaluate_square_off_due(
 
 
 def square_off_due_positions(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
-    """Closes each OPEN position once local time passes ITS OWN stored
-    square_off_time - the periodic replacement for a single daily cron
-    trigger, since square_off_time can now differ per position (a
-    Strategy override, or whatever the platform default was at open
-    time). This is what the scheduler's periodic job actually calls;
-    square_off_all_open (unconditional, ignores each position's own time)
-    remains for the manual 'square off everything now' trigger."""
+    """Closes each OPEN position (across every user AND the automated
+    flow - a background job, not a per-request one) once local time
+    passes ITS OWN stored square_off_time - the periodic replacement for
+    a single daily cron trigger, since square_off_time can now differ per
+    position (a Strategy override, or whatever the platform default was
+    at open time). This is what the scheduler's periodic job actually
+    calls; square_off_all_open (unconditional, ignores each position's
+    own time, and scoped to one authenticated user) remains for the
+    manual 'square off everything now' button.
+
+    now_local is computed from the platform's own legacy timezone setting
+    for every position regardless of owner - a deliberate simplification
+    (every segment trades on IST-based hours regardless of who's
+    watching), unlike usdinr_rate below which genuinely can differ per
+    user and does get resolved per-position."""
     exec_settings = load_settings(db)
     now_local = datetime.now(dt_timezone.utc).astimezone(ZoneInfo(exec_settings.timezone)).time()
     open_positions = db.query(db_models.Position).filter_by(status="OPEN").all()
     accounts = _accounts_by_segment(db, open_positions)
     strategy_accounts = _strategy_accounts_by_id(db, open_positions)
-    result = _evaluate_square_off_due(open_positions, get_ltp_batch, now_local, accounts, strategy_accounts, exec_settings.usdinr_rate)
+    usdinr_rates = _usdinr_rate_by_user(db, open_positions)
+    result = _evaluate_square_off_due(open_positions, get_ltp_batch, now_local, accounts, strategy_accounts, usdinr_rates)
     db.commit()
     return result
 
@@ -1739,7 +1887,7 @@ def _evaluate_exits(
     accounts_by_segment: dict,
     get_candle_history: Optional[GetCandleHistory] = None,
     strategy_accounts: Optional[dict] = None,
-    usdinr_rate: Optional[float] = None,
+    usdinr_rate_by_user: Optional[dict] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mutates the given position
     objects in place (closing them, or trailing stop_loss_price) and
@@ -1781,6 +1929,7 @@ def _evaluate_exits(
     # interval-length TTL cache further dedupes across separate runs.
     candle_cache: dict[tuple[str, str, str], Optional[dict]] = {}
     candle_history_cache: dict[tuple[str, str, str], list[dict]] = {}
+    rates = usdinr_rate_by_user or {}
 
     for pos in positions:
         cmp_price = quotes.get((pos.exchange, pos.symbol))
@@ -1811,7 +1960,7 @@ def _evaluate_exits(
             pos.close_fee = liquidation_fee
             _apply_realized_pnl(
                 pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), -float(pos.margin_posted) - liquidation_fee,
-                usdinr_rate,
+                rates.get(pos.user_id),
             )
             pos.status = "CLOSED"
             pos.exit_reason = "liquidation"
@@ -1833,7 +1982,7 @@ def _evaluate_exits(
             raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
             _apply_realized_pnl(
                 pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_fees(pos, cmp_price, raw_pnl),
-                usdinr_rate,
+                rates.get(pos.user_id),
             )
             pos.status = "CLOSED"
             if sl_hit:
@@ -1923,7 +2072,7 @@ def check_exits(
     )
     accounts = _accounts_by_segment(db, candidates)
     strategy_accounts = _strategy_accounts_by_id(db, candidates)
-    usdinr_rate = load_settings(db).usdinr_rate
-    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts, usdinr_rate)
+    usdinr_rates = _usdinr_rate_by_user(db, candidates)
+    result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts, usdinr_rates)
     db.commit()
     return result

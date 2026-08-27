@@ -57,6 +57,7 @@ from app.domain.position_manager import (
     _resolve_capital_account,
     _resolve_signal_conflicts,
     _strategy_accounts_by_id,
+    _usdinr_rate_by_user,
     _STOP_LOSS_COMPUTE_FUNCS,
     _supertrend_stop_value,
     compute_pnl,
@@ -141,9 +142,12 @@ def _close_delta_option_fee(segment: str, spot_price: Optional[float], quantity:
 def _reject_group(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str) -> db_models.OptionPositionGroup:
     """No leg Position rows are created for a rejected group - mirrors
     position_manager._reject's 'never really opened' philosophy, just
-    applied at the group level."""
+    applied at the group level. user_id is always None here - only the
+    automated Strategy-driven flow calls this (see _reject_manual_group
+    for the manual/SaaS counterpart)."""
     logger.info("rejecting option signal %s: %s", order.signal_id, reason)
     row = db_models.OptionPositionGroup(
+        user_id=None,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         underlying_symbol=order.symbol,
@@ -300,7 +304,10 @@ def open_option_group(
         spot_stop_loss_indicator_params = order.stop_loss_indicator_params
         spot_stop_loss_interval = order.stop_loss_interval
 
-    account = load_account(db, order.segment)
+    # user_id=None throughout - the automated Strategy-driven flow has no
+    # per-user concept, same reasoning as position_manager.open_position's
+    # identical comment.
+    account = load_account(db, None, order.segment)
     if account is None:
         row = _reject_group(db, order, signal_id, f"no paper-trading account configured for segment {order.segment}")
         db.commit()
@@ -309,7 +316,7 @@ def open_option_group(
     # Sizing/balance uses the strategy's OWN dedicated account if it has
     # one, else the same shared segment `account` above - leverage/
     # square_off_time always stay segment-only (see load_capital_account).
-    capital_account = load_capital_account(db, order.segment, order.strategy_id)
+    capital_account = load_capital_account(db, None, order.segment, order.strategy_id)
 
     # square_off_time is the SEGMENT's own configured cutoff now
     # (execution.accounts.square_off_time), not a per-Strategy value -
@@ -322,7 +329,9 @@ def open_option_group(
         db.commit()
         return row
 
-    open_groups = db.query(db_models.OptionPositionGroup).filter_by(underlying_symbol=order.symbol, status="OPEN").all()
+    open_groups = (
+        db.query(db_models.OptionPositionGroup).filter_by(user_id=None, underlying_symbol=order.symbol, status="OPEN").all()
+    )
     groups_to_close, reject_reason = _resolve_signal_conflicts(open_groups, order)
     if reject_reason is not None:
         row = _reject_group(db, order, signal_id, reject_reason)
@@ -486,6 +495,7 @@ def open_option_group(
     group_id = uuid.uuid4()
     group = db_models.OptionPositionGroup(
         id=group_id,
+        user_id=None,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         underlying_symbol=order.symbol,
@@ -519,6 +529,7 @@ def open_option_group(
     for leg_dict, symbol, premium, leg_sl, leg_target in legs_to_write:
         db.add(
             db_models.Position(
+                user_id=None,
                 signal_id=signal_id,
                 strategy_id=uuid.UUID(order.strategy_id),
                 symbol=symbol,
@@ -545,13 +556,14 @@ def open_option_group(
 
 
 def _reject_manual_group(
-    db: Session, signal_id: uuid.UUID, symbol: str, segment: str, action: str, strategy_type: str, reason: str
+    db: Session, user_id: uuid.UUID, signal_id: uuid.UUID, symbol: str, segment: str, action: str, strategy_type: str, reason: str
 ) -> db_models.OptionPositionGroup:
     """Manual-option counterpart to _reject_group - no leg Position rows,
     strategy_id=None (never a real Strategy for this path at all, unlike
     _reject_group's signal-driven ResolvedOrder.strategy_id)."""
     logger.info("rejecting manual option order %s: %s", signal_id, reason)
     row = db_models.OptionPositionGroup(
+        user_id=user_id,
         signal_id=signal_id,
         strategy_id=None,
         underlying_symbol=symbol,
@@ -568,6 +580,7 @@ def _reject_manual_group(
 
 
 def open_manual_option_group(
+    user_id: uuid.UUID,
     segment: str,
     symbol: str,
     action: str,
@@ -621,7 +634,7 @@ def open_manual_option_group(
     resolved = resolve_underlying(segment, symbol)
     if resolved is None:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            db, user_id, signal_id, symbol, segment, action, strategy_type_for_rejection,
             f"could not resolve underlying '{symbol}' on {segment} for options",
         )
         db.commit()
@@ -631,7 +644,7 @@ def open_manual_option_group(
     expiries = get_expiry_list(chart_exchange, chart_symbol)
     if not expiries:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            db, user_id, signal_id, symbol, segment, action, strategy_type_for_rejection,
             f"no currently-tradeable expiry available for '{chart_symbol}'",
         )
         db.commit()
@@ -640,7 +653,7 @@ def open_manual_option_group(
         resolved_expiry = sorted(expiries)[0]  # nearest - see docstring above
     elif expiry not in expiries:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            db, user_id, signal_id, symbol, segment, action, strategy_type_for_rejection,
             f"'{expiry}' is not a currently-tradeable expiry for '{chart_symbol}' - available: {expiries}",
         )
         db.commit()
@@ -651,7 +664,7 @@ def open_manual_option_group(
     chain = get_option_chain(chart_exchange, chart_symbol, resolved_expiry)
     if chain is None:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            db, user_id, signal_id, symbol, segment, action, strategy_type_for_rejection,
             f"could not resolve option chain for '{chart_symbol}' ({expiry})",
         )
         db.commit()
@@ -669,7 +682,7 @@ def open_manual_option_group(
             strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness)
     except ValueError as exc:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type_for_rejection,
+            db, user_id, signal_id, symbol, segment, action, strategy_type_for_rejection,
             f"could not build an option strategy for '{symbol}': {exc}",
         )
         db.commit()
@@ -680,10 +693,10 @@ def open_manual_option_group(
     long_leg_dict = legs[0]
     short_leg_dict = legs[1] if len(legs) == 2 else None
 
-    account = load_account(db, segment)
+    account = load_account(db, user_id, segment)
     if account is None:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type, f"no paper-trading account configured for segment {segment}"
+            db, user_id, signal_id, symbol, segment, action, strategy_type, f"no paper-trading account configured for segment {segment}"
         )
         db.commit()
         return row
@@ -691,7 +704,7 @@ def open_manual_option_group(
     now = datetime.now(dt_timezone.utc)
     if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type,
+            db, user_id, signal_id, symbol, segment, action, strategy_type,
             f"received outside intraday window (square-off is {account.square_off_time})",
         )
         db.commit()
@@ -701,10 +714,10 @@ def open_manual_option_group(
     # open_manual_position (spot/future) - no Strategy exists here to carry
     # duplicate_signal_policy/counter_signal_policy.
     conflict_check = SimpleNamespace(action=action, duplicate_signal_policy="add_position", counter_signal_policy="close_and_flip")
-    open_groups = db.query(db_models.OptionPositionGroup).filter_by(underlying_symbol=symbol, status="OPEN").all()
+    open_groups = db.query(db_models.OptionPositionGroup).filter_by(user_id=user_id, underlying_symbol=symbol, status="OPEN").all()
     groups_to_close, reject_reason = _resolve_signal_conflicts(open_groups, conflict_check)
     if reject_reason is not None:
-        row = _reject_manual_group(db, signal_id, symbol, segment, action, strategy_type, reject_reason)
+        row = _reject_manual_group(db, user_id, signal_id, symbol, segment, action, strategy_type, reject_reason)
         db.commit()
         return row
 
@@ -712,7 +725,7 @@ def open_manual_option_group(
     short_symbol = resolve_symbol_by_security_id(segment, short_leg_dict["security_id"]) if short_leg_dict else None
     if long_symbol is None or (short_leg_dict and short_symbol is None):
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type,
+            db, user_id, signal_id, symbol, segment, action, strategy_type,
             "could not resolve one or both option legs' security_id to a trading symbol",
         )
         db.commit()
@@ -727,7 +740,7 @@ def open_manual_option_group(
     entry_spot_price = quotes.get(symbol)
     if long_premium is None or (short_symbol and short_premium is None):
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type, "could not fetch a live quote for one or both option legs"
+            db, user_id, signal_id, symbol, segment, action, strategy_type, "could not fetch a live quote for one or both option legs"
         )
         db.commit()
         return row
@@ -735,7 +748,7 @@ def open_manual_option_group(
     net_debit = long_premium - short_premium
     if net_debit <= 0:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type,
+            db, user_id, signal_id, symbol, segment, action, strategy_type,
             f"combined net debit ({net_debit}) is not positive - can't size or monitor this spread",
         )
         db.commit()
@@ -744,7 +757,7 @@ def open_manual_option_group(
     lot_size = get_lot_size(segment, long_symbol)
     if lot_size is None:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type, f"could not determine lot size for {long_symbol} on {segment}"
+            db, user_id, signal_id, symbol, segment, action, strategy_type, f"could not determine lot size for {long_symbol} on {segment}"
         )
         db.commit()
         return row
@@ -762,7 +775,7 @@ def open_manual_option_group(
             )
             if not closed:
                 row = _reject_manual_group(
-                    db, signal_id, symbol, segment, action, strategy_type,
+                    db, user_id, signal_id, symbol, segment, action, strategy_type,
                     f"could not close conflicting option group {grp.id} (quote unavailable) - "
                     "counter_signal_policy='close_and_flip' requires closing it first",
                 )
@@ -774,7 +787,7 @@ def open_manual_option_group(
     if segment == "CRYPTO":
         if settings.usdinr_rate is None:
             row = _reject_manual_group(
-                db, signal_id, symbol, segment, action, strategy_type,
+                db, user_id, signal_id, symbol, segment, action, strategy_type,
                 "no USDINR rate configured - set one in Settings to size a CRYPTO option position",
             )
             db.commit()
@@ -784,7 +797,7 @@ def open_manual_option_group(
     required_lots = option_fixed_lots if option_fixed_lots is not None else 1
     if effective_capital < net_debit * lot_size * required_lots:
         row = _reject_manual_group(
-            db, signal_id, symbol, segment, action, strategy_type,
+            db, user_id, signal_id, symbol, segment, action, strategy_type,
             f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
             f"need at least {net_debit * lot_size * required_lots} for {required_lots} lot(s))",
         )
@@ -808,6 +821,7 @@ def open_manual_option_group(
     group_id = uuid.uuid4()
     group = db_models.OptionPositionGroup(
         id=group_id,
+        user_id=user_id,
         signal_id=signal_id,
         strategy_id=None,
         underlying_symbol=symbol,
@@ -834,6 +848,7 @@ def open_manual_option_group(
     for leg_dict, leg_symbol, premium in legs_to_write:
         db.add(
             db_models.Position(
+                user_id=user_id,
                 signal_id=signal_id,
                 strategy_id=None,
                 symbol=leg_symbol,
@@ -855,6 +870,7 @@ def open_manual_option_group(
 
 def submit_option_group_review(
     db: Session,
+    user_id: uuid.UUID,
     group_id: uuid.UUID,
     violation: bool,
     notes: Optional[str],
@@ -864,7 +880,7 @@ def submit_option_group_review(
     """PUT /option-groups/{id}/review - option-group counterpart to
     position_manager.submit_position_review, identical rules/reasons."""
     row = db.get(db_models.OptionPositionGroup, group_id)
-    if row is None:
+    if row is None or row.user_id != user_id:
         return None, "option group not found"
     if row.strategy_id is not None:
         return None, "only manually-opened option groups have a discipline review"
@@ -1003,12 +1019,15 @@ def record_option_group_pnl_snapshots(db: Session, get_ltp_batch: GetLtpBatch) -
     return {"recorded": len(live), "checked": len(open_groups)}
 
 
-def square_off_all_open_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
-    open_groups = db.query(db_models.OptionPositionGroup).filter_by(status="OPEN").all()
+def square_off_all_open_option_groups(db: Session, user_id: uuid.UUID, get_ltp_batch: GetLtpBatch) -> dict:
+    """Closes every OPEN option group BELONGING TO user_id - only ever
+    reachable via the authenticated POST /option-groups/square-off route,
+    same scoping reasoning as position_manager.square_off_all_open."""
+    open_groups = db.query(db_models.OptionPositionGroup).filter_by(user_id=user_id, status="OPEN").all()
     legs = legs_by_group(db, open_groups)
     accounts = _accounts_by_segment(db, open_groups)
     strategy_accounts = _strategy_accounts_by_id(db, open_groups)
-    usdinr_rate = load_settings(db).usdinr_rate
+    usdinr_rate = load_settings(db, user_id).usdinr_rate
     closed = 0
     failed = 0
     for group in open_groups:
@@ -1028,16 +1047,16 @@ def square_off_all_open_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -
     return {"closed": closed, "failed": failed, "total_open": len(open_groups)}
 
 
-def square_off_option_group(db: Session, group_id: uuid.UUID, get_ltp_batch: GetLtpBatch) -> dict:
+def square_off_option_group(db: Session, user_id: uuid.UUID, group_id: uuid.UUID, get_ltp_batch: GetLtpBatch) -> dict:
     group = db.get(db_models.OptionPositionGroup, group_id)
-    if group is None:
+    if group is None or group.user_id != user_id:
         return {"status": "not_found"}
     if group.status != "OPEN":
         return {"status": "not_open", "group_status": group.status}
 
     group_legs = legs_by_group(db, [group]).get(group.id)
-    account = load_capital_account(db, group.segment, group.strategy_id)
-    usdinr_rate = load_settings(db).usdinr_rate
+    account = load_capital_account(db, user_id, group.segment, group.strategy_id)
+    usdinr_rate = load_settings(db, user_id).usdinr_rate
     if (
         group_legs is None
         or "BUY" not in group_legs
@@ -1048,7 +1067,9 @@ def square_off_option_group(db: Session, group_id: uuid.UUID, get_ltp_batch: Get
     return {"status": "closed", "group_id": str(group.id), "underlying_symbol": group.underlying_symbol, "pnl": float(group.pnl)}
 
 
-def update_group_stop_loss(db: Session, group_id: uuid.UUID, new_price: float) -> Optional[db_models.OptionPositionGroup]:
+def update_group_stop_loss(
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+) -> Optional[db_models.OptionPositionGroup]:
     """Generically useful, not manual-only - editing SL on any already-open
     option group. Scoped to sl_scope='combined' groups only - editing an
     individual leg's own stop_loss_price is out of scope here (would need
@@ -1056,7 +1077,7 @@ def update_group_stop_loss(db: Session, group_id: uuid.UUID, new_price: float) -
     unchanged (caller checks status/sl_scope separately) rather than
     silently no-op'ing on a mismatch."""
     row = db.get(db_models.OptionPositionGroup, group_id)
-    if row is None:
+    if row is None or row.user_id != user_id:
         return None
     if row.sl_scope != "combined":
         return row
@@ -1065,7 +1086,9 @@ def update_group_stop_loss(db: Session, group_id: uuid.UUID, new_price: float) -
     return row
 
 
-def update_group_spot_stop_loss(db: Session, group_id: uuid.UUID, new_price: float) -> Optional[db_models.OptionPositionGroup]:
+def update_group_spot_stop_loss(
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+) -> Optional[db_models.OptionPositionGroup]:
     """Sets the underlying-spot-price stop - independent of sl_scope and
     the premium-based combined_stop_loss_price/individual leg stops above;
     _evaluate_option_group_exits checks both, whichever trips first closes
@@ -1080,7 +1103,7 @@ def update_group_spot_stop_loss(db: Session, group_id: uuid.UUID, new_price: flo
     deliberately left as-is - this only changes the price, not the
     reference instrument."""
     row = db.get(db_models.OptionPositionGroup, group_id)
-    if row is None:
+    if row is None or row.user_id != user_id:
         return None
     row.spot_stop_loss_price = new_price
     row.spot_stop_loss_trailing_enabled = False
@@ -1088,7 +1111,9 @@ def update_group_spot_stop_loss(db: Session, group_id: uuid.UUID, new_price: flo
     return row
 
 
-def update_group_square_off_time(db: Session, group_id: uuid.UUID, square_off_time: Optional[time]) -> Optional[db_models.OptionPositionGroup]:
+def update_group_square_off_time(
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, square_off_time: Optional[time]
+) -> Optional[db_models.OptionPositionGroup]:
     """PUT /option-groups/{id}/square-off-time - see position_manager.
     update_square_off_time's own comment, identical meaning here.
     square_off_due_option_groups only ever reads the GROUP's own field
@@ -1097,7 +1122,7 @@ def update_group_square_off_time(db: Session, group_id: uuid.UUID, square_off_ti
     create time, for consistency if anything else ever reads a leg's own
     value."""
     row = db.get(db_models.OptionPositionGroup, group_id)
-    if row is None or row.status != "OPEN":
+    if row is None or row.user_id != user_id or row.status != "OPEN":
         return None
     row.square_off_time = square_off_time
     db.query(db_models.Position).filter_by(option_group_id=group_id, status="OPEN").update({"square_off_time": square_off_time})
@@ -1112,18 +1137,20 @@ def _evaluate_option_group_square_off_due(
     now_local,
     accounts_by_segment: dict,
     strategy_accounts: Optional[dict] = None,
-    usdinr_rate: Optional[float] = None,
+    usdinr_rate_by_user: Optional[dict] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mirrors
     position_manager._evaluate_square_off_due at the group level.
-    strategy_accounts is optional (default {}) - see that function's own
-    docstring for why."""
+    strategy_accounts/usdinr_rate_by_user are optional (default {}) - see
+    that function's own docstring for why (a cross-tenant batch can mix
+    groups from several users, each with their own configured rate)."""
     due = [g for g in groups if g.square_off_time is not None and now_local >= g.square_off_time]
     if not due:
         return {"closed": 0, "failed": 0, "checked": 0}
 
     all_legs = [pos for g in due for pos in legs.get(g.id, {}).values()]
     quotes = _quotes_by_exchange(all_legs, get_ltp_batch)
+    rates = usdinr_rate_by_user or {}
     closed = 0
     failed = 0
     now = datetime.now(dt_timezone.utc)
@@ -1157,21 +1184,27 @@ def _evaluate_option_group_square_off_due(
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = "square_off"
-        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, usdinr_rate)
+        _apply_realized_pnl(
+            group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, rates.get(group.user_id)
+        )
         closed += 1
 
     return {"closed": closed, "failed": failed, "checked": len(due)}
 
 
 def square_off_due_option_groups(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
+    """Background job (every user AND the automated flow) - see
+    position_manager.square_off_due_positions' own comment on why
+    now_local stays platform-wide while usdinr_rate is resolved per user."""
     exec_settings = load_settings(db)
     now_local = datetime.now(dt_timezone.utc).astimezone(ZoneInfo(exec_settings.timezone)).time()
     open_groups = db.query(db_models.OptionPositionGroup).filter_by(status="OPEN").all()
     legs = legs_by_group(db, open_groups)
     accounts = _accounts_by_segment(db, open_groups)
     strategy_accounts = _strategy_accounts_by_id(db, open_groups)
+    usdinr_rates = _usdinr_rate_by_user(db, open_groups)
     result = _evaluate_option_group_square_off_due(
-        open_groups, legs, get_ltp_batch, now_local, accounts, strategy_accounts, exec_settings.usdinr_rate
+        open_groups, legs, get_ltp_batch, now_local, accounts, strategy_accounts, usdinr_rates
     )
     db.commit()
     return result
@@ -1184,7 +1217,7 @@ def _evaluate_option_group_exits(
     accounts_by_segment: dict,
     strategy_accounts: Optional[dict] = None,
     get_candle_history: Optional[GetCandleHistory] = None,
-    usdinr_rate: Optional[float] = None,
+    usdinr_rate_by_user: Optional[dict] = None,
 ) -> dict:
     """Pure logic (no DB query/commit) - mirrors position_manager
     ._evaluate_exits at the group level (no previous_candle - see module
@@ -1238,6 +1271,7 @@ def _evaluate_option_group_exits(
     trailed = 0
     candle_history_cache: dict[tuple[str, str, str], list[dict]] = {}
     now = datetime.now(dt_timezone.utc)
+    rates = usdinr_rate_by_user or {}
 
     for group in groups:
         group_legs = legs.get(group.id)
@@ -1348,7 +1382,9 @@ def _evaluate_option_group_exits(
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = group_reason
-        _apply_realized_pnl(group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, usdinr_rate)
+        _apply_realized_pnl(
+            group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, rates.get(group.user_id)
+        )
 
         if sl_hit or spot_sl_hit:
             closed_stop_loss += 1
@@ -1380,7 +1416,7 @@ def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch, get_candle
     legs = legs_by_group(db, candidates)
     accounts = _accounts_by_segment(db, candidates)
     strategy_accounts = _strategy_accounts_by_id(db, candidates)
-    usdinr_rate = load_settings(db).usdinr_rate
-    result = _evaluate_option_group_exits(candidates, legs, get_ltp_batch, accounts, strategy_accounts, get_candle_history, usdinr_rate)
+    usdinr_rates = _usdinr_rate_by_user(db, candidates)
+    result = _evaluate_option_group_exits(candidates, legs, get_ltp_batch, accounts, strategy_accounts, get_candle_history, usdinr_rates)
     db.commit()
     return result

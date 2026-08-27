@@ -16,19 +16,30 @@ CREATE SCHEMA IF NOT EXISTS execution;
 -- direction-blind) but moved onto signal_generation.strategies
 -- (duplicate_signal_policy/counter_signal_policy, per-strategy and
 -- direction-aware) - see position_manager._resolve_signal_conflicts.
+-- user_id NULL = the legacy platform-wide settings row, read by the
+-- automated Strategy-driven order flow (open_position, the square-off/
+-- exit-monitor scheduler jobs) - that flow has no per-user concept at all
+-- (signal-generation/signal-processing aren't part of the manual-trading
+-- SaaS, see docs/architecture.md's "Manual Trading SaaS" section). A
+-- non-NULL user_id is one SaaS user's OWN settings (Manual tab), created
+-- lazily the first time they save one via PUT /settings - mirrors
+-- execution.accounts' own per-(user, segment) row shape below. Surrogate
+-- UUID `id` PK (was a SMALLINT singleton, CHECK(id=1)) since there can now
+-- be many rows, one per user plus the one legacy NULL row.
 CREATE TABLE IF NOT EXISTS execution.settings (
-    id                      SMALLINT PRIMARY KEY DEFAULT 1,
+    id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id                 UUID,
     timezone                TEXT NOT NULL DEFAULT 'Asia/Kolkata',
     -- CRYPTO only, nullable - manually configured INR-per-USD rate used to
     -- convert capital_per_trade/current_balance into USD-equivalent before
     -- sizing a CRYPTO position. See docs/architecture.md.
     usdinr_rate             NUMERIC CHECK (usdinr_rate > 0),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT settings_single_row CHECK (id = 1)
+    CONSTRAINT uq_settings_user_id UNIQUE NULLS NOT DISTINCT (user_id)
 );
 
-INSERT INTO execution.settings (id) VALUES (1)
-    ON CONFLICT (id) DO NOTHING;
+INSERT INTO execution.settings (user_id) VALUES (NULL)
+    ON CONFLICT ON CONSTRAINT uq_settings_user_id DO NOTHING;
 
 -- One paper-trading account per segment (NSE/MCX/CRYPTO) - segment as the
 -- primary key structurally enforces "one account per segment" rather than
@@ -59,8 +70,18 @@ INSERT INTO execution.settings (id) VALUES (1)
 -- ever a fixed business-rule guess, not a real market close. Editable via
 -- PUT /accounts/{segment}, shown in AccountsPage.tsx. See
 -- docs/architecture.md.
+-- user_id NULL = the legacy platform-wide account for this segment (read
+-- by the automated Strategy-driven flow - see execution.settings' own
+-- comment on the identical NULL convention). Non-NULL = one SaaS user's
+-- own paper-trading account for this segment (Manual tab), created lazily
+-- with sensible defaults the first time they place a manual order or edit
+-- their risk settings for that segment. Surrogate UUID `id` PK (was
+-- `segment` alone) since there can now be many rows per segment, one per
+-- user plus the one legacy NULL row.
 CREATE TABLE IF NOT EXISTS execution.accounts (
-    segment             TEXT PRIMARY KEY CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID,
+    segment             TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     starting_balance    NUMERIC NOT NULL CHECK (starting_balance > 0),
     current_balance     NUMERIC NOT NULL,
     capital_per_trade   NUMERIC NOT NULL CHECK (capital_per_trade > 0),
@@ -83,7 +104,8 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     enforce_risk_based_lots BOOLEAN NOT NULL DEFAULT false,
     leverage            NUMERIC NOT NULL DEFAULT 1 CHECK (leverage > 0),
     square_off_time     TIME,
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_accounts_user_segment UNIQUE NULLS NOT DISTINCT (user_id, segment)
 );
 
 -- Pre-existing volumes created before min_reward_risk_ratio/
@@ -117,12 +139,14 @@ CREATE TABLE IF NOT EXISTS execution.strategy_accounts (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-INSERT INTO execution.accounts (segment, starting_balance, current_balance, capital_per_trade, risk_per_trade_pct, square_off_time)
+-- The 3 legacy platform-wide accounts (user_id NULL) - unchanged values,
+-- still what the automated Strategy-driven flow sizes/credits against.
+INSERT INTO execution.accounts (user_id, segment, starting_balance, current_balance, capital_per_trade, risk_per_trade_pct, square_off_time)
 VALUES
-    ('NSE', 200000, 200000, 50000, 1.0, '15:00:00'),
-    ('MCX', 200000, 200000, 50000, 1.0, '22:00:00'),
-    ('CRYPTO', 200000, 200000, 50000, 1.0, NULL)
-ON CONFLICT (segment) DO NOTHING;
+    (NULL, 'NSE', 200000, 200000, 50000, 1.0, '15:00:00'),
+    (NULL, 'MCX', 200000, 200000, 50000, 1.0, '22:00:00'),
+    (NULL, 'CRYPTO', 200000, 200000, 50000, 1.0, NULL)
+ON CONFLICT ON CONSTRAINT uq_accounts_user_segment DO NOTHING;
 
 -- One row per paper position, one row per resolved signal regardless of
 -- outcome (OPEN/CLOSED/REJECTED) - horizon/instrument_type are carried
@@ -131,6 +155,13 @@ ON CONFLICT (segment) DO NOTHING;
 -- capital_per_trade / entry_price only once a position is actually opened).
 CREATE TABLE IF NOT EXISTS execution.positions (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- NULL = opened by the automated Strategy-driven flow (same NULL
+    -- convention as execution.settings/accounts above - no FK to
+    -- accounts.users, systems/* stay self-contained). Non-NULL = a SaaS
+    -- user's own manually-placed trade (always paired with strategy_id
+    -- IS NULL below, same as before this column existed). See
+    -- docs/architecture.md's "Manual Trading SaaS" section.
+    user_id          UUID,
     signal_id        UUID NOT NULL,
     -- Nullable: NULL means manually opened (Manual tab), bypassing
     -- signal-generation/signal-processing entirely - no FK exists to
@@ -141,8 +172,13 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     exchange         TEXT NOT NULL,
     -- Which execution.accounts row this position was sized against and
     -- (once closed) credited/debited on - copied from the resolved order
-    -- at open time, same pattern as stop_loss_method etc. below.
-    segment          TEXT NOT NULL REFERENCES execution.accounts (segment),
+    -- at open time, same pattern as stop_loss_method etc. below. No FK to
+    -- accounts (segment) any more - accounts.segment alone stopped being
+    -- unique once user_id was added there (multiple rows can share a
+    -- segment, one per user); the application already only ever writes a
+    -- valid segment value, so this is a plain CHECK instead of a DB-level
+    -- FK guarantee.
+    segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
     horizon          TEXT NOT NULL,
     instrument_type  TEXT NOT NULL,
@@ -218,6 +254,9 @@ CREATE TABLE IF NOT EXISTS execution.positions (
 -- onto both leg rows.
 CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- NULL = the automated Strategy-driven flow, non-NULL = a SaaS user's
+    -- own manual option order - same convention as positions.user_id above.
+    user_id                  UUID,
     signal_id                UUID NOT NULL UNIQUE,
     -- NULL = manually opened (Manual tab, no auto-provisioned Strategy as
     -- of 2026-08-14) - same nullability/meaning as positions.strategy_id
@@ -225,7 +264,10 @@ CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     strategy_id              UUID,
     underlying_symbol        TEXT NOT NULL,  -- the resolved order's own symbol (e.g. "NIFTY") - NOT either leg's own symbol
     exchange                 TEXT NOT NULL,
-    segment                  TEXT NOT NULL REFERENCES execution.accounts (segment),
+    -- No FK to accounts (segment) any more - see positions.segment's own
+    -- comment on why (accounts.segment alone stopped being unique once
+    -- user_id was added there).
+    segment                  TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     strategy_type            TEXT NOT NULL,  -- e.g. "bull_call_spread" - order.strategy['type']
     action                   TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),  -- the original signal direction, not either leg's own action
     horizon                  TEXT NOT NULL,
@@ -399,8 +441,16 @@ CREATE INDEX IF NOT EXISTS idx_option_group_pnl_snapshots_group_id ON execution.
 -- order. Answered once per (day, segment) via GET/PUT /daily-checklist
 -- (execution.daily_checklist_log below), not per position/group - see
 -- that table's own comment.
+-- user_id NULL = the platform default template (seeded below at install
+-- time, before any user exists to own it) - never edited/returned to a
+-- SaaS user directly. A signed-in user gets their OWN editable copy
+-- (user_id = their id), cloned from the NULL template the first time
+-- GET /checklist-items returns empty for them (app/domain/position_manager.py
+-- - mirrors execution.accounts' own "seeded lazily on first use" pattern).
+-- See docs/architecture.md's "Manual Trading SaaS" section.
 CREATE TABLE IF NOT EXISTS execution.checklist_items (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID,
     label       TEXT NOT NULL,
     phase       TEXT NOT NULL DEFAULT 'plan',
     segments    TEXT[] NOT NULL DEFAULT '{}',
@@ -437,7 +487,7 @@ SELECT * FROM (VALUES
     ('High-volatility MCX session, no major commodity news today (crude inventory, geopolitical/global cues)', 'day', ARRAY['MCX'], 20),
     ('No major crypto news or headlines today (regulatory, macro, exchange outages) - crypto trades 24/7, so this checks news risk rather than a session window', 'day', ARRAY['CRYPTO'], 30)
 ) AS seed(label, phase, segments, sort_order)
-WHERE NOT EXISTS (SELECT 1 FROM execution.checklist_items);
+WHERE NOT EXISTS (SELECT 1 FROM execution.checklist_items WHERE user_id IS NULL);
 
 -- One-time data fixes for a volume seeded before the 2026-08-25 changes
 -- above - each matched by the OLD label/phase, so it only ever fires
@@ -534,13 +584,17 @@ UPDATE execution.checklist_items
 -- and is never blocked. PUT /daily-checklist upserts (ON CONFLICT DO
 -- UPDATE) - answered once, editable the rest of that same day, not an
 -- immutable journal entry.
+-- Purely a Manual tab/SaaS-user concept (no automated-flow use at all,
+-- unlike positions/accounts/settings above) - user_id is a genuine
+-- required part of the identity, not nullable.
 CREATE TABLE IF NOT EXISTS execution.daily_checklist_log (
+    user_id      UUID NOT NULL,
     log_date     DATE NOT NULL,
     segment      TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     answers      JSONB NOT NULL,
     notes        TEXT,
     submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (log_date, segment)
+    PRIMARY KEY (user_id, log_date, segment)
 );
 
 -- Backfill for a volume that already had this table before `notes`
@@ -570,14 +624,16 @@ ALTER TABLE execution.daily_checklist_log ADD COLUMN IF NOT EXISTS notes TEXT;
 -- trading day has breaks), to let ManualStatsPage.tsx's Performance page
 -- correlate a day's actual session time against its PnL, not just infer
 -- a window from whenever trades happened to fill.
+-- Purely a Manual tab/SaaS-user concept, same as daily_checklist_log above.
 CREATE TABLE IF NOT EXISTS execution.trading_sessions (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id        UUID NOT NULL,
     log_date       DATE NOT NULL,
     segment        TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     checked_in_at  TIMESTAMPTZ NOT NULL,
     checked_out_at TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS idx_trading_sessions_day_segment ON execution.trading_sessions (log_date, segment);
+CREATE INDEX IF NOT EXISTS idx_trading_sessions_user_day_segment ON execution.trading_sessions (user_id, log_date, segment);
 
 -- plan_checklist/review_checklist: the {label, checked}[] snapshots
 -- described above, taken at order-placement time and review-submission

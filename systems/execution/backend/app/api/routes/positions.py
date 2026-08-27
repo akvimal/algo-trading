@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
+from app.auth import User, get_current_user
 from app.domain.models import ManualPositionCreate, ReviewSubmit, SquareOffTimeUpdate, StopLossUpdate
 from app.domain.position_manager import (
     check_exits,
@@ -88,24 +89,28 @@ def list_positions(
     manual_only: bool = Query(default=False),
     limit: int = 100,
     with_live_pnl: bool = Query(default=False),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """signal_id: exact match, for cross-system deep links (?signal_id=...
-    from signal-processing's frontend to this position's outcome). symbol/
-    segment: exact match - backs ManualTab.tsx's own per-row trade-history
-    backfill (a row has no persisted identity beyond symbol+segment+
-    instrument_type, so this is how it re-finds its own past trades after
-    a reload, rather than only ever seeing closes detected live during the
-    current session). manual_only: strategy_id IS NULL - same "no live
-    watch on the client, and we only care about the Strategy-free path"
-    reasoning that call site adds, since a Strategy-driven position could
-    otherwise share the same symbol/segment and pollute a manual row's own
-    history. with_live_pnl: mark-to-market OPEN positions in this response
-    against a fresh quote (one batched call per distinct exchange) - off
-    by default since it means extra Dhan calls on every request; the
+    """Always scoped to the caller's own positions (user_id=user.id) - the
+    automated Strategy-driven flow's positions (user_id IS NULL) are never
+    visible via this route regardless of any other filter, same isolation
+    every other route in this file now has. signal_id: exact match, for
+    cross-system deep links (?signal_id=... from signal-processing's
+    frontend to this position's outcome). symbol/segment: exact match -
+    backs ManualTab.tsx's own per-row trade-history backfill (a row has no
+    persisted identity beyond symbol+segment+instrument_type, so this is
+    how it re-finds its own past trades after a reload, rather than only
+    ever seeing closes detected live during the current session).
+    manual_only: strategy_id IS NULL - always true in practice now that
+    this route is user-scoped (every one of a user's own positions is
+    already manual), kept for backward-compatible query-param shape.
+    with_live_pnl: mark-to-market OPEN positions in this response against
+    a fresh quote (one batched call per distinct exchange) - off by
+    default since it means extra Dhan calls on every request; the
     frontend opts in for its own polling, other callers (cross-links,
     other systems) don't pay for it unless they ask."""
-    q = db.query(db_models.Position)
+    q = db.query(db_models.Position).filter_by(user_id=user.id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:
@@ -130,18 +135,19 @@ def list_positions(
 
 
 @router.get("/positions/{position_id}/pnl-history")
-def get_position_pnl_history(position_id: str, db: Session = Depends(get_db)):
+def get_position_pnl_history(position_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Oldest-first unrealized-P&L time series recorded by the exit-monitor
     tick (see position_manager.record_position_pnl_snapshots) - lets the
     frontend chart how this position's P&L actually moved while OPEN, not
     just its entry/exit endpoints. Empty list (not 404) once the position
     closes and its snapshot rows are still there - only a genuinely
-    unknown position_id 404s."""
+    unknown position_id (or one belonging to another user) 404s."""
     try:
         parsed_id = uuid.UUID(position_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
-    if db.get(db_models.Position, parsed_id) is None:
+    owner = db.get(db_models.Position, parsed_id)
+    if owner is None or owner.user_id != user.id:
         raise HTTPException(status_code=404, detail="position not found")
     rows = (
         db.query(db_models.PositionPnlSnapshot)
@@ -155,7 +161,7 @@ def get_position_pnl_history(position_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/positions/manual")
-def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
+def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The Manual tab (signal-generation's frontend) - spot/future only,
     bypasses signal-generation/signal-processing entirely (no Strategy, no
     resolution pipeline). Options go through the real pipeline instead via
@@ -177,15 +183,16 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
     /manual-trades/pending-review (find_pending_manual_review) still
     surfaces the same trade as a reminder banner in the frontend, it just
     no longer blocks placing a new one."""
-    settings = load_settings(db)
-    daily_error = find_missing_daily_checklist(db, settings, payload.segment)
+    settings = load_settings(db, user.id)
+    daily_error = find_missing_daily_checklist(db, user.id, settings, payload.segment)
     if daily_error is not None:
         raise HTTPException(status_code=409, detail=daily_error)
-    checklist_error = validate_plan_checklist(db, payload.plan_checklist, payload.segment)
+    checklist_error = validate_plan_checklist(db, user.id, payload.plan_checklist, payload.segment)
     if checklist_error is not None:
         raise HTTPException(status_code=422, detail=checklist_error)
 
     row = open_manual_position(
+        user.id,
         payload.segment,
         payload.symbol,
         payload.action,
@@ -212,7 +219,7 @@ def open_manual(payload: ManualPositionCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/positions/{position_id}/review")
-def review_position(position_id: str, payload: ReviewSubmit, db: Session = Depends(get_db)):
+def review_position(position_id: str, payload: ReviewSubmit, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The Complete step of the discipline checklist - submitted once a
     manually-opened position closes. 404 if missing, 409 if it's not a
     CLOSED manual position or is already reviewed, 422 if it closed at a
@@ -226,7 +233,7 @@ def review_position(position_id: str, payload: ReviewSubmit, db: Session = Depen
         raise HTTPException(status_code=404, detail="position not found")
 
     row, reject_reason = submit_position_review(
-        db, parsed_id, payload.violation, payload.notes, payload.accepted_loss, [a.model_dump() for a in payload.checklist]
+        db, user.id, parsed_id, payload.violation, payload.notes, payload.accepted_loss, [a.model_dump() for a in payload.checklist]
     )
     if reject_reason == "position not found":
         raise HTTPException(status_code=404, detail=reject_reason)
@@ -238,27 +245,29 @@ def review_position(position_id: str, payload: ReviewSubmit, db: Session = Depen
 
 
 @router.put("/positions/{position_id}/stop-loss")
-def edit_stop_loss(position_id: str, payload: StopLossUpdate, db: Session = Depends(get_db)):
+def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Generically useful, not manual-only - editing SL on any already-open
     position, including attaching/replacing a trailing, method-based
     stop-loss after the fact (percent/previous_candle/indicator - see
-    StopLossUpdate/update_stop_loss). 404 if missing, 409 if not OPEN, 422
-    if a stop_loss_method was given but couldn't be computed (not enough
-    history yet, wrong side of entry, etc - the position's existing
-    stop-loss is left untouched in that case)."""
+    StopLossUpdate/update_stop_loss). 404 if missing or owned by another
+    user, 409 if not OPEN, 422 if a stop_loss_method was given but
+    couldn't be computed (not enough history yet, wrong side of entry,
+    etc - the position's existing stop-loss is left untouched in that
+    case)."""
     try:
         parsed_id = uuid.UUID(position_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
 
     row = db.get(db_models.Position, parsed_id)
-    if row is None:
+    if row is None or row.user_id != user.id:
         raise HTTPException(status_code=404, detail="position not found")
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
     row, reject_reason = update_stop_loss(
         db,
+        user.id,
         parsed_id,
         payload.stop_loss_price,
         payload.stop_loss_method,
@@ -276,66 +285,83 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, db: Session = Depe
 
 
 @router.put("/positions/{position_id}/square-off-time")
-def edit_square_off_time(position_id: str, payload: SquareOffTimeUpdate, db: Session = Depends(get_db)):
+def edit_square_off_time(
+    position_id: str, payload: SquareOffTimeUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     """Edits an already-open position's own square_off_time - lets a
     position be closed ahead of (or, given a later time, past) its
     segment's usual cutoff, e.g. squaring an MCX position out before
     18:00's volatility-regime change without touching MCX's own
     execution.accounts.square_off_time or any other open MCX position.
-    404 if missing, 409 if not OPEN. `null` clears it (never force-closed
-    by time, same as CRYPTO's own segment default)."""
+    404 if missing or owned by another user, 409 if not OPEN. `null`
+    clears it (never force-closed by time, same as CRYPTO's own segment
+    default)."""
     try:
         parsed_id = uuid.UUID(position_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
 
     row = db.get(db_models.Position, parsed_id)
-    if row is None:
+    if row is None or row.user_id != user.id:
         raise HTTPException(status_code=404, detail="position not found")
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
-    row = update_square_off_time(db, parsed_id, payload.square_off_time)
+    row = update_square_off_time(db, user.id, parsed_id, payload.square_off_time)
     return _position_to_out(row)
 
 
 @router.post("/positions/square-off")
-def square_off_now(db: Session = Depends(get_db)):
-    """Manual override - closes EVERY open position immediately,
-    regardless of each one's own square_off_time. Useful for squaring off
-    early or testing without waiting for the clock."""
-    return square_off_all_open(db, get_ltp_batch)
+def square_off_now(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Manual override - closes EVERY open position BELONGING TO the
+    caller immediately, regardless of each one's own square_off_time.
+    Useful for squaring off early or testing without waiting for the
+    clock."""
+    return square_off_all_open(db, user.id, get_ltp_batch)
 
 
 @router.post("/positions/square-off-due")
 def square_off_due_now(db: Session = Depends(get_db)):
     """Manual trigger - same logic the scheduled square-off job runs
     (only closes positions whose own square_off_time has passed, not
-    everything). Useful for testing without waiting on the poll interval."""
+    everything). Useful for testing without waiting on the poll interval.
+    KNOWN GAP: deliberately NOT user-scoped (mirrors the cross-tenant
+    scheduler job exactly, since that's what this exists to let you
+    manually re-trigger) - any authenticated user can currently fire this
+    for every user's due positions. Fine for solo/personal use; needs a
+    platform-admin role before this SaaS has more than one real user."""
     return square_off_due_positions(db, get_ltp_batch)
 
 
 @router.post("/positions/check-exits")
 def check_exits_now(db: Session = Depends(get_db)):
     """Manual trigger - same logic the exit-monitor job runs on its
-    interval. Useful for testing without waiting on the poll interval."""
+    interval. Useful for testing without waiting on the poll interval.
+    Same KNOWN GAP as /positions/square-off-due above (cross-tenant,
+    not scoped to the caller)."""
     return check_exits(db, get_ltp_batch, get_previous_candle, get_candle_history)
 
 
 @router.post("/positions/{position_id}/square-off")
-def square_off_one(position_id: str, quantity: Optional[float] = Query(default=None, gt=0), db: Session = Depends(get_db)):
+def square_off_one(
+    position_id: str,
+    quantity: Optional[float] = Query(default=None, gt=0),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Closes exactly one OPEN position - the frontend's per-row
     'Square off' button on the Positions grid. 404 if the id doesn't
-    exist, 409 if it's not OPEN (already closed/rejected), 502 if a CMP
-    couldn't be fetched (position is left OPEN, same as the bulk paths).
-    `quantity` (optional) partially closes - see square_off_position's own
-    docstring; omitted behaves exactly as before this parameter existed."""
+    exist or belongs to another user, 409 if it's not OPEN (already
+    closed/rejected), 502 if a CMP couldn't be fetched (position is left
+    OPEN, same as the bulk paths). `quantity` (optional) partially closes -
+    see square_off_position's own docstring; omitted behaves exactly as
+    before this parameter existed."""
     try:
         parsed_id = uuid.UUID(position_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
 
-    result = square_off_position(db, parsed_id, get_ltp_batch, quantity)
+    result = square_off_position(db, user.id, parsed_id, get_ltp_batch, quantity)
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="position not found")
     if result["status"] == "not_open":
@@ -348,20 +374,23 @@ def square_off_one(position_id: str, quantity: Optional[float] = Query(default=N
 
 
 @router.delete("/positions")
-def clear_positions(db: Session = Depends(get_db)):
-    """Wipes all positions (OPEN/CLOSED/REJECTED) AND all option position
-    groups (execution.option_position_groups) - a manual reset for
-    testing, not something the pipeline itself ever calls. Both in one
-    transaction so an OPEN option group never survives without its own
-    legs - a group whose legs were deleted but which itself wasn't stays
-    OPEN forever (square-off can't quote it, duplicate_signal_policy=skip
-    blocks every future signal on that symbol) since nothing else ever
-    revisits it. Positions deleted first since they FK-reference groups.
-    Settings and the Redis stream/consumer group are untouched. Signals in
-    signal-processing and strategies in signal-generation are untouched
-    too - each system only ever clears its own schema, see
-    docs/architecture.md."""
-    positions_deleted = db.query(db_models.Position).delete()
-    option_groups_deleted = db.query(db_models.OptionPositionGroup).delete()
+def clear_positions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Wipes THIS USER'S OWN positions (OPEN/CLOSED/REJECTED) AND option
+    position groups (execution.option_position_groups) - a manual reset
+    for testing, not something the pipeline itself ever calls. Scoped to
+    user_id=user.id (changed when this route became multi-tenant - was
+    previously an unscoped platform-wide wipe, which would otherwise let
+    any signed-in user delete every other user's trade history). Both
+    tables cleared in one transaction so an OPEN option group never
+    survives without its own legs - a group whose legs were deleted but
+    which itself wasn't stays OPEN forever (square-off can't quote it,
+    duplicate_signal_policy=skip blocks every future signal on that
+    symbol) since nothing else ever revisits it. Positions deleted first
+    since they FK-reference groups. Settings and the Redis stream/consumer
+    group are untouched. Signals in signal-processing and strategies in
+    signal-generation are untouched too - each system only ever clears its
+    own schema, see docs/architecture.md."""
+    positions_deleted = db.query(db_models.Position).filter_by(user_id=user.id).delete()
+    option_groups_deleted = db.query(db_models.OptionPositionGroup).filter_by(user_id=user.id).delete()
     db.commit()
     return {"positions_deleted": positions_deleted, "option_groups_deleted": option_groups_deleted}

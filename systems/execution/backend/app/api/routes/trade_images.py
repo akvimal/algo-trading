@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.auth import User, get_current_user
 
 router = APIRouter()
 
@@ -51,57 +52,81 @@ async def _save_image(
 
 
 @router.post("/positions/{position_id}/images")
-async def upload_position_image(position_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_position_image(
+    position_id: str, file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     try:
         parsed_id = uuid.UUID(position_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
-    if db.get(db_models.Position, parsed_id) is None:
+    owner = db.get(db_models.Position, parsed_id)
+    if owner is None or owner.user_id != user.id:
         raise HTTPException(status_code=404, detail="position not found")
     row = await _save_image(db, file, position_id=parsed_id)
     return _image_to_out(row)
 
 
 @router.get("/positions/{position_id}/images")
-def list_position_images(position_id: str, db: Session = Depends(get_db)):
+def list_position_images(position_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         parsed_id = uuid.UUID(position_id)
     except ValueError:
+        return []
+    owner = db.get(db_models.Position, parsed_id)
+    if owner is None or owner.user_id != user.id:
         return []
     rows = db.query(db_models.TradeImage).filter_by(position_id=parsed_id).order_by(db_models.TradeImage.uploaded_at).all()
     return [_image_to_out(r) for r in rows]
 
 
 @router.post("/option-groups/{group_id}/images")
-async def upload_option_group_image(group_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_option_group_image(
+    group_id: str, file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     try:
         parsed_id = uuid.UUID(group_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="option group not found")
-    if db.get(db_models.OptionPositionGroup, parsed_id) is None:
+    owner = db.get(db_models.OptionPositionGroup, parsed_id)
+    if owner is None or owner.user_id != user.id:
         raise HTTPException(status_code=404, detail="option group not found")
     row = await _save_image(db, file, option_group_id=parsed_id)
     return _image_to_out(row)
 
 
 @router.get("/option-groups/{group_id}/images")
-def list_option_group_images(group_id: str, db: Session = Depends(get_db)):
+def list_option_group_images(group_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         parsed_id = uuid.UUID(group_id)
     except ValueError:
+        return []
+    owner = db.get(db_models.OptionPositionGroup, parsed_id)
+    if owner is None or owner.user_id != user.id:
         return []
     rows = db.query(db_models.TradeImage).filter_by(option_group_id=parsed_id).order_by(db_models.TradeImage.uploaded_at).all()
     return [_image_to_out(r) for r in rows]
 
 
+def _image_owned_by(db: Session, row: db_models.TradeImage, user_id: uuid.UUID) -> bool:
+    """trade_images carries no user_id of its own (see this module's own
+    docstring on why) - ownership always resolves through exactly one of
+    position_id/option_group_id, same as every other cross-reference in
+    this table."""
+    if row.position_id is not None:
+        owner = db.get(db_models.Position, row.position_id)
+    else:
+        owner = db.get(db_models.OptionPositionGroup, row.option_group_id)
+    return owner is not None and owner.user_id == user_id
+
+
 @router.get("/images/{image_id}")
-def get_image(image_id: str, db: Session = Depends(get_db)):
+def get_image(image_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         parsed_id = uuid.UUID(image_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="image not found")
     row = db.get(db_models.TradeImage, parsed_id)
-    if row is None:
+    if row is None or not _image_owned_by(db, row, user.id):
         raise HTTPException(status_code=404, detail="image not found")
     # Cached aggressively client-side - an uploaded image is immutable
     # (no PUT/replace route, only upload-new/delete), so there's never a
@@ -110,13 +135,13 @@ def get_image(image_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/images/{image_id}")
-def delete_image(image_id: str, db: Session = Depends(get_db)):
+def delete_image(image_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         parsed_id = uuid.UUID(image_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="image not found")
     row = db.get(db_models.TradeImage, parsed_id)
-    if row is None:
+    if row is None or not _image_owned_by(db, row, user.id):
         raise HTTPException(status_code=404, detail="image not found")
     db.delete(row)
     db.commit()

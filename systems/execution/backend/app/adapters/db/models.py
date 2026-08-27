@@ -6,7 +6,7 @@ update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, Text, Time, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -17,10 +17,15 @@ SCHEMA = settings.database_schema
 
 
 class Settings(Base):
+    """NULL user_id = the legacy platform-wide row (automated Strategy-
+    driven flow); non-NULL = one SaaS user's own settings - see
+    infra/postgres/init/02-execution.sql's own comment on this table."""
+
     __tablename__ = "settings"
     __table_args__ = {"schema": SCHEMA}
 
-    id = Column(SmallInteger, primary_key=True, default=1)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=True)
     timezone = Column(Text, nullable=False)
     # CRYPTO only, nullable - see ExecutionSettings.usdinr_rate in app/domain/models.py.
     usdinr_rate = Column(Numeric, nullable=True)
@@ -28,10 +33,16 @@ class Settings(Base):
 
 
 class Account(Base):
+    """NULL user_id = the legacy platform-wide account for this segment
+    (automated Strategy-driven flow); non-NULL = one SaaS user's own
+    account - see infra/postgres/init/02-execution.sql's own comment."""
+
     __tablename__ = "accounts"
     __table_args__ = {"schema": SCHEMA}
 
-    segment = Column(Text, primary_key=True)  # 'NSE' | 'MCX' | 'CRYPTO' - one row per segment
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=True)
+    segment = Column(Text, nullable=False)  # 'NSE' | 'MCX' | 'CRYPTO'
     starting_balance = Column(Numeric, nullable=False)
     current_balance = Column(Numeric, nullable=False)  # debited/credited by realized P&L on close
     capital_per_trade = Column(Numeric, nullable=False)
@@ -86,6 +97,10 @@ class ChecklistItem(Base):
     __table_args__ = {"schema": SCHEMA}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # NULL = the platform default template; non-NULL = one user's own
+    # editable copy - see infra/postgres/init/02-execution.sql's own
+    # comment on this table.
+    user_id = Column(UUID(as_uuid=True), nullable=True)
     label = Column(Text, nullable=False)
     # 'plan' (pre-trade, gates ManualTab.tsx's own Add button), 'review'
     # (post-trade, self-assessed in the review banner - not required to
@@ -109,6 +124,7 @@ class DailyChecklistLog(Base):
     __tablename__ = "daily_checklist_log"
     __table_args__ = {"schema": SCHEMA}
 
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
     log_date = Column(Date, primary_key=True)
     segment = Column(Text, primary_key=True)
     answers = Column(JSONB(none_as_null=True), nullable=False)
@@ -137,6 +153,7 @@ class TradingSession(Base):
     __table_args__ = {"schema": SCHEMA}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
     log_date = Column(Date, nullable=False)
     segment = Column(Text, nullable=False)
     checked_in_at = Column(TIMESTAMP(timezone=True), nullable=False)
@@ -171,6 +188,10 @@ class OptionPositionGroup(Base):
     __table_args__ = {"schema": SCHEMA}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # NULL = the automated Strategy-driven flow; non-NULL = a SaaS user's
+    # own manual option order - see infra/postgres/init/02-execution.sql's
+    # own comment on positions.user_id (identical convention).
+    user_id = Column(UUID(as_uuid=True), nullable=True)
     signal_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
     # NULL = manually opened (Manual tab, no auto-provisioned Strategy as
     # of 2026-08-14) - same nullability/meaning as Position.strategy_id.
@@ -231,6 +252,10 @@ class Position(Base):
     __table_args__ = {"schema": SCHEMA}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # NULL = the automated Strategy-driven flow; non-NULL = a SaaS user's
+    # own manually-placed trade (always paired with strategy_id IS NULL) -
+    # see infra/postgres/init/02-execution.sql's own comment.
+    user_id = Column(UUID(as_uuid=True), nullable=True)
     signal_id = Column(UUID(as_uuid=True), nullable=False)
     # Nullable: NULL means manually opened (Manual tab), bypassing
     # signal-generation/signal-processing entirely.

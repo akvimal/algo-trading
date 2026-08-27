@@ -135,6 +135,9 @@ services:
       REDIS_STREAM: orders.resolved
       REDIS_CONSUMER_GROUP: execution-service
       MARKET_DATA_BASE_URL: http://market-data-backend:8000
+      # Verifies the same bearer tokens accounts-backend issues - see
+      # app/auth.py's own comment. Must match ACCOUNTS_JWT_SECRET exactly.
+      JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
     ports:
       - "${EXECUTION_BACKEND_PORT}:8000"
     depends_on:
@@ -144,6 +147,27 @@ services:
         condition: service_healthy
       market-data-backend:
         condition: service_started
+
+  # Identity + BYO broker-credential storage for the manual-trading SaaS
+  # (see docs/architecture.md § "Manual Trading SaaS - Phase 1: accounts
+  # service"). Gated behind the same profile as execution - Phase 1 is a
+  # standalone service with no other backend wired to it yet, but it's
+  # meaningless without execution/manual-trading up too.
+  accounts-backend:
+    profiles: ["execution"]
+    build:
+      context: ./systems/accounts/backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_SCHEMA: accounts
+      JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
+      CREDENTIALS_ENCRYPTION_KEY: ${ACCOUNTS_CREDENTIALS_ENCRYPTION_KEY}
+    ports:
+      - "${ACCOUNTS_BACKEND_PORT}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   execution-frontend:
     profiles: ["execution"]

@@ -38,5 +38,12 @@ class Settings(BaseSettings):
     # instead of one fixed fire time.
     square_off_poll_seconds: int = 30
 
+    # Verifies bearer tokens issued by systems/accounts' POST /auth/login -
+    # same secret, shared via env var (not an HTTP call back to accounts
+    # on every request - see app/auth.py's own comment). Must match
+    # accounts' own JWT_SECRET exactly.
+    jwt_secret: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+
 
 settings = Settings()

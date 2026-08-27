@@ -269,6 +269,55 @@ existing in-memory 20-minute buffer) — that's a separate decision (who owns th
 backend under `manual-trading`, or `market-data` breaking its own "no DB" design) not needed just to
 relocate the existing feature into its own container. Also deferred: anything SaaS-shaped (auth,
 multi-tenancy, billing) — this split only addresses deployability/separation, not productization.
+The SaaS work itself is picked up below.
+
+## Manual Trading SaaS: turning the personal single-tenant stack into a multi-tenant product
+
+Goal (2026-08-26): beginners get their own account, paper-trade by default to build discipline
+before risking real money, and bring their own Dhan (NSE/MCX)/Delta Exchange India (CRYPTO)
+credentials for market data — evolving the existing `manual-trading` + `execution` + `market-data`
+stack in place (the current personal usage becomes the first account) rather than forking a separate
+codebase. Confirmed direction: shared-schema multi-tenancy (`user_id` column + row-level scoping on
+every table, not per-tenant DBs/containers — far cheaper to run for an MVP) and a new dedicated
+`systems/accounts` service owns identity + credential storage, rather than folding it into
+`execution` (which already overloads "accounts" for per-segment risk config — `capital_per_trade`/
+`square_off_time`/etc., a different concept entirely) or `market-data` (deliberately DB-less by
+design, see below).
+
+**Phase 1 — `systems/accounts` (shipped 2026-08-26)**: a standalone backend, not yet called by
+anything else in the platform. `POST /auth/signup`/`POST /auth/login` (bcrypt password hashing,
+returns a JWT signed with `JWT_SECRET`), `GET /auth/me`, `GET`/`PUT /credentials` (a user's own Dhan
+`client_id`/`access_token` and/or Delta `api_key`/`api_secret`, the four secret fields Fernet-
+encrypted at rest keyed by `CREDENTIALS_ENCRYPTION_KEY` — no route ever returns a decrypted secret,
+only presence flags + a masked `dhan_client_id`). JWT verification is local/stateless (shared-secret
+HS256) rather than a remote call back to this service on every request, so later phases can validate
+a token fast without making `accounts` a hard availability dependency for the whole platform — the
+tradeoff is that rotating `JWT_SECRET` invalidates every session. See `systems/accounts/README.md`.
+
+**Not yet done** (each is its own follow-on phase, deliberately not bundled into Phase 1 given the
+size/risk of each):
+- **Phase 2 — `execution` multi-tenancy**: `user_id` on all 11 tables, including two schema
+  wrinkles: `execution.accounts`' PK is bare `segment` today (becomes composite `(user_id, segment)`,
+  with the FKs from `positions`/`option_position_groups` following), and `execution.settings` is a
+  hard single-row table (`CHECK (id=1)`, becomes one row per user). `checklist_items` moves from
+  platform-wide to per-user, seeded with today's defaults on first use. Every one of `execution`'s
+  ~53 endpoints (currently zero auth) gets a `get_current_user` dependency, enforced via
+  `dependencies=[Depends(...)]` on each `app.include_router(...)` call for blanket coverage.
+- **Phase 3 — `market-data` BYO Dhan credentials**: the harder piece. `DhanProvider` is a
+  process-global singleton today — credentials, instrument-master sync, rate-limit throttle state,
+  and OI/price history are all shared, not per-instance. The instrument sync/OI history genuinely
+  are market-wide (not user-specific) and must stay shared — duplicating them per user would
+  multiply real Dhan API traffic for identical data. Only the actual outbound credential and the
+  rate-limit throttle need to become per-user (each user's own Dhan account has its own independent
+  rate budget; leaving the throttle global would bottleneck every user behind one shared 2-second
+  gate). `DeltaProvider`/CRYPTO needs no change — it's fully public/credential-free already, so that
+  segment already works per-user with zero setup.
+- **Phase 4 — frontend auth**: `manual-trading/frontend`'s `api.ts` has 60 `fetch()` call sites with
+  no shared low-level request wrapper — adding an `Authorization` header means introducing one first,
+  then migrating every call site to it. Login/Signup as a simple conditional-render gate (no router
+  exists or is needed). Known deferred gap: `tradeImageUrl`'s plain `<img src>` can't carry a bearer
+  header, so authenticated trade-screenshot loading needs its own follow-up (signed URL or
+  blob-fetch) — acceptable to leave open past MVP given screenshots are low-sensitivity.
 
 ## Trade discipline checklist
 

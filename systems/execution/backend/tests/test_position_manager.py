@@ -55,6 +55,10 @@ class FakePosition:
     close_fee: Optional[float] = None
     margin_posted: Optional[float] = None
     liquidation_price: Optional[float] = None
+    # None = the automated Strategy-driven flow's legacy convention (the
+    # default every existing test predates and still exercises) - see
+    # infra/postgres/init/02-execution.sql's own comment on this column.
+    user_id: Optional[str] = None
 
 
 @dataclass
@@ -75,10 +79,13 @@ class FakeOrder:
 
 
 def _accounts(balance: float = 1_000_000.0, segment: str = "NSE") -> dict:
-    """A fresh {segment: FakeAccount} dict per call - _apply_realized_pnl
-    mutates the account object in place, so tests that assert on balance
-    need their own isolated instance rather than a shared module-level one."""
-    return {segment: FakeAccount(segment=segment, starting_balance=balance, current_balance=balance)}
+    """A fresh {(user_id, segment): FakeAccount} dict per call - keyed to
+    match _accounts_by_segment's real shape (None user_id = the
+    automated-flow account every FakePosition above defaults to) -
+    _apply_realized_pnl mutates the account object in place, so tests
+    that assert on balance need their own isolated instance rather than a
+    shared module-level one."""
+    return {(None, segment): FakeAccount(segment=segment, starting_balance=balance, current_balance=balance)}
 
 
 def test_compute_pnl_buy_is_long():
@@ -562,7 +569,7 @@ def test_evaluate_exits_liquidation_credits_inr_converted_loss():
     accounts = _accounts(balance=200_000.0, segment="CRYPTO")
     result = _evaluate_exits(
         positions, get_ltp_batch=lambda ex, syms: {"BTCUSD": 65_000.0}, get_previous_candle=lambda *a: None,
-        accounts_by_segment=accounts, usdinr_rate=90.0,
+        accounts_by_segment=accounts, usdinr_rate_by_user={None: 90.0},
     )
 
     assert result["closed_stop_loss"] == 1
@@ -570,7 +577,7 @@ def test_evaluate_exits_liquidation_credits_inr_converted_loss():
     # pos.pnl (USD) stays unconverted; the account (INR) is credited at 90x it.
     usd_loss = positions[0].pnl
     assert usd_loss < 0
-    assert accounts["CRYPTO"].current_balance == pytest.approx(200_000.0 + usd_loss * 90.0)
+    assert accounts[(None, "CRYPTO")].current_balance == pytest.approx(200_000.0 + usd_loss * 90.0)
 
 
 def test_evaluate_exits_skips_position_when_quote_missing():
@@ -919,7 +926,7 @@ def test_evaluate_exits_credits_the_positions_own_segment_account():
 
     # stop_loss_price=98 not hit at cmp=104, so this closes via... wait, no target set - stays open.
     assert positions[0].status == "OPEN"
-    assert accounts["NSE"].current_balance == 200000.0  # untouched - nothing closed
+    assert accounts[(None, "NSE")].current_balance == 200000.0  # untouched - nothing closed
 
 
 def test_evaluate_exits_closing_a_loser_debits_its_segment_account():
@@ -932,7 +939,7 @@ def test_evaluate_exits_closing_a_loser_debits_its_segment_account():
 
     expected_pnl = compute_pnl("BUY", 100.0, 97.5, 10)  # -25.0
     assert positions[0].pnl == expected_pnl
-    assert accounts["NSE"].current_balance == 200000.0 + expected_pnl
+    assert accounts[(None, "NSE")].current_balance == 200000.0 + expected_pnl
 
 
 # --- optional per-strategy dedicated account (execution.strategy_accounts) -
@@ -960,7 +967,7 @@ def test_resolve_capital_account_falls_back_to_segment_when_no_dedicated_row():
 
     resolved = _resolve_capital_account(pos, accounts, {})  # strat-1 has no dedicated row
 
-    assert resolved is accounts["NSE"]
+    assert resolved is accounts[(None, "NSE")]
 
 
 def test_resolve_capital_account_falls_back_to_segment_when_no_strategy_id_at_all():
@@ -971,7 +978,7 @@ def test_resolve_capital_account_falls_back_to_segment_when_no_strategy_id_at_al
 
     resolved = _resolve_capital_account(pos, accounts, {"strat-1": dedicated})
 
-    assert resolved is accounts["NSE"]
+    assert resolved is accounts[(None, "NSE")]
 
 
 def test_resolve_capital_account_treats_none_strategy_accounts_as_empty():
@@ -984,7 +991,7 @@ def test_resolve_capital_account_treats_none_strategy_accounts_as_empty():
 
     resolved = _resolve_capital_account(pos, accounts, None)
 
-    assert resolved is accounts["NSE"]
+    assert resolved is accounts[(None, "NSE")]
 
 
 def test_evaluate_exits_credits_the_dedicated_strategy_account_when_one_exists():
@@ -1003,7 +1010,7 @@ def test_evaluate_exits_credits_the_dedicated_strategy_account_when_one_exists()
     assert positions[0].status == "CLOSED"
     # Credited to the DEDICATED account, not the shared segment one.
     assert strategy_accounts["strat-1"].current_balance == 50000.0 + expected_pnl
-    assert accounts["NSE"].current_balance == 200000.0  # untouched
+    assert accounts[(None, "NSE")].current_balance == 200000.0  # untouched
 
 
 def test_evaluate_square_off_due_credits_the_dedicated_strategy_account_when_one_exists():
@@ -1020,7 +1027,7 @@ def test_evaluate_square_off_due_credits_the_dedicated_strategy_account_when_one
 
     expected_pnl = compute_pnl("BUY", 100.0, 105.0, 10)
     assert strategy_accounts["strat-1"].current_balance == 50000.0 + expected_pnl
-    assert accounts["NSE"].current_balance == 200000.0  # untouched
+    assert accounts[(None, "NSE")].current_balance == 200000.0  # untouched
 
 
 # --- periodic due-position closing (each position's own stored square_off_time) -----------
@@ -1099,7 +1106,7 @@ def test_evaluate_square_off_due_credits_its_segment_account():
     _evaluate_square_off_due(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 105.0}, now_local=time(14, 30), accounts_by_segment=accounts)
 
     expected_pnl = compute_pnl("BUY", 100.0, 105.0, 10)  # +50.0
-    assert accounts["NSE"].current_balance == 200000.0 + expected_pnl
+    assert accounts[(None, "NSE")].current_balance == 200000.0 + expected_pnl
 
 
 def test_evaluate_square_off_due_handles_missing_account_without_crashing():

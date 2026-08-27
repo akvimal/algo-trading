@@ -72,6 +72,10 @@ class FakeGroup:
     duplicate_signal_policy: str = "add_position"
     counter_signal_policy: str = "skip"
     strategy_id: Optional[str] = None
+    # None = the automated Strategy-driven flow's legacy convention (the
+    # default every existing test predates and still exercises) - see
+    # infra/postgres/init/02-execution.sql's own comment on this column.
+    user_id: Optional[str] = None
 
 
 @dataclass
@@ -89,7 +93,11 @@ class FakeOrder:
 
 
 def _accounts(balance: float = 1_000_000.0, segment: str = "NSE") -> dict:
-    return {segment: FakeAccount(segment=segment, starting_balance=balance, current_balance=balance)}
+    """Keyed to match _accounts_by_segment's real (user_id, segment) shape
+    - None user_id is the automated-flow account every FakeGroup above
+    defaults to, same convention test_position_manager.py's own _accounts
+    helper uses."""
+    return {(None, segment): FakeAccount(segment=segment, starting_balance=balance, current_balance=balance)}
 
 
 def _legs(net_debit_entry: tuple[float, float] = (30.0, 10.0), quantity: float = 75) -> tuple:
@@ -123,7 +131,7 @@ def test_close_group_at_cmp_computes_combined_pnl_and_credits_account():
     accounts = _accounts()
 
     closed = _close_group_at_cmp(
-        group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 15.0}, accounts["NSE"], "manual"
+        group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 15.0}, accounts[(None, "NSE")], "manual"
     )
 
     assert closed is True
@@ -131,7 +139,7 @@ def test_close_group_at_cmp_computes_combined_pnl_and_credits_account():
     assert group.pnl == 750.0
     assert group.status == "CLOSED"
     assert group.exit_reason == "manual"
-    assert accounts["NSE"].current_balance == 1_000_000.0 + 750.0
+    assert accounts[(None, "NSE")].current_balance == 1_000_000.0 + 750.0
     assert long_leg.status == "CLOSED"
     assert long_leg.pnl == (45.0 - 30.0) * 75  # BUY leg: exit-entry
     assert short_leg.pnl == (10.0 - 15.0) * 75  # SELL leg: entry-exit
@@ -141,7 +149,7 @@ def test_close_group_at_cmp_returns_false_when_quote_unavailable():
     group = _group()
     long_leg, short_leg = _legs()
 
-    closed = _close_group_at_cmp(group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 45.0}, _accounts()["NSE"], "manual")
+    closed = _close_group_at_cmp(group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 45.0}, _accounts()[(None, "NSE")], "manual")
 
     assert closed is False
     assert group.status == "OPEN"
@@ -156,13 +164,13 @@ def test_close_group_at_cmp_naked_group_has_no_short_leg():
     long_leg = _naked_leg(entry_price=30.0)
     accounts = _accounts()
 
-    closed = _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"NIFTY-CE": 45.0}, accounts["NSE"], "manual")
+    closed = _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"NIFTY-CE": 45.0}, accounts[(None, "NSE")], "manual")
 
     assert closed is True
     assert group.pnl == (45.0 - 30.0) * 75
     assert group.status == "CLOSED"
     assert long_leg.pnl == (45.0 - 30.0) * 75
-    assert accounts["NSE"].current_balance == 1_000_000.0 + (45.0 - 30.0) * 75
+    assert accounts[(None, "NSE")].current_balance == 1_000_000.0 + (45.0 - 30.0) * 75
 
 
 # --- _evaluate_option_group_exits ----------------------------------------------------------------
@@ -219,7 +227,7 @@ def test_evaluate_option_group_exits_falls_back_to_segment_account_with_no_dedic
     )
 
     combined_pnl = (37.0 - 20.0) * group.quantity
-    assert accounts["NSE"].current_balance == 200000.0 + combined_pnl
+    assert accounts[(None, "NSE")].current_balance == 200000.0 + combined_pnl
 
 
 def test_evaluate_option_group_exits_leaves_open_when_neither_hit():
@@ -686,7 +694,7 @@ def test_close_group_at_cmp_nets_fees_for_crypto_group():
     long_leg = FakePosition(id="long", status="OPEN", exchange="CRYPTO", symbol="BTC-CALL", action="BUY", entry_price=1_500.0, quantity=0.1)
     accounts = _accounts(segment="CRYPTO")
 
-    closed = _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"BTC-CALL": 1_800.0}, accounts["CRYPTO"], "manual")
+    closed = _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"BTC-CALL": 1_800.0}, accounts[(None, "CRYPTO")], "manual")
 
     assert closed is True
     assert group.close_fee is not None and group.close_fee > 0
@@ -702,10 +710,10 @@ def test_close_group_at_cmp_credits_inr_converted_pnl_for_crypto_group():
     long_leg = FakePosition(id="long", status="OPEN", exchange="CRYPTO", symbol="BTC-CALL", action="BUY", entry_price=1_500.0, quantity=0.1)
     accounts = _accounts(balance=200_000.0, segment="CRYPTO")
 
-    _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"BTC-CALL": 1_800.0}, accounts["CRYPTO"], "manual", usdinr_rate=90.0)
+    _close_group_at_cmp(group, long_leg, None, lambda ex, syms: {"BTC-CALL": 1_800.0}, accounts[(None, "CRYPTO")], "manual", usdinr_rate=90.0)
 
     usd_pnl = group.pnl
-    assert accounts["CRYPTO"].current_balance == pytest.approx(200_000.0 + usd_pnl * 90.0)
+    assert accounts[(None, "CRYPTO")].current_balance == pytest.approx(200_000.0 + usd_pnl * 90.0)
 
 
 def test_close_group_at_cmp_unaffected_for_non_crypto_group():
@@ -716,7 +724,7 @@ def test_close_group_at_cmp_unaffected_for_non_crypto_group():
     long_leg, short_leg = _legs()
     accounts = _accounts()
 
-    _close_group_at_cmp(group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 15.0}, accounts["NSE"], "manual")
+    _close_group_at_cmp(group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 45.0, "NIFTY-CE-OTM": 15.0}, accounts[(None, "NSE")], "manual")
 
     assert group.close_fee is None
     assert group.pnl == pytest.approx((45.0 - 15.0 - 20.0) * 75)

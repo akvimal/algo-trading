@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.auth import User, get_current_user
 from app.domain.models import AccountUpdate, StrategyAccountCreate, StrategyAccountUpdate
+from app.domain.position_manager import load_account
 
 router = APIRouter()
 
@@ -28,15 +30,17 @@ def _to_out(row: db_models.Account) -> dict:
 
 
 @router.get("/accounts")
-def list_accounts(db: Session = Depends(get_db)):
-    """One row per segment - always exactly NSE/MCX/CRYPTO, seeded on
-    first container start. Returned in a stable order for the frontend."""
-    rows = {r.segment: r for r in db.query(db_models.Account).all()}
-    return [_to_out(rows[s]) for s in _SEGMENTS if s in rows]
+def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """One row per segment - always exactly NSE/MCX/CRYPTO, one per SaaS
+    user (created lazily with sensible defaults - see load_account - the
+    first time each is touched, so a brand-new signup always sees all 3
+    immediately rather than 404ing until they've placed a trade)."""
+    rows = {seg: load_account(db, user.id, seg) for seg in _SEGMENTS}
+    return [_to_out(rows[s]) for s in _SEGMENTS if rows[s] is not None]
 
 
 @router.put("/accounts/{segment}")
-def update_account(segment: str, update: AccountUpdate, db: Session = Depends(get_db)):
+def update_account(segment: str, update: AccountUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """capital_per_trade/risk_per_trade_pct/min_reward_risk_ratio/
     enforce_risk_based_lots/leverage/square_off_time are editable here -
     use POST /accounts/{segment}/reset to touch
@@ -47,7 +51,7 @@ def update_account(segment: str, update: AccountUpdate, db: Session = Depends(ge
     explicit {"square_off_time": null} from the key being omitted
     entirely, same pattern signal-generation's update_strategy uses for
     fixed_lots."""
-    row = db.get(db_models.Account, segment.upper())
+    row = load_account(db, user.id, segment.upper())
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
     if update.capital_per_trade is not None:
@@ -68,11 +72,11 @@ def update_account(segment: str, update: AccountUpdate, db: Session = Depends(ge
 
 
 @router.post("/accounts/{segment}/reset")
-def reset_account(segment: str, db: Session = Depends(get_db)):
+def reset_account(segment: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Resets current_balance back to starting_balance - does not touch
     capital_per_trade/risk_per_trade_pct or any positions. A manual reset
     for testing, same spirit as DELETE /positions but decoupled from it."""
-    row = db.get(db_models.Account, segment.upper())
+    row = load_account(db, user.id, segment.upper())
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
     row.current_balance = row.starting_balance

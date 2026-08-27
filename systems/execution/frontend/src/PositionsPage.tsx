@@ -8,9 +8,12 @@ import {
   type PositionPnlSnapshot,
   checkExitsNow,
   checkOptionGroupExitsNow,
+  clearPlatformPositions,
   clearPositions,
   fetchOptionGroupPnlHistory,
   fetchOptionGroups,
+  fetchPlatformOptionGroups,
+  fetchPlatformPositions,
   fetchPositionPnlHistory,
   fetchPositions,
   fetchStrategyNames,
@@ -24,6 +27,16 @@ import {
 import Nav from "./Nav";
 import { PnlChart, type PnlPoint } from "./PnlChart";
 import { SEGMENTS, formatPct, formatTime, localDateStr, money, moneySigned, pnlPercent, todayLocalDate } from "./format";
+
+// Merges this admin's own (user_id=caller) rows with the platform-wide
+// (user_id IS NULL, the automated Strategy-driven flow's own) rows into one
+// list, newest-first - the two come from separate GET calls (see
+// api.ts's fetchPlatformPositions/fetchPlatformOptionGroups) since the
+// backend keeps them strictly separate query-wise, but this page shows
+// them side by side rather than as two more tabs.
+function mergeByEntryTimeDesc<T extends { entry_time: string }>(own: T[], platform: T[]): T[] {
+  return [...own, ...platform].sort((a, b) => new Date(b.entry_time).getTime() - new Date(a.entry_time).getTime());
+}
 
 function combinedExitPrice(g: OptionGroup): number | null {
   const buyLeg = g.legs.find((l) => l.action === "BUY");
@@ -102,6 +115,7 @@ export default function PositionsPage() {
   const [squaringOff, setSquaringOff] = useState(false);
   const [checkingExits, setCheckingExits] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [clearingPlatform, setClearingPlatform] = useState(false);
   const [squaringOffId, setSquaringOffId] = useState<string | null>(null);
   const [squaringOffGroupId, setSquaringOffGroupId] = useState<string | null>(null);
   const [editingSlGroupId, setEditingSlGroupId] = useState<string | null>(null);
@@ -146,13 +160,15 @@ export default function PositionsPage() {
 
     async function poll() {
       try {
-        const [positionsData, groupsData] = await Promise.all([
+        const [positionsData, groupsData, platformPositionsData, platformGroupsData] = await Promise.all([
           fetchPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
           fetchOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
+          fetchPlatformPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
+          fetchPlatformOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
         ]);
         if (!cancelled) {
-          setPositions(positionsData);
-          setOptionGroups(groupsData);
+          setPositions(mergeByEntryTimeDesc(positionsData, platformPositionsData));
+          setOptionGroups(mergeByEntryTimeDesc(groupsData, platformGroupsData));
           setError(null);
           setLastUpdated(new Date());
         }
@@ -213,12 +229,14 @@ export default function PositionsPage() {
   }, [expandedGroupId]);
 
   async function refreshAll() {
-    const [freshPositions, freshGroups] = await Promise.all([
+    const [freshPositions, freshGroups, freshPlatformPositions, freshPlatformGroups] = await Promise.all([
       fetchPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
       fetchOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
+      fetchPlatformPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
+      fetchPlatformOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
     ]);
-    setPositions(freshPositions);
-    setOptionGroups(freshGroups);
+    setPositions(mergeByEntryTimeDesc(freshPositions, freshPlatformPositions));
+    setOptionGroups(mergeByEntryTimeDesc(freshGroups, freshPlatformGroups));
   }
 
   async function handleSquareOffNow() {
@@ -260,7 +278,9 @@ export default function PositionsPage() {
   async function handleClearPositions() {
     const confirmed = window.confirm(
       "Delete every position (OPEN/CLOSED/REJECTED) and every option position group? This can't be " +
-        "undone. Settings, signals in signal-processing, and strategies in signal-generation are untouched.",
+        "undone. Settings, signals in signal-processing, and strategies in signal-generation are untouched. " +
+        "This only clears YOUR OWN positions - Strategy-driven (webhook/in-house) positions live on the " +
+        "platform-wide account and need the separate 'Clear platform positions' button below.",
     );
     if (!confirmed) return;
     setClearing(true);
@@ -268,12 +288,32 @@ export default function PositionsPage() {
     try {
       const result = await clearPositions();
       setActionMessage(`Cleared ${result.positions_deleted} positions and ${result.option_groups_deleted} option groups.`);
-      setPositions([]);
-      setOptionGroups([]);
+      await refreshAll();
     } catch (err) {
       setActionMessage(err instanceof Error ? err.message : "Failed to clear positions");
     } finally {
       setClearing(false);
+    }
+  }
+
+  async function handleClearPlatformPositions() {
+    const confirmed = window.confirm(
+      "Delete EVERY platform-wide position and option group - the automated Strategy-driven flow's own " +
+        "(webhook/in-house signals), shared across every user, not just yours. This can't be undone.",
+    );
+    if (!confirmed) return;
+    setClearingPlatform(true);
+    setActionMessage(null);
+    try {
+      const result = await clearPlatformPositions();
+      setActionMessage(
+        `Cleared ${result.positions_deleted} platform positions and ${result.option_groups_deleted} platform option groups.`,
+      );
+      await refreshAll();
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : "Failed to clear platform positions");
+    } finally {
+      setClearingPlatform(false);
     }
   }
 
@@ -566,6 +606,14 @@ export default function PositionsPage() {
         <button onClick={handleClearPositions} disabled={clearing} className="danger tiny">
           {clearing ? "Clearing..." : "Clear positions"}
         </button>
+        <button
+          onClick={handleClearPlatformPositions}
+          disabled={clearingPlatform}
+          className="danger tiny"
+          title="Clears the automated Strategy-driven flow's own positions (webhook/in-house signals) - Clear positions above can't touch these, see Accounts > Platform account (admin)."
+        >
+          {clearingPlatform ? "Clearing..." : "Clear platform positions"}
+        </button>
       </div>
 
       {error && <p className="error">Could not reach the backend: {error}</p>}
@@ -794,6 +842,7 @@ export default function PositionsPage() {
                 <td title={p.rejection_reason ?? p.exit_reason ?? undefined}>
                   {p.status}
                   {p.exit_reason && <span className="muted"> ({p.exit_reason.replace("_", " ")})</span>}
+                  {p.rejection_reason && <span className="muted"> ({p.rejection_reason})</span>}
                 </td>
                 <td>
                   {p.status === "CLOSED" && (
@@ -1075,6 +1124,7 @@ export default function PositionsPage() {
                     <td title={g.rejection_reason ?? g.exit_reason ?? undefined}>
                       {g.status}
                       {g.exit_reason && <span className="muted"> ({g.exit_reason.replace("_", " ")})</span>}
+                      {g.rejection_reason && <span className="muted"> ({g.rejection_reason})</span>}
                     </td>
                   </tr>
                   {expanded && hasLegs && (

@@ -248,6 +248,22 @@ export async function fetchPositions(
   return asJson(res, "GET /positions");
 }
 
+// The platform-wide (user_id IS NULL) positions GET /positions can never
+// return - the automated Strategy-driven flow (Chartink webhooks, in-house
+// engine) opens these, and a Strategy isn't owned by any SaaS user. Every
+// caller of this frontend is already admin-gated end-to-end (AuthGate.tsx),
+// same reasoning as fetchPlatformAccounts below.
+export async function fetchPlatformPositions(
+  opts: { limit?: number; signalId?: string; withLivePnl?: boolean } = {},
+): Promise<Position[]> {
+  const params = new URLSearchParams({ limit: String(opts.limit ?? 100) });
+  if (opts.signalId) params.set("signal_id", opts.signalId);
+  if (opts.withLivePnl) params.set("with_live_pnl", "true");
+
+  const res = await authFetch(`${API_BASE}/positions/platform?${params}`);
+  return asJson(res, "GET /positions/platform");
+}
+
 // Oldest-first unrealized-P&L time series recorded by the exit-monitor's
 // own 30s tick (execution/backend/app/domain/position_manager.py's
 // record_position_pnl_snapshots) - fetched on demand when a Positions-grid
@@ -289,7 +305,7 @@ export async function fetchPlatformAccounts(): Promise<Account[]> {
 
 export async function updatePlatformAccount(
   segment: Account["segment"],
-  update: Partial<Pick<Account, "leverage" | "mtf_annual_interest_rate_pct">>,
+  update: Partial<Pick<Account, "leverage" | "mtf_annual_interest_rate_pct" | "square_off_time">>,
 ): Promise<Account> {
   const res = await authFetch(`${API_BASE}/accounts/platform/${segment}`, {
     method: "PUT",
@@ -477,6 +493,15 @@ export async function clearPositions(): Promise<ClearPositionsResult> {
   return asJson(res, "DELETE /positions");
 }
 
+// Platform-wide (user_id IS NULL) counterpart - the automated Strategy-
+// driven flow's own positions/groups, which clearPositions above can never
+// touch. See fetchPlatformPositions' own comment for why every caller of
+// this frontend is already admin-gated end-to-end.
+export async function clearPlatformPositions(): Promise<ClearPositionsResult> {
+  const res = await authFetch(`${API_BASE}/positions/platform`, { method: "DELETE" });
+  return asJson(res, "DELETE /positions/platform");
+}
+
 export type SquareOffOneResult = {
   status: string;
   position_id: string;
@@ -548,6 +573,19 @@ export async function fetchOptionGroups(
 
   const res = await authFetch(`${API_BASE}/option-groups?${params}`);
   return asJson(res, "GET /option-groups");
+}
+
+// Option-group counterpart to fetchPlatformPositions above - see that
+// function's own comment.
+export async function fetchPlatformOptionGroups(
+  opts: { limit?: number; signalId?: string; withLivePnl?: boolean } = {},
+): Promise<OptionGroup[]> {
+  const params = new URLSearchParams({ limit: String(opts.limit ?? 100) });
+  if (opts.signalId) params.set("signal_id", opts.signalId);
+  if (opts.withLivePnl) params.set("with_live_pnl", "true");
+
+  const res = await authFetch(`${API_BASE}/option-groups/platform?${params}`);
+  return asJson(res, "GET /option-groups/platform");
 }
 
 export type OptionGroupPnlSnapshot = { recorded_at: string; combined_price: number; unrealized_pnl: number };

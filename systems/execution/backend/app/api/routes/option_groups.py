@@ -21,7 +21,7 @@ from app.adapters.quotes.client import (
     resolve_symbol_by_security_id,
     resolve_underlying,
 )
-from app.auth import User, get_current_user
+from app.auth import User, get_current_user, require_admin
 from app.domain.models import ManualOptionPositionCreate, ReviewSubmit, SpotStopLossUpdate, SquareOffTimeUpdate, StopLossUpdate
 from app.domain.option_position_manager import (
     check_option_group_exits,
@@ -43,6 +43,16 @@ from app.domain.position_manager import (
 )
 
 router = APIRouter()
+
+
+def _authorized_owner_id(row_user_id: Optional[uuid.UUID], user: User) -> uuid.UUID | None:
+    """Option-group counterpart to positions.py's identical helper - see
+    that one's own docstring for the full reasoning."""
+    if row_user_id == user.id:
+        return user.id
+    if row_user_id is None and user.is_admin:
+        return None
+    raise HTTPException(status_code=404, detail="option group not found")
 
 
 def _group_to_out(
@@ -136,27 +146,21 @@ def _leg_dict(
     }
 
 
-@router.get("/option-groups")
-def list_option_groups(
-    status: Optional[str] = Query(default=None),
-    signal_id: Optional[str] = Query(default=None),
-    symbol: Optional[str] = Query(default=None),
-    segment: Optional[str] = Query(default=None),
-    manual_only: bool = Query(default=False),
-    limit: int = 100,
-    with_live_pnl: bool = Query(default=False),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+def _query_option_groups(
+    db: Session,
+    user_id: Optional[uuid.UUID],
+    status: Optional[str],
+    signal_id: Optional[str],
+    symbol: Optional[str],
+    segment: Optional[str],
+    manual_only: bool,
+    limit: int,
+    with_live_pnl: bool,
 ):
-    """Always scoped to the caller's own groups (user_id=user.id), same
-    isolation reasoning as GET /positions' own identical change.
-    signal_id: exact match, for cross-system deep links, same as
-    GET /positions. symbol (matched against underlying_symbol)/segment/
-    manual_only: same ManualTab.tsx per-row trade-history backfill
-    reasoning as GET /positions' own identical filters. with_live_pnl:
-    mark-to-market OPEN groups against a fresh combined quote - off by
-    default, same reasoning as GET /positions."""
-    q = db.query(db_models.OptionPositionGroup).filter_by(user_id=user.id)
+    """Shared by GET /option-groups (user_id=caller) and GET
+    /option-groups/platform (user_id=None) - see positions.py's identical
+    _query_positions for the reasoning."""
+    q = db.query(db_models.OptionPositionGroup).filter_by(user_id=user_id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:
@@ -192,6 +196,48 @@ def list_option_groups(
     return result
 
 
+@router.get("/option-groups")
+def list_option_groups(
+    status: Optional[str] = Query(default=None),
+    signal_id: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    segment: Optional[str] = Query(default=None),
+    manual_only: bool = Query(default=False),
+    limit: int = 100,
+    with_live_pnl: bool = Query(default=False),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Always scoped to the caller's own groups (user_id=user.id), same
+    isolation reasoning as GET /positions' own identical change (see
+    GET /option-groups/platform below for how to see the automated
+    Strategy-driven flow's own groups, user_id IS NULL).
+    signal_id: exact match, for cross-system deep links, same as
+    GET /positions. symbol (matched against underlying_symbol)/segment/
+    manual_only: same ManualTab.tsx per-row trade-history backfill
+    reasoning as GET /positions' own identical filters. with_live_pnl:
+    mark-to-market OPEN groups against a fresh combined quote - off by
+    default, same reasoning as GET /positions."""
+    return _query_option_groups(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+
+
+@router.get("/option-groups/platform")
+def list_platform_option_groups(
+    status: Optional[str] = Query(default=None),
+    signal_id: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    segment: Optional[str] = Query(default=None),
+    manual_only: bool = Query(default=False),
+    limit: int = 100,
+    with_live_pnl: bool = Query(default=False),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Option-group counterpart to GET /positions/platform - see that
+    route's own docstring for the full reasoning."""
+    return _query_option_groups(db, None, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+
+
 @router.get("/option-groups/{group_id}/pnl-history")
 def get_option_group_pnl_history(group_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Oldest-first combined-premium unrealized-P&L time series - group-
@@ -202,8 +248,9 @@ def get_option_group_pnl_history(group_id: str, user: User = Depends(get_current
     except ValueError:
         raise HTTPException(status_code=404, detail="option group not found")
     owner = db.get(db_models.OptionPositionGroup, parsed_id)
-    if owner is None or owner.user_id != user.id:
+    if owner is None:
         raise HTTPException(status_code=404, detail="option group not found")
+    _authorized_owner_id(owner.user_id, user)
     rows = (
         db.query(db_models.OptionGroupPnlSnapshot)
         .filter_by(option_group_id=parsed_id)
@@ -299,8 +346,9 @@ def edit_group_stop_loss(
         raise HTTPException(status_code=404, detail="option group not found")
 
     row = db.get(db_models.OptionPositionGroup, parsed_id)
-    if row is None or row.user_id != user.id:
+    if row is None:
         raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
     if row.sl_scope != "combined":
@@ -308,7 +356,7 @@ def edit_group_stop_loss(
     if payload.stop_loss_method is not None:
         raise HTTPException(status_code=422, detail="stop_loss_method is not supported for options - use stop_loss_price")
 
-    row = update_group_stop_loss(db, user.id, parsed_id, payload.stop_loss_price)
+    row = update_group_stop_loss(db, owner_id, parsed_id, payload.stop_loss_price)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
@@ -328,12 +376,13 @@ def edit_group_spot_stop_loss(
         raise HTTPException(status_code=404, detail="option group not found")
 
     row = db.get(db_models.OptionPositionGroup, parsed_id)
-    if row is None or row.user_id != user.id:
+    if row is None:
         raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
 
-    row = update_group_spot_stop_loss(db, user.id, parsed_id, payload.spot_stop_loss_price)
+    row = update_group_spot_stop_loss(db, owner_id, parsed_id, payload.spot_stop_loss_price)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
@@ -350,12 +399,13 @@ def edit_group_square_off_time(
         raise HTTPException(status_code=404, detail="option group not found")
 
     row = db.get(db_models.OptionPositionGroup, parsed_id)
-    if row is None or row.user_id != user.id:
+    if row is None:
         raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
 
-    row = update_group_square_off_time(db, user.id, parsed_id, payload.square_off_time)
+    row = update_group_square_off_time(db, owner_id, parsed_id, payload.square_off_time)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
@@ -392,7 +442,12 @@ def square_off_one(group_id: str, user: User = Depends(get_current_user), db: Se
     except ValueError:
         raise HTTPException(status_code=404, detail="option group not found")
 
-    result = square_off_option_group(db, user.id, parsed_id, functools.partial(get_ltp_batch, token=user.token))
+    group = db.get(db_models.OptionPositionGroup, parsed_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(group.user_id, user)
+
+    result = square_off_option_group(db, owner_id, parsed_id, functools.partial(get_ltp_batch, token=user.token))
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="option group not found")
     if result["status"] == "not_open":

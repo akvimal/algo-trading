@@ -49,7 +49,7 @@ export default function AccountsPage() {
   // MTF interest), not this admin's own personal paper-trading account.
   const [platformAccounts, setPlatformAccounts] = useState<Account[]>([]);
   const [platformDrafts, setPlatformDrafts] = useState<
-    Record<string, { leverage: number | ""; mtfInterestRate: number | "" }>
+    Record<string, { leverage: number | ""; mtfInterestRate: number | ""; squareOffTime: string }>
   >({});
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [savingPlatform, setSavingPlatform] = useState<string | null>(null);
@@ -233,7 +233,11 @@ export default function AccountsPage() {
           const next = { ...prev };
           for (const a of data) {
             if (!(a.segment in next))
-              next[a.segment] = { leverage: a.leverage, mtfInterestRate: a.mtf_annual_interest_rate_pct ?? "" };
+              next[a.segment] = {
+                leverage: a.leverage,
+                mtfInterestRate: a.mtf_annual_interest_rate_pct ?? "",
+                squareOffTime: a.square_off_time ? a.square_off_time.slice(0, 5) : "",
+              };
           }
           return next;
         });
@@ -402,6 +406,7 @@ export default function AccountsPage() {
       const updated = await updatePlatformAccount(segment, {
         leverage: draft.leverage,
         mtf_annual_interest_rate_pct: draft.mtfInterestRate === "" ? null : draft.mtfInterestRate,
+        square_off_time: draft.squareOffTime ? `${draft.squareOffTime}:00` : null,
       });
       setPlatformAccounts((prev) => prev.map((a) => (a.segment === segment ? updated : a)));
       setPlatformMessage(`Platform ${segment} account saved.`);
@@ -656,9 +661,12 @@ export default function AccountsPage() {
       <h2>Platform account (admin)</h2>
       <p className="subtitle">
         The platform-wide account the automated Strategy-driven flow actually sizes/holds against - separate from
-        this admin's own personal account above. Leverage/MTF interest configured here is broker/platform config,
-        not a per-SaaS-user setting - a Strategy opts in via its own <code>use_margin</code> field
-        (signal-generation) before this leverage ever applies to one of its orders.
+        this admin's own personal account above, and edited here since it belongs to no single SaaS user. This
+        includes <strong>Square-off</strong>: a webhook (e.g. Chartink) or in-house signal is checked against THIS
+        row's cutoff, not the personal account's own square-off time above - a signal received after it is
+        rejected with "received outside intraday window". Leverage/MTF interest here is broker/platform config too
+        - a Strategy opts in via its own <code>use_margin</code> field (signal-generation) before this leverage
+        ever applies to one of its orders.
       </p>
       {platformError && <p className="error">Could not reach the backend: {platformError}</p>}
       {platformMessage && <p className="action-message">{platformMessage}</p>}
@@ -669,13 +677,14 @@ export default function AccountsPage() {
               <th>Segment</th>
               <th>Leverage</th>
               <th>MTF interest %/yr (NSE)</th>
+              <th>Square-off (blank = never)</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {SEGMENTS.map((segment) => {
               const account = platformAccounts.find((a) => a.segment === segment);
-              const draft = platformDrafts[segment] ?? { leverage: "", mtfInterestRate: "" };
+              const draft = platformDrafts[segment] ?? { leverage: "", mtfInterestRate: "", squareOffTime: "" };
               return (
                 <tr key={segment}>
                   <td className="symbol">{segment}</td>
@@ -733,6 +742,19 @@ export default function AccountsPage() {
                     ) : (
                       "-"
                     )}
+                  </td>
+                  <td>
+                    <input
+                      type="time"
+                      title="The automated Strategy-driven flow (webhooks, in-house engine) always sizes/holds against THIS account, not any admin's own personal one above - this is the square-off cutoff a Chartink/in-house signal actually gets checked against."
+                      value={draft.squareOffTime}
+                      onChange={(e) =>
+                        setPlatformDrafts((prev) => ({
+                          ...prev,
+                          [segment]: { ...draft, squareOffTime: e.target.value },
+                        }))
+                      }
+                    />
                   </td>
                   <td>
                     <button

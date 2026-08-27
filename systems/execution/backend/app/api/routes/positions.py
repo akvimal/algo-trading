@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
-from app.auth import User, get_current_user
+from app.auth import User, get_current_user, require_admin
 from app.domain.models import ManualPositionCreate, ReviewSubmit, SquareOffTimeUpdate, StopLossUpdate
 from app.domain.position_manager import (
     check_exits,
@@ -26,6 +26,31 @@ from app.domain.position_manager import (
 )
 
 router = APIRouter()
+
+
+def _authorized_owner_id(row_user_id: Optional[uuid.UUID], user: User) -> uuid.UUID | None:
+    """A per-position action route (square-off, stop-loss edit, etc.) may
+    act on the caller's own row (user_id=user.id), or - since every caller
+    of this frontend is already an admin (AuthGate.tsx gates the whole app
+    behind one) - on a platform-wide row (user_id IS NULL) the automated
+    Strategy-driven flow itself owns, same reasoning as GET/DELETE
+    /positions/platform. Returns the actual owner to re-pass into the
+    domain function (None for a platform row, so load_settings/
+    load_capital_account etc. keep reading the platform's own account, not
+    the admin's personal one) - never the caller's own id when the row
+    belongs to the platform instead. Raises 404 for anything else,
+    including a genuinely unknown id or one owned by a DIFFERENT user
+    (never possible today, no second real user exists, but this is the
+    right behavior if one ever does). Confirmed live 2026-08-27: a
+    Strategy-driven position's per-row 'Square off' button silently 404'd
+    even though the position was visible (post-GET/positions/platform fix)
+    and genuinely OPEN, because this authorization check still only ever
+    accepted user.id."""
+    if row_user_id == user.id:
+        return user.id
+    if row_user_id is None and user.is_admin:
+        return None
+    raise HTTPException(status_code=404, detail="position not found")
 
 
 def _position_to_out(row: db_models.Position, live_price: Optional[float] = None, unrealized_pnl: Optional[float] = None) -> dict:
@@ -85,37 +110,22 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
     }
 
 
-@router.get("/positions")
-def list_positions(
-    status: Optional[str] = Query(default=None),
-    signal_id: Optional[str] = Query(default=None),
-    symbol: Optional[str] = Query(default=None),
-    segment: Optional[str] = Query(default=None),
-    manual_only: bool = Query(default=False),
-    limit: int = 100,
-    with_live_pnl: bool = Query(default=False),
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+def _query_positions(
+    db: Session,
+    user_id: Optional[uuid.UUID],
+    status: Optional[str],
+    signal_id: Optional[str],
+    symbol: Optional[str],
+    segment: Optional[str],
+    manual_only: bool,
+    limit: int,
+    with_live_pnl: bool,
 ):
-    """Always scoped to the caller's own positions (user_id=user.id) - the
-    automated Strategy-driven flow's positions (user_id IS NULL) are never
-    visible via this route regardless of any other filter, same isolation
-    every other route in this file now has. signal_id: exact match, for
-    cross-system deep links (?signal_id=... from signal-processing's
-    frontend to this position's outcome). symbol/segment: exact match -
-    backs ManualTab.tsx's own per-row trade-history backfill (a row has no
-    persisted identity beyond symbol+segment+instrument_type, so this is
-    how it re-finds its own past trades after a reload, rather than only
-    ever seeing closes detected live during the current session).
-    manual_only: strategy_id IS NULL - always true in practice now that
-    this route is user-scoped (every one of a user's own positions is
-    already manual), kept for backward-compatible query-param shape.
-    with_live_pnl: mark-to-market OPEN positions in this response against
-    a fresh quote (one batched call per distinct exchange) - off by
-    default since it means extra Dhan calls on every request; the
-    frontend opts in for its own polling, other callers (cross-links,
-    other systems) don't pay for it unless they ask."""
-    q = db.query(db_models.Position).filter_by(user_id=user.id)
+    """Shared by GET /positions (user_id=caller) and GET /positions/platform
+    (user_id=None) - identical filtering/serialization, only the ownership
+    scope differs. See both routes' own docstrings for what each filter
+    means."""
+    q = db.query(db_models.Position).filter_by(user_id=user_id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:
@@ -139,6 +149,64 @@ def list_positions(
     ]
 
 
+@router.get("/positions")
+def list_positions(
+    status: Optional[str] = Query(default=None),
+    signal_id: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    segment: Optional[str] = Query(default=None),
+    manual_only: bool = Query(default=False),
+    limit: int = 100,
+    with_live_pnl: bool = Query(default=False),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Always scoped to the caller's own positions (user_id=user.id) - the
+    automated Strategy-driven flow's positions (user_id IS NULL) are never
+    visible via this route regardless of any other filter, same isolation
+    every other route in this file now has (see GET /positions/platform
+    below for how to actually see those). signal_id: exact match, for
+    cross-system deep links (?signal_id=... from signal-processing's
+    frontend to this position's outcome). symbol/segment: exact match -
+    backs ManualTab.tsx's own per-row trade-history backfill (a row has no
+    persisted identity beyond symbol+segment+instrument_type, so this is
+    how it re-finds its own past trades after a reload, rather than only
+    ever seeing closes detected live during the current session).
+    manual_only: strategy_id IS NULL - always true in practice now that
+    this route is user-scoped (every one of a user's own positions is
+    already manual), kept for backward-compatible query-param shape.
+    with_live_pnl: mark-to-market OPEN positions in this response against
+    a fresh quote (one batched call per distinct exchange) - off by
+    default since it means extra Dhan calls on every request; the
+    frontend opts in for its own polling, other callers (cross-links,
+    other systems) don't pay for it unless they ask."""
+    return _query_positions(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+
+
+@router.get("/positions/platform")
+def list_platform_positions(
+    status: Optional[str] = Query(default=None),
+    signal_id: Optional[str] = Query(default=None),
+    symbol: Optional[str] = Query(default=None),
+    segment: Optional[str] = Query(default=None),
+    manual_only: bool = Query(default=False),
+    limit: int = 100,
+    with_live_pnl: bool = Query(default=False),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """The platform-wide (user_id IS NULL) positions GET /positions above
+    can never return - the ones the automated Strategy-driven flow (Chartink
+    webhooks, in-house engine) actually opens, since a Strategy isn't owned
+    by any SaaS user (see position_manager.open_position's own comment).
+    Admin-gated like GET /accounts/platform, not user-scoped at all - there
+    is only one platform, not one per caller. Confirmed live 2026-08-27: a
+    Strategy-driven signal resolved and opened a real OPEN position, but it
+    was invisible on the Positions page because GET /positions is
+    unconditionally user_id=user.id - this route is what makes it visible."""
+    return _query_positions(db, None, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+
+
 @router.get("/positions/{position_id}/pnl-history")
 def get_position_pnl_history(position_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Oldest-first unrealized-P&L time series recorded by the exit-monitor
@@ -152,8 +220,9 @@ def get_position_pnl_history(position_id: str, user: User = Depends(get_current_
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
     owner = db.get(db_models.Position, parsed_id)
-    if owner is None or owner.user_id != user.id:
+    if owner is None:
         raise HTTPException(status_code=404, detail="position not found")
+    _authorized_owner_id(owner.user_id, user)
     rows = (
         db.query(db_models.PositionPnlSnapshot)
         .filter_by(position_id=parsed_id)
@@ -265,14 +334,15 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         raise HTTPException(status_code=404, detail="position not found")
 
     row = db.get(db_models.Position, parsed_id)
-    if row is None or row.user_id != user.id:
+    if row is None:
         raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
     row, reject_reason = update_stop_loss(
         db,
-        user.id,
+        owner_id,
         parsed_id,
         payload.stop_loss_price,
         payload.stop_loss_method,
@@ -307,12 +377,13 @@ def edit_square_off_time(
         raise HTTPException(status_code=404, detail="position not found")
 
     row = db.get(db_models.Position, parsed_id)
-    if row is None or row.user_id != user.id:
+    if row is None:
         raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
-    row = update_square_off_time(db, user.id, parsed_id, payload.square_off_time)
+    row = update_square_off_time(db, owner_id, parsed_id, payload.square_off_time)
     return _position_to_out(row)
 
 
@@ -366,7 +437,12 @@ def square_off_one(
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
 
-    result = square_off_position(db, user.id, parsed_id, functools.partial(get_ltp_batch, token=user.token), quantity)
+    pos = db.get(db_models.Position, parsed_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(pos.user_id, user)
+
+    result = square_off_position(db, owner_id, parsed_id, functools.partial(get_ltp_batch, token=user.token), quantity)
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="position not found")
     if result["status"] == "not_open":
@@ -397,5 +473,22 @@ def clear_positions(user: User = Depends(get_current_user), db: Session = Depend
     own schema, see docs/architecture.md."""
     positions_deleted = db.query(db_models.Position).filter_by(user_id=user.id).delete()
     option_groups_deleted = db.query(db_models.OptionPositionGroup).filter_by(user_id=user.id).delete()
+    db.commit()
+    return {"positions_deleted": positions_deleted, "option_groups_deleted": option_groups_deleted}
+
+
+@router.delete("/positions/platform")
+def clear_platform_positions(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Platform-wide (user_id IS NULL) counterpart to DELETE /positions
+    above - the automated Strategy-driven flow's own positions/groups,
+    which the user-scoped route can never touch (same reason GET /positions
+    can't see them - see GET /positions/platform's own docstring). Without
+    this there was no way to clear a Strategy-driven test position at all:
+    confirmed live 2026-08-27 - a user's "Clear positions" click reported
+    success but a platform position kept reappearing on refresh, because it
+    was never actually in scope to begin with. Same clear-both-tables-
+    together reasoning as DELETE /positions."""
+    positions_deleted = db.query(db_models.Position).filter_by(user_id=None).delete()
+    option_groups_deleted = db.query(db_models.OptionPositionGroup).filter_by(user_id=None).delete()
     db.commit()
     return {"positions_deleted": positions_deleted, "option_groups_deleted": option_groups_deleted}

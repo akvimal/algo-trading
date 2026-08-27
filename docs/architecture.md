@@ -294,24 +294,53 @@ HS256) rather than a remote call back to this service on every request, so later
 a token fast without making `accounts` a hard availability dependency for the whole platform — the
 tradeoff is that rotating `JWT_SECRET` invalidates every session. See `systems/accounts/README.md`.
 
-**Not yet done** (each is its own follow-on phase, deliberately not bundled into Phase 1 given the
-size/risk of each):
-- **Phase 2 — `execution` multi-tenancy**: `user_id` on all 11 tables, including two schema
-  wrinkles: `execution.accounts`' PK is bare `segment` today (becomes composite `(user_id, segment)`,
-  with the FKs from `positions`/`option_position_groups` following), and `execution.settings` is a
-  hard single-row table (`CHECK (id=1)`, becomes one row per user). `checklist_items` moves from
-  platform-wide to per-user, seeded with today's defaults on first use. Every one of `execution`'s
-  ~53 endpoints (currently zero auth) gets a `get_current_user` dependency, enforced via
-  `dependencies=[Depends(...)]` on each `app.include_router(...)` call for blanket coverage.
-- **Phase 3 — `market-data` BYO Dhan credentials**: the harder piece. `DhanProvider` is a
-  process-global singleton today — credentials, instrument-master sync, rate-limit throttle state,
-  and OI/price history are all shared, not per-instance. The instrument sync/OI history genuinely
-  are market-wide (not user-specific) and must stay shared — duplicating them per user would
-  multiply real Dhan API traffic for identical data. Only the actual outbound credential and the
-  rate-limit throttle need to become per-user (each user's own Dhan account has its own independent
-  rate budget; leaving the throttle global would bottleneck every user behind one shared 2-second
-  gate). `DeltaProvider`/CRYPTO needs no change — it's fully public/credential-free already, so that
-  segment already works per-user with zero setup.
+**Phase 2 — `execution` multi-tenancy (shipped 2026-08-26)**: `user_id` added to every one of
+`execution`'s 11 tables, with a nullable-vs-`NOT NULL` split rather than "not null everywhere" as
+originally scoped — tables shared with the automated Strategy-driven flow (`settings`, `accounts`,
+`positions`, `option_position_groups`, `checklist_items`) stay **nullable** (`NULL` = platform-wide/
+automated), while purely Manual-tab-only tables (`daily_checklist_log`, `trading_sessions`) are
+`NOT NULL`. `execution.accounts`' PK became composite `(user_id, segment)` (`UNIQUE ... NULLS NOT
+DISTINCT`, PG15+, so exactly one platform-wide `NULL`-user row can coexist with many per-user rows),
+and `execution.settings` — previously a hard `CHECK (id=1)` single row — got the same nullable
+`user_id` treatment. `load_account`/`load_settings` lazily create a sensible-default row for a new
+user the first time they're needed, mirroring the pre-SaaS seed-row convention; `checklist_items`
+clones the platform-wide template into a user's own editable copy on first `GET /checklist-items`.
+Every route touching a specific position/group/checklist-item now checks `row.user_id == user.id`.
+Cross-tenant batch jobs (`square_off_due_positions`, `check_exits`, and their option-group
+equivalents) deliberately stay **unscoped** — one tick processes every OPEN position/group regardless
+of owner, now resolving each owner's own `accounts`/`usdinr_rate` row via a `(user_id, segment)`-keyed
+batch lookup instead of a single global one. Every one of `execution`'s routes now requires a bearer
+token (`get_current_user`, verified locally against the shared `JWT_SECRET`, no round-trip to
+`accounts`) — this phase, unlike Phase 3 below, is a breaking migration: the frontend must send a
+token on every call from this point on.
+
+**Phase 3 — `market-data` BYO Dhan credentials (shipped 2026-08-27)**: unlike Phase 2,
+this phase is purely **additive** — Dhan credentials already have a safe, always-correct default
+(the platform-wide credential), so nothing needs to start requiring auth. `DhanProvider` gained an
+optional `credentials: Optional[DhanCredentials]` parameter (client_id/access_token/throttle_key) on
+every public method that makes a live call — `None` (the default) preserves today's behavior
+byte-for-byte. Its 3 rate-limit throttle timestamps became `dict[Optional[str], float]` keyed by
+`throttle_key`, so a BYO user gets an independent rate budget instead of contending with the
+platform's. `market-data` gained its own `app/auth.py` — unlike `execution`'s required
+`get_current_user`, this one (`get_optional_user_id`) never raises: a missing/invalid token just
+falls through to the platform default, since most of `market-data`'s routes must keep serving
+unauthenticated callers. A new `accounts` route, `GET /internal/credentials/{user_id}/dhan`,
+returns a user's Dhan credentials **decrypted** (the only route in that service that does) —
+protected by a shared `X-Internal-Secret` header (`INTERNAL_SERVICE_SECRET`) rather than a user JWT,
+since the caller is a trusted service, not a person; `market-data`'s new
+`app/adapters/accounts_client.py` calls it with a 300s in-memory cache (caching a "no credentials"
+result too, to avoid repeated round-trips). Only `execution`'s request-scoped manual-order/square-off
+routes (`positions.py`/`option_groups.py`) forward a caller's bearer token through to `market-data` —
+via `functools.partial(get_ltp_batch, token=user.token)`-style binding at the route layer, not a
+`token` parameter threaded through `position_manager.py`/`option_position_manager.py`'s own
+signatures, since those callbacks were already passed around as plain `Callable`s. `DeltaProvider`/
+CRYPTO needed no changes (fully public already). **Deliberately not done here** (documented gaps,
+same pattern as Phase 2's own flagged gaps): `execution`'s scheduler jobs (`square_off_due_positions`/
+`check_exits`) still run on the platform-default credential/rate budget, not split per owner;
+`manual-trading-frontend`'s ~10 direct-to-`market-data` browser calls (OI Summary, option chain
+preview, LTP) stay on the platform default until Phase 4 adds a bearer header there.
+
+**Not yet done**:
 - **Phase 4 — frontend auth**: `manual-trading/frontend`'s `api.ts` has 60 `fetch()` call sites with
   no shared low-level request wrapper — adding an `Authorization` header means introducing one first,
   then migrating every call site to it. Login/Signup as a simple conditional-render gate (no router

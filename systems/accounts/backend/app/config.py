@@ -19,5 +19,14 @@ class Settings(BaseSettings):
     # app/domain/security.py. Never logged, never returned by any route.
     credentials_encryption_key: str = "change-me-in-production-32-bytes-min"
 
+    # Protects GET /internal/credentials/{user_id}/dhan (Phase 3 of the
+    # manual-trading SaaS, see docs/architecture.md) - the one route that
+    # DOES return a decrypted secret, since market-data needs the real
+    # value to call Dhan on a user's behalf. A shared secret header, not a
+    # user JWT - the caller here is a trusted service (market-data), not
+    # a person. Known only to accounts and market-data, not execution or
+    # any frontend.
+    internal_service_secret: str = "change-me-in-production"
+
 
 settings = Settings()

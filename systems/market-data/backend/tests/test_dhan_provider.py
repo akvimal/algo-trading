@@ -4,7 +4,7 @@ import time
 import responses
 
 from app.config import settings
-from app.providers.dhan import LTP_URL, INSTRUMENT_MASTER_URL, DhanProvider
+from app.providers.dhan import LTP_URL, INSTRUMENT_MASTER_URL, DhanCredentials, DhanProvider
 
 FAKE_CSV = (
     "SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,SEM_EXPIRY_CODE,"
@@ -106,10 +106,58 @@ def test_get_ltp_fails_fast_when_throttle_queue_too_deep(monkeypatch):
     # up well past MAX_THROTTLE_WAIT_SECONDS, so this should raise
     # immediately rather than block the test (or a real request) for
     # several seconds.
-    provider._last_ltp_call_at = time.monotonic() + 3.0
+    provider._last_ltp_call_at[None] = time.monotonic() + 3.0
 
     try:
         provider.get_ltp("RELIANCE")
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "backed up" in str(exc)
+
+
+@responses.activate
+def test_get_ltp_batch_uses_byo_credentials_over_the_platform_default(monkeypatch):
+    """Phase 3 (BYO Dhan credentials, see docs/architecture.md) -
+    passing a DhanCredentials must authenticate the outbound call with
+    THAT client_id/access_token, not the platform-wide
+    settings.dhan_client_id/current_access_token()."""
+    monkeypatch.setattr(settings, "dhan_client_id", "platform-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "platform-token")
+
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=FAKE_CSV, status=200)
+    responses.add(responses.POST, LTP_URL, json={"data": {"NSE_EQ": {"2885": {"last_price": 2500.5}}}}, status=200)
+
+    provider = DhanProvider()
+    creds = DhanCredentials(client_id="user-client", access_token="user-token", throttle_key="user-1")
+    price = provider.get_ltp("RELIANCE", credentials=creds)
+
+    assert price == 2500.5
+    sent = responses.calls[-1].request
+    assert sent.headers["client-id"] == "user-client"
+    assert sent.headers["access-token"] == "user-token"
+
+
+@responses.activate
+def test_get_ltp_batch_byo_credentials_have_their_own_throttle_slot(monkeypatch):
+    """A backed-up platform-default throttle must not block a BYO user's
+    own call, and vice versa - each throttle_key gets an independent
+    rate-limit clock (see DhanProvider._throttle/DhanCredentials's own
+    docstring), same "independent throttle domains" property
+    test_candle_throttle_is_independent_of_ltp_throttle already proves
+    for the LTP-vs-candle split."""
+    monkeypatch.setattr(settings, "dhan_client_id", "platform-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "platform-token")
+
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=FAKE_CSV, status=200)
+    responses.add(responses.POST, LTP_URL, json={"data": {"NSE_EQ": {"2885": {"last_price": 2500.5}}}}, status=200)
+
+    provider = DhanProvider()
+    provider.sync_instruments()
+    # Simulate the PLATFORM-default queue backed up - a BYO user's own
+    # call (different throttle_key) must still succeed immediately.
+    provider._last_ltp_call_at[None] = time.monotonic() + 3.0
+
+    creds = DhanCredentials(client_id="user-client", access_token="user-token", throttle_key="user-1")
+    price = provider.get_ltp("RELIANCE", credentials=creds)
+
+    assert price == 2500.5

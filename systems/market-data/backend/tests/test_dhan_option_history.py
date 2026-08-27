@@ -154,7 +154,7 @@ def test_get_option_leg_history_fails_fast_when_throttle_queue_too_deep(monkeypa
     monkeypatch.setattr(settings, "dhan_access_token", "test-token")
 
     provider = _provider_with_nifty()
-    provider._last_option_chain_call_at = time.monotonic() + 5.0
+    provider._last_option_chain_call_at[None] = time.monotonic() + 5.0
     try:
         provider.get_option_leg_history("NIFTY", "CE", "ATM", "WEEK", 0, "5", date(2026, 8, 1), date(2026, 8, 5))
         assert False, "expected RuntimeError"

@@ -38,6 +38,15 @@ from app.domain.models import (
 )
 from app.domain.moneyness import classify_moneyness, infer_strike_step
 from app.providers.base import QuoteProvider
+# Only for the unused `credentials` param's type on get_ltp/get_ltp_batch/
+# get_previous_candle/get_candle_history below - a plain intra-system
+# import (both live under systems/market-data), not a cross-system one -
+# lets route code call provider.get_ltp_batch(..., credentials=creds)
+# uniformly regardless of which concrete provider get_provider(exchange)
+# happened to return, without this provider needing to know or care
+# what's inside DhanCredentials (Delta needs no credentials at all - see
+# this module's own docstring).
+from app.providers.dhan import DhanCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -336,8 +345,8 @@ class DeltaProvider(QuoteProvider):
             for symbol, price in prices.items():
                 self._quote_cache[symbol] = (price, now)
 
-    def get_ltp(self, symbol: str) -> float:
-        result = self.get_ltp_batch([symbol])
+    def get_ltp(self, symbol: str, credentials: Optional[DhanCredentials] = None) -> float:
+        result = self.get_ltp_batch([symbol], credentials=credentials)
         if symbol not in result:
             raise ValueError(f"no LTP available for '{symbol}' - unknown symbol or Delta omitted it")
         return result[symbol]
@@ -396,12 +405,15 @@ class DeltaProvider(QuoteProvider):
                     fresh[symbol] = float(row["close"])
         return fresh
 
-    def get_ltp_batch(self, symbols: list[str]) -> dict[str, float]:
+    def get_ltp_batch(self, symbols: list[str], credentials: Optional[DhanCredentials] = None) -> dict[str, float]:
         """Batches a mix of perpetual and option symbols - see
         _fetch_perpetual_quotes/_fetch_option_quotes for how each half is
         actually fetched. A pending symbol matching neither shape (unknown
         symbol) is simply absent from the result, same as an unresolvable
-        one always was."""
+        one always was. `credentials` is accepted-and-ignored (never
+        used) - every Delta endpoint is public, see this module's own
+        docstring; the param exists only so callers can pass it uniformly
+        regardless of which provider get_provider(exchange) returned."""
         if not symbols:
             return {}
 
@@ -535,7 +547,10 @@ class DeltaProvider(QuoteProvider):
         with self._candle_cache_lock:
             self._candle_cache[(symbol, interval)] = (candle, time.monotonic())
 
-    def get_previous_candle(self, symbol: str, interval: str) -> Optional[Candle]:
+    def get_previous_candle(
+        self, symbol: str, interval: str, credentials: Optional[DhanCredentials] = None
+    ) -> Optional[Candle]:
+        """credentials accepted-and-ignored - see get_ltp_batch's own comment."""
         resolve_interval_minutes(interval, DELTA_CANDLE_INTERVAL_MINUTES)  # raises ValueError for a malformed interval
 
         cached = self._cached_candle(symbol, interval)
@@ -552,7 +567,10 @@ class DeltaProvider(QuoteProvider):
         self._store_candle(symbol, interval, candle)
         return candle
 
-    def get_candle_history(self, symbol: str, interval: str, from_date: date, to_date: date) -> list[Candle]:
+    def get_candle_history(
+        self, symbol: str, interval: str, from_date: date, to_date: date, credentials: Optional[DhanCredentials] = None
+    ) -> list[Candle]:
+        """credentials accepted-and-ignored - see get_ltp_batch's own comment."""
         resolve_interval_minutes(interval, DELTA_CANDLE_INTERVAL_MINUTES)  # raises ValueError for a malformed interval
 
         tz = ZoneInfo(settings.timezone)

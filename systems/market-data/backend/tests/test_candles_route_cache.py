@@ -20,7 +20,7 @@ class FakeProvider:
     def __init__(self):
         self.call_count = 0
 
-    def get_candle_history(self, symbol, interval, from_date, to_date):
+    def get_candle_history(self, symbol, interval, from_date, to_date, credentials=None):
         self.call_count += 1
         return [Candle(exchange="NSE", symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, timestamp=f"{from_date}T09:15:00", provider="fake")]
 

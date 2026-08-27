@@ -60,5 +60,21 @@ class Settings(BaseSettings):
         "NATURALGAS:1250,NATGASMINI:250"
     )
 
+    # BYO Dhan credentials (Phase 3 of the manual-trading SaaS, see
+    # docs/architecture.md) - jwt_secret verifies the same bearer tokens
+    # systems/accounts issues (must match its own JWT_SECRET exactly),
+    # used ONLY to optionally identify a caller (app/auth.py's
+    # get_optional_user_id never raises - most routes here still serve
+    # unauthenticated callers on the platform-default Dhan credential
+    # exactly as before this phase). internal_service_secret/
+    # accounts_base_url are for the outbound call to accounts' own
+    # internal, decrypted-credential-returning route (see
+    # app/adapters/accounts_client.py) - must match accounts' identical
+    # INTERNAL_SERVICE_SECRET.
+    jwt_secret: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+    internal_service_secret: str = "change-me-in-production"
+    accounts_base_url: str = "http://accounts-backend:8000"
+
 
 settings = Settings()

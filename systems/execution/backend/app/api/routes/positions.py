@@ -1,3 +1,4 @@
+import functools
 import uuid
 from typing import Optional
 
@@ -203,8 +204,8 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         settings,
         db,
         resolve_underlying,
-        get_previous_candle,
-        get_candle_history,
+        functools.partial(get_previous_candle, token=user.token),
+        functools.partial(get_candle_history, token=user.token),
         payload.stop_loss_method,
         payload.stop_loss_interval,
         payload.stop_loss_percent,
@@ -276,8 +277,8 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         payload.stop_loss_indicator_type,
         payload.stop_loss_indicator_params,
         payload.trailing_stop_enabled,
-        get_previous_candle,
-        get_candle_history,
+        functools.partial(get_previous_candle, token=user.token),
+        functools.partial(get_candle_history, token=user.token),
     )
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
@@ -317,7 +318,7 @@ def square_off_now(user: User = Depends(get_current_user), db: Session = Depends
     caller immediately, regardless of each one's own square_off_time.
     Useful for squaring off early or testing without waiting for the
     clock."""
-    return square_off_all_open(db, user.id, get_ltp_batch)
+    return square_off_all_open(db, user.id, functools.partial(get_ltp_batch, token=user.token))
 
 
 @router.post("/positions/square-off-due")
@@ -361,7 +362,7 @@ def square_off_one(
     except ValueError:
         raise HTTPException(status_code=404, detail="position not found")
 
-    result = square_off_position(db, user.id, parsed_id, get_ltp_batch, quantity)
+    result = square_off_position(db, user.id, parsed_id, functools.partial(get_ltp_batch, token=user.token), quantity)
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="position not found")
     if result["status"] == "not_open":

@@ -100,6 +100,17 @@ services:
       # "underlying:qty" pairs, comma-separated. See
       # app/providers/dhan.py's _parse_lot_size_overrides.
       MCX_LOT_SIZE_OVERRIDES: ${MCX_LOT_SIZE_OVERRIDES:-GOLD:100,GOLDM:10,CRUDEOIL:100,CRUDEOILM:10,SILVER:30,SILVERM:5,SILVERMIC:1,SILVER100:10,NATURALGAS:1250,NATGASMINI:250}
+      # BYO Dhan credentials (Phase 3, see docs/architecture.md) - lets a
+      # request carrying a real user's bearer token (forwarded by
+      # execution-backend on the manual-order/square-off routes) use that
+      # user's own Dhan credentials/rate budget instead of the platform
+      # default above. A missing/invalid token, or accounts-backend being
+      # unreachable, degrades to the platform default - see app/auth.py
+      # and app/adapters/accounts_client.py's own comments. Must match
+      # ACCOUNTS_JWT_SECRET/INTERNAL_SERVICE_SECRET exactly.
+      JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      ACCOUNTS_BASE_URL: http://accounts-backend:8000
     volumes:
       # PUT /dhan/credentials persists here (app/providers/dhan.py) so a
       # UI-submitted Dhan token survives a container restart instead of
@@ -163,6 +174,12 @@ services:
       DATABASE_SCHEMA: accounts
       JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
       CREDENTIALS_ENCRYPTION_KEY: ${ACCOUNTS_CREDENTIALS_ENCRYPTION_KEY}
+      # Shared only with market-data-backend (Phase 3, BYO Dhan
+      # credentials - see docs/architecture.md) - protects GET
+      # /internal/credentials/{user_id}/dhan, the one route in this
+      # service that returns a decrypted plaintext secret, since its
+      # caller is a trusted service rather than a user with a JWT.
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
     ports:
       - "${ACCOUNTS_BACKEND_PORT}:8000"
     depends_on:

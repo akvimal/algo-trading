@@ -6,9 +6,13 @@ gets a clean 404 instead of an AttributeError, same reasoning as
 app/providers/dhan_feed.py's _resolve_target."""
 
 from datetime import date
+from typing import Optional
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.adapters.accounts_client import get_user_dhan_credentials
+from app.auth import get_optional_user_id
 from app.domain.models import OptionChain, OptionLegCandle, OptionOiSummary
 from app.domain.oi_summary import build_oi_summary
 from app.providers.router import get_provider
@@ -17,7 +21,7 @@ router = APIRouter()
 
 
 @router.get("/options/expiries")
-def get_expiries(exchange: str, symbol: str):
+def get_expiries(exchange: str, symbol: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
     try:
         provider = get_provider(exchange)
     except ValueError as exc:
@@ -28,7 +32,8 @@ def get_expiries(exchange: str, symbol: str):
         raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
 
     try:
-        expiries = resolver(symbol)
+        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        expiries = resolver(symbol, credentials=credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if expiries is None:
@@ -37,7 +42,7 @@ def get_expiries(exchange: str, symbol: str):
 
 
 @router.get("/options/chain", response_model=OptionChain)
-def get_chain(exchange: str, symbol: str, expiry: str):
+def get_chain(exchange: str, symbol: str, expiry: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
     try:
         provider = get_provider(exchange)
     except ValueError as exc:
@@ -48,7 +53,8 @@ def get_chain(exchange: str, symbol: str, expiry: str):
         raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
 
     try:
-        chain = resolver(symbol, expiry)
+        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        chain = resolver(symbol, expiry, credentials=credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if chain is None:

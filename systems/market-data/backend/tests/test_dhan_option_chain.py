@@ -182,7 +182,7 @@ def test_get_option_chain_fails_fast_when_throttle_queue_too_deep(monkeypatch):
     # Simulate a request already in-flight far enough ahead that the
     # implied wait exceeds MAX_THROTTLE_WAIT_SECONDS - should raise
     # immediately rather than block the test for several seconds.
-    provider._last_option_chain_call_at = time.monotonic() + 5.0
+    provider._last_option_chain_call_at[None] = time.monotonic() + 5.0
 
     try:
         provider.get_option_chain("NIFTY", "2026-08-14")

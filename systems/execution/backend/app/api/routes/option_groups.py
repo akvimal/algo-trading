@@ -3,6 +3,7 @@ module - see docs/architecture.md). Mirrors positions.py's route
 shapes/status-code conventions 1:1 - see there for the spot/future
 equivalents this parallels."""
 
+import functools
 import uuid
 from typing import Optional
 
@@ -249,9 +250,9 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         settings,
         db,
         resolve_underlying,
-        get_expiry_list,
-        get_option_chain,
-        get_ltp_batch,
+        functools.partial(get_expiry_list, token=user.token),
+        functools.partial(get_option_chain, token=user.token),
+        functools.partial(get_ltp_batch, token=user.token),
         resolve_symbol_by_security_id,
         get_lot_size,
         [a.model_dump() for a in payload.plan_checklist],
@@ -363,7 +364,7 @@ def edit_group_square_off_time(
 def square_off_all_now(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Manual override - closes EVERY open option group BELONGING TO the
     caller immediately, same as POST /positions/square-off for spot/future."""
-    return square_off_all_open_option_groups(db, user.id, get_ltp_batch)
+    return square_off_all_open_option_groups(db, user.id, functools.partial(get_ltp_batch, token=user.token))
 
 
 @router.post("/option-groups/square-off-due")
@@ -391,7 +392,7 @@ def square_off_one(group_id: str, user: User = Depends(get_current_user), db: Se
     except ValueError:
         raise HTTPException(status_code=404, detail="option group not found")
 
-    result = square_off_option_group(db, user.id, parsed_id, get_ltp_batch)
+    result = square_off_option_group(db, user.id, parsed_id, functools.partial(get_ltp_batch, token=user.token))
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="option group not found")
     if result["status"] == "not_open":

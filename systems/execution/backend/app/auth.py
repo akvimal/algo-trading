@@ -25,6 +25,14 @@ _bearer = HTTPBearer(auto_error=False)
 @dataclass
 class User:
     id: UUID
+    # The raw bearer token itself (not just the decoded id) - Phase 3
+    # (BYO Dhan credentials, see docs/architecture.md) forwards this
+    # verbatim to market-data on the manual-order/square-off routes, so
+    # market-data can independently verify it and resolve THIS user's own
+    # Dhan credentials, rather than trusting a bare client-supplied
+    # user_id (which would let anyone burn another user's Dhan quota just
+    # by guessing a UUID).
+    token: str
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) -> User:
@@ -40,4 +48,4 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_bearer
     except (KeyError, ValueError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token payload")
 
-    return User(id=user_id)
+    return User(id=user_id, token=credentials.credentials)

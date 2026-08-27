@@ -3,9 +3,12 @@ import threading
 import time
 from datetime import date, datetime, timezone
 from typing import Optional
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.adapters.accounts_client import get_user_dhan_credentials
+from app.auth import get_optional_user_id
 from app.domain.models import Candle, CandleCacheStatus, DataAvailability
 from app.providers.router import get_provider
 
@@ -52,19 +55,21 @@ def _history_cache_ttl_seconds(interval: str, to_date: date) -> float:
 
 
 @router.get("/candles/previous", response_model=Candle)
-def get_previous_candle(exchange: str, symbol: str, interval: str):
+def get_previous_candle(exchange: str, symbol: str, interval: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
     """The most recently completed candle only - not a historical range,
     see app/providers/dhan.py get_previous_candle for scope/rationale.
     404 if unavailable (unknown symbol, or no completed candle yet e.g.
     just after market open) - same "not found" semantics as GET
-    /quotes/ltp for an unknown symbol."""
+    /quotes/ltp for an unknown symbol. BYO Dhan credentials (Phase 3) -
+    see GET /quotes/ltp/batch's own docstring."""
     try:
         provider = get_provider(exchange)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        candle = provider.get_previous_candle(symbol, interval)
+        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        candle = provider.get_previous_candle(symbol, interval, credentials=credentials)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -83,6 +88,7 @@ def get_candle_history(
     interval: str,
     from_: Optional[date] = Query(default=None, alias="from"),
     to: Optional[date] = None,
+    user_id: Optional[UUID] = Depends(get_optional_user_id),
 ):
     """A general multi-bar series over [from_, to] - used to warm up
     indicator state (signal-generation's RSI/SMA engine) and for
@@ -90,7 +96,11 @@ def get_candle_history(
     one value. `from_` (query param `from`) defaults to 7 days back,
     `to` defaults to today, if omitted. Cached per exact (exchange,
     symbol, interval, from_date, to_date) tuple - see
-    _history_cache_ttl_seconds for how long."""
+    _history_cache_ttl_seconds for how long. Note: this route-level cache
+    isn't credential-aware (a cache hit returns the same candle DATA
+    regardless of who fetched it originally, so this is harmless - it
+    just means a cache hit never even resolves BYO credentials, which is
+    fine since candle values don't depend on whose token fetched them)."""
     try:
         provider = get_provider(exchange)
     except ValueError as exc:
@@ -109,7 +119,8 @@ def get_candle_history(
             return candles
 
     try:
-        candles = provider.get_candle_history(symbol, interval, from_date, to_date)
+        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        candles = provider.get_candle_history(symbol, interval, from_date, to_date, credentials=credentials)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:

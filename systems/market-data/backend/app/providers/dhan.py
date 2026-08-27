@@ -601,6 +601,25 @@ def _parse_lot_size_overrides(raw: str) -> dict[str, int]:
 _LOT_SIZE_OVERRIDES = _parse_lot_size_overrides(settings.mcx_lot_size_overrides)
 
 
+@dataclass(frozen=True)
+class DhanCredentials:
+    """A specific user's own Dhan client_id/access_token - an optional
+    override of the platform-wide global credential (current_access_token()/
+    settings.dhan_client_id above), threaded through DhanProvider's public
+    methods for BYO credentials (Phase 3 of the manual-trading SaaS, see
+    docs/architecture.md). Resolved per-request from systems/accounts by
+    app/adapters/accounts_client.py, never constructed here directly.
+    throttle_key scopes rate-limit state independently per user - their
+    own Dhan account has its own real rate budget, so shouldn't contend
+    with the platform's or another user's (see DhanProvider's throttle
+    dicts below) - always str(user_id), never logged or used for
+    anything else."""
+
+    client_id: str
+    access_token: str
+    throttle_key: str
+
+
 class DhanProvider(QuoteProvider):
     def __init__(self, segment_configs: Optional[list[SegmentConfig]] = None, name: str = "dhan") -> None:
         # Defaults to NSE-cash-equity-only, matching this class's
@@ -631,12 +650,19 @@ class DhanProvider(QuoteProvider):
         # set underlying_of.
         self._underlying_to_contracts: dict[str, list[ContractInfo]] = {}
         self._last_synced_at: Optional[datetime] = None
-        self._last_ltp_call_at: float = 0.0
+        # Rate-limit throttle timestamps, keyed by a throttle key (None =
+        # the platform-default credential; a BYO user's own str(user_id)
+        # otherwise - see DhanCredentials/_throttle above/below) rather
+        # than a single scalar, so a user with their own Dhan account gets
+        # their own independent rate budget instead of contending with
+        # the platform's (or another user's) - see docs/architecture.md
+        # Phase 3.
+        self._last_ltp_call_at: dict[Optional[str], float] = {}
         self._quote_cache: dict[str, tuple[float, float]] = {}  # symbol -> (price, fetched_at)
         self._quote_cache_lock = threading.Lock()
 
         self._candle_lock = threading.Lock()
-        self._last_candle_call_at: float = 0.0
+        self._last_candle_call_at: dict[Optional[str], float] = {}
         # (symbol, interval) -> (candle, fetched_at) - TTL is the
         # interval's own length (see _cached_candle), not the 3s quote
         # TTL, since a completed candle doesn't change until the next one
@@ -645,7 +671,7 @@ class DhanProvider(QuoteProvider):
         self._candle_cache_lock = threading.Lock()
 
         self._option_chain_lock = threading.Lock()
-        self._last_option_chain_call_at: float = 0.0
+        self._last_option_chain_call_at: dict[Optional[str], float] = {}
         self._option_chain_cache: dict[tuple[str, str], tuple[OptionChain, float]] = {}
         self._option_chain_cache_lock = threading.Lock()
 
@@ -677,6 +703,21 @@ class DhanProvider(QuoteProvider):
             "symbol_count": len(self._symbol_to_security_id),
             "last_synced_at": self._last_synced_at.isoformat() if self._last_synced_at else None,
         }
+
+    def _throttle(self, lock: threading.Lock, timestamps: dict, key: Optional[str], min_interval: float, label: str) -> None:
+        """Shared wait-then-stamp logic for the LTP/candle/option-chain
+        throttle families below - `timestamps` is one of
+        self._last_ltp_call_at/_last_candle_call_at/_last_option_chain_call_at,
+        keyed by `key` (None = platform-default credential, str(user_id)
+        for a BYO one - see DhanCredentials's own docstring) so each gets
+        an independent rate-limit clock."""
+        with lock:
+            wait = min_interval - (time.monotonic() - timestamps.get(key, 0.0))
+            if wait > MAX_THROTTLE_WAIT_SECONDS:
+                raise RuntimeError(f"Dhan {label} queue is backed up ({wait:.1f}s wait) - try again shortly")
+            if wait > 0:
+                time.sleep(wait)
+            timestamps[key] = time.monotonic()
 
     def sync_instruments(self) -> dict:
         logger.info("syncing Dhan instrument master from %s (%s)", INSTRUMENT_MASTER_URL, self.name)
@@ -877,13 +918,19 @@ class DhanProvider(QuoteProvider):
             for symbol, price in prices.items():
                 self._quote_cache[symbol] = (price, now)
 
-    def get_ltp(self, symbol: str) -> float:
-        result = self.get_ltp_batch([symbol])
+    def get_ltp(self, symbol: str, credentials: Optional[DhanCredentials] = None) -> float:
+        result = self.get_ltp_batch([symbol], credentials=credentials)
         if symbol not in result:
             raise ValueError(f"no LTP available for '{symbol}' - unknown symbol or Dhan omitted it")
         return result[symbol]
 
-    def get_ltp_batch(self, symbols: list[str]) -> dict[str, float]:
+    def get_ltp_batch(self, symbols: list[str], credentials: Optional[DhanCredentials] = None) -> dict[str, float]:
+        """credentials=None (the default) uses the platform-wide global
+        credential exactly as before Phase 3 - a specific user's own
+        DhanCredentials (resolved from systems/accounts by
+        app/adapters/accounts_client.py) both authenticates the outbound
+        call AND scopes the rate-limit throttle to their own independent
+        budget, see DhanCredentials's own docstring."""
         if not symbols:
             return {}
 
@@ -907,17 +954,12 @@ class DhanProvider(QuoteProvider):
         if not pending:
             return result  # everything was cached (or unknown)
 
-        access_token = current_access_token()
-        if not settings.dhan_client_id or not access_token:
+        access_token = credentials.access_token if credentials else current_access_token()
+        client_id = credentials.client_id if credentials else settings.dhan_client_id
+        if not client_id or not access_token:
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
-        with self._lock:
-            wait = MIN_LTP_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_ltp_call_at)
-            if wait > MAX_THROTTLE_WAIT_SECONDS:
-                raise RuntimeError(f"Dhan quote queue is backed up ({wait:.1f}s wait) - try again shortly")
-            if wait > 0:
-                time.sleep(wait)
-            self._last_ltp_call_at = time.monotonic()
+        self._throttle(self._lock, self._last_ltp_call_at, credentials.throttle_key if credentials else None, MIN_LTP_CALL_INTERVAL_SECONDS, "quote")
 
         body: dict[str, list[int]] = {}
         for security_id, (_symbol, segment_key) in pending.items():
@@ -929,7 +971,7 @@ class DhanProvider(QuoteProvider):
                 "Accept": "application/json",
                 "Content-Type": "application/json",
                 "access-token": access_token,
-                "client-id": settings.dhan_client_id,
+                "client-id": client_id,
             },
             json=body,
             timeout=15,
@@ -971,7 +1013,9 @@ class DhanProvider(QuoteProvider):
         with self._candle_cache_lock:
             self._candle_cache[(symbol, interval)] = (candle, time.monotonic())
 
-    def _fetch_candles(self, symbol: str, interval: str, from_dt: datetime, to_dt: datetime) -> list[Candle]:
+    def _fetch_candles(
+        self, symbol: str, interval: str, from_dt: datetime, to_dt: datetime, credentials: Optional[DhanCredentials] = None
+    ) -> list[Candle]:
         """Shared entry point for both get_previous_candle and
         get_candle_history. For a native Dhan granularity, this is a
         single request. For anything else (e.g. "3min"), Dhan has no
@@ -980,35 +1024,40 @@ class DhanProvider(QuoteProvider):
         way, returns only *completed* bars, oldest first."""
         minutes = _interval_minutes(interval)
         if interval in DHAN_CANDLE_INTERVAL_MINUTES:
-            return self._fetch_native_candles(symbol, interval, minutes, from_dt, to_dt)
-        one_min_candles = self._fetch_native_candles(symbol, "1min", 1, from_dt, to_dt)
+            return self._fetch_native_candles(symbol, interval, minutes, from_dt, to_dt, credentials)
+        one_min_candles = self._fetch_native_candles(symbol, "1min", 1, from_dt, to_dt, credentials)
         return _aggregate_candles(one_min_candles, interval, minutes)
 
     def _fetch_native_candles(
-        self, symbol: str, interval: str, interval_minutes: int, from_dt: datetime, to_dt: datetime
+        self,
+        symbol: str,
+        interval: str,
+        interval_minutes: int,
+        from_dt: datetime,
+        to_dt: datetime,
+        credentials: Optional[DhanCredentials] = None,
     ) -> list[Candle]:
         """The actual Dhan charts/intraday request/parse - `interval` must
         be one of Dhan's own native granularities (a key of
         DHAN_CANDLE_INTERVAL_MINUTES), used both directly (native
         intervals) and as the "1min" building block for local aggregation
         (see _fetch_candles). Returns only *completed* bars (excludes any
-        still-forming trailing bar), oldest first."""
+        still-forming trailing bar), oldest first. credentials - see
+        get_ltp_batch's own docstring, identical meaning here."""
         security_id = self._security_id(symbol)
         if security_id is None:
             logger.warning("unknown symbol '%s' (%s) - instrument master may need a sync", symbol, self.name)
             return []
 
-        access_token = current_access_token()
-        if not settings.dhan_client_id or not access_token:
+        access_token = credentials.access_token if credentials else current_access_token()
+        client_id = credentials.client_id if credentials else settings.dhan_client_id
+        if not client_id or not access_token:
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
-        with self._candle_lock:
-            wait = MIN_CANDLE_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_candle_call_at)
-            if wait > MAX_THROTTLE_WAIT_SECONDS:
-                raise RuntimeError(f"Dhan candle queue is backed up ({wait:.1f}s wait) - try again shortly")
-            if wait > 0:
-                time.sleep(wait)
-            self._last_candle_call_at = time.monotonic()
+        self._throttle(
+            self._candle_lock, self._last_candle_call_at, credentials.throttle_key if credentials else None,
+            MIN_CANDLE_CALL_INTERVAL_SECONDS, "candle",
+        )
 
         config = self._config_for(symbol)
         tz = ZoneInfo(settings.timezone)
@@ -1020,7 +1069,7 @@ class DhanProvider(QuoteProvider):
                 "Accept": "application/json",
                 "Content-Type": "application/json",
                 "access-token": access_token,
-                "client-id": settings.dhan_client_id,
+                "client-id": client_id,
             },
             json={
                 "securityId": security_id,
@@ -1068,14 +1117,18 @@ class DhanProvider(QuoteProvider):
             for i in completed
         ]
 
-    def get_previous_candle(self, symbol: str, interval: str) -> Optional[Candle]:
+    def get_previous_candle(
+        self, symbol: str, interval: str, credentials: Optional[DhanCredentials] = None
+    ) -> Optional[Candle]:
         """The most recently *completed* candle only - not a historical
         range (use get_candle_history for that). No true multi-symbol
         batching like get_ltp_batch - Dhan's charts/intraday endpoint is
         per-security-id, so callers needing several symbols must call
         this once each; the interval-length cache above is what keeps
         repeated calls (e.g. execution's exit-monitor job polling every
-        30s) from re-hitting Dhan every tick."""
+        30s) from re-hitting Dhan every tick. credentials is only ever
+        consulted on a cache miss - see get_ltp_batch's own docstring for
+        what it does."""
         _interval_minutes(interval)  # raises ValueError for a malformed interval; native or "Nmin" aggregate both fine
 
         cached = self._cached_candle(symbol, interval)
@@ -1088,7 +1141,7 @@ class DhanProvider(QuoteProvider):
         # reaching back into a previous day - "previous candle" is scoped
         # to today; if the market just opened and no candle has completed
         # yet, this correctly returns None below.
-        candles = self._fetch_candles(symbol, interval, now - timedelta(hours=6), now)
+        candles = self._fetch_candles(symbol, interval, now - timedelta(hours=6), now, credentials)
         if not candles:
             return None
 
@@ -1096,19 +1149,21 @@ class DhanProvider(QuoteProvider):
         self._store_candle(symbol, interval, candle)
         return candle
 
-    def get_candle_history(self, symbol: str, interval: str, from_date: date, to_date: date) -> list[Candle]:
+    def get_candle_history(
+        self, symbol: str, interval: str, from_date: date, to_date: date, credentials: Optional[DhanCredentials] = None
+    ) -> list[Candle]:
         """A general multi-bar series over a caller-supplied date range -
         NOT cached (unlike get_previous_candle, a historical range isn't
         a single value that goes stale on a fixed TTL). Used to warm up
         indicator state (RSI/SMA) for the in-house signal engine and for
         backtesting - see signal-generation's app/domain/engine.py and
-        backtest.py."""
+        backtest.py. credentials - see get_ltp_batch's own docstring."""
         _interval_minutes(interval)  # raises ValueError for a malformed interval; native or "Nmin" aggregate both fine
 
         tz = ZoneInfo(settings.timezone)
         from_dt = datetime.combine(from_date, datetime.min.time(), tzinfo=tz)
         to_dt = datetime.combine(to_date, datetime.max.time().replace(microsecond=0), tzinfo=tz)
-        return self._fetch_candles(symbol, interval, from_dt, to_dt)
+        return self._fetch_candles(symbol, interval, from_dt, to_dt, credentials)
 
     def get_data_availability(self, symbol: str, interval: str) -> DataAvailability:
         """A fixed, documented constant - not a live probe. See
@@ -1127,19 +1182,13 @@ class DhanProvider(QuoteProvider):
             ),
         )
 
-    def _option_chain_headers(self, access_token: str) -> dict:
-        return {"Accept": "application/json", "Content-Type": "application/json", "access-token": access_token, "client-id": settings.dhan_client_id}
+    def _option_chain_headers(self, access_token: str, client_id: str) -> dict:
+        return {"Accept": "application/json", "Content-Type": "application/json", "access-token": access_token, "client-id": client_id}
 
-    def _throttle_option_chain_call(self) -> None:
-        with self._option_chain_lock:
-            wait = MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_option_chain_call_at)
-            if wait > MAX_THROTTLE_WAIT_SECONDS:
-                raise RuntimeError(f"Dhan option-chain queue is backed up ({wait:.1f}s wait) - try again shortly")
-            if wait > 0:
-                time.sleep(wait)
-            self._last_option_chain_call_at = time.monotonic()
+    def _throttle_option_chain_call(self, key: Optional[str] = None) -> None:
+        self._throttle(self._option_chain_lock, self._last_option_chain_call_at, key, MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS, "option-chain")
 
-    def get_expiry_list(self, symbol: str) -> Optional[list[str]]:
+    def get_expiry_list(self, symbol: str, credentials: Optional[DhanCredentials] = None) -> Optional[list[str]]:
         """Every active option expiry date (YYYY-MM-DD) for `symbol` (e.g.
         "NIFTY") - None if `symbol` doesn't resolve on this provider.
         Self-throttled to Dhan's documented 1-request-per-3s limit and
@@ -1153,14 +1202,15 @@ class DhanProvider(QuoteProvider):
             return None
         segment_key, security_id = target
 
-        access_token = current_access_token()
-        if not settings.dhan_client_id or not access_token:
+        access_token = credentials.access_token if credentials else current_access_token()
+        client_id = credentials.client_id if credentials else settings.dhan_client_id
+        if not client_id or not access_token:
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
-        self._throttle_option_chain_call()
+        self._throttle_option_chain_call(credentials.throttle_key if credentials else None)
         resp = requests.post(
             OPTION_EXPIRY_LIST_URL,
-            headers=self._option_chain_headers(access_token),
+            headers=self._option_chain_headers(access_token, client_id),
             json={"UnderlyingScrip": int(security_id), "UnderlyingSeg": segment_key},
             timeout=15,
         )
@@ -1320,13 +1370,19 @@ class DhanProvider(QuoteProvider):
             moneyness=classify_moneyness(strike, spot, option_type, strike_step),
         )
 
-    def get_option_chain(self, symbol: str, expiry: str) -> Optional[OptionChain]:
+    def get_option_chain(
+        self, symbol: str, expiry: str, credentials: Optional[DhanCredentials] = None
+    ) -> Optional[OptionChain]:
         """Full option chain for `symbol` (e.g. "NIFTY") at `expiry`
         (YYYY-MM-DD, from get_expiry_list) - OI/Greeks/IV/bid-ask per
         strike, each leg's ITM/ATM/OTM classification computed via
         app/domain/moneyness.py. None if `symbol` doesn't resolve on this
         provider. Self-throttled to Dhan's documented 1-request-per-3s
-        limit and short-cached (OPTION_CHAIN_CACHE_TTL_SECONDS)."""
+        limit and short-cached (OPTION_CHAIN_CACHE_TTL_SECONDS).
+        credentials - see get_ltp_batch's own docstring; also forwarded
+        to the internal get_ltp_batch call below (spot LTP override) so
+        that stays consistent with whichever credential fetched the chain
+        itself."""
         cached = self._cached_option_chain(symbol, expiry)
         if cached is not None:
             return cached
@@ -1337,14 +1393,15 @@ class DhanProvider(QuoteProvider):
         segment_key, security_id = target
         config = self._config_for(symbol)
 
-        access_token = current_access_token()
-        if not settings.dhan_client_id or not access_token:
+        access_token = credentials.access_token if credentials else current_access_token()
+        client_id = credentials.client_id if credentials else settings.dhan_client_id
+        if not client_id or not access_token:
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
-        self._throttle_option_chain_call()
+        self._throttle_option_chain_call(credentials.throttle_key if credentials else None)
         resp = requests.post(
             OPTION_CHAIN_URL,
-            headers=self._option_chain_headers(access_token),
+            headers=self._option_chain_headers(access_token, client_id),
             json={"UnderlyingScrip": int(security_id), "UnderlyingSeg": segment_key, "Expiry": expiry},
             timeout=15,
         )
@@ -1377,7 +1434,7 @@ class DhanProvider(QuoteProvider):
         # rather than fail the whole chain fetch over a transient LTP hiccup.
         spot = data.get("last_price", 0.0)
         try:
-            live_ltp = self.get_ltp_batch([symbol]).get(symbol)
+            live_ltp = self.get_ltp_batch([symbol], credentials=credentials).get(symbol)
             if live_ltp is not None:
                 spot = live_ltp
         except Exception:
@@ -1458,17 +1515,18 @@ class DhanProvider(QuoteProvider):
         while chunk_start <= to_date:
             chunk_end = min(chunk_start + timedelta(days=OPTION_HISTORY_MAX_DAYS_PER_CALL - 1), to_date)
 
-            with self._option_chain_lock:
-                wait = MIN_OPTION_HISTORY_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_option_chain_call_at)
-                if wait > MAX_THROTTLE_WAIT_SECONDS:
-                    raise RuntimeError(f"Dhan option-history queue is backed up ({wait:.1f}s wait) - try again shortly")
-                if wait > 0:
-                    time.sleep(wait)
-                self._last_option_chain_call_at = time.monotonic()
+            # Not credentials-aware (unlike get_ltp_batch/get_option_chain/
+            # get_expiry_list) - this endpoint backs signal-generation's
+            # backtesting only, not the Manual-tab order-placement path
+            # Phase 3 scoped BYO credentials to - always the platform-
+            # default credential/throttle slot (key=None).
+            self._throttle(
+                self._option_chain_lock, self._last_option_chain_call_at, None, MIN_OPTION_HISTORY_CALL_INTERVAL_SECONDS, "option-history"
+            )
 
             resp = requests.post(
                 ROLLING_OPTION_URL,
-                headers=self._option_chain_headers(access_token),
+                headers=self._option_chain_headers(access_token, settings.dhan_client_id),
                 json={
                     "securityId": int(security_id),
                     "exchangeSegment": ROLLING_OPTION_EXCHANGE_SEGMENT,

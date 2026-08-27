@@ -397,12 +397,13 @@ def test_get_candle_history_returns_all_completed_bars_in_range(monkeypatch):
 
 
 def test_get_candle_history_unsupported_interval_raises():
-    """"daily" isn't a native Dhan intraday granularity and isn't an
-    "Nmin" shape either, so it can't be served by local aggregation -
-    unlike "30min", which now works via _aggregate_candles."""
+    """A genuinely unsupported "Nmin"-shaped interval string still raises -
+    unlike "30min" (works via _aggregate_candles) and unlike "daily" (now a
+    real, separately-routed endpoint - see test_dhan_candles.py's own
+    charts/historical tests, not this "unsupported" case anymore)."""
     provider = DhanProvider([NSE_EQ], name="dhan-nse")
     try:
-        provider.get_candle_history("RELIANCE", "daily", date.today(), date.today())
+        provider.get_candle_history("RELIANCE", "not-a-real-interval", date.today(), date.today())
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "unsupported candle interval" in str(exc)

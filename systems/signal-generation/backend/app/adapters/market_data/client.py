@@ -111,7 +111,15 @@ def get_candle_history(exchange: str, symbol: str, interval: str, from_date: dat
     )
     resp.raise_for_status()
     return [
-        CandleClose(timestamp=c["timestamp"], close=c["close"], high=c["high"], low=c["low"]) for c in resp.json()
+        CandleClose(
+            timestamp=c["timestamp"],
+            close=c["close"],
+            high=c["high"],
+            low=c["low"],
+            open=c.get("open", 0.0),
+            volume=c.get("volume", 0.0),
+        )
+        for c in resp.json()
     ]
 
 

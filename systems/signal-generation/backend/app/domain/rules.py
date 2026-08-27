@@ -33,12 +33,21 @@ class CandleClose:
     any indicator/rule (those only ever look at `close`) - they exist for
     app/domain/backtest.py's stop-loss/target hit detection, the closest
     a candle-only backtest can get to execution's continuous CMP
-    monitoring."""
+    monitoring. `open`/`volume` exist for app/domain/multi_condition.py's
+    Term primitives (candle_body/candle_range need open, a volume
+    condition needs volume) - every other rule type still ignores both.
+    Both default to 0.0 so every pre-existing CandleClose(...) call site
+    (crossover/breakout/range_breakout code and their tests, none of which
+    ever populated these) keeps working unchanged - only
+    app/adapters/market_data/client.py (the real construction site) and
+    multi_condition's own tests need to actually populate them."""
 
     timestamp: str
     close: float
     high: float
     low: float
+    open: float = 0.0
+    volume: float = 0.0
 
 
 @dataclass

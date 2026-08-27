@@ -515,6 +515,10 @@ class DeltaProvider(QuoteProvider):
                 high=float(row["high"]),
                 low=float(row["low"]),
                 close=float(row["close"]),
+                # Delta's own history/candles response includes it; 0.0
+                # fallback only as defense-in-depth, same as Dhan's own
+                # extraction - never actually expected to trigger.
+                volume=float(row.get("volume", 0.0)),
                 timestamp=datetime.fromtimestamp(row["time"], tz=tz).isoformat(),
                 provider=self.name,
             )

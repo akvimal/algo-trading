@@ -60,6 +60,29 @@ def compute_sma(values: list[Optional[float]], period: int) -> list[Optional[flo
     return result
 
 
+def compute_cci(candles: "list[CandleClose]", period: int) -> list[Optional[float]]:
+    """Commodity Channel Index (Lambert's original constant-0.015 scaling)
+    - typical_price = (high+low+close)/3. None for warm-up bars before
+    `period` typical-price values are available (via compute_sma above).
+    A flat window (mean_deviation == 0, e.g. period=1 or a completely
+    silent tape) yields 0.0 rather than dividing by zero. Not wired
+    through the Indicator/IndicatorType registry (compute_indicator/
+    indicator_warmup below) - it's a self-contained Term primitive for
+    app/domain/multi_condition.py, whose own `period` lives inline on the
+    Term rather than a saved Indicator row (see that module)."""
+    typical = [(c.high + c.low + c.close) / 3 for c in candles]
+    sma_tp = compute_sma(typical, period)
+    n = len(candles)
+    cci: list[Optional[float]] = [None] * n
+    for i in range(n):
+        if sma_tp[i] is None:
+            continue
+        window = typical[i - period + 1 : i + 1]
+        mean_deviation = sum(abs(v - sma_tp[i]) for v in window) / period
+        cci[i] = 0.0 if mean_deviation == 0 else (typical[i] - sma_tp[i]) / (0.015 * mean_deviation)
+    return cci
+
+
 def compute_indicator(indicator_type: str, params: dict, candles: "list[CandleClose]") -> list[Optional[float]]:
     """The indicator's own primary value series - dispatches to the right
     compute_* function for an Indicator's `type`. The one place that

@@ -22,11 +22,12 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings
-from app.domain import breakout, range_breakout
+from app.domain import breakout, multi_condition, range_breakout
 from app.domain.indicators import evaluate_regime_indicator, regime_indicator_warmup
 from app.domain.models import WEEKDAY_NAMES
 from app.domain.rule import (
     BreakoutRuleConfig,
+    MultiConditionRuleConfig,
     RangeBreakoutRuleConfig,
     parse_symbol_list,
     validate_indicator_params,
@@ -73,8 +74,22 @@ def history_window(bar_count: int, interval: str) -> tuple[date, date]:
     data and could never signal. Reproduced live: a 24/7 BTCUSD crossover
     rule with an 02:15-04:14 IST active window produced zero signals
     despite 6 real crossovers occurring in it, because every candle fetch
-    during that window still carried `to=<yesterday's UTC date>`."""
+    during that window still carried `to=<yesterday's UTC date>`.
+
+    interval='daily' gets its own branch: 1 bar IS 1 calendar day, not an
+    intraday bars-per-day conversion, and _MAX_HISTORY_DAYS doesn't apply
+    to it (that cap exists specifically because charts/intraday is
+    Dhan-capped at 90 days per request - charts/historical, which serves
+    'daily', has no such cap, see market-data's own dhan.py). Without this
+    branch, `_INTERVAL_MINUTES.get(interval, 5)` silently defaulted to 5
+    minutes for 'daily' (not a key in that dict), so e.g. a 200-bar EMA
+    warmup computed as needing only ~4 calendar days before being capped
+    to 30 anyway - both wildly short of the ~280+ calendar days 200 daily
+    bars actually need."""
     today = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
+    if interval == "daily":
+        days_needed = max(_MIN_HISTORY_DAYS, int(bar_count * 1.6) + 5)  # ~1.6x margin for weekends/holidays
+        return today - timedelta(days=days_needed), today
     minutes = _INTERVAL_MINUTES.get(interval, 5)
     bars_per_day = max(1, (6.25 * 60) // minutes)  # ~6h15m NSE session as a rough yardstick
     days_needed = max(_MIN_HISTORY_DAYS, min(_MAX_HISTORY_DAYS, int(bar_count / bars_per_day) + 2))
@@ -455,6 +470,98 @@ def _run_one_range_breakout(
     return True
 
 
+def _run_one_multi_condition(
+    db: Session,
+    strategy: db_models.Strategy,
+    rule_row: db_models.Rule,
+    rule: MultiConditionRuleConfig,
+    symbol: str,
+    today: date,
+    resolve_underlying: ResolveUnderlying,
+    get_candle_history: GetCandleHistory,
+    get_ltp: GetLtp,
+    post_signal: PostSignal,
+) -> bool:
+    """The live tick's multi-condition path - mirrors _run_one_breakout's
+    shape (resolve -> fetch -> dedupe-check -> evaluate -> regime filter ->
+    LTP fetch -> post_signal), generalized from breakout's fixed 2-interval
+    (HTF/LTF) fetch to however many DISTINCT intervals this rule's own
+    conditions use. No alignment needed here (unlike backtest replay, see
+    app/domain/multi_condition.py's own module docstring) - each interval
+    is fetched independently "up to now" and evaluate_multi_condition_live
+    reads the latest bar of each directly."""
+    resolved = resolve_underlying(strategy.segment, symbol)
+    if resolved is None:
+        logger.warning(
+            "could not resolve underlying %s (segment=%s) for strategy %s", symbol, strategy.segment, strategy.id
+        )
+        return False
+    if not _matches_contract_day_filter(strategy.instrument_type, strategy.segment, strategy.contract_day_filter, resolved.expiry, today):
+        return False
+
+    warmup_by_interval = multi_condition.multi_condition_warmup(rule)
+    # rule_row.interval always equals the FINEST condition interval (see
+    # validate_multi_condition_interval_consistency) - regime runs against
+    # that same series, same single-timeframe convention every other rule
+    # type's regime check already uses.
+    warmup_by_interval[rule_row.interval] = max(warmup_by_interval.get(rule_row.interval, 0), _regime_warmup_bars(db, rule_row))
+
+    candles_by_interval: dict[str, list[CandleClose]] = {}
+    for interval, bar_count in warmup_by_interval.items():
+        from_date, to_date = history_window(bar_count * _HISTORY_MULTIPLIER, interval)
+        candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, interval, from_date, to_date)
+        if not candles:
+            return False
+        candles_by_interval[interval] = candles
+
+    finest_candles = candles_by_interval[rule_row.interval]
+
+    run = db.get(db_models.EngineRun, (strategy.id, symbol))
+    if run is None:
+        run = db_models.EngineRun(strategy_id=strategy.id, symbol=symbol)
+        db.add(run)
+    run.last_checked_at = datetime.now(timezone.utc)
+
+    result = multi_condition.evaluate_multi_condition_live(rule, candles_by_interval)
+    if result is None:
+        return False
+    bias, latest_ts_str = result
+    latest_ts = datetime.fromisoformat(latest_ts_str)
+
+    if run.last_signal_candle_ts is not None and run.last_signal_candle_ts == latest_ts:
+        return False  # already acted on this exact completed bar
+
+    if not _regime_confirmed(db, rule_row, bias, finest_candles):
+        return False  # every condition fired, but the regime doesn't confirm its direction
+
+    trade_price = get_ltp(resolved.trade_exchange, resolved.trade_symbol)
+    if trade_price is None:
+        logger.warning("could not fetch LTP for trade symbol %s (%s) - skipping signal", resolved.trade_symbol, resolved.trade_exchange)
+        return False
+
+    post_signal(
+        {
+            "strategy_id": str(strategy.id),
+            # See _run_one_breakout's own comment on why this differs for
+            # instrument_type='option' - same reasoning applies unchanged.
+            "symbol": symbol if strategy.instrument_type == "option" else resolved.trade_symbol,
+            "exchange": resolved.trade_exchange,
+            "action": "BUY" if bias == "bullish" else "SELL",
+            "price": trade_price,
+            "source": "in_house",
+            "source_meta": {
+                "underlying": symbol,
+                "universe": rule_row.underlying if rule_row.underlying_type == "universe" else None,
+                "symbol_list": rule_row.underlying if rule_row.underlying_type == "symbol_list" else None,
+                "rule": "multi_condition",
+                "chart_symbol": resolved.chart_symbol,
+            },
+        }
+    )
+    run.last_signal_candle_ts = latest_ts
+    return True
+
+
 def _run_one(
     db: Session,
     strategy: db_models.Strategy,
@@ -477,6 +584,10 @@ def _run_one(
         return _run_one_breakout(db, strategy, rule_row, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal)
     if isinstance(rule, RangeBreakoutRuleConfig):
         return _run_one_range_breakout(
+            db, strategy, rule_row, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal
+        )
+    if isinstance(rule, MultiConditionRuleConfig):
+        return _run_one_multi_condition(
             db, strategy, rule_row, rule, symbol, today, resolve_underlying, get_candle_history, get_ltp, post_signal
         )
 

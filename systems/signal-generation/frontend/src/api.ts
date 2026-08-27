@@ -256,7 +256,59 @@ export type RangeBreakoutRuleConfig = {
   breakout_period: number;
 };
 
-export type RuleConfig = CrossoverRuleConfig | BreakoutRuleConfig | RangeBreakoutRuleConfig;
+// One leaf value in a MultiConditionRuleConfig's Condition (below) -
+// deliberately FLAT, not a recursive expression tree. `field` names which
+// raw OHLCV series a windowed kind (sma/ema/highest/lowest) or 'price'
+// itself reads off the candle - required for those, must be omitted for
+// every other kind. `offset_bars` shifts the whole computed series back N
+// completed bars - "N days/bars ago X". `scale` multiplies the final value
+// (covers e.g. "candle_range / 4" as scale=0.25). See backend's Term.
+export type TermKind =
+  | "price"
+  | "volume"
+  | "sma"
+  | "ema"
+  | "rsi"
+  | "cci"
+  | "highest"
+  | "lowest"
+  | "candle_body"
+  | "candle_range"
+  | "constant";
+
+export type Term = {
+  kind: TermKind;
+  field?: "open" | "high" | "low" | "close" | "volume";
+  period?: number;
+  offset_bars?: number;
+  scale?: number;
+  value?: number;
+};
+
+// One AND-combined leaf of a MultiConditionRuleConfig - `interval` is THIS
+// condition's own timeframe, independent of the Rule's own top-level
+// `interval` (unlike every other rule type). See backend's Condition.
+export type Condition = {
+  interval: Interval;
+  left: Term;
+  operator: ">" | "<" | ">=" | "<=";
+  right: Term;
+};
+
+// A 4th, structurally independent rule type - an arbitrary AND-combined
+// list of Conditions, each with its own timeframe, for recreating
+// Chartink-style multi-filter scans (e.g. "daily volume > its own 20-SMA
+// AND 15m CCI(200) > 100 AND ..."). Deliberately ONE-DIRECTIONAL
+// (`direction` picked once, matching how a Chartink scan itself is always
+// a buy-scan or a sell-scan, never both) - see backend's
+// MultiConditionRuleConfig.
+export type MultiConditionRuleConfig = {
+  type: "multi_condition";
+  direction: "bullish" | "bearish";
+  conditions: Condition[];
+};
+
+export type RuleConfig = CrossoverRuleConfig | BreakoutRuleConfig | RangeBreakoutRuleConfig | MultiConditionRuleConfig;
 
 // A saved, reusable, independently-backtestable definition of *when a
 // signal should fire* - a Strategy just picks one (Strategy.rule_id

@@ -69,17 +69,23 @@ logger = logging.getLogger(__name__)
 INSTRUMENT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 LTP_URL = "https://api.dhan.co/v2/marketfeed/ltp"
 CANDLE_URL = "https://api.dhan.co/v2/charts/intraday"
+# Dhan's separate daily-bars endpoint (see the DHAN_CANDLE_INTERVAL_MINUTES
+# comment below for why interval='daily' can't go through CANDLE_URL) -
+# same auth/response-field shape as charts/intraday per Dhan's own docs,
+# just date-keyed instead of interval-keyed, and with no 90-day-per-request
+# cap ("available back upto the date of its inception") - see
+# _fetch_historical_candles.
+HISTORICAL_URL = "https://api.dhan.co/v2/charts/historical"
 RENEW_TOKEN_URL = "https://api.dhan.co/v2/RenewToken"
 OPTION_CHAIN_URL = "https://api.dhan.co/v2/optionchain"
 OPTION_EXPIRY_LIST_URL = "https://api.dhan.co/v2/optionchain/expirylist"
 ROLLING_OPTION_URL = "https://api.dhan.co/v2/charts/rollingoption"
 
 # Dhan's charts/intraday only *natively* supports these interval values
-# (minutes) - notably 25, not 30, and no daily granularity (that's a
-# separate charts/historical endpoint returning DAILY bars only - wrong
-# granularity for intraday RSI, so get_candle_history below stays on
-# this same intraday endpoint with a real date range instead). Any other
-# "Nmin" interval (3min, 2min, 10min, 20min, 30min, ...) is served by
+# (minutes) - notably 25, not 30, and no daily granularity at all
+# ('daily' is served by the separate HISTORICAL_URL endpoint instead - see
+# get_candle_history's own dispatch and _fetch_historical_candles). Any
+# other "Nmin" interval (3min, 2min, 10min, 20min, 30min, ...) is served by
 # fetching native 1min bars and aggregating them locally - see
 # _interval_minutes/_aggregate_candles below - so the interval vocabulary
 # used by Strategy's interval (signal-generation) is NOT limited to this
@@ -1097,6 +1103,7 @@ class DhanProvider(QuoteProvider):
             return []
 
         opens, highs, lows, closes = data.get("open", []), data.get("high", []), data.get("low", []), data.get("close", [])
+        volumes = data.get("volume", [])
         interval_seconds = interval_minutes * 60
         # Dhan may include a still-forming final bar - only trust bars
         # whose full interval has already elapsed.
@@ -1111,6 +1118,100 @@ class DhanProvider(QuoteProvider):
                 high=float(highs[i]),
                 low=float(lows[i]),
                 close=float(closes[i]),
+                # volumes may be absent/short on some Dhan responses (option
+                # legs, older data) - 0.0 rather than crashing, same
+                # graceful-degradation spirit as the rest of this parse.
+                volume=float(volumes[i]) if i < len(volumes) else 0.0,
+                timestamp=datetime.fromtimestamp(timestamps[i], tz=tz).isoformat(),
+                provider=self.name,
+            )
+            for i in completed
+        ]
+
+    def _fetch_historical_candles(
+        self, symbol: str, from_date: date, to_date: date, credentials: Optional[DhanCredentials] = None
+    ) -> list[Candle]:
+        """The actual Dhan charts/historical request/parse - real daily
+        bars, a separate endpoint from charts/intraday (see HISTORICAL_URL's
+        own comment), not a repurposing of it. Plain YYYY-MM-DD date
+        strings (no datetime.combine/timezone dance the intraday path
+        needs) and no `interval` field at all - this endpoint is
+        daily-only. Reuses the exact same throttle state as
+        _fetch_native_candles (self._candle_lock/MIN_CANDLE_CALL_INTERVAL_SECONDS)
+        rather than an independent one - both are charts/* endpoints on the
+        same Dhan API key, and there's no confirmed evidence they carry
+        separate rate budgets; split this out later if live use shows that
+        assumption wrong. Returns only *completed* days (excludes any
+        still-forming trailing bar), oldest first."""
+        security_id = self._security_id(symbol)
+        if security_id is None:
+            logger.warning("unknown symbol '%s' (%s) - instrument master may need a sync", symbol, self.name)
+            return []
+
+        access_token = credentials.access_token if credentials else current_access_token()
+        client_id = credentials.client_id if credentials else settings.dhan_client_id
+        if not client_id or not access_token:
+            raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
+
+        self._throttle(
+            self._candle_lock, self._last_candle_call_at, credentials.throttle_key if credentials else None,
+            MIN_CANDLE_CALL_INTERVAL_SECONDS, "candle",
+        )
+
+        config = self._config_for(symbol)
+        tz = ZoneInfo(settings.timezone)
+        now_epoch = datetime.now(tz).timestamp()
+
+        resp = requests.post(
+            HISTORICAL_URL,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "access-token": access_token,
+                "client-id": client_id,
+            },
+            json={
+                "securityId": security_id,
+                "exchangeSegment": config.candle_exchange_segment,
+                "instrument": config.candle_instrument,
+                "fromDate": from_date.isoformat(),
+                "toDate": to_date.isoformat(),
+                "oi": False,
+            },
+            timeout=30,
+        )
+        if resp.status_code == 401:
+            raise RuntimeError("Dhan API rejected the access token (401) - it may need to be regenerated")
+        if resp.status_code == 429:
+            raise RuntimeError("Dhan API rate limit hit (429) on charts/historical - retry shortly")
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            raise RuntimeError(f"Dhan API error ({resp.status_code}): {resp.text[:200]}") from exc
+
+        data = resp.json()
+        timestamps = data.get("timestamp") or []
+        if not timestamps:
+            return []
+
+        opens, highs, lows, closes = data.get("open", []), data.get("high", []), data.get("low", []), data.get("close", [])
+        volumes = data.get("volume", [])
+        # A full trading day, not an interval_minutes-derived duration
+        # (this endpoint has no interval concept) - excludes today's own
+        # not-yet-complete day, same "still-forming bar" defensiveness
+        # _fetch_native_candles applies at intraday granularity.
+        completed = [i for i, ts in enumerate(timestamps) if ts + 86400 <= now_epoch]
+
+        return [
+            Candle(
+                exchange=config.exchange,
+                symbol=symbol,
+                interval="daily",
+                open=float(opens[i]),
+                high=float(highs[i]),
+                low=float(lows[i]),
+                close=float(closes[i]),
+                volume=float(volumes[i]) if i < len(volumes) else 0.0,
                 timestamp=datetime.fromtimestamp(timestamps[i], tz=tz).isoformat(),
                 provider=self.name,
             )
@@ -1157,7 +1258,14 @@ class DhanProvider(QuoteProvider):
         a single value that goes stale on a fixed TTL). Used to warm up
         indicator state (RSI/SMA) for the in-house signal engine and for
         backtesting - see signal-generation's app/domain/engine.py and
-        backtest.py. credentials - see get_ltp_batch's own docstring."""
+        backtest.py. credentials - see get_ltp_batch's own docstring.
+        interval='daily' is a genuinely different endpoint (see
+        _fetch_historical_candles) - dispatched here, before the
+        _interval_minutes validation below, which correctly has no 'daily'
+        entry for every other interval."""
+        if interval == "daily":
+            return self._fetch_historical_candles(symbol, from_date, to_date, credentials)
+
         _interval_minutes(interval)  # raises ValueError for a malformed interval; native or "Nmin" aggregate both fine
 
         tz = ZoneInfo(settings.timezone)
@@ -1169,7 +1277,22 @@ class DhanProvider(QuoteProvider):
         """A fixed, documented constant - not a live probe. See
         DHAN_INTRADAY_MAX_DAYS_PER_REQUEST above for how this was
         confirmed; unlike Delta's real history-depth question, this
-        never changes, so there's nothing to check live."""
+        never changes, so there's nothing to check live. interval='daily'
+        goes through the separate charts/historical endpoint
+        (_fetch_historical_candles), which per Dhan's own docs has no
+        per-request day cap at all - report None (same "only one of the
+        two optional fields populated" convention DataAvailability already
+        uses for Delta's earliest_available_date-only case), not the
+        90-day intraday figure, which doesn't apply to it."""
+        if interval == "daily":
+            return DataAvailability(
+                exchange=self._config_for(symbol).exchange,
+                symbol=symbol,
+                interval=interval,
+                max_days_per_request=None,
+                earliest_available_date=None,
+                note="Dhan's daily-candle endpoint has no fixed per-request cap - available back to the scrip's own inception.",
+            )
         return DataAvailability(
             exchange=self._config_for(symbol).exchange,
             symbol=symbol,

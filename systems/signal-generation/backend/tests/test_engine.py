@@ -32,6 +32,22 @@ def test_history_window_caps_at_max_days_for_large_bar_counts():
     assert (to_date - from_date).days <= 30
 
 
+def test_history_window_daily_scales_with_bar_count_not_5min_default():
+    # Before the 'daily' branch existed, _INTERVAL_MINUTES.get(interval, 5)
+    # silently defaulted 'daily' to 5 minutes, producing a wildly
+    # undersized range - a 200-bar EMA warmup must actually get well over
+    # 200 calendar days, not ~4 (and not the 30-day intraday cap either).
+    from_date, to_date = history_window(bar_count=200, interval="daily")
+    assert (to_date - from_date).days > 200
+
+
+def test_history_window_daily_not_capped_at_30_days():
+    from_date, to_date = history_window(bar_count=10, interval="daily")
+    assert (to_date - from_date).days >= 3
+    from_date, to_date = history_window(bar_count=1000, interval="daily")
+    assert (to_date - from_date).days > 1000
+
+
 # --- _target_symbols: expanding a Rule into what the engine actually checks -------------
 
 

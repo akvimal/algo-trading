@@ -400,7 +400,8 @@ tbody tr:last-child td {
 }
 
 .strategy-form input,
-.strategy-form select {
+.strategy-form select,
+.strategy-form textarea {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -408,6 +409,11 @@ tbody tr:last-child td {
   padding: 0.4rem 0.6rem;
   font-size: 0.9rem;
   min-width: 10rem;
+}
+
+.strategy-form textarea {
+  font-family: inherit;
+  resize: vertical;
 }
 
 .strategy-form input[type="number"] {
@@ -576,6 +582,37 @@ tbody tr:last-child td {
 
 .title-field {
   max-width: 28rem;
+}
+
+.multi-condition-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+}
+
+.conditions-text-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.conditions-text-editor textarea {
+  font-family: monospace;
+  font-size: 0.85rem;
+  min-width: 24rem;
+  resize: vertical;
+}
+
+.conditions-parse-errors {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--sell);
 }
 
 .form-actions {

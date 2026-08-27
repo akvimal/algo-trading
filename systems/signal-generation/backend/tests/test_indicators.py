@@ -2,6 +2,7 @@ import pytest
 
 from app.domain import regime as regime_module
 from app.domain.indicators import (
+    compute_cci,
     compute_indicator,
     compute_indicator_signal,
     compute_rsi,
@@ -69,6 +70,38 @@ def test_compute_sma_skips_windows_containing_none():
     values = [None, 10.0, 20.0, 30.0]
     sma = compute_sma(values, period=2)
     assert sma == [None, None, 15.0, 25.0]
+
+
+# --- compute_cci: Commodity Channel Index -----------------------------------------------------
+
+
+def _hlc_candles(bars: list[tuple[float, float, float]]) -> list[CandleClose]:
+    return [CandleClose(timestamp=f"t{i}", high=h, low=lo, close=c) for i, (h, lo, c) in enumerate(bars)]
+
+
+def test_compute_cci_warmup_period_is_none():
+    candles = _hlc_candles([(10, 8, 9), (12, 10, 11)])  # only 2 bars, period=3
+    cci = compute_cci(candles, period=3)
+    assert cci == [None, None]
+
+
+def test_compute_cci_known_value():
+    # typical price (H+L+C)/3 = 9, 11, 13 - SMA(TP,3) at bar 2 = 11,
+    # mean deviation = (|9-11|+|11-11|+|13-11|)/3 = 4/3, so
+    # CCI[2] = (13-11) / (0.015 * 4/3) = 2 / 0.02 = 100.0 exactly.
+    candles = _hlc_candles([(10, 8, 9), (12, 10, 11), (14, 12, 13)])
+    cci = compute_cci(candles, period=3)
+    assert cci[:2] == [None, None]
+    assert cci[2] == pytest.approx(100.0)
+
+
+def test_compute_cci_flat_tape_is_zero_not_a_crash():
+    # Every typical price identical -> mean_deviation == 0 -> 0.0, not a
+    # ZeroDivisionError.
+    candles = _hlc_candles([(10, 10, 10)] * 4)
+    cci = compute_cci(candles, period=3)
+    assert cci[2] == 0.0
+    assert cci[3] == 0.0
 
 
 # --- compute_indicator / indicator_warmup: the per-type dispatchers --------------------------

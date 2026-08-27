@@ -55,6 +55,13 @@ class Candle(BaseModel):
     high: float
     low: float
     close: float
+    # Total traded quantity within this bar - Dhan's charts/intraday response
+    # already includes it, just wasn't being extracted before signal-generation's
+    # multi-condition rules (app/domain/multi_condition.py there) needed a
+    # volume-vs-its-own-SMA condition type. Summed across the 1min bars an
+    # aggregated (non-native) interval buckets together - see
+    # providers/dhan.py's _aggregate_candles.
+    volume: float
     timestamp: str  # ISO-8601, the candle's start time
     provider: str
 

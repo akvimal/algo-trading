@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { SignalNotifier } from "./SignalNotifier";
+import { type ParseError, parseConditionsText, stringifyConditions } from "./conditionsExpression";
 
 import {
   ALL_WEEKDAYS,
@@ -11,6 +12,7 @@ import {
   REGIME_INDICATOR_TYPES,
   type ActiveWindow,
   type BacktestResult,
+  type Condition,
   type ContractDayFilter,
   type CounterSignalPolicy,
   type CandleCacheStatus,
@@ -78,7 +80,7 @@ import { chartinkWebhookUrls, executionUrl, processingUrl } from "./links";
 
 const POLL_INTERVAL_MS = 5000;
 
-type TabId = "strategies" | "rules";
+type TabId = "strategies" | "rules" | "watchlists";
 
 // A performance advisory (not a real data-availability limit) for the
 // Backtest tab's From/To range - finer intervals mean far more bars to
@@ -189,6 +191,15 @@ function daysBetweenDates(from: string, to: string): number {
 function intervalToMinutes(interval: Interval): number | null {
   const match = /^(\d+)min$/.exec(interval);
   return match ? Number(match[1]) : null;
+}
+
+// Sort key only (minutes-per-bar, "daily" as a large sentinel) - mirrors
+// the backend's own INTERVAL_SORT_MINUTES (app/domain/rule.py). Used to
+// find the finest (shortest-duration) interval among a multi_condition
+// rule's own conditions, which becomes the Rule's own top-level
+// `interval` (see validate_multi_condition_interval_consistency).
+function intervalSortMinutes(interval: Interval): number {
+  return intervalToMinutes(interval) ?? 24 * 60; // "daily"
 }
 
 function ClipboardIcon() {
@@ -848,10 +859,11 @@ function WatchlistManager() {
         </label>
         <label>
           Symbols (comma-separated)
-          <input
+          <textarea
             value={newSymbols}
             onChange={(e) => setNewSymbols(e.target.value.toUpperCase())}
             required
+            rows={4}
             placeholder="e.g. RELIANCE,TCS,INFY"
           />
         </label>
@@ -873,6 +885,10 @@ function ruleSummary(r: Rule, indicators: Indicator[]): string {
   }
   if (ruleConfig.type === "range_breakout") {
     return ` - close beyond last ${ruleConfig.breakout_period} candles' high/low`;
+  }
+  if (ruleConfig.type === "multi_condition") {
+    const count = ruleConfig.conditions.length;
+    return ` - ${count} condition${count === 1 ? "" : "s"} AND'd, ${ruleConfig.direction}`;
   }
   const indicator = indicators.find((i) => i.id === ruleConfig.indicator_id);
   if (!indicator) return ` - unknown indicator (${ruleConfig.indicator_id.slice(0, 8)}...)`;
@@ -917,7 +933,7 @@ function RuleManager() {
   const [selectedUniverse, setSelectedUniverse] = useState("");
   const [selectedWatchlist, setSelectedWatchlist] = useState("");
   const [interval, setInterval_] = useState<Interval | "">("");
-  const [ruleType, setRuleType] = useState<"crossover" | "breakout" | "range_breakout">("crossover");
+  const [ruleType, setRuleType] = useState<"crossover" | "breakout" | "range_breakout" | "multi_condition">("crossover");
   const [selectedIndicatorId, setSelectedIndicatorId] = useState("");
   const [htfInterval, setHtfInterval] = useState<Interval>("15min");
   const [htfBreakoutPeriod, setHtfBreakoutPeriod] = useState("20");
@@ -926,6 +942,15 @@ function RuleManager() {
   const [emaFilterEnabled, setEmaFilterEnabled] = useState(false);
   const [emaPeriod, setEmaPeriod] = useState("20");
   const [rangeBreakoutPeriod, setRangeBreakoutPeriod] = useState("5");
+  const [conditions, setConditions] = useState<Condition[]>([]);
+  const [multiConditionDirection, setMultiConditionDirection] = useState<"bullish" | "bearish">("bullish");
+  // The text expression is the only way to build a multi_condition rule's
+  // conditions (see conditionsExpression.ts) - `conditions` is the single
+  // source of truth (what actually submits), committed from conditionsText
+  // only on a clean parse; otherwise it stays at its last valid value and
+  // conditionsParseErrors shows what's wrong.
+  const [conditionsText, setConditionsText] = useState("");
+  const [conditionsParseErrors, setConditionsParseErrors] = useState<ParseError[]>([]);
   const [regimeIndicatorIds, setRegimeIndicatorIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -1402,9 +1427,27 @@ function RuleManager() {
     selectedIndicator?.type === "rsi" ? (selectedIndicator.params as RsiParams) : undefined;
   const selectedIsBreakout = selectedRule?.rule_config?.type === "breakout";
   const selectedIsRangeBreakout = selectedRule?.rule_config?.type === "range_breakout";
+  const selectedIsMultiCondition = selectedRule?.rule_config?.type === "multi_condition";
 
   const isBreakout = ruleType === "breakout";
   const isRangeBreakout = ruleType === "range_breakout";
+  const isMultiCondition = ruleType === "multi_condition";
+
+  // The finest (shortest-duration) interval among the conditions so far -
+  // becomes the Rule's own top-level `interval` for a multi_condition rule
+  // (mirrors how breakout's own top-level interval is forced to its
+  // ltf_interval) - see intervalSortMinutes.
+  const multiConditionInterval: Interval | "" =
+    conditions.length > 0
+      ? conditions.reduce((finest, c) => (intervalSortMinutes(c.interval) < intervalSortMinutes(finest) ? c.interval : finest), conditions[0].interval)
+      : "";
+
+  function handleConditionsTextChange(text: string) {
+    setConditionsText(text);
+    const { conditions: parsed, errors } = parseConditionsText(text);
+    setConditionsParseErrors(errors);
+    if (errors.length === 0) setConditions(parsed);
+  }
 
   function buildRuleConfig(): RuleConfig {
     if (isBreakout) {
@@ -1420,6 +1463,9 @@ function RuleManager() {
     }
     if (isRangeBreakout) {
       return { type: "range_breakout", breakout_period: Number(rangeBreakoutPeriod) };
+    }
+    if (isMultiCondition) {
+      return { type: "multi_condition", direction: multiConditionDirection, conditions };
     }
     return { type: "crossover", indicator_id: selectedIndicatorId };
   }
@@ -1444,6 +1490,10 @@ function RuleManager() {
     setEmaFilterEnabled(false);
     setEmaPeriod("20");
     setRangeBreakoutPeriod("5");
+    setConditions([]);
+    setMultiConditionDirection("bullish");
+    setConditionsText("");
+    setConditionsParseErrors([]);
     setRegimeIndicatorIds([]);
   }
 
@@ -1461,7 +1511,7 @@ function RuleManager() {
       underlying:
         (underlyingType === "universe" ? selectedUniverse : underlyingType === "watchlist" ? selectedWatchlist : underlying) || "",
       underlying_type: underlyingType,
-      interval: isBreakout ? ltfInterval : (interval as Interval),
+      interval: isBreakout ? ltfInterval : isMultiCondition ? (multiConditionInterval as Interval) : (interval as Interval),
       rule_config: buildRuleConfig(),
       regime_indicator_ids: regimeIndicatorIds,
     };
@@ -1517,6 +1567,12 @@ function RuleManager() {
     } else if (r.rule_config?.type === "range_breakout") {
       setRuleType("range_breakout");
       setRangeBreakoutPeriod(String(r.rule_config.breakout_period));
+    } else if (r.rule_config?.type === "multi_condition") {
+      setRuleType("multi_condition");
+      setMultiConditionDirection(r.rule_config.direction);
+      setConditions(r.rule_config.conditions);
+      setConditionsText(stringifyConditions(r.rule_config.conditions));
+      setConditionsParseErrors([]);
     } else {
       setRuleType("crossover");
       setSelectedIndicatorId(r.rule_config?.indicator_id ?? "");
@@ -1766,7 +1822,7 @@ function RuleManager() {
               )}
             </div>
             <div className="form-row">
-              {ruleType !== "breakout" && (
+              {ruleType !== "breakout" && !isMultiCondition && (
                 <label>
                   Interval
                   <select value={interval} onChange={(e) => setInterval_(e.target.value as Interval | "")} required>
@@ -1781,15 +1837,22 @@ function RuleManager() {
                   </select>
                 </label>
               )}
+              {isMultiCondition && (
+                <label>
+                  Interval
+                  <input value={multiConditionInterval ? `${multiConditionInterval} (finest condition)` : "add a condition first"} disabled readOnly />
+                </label>
+              )}
               <label>
                 Rule Type
                 <select
                   value={ruleType}
-                  onChange={(e) => setRuleType(e.target.value as "crossover" | "breakout" | "range_breakout")}
+                  onChange={(e) => setRuleType(e.target.value as "crossover" | "breakout" | "range_breakout" | "multi_condition")}
                 >
                   <option value="crossover">Crossover (indicator)</option>
                   <option value="breakout">Breakout (multi-timeframe)</option>
                   <option value="range_breakout">Range breakout (single timeframe)</option>
+                  <option value="multi_condition">Multi-condition (AND-combined filters)</option>
                 </select>
               </label>
             </div>
@@ -1847,6 +1910,33 @@ function RuleManager() {
                     onChange={(e) => setRangeBreakoutPeriod(e.target.value)}
                   />
                 </label>
+              ) : isMultiCondition ? (
+                <div className="multi-condition-fields">
+                  <label>
+                    Direction
+                    <select value={multiConditionDirection} onChange={(e) => setMultiConditionDirection(e.target.value as "bullish" | "bearish")}>
+                      <option value="bullish">Bullish (buy)</option>
+                      <option value="bearish">Bearish (sell)</option>
+                    </select>
+                  </label>
+                  <div className="conditions-text-editor">
+                    <textarea
+                      rows={Math.max(4, conditionsText.split("\n").length)}
+                      placeholder={"e.g.\ndaily: close > ema(close, 200)\n15min: cci(200) > 100"}
+                      value={conditionsText}
+                      onChange={(e) => handleConditionsTextChange(e.target.value)}
+                    />
+                    {conditionsParseErrors.length > 0 && (
+                      <ul className="conditions-parse-errors">
+                        {conditionsParseErrors.map((err, i) => (
+                          <li key={i}>
+                            Line {err.line}: {err.message}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
               ) : (
                 <label>
                   Indicator
@@ -1905,11 +1995,13 @@ function RuleManager() {
               disabled={
                 saving ||
                 !name.trim() ||
-                (ruleType !== "breakout" && !interval) ||
+                (ruleType !== "breakout" && !isMultiCondition && !interval) ||
+                (isMultiCondition && conditions.length === 0) ||
+                (isMultiCondition && conditionsParseErrors.length > 0) ||
                 (underlyingType === "symbol" && !underlying.trim()) ||
                 (underlyingType === "universe" && !selectedUniverse) ||
                 (underlyingType === "watchlist" && !selectedWatchlist) ||
-                (!isBreakout && !isRangeBreakout && !selectedIndicatorId)
+                (!isBreakout && !isRangeBreakout && !isMultiCondition && !selectedIndicatorId)
               }
             >
               {saving ? "Saving..." : editingId ? "Save changes" : "Create rule"}
@@ -2525,8 +2617,8 @@ function RuleManager() {
 
           {backtestSubTab === "grid" && (
           <>
-          {selectedIsBreakout || selectedIsRangeBreakout ? (
-            <p className="hint">Grid search isn't supported for breakout/range-breakout rules yet.</p>
+          {selectedIsBreakout || selectedIsRangeBreakout || selectedIsMultiCondition ? (
+            <p className="hint">Grid search isn't supported for breakout/range-breakout/multi-condition rules yet.</p>
           ) : selectedIndicator?.type === "supertrend" ? (
             <p className="hint">
               Grid search's Period/SMA period inputs only sweep RSI-shaped params - not supported for a
@@ -2707,7 +2799,6 @@ function RulesTab() {
           overrides rather than reading them from a Strategy.
         </p>
       </InfoDisclosure>
-      <WatchlistManager />
       <RuleManager />
       <IndicatorsTab />
     </>
@@ -3832,14 +3923,14 @@ function StrategiesTab() {
     <>
       <InfoDisclosure summary="How strategy webhooks work here">
         <p>
-          Every strategy - in-house or external - gets its own <code>?strategy_id=</code> query param. There's no
-          separate Source field here anymore: a strategy just picks a saved <strong>Rule</strong> (see the Rules
-          tab), and inherits that Rule's own source directly - an external Rule already names its provider (e.g.
-          "chartink", "tradingview", or anything else) when it's created, so a strategy pointed at it is external
-          too, with no need to retype the name. Today only Chartink has a real webhook route wired up on
-          signal-processing (one route per direction handles <em>every</em> Chartink strategy via that query
-          param) - copy its buy/sell webhook URLs (the clipboard icons in the Webhooks column below) into a
-          Chartink scan alert once created. Any other provider name is recorded but has no webhook wired up yet -
+          Every strategy - in-house or external - gets its own <code>?strategy_id=</code> query param. Source is
+          its own selector on the strategy form (In-house vs. External + a free-text provider name, e.g.
+          "chartink", "tradingview") - independent of which <strong>Rule</strong> it optionally references, since
+          a Rule is in-house-only. Today only Chartink has a real webhook route wired up on signal-processing (one
+          route per direction handles <em>every</em> Chartink strategy via that query param) - to get a strategy's
+          buy/sell webhook URLs, hover (or tap) the <strong>ⓘ</strong> icon in that strategy's row (Info column) -
+          the Webhooks section there has click-to-copy buttons, shown whenever the strategy's Source is exactly
+          "chartink" (case-insensitive). Any other provider name is recorded but has no webhook wired up yet -
           adding one follows the same pattern (a new parse function normalizing that provider's alert payload
           into the canonical signal shape, see the <code>add-signal-provider</code> Claude Code skill).
         </p>
@@ -3884,10 +3975,14 @@ export default function App() {
         <button className={tab === "rules" ? "active" : ""} onClick={() => setTab("rules")}>
           Rules
         </button>
+        <button className={tab === "watchlists" ? "active" : ""} onClick={() => setTab("watchlists")}>
+          Watchlists
+        </button>
       </nav>
 
       {tab === "strategies" && <StrategiesTab />}
       {tab === "rules" && <RulesTab />}
+      {tab === "watchlists" && <WatchlistManager />}
     </main>
   );
 }

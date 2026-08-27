@@ -19,6 +19,14 @@ from typing import Literal, Optional, Union
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 Interval = Literal["1min", "3min", "5min", "15min", "30min", "60min", "daily"]
+# Sort key only (minutes-per-bar, "daily" as a large sentinel) - used by
+# validate_multi_condition_interval_consistency below to find the finest
+# (shortest-duration) interval among a MultiConditionRuleConfig's own
+# conditions. Not used for candle-fetch date-range sizing (that's
+# app/domain/engine.py's own _INTERVAL_MINUTES, a separate concern).
+INTERVAL_SORT_MINUTES: dict[str, int] = {
+    "1min": 1, "3min": 3, "5min": 5, "15min": 15, "30min": 30, "60min": 60, "daily": 24 * 60,
+}
 # Which market this rule's condition/universe is evaluated against -
 # distinct from a linked Strategy's own `segment` (what gets traded when
 # it fires). Shared literal type, defined here (not app/domain/models.py)
@@ -332,7 +340,88 @@ class RangeBreakoutRuleConfig(BaseModel):
     breakout_period: int = Field(gt=1)
 
 
-RuleConfig = Union[CrossoverRuleConfig, BreakoutRuleConfig, RangeBreakoutRuleConfig]
+TermKind = Literal[
+    "price", "volume", "sma", "ema", "rsi", "cci", "highest", "lowest", "candle_body", "candle_range", "constant"
+]
+
+
+class Term(BaseModel):
+    """One leaf value in a MultiConditionRuleConfig's Condition (below) -
+    deliberately FLAT, not a recursive expression tree (no SMA-of-an-EMA
+    nesting) - see app/domain/multi_condition.py's compute_term_series for
+    the evaluator this shape feeds. `field` names which raw OHLCV series a
+    windowed kind (sma/ema/highest/lowest) or 'price' itself reads off the
+    candle - required for those, meaningless (and must be omitted) for
+    every other kind, including 'volume' (self-naming) and 'cci' (always
+    typical-price, high+low+close - no field choice). `offset_bars` shifts
+    the whole computed series back N completed bars before comparison -
+    "N days/bars ago X". `scale` multiplies the final value - covers e.g.
+    "candle_range / 4" as scale=0.25 on a candle_range term, without a
+    general arithmetic tree."""
+
+    kind: TermKind
+    field: Optional[Literal["open", "high", "low", "close", "volume"]] = None
+    period: Optional[int] = Field(default=None, gt=0)
+    offset_bars: int = Field(default=0, ge=0)
+    scale: float = 1.0
+    value: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> "Term":
+        needs_field = self.kind in ("price", "sma", "ema", "highest", "lowest")
+        needs_period = self.kind in ("sma", "ema", "rsi", "cci", "highest", "lowest")
+        if needs_field and self.field is None:
+            raise ValueError(f"kind={self.kind!r} requires field")
+        if not needs_field and self.field is not None:
+            raise ValueError(f"kind={self.kind!r} does not accept field")
+        if needs_period and self.period is None:
+            raise ValueError(f"kind={self.kind!r} requires period")
+        if not needs_period and self.period is not None:
+            raise ValueError(f"kind={self.kind!r} does not accept period")
+        if self.kind == "constant" and self.value is None:
+            raise ValueError("kind='constant' requires value")
+        if self.kind != "constant" and self.value is not None:
+            raise ValueError(f"kind={self.kind!r} does not accept value")
+        return self
+
+
+class Condition(BaseModel):
+    """One AND-combined leaf of a MultiConditionRuleConfig - `interval` is
+    THIS condition's own timeframe, independent of the Rule's own
+    top-level `interval` (unlike every other rule type, where `interval`
+    IS the one timeframe) - see MultiConditionRuleConfig's own docstring
+    for why. `left`/`right` are both Terms (a fixed number is just
+    kind='constant' on either side) so e.g. 'close > open' and
+    'volume > sma(volume,20)' and 'close > 100' are all the same shape."""
+
+    interval: Interval
+    left: Term
+    operator: Literal[">", "<", ">=", "<="]
+    right: Term
+
+
+class MultiConditionRuleConfig(BaseModel):
+    """A 4th, structurally independent rule type: an arbitrary AND-combined
+    list of conditions (see Condition/Term above), each with its own
+    timeframe - built for recreating Chartink-style multi-filter scans
+    (e.g. "daily volume > its own 20-SMA AND daily close > its own 200-EMA
+    AND 15m CCI(200) > 100 AND ..."), which none of the other 3 rule types
+    can express (each is a single condition). Deliberately ONE-DIRECTIONAL
+    (`direction` picked once, not inferred or auto-mirrored) - matches how
+    Chartink itself works (a scan is a buy-scan or a sell-scan, never
+    both), the same precedent this platform already follows with separate
+    chartink-buy/chartink-sell webhook routes; auto-mirroring an arbitrary
+    user-authored inequality set into its bearish opposite isn't generally
+    well-defined. See app/domain/multi_condition.py for the evaluator and
+    docs/architecture.md's "Rules module" section for the multi-interval
+    alignment design (backtest) vs. the simpler live-tick path."""
+
+    type: Literal["multi_condition"] = "multi_condition"
+    direction: Literal["bullish", "bearish"]
+    conditions: list[Condition] = Field(min_length=1)
+
+
+RuleConfig = Union[CrossoverRuleConfig, BreakoutRuleConfig, RangeBreakoutRuleConfig, MultiConditionRuleConfig]
 _rule_config_adapter = TypeAdapter(RuleConfig)
 
 
@@ -441,6 +530,25 @@ def validate_breakout_interval_consistency(interval: Optional[str], rule_config:
         raise ValueError("interval must equal rule_config.ltf_interval for a breakout rule")
 
 
+def validate_multi_condition_interval_consistency(interval: Optional[str], rule_config: Optional[dict]) -> None:
+    """A MultiConditionRuleConfig's own top-level `interval` must equal the
+    FINEST (shortest-duration) interval used across its own conditions -
+    that's the cadence the live engine ticks/dedupes on and backtest
+    replay walks bar-by-bar (see app/domain/multi_condition.py), mirroring
+    validate_breakout_interval_consistency's identical "interval == the
+    driving timeframe" rule for BreakoutRuleConfig's own ltf_interval. A
+    non-multi_condition rule_config (or no rule_config at all) has no such
+    constraint."""
+    if rule_config is None:
+        return
+    rule = validate_rule_config(rule_config)
+    if not isinstance(rule, MultiConditionRuleConfig):
+        return
+    finest = min(rule.conditions, key=lambda c: INTERVAL_SORT_MINUTES[c.interval]).interval
+    if interval != finest:
+        raise ValueError(f"interval must equal the finest condition interval ({finest!r}) for a multi_condition rule")
+
+
 class RuleCreate(BaseModel):
     name: str = Field(min_length=1)
     description: Optional[str] = None
@@ -475,6 +583,11 @@ class RuleCreate(BaseModel):
     @model_validator(mode="after")
     def _check_breakout_interval_consistency(self) -> "RuleCreate":
         validate_breakout_interval_consistency(self.interval, self.rule_config)
+        return self
+
+    @model_validator(mode="after")
+    def _check_multi_condition_interval_consistency(self) -> "RuleCreate":
+        validate_multi_condition_interval_consistency(self.interval, self.rule_config)
         return self
 
 

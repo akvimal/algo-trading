@@ -67,6 +67,7 @@ def aggregate_candles(one_min_candles: list[Candle], interval: str, minutes: int
                 high=max(c.high for c in members),
                 low=min(c.low for c in members),
                 close=members[-1].close,
+                volume=sum(c.volume for c in members),
                 timestamp=bucket_start.isoformat(),
                 provider=members[0].provider,
             )

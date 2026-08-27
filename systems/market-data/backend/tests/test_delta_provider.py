@@ -343,7 +343,7 @@ def test_fetch_native_candles_chunks_wide_ranges_to_avoid_delta_truncation():
 
     def _fake_page(symbol, interval, interval_minutes, from_dt, to_dt):
         calls.append((from_dt, to_dt))
-        return [Candle(exchange="CRYPTO", symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, timestamp=from_dt.isoformat(), provider="delta-india")]
+        return [Candle(exchange="CRYPTO", symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, volume=1, timestamp=from_dt.isoformat(), provider="delta-india")]
 
     with patch.object(provider, "_fetch_native_candles_page", side_effect=_fake_page):
         # 15min * 2000 = 20.83 days is the widest single-chunk span - a
@@ -738,7 +738,7 @@ def test_get_option_chain_fails_fast_when_throttle_queue_too_deep():
 def _fake_candle() -> Candle:
     return Candle(
         exchange="CRYPTO", symbol="BTCUSD", interval="60min",
-        open=1.0, high=1.0, low=1.0, close=1.0, timestamp="2024-01-01T00:00:00+05:30", provider="delta-india",
+        open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0, timestamp="2024-01-01T00:00:00+05:30", provider="delta-india",
     )
 
 

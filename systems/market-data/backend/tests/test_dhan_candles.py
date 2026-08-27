@@ -6,7 +6,7 @@ import responses
 
 from app.config import settings
 from app.domain.models import Candle
-from app.providers.dhan import CANDLE_URL, INSTRUMENT_MASTER_URL, DhanProvider, _aggregate_candles, _interval_minutes
+from app.providers.dhan import CANDLE_URL, HISTORICAL_URL, INSTRUMENT_MASTER_URL, DhanProvider, _aggregate_candles, _interval_minutes
 
 FAKE_CSV = (
     "SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,SEM_EXPIRY_CODE,"
@@ -172,7 +172,7 @@ def test_candle_throttle_is_independent_of_ltp_throttle(monkeypatch):
 # ---- local aggregation ("3min" and other non-native "Nmin" intervals) ----
 
 
-def _one_min_candle(minute_offset: int, o: float, h: float, l: float, c: float) -> Candle:
+def _one_min_candle(minute_offset: int, o: float, h: float, l: float, c: float, v: float = 100.0) -> Candle:
     """A 1-minute candle starting at 09:15 + minute_offset IST, on an
     arbitrary fixed date - only the time-of-day matters for bucket
     alignment."""
@@ -180,7 +180,7 @@ def _one_min_candle(minute_offset: int, o: float, h: float, l: float, c: float) 
     ts = datetime(2026, 8, 12, 9, 15, tzinfo=tz) + timedelta(minutes=minute_offset)
     return Candle(
         exchange="NSE", symbol="RELIANCE", interval="1min",
-        open=o, high=h, low=l, close=c, timestamp=ts.isoformat(), provider="dhan",
+        open=o, high=h, low=l, close=c, volume=v, timestamp=ts.isoformat(), provider="dhan",
     )
 
 
@@ -211,6 +211,14 @@ def test_aggregate_candles_buckets_aligned_to_clock_multiples():
     assert first.high == max(ones[0].high, ones[1].high, ones[2].high)
     assert first.low == min(ones[0].low, ones[1].low, ones[2].low)
     assert first.timestamp == ones[0].timestamp  # bucket start == first member's own timestamp (09:15 aligned)
+
+
+def test_aggregate_candles_sums_volume_across_bucket_members():
+    ones = [_one_min_candle(i, 100, 105, 95, 102, v=10.0 + i) for i in range(3)]
+
+    aggregated = _aggregate_candles(ones, "3min", 3)
+
+    assert aggregated[0].volume == 10.0 + 11.0 + 12.0
 
 
 def test_aggregate_candles_drops_incomplete_trailing_bucket():
@@ -304,6 +312,78 @@ def test_get_candle_history_native_interval_makes_no_aggregation_overhead(monkey
     assert all(c.interval == "5min" for c in candles)
 
 
+# --- get_candle_history(interval='daily') -> charts/historical, not charts/intraday -------------
+
+
+@responses.activate
+def test_get_candle_history_daily_routes_to_historical_endpoint_not_intraday(monkeypatch):
+    monkeypatch.setattr(settings, "dhan_client_id", "test-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "test-token")
+
+    tz = ZoneInfo("Asia/Kolkata")
+    today = datetime.now(tz).date()
+    # 3 completed days (2/3/4 days ago - safely >=86400s old regardless of
+    # time-of-day this test runs) plus today's own bar, which must be
+    # excluded as still-forming.
+    days_ago = [4, 3, 2]
+    timestamps = [int(datetime(today.year, today.month, today.day, tzinfo=tz).timestamp()) - n * 86400 for n in days_ago]
+    timestamps.append(int(datetime.now(tz).timestamp()))  # today, still forming
+    n = len(timestamps)
+    responses.add(
+        responses.POST,
+        HISTORICAL_URL,
+        json={
+            "open": [100.0 + i for i in range(n)],
+            "high": [105.0 + i for i in range(n)],
+            "low": [95.0 + i for i in range(n)],
+            "close": [102.0 + i for i in range(n)],
+            "volume": [1000 + i for i in range(n)],
+            "timestamp": timestamps,
+        },
+        status=200,
+    )
+
+    provider = DhanProvider()
+    provider._symbol_to_security_id = {"RELIANCE": "2885"}
+
+    candles = provider.get_candle_history("RELIANCE", "daily", today - timedelta(days=5), today)
+
+    assert len(responses.calls) == 1  # never touched charts/intraday
+    sent_body = responses.calls[0].request.body
+    assert b'"securityId": "2885"' in sent_body or b'"securityId":"2885"' in sent_body
+    assert b"interval" not in sent_body  # charts/historical has no interval field at all
+    assert b'"fromDate"' in sent_body and b'"toDate"' in sent_body
+
+    assert len(candles) == 3  # today's still-forming bar excluded
+    assert all(c.interval == "daily" for c in candles)
+    assert all(c.provider == "dhan" for c in candles)
+    assert candles[0].open == 100.0
+    assert candles[0].volume == 1000.0
+    assert candles[-1].close == 104.0
+
+
+@responses.activate
+def test_get_candle_history_daily_empty_response_returns_empty_list(monkeypatch):
+    monkeypatch.setattr(settings, "dhan_client_id", "test-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "test-token")
+    responses.add(responses.POST, HISTORICAL_URL, json={"timestamp": []}, status=200)
+
+    provider = DhanProvider()
+    provider._symbol_to_security_id = {"RELIANCE": "2885"}
+
+    assert provider.get_candle_history("RELIANCE", "daily", date.today() - timedelta(days=5), date.today()) == []
+
+
+@responses.activate
+def test_get_candle_history_daily_unknown_symbol_returns_empty_without_network_call():
+    # FAKE_CSV doesn't contain "NOPE" - _security_id resolves to None after sync.
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=FAKE_CSV, status=200)
+    # No HISTORICAL_URL response registered - a stray call to it would
+    # ConnectionError, proving this short-circuits before reaching Dhan.
+    provider = DhanProvider()
+    assert provider.get_candle_history("NOPE", "daily", date.today() - timedelta(days=5), date.today()) == []
+
+
 # --- get_data_availability -----------------------------------------------------------------
 
 
@@ -321,3 +401,17 @@ def test_get_data_availability_reports_fixed_90_day_cap_without_any_http_call():
     assert result.interval == "5min"
     assert result.max_days_per_request == 90
     assert result.earliest_available_date is None
+
+
+def test_get_data_availability_daily_reports_no_fixed_cap():
+    # charts/historical has no documented per-request day cap (unlike
+    # charts/intraday's 90-day one) - None, not 90, same "only one of the
+    # two optional fields populated" convention this model already uses
+    # for Delta's own earliest_available_date-only case.
+    provider = DhanProvider()
+
+    result = provider.get_data_availability("RELIANCE", "daily")
+
+    assert result.interval == "daily"
+    assert result.max_days_per_request is None
+    assert "inception" in result.note

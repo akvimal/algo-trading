@@ -15,7 +15,7 @@ from app.adapters.market_data.client import (
     get_universe_constituents,
     resolve_underlying,
 )
-from app.domain import breakout, range_breakout
+from app.domain import breakout, multi_condition, range_breakout
 from app.domain.backtest import (
     MAX_GRID_COMBINATIONS,
     ExitConfig,
@@ -33,6 +33,7 @@ from app.domain.rule import (
     REGIME_INDICATOR_TYPES,
     BreakoutRuleConfig,
     CrossoverRuleConfig,
+    MultiConditionRuleConfig,
     RangeBreakoutRuleConfig,
     RuleBacktestGridRequest,
     RuleBacktestRequest,
@@ -43,6 +44,7 @@ from app.domain.rule import (
     parse_symbol_list,
     validate_breakout_interval_consistency,
     validate_indicator_params,
+    validate_multi_condition_interval_consistency,
     validate_rule_config,
     validate_rule_in_house_fields,
     validate_rule_symbol_list_fields,
@@ -237,6 +239,7 @@ def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)
         validate_rule_symbol_list_fields(row.underlying_type, row.underlying)
         validate_rule_watchlist_fields(row.underlying_type, row.underlying)
         validate_breakout_interval_consistency(row.interval, row.rule_config)
+        validate_multi_condition_interval_consistency(row.interval, row.rule_config)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _check_referenced_indicator_exists(db, row.rule_config)
@@ -393,6 +396,36 @@ def _backtest_one_symbol(
             lambda window: range_breakout.evaluate_range_breakout(rule, window),
             rule.breakout_period + 1,
             candles,
+            _exit_config_for(payload),
+            sl_candles,
+            regime_indicators,
+            payload.time_bucket_minutes,
+        )
+
+    if isinstance(rule, MultiConditionRuleConfig):
+        resolved = resolve_underlying(rule_row.segment, symbol)
+        if resolved is None:
+            raise HTTPException(status_code=502, detail=f"could not resolve underlying '{symbol}' on segment '{rule_row.segment}'")
+
+        warmup_by_interval = multi_condition.multi_condition_warmup(rule)
+        finest_bar_count = max(warmup_by_interval.get(rule_row.interval, 0), _regime_warmup_bars(regime_indicators))
+        warmup_by_interval[rule_row.interval] = finest_bar_count
+
+        candles_by_interval: dict[str, list] = {}
+        finest_fetch_from = from_
+        for interval, bar_count in warmup_by_interval.items():
+            warmup_from, _ = history_window(bar_count, interval)
+            fetch_from = min(from_, warmup_from)
+            candles_by_interval[interval] = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, interval, fetch_from, to)
+            if interval == rule_row.interval:
+                finest_fetch_from = fetch_from
+
+        fine_candles = candles_by_interval[rule_row.interval]
+        sl_candles = _sl_candles_for(payload, rule_row, resolved, fine_candles, finest_fetch_from, to)
+        return replay(
+            multi_condition.build_multi_condition_bias_fn(rule, candles_by_interval),
+            finest_bar_count + 1,
+            fine_candles,
             _exit_config_for(payload),
             sl_candles,
             regime_indicators,

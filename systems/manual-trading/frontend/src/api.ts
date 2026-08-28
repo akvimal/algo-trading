@@ -622,23 +622,24 @@ export type ProviderSignal = {
   rejection_reason: string | null;
 };
 
-// Ports are build-time configurable (VITE_SIGNAL_GENERATION_PORT/
-// VITE_SIGNAL_PROCESSING_PORT - see Dockerfile's ARG/ENV and
-// docker-compose.yml's build args) so a port-shifted container group
-// (e.g. a separate local test stack) actually calls its OWN backends
-// instead of a hardcoded dev port. Defaults match dev's ports, so
-// `npm run dev` with no .env still works exactly as before.
-const SIGNAL_GENERATION_PORT = import.meta.env.VITE_SIGNAL_GENERATION_PORT ?? "8003";
-const SIGNAL_PROCESSING_PORT = import.meta.env.VITE_SIGNAL_PROCESSING_PORT ?? "8000";
+// Port is build-time configurable (VITE_SIGNAL_ENGINE_PORT - see
+// Dockerfile's ARG/ENV and docker-compose.yml's build args) so a
+// port-shifted container group (e.g. a separate local test stack)
+// actually calls its OWN backend instead of a hardcoded dev port. Default
+// matches dev's port, so `npm run dev` with no .env still works exactly
+// as before. One backend/one base URL since the signal-engine merge
+// (2026-08-28, see docs/architecture.md) - signal-generation (strategy
+// names) and signal-processing (signal activity) used to be two separate
+// services/ports here.
+const SIGNAL_ENGINE_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";
 const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
 
-// This system's own backend - owns the strategies/rules tables.
-const SIGNAL_GENERATION_BASE_URL = `http://${location.hostname}:${SIGNAL_GENERATION_PORT}`;
-// signal-processing's API, read directly from the browser (CORS-enabled)
-// for per-strategy signal activity - a view, not a copy of that data.
-const SIGNAL_PROCESSING_BASE_URL = `http://${location.hostname}:${SIGNAL_PROCESSING_PORT}`;
+// signal-engine's API, read directly from the browser (CORS-enabled) for
+// strategy names and per-strategy signal activity - a view, not a copy
+// of that data.
+const SIGNAL_ENGINE_BASE_URL = `http://${location.hostname}:${SIGNAL_ENGINE_PORT}`;
 // market-data's API, read directly from the browser (CORS-enabled) - just
-// for the universe picker below, same pattern as signal-processing above.
+// for the universe picker below, same pattern as signal-engine above.
 const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
 
 // FastAPI's own error body shape is {"detail": "..."} - a specific reason
@@ -665,12 +666,12 @@ async function asJson<T>(res: Response, what: string): Promise<T> {
 }
 
 export async function fetchIndicators(): Promise<Indicator[]> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/indicators`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`);
   return asJson(res, "GET /indicators");
 }
 
 export async function createIndicator(payload: IndicatorCreate): Promise<Indicator> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/indicators`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -679,7 +680,7 @@ export async function createIndicator(payload: IndicatorCreate): Promise<Indicat
 }
 
 export async function updateIndicator(id: string, payload: IndicatorUpdate): Promise<Indicator> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/indicators/${id}`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -688,19 +689,19 @@ export async function updateIndicator(id: string, payload: IndicatorUpdate): Pro
 }
 
 export async function deleteIndicator(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/indicators/${id}`, { method: "DELETE" });
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /indicators/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
 export async function fetchRules(): Promise<Rule[]> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules`);
   return asJson(res, "GET /rules");
 }
 
 export async function createRule(payload: RuleCreate): Promise<Rule> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -709,7 +710,7 @@ export async function createRule(payload: RuleCreate): Promise<Rule> {
 }
 
 export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -718,7 +719,7 @@ export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule>
 }
 
 export async function deleteRule(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}`, { method: "DELETE" });
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /rules/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -731,7 +732,7 @@ export async function backtestRule(
   overrides: RuleBacktestRequest = {},
 ): Promise<BacktestResult | UniverseBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}/backtest?${params}`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(overrides),
@@ -740,12 +741,12 @@ export async function backtestRule(
 }
 
 export async function listSavedBacktests(ruleId: string): Promise<SavedBacktestSummary[]> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${ruleId}/saved-backtests`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`);
   return asJson(res, "GET /rules/{id}/saved-backtests");
 }
 
 export async function createSavedBacktest(ruleId: string, payload: SavedBacktestCreate): Promise<SavedBacktestOut> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${ruleId}/saved-backtests`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -754,12 +755,12 @@ export async function createSavedBacktest(ruleId: string, payload: SavedBacktest
 }
 
 export async function getSavedBacktest(id: string): Promise<SavedBacktestOut> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/saved-backtests/${id}`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`);
   return asJson(res, "GET /saved-backtests/{id}");
 }
 
 export async function deleteSavedBacktest(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /saved-backtests/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -776,7 +777,7 @@ export async function backtestRuleGrid(
   overrides: Omit<RuleBacktestGridRequest, "param_grid"> = {},
 ): Promise<GridBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...overrides, param_grid: paramGrid }),
@@ -786,12 +787,12 @@ export async function backtestRuleGrid(
 
 export async function fetchStrategies(sourceType?: SourceType): Promise<Strategy[]> {
   const params = sourceType ? `?source_type=${sourceType}` : "";
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies${params}`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies${params}`);
   return asJson(res, "GET /strategies");
 }
 
 export async function createStrategy(payload: StrategyCreate): Promise<Strategy> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -800,7 +801,7 @@ export async function createStrategy(payload: StrategyCreate): Promise<Strategy>
 }
 
 export async function updateStrategy(id: string, payload: StrategyEdit): Promise<Strategy> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies/${id}`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -809,7 +810,7 @@ export async function updateStrategy(id: string, payload: StrategyEdit): Promise
 }
 
 export async function deleteStrategy(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies/${id}`, { method: "DELETE" });
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /strategies/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -817,7 +818,7 @@ export async function deleteStrategy(id: string): Promise<void> {
 
 export async function fetchSignalsForStrategy(strategyId: string, limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ strategy_id: strategyId, limit: String(limit) });
-  const res = await fetch(`${SIGNAL_PROCESSING_BASE_URL}/signals?${params}`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals?strategy_id=...");
 }
 
@@ -826,7 +827,7 @@ export async function fetchSignalsForStrategy(strategyId: string, limit = 20): P
 // ANY strategy, not just whichever one's row happens to be expanded.
 export async function fetchRecentSignals(limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const res = await fetch(`${SIGNAL_PROCESSING_BASE_URL}/signals?${params}`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals");
 }
 
@@ -846,7 +847,7 @@ export async function sendManualSignal(payload: {
   action: "BUY" | "SELL";
   price: number;
 }): Promise<{ signal_id: string; status: string }> {
-  const res = await fetch(`${SIGNAL_PROCESSING_BASE_URL}/signals`, {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, source: "manual", source_meta: {} }),
@@ -981,6 +982,60 @@ export async function fetchOiSummary(exchange: string, symbol: string, expiry: s
     `${MARKET_DATA_BASE_URL}/options/oi-summary?${new URLSearchParams({ exchange, symbol, expiry })}`,
   );
   return asJson(res, "GET /options/oi-summary");
+}
+
+// NSE/MCX OI-based sentiment for the header badges - GET /options/sentiment,
+// aggregated (app/domain/sentiment.py) from the same 4-underlying watchlist
+// as the OI tab above. authFetch so a user with their own saved Dhan
+// credentials (My Credentials tab) uses their own token/rate budget for
+// this too, same as fetchOiSummary/fetchOptionExpiries above.
+export type SentimentDirection = "bullish" | "bearish" | "neutral";
+export type SentimentStrength = "mild" | "strong" | "very_strong";
+
+export type UnderlyingSentiment = {
+  symbol: string;
+  score_5m: number | null;
+  score_15m: number | null;
+  direction: SentimentDirection;
+  strength: SentimentStrength | null;
+  error: string | null;
+};
+
+export type ExchangeSentiment = {
+  direction: SentimentDirection;
+  strength: SentimentStrength | null;
+  score: number | null;
+  underlyings: UnderlyingSentiment[];
+};
+
+export type MarketSentiment = {
+  exchanges: Record<string, ExchangeSentiment>;
+};
+
+export async function fetchSentiment(): Promise<MarketSentiment> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/options/sentiment`);
+  return asJson(res, "GET /options/sentiment");
+}
+
+// One market_data.sentiment_history row (app/scheduler.py's
+// _record_sentiment_history, one per symbol every 5 minutes) - the same
+// OI-based read the sentiment badges show, plus the underlying's own spot
+// price at that same moment, so SentimentHistoryChart.tsx can plot
+// whether price actually moved the way a past bullish/bearish read
+// predicted. Oldest-first (chart-friendly reading order).
+export type SentimentHistoryPoint = {
+  recorded_at: string;
+  direction: SentimentDirection;
+  strength: SentimentStrength | null;
+  score_5m: number | null;
+  score_15m: number | null;
+  spot_price: number | null;
+  error: string | null;
+};
+
+export async function fetchSentimentHistory(symbol: string, limit = 200): Promise<SentimentHistoryPoint[]> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/options/sentiment-history?symbol=${encodeURIComponent(symbol)}&limit=${limit}`);
+  return asJson(res, "GET /options/sentiment-history");
 }
 
 // Backs the Rules page's backtest form - what date range is actually
@@ -1337,9 +1392,18 @@ export async function updateAccount(
   return asJson(res, "PUT /accounts/{segment}");
 }
 
-// CRYPTO-only in practice (see execution's own AccountsPage.tsx) - the
-// manually configured INR-per-USD rate used to convert capital into
-// USD-equivalent before sizing a CRYPTO position.
+// Resets current_balance back to starting_balance - doesn't touch
+// capital_per_trade/risk_per_trade_pct or any positions. Row-scoped to the
+// caller (get_current_user, not admin-gated) - same route execution's own
+// AccountsPage used to call for this before its personal-account section
+// (this page's exact same data) moved here as the one place for it.
+export async function resetAccount(segment: Segment): Promise<Account> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/accounts/${segment}/reset`, { method: "POST" });
+  return asJson(res, "POST /accounts/{segment}/reset");
+}
+
+// CRYPTO-only in practice - the manually configured INR-per-USD rate used
+// to convert capital into USD-equivalent before sizing a CRYPTO position.
 export type Settings = {
   timezone: string;
   usdinr_rate: number | null;

@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS accounts.users (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Display name, collected at signup - shown in the shell's own top-bar
+-- user area (see shell/index.html) instead of the email there. Not a
+-- login credential (email still is), so no uniqueness constraint. ADD
+-- COLUMN IF NOT EXISTS so this is safe to (re-)run against a volume
+-- created before this column existed, same convention as is_admin below -
+-- a pre-existing row backfills to '' rather than failing the NOT NULL.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+
 -- Platform-operator flag, not a self-service signup option - see
 -- app/domain/security.py's create_access_token (embedded as a JWT claim,
 -- checked stateless by market-data's require_admin) and

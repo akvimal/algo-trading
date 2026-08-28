@@ -9,16 +9,16 @@ import {
   fetchChecklistItems,
   updateChecklistItem,
 } from "./api";
+import { CheckIcon, PencilIcon, TrashIcon, XIcon } from "./Icons";
 
 const ALL_SEGMENTS: Segment[] = ["NSE", "MCX", "CRYPTO"];
 
 // Intraday > Trade Checklist - the plan/day/review item editor
 // (execution.checklist_items), split out of the old combined "Checklist &
 // Risk Settings" page (see docs/architecture.md § "Manual Trading SaaS").
-// Owns its own checklistItems fetch - WorkspacePage.tsx and DashboardPage.tsx
-// each have their own independent copy too (planItems/reviewItems and
-// dayItems respectively), since only one Intraday sub-page is ever mounted
-// at a time.
+// Owns its own checklistItems fetch - WorkspacePage.tsx has its own
+// independent copy too (dayItems, for its session check-in banner), since
+// only one Intraday sub-page is ever mounted at a time.
 export default function TradeChecklistPage() {
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
   const planItems = checklistItems.filter((i) => i.phase === "plan");
@@ -66,22 +66,32 @@ export default function TradeChecklistPage() {
                 {editingChecklistId === item.id ? (
                   <>
                     <input type="text" value={editingChecklistLabel} onChange={(e) => setEditingChecklistLabel(e.target.value)} />
-                    <button
-                      type="button"
-                      className="tiny"
-                      onClick={async () => {
-                        const label = editingChecklistLabel.trim();
-                        if (!label) return;
-                        await updateChecklistItem(item.id, { label });
-                        setEditingChecklistId(null);
-                        await refreshChecklistItems();
-                      }}
-                    >
-                      Save
-                    </button>
-                    <button type="button" className="tiny secondary" onClick={() => setEditingChecklistId(null)}>
-                      Cancel
-                    </button>
+                    <span className="edit-actions">
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="Save"
+                        aria-label="Save"
+                        onClick={async () => {
+                          const label = editingChecklistLabel.trim();
+                          if (!label) return;
+                          await updateChecklistItem(item.id, { label });
+                          setEditingChecklistId(null);
+                          await refreshChecklistItems();
+                        }}
+                      >
+                        <CheckIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="Cancel"
+                        aria-label="Cancel"
+                        onClick={() => setEditingChecklistId(null)}
+                      >
+                        <XIcon />
+                      </button>
+                    </span>
                   </>
                 ) : (
                   <>
@@ -102,26 +112,32 @@ export default function TradeChecklistPage() {
                         </button>
                       ))}
                     </span>
-                    <button
-                      type="button"
-                      className="tiny secondary"
-                      onClick={() => {
-                        setEditingChecklistId(item.id);
-                        setEditingChecklistLabel(item.label);
-                      }}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="tiny btn-exit"
-                      onClick={async () => {
-                        await deleteChecklistItem(item.id);
-                        await refreshChecklistItems();
-                      }}
-                    >
-                      Remove
-                    </button>
+                    <span className="edit-actions">
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title={`Edit "${item.label}"`}
+                        aria-label="Edit"
+                        onClick={() => {
+                          setEditingChecklistId(item.id);
+                          setEditingChecklistLabel(item.label);
+                        }}
+                      >
+                        <PencilIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn danger"
+                        title={`Remove "${item.label}"`}
+                        aria-label="Remove"
+                        onClick={async () => {
+                          await deleteChecklistItem(item.id);
+                          await refreshChecklistItems();
+                        }}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </span>
                   </>
                 )}
               </div>

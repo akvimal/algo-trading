@@ -2,11 +2,21 @@ import { useEffect, useRef, useState } from "react";
 
 import { type OiBuildup, type OiSummary, type OiSummaryLeg, fetchOiSummary, fetchOptionExpiries, resolveUnderlying } from "./api";
 import { OiBarChart } from "./OiBarChart";
+import { SentimentHistoryChart } from "./SentimentHistoryChart";
 
 // Options only exist on NSE/MCX in this codebase (CRYPTO option chain/
 // execution are still planned - see CLAUDE.md) - a narrower type than
 // the shared Segment, deliberately excluding CRYPTO.
 type OptionExchange = "NSE" | "MCX";
+
+// Local calendar date ("YYYY-MM-DD", same shape GET /options/expiries
+// returns) - same convention execution/frontend's own format.ts uses for
+// todayLocalDate, duplicated here rather than shared (no cross-system
+// imports between frontends).
+function todayLocalDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 // Fixed watchlist rather than a free-text symbol picker - the 4
 // underlyings actually traded via this codebase's option flows (2 NSE
@@ -343,6 +353,11 @@ export default function OiSummaryPage() {
           {PRESETS.map((p) => (
             <button key={p.key} className={activeKey === p.key ? "active" : ""} onClick={() => setActiveKey(p.key)}>
               {p.key}
+              {tabStates[p.key]?.expiry === todayLocalDate() && (
+                <span className="expiry-today-badge" title="This instrument's nearest expiry is today">
+                  EXP
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -433,25 +448,34 @@ export default function OiSummaryPage() {
             )}
           </section>
 
-          <section className="manual-settings-section">
-            <div className="oi-summary-chart-header">
-              <h4>OI by strike - {summary.expiry}</h4>
-              <div className="oi-summary-window-toggle">
-                <button type="button" className={chartWindow === "5m" ? "active" : ""} onClick={() => setChartWindow("5m")}>
-                  5m
-                </button>
-                <button type="button" className={chartWindow === "15m" ? "active" : ""} onClick={() => setChartWindow("15m")}>
-                  15m
-                </button>
+          <div className="oi-charts-row">
+            <section className="manual-settings-section oi-charts-row-item">
+              <div className="oi-summary-chart-header">
+                <h4>OI by strike - {summary.expiry}</h4>
+                <div className="oi-summary-window-toggle">
+                  <button type="button" className={chartWindow === "5m" ? "active" : ""} onClick={() => setChartWindow("5m")}>
+                    5m
+                  </button>
+                  <button type="button" className={chartWindow === "15m" ? "active" : ""} onClick={() => setChartWindow("15m")}>
+                    15m
+                  </button>
+                </div>
               </div>
-            </div>
-            <OiBarChart
-              strikes={visibleStrikes}
-              spot={summary.underlying_last_price}
-              symbol={summary.underlying_symbol}
-              changeWindow={chartWindow}
-            />
-          </section>
+              <OiBarChart
+                strikes={visibleStrikes}
+                spot={summary.underlying_last_price}
+                symbol={summary.underlying_symbol}
+                changeWindow={chartWindow}
+              />
+            </section>
+
+            <section className="manual-settings-section oi-charts-row-item">
+              <div className="oi-summary-chart-header">
+                <h4>Sentiment history - {activeKey}</h4>
+              </div>
+              <SentimentHistoryChart symbol={activeKey} />
+            </section>
+          </div>
 
           <section className="manual-settings-section">
             <div className="oi-summary-chart-header">

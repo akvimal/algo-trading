@@ -24,7 +24,7 @@ import {
   updateOptionGroupSpotStopLoss,
   updateOptionGroupStopLoss,
 } from "./api";
-import Nav from "./Nav";
+import { PencilIcon, XIcon } from "./Icons";
 import { PnlChart, type PnlPoint } from "./PnlChart";
 import { SEGMENTS, formatPct, formatTime, localDateStr, money, moneySigned, pnlPercent, todayLocalDate } from "./format";
 
@@ -556,17 +556,11 @@ export default function PositionsPage() {
     closedGroups.some((g) => isCrypto(g.segment));
 
   return (
-    <main>
-      <header>
-        <div className="header-row">
-          <h1>execution</h1>
-          <Nav active="positions" />
-        </div>
-        <p className="subtitle">
-          Refreshed every {POLL_INTERVAL_MS / 1000}s.
-          {lastUpdated && <span className="updated"> Last updated {lastUpdated.toLocaleTimeString()}</span>}
-        </p>
-      </header>
+    <>
+      <p className="subtitle">
+        Refreshed every {POLL_INTERVAL_MS / 1000}s.
+        {lastUpdated && <span className="updated"> Last updated {lastUpdated.toLocaleTimeString()}</span>}
+      </p>
 
       {signalIdFilter && (
         <p className="filter-banner">
@@ -757,11 +751,13 @@ export default function PositionsPage() {
                 <td>
                   <button
                     type="button"
-                    className="danger tiny"
+                    className="icon-btn danger"
                     onClick={() => handleSquareOffOne(p)}
                     disabled={squaringOffId === p.id}
+                    title={squaringOffId === p.id ? "Closing..." : "Square off"}
+                    aria-label="Square off"
                   >
-                    {squaringOffId === p.id ? "Closing..." : "Square off"}
+                    <XIcon />
                   </button>
                 </td>
               </tr>
@@ -946,7 +942,7 @@ export default function PositionsPage() {
                         title={g.entry_spot_price == null ? "No entry spot price recorded" : "Edit stop-loss (underlying price/%)"}
                         aria-label="Edit stop-loss"
                       >
-                        {editingSpotSlGroupId === g.id ? "…" : "✎"}
+                        {editingSpotSlGroupId === g.id ? "..." : <PencilIcon />}
                       </button>
                     </td>
                     <td
@@ -965,7 +961,7 @@ export default function PositionsPage() {
                         title="Square off (both legs)"
                         aria-label="Square off"
                       >
-                        {squaringOffGroupId === g.id ? "…" : "✕"}
+                        {squaringOffGroupId === g.id ? "..." : <XIcon />}
                       </button>
                     </td>
                   </tr>
@@ -1176,6 +1172,6 @@ export default function PositionsPage() {
         </table>
       </div>
       )}
-    </main>
+    </>
   );
 }

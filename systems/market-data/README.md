@@ -48,5 +48,7 @@ A second, independent live feed does the same for Delta Exchange India (`app/pro
 - `GET /options/leg-history?exchange=NSE&symbol=NIFTY&option_type=CE&strike=ATM&expiry_flag=WEEK&expiry_code=0&interval=5&from=2026-07-01&to=2026-08-01` - historical premium for one leg, tracked relative to spot
 - `GET /delta/feed-status` - Delta live feed connection health + last ticks
 - `POST /delta/feed/subscribe` - `{exchange: "CRYPTO", symbol}`, adds one more symbol to the Delta live feed
+- `GET /options/sentiment` - OI-based bullish/bearish read for a fixed 4-symbol watchlist (NIFTY/BANKNIFTY/GOLDM/CRUDEOILM)
+- `GET /options/sentiment-history?symbol=NIFTY&limit=200` - that same read's history for one symbol, plus spot price at each recorded moment
 
-No database - this system holds no business-critical state, just a cached provider lookup and in-memory feed/token state, both cheap to rebuild on restart.
+Mostly no database - this system is otherwise in-memory-cache-only (cached provider lookup, feed/token state, both cheap to rebuild on restart), with one exception: `market_data.sentiment_history` (Postgres), an append-only log the sentiment-history route above reads from, written every 5 minutes by a scheduled job (`app/scheduler.py`).

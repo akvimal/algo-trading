@@ -3,6 +3,7 @@ import { login, setAuthEmail, setAuthToken, signup } from "./auth";
 
 export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -13,7 +14,7 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => 
     setSubmitting(true);
     setError(null);
     try {
-      const token = mode === "login" ? await login(email, password) : await signup(email, password);
+      const token = mode === "login" ? await login(email, password) : await signup(name, email, password);
       setAuthToken(token);
       setAuthEmail(email);
       onAuthenticated();
@@ -28,9 +29,18 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => 
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
         <h1>{mode === "login" ? "Log in" : "Sign up"}</h1>
+        {/* Login-only accounts already have a name from when they signed
+            up - only a fresh signup needs to collect one, shown in the
+            shell's own top-bar user area afterward (see shell/index.html). */}
+        {mode === "signup" && (
+          <label>
+            Name
+            <input type="text" required autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+        )}
         <label>
           Email
-          <input type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input type="email" required autoFocus={mode === "login"} value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label>
           Password
@@ -43,7 +53,7 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => 
           />
         </label>
         {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={submitting || !email || !password}>
+        <button type="submit" disabled={submitting || !email || !password || (mode === "signup" && !name.trim())}>
           {submitting ? "..." : mode === "login" ? "Log in" : "Sign up"}
         </button>
         <button

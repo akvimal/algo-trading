@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { type Account, type Segment, type Settings, fetchAccounts, fetchSettings, updateAccount, updateSettings } from "./api";
+import { type Account, type Segment, type Settings, fetchAccounts, fetchSettings, resetAccount, updateAccount, updateSettings } from "./api";
+import { RotateCcwIcon } from "./Icons";
 
 const ALL_SEGMENTS: Segment[] = ["NSE", "MCX", "CRYPTO"];
 
@@ -42,6 +43,7 @@ export default function RiskAccountsPage() {
   const [draftNeverSquareOff, setDraftNeverSquareOff] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
   const [savingSegment, setSavingSegment] = useState<Segment | null>(null);
   const [justSavedSegment, setJustSavedSegment] = useState<Segment | null>(null);
+  const [resettingSegment, setResettingSegment] = useState<Segment | null>(null);
 
   // USD/INR rate (CRYPTO sizing only).
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -172,6 +174,23 @@ export default function RiskAccountsPage() {
     }
   }
 
+  async function resetSegmentBalance(segment: Segment) {
+    const confirmed = window.confirm(
+      `Reset the ${segment} account's balance back to its starting balance? This doesn't undo any positions.`,
+    );
+    if (!confirmed) return;
+    setResettingSegment(segment);
+    try {
+      await resetAccount(segment);
+      await refreshAccounts();
+      setAccountsError(null);
+    } catch (err) {
+      setAccountsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResettingSegment(null);
+    }
+  }
+
   return (
     <div className="manual-settings-page">
       <div className="manual-page-header">
@@ -274,18 +293,30 @@ export default function RiskAccountsPage() {
                   />
                   Never force-close
                 </label>
-                <label className="checkbox-label tiny manual-risk-card-checkbox" title="Spot/future orders only - auto-computes and locks the Lot field from Risk/trade % once a stop-loss is set, instead of leaving it free-typed.">
+                <label className="checkbox-label tiny manual-risk-card-checkbox" title="Auto-computes and locks the Lot field from Risk/trade % once a stop-loss is set (spot/future: spot SL Limit; option: the option row's own Premium SL, against its ATM leg's live premium), instead of leaving it free-typed.">
                   <input
                     type="checkbox"
                     checked={draftEnforceLots[seg]}
                     disabled={!account}
                     onChange={(e) => setDraftEnforceLots((prev) => ({ ...prev, [seg]: e.target.checked }))}
                   />
-                  Enforce risk-based Lot (spot/future)
+                  Enforce risk-based Lot
                 </label>
-                <button type="button" className="tiny" disabled={!account || savingSegment === seg} onClick={() => void saveSegmentRisk(seg)}>
-                  {savingSegment === seg ? "Saving..." : "Save"}
-                </button>
+                <span className="edit-actions">
+                  <button type="button" className="tiny" disabled={!account || savingSegment === seg} onClick={() => void saveSegmentRisk(seg)}>
+                    {savingSegment === seg ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn secondary"
+                    disabled={!account || resettingSegment === seg}
+                    onClick={() => void resetSegmentBalance(seg)}
+                    title={resettingSegment === seg ? "Resetting..." : `Reset ${seg} balance to its starting balance`}
+                    aria-label="Reset balance"
+                  >
+                    <RotateCcwIcon />
+                  </button>
+                </span>
                 {justSavedSegment === seg && <span className="manual-saved-badge">Saved</span>}
               </div>
             );

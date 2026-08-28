@@ -18,7 +18,22 @@ def _normalize_email(email: str) -> str:
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest, db: Session = Depends(get_db)):
     email = _normalize_email(payload.email)
-    user = models.User(email=email, password_hash=hash_password(payload.password))
+    # Bootstraps the platform's first admin - the very first account ever
+    # created (across the whole table, not per-request) gets is_admin=True
+    # so there's always at least one admin login without a manual SQL
+    # UPDATE ... SET is_admin=true right after standing up a fresh stack.
+    # Every signup after that stays a regular (non-admin) account, same as
+    # before this existed. A theoretical concurrent-first-signup race
+    # (two requests both seeing count()==0) isn't guarded against - this
+    # is a one-time bootstrap step on a fresh, single-operator stack, not
+    # an ongoing security boundary.
+    is_first_user = db.query(models.User).count() == 0
+    user = models.User(
+        email=email,
+        name=payload.name.strip(),
+        password_hash=hash_password(payload.password),
+        is_admin=is_first_user,
+    )
     db.add(user)
     try:
         db.commit()

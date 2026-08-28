@@ -1,6 +1,6 @@
 # algo-trading
 
-A multi-system algo-trading platform: **signal-generation** (owns the Strategy concept — external providers like Chartink/TradingView, and eventually in-house rules — that produce BUY/SELL ideas), **signal-processing** (resolve a raw signal into an intraday/positional trade on spot/futures/options, using its Strategy's configuration), **execution** (paper or live broker trading), and **market-data** (provider credentials + quote lookups, shared by the others). The systems are loosely coupled — HTTP calls against versioned JSON contracts, and a Redis stream between signal-processing and execution — never a shared database or shared code import.
+A multi-system algo-trading platform: **signal-engine** (owns the Strategy/Rule concepts — external providers like Chartink/TradingView, and an in-house indicator engine — that produce BUY/SELL ideas, and resolves each raw signal into an intraday/positional trade on spot/futures/options using its Strategy's configuration), **execution** (paper or live broker trading), and **market-data** (provider credentials + quote lookups, shared by the others). The systems are loosely coupled — HTTP calls against versioned JSON contracts, and a Redis stream between signal-engine and execution — never a shared database or shared code import. (`signal-engine` is the 2026-08-28 merger of what used to be two separate systems, `signal-generation` and `signal-processing` — see `docs/architecture.md` § "The signal-engine merge".)
 
 Full architecture writeup: [`docs/architecture.md`](docs/architecture.md).
 
@@ -8,8 +8,7 @@ Full architecture writeup: [`docs/architecture.md`](docs/architecture.md).
 
 | system | status |
 |---|---|
-| `signal-generation` | owns the **Strategy** entity (name, source, horizon/instrument/interval, webhook URLs, draft/live/paused) - create one, get webhook URLs, activate it. Chartink wired up; TradingView and in-house engine integration not yet done, see [`systems/signal-generation/README.md`](systems/signal-generation/README.md) |
-| `signal-processing` | Chartink webhook intake (`?strategy_id=`, `app/api/routes/webhooks.py`), resolves each signal by looking up its Strategy (no more guessing), Postgres persistence, Redis publish |
+| `signal-engine` | owns the **Strategy**/**Rule** entities (name, source, horizon/instrument/interval, webhook URLs, draft/live/paused) - create one, get webhook URLs, activate it. Chartink + an in-house indicator engine wired up; TradingView is a placeholder. Also owns Chartink webhook intake (`?strategy_id=`, `app/api/routes/webhooks.py`), resolves each signal by looking up its Strategy (no more guessing), Postgres persistence, Redis publish. See [`systems/signal-engine/README.md`](systems/signal-engine/README.md) |
 | `execution` | paper trading, intraday spot only — Redis consumer, capital-based position sizing, configurable square-off scheduler, CMP via market-data |
 | `market-data` | Dhan/NSE quote lookups + instrument-master sync; MCX and crypto routed but not implemented |
 | `accounts` | Turning Manual Trading + Options OI into a multi-tenant SaaS: signup/login (JWT) + encrypted BYO Dhan/Delta credential storage. 5 phases shipped — `execution` is fully multi-tenant, `market-data` uses a caller's own Dhan credentials/rate budget when present, both frontends have real login, `manual-trading/frontend` is the SaaS product (self-service BYO credentials + capital/leverage/square-off/USDINR settings) while `execution/frontend` is now an admin-only ops console, see [`docs/architecture.md`](docs/architecture.md) § "Manual Trading SaaS" |
@@ -18,15 +17,14 @@ Full architecture writeup: [`docs/architecture.md`](docs/architecture.md).
 
 ```bash
 cp .env.example .env        # then edit passwords/ports, and DHAN_CLIENT_ID/DHAN_ACCESS_TOKEN if using execution
-make bootstrap                # builds images and starts signal-generation + signal-processing + market-data
+make bootstrap                # builds images and starts signal-engine + market-data
 docker compose --profile execution up -d --build   # also bring up execution (paper trading)
 ```
 
 Once running:
 
 - **shell** (tab nav across all frontends): http://localhost:8090
-- **signal-generation**: http://localhost:8082 (frontend), http://localhost:8003/docs (API) — create a Strategy here first to get webhook URLs (point your real Chartink scans at them directly, no separate workflow tool to configure)
-- **signal-processing**: http://localhost:8080 (frontend), http://localhost:8000/docs (API)
+- **signal-engine**: http://localhost:8080 (frontend), http://localhost:8000/docs (API) — create a Strategy here first to get webhook URLs (point your real Chartink scans at them directly, no separate workflow tool to configure)
 - **execution**: http://localhost:8081 (frontend), http://localhost:8002/docs (API) — needs the `execution` profile
 - **market-data**: http://localhost:8001/docs (API) — needs `DHAN_CLIENT_ID`/`DHAN_ACCESS_TOKEN` in `.env` for real quotes
 
@@ -45,14 +43,14 @@ make test-up      # builds + starts the test stack (project algo-trading-test)
 make test-ps       # make test-down / test-logs / test-build / test-psql also available
 ```
 
-Test stack URLs mirror the dev ones 1000 higher (shell 9090, signal-generation frontend 9082, etc). `.env.test` is gitignored like `.env` — copy/adjust it the same way if you need different credentials per stack. Known gap: cross-system deep links in each frontend still point at dev's ports (see `CLAUDE.md`).
+Test stack URLs mirror the dev ones 1000 higher (shell 9090, signal-engine frontend 9080, etc). `.env.test` is gitignored like `.env` — copy/adjust it the same way if you need different credentials per stack. Known gap: cross-system deep links in each frontend still point at dev's ports (see `CLAUDE.md`).
 
 ## Repo layout
 
 ```
 docs/            architecture notes + versioned JSON contracts between systems
 infra/           postgres init SQL, redis config
-systems/         one folder per system: signal-generation, signal-processing, execution, market-data
+systems/         one folder per system: signal-engine, execution, accounts, market-data, manual-trading
 shell/           static tab bar + iframes onto each frontend, not a system of its own
 shared/          cross-system libs (python + ts), used sparingly and explicitly
 scripts/         dev convenience scripts

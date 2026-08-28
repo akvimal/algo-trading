@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { type CredentialsOut, fetchCredentials, saveCredentials } from "./api";
+import { InfoDisclosure } from "./InfoDisclosure";
 
 // Intraday > My Credentials - BYO Dhan/Delta broker keys (systems/
 // accounts), split out of the old combined "Checklist & Risk Settings"
@@ -72,11 +73,13 @@ export default function MyCredentialsPage() {
       </div>
 
       <section className="manual-settings-section">
-        <p className="subtitle">
-          Your own Dhan (NSE/MCX) and Delta Exchange India (CRYPTO) keys - once saved, quotes/candles/option chains and your own manual
-          orders use YOUR credentials and rate budget instead of the platform default. Never shown back once saved - paste a new value to
-          replace it.
-        </p>
+        <p className="subtitle">Your own Dhan (NSE/MCX) and Delta Exchange India (CRYPTO) keys.</p>
+        <InfoDisclosure summary="Why set these?">
+          <p>
+            Once saved, quotes/candles/option chains and your own manual orders use YOUR credentials and rate
+            budget instead of the platform default. Never shown back once saved - paste a new value to replace it.
+          </p>
+        </InfoDisclosure>
         {credentialsError && <p className="error">{credentialsError}</p>}
 
         <div className="strategy-form">

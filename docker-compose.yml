@@ -34,13 +34,23 @@ services:
       timeout: 5s
       retries: 10
 
-  signal-processing-backend:
+  # The merger (2026-08-28, see docs/architecture.md) of the old
+  # signal-generation and signal-processing services - they were coupled
+  # by a synchronous HTTP call on every single signal (resolution
+  # fetching a Strategy over HTTP), unlike every other cross-system
+  # relationship in this platform. One service now, still two Postgres
+  # schemas (no data migration - both already lived in the same shared
+  # database). Infra-tier, not gated behind a profile: execution's
+  # square-off job and every signal-source webhook depend on this being
+  # reachable, so it's expected to be up alongside postgres/redis.
+  signal-engine-backend:
     build:
-      context: ./systems/signal-processing/backend
+      context: ./systems/signal-engine/backend
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      DATABASE_SCHEMA: signal_processing
+      GENERATION_DATABASE_SCHEMA: signal_generation
+      PROCESSING_DATABASE_SCHEMA: signal_processing
       REDIS_URL: redis://redis:6379/0
       REDIS_STREAM: orders.resolved
       # A second, separate stream from REDIS_STREAM above - moves resolve()'s
@@ -50,32 +60,35 @@ services:
       SIGNAL_RESOLUTION_STREAM: signals.pending_resolution
       SIGNAL_RESOLUTION_CONSUMER_GROUP: signal-processing-resolver
       SIGNAL_RESOLUTION_CONSUMER_NAME: signal-processing-resolver-1
-      SIGNAL_GENERATION_BASE_URL: http://signal-generation-backend:8000
       # Option-strategy resolution only (Phase 4b of the options trading
       # module) - see app/adapters/market_data/client.py.
       MARKET_DATA_BASE_URL: http://market-data-backend:8000
     ports:
-      - "${SIGNAL_PROCESSING_BACKEND_PORT}:8000"
+      - "${SIGNAL_ENGINE_BACKEND_PORT}:8000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      signal-generation-backend:
-        condition: service_started
       market-data-backend:
         condition: service_started
 
-  signal-processing-frontend:
+  signal-engine-frontend:
     build:
-      context: ./systems/signal-processing/frontend
+      context: ./systems/signal-engine/frontend
       args:
-        VITE_API_BASE_URL: /api
+        VITE_SIGNAL_ENGINE_PORT: ${SIGNAL_ENGINE_BACKEND_PORT}
+        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+        VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
+        # Now gated behind a login too (see AuthGate.tsx) - accounts-backend
+        # sits behind the "execution" profile, so like manual-trading's and
+        # market-data's own logins, this simply errors until it's up.
+        VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
-      - "${SIGNAL_PROCESSING_FRONTEND_PORT}:80"
+      - "${SIGNAL_ENGINE_FRONTEND_PORT}:80"
     depends_on:
-      - signal-processing-backend
+      - signal-engine-backend
 
   # Infra-tier, not gated behind a profile: execution's square-off job
   # depends on this being reachable, so it's expected to be up alongside
@@ -85,6 +98,11 @@ services:
       context: ./systems/market-data/backend
     restart: unless-stopped
     environment:
+      # market-data's first-ever DB dependency - sentiment_history only
+      # (app/config.py's own comment) - everything else here stays
+      # in-memory-cache-only exactly as before.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_SCHEMA: market_data
       DHAN_CLIENT_ID: ${DHAN_CLIENT_ID}
       DHAN_ACCESS_TOKEN: ${DHAN_ACCESS_TOKEN}
       # Default 20 (auto-renew every 20h). Set to 0 only if this stack ever
@@ -122,12 +140,23 @@ services:
       - dhan-credentials:/data
     ports:
       - "${MARKET_DATA_BACKEND_PORT}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   market-data-frontend:
     build:
       context: ./systems/market-data/frontend
       args:
         VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+        # Admin login for the Data provider (Dhan) panel only (moved here
+        # from execution/frontend - see docs/architecture.md) - same
+        # direct-from-browser CORS pattern execution/manual-trading's own
+        # accounts-backend calls already use. accounts-backend itself sits
+        # behind the "execution" profile, so that one panel's login simply
+        # errors until it's up - the rest of this dashboard needs no login
+        # and is unaffected.
+        VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
       - "${MARKET_DATA_FRONTEND_PORT}:80"
@@ -192,15 +221,10 @@ services:
       context: ./systems/execution/frontend
       args:
         VITE_API_BASE_URL: /api
-        # Data provider (Dhan) credentials settings - execution's frontend
-        # calls market-data-backend directly (CORS-enabled), same
-        # direct-from-browser cross-system pattern signal-generation's
-        # frontend already uses for its own market-data calls.
-        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
         # Strategy names for the derivatives Orders grid's "Signal" column
         # (id -> name) - same direct-from-browser CORS pattern as above,
         # not execution's own /api proxy (this isn't execution's data).
-        VITE_SIGNAL_GENERATION_PORT: ${SIGNAL_GENERATION_BACKEND_PORT}
+        VITE_SIGNAL_ENGINE_PORT: ${SIGNAL_ENGINE_BACKEND_PORT}
         # Login/signup (Phase 4, BYO Dhan/Delta credentials SaaS - see
         # docs/architecture.md) - accounts-backend, same direct-from-
         # browser CORS pattern as the two ports above.
@@ -211,53 +235,19 @@ services:
     depends_on:
       - execution-backend
 
-  # Infra-tier like market-data: signal-processing's resolution calls this
-  # for every signal, so it's expected to be up alongside postgres/redis,
-  # not gated behind a profile.
-  signal-generation-backend:
-    build:
-      context: ./systems/signal-generation/backend
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      DATABASE_SCHEMA: signal_generation
-    ports:
-      - "${SIGNAL_GENERATION_BACKEND_PORT}:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  # Reads signal-processing's API directly from the browser (CORS) for
-  # per-strategy signal activity, and its own backend above for strategy
-  # CRUD. Not gated behind a profile.
-  signal-generation-frontend:
-    build:
-      context: ./systems/signal-generation/frontend
-      args:
-        VITE_SIGNAL_GENERATION_PORT: ${SIGNAL_GENERATION_BACKEND_PORT}
-        VITE_SIGNAL_PROCESSING_PORT: ${SIGNAL_PROCESSING_BACKEND_PORT}
-        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
-        VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
-    restart: unless-stopped
-    ports:
-      - "${SIGNAL_GENERATION_FRONTEND_PORT}:80"
-    depends_on:
-      - signal-generation-backend
-
   # Manual Trading + Options OI, split out of signal-generation's frontend
   # (see docs/architecture.md § "Manual Trading module split") - neither
   # ever actually depended on signal-generation's own backend/DB, only on
   # execution's (paper positions/checklist/trade images) and market-data's
   # (option chain/OI), so this is frontend-only, no backend of its own.
   # Gated behind the same profile as execution - it's non-functional
-  # without it, unlike signal-generation-frontend's other tabs.
+  # without it, unlike signal-engine-frontend's other tabs.
   manual-trading-frontend:
     profiles: ["execution"]
     build:
       context: ./systems/manual-trading/frontend
       args:
-        VITE_SIGNAL_GENERATION_PORT: ${SIGNAL_GENERATION_BACKEND_PORT}
-        VITE_SIGNAL_PROCESSING_PORT: ${SIGNAL_PROCESSING_BACKEND_PORT}
+        VITE_SIGNAL_ENGINE_PORT: ${SIGNAL_ENGINE_BACKEND_PORT}
         VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
         VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
         # Login/signup (Phase 4, BYO Dhan/Delta credentials SaaS - see
@@ -280,9 +270,9 @@ services:
       - "${SHELL_PORT}:80"
 
 # --- Later phases (see docs/architecture.md) plug in here behind profiles, e.g.: ---
-#   signal-generation-api:
-#     profiles: ["signal-generation"]
-#     build: { context: ./systems/signal-generation/api }
+#   some-new-system-backend:
+#     profiles: ["some-new-system"]
+#     build: { context: ./systems/some-new-system/backend }
 #     ...
 
 volumes:

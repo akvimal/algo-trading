@@ -373,85 +373,23 @@ export async function updateSettings(update: { usdinr_rate: number }): Promise<S
   return asJson(res, "PUT /settings");
 }
 
+// Data provider (Dhan) credentials + live feed used to live here (called
+// directly on market-data's backend, CORS-enabled) - moved to market-data's
+// own frontend since it's market-data's data, not execution's (see
+// docs/architecture.md). See that system's App.tsx (DhanAdminSection) and
+// api.ts.
+
 // ---------------------------------------------------------------------
-// Data provider (Dhan) ops - market-data's own backend, read/written
+// Strategy names - signal-engine's own backend (the 2026-08-28 merger of
+// signal-generation/signal-processing, see docs/architecture.md), read
 // directly from the browser (CORS-enabled), same direct-from-browser
-// cross-system pattern signal-generation's frontend already uses for its
-// own market-data calls - NOT execution's own /api proxy convention above,
-// since this isn't execution's data. Admin-only on market-data's side
-// (require_admin, see docs/architecture.md) - this whole app is already
-// admin-gated (AuthGate.tsx), so every call here goes through authFetch
-// for the Bearer token.
+// cross-system pattern as the Dhan credentials block above. Used only for
+// the derivatives Orders grid's "Signal" column (OptionGroup.strategy_id
+// -> name, "Manual" when null) - execution itself only ever stores the id.
 // ---------------------------------------------------------------------
 
-const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
-const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
-
-export type DhanStatus = {
-  renewed: boolean;
-  last_renewed_at: string | null;
-  expiry_time: string | null;
-  dhan_client_name: string | null;
-  create_time: string | null;
-  dhan_client_id: string;
-  has_access_token: boolean;
-};
-
-export async function fetchDhanStatus(): Promise<DhanStatus> {
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/token-status`);
-  return asJson(res, "GET /dhan/token-status");
-}
-
-// Sets both the Dhan client ID and access token at runtime - in-memory
-// only on market-data's side (see set_manual_credentials' own docstring),
-// no restart needed, but also doesn't survive one.
-export async function updateDhanCredentials(clientId: string, accessToken: string): Promise<DhanStatus> {
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/credentials`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: clientId, access_token: accessToken }),
-  });
-  return asJson(res, "PUT /dhan/credentials");
-}
-
-export async function renewDhanToken(): Promise<unknown> {
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/renew-token`, { method: "POST" });
-  return asJson(res, "POST /dhan/renew-token");
-}
-
-export type FeedStatus = {
-  connected: boolean;
-  connected_at: string | null;
-  last_message_at: string | null;
-  reconnect_count: number;
-  last_error: string | null;
-  ticks: Record<string, unknown>;
-};
-
-export async function fetchFeedStatus(): Promise<FeedStatus> {
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/feed-status`);
-  return asJson(res, "GET /dhan/feed-status");
-}
-
-export async function subscribeFeed(exchange: string, symbol: string): Promise<FeedStatus> {
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/feed/subscribe`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ exchange, symbol }),
-  });
-  return asJson(res, "POST /dhan/feed/subscribe");
-}
-
-// ---------------------------------------------------------------------
-// Strategy names - signal-generation's own backend, read directly from
-// the browser (CORS-enabled), same direct-from-browser cross-system
-// pattern as the Dhan credentials block above. Used only for the
-// derivatives Orders grid's "Signal" column (OptionGroup.strategy_id ->
-// name, "Manual" when null) - execution itself only ever stores the id.
-// ---------------------------------------------------------------------
-
-const SIGNAL_GENERATION_PORT = import.meta.env.VITE_SIGNAL_GENERATION_PORT ?? "8003";
-const SIGNAL_GENERATION_BASE_URL = `http://${location.hostname}:${SIGNAL_GENERATION_PORT}`;
+const SIGNAL_ENGINE_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";
+const SIGNAL_ENGINE_BASE_URL = `http://${location.hostname}:${SIGNAL_ENGINE_PORT}`;
 
 export type StrategySummary = {
   id: string;
@@ -464,7 +402,7 @@ export type StrategySummary = {
 };
 
 export async function fetchStrategyNames(): Promise<StrategySummary[]> {
-  const res = await fetch(`${SIGNAL_GENERATION_BASE_URL}/strategies`);
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`);
   return asJson(res, "GET /strategies");
 }
 

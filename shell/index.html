@@ -23,12 +23,18 @@
     display: flex;
     flex-direction: column;
   }
-  nav {
+  .top-bar {
     display: flex;
-    gap: 0.25rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
     padding: 0.75rem 1rem 0;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
+  }
+  nav {
+    display: flex;
+    gap: 0.25rem;
   }
   nav button {
     background: transparent;
@@ -43,6 +49,100 @@
   nav button.active {
     color: var(--text);
     border-bottom-color: var(--accent);
+  }
+  /* Groups the user-identity display and the notification bell into one
+     right-hand cluster, so top-bar (space-between) still only has two
+     direct children - nav on the left, this on the right - regardless of
+     how many things live inside it. */
+  .top-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-shrink: 0;
+  }
+  /* One global username/logout display instead of a per-module copy
+     (moved from execution's Nav/manual-trading's/market-data's own Dhan
+     panel) - it's the same underlying session (see the shared-token
+     broker below) regardless of which tab happens to be active, so it
+     belongs up here, not duplicated per tab. Empty (no children) when
+     nobody's logged in anywhere - collapses to nothing via :empty rather
+     than showing a placeholder. */
+  .user-area {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-bottom: 0.6rem;
+    font-size: 0.82rem;
+  }
+  .user-area:empty {
+    display: none;
+  }
+  .user-name {
+    color: var(--text-dim);
+  }
+  .admin-badge {
+    background: var(--accent);
+    color: #0f1216;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 0.15rem 0.4rem;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .user-logout-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+  }
+  .user-logout-btn:hover {
+    color: var(--text);
+    border-color: var(--text-dim);
+  }
+  /* One global notification bell instead of a per-module copy (moved
+     from signal-engine's/manual-trading's own top rows) - it's the same
+     underlying feature (new signal, across every strategy) regardless of
+     which tab happens to be active, so it belongs up here, not
+     duplicated per tab. */
+  .notif-area {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-bottom: 0.6rem;
+    flex-shrink: 0;
+  }
+  #notif-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0.35rem 0.55rem;
+    cursor: pointer;
+  }
+  .notif-sound-label {
+    display: none;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+  .notif-sound-label.active {
+    display: flex;
+  }
+  #notif-blocked {
+    display: none;
+    font-size: 0.72rem;
+    color: #e8586a;
+    max-width: 16rem;
+  }
+  #notif-blocked.active {
+    display: block;
   }
   .frame-wrap {
     flex: 1;
@@ -88,7 +188,20 @@
 </head>
 <body>
   <div id="dhan-banner"></div>
-  <nav id="tabs"></nav>
+  <div class="top-bar">
+    <nav id="tabs"></nav>
+    <div class="top-bar-right">
+      <div class="user-area" id="user-area"></div>
+      <div class="notif-area">
+        <span id="notif-blocked"></span>
+        <label class="notif-sound-label" id="notif-sound-label">
+          <input type="checkbox" id="notif-sound" />
+          Sound
+        </label>
+        <button type="button" id="notif-toggle"></button>
+      </div>
+    </div>
+  </div>
   <div class="frame-wrap" id="frame-wrap"></div>
 
   <script>
@@ -112,11 +225,10 @@
     document.title = `algo-trading [${PORT_OFFSET === 0 ? "DEV" : "TEST"}]`;
 
     const TABS = [
-      { id: "signal-generation", label: "Signal Generation", port: 8082, built: true },
-      { id: "signal-processing", label: "Signal Processing", port: 8080, built: true },
-      { id: "execution", label: "Execution", port: 8081, built: true },
-      { id: "market-data", label: "Market Data", port: 8083, built: true },
+      { id: "signal-engine", label: "Algo Trading", port: 8080, built: true },
       { id: "manual-trading", label: "Manual Trading", port: 8084, built: true },
+      { id: "execution", label: "Money", port: 8081, built: true },
+      { id: "market-data", label: "Market Data", port: 8083, built: true },
     ];
 
     const tabsEl = document.getElementById("tabs");
@@ -132,7 +244,9 @@
 
       if (tab.built) {
         const iframe = document.createElement("iframe");
-        iframe.src = `http://${location.hostname}:${tab.port + PORT_OFFSET}`;
+        const origin = `http://${location.hostname}:${tab.port + PORT_OFFSET}`;
+        iframe.src = origin;
+        iframe.dataset.origin = origin; // read back by the session broker below
         iframe.id = `frame-${tab.id}`;
         iframe.className = i === 0 ? "active" : "";
         // Without this, navigator.clipboard.writeText() in the iframed
@@ -148,6 +262,127 @@
         frameWrap.appendChild(placeholder);
       }
     });
+
+    // --- Shared login session across all embedded frontends ---------------
+    // Each frontend is its own browser origin (different port), so logging
+    // in on one doesn't carry over to another by default - each keeps its
+    // own separate localStorage session (a documented gap, see CLAUDE.md).
+    // The shell is the one place all of them are already embedded
+    // together, so it acts as the session broker: holds one shared copy of
+    // the token, hands it to any iframe that asks (on load, before it would
+    // otherwise show a login screen), and rebroadcasts it to every OTHER
+    // iframe the instant any one of them logs in or out. Each frontend's
+    // own auth.ts opts into this (duplicated per-frontend, not shared code,
+    // same convention as everything else under systems/*) - a frontend
+    // that never sends "request-token"/"auth-token" would simply be
+    // unaffected (every embedded module opts in today).
+    const SHARED_TOKEN_KEY = "algoTradingSharedAuthToken";
+
+    function getSharedToken() {
+      return localStorage.getItem(SHARED_TOKEN_KEY);
+    }
+
+    function setSharedToken(token) {
+      if (token) localStorage.setItem(SHARED_TOKEN_KEY, token);
+      else localStorage.removeItem(SHARED_TOKEN_KEY);
+    }
+
+    function broadcastToken(token, excludeWindow) {
+      document.querySelectorAll(".frame-wrap iframe").forEach((iframe) => {
+        if (iframe.contentWindow && iframe.contentWindow !== excludeWindow) {
+          iframe.contentWindow.postMessage({ source: "algo-trading-shell", type: "auth-token", token }, iframe.dataset.origin);
+        }
+      });
+    }
+
+    const iframeOrigins = new Set(Array.from(document.querySelectorAll(".frame-wrap iframe")).map((f) => f.dataset.origin));
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      // Only ever a plain object we recognize, from one of our own
+      // embedded iframes - never acted on for any other message shape or
+      // origin (e.g. a browser extension, or something else entirely).
+      if (!data || data.source !== "algo-trading-app" || !iframeOrigins.has(event.origin)) return;
+
+      if (data.type === "request-token") {
+        event.source.postMessage({ source: "algo-trading-shell", type: "auth-token", token: getSharedToken() }, event.origin);
+      } else if (data.type === "auth-token") {
+        setSharedToken(data.token);
+        broadcastToken(data.token, event.source);
+        refreshUserArea();
+      }
+    });
+
+    // --- Global username/logout display -------------------------------
+    // Reads the very same shared token the broker above already holds
+    // (this IS the shell's own origin, so no postMessage round-trip is
+    // needed here) and shows who's logged in - once, for every module,
+    // instead of each frontend repeating its own "email + Logout" row
+    // (moved out of execution's Nav, manual-trading's top row, and
+    // market-data's Dhan panel - see each of their own comments). Any
+    // ONE frontend logging in is enough to populate this, since the
+    // broker above already keeps localStorage and every iframe in sync.
+    const ACCOUNTS_BACKEND_PORT = 8004;
+    const userAreaEl = document.getElementById("user-area");
+
+    async function fetchAccountUser(token) {
+      const base = `http://${location.hostname}:${ACCOUNTS_BACKEND_PORT + PORT_OFFSET}`;
+      const res = await fetch(`${base}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json(); // { id, email, name, is_admin }
+    }
+
+    function renderUserArea(user) {
+      userAreaEl.innerHTML = "";
+      if (!user) return;
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "user-name";
+      // Pre-name accounts (signed up before this field existed) fall back
+      // to email so the bar never renders empty.
+      nameSpan.textContent = user.name || user.email;
+      userAreaEl.appendChild(nameSpan);
+
+      if (user.is_admin) {
+        const badge = document.createElement("span");
+        badge.className = "admin-badge";
+        badge.textContent = "Admin";
+        userAreaEl.appendChild(badge);
+      }
+
+      const logoutBtn = document.createElement("button");
+      logoutBtn.type = "button";
+      logoutBtn.className = "user-logout-btn";
+      logoutBtn.textContent = "Logout";
+      logoutBtn.onclick = () => {
+        // Nobody else initiated this (unlike a frontend's own Logout
+        // button, this isn't "one of the iframes" logging itself out) -
+        // every iframe needs telling, no exclusion.
+        setSharedToken(null);
+        broadcastToken(null);
+        renderUserArea(null);
+      };
+      userAreaEl.appendChild(logoutBtn);
+    }
+
+    async function refreshUserArea() {
+      const token = getSharedToken();
+      if (!token) {
+        renderUserArea(null);
+        return;
+      }
+      try {
+        renderUserArea(await fetchAccountUser(token));
+      } catch {
+        // Expired/invalid - treat as logged out rather than leaving a
+        // stale display, and clear the bad token so a frontend's own
+        // AuthGate doesn't keep trying it either.
+        setSharedToken(null);
+        renderUserArea(null);
+      }
+    }
+
+    refreshUserArea();
 
     function activate(id) {
       document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === id));
@@ -200,6 +435,252 @@
 
     checkDhanTokenExpiry();
     setInterval(checkDhanTokenExpiry, DHAN_POLL_INTERVAL_MS);
+
+    // --- Global signal-notification bell ------------------------------------
+    // Ported from signal-engine's/manual-trading's own (duplicated)
+    // SignalNotifier.tsx React component into plain JS here, since it's the
+    // same underlying feature (desktop notification + sound for a new
+    // signal, across every strategy) regardless of which tab is active - one
+    // bell in the shell's own top bar instead of one copy per module.
+    // Requires a secure context (HTTPS, or localhost's explicit exception) -
+    // silently no-ops (button stays hidden) if window.Notification isn't
+    // available at all. localStorage keys are new here (the shell's own
+    // origin never held this preference before) - a user who'd already
+    // enabled it in the old per-module UI needs to re-enable it once here.
+    const SIGNAL_ENGINE_BACKEND_PORT = 8000;
+    const NOTIF_POLL_MS = 5000;
+    const NOTIF_ENABLED_KEY = "signalNotificationsEnabled";
+    const NOTIF_SOUND_KEY = "signalNotificationSoundEnabled";
+    const notifSupported = typeof window !== "undefined" && "Notification" in window;
+    const notifToggleEl = document.getElementById("notif-toggle");
+    const notifSoundLabelEl = document.getElementById("notif-sound-label");
+    const notifSoundCheckboxEl = document.getElementById("notif-sound");
+    const notifBlockedEl = document.getElementById("notif-blocked");
+
+    if (notifSupported) {
+      let notifEnabled = localStorage.getItem(NOTIF_ENABLED_KEY) === "true" && Notification.permission === "granted";
+      let notifSoundEnabled = localStorage.getItem(NOTIF_SOUND_KEY) !== "false";
+      // null = not seeded yet - the first poll after enabling only records
+      // what's already there, it never fires N notifications for
+      // pre-existing history just because notifications were switched on.
+      let seenIds = null;
+      let strategyNames = new Map();
+      let audioCtx = null;
+
+      function renderNotifButton() {
+        notifToggleEl.textContent = notifEnabled ? "🔔" : "🔕";
+        notifToggleEl.title = notifEnabled ? "Notifications on" : "Enable notifications";
+        notifToggleEl.setAttribute("aria-label", notifToggleEl.title);
+        notifSoundLabelEl.classList.toggle("active", notifEnabled);
+        notifSoundCheckboxEl.checked = notifSoundEnabled;
+      }
+
+      // A distinct little tune per notification type, so which one just
+      // fired is audibly obvious without looking at the screen - a new
+      // trading signal (2-tone ascending "ding-dong", the original tune)
+      // reads differently from a sentiment shift (3-tone ascending
+      // "twinkle") purely by note COUNT, not just pitch, so it stays
+      // distinguishable even played quietly/in the background.
+      const SIGNAL_TUNE_HZ = [880, 1320];
+      const SENTIMENT_TUNE_HZ = [660, 880, 1108.73];
+
+      // Synthesized directly (Web Audio oscillator), not a bundled audio
+      // asset - `frequencies` is one tone's pitch per array entry, played
+      // in sequence.
+      function playAlertSound(ctx, frequencies) {
+        const now = ctx.currentTime;
+        frequencies.forEach((freq, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          const start = now + i * 0.15;
+          gain.gain.setValueAtTime(0.0001, start);
+          gain.gain.exponentialRampToValueAtTime(0.2, start + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.13);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(start);
+          osc.stop(start + 0.14);
+        });
+      }
+
+      function notifyOfSignal(s) {
+        const strategyName = strategyNames.get(s.strategy_id) || s.strategy_id;
+        const n = new Notification(`${s.action} ${s.symbol}`, {
+          body: `${strategyName} · ${s.exchange} @ ${s.price}${s.status ? ` · ${s.status}` : ""}`,
+          tag: s.signal_id,
+        });
+        n.onclick = () => window.focus();
+        playSoundIfEnabled(SIGNAL_TUNE_HZ);
+      }
+
+      function playSoundIfEnabled(frequencies) {
+        if (!notifSoundEnabled) return;
+        try {
+          if (!audioCtx) audioCtx = new AudioContext();
+          playAlertSound(audioCtx, frequencies);
+        } catch {
+          // audio blocked/unsupported - the visual notification still fired
+        }
+      }
+
+      const SENTIMENT_STRENGTH_LABEL = { mild: "Mild", strong: "Strong", very_strong: "Very Strong" };
+
+      // Mirrors SentimentBadges.tsx's own fullLabel() - "Bullish (Strong)",
+      // "Bearish (Mild)", or "Neutral".
+      function sentimentLabel(direction, strength) {
+        if (direction === "neutral" || !strength) return "Neutral";
+        return `${direction === "bullish" ? "Bullish" : "Bearish"} (${SENTIMENT_STRENGTH_LABEL[strength]})`;
+      }
+
+      function notifyOfSentimentChange(symbol, exchange, prevLabel, nextLabel) {
+        const n = new Notification(`${symbol} sentiment: ${nextLabel}`, {
+          body: `${exchange} · was ${prevLabel}`,
+          tag: `sentiment-${symbol}`,
+        });
+        n.onclick = () => window.focus();
+        playSoundIfEnabled(SENTIMENT_TUNE_HZ);
+      }
+
+      async function pollStrategyNames() {
+        const base = `http://${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
+        try {
+          const res = await fetch(`${base}/strategies`);
+          if (!res.ok) return;
+          const data = await res.json();
+          strategyNames = new Map(data.map((s) => [s.id, s.name]));
+        } catch {
+          // keep the last known names rather than clearing on a blip
+        }
+      }
+
+      async function pollSignals() {
+        if (!notifEnabled) return;
+        const base = `http://${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
+        try {
+          const res = await fetch(`${base}/signals?limit=20`);
+          if (!res.ok) return;
+          const signals = await res.json();
+          if (seenIds === null) {
+            seenIds = new Set(signals.map((s) => s.signal_id));
+            return;
+          }
+          const fresh = signals.filter((s) => !seenIds.has(s.signal_id));
+          // Oldest fresh signal first, so notifications appear in the order
+          // they actually happened rather than reverse-chronological.
+          for (const s of fresh.reverse()) {
+            seenIds.add(s.signal_id);
+            notifyOfSignal(s);
+          }
+        } catch {
+          // stay quiet until the next tick rather than notifying about a poll failure
+        }
+      }
+
+      // null = not seeded yet - same "record what's already there, don't
+      // notify retroactively" convention as seenIds above. Keyed by symbol
+      // (NIFTY/BANKNIFTY/GOLDM/CRUDEOILM - see market-data's
+      // SENTIMENT_UNDERLYINGS) since two assets on the same exchange can
+      // read opposite ways - see SentimentBadges.tsx's own comment.
+      let prevSentiment = null;
+
+      async function pollSentiment() {
+        if (!notifEnabled) return;
+        const base = `http://${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
+        try {
+          const res = await fetch(`${base}/options/sentiment`);
+          if (!res.ok) return;
+          const data = await res.json();
+          const next = new Map();
+          for (const [exchange, entry] of Object.entries(data.exchanges ?? {})) {
+            for (const u of entry.underlyings ?? []) {
+              next.set(u.symbol, { exchange, direction: u.direction, strength: u.strength });
+            }
+          }
+          if (prevSentiment === null) {
+            prevSentiment = next;
+            return;
+          }
+          for (const [symbol, current] of next) {
+            const prev = prevSentiment.get(symbol);
+            if (prev && (prev.direction !== current.direction || prev.strength !== current.strength)) {
+              notifyOfSentimentChange(
+                symbol,
+                current.exchange,
+                sentimentLabel(prev.direction, prev.strength),
+                sentimentLabel(current.direction, current.strength),
+              );
+            }
+          }
+          prevSentiment = next;
+        } catch {
+          // stay quiet until the next tick rather than notifying about a poll failure
+        }
+      }
+
+      notifToggleEl.addEventListener("click", async () => {
+        if (notifEnabled) {
+          localStorage.setItem(NOTIF_ENABLED_KEY, "false");
+          notifEnabled = false;
+          seenIds = null;
+          prevSentiment = null;
+          renderNotifButton();
+          return;
+        }
+        notifBlockedEl.classList.remove("active");
+        // Already denied - calling requestPermission() again would just
+        // silently resolve back to 'denied' with no browser prompt at all
+        // (every major browser refuses to re-prompt once a site's been
+        // denied). Short-circuit with an actionable message instead of
+        // repeating that.
+        if (Notification.permission === "denied") {
+          notifBlockedEl.textContent = "Notifications are blocked for this site - allow them in your browser's site settings, then try again.";
+          notifBlockedEl.classList.add("active");
+          return;
+        }
+        // Everything below runs synchronously off this click (a real user
+        // gesture) up to the await - required both for
+        // Notification.requestPermission and to unlock the AudioContext for
+        // sounds the poll loop plays later with no gesture of its own.
+        if (!audioCtx) {
+          try {
+            audioCtx = new AudioContext();
+          } catch {
+            // sound just won't play - notifications still work without it
+          }
+        }
+        const permission = await Notification.requestPermission();
+        if (permission === "granted") {
+          localStorage.setItem(NOTIF_ENABLED_KEY, "true");
+          notifEnabled = true;
+        } else if (permission === "denied") {
+          notifBlockedEl.textContent = "Notifications are blocked for this site - allow them in your browser's site settings, then try again.";
+          notifBlockedEl.classList.add("active");
+        }
+        // permission === "default" - the prompt was dismissed without a
+        // choice - stay quiet, clicking again just re-prompts.
+        renderNotifButton();
+      });
+
+      notifSoundCheckboxEl.addEventListener("change", (e) => {
+        notifSoundEnabled = e.target.checked;
+        localStorage.setItem(NOTIF_SOUND_KEY, String(notifSoundEnabled));
+      });
+
+      renderNotifButton();
+      pollStrategyNames();
+      pollSignals();
+      setInterval(pollStrategyNames, NOTIF_POLL_MS * 4);
+      setInterval(pollSignals, NOTIF_POLL_MS);
+      // Same cadence as SentimentBadges.tsx's own poll (also 5 minutes,
+      // reusing DHAN_POLL_INTERVAL_MS's value rather than a second magic
+      // number) - each tick is a real Dhan option-chain fetch per
+      // watchlist symbol server-side, no reason to check for a change
+      // more often than the data itself actually refreshes.
+      pollSentiment();
+      setInterval(pollSentiment, DHAN_POLL_INTERVAL_MS);
+    }
   </script>
 </body>
 </html>

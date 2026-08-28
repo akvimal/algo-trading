@@ -20,10 +20,10 @@ build:
 	docker compose build
 
 backend-shell:
-	docker compose exec signal-processing-backend sh
+	docker compose exec signal-engine-backend sh
 
 frontend-shell:
-	docker compose exec signal-processing-frontend sh
+	docker compose exec signal-engine-frontend sh
 
 psql:
 	docker compose exec postgres psql -U $${POSTGRES_USER:-algotrading} -d $${POSTGRES_DB:-algotrading}

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simulates a Chartink webhook call against signal-processing's own
+# Simulates a Chartink webhook call against signal-engine's own
 # /webhook/chartink-{buy,sell} route, using Chartink's real payload shape
 # (comma-separated stocks/trigger_prices). Useful for testing the intake
 # pipeline before you have a live Chartink scan wired up.
 #
 # Usage: simulate-chartink-alert.sh [buy|sell] [strategy_id]
 # If strategy_id is omitted, a throwaway "smoke-test" strategy is created
-# (and activated) via signal-generation so this still works as a
+# (and activated) via signal-engine so this still works as a
 # zero-argument smoke test (`make test-signal`).
 
 cd "$(dirname "$0")/.."
@@ -16,8 +16,7 @@ cd "$(dirname "$0")/.."
 
 DIRECTION="${1:-buy}"      # buy | sell
 STRATEGY_ID="${2:-}"
-BACKEND_PORT="${SIGNAL_PROCESSING_BACKEND_PORT:-8000}"
-GENERATION_PORT="${SIGNAL_GENERATION_BACKEND_PORT:-8003}"
+BACKEND_PORT="${SIGNAL_ENGINE_BACKEND_PORT:-8000}"
 
 if [[ "$DIRECTION" != "buy" && "$DIRECTION" != "sell" ]]; then
   echo "Usage: $0 [buy|sell] [strategy_id]" >&2
@@ -26,11 +25,11 @@ fi
 
 if [[ -z "$STRATEGY_ID" ]]; then
   echo "No strategy_id given - creating a throwaway 'smoke-test' strategy..." >&2
-  STRATEGY_ID=$(curl -sS -X POST "http://localhost:${GENERATION_PORT}/strategies" \
+  STRATEGY_ID=$(curl -sS -X POST "http://localhost:${BACKEND_PORT}/strategies" \
     -H "Content-Type: application/json" \
     -d '{"name":"smoke-test","source_type":"chartink","horizon":"intraday","instrument_type":"spot","quantity":1}' \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
-  curl -sS -X PATCH "http://localhost:${GENERATION_PORT}/strategies/${STRATEGY_ID}" \
+  curl -sS -X PATCH "http://localhost:${BACKEND_PORT}/strategies/${STRATEGY_ID}" \
     -H "Content-Type: application/json" -d '{"status":"live"}' > /dev/null
   echo "Created + activated strategy ${STRATEGY_ID}" >&2
 fi

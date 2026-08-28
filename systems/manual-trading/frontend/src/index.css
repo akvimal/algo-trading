@@ -30,8 +30,12 @@ body {
 }
 
 main {
-  max-width: 1080px;
-  margin: 0 auto;
+  /* No max-width/centering - fills the viewport instead of a fixed
+     column, same across every module now (signal-engine/execution/
+     market-data all made this same change together). Narrow settings-
+     form pages still cap their OWN width via .manual-settings-page's
+     48rem - a deliberate readability choice for a form, not this outer
+     shell. */
   /* No page-level header in this app (see App.tsx's own comment - the
      shell's nav one row above already labels this "Manual Trading"), so
      top padding stays tight rather than the fuller 2.5rem a page with
@@ -43,13 +47,20 @@ main {
 }
 
 /* Tabs + notification toggle share one row/border instead of the toggle
-   getting its own header row above them. */
+   getting its own header row above them. Sticky (not just at scroll-top)
+   so the top-level tabs/sentiment/notifications stay reachable while a
+   long page (e.g. Workspace's instrument list) scrolls underneath -
+   background must be opaque or scrolled content shows through. */
 .app-top-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg);
 }
 
 .app-top-row .tabs {
@@ -61,6 +72,71 @@ main {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+.sentiment-bar {
+  display: flex;
+  gap: 0.9rem;
+  font-size: 0.78rem;
+}
+
+.sentiment-segment {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.segment-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.sentiment-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.sentiment-badge .symbol {
+  color: var(--text);
+}
+
+.sentiment-badge.bullish {
+  color: var(--buy);
+}
+
+.sentiment-badge.bearish {
+  color: var(--sell);
+}
+
+.sentiment-badge .glyph {
+  font-size: 0.7rem;
+  letter-spacing: -0.05em;
+}
+
+/* Briefly pulses a badge whose direction/strength just changed (see
+   SentimentBadges.tsx's own flashingSymbols) - a highlight independent of
+   the bullish/bearish text color above, so it reads as "this one moved"
+   regardless of which way. Iteration count/duration is tuned to roughly
+   match FLASH_DURATION_MS there (5 * 0.8s = 4s) rather than looping
+   forever. */
+.sentiment-badge.flash {
+  animation: sentiment-flash 0.8s ease-in-out 5;
+  border-radius: 4px;
+}
+
+@keyframes sentiment-flash {
+  0%, 100% {
+    background: transparent;
+  }
+  50% {
+    background: rgba(76, 139, 245, 0.35);
+  }
 }
 
 .login-page {
@@ -105,27 +181,6 @@ main {
   text-align: left;
 }
 
-.signal-notifier {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 0.4rem 0.6rem;
-  max-width: 22rem;
-}
-
-.signal-notifier .tiny-checkbox {
-  font-size: 0.8rem;
-  color: var(--text-dim);
-}
-
-.signal-notifier-blocked {
-  flex-basis: 100%;
-  text-align: right;
-  font-size: 0.72rem;
-  color: var(--sell);
-}
-
 .error {
   background: rgba(232, 88, 106, 0.12);
   border: 1px solid var(--sell);
@@ -160,14 +215,34 @@ main {
 
 /* Second-level nav (e.g. IntradayPage's Dashboard/Workspace/... sub-tabs
    under App.tsx's own top-level Intraday/OI tabs) - same look, just
-   tighter, so two stacked .tabs bars read as two levels, not duplicates. */
+   tighter, so two stacked .tabs bars read as two levels, not duplicates.
+   Sticky right below .app-top-row (its own height, tracked into
+   --top-row-height by App.tsx, since it isn't a fixed number of rem) so
+   both headers stay frozen together while the page scrolls. */
 nav.tabs.subtabs {
   margin-top: -0.15rem;
+  position: sticky;
+  top: var(--top-row-height, 52px);
+  z-index: 20;
+  background: var(--bg);
 }
 
 nav.tabs.subtabs button {
   padding: 0.3rem 0.7rem;
   font-size: 0.78rem;
+}
+
+/* IntradayPage's own wrapper (subtabs nav + whichever sub-page is active) -
+   same 1rem rhythm as .manual-settings-page/.manual-wide-page below, which
+   the OI tab's own top-level wrapper already uses. WorkspacePage in
+   particular renders its toolbar/session-bars/instrument-cards as a bare
+   Fragment (no wrapper div of its own), so this is what actually spaces
+   those apart AND spaces the subtabs nav from whatever page follows it -
+   without it those all touched with zero gap between them. */
+.intraday-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .panel {
@@ -2218,6 +2293,22 @@ button.btn-exit {
   gap: 0.4rem;
 }
 
+/* "This instrument's nearest expiry is today" - OiSummaryPage.tsx's own
+   symbol tabs and WorkspacePage.tsx's option card headers (manual-card-
+   collapsed-summary/manual-card-identity) both use this same badge. */
+.expiry-today-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  background: rgba(232, 88, 106, 0.18);
+  color: var(--sell);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .oi-buildup-badge {
   display: inline-flex;
   align-items: center;
@@ -2299,6 +2390,62 @@ button.btn-exit {
   background: #e15b5b;
 }
 
+/* SentimentHistoryChart.tsx - spot price over time, points colored by
+   that snapshot's own OI sentiment direction - same sizing/tooltip
+   conventions as .oi-bar-chart above (own class names, not shared, same
+   "this frontend has no chart of its own to reuse from" reasoning). */
+.sentiment-history-chart {
+  position: relative;
+  width: 100%;
+}
+
+/* Floats near the hovered point (left set inline in JS, as a % of the
+   chart's own width) rather than sitting statically below the chart -
+   needs position:absolute + a positioned ancestor (.sentiment-history-chart
+   above) for that "left" to do anything at all. Missing both here left
+   this tooltip anchored to the container's own left edge regardless of
+   hover position, and the left/right flip translateX (SentimentHistoryChart.tsx's
+   own tooltipOnLeft) then pushed it fully off-screen instead of just
+   flipping sides - the bug reported live. white-space: nowrap keeps the
+   two-line content (direction + 5m/15m readout) from wrapping and
+   throwing off the flip math's own width assumption. */
+.sentiment-history-tooltip {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.sentiment-history-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.sentiment-history-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.sentiment-history-swatch {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+}
+
 .oi-bar-chart-swatch.put.increase {
   background: repeating-linear-gradient(45deg, #3cb371 0 2px, rgba(60, 179, 113, 0.25) 2px 4px);
 }
@@ -2322,6 +2469,41 @@ button.btn-exit {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+/* OI-by-strike bars + SentimentHistoryChart side by side (OiSummaryPage.tsx) -
+   wraps to stacked on a narrow viewport rather than squeezing both charts
+   unreadably thin. align-items:stretch (not the default flex-start) makes
+   both columns equal height (the taller one wins) so the flex-column +
+   margin-top:auto rules below can pin each chart's own legend to the
+   bottom of its column - otherwise the two legends would land at
+   different heights whenever one chart's own header/content is taller
+   than the other's. */
+.oi-charts-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.oi-charts-row-item {
+  flex: 1 1 420px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.oi-charts-row-item .oi-bar-chart,
+.oi-charts-row-item .sentiment-history-chart {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.oi-charts-row-item .oi-bar-chart-legend,
+.oi-charts-row-item .sentiment-history-legend {
+  margin-top: auto;
+  padding-top: 0.5rem;
 }
 
 .oi-summary-window-toggle {

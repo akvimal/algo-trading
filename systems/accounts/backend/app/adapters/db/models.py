@@ -26,6 +26,7 @@ class User(Base):
     password_hash = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     is_admin = Column(Boolean, nullable=False, server_default="false")
+    name = Column(Text, nullable=False, server_default="")
 
 
 class BrokerCredentials(Base):

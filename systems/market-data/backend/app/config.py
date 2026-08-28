@@ -2,6 +2,20 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # market-data's first-ever DB dependency (it was in-memory-cache-only
+    # by design otherwise, see its README/CLAUDE.md) - added specifically
+    # for sentiment_history (app/adapters/db/models.py), a persisted log
+    # of the sentiment badges' own OI-based reads plus the underlying's
+    # spot price at that moment, so a past bullish/bearish read can later
+    # be checked against what price actually did. Nothing else here uses
+    # the DB - the instrument-master cache and everything else stays
+    # exactly as in-memory as before.
+    database_url: str = "postgresql+psycopg://algotrading:changeme@localhost:5433/algotrading"
+    database_schema: str = "market_data"
+    # Same cadence SentimentBadges.tsx/shell/index.html already poll GET
+    # /options/sentiment at - see app/scheduler.py's _record_sentiment_history.
+    sentiment_history_interval_minutes: int = 5
+
     timezone: str = "Asia/Kolkata"
     # Scheduled instrument-master resync, before market open.
     instrument_sync_hour: int = 8

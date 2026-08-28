@@ -28,8 +28,9 @@ import {
   fetchCryptoSymbols,
   fetchDailyChecklist,
   fetchExecPositions,
-  fetchLotSize,
   fetchLtp,
+  fetchOiSummary,
+  fetchOptionExpiries,
   fetchOptionGroupImages,
   fetchOptionGroups,
   fetchPendingReview,
@@ -59,6 +60,21 @@ function appliesToSegment(item: ChecklistItem, segment: Segment): boolean {
 
 const POLL_INTERVAL_MS = 5000;
 const STORAGE_KEY = "manual-tab-rows-v4";
+// Safety margin on risk-based Lot sizing (computeRiskBasedLots) - sizes
+// to 90% of the configured risk budget, not the full 100%, so live price
+// drift between this preview and the moment the order actually fills
+// (worst for options - see atmPremium's own 15s-cadence comment) doesn't
+// by itself push the real risk over what was configured. Applied
+// uniformly to spot/future and option sizing alike.
+const RISK_SIZING_BUFFER_PCT = 10;
+
+// Local calendar date ("YYYY-MM-DD", same shape GET /options/expiries
+// returns) - same convention OiSummaryPage.tsx/execution's own format.ts
+// use, duplicated here rather than shared (no cross-frontend imports).
+function todayLocalDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 // Delta Exchange India currently only lists live options for these two
 // CRYPTO perpetuals (confirmed against their real /v2/products endpoint,
@@ -70,6 +86,14 @@ const STORAGE_KEY = "manual-tab-rows-v4";
 // simpler to just update here if/when it does, matching the user's own
 // call on scope.
 const CRYPTO_OPTION_SYMBOLS = ["BTCUSD", "ETHUSD"];
+
+// Suggestions only (a <datalist>, not a closed <select> like CRYPTO's own
+// symbol picker above) - NSE/MCX have thousands of tradable symbols, so
+// free typing has to stay available; this just surfaces the handful of
+// index/commodity symbols someone reaches for constantly, same "hardcode
+// the small stable set" reasoning as CRYPTO_OPTION_SYMBOLS above.
+const NSE_INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY"];
+const MCX_COMMODITY_SYMBOLS = ["GOLDM", "CRUDEOILM"];
 
 function PlusIcon() {
   return (
@@ -134,6 +158,15 @@ type OrderInstance = {
   optionStyle?: OptionPositionStyle;
   triggerPrice?: number; // "Spot Limit" - entry watch, on the underlying's own spot price. undefined = market/CMP.
   startedAboveTarget?: boolean; // entry-trigger crossing direction, recorded once at pending-creation time
+  // Option rows only - entry watch on the OPTION'S OWN premium (ATM-leg
+  // reference, same approximation atmPremium/computeRiskBasedLots already
+  // use), independent of and takes precedence over triggerPrice above
+  // when both would otherwise apply (kept mutually exclusive rather than
+  // requiring both to cross, to avoid a much harder two-condition wait -
+  // see this field's own placeOrder branch). Checked on the same 15s tick
+  // that refreshes atmPremium, not the main 5s poll loop.
+  optionLimitPrice?: number;
+  optionStartedAbove?: boolean; // crossing direction for optionLimitPrice, recorded once at pending-creation time
   quantity?: number; // as typed - undefined means auto-sized
   positionId?: string;
   groupId?: string;
@@ -255,6 +288,18 @@ type ManualRow = {
   draftPendingPrice: string; // while current.state==="pending" - editable trigger-price watch, see updatePendingTriggerPrice
   draftTarget: string; // "Spot Target"
   draftSlLimit: string; // "Spot SL Limit" - option rows only, see trailSlEnabled below
+  // "Premium SL" - option rows only, an approximate premium-terms stop
+  // used SOLELY to drive risk-based Lot sizing below (computeRiskBasedLots)
+  // when the segment's account has enforce_risk_based_lots on. Distinct
+  // from draftSlLimit above: that one is a spot-based browser watch that
+  // actually closes the position; this one never triggers anything by
+  // itself, it's just the "risk per lot" input for the sizing formula.
+  draftPremiumSl: string;
+  // "Option Limit" - option rows only, an optional entry watch on the
+  // option's own premium (see OrderInstance.optionLimitPrice's own
+  // comment) - blank means the existing behavior (fire at market, or
+  // wait on the spot-based Limit toggle above if that's set instead).
+  draftOptionLimitPrice: string;
   // "Close by" - HTML <input type="time"> value ("HH:MM"), the per-
   // position square_off_time override (see OrderInstance.squareOffTime's
   // own comment). Blank means inherit the segment's own default, same as
@@ -312,6 +357,8 @@ function newRow(segment: Segment = "NSE", symbol = "", instrumentType: Instrumen
     draftPendingPrice: "",
     draftTarget: "",
     draftSlLimit: "",
+    draftPremiumSl: "",
+    draftOptionLimitPrice: "",
     draftCloseByTime: "",
     trailSlEnabled: false,
     draftStopLossPrice: "",
@@ -345,6 +392,8 @@ function clearDraftPrices<T extends ManualRow>(r: T): T {
     draftLimitPrice: "",
     draftTarget: "",
     draftSlLimit: "",
+    draftPremiumSl: "",
+    draftOptionLimitPrice: "",
     draftStopLossPrice: "",
     draftCloseByTime: "",
   };
@@ -367,6 +416,8 @@ function loadRows(): ManualRow[] {
         checklistChecked: {},
         collapsed: !!r.collapsed,
         priceMode: r.priceMode ?? "market",
+        draftPremiumSl: r.draftPremiumSl ?? "",
+        draftOptionLimitPrice: r.draftOptionLimitPrice ?? "",
       };
       return fresh.current == null ? clearDraftPrices(fresh) : fresh;
     });
@@ -575,6 +626,31 @@ export default function WorkspacePage() {
   const [rows, setRows] = useState<ManualRow[]>(() => loadRows());
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
+
+  // Row id -> "this option row's nearest expiry is today" - checked once
+  // per row (on mount for a restored row, or as soon as a new one's added
+  // - Segment/Symbol/Instrument never change after creation, see
+  // manual-card-identity's own comment, so one fetch per row id is enough,
+  // no polling needed). Spot/future rows never enter this map at all.
+  const [expiresToday, setExpiresToday] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    for (const row of rows) {
+      if (row.instrumentType !== "option" || !row.symbol.trim() || row.id in expiresToday) continue;
+      const { id, segment, symbol } = row;
+      (async () => {
+        try {
+          const resolved = await resolveUnderlying(segment, symbol);
+          const expiries = await fetchOptionExpiries(resolved.chart_exchange, resolved.chart_symbol);
+          setExpiresToday((prev) => ({ ...prev, [id]: expiries[0] === todayLocalDate() }));
+        } catch {
+          // leave unchecked - the badge just won't show, same best-effort
+          // convention refreshLtp uses for its own resolve+fetch.
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
   // Segment/Symbol/Instrument for "+ Add instrument"'s NEXT card -
   // picked ahead of time in the toolbar, rather than editable on the
   // card afterward (removed entirely at the user's explicit request,
@@ -651,6 +727,8 @@ export default function WorkspacePage() {
   // edited from the Intraday > Risk & Accounts page; re-fetched here on
   // mount so a just-saved change takes effect on next load.
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
 
   async function refreshAccounts() {
     try {
@@ -1150,11 +1228,35 @@ export default function WorkspacePage() {
   // accurate, not just for CRYPTO's own display hint).
   const [lotSizeCache, setLotSizeCache] = useState<Record<string, number>>({});
   useEffect(() => {
-    const missing = rows.filter((r) => r.instrumentType === "future" && r.symbol && !(r.symbol in lotSizeCache));
+    // Sourced from resolveUnderlying's own lot_size (what execution
+    // itself actually sizes against - see ResolvedUnderlying's own
+    // comment), NOT fetchLotSize/GET-instruments/lot-size - that one is
+    // keyed by an exact, already-resolved trading symbol (e.g. Dhan's
+    // "CRUDEOILM-21Sep2026-FUT"), and 404s (silently, since the .catch
+    // below swallowed it) for the bare underlying every row here actually
+    // stores, on every MCX symbol tested (GOLDM, CRUDEOILM) - meaning
+    // this cache silently defaulted to lotSize=1 the whole time for MCX,
+    // wherever it was consulted (see computeRiskBasedLots) - understated
+    // real per-lot cost by exactly the real lot size (10x for GOLDM/
+    // CRUDEOILM), a much bigger contributor to the 2026-08-28 CRUDEOILM
+    // "insufficient balance" 18-lot case than the last_price-vs-ask gap
+    // fixed alongside it. resolveUnderlying works uniformly across every
+    // provider/segment (Dhan MCX/NSE and Delta CRYPTO both populate it,
+    // confirmed by reading both providers' own resolve_underlying).
+    // Options included here too, same as future - both need a real lot
+    // size for risk-based sizing below; spot never enters this cache
+    // (lot size 1, hardcoded at every call site already).
+    const missing = rows.filter(
+      (r) => (r.instrumentType === "future" || r.instrumentType === "option") && r.symbol && !(r.symbol in lotSizeCache),
+    );
     if (missing.length === 0) return;
     let cancelled = false;
     Promise.all(
-      missing.map((r) => fetchLotSize(r.segment, r.symbol).then((lot) => [r.symbol, lot] as const).catch(() => null)),
+      missing.map((r) =>
+        resolveUnderlying(r.segment, r.symbol)
+          .then((resolved) => [r.symbol, resolved.lot_size] as const)
+          .catch(() => null),
+      ),
     ).then((results) => {
       if (cancelled) return;
       const updates = Object.fromEntries(results.filter((r): r is readonly [string, number] => r !== null));
@@ -1165,27 +1267,124 @@ export default function WorkspacePage() {
     };
   }, [rows, lotSizeCache]);
 
+  // Row id -> that option row's own ATM-leg reference price/strike
+  // (approximate - whichever strike is actually ATM right now, not
+  // necessarily the strike this row's own Strike selector is set to, see
+  // the comment on the fetch effect below). Feeds three things: the "ATM
+  // 580.50"/strike hint shown on the card, risk-based Lot sizing, and
+  // (atmPremium only) checking a pending Option Limit order below. Never
+  // touched for spot/future rows - those source their own equivalent
+  // "entry" straight from lastKnownLtp/draftLimitPrice instead, no
+  // analogous per-row cache needed since fetchUnderlyingLtp is already
+  // cheap and already polled.
+  const [atmPremium, setAtmPremium] = useState<Record<string, number>>({});
+  const [atmStrike, setAtmStrike] = useState<Record<string, number>>({});
+
+  // Refreshes atmPremium/atmStrike above for every option row that's
+  // still actionable - being planned (no `current` yet) or pending entry
+  // (watching either the spot trigger or, here, its own Option Limit) -
+  // once fully open, the real net_debit from the backend is what matters,
+  // not this preview. Deliberately its own slower-cadence loop rather
+  // than folding into the main 5s poll loop below: each tick here costs 3
+  // market-data calls (resolve + expiries + full OI chain) per row, and a
+  // premium preview doesn't need to be anywhere near as fresh as an open
+  // instance's own watch - a pending Option Limit order is checked on
+  // this same cadence, so it's this loop's job either way. Uses the row's
+  // actual ATM strike (moneyness==="ATM" in the chain), not whatever this
+  // row's own Strike selector (ITM2..OTM2) is set to - per user
+  // direction, ATM is an acceptable approximation even when the row
+  // itself will trade a different strike.
+  useEffect(() => {
+    const ATM_PREMIUM_POLL_INTERVAL_MS = 15000;
+    const tick = async () => {
+      for (const row of rowsRef.current) {
+        if (row.instrumentType !== "option" || !row.symbol.trim()) continue;
+        if (row.current && row.current.state !== "pending") continue;
+        try {
+          const resolved = await resolveUnderlying(row.segment, row.symbol.trim().toUpperCase());
+          const expiries = await fetchOptionExpiries(resolved.chart_exchange, resolved.chart_symbol);
+          if (expiries.length === 0) continue;
+          const summary = await fetchOiSummary(resolved.chart_exchange, resolved.chart_symbol, expiries[0]);
+          const strike = summary.strikes.find((s) => (row.action === "BUY" ? s.call : s.put)?.moneyness === "ATM");
+          const leg = row.action === "BUY" ? strike?.call : strike?.put;
+          // BUY's real fill cost tracks the top ASK, not the last TRADED
+          // price - on a fast-moving contract (e.g. MCX CRUDEOILM) those
+          // can diverge enough that sizing off last_price overstates how
+          // many lots actually fit the capital, only caught server-side at
+          // order time against the real net_debit (see option_position_
+          // manager.py's own "insufficient account balance" check) - a
+          // user hit exactly this gap 2026-08-28. SELL's real proceeds
+          // track the top BID instead. Falls back to last_price if the
+          // book side we want is missing/zero (illiquid strike).
+          const bookPrice = leg ? (row.action === "BUY" ? leg.top_ask_price : leg.top_bid_price) : undefined;
+          const price = bookPrice || leg?.last_price;
+          if (strike) setAtmStrike((prev) => (prev[row.id] === strike.strike ? prev : { ...prev, [row.id]: strike.strike }));
+          if (!price) continue;
+          setAtmPremium((prev) => (prev[row.id] === price ? prev : { ...prev, [row.id]: price }));
+          if (row.current?.state === "pending" && row.current.optionLimitPrice != null) {
+            const limit = row.current.optionLimitPrice;
+            const crossed = row.current.optionStartedAbove ? price <= limit : price >= limit;
+            if (crossed) await executeOrder(row, row.symbol.trim().toUpperCase(), row.current, undefined);
+          }
+        } catch {
+          // leave last known premium/strike (if any) - retried next tick
+        }
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), ATM_PREMIUM_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Manual tab's own risk-based Lot auto-sizing (Account.
   // enforce_risk_based_lots) - mirrors position_manager.
   // compute_risk_based_quantity exactly, but stays purely client-side:
   // the computed lot count is written into draftQuantity and sent as an
   // explicit quantity at order time, same as a manually typed one, so
   // there's no separate server-side enforcement to keep in sync with
-  // this. Spot/future only - options have no comparable premium-vs-spot
-  // risk figure (same reasoning computeRR/ManualStatsPage's avg-R stat
-  // already exclude them for). Returns null whenever it can't be
-  // computed yet (no fixed SL, trailing SL, or SL == entry) - same
-  // "nothing to enforce yet" contract computeRR's own null already uses.
-  function computeRiskBasedLots(row: ManualRow, capitalPerTrade: number, riskPerTradePct: number, lotSize: number): number | null {
+  // this. Options size against atmPremium (above) and draftPremiumSl
+  // instead of spot LTP/draftStopLossPrice - see draftPremiumSl's own
+  // comment on why that's a separate field from the spot-based SL Limit.
+  // Returns null whenever it can't be computed yet (no fixed SL, trailing
+  // SL, SL == entry, or - options only - no ATM premium fetched yet) -
+  // same "nothing to enforce yet" contract computeRR's own null already
+  // uses.
+  function computeRiskBasedLots(
+    row: ManualRow,
+    capitalPerTrade: number,
+    riskPerTradePct: number,
+    lotSize: number,
+    optionPremium?: number,
+  ): number | null {
     if (row.trailSlEnabled) return null;
-    const entry = row.draftLimitPrice ? Number(row.draftLimitPrice) : row.lastKnownLtp ?? null;
-    const sl = row.draftStopLossPrice ? Number(row.draftStopLossPrice) : null;
+    const entry =
+      row.instrumentType === "option"
+        ? optionPremium ?? null
+        : row.draftLimitPrice
+          ? Number(row.draftLimitPrice)
+          : row.lastKnownLtp ?? null;
+    const sl =
+      row.instrumentType === "option"
+        ? row.draftPremiumSl
+          ? Number(row.draftPremiumSl)
+          : null
+        : row.draftStopLossPrice
+          ? Number(row.draftStopLossPrice)
+          : null;
     if (entry == null || sl == null || !Number.isFinite(entry) || !Number.isFinite(sl)) return null;
     const stopDistance = Math.abs(entry - sl);
     if (stopDistance <= 0) return null;
-    const riskAmount = (capitalPerTrade * riskPerTradePct) / 100;
+    const buffered = 1 - RISK_SIZING_BUFFER_PCT / 100;
+    const riskAmount = ((capitalPerTrade * riskPerTradePct) / 100) * buffered;
     const riskBasedLots = Math.floor(riskAmount / (stopDistance * lotSize));
-    const capitalCappedLots = Math.max(1, Math.floor(capitalPerTrade / (entry * lotSize)));
+    // Same buffer applied to the capital-affordability cap, not just the
+    // risk amount above - this is the lever that actually failed for the
+    // 2026-08-28 CRUDEOILM case (entry underestimated -> cap too loose);
+    // the ask/bid fix on atmPremium above addresses that gap directly,
+    // this buffer is the remaining margin against staleness within this
+    // effect's own 15s poll cadence.
+    const capitalCappedLots = Math.max(1, Math.floor((capitalPerTrade * buffered) / (entry * lotSize)));
     return Math.max(1, Math.min(riskBasedLots, capitalCappedLots));
   }
 
@@ -1197,16 +1396,22 @@ export default function WorkspacePage() {
   // updateRow is skipped, so this doesn't loop.
   useEffect(() => {
     for (const row of rows) {
-      if (row.current || row.instrumentType === "option") continue;
+      if (row.current) continue;
       const account = accounts.find((a) => a.segment === row.segment);
       if (!account?.enforce_risk_based_lots) continue;
-      const lotSize = row.instrumentType === "future" ? lotSizeCache[row.symbol] ?? 1 : 1;
-      const lots = computeRiskBasedLots(row, account.capital_per_trade, account.risk_per_trade_pct, lotSize);
+      const lotSize = row.instrumentType === "spot" ? 1 : lotSizeCache[row.symbol] ?? 1;
+      const lots = computeRiskBasedLots(
+        row,
+        account.capital_per_trade,
+        account.risk_per_trade_pct,
+        lotSize,
+        atmPremium[row.id],
+      );
       const desired = lots != null ? String(lots) : "";
       if (row.draftQuantity !== desired) updateRow(row.id, { draftQuantity: desired });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, accounts, lotSizeCache]);
+  }, [rows, accounts, lotSizeCache, atmPremium]);
 
   function updateRow(id: string, patch: Partial<ManualRow>) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -1383,6 +1588,23 @@ export default function WorkspacePage() {
     updateRow(row.id, { rowError: undefined, draftPendingPrice: String(newPrice) });
   }
 
+  // Sibling to updatePendingTriggerPrice above, for a pending option
+  // row's Option Limit instead of the spot trigger - no live fetch needed
+  // (unlike the spot version), atmPremium is already kept fresh by its
+  // own 15s poll effect above.
+  function updatePendingOptionLimitPrice(row: ManualRow) {
+    if (!row.current || row.current.state !== "pending") return;
+    const newPrice = Number(row.draftPendingPrice);
+    if (!Number.isFinite(newPrice) || newPrice <= 0) {
+      updateRow(row.id, { rowError: "Enter a valid limit price." });
+      return;
+    }
+    const premium = atmPremium[row.id];
+    const optionStartedAbove = premium != null ? premium >= newPrice : true;
+    updateCurrent(row.id, row.current.id, { optionLimitPrice: newPrice, optionStartedAbove });
+    updateRow(row.id, { rowError: undefined, draftPendingPrice: String(newPrice) });
+  }
+
   // An "open" instance whose last square-off attempt errored (typically
   // 404 - the position/group behind it was already deleted server-side,
   // e.g. via execution's "Clear positions" reset) can never resolve
@@ -1403,6 +1625,12 @@ export default function WorkspacePage() {
     // should already be "" in that mode, see priceMode's own comment on
     // ManualRow) - executeOrder then fetches a fresh live LTP at submit time.
     const limitPrice = row.priceMode === "limit" && row.draftLimitPrice ? Number(row.draftLimitPrice) : undefined;
+    // Option rows only - takes precedence over limitPrice above when both
+    // are set (see OrderInstance.optionLimitPrice's own comment on why
+    // these stay mutually exclusive rather than both being required to
+    // cross).
+    const optionLimitPrice =
+      row.instrumentType === "option" && row.draftOptionLimitPrice ? Number(row.draftOptionLimitPrice) : undefined;
     const target = row.draftTarget ? Number(row.draftTarget) : undefined;
     const slLimit = row.draftSlLimit ? Number(row.draftSlLimit) : undefined;
     // "HH:MM" from the <input type="time"> -> "HH:MM:SS" for execution's
@@ -1441,6 +1669,7 @@ export default function WorkspacePage() {
       draftLimitPrice: "",
       draftTarget: target != null ? String(target) : "",
       draftSlLimit: slLimit != null ? String(slLimit) : "",
+      draftOptionLimitPrice: optionLimitPrice != null ? String(optionLimitPrice) : "",
       // Same re-seed-not-blank reasoning as draftTarget/draftSlLimit
       // above - draftCloseByTime stays in "HH:MM" form (the <input
       // type="time"> value), not closeByTime's own "HH:MM:SS".
@@ -1461,6 +1690,19 @@ export default function WorkspacePage() {
       squareOffTime: closeByTime,
       planChecklist,
     };
+
+    // Option Limit given - never fires immediately, regardless of
+    // priceMode/limitPrice above (see optionLimitPrice's own comment).
+    // Watched by the atmPremium poll effect, not this function.
+    if (optionLimitPrice !== undefined) {
+      const premium = atmPremium[row.id];
+      const optionStartedAbove = premium != null ? premium >= optionLimitPrice : true;
+      updateRow(row.id, {
+        current: { ...instance, optionLimitPrice, optionStartedAbove },
+        draftPendingPrice: String(optionLimitPrice),
+      });
+      return;
+    }
 
     // No Spot Limit given - fires immediately at CMP, same as leaving it
     // blank always has.
@@ -1488,11 +1730,13 @@ export default function WorkspacePage() {
   async function executeOrder(row: ManualRow, symbol: string, instance: OrderInstance, price: number | undefined) {
     try {
       const resolvedPrice = price ?? (await fetchUnderlyingLtp(row.segment, symbol));
-      // instance.triggerPrice is only ever set on the "limit" branch of
-      // placeOrder (undefined means it fired immediately at CMP) - reused
-      // here rather than adding a separate field, for future performance
-      // review (see execution.positions.order_type's own comment).
-      const orderType: "market" | "limit" = instance.triggerPrice != null ? "limit" : "market";
+      // instance.triggerPrice (spot) / optionLimitPrice (option premium)
+      // are only ever set on their own "wait for a cross" branches of
+      // placeOrder (both undefined means it fired immediately at CMP) -
+      // reused here rather than adding a separate field, for future
+      // performance review (see execution.positions.order_type's own
+      // comment).
+      const orderType: "market" | "limit" = instance.triggerPrice != null || instance.optionLimitPrice != null ? "limit" : "market";
       if (instance.instrumentType === "option") {
         const created = await createManualOptionGroup({
           segment: row.segment,
@@ -1706,7 +1950,7 @@ export default function WorkspacePage() {
           review_notes: null,
           review_checklist: null,
           stop_loss_price: null,
-          order_type: instance.triggerPrice != null ? "limit" : "market",
+          order_type: instance.triggerPrice != null || instance.optionLimitPrice != null ? "limit" : "market",
         });
       } else {
         const result = await squareOffManualPosition(instance.positionId ?? "");
@@ -1729,7 +1973,7 @@ export default function WorkspacePage() {
           review_notes: null,
           review_checklist: null,
           stop_loss_price: instance.stopLossPrice ?? null,
-          order_type: instance.triggerPrice != null ? "limit" : "market",
+          order_type: instance.triggerPrice != null || instance.optionLimitPrice != null ? "limit" : "market",
         });
       }
     } catch (err) {
@@ -2005,13 +2249,23 @@ export default function WorkspacePage() {
               ))}
             </select>
           ) : (
-            <input
-              className="manual-new-row-symbol"
-              value={newRowSymbol}
-              title="Symbol for the next added instrument"
-              onChange={(e) => setNewRowSymbol(e.target.value.toUpperCase())}
-              placeholder="e.g. BTCUSD, TCS"
-            />
+            <>
+              <input
+                className="manual-new-row-symbol"
+                value={newRowSymbol}
+                title="Symbol for the next added instrument"
+                onChange={(e) => setNewRowSymbol(e.target.value.toUpperCase())}
+                placeholder="e.g. BTCUSD, TCS"
+                list={newRowSegment === "NSE" || newRowSegment === "MCX" ? "manual-new-row-symbol-suggestions" : undefined}
+              />
+              {(newRowSegment === "NSE" || newRowSegment === "MCX") && (
+                <datalist id="manual-new-row-symbol-suggestions">
+                  {(newRowSegment === "NSE" ? NSE_INDEX_SYMBOLS : MCX_COMMODITY_SYMBOLS).map((sym) => (
+                    <option key={sym} value={sym} />
+                  ))}
+                </datalist>
+              )}
+            </>
           )}
           <select
             className="manual-new-row-instrument"
@@ -2235,6 +2489,11 @@ export default function WorkspacePage() {
                   <strong>{row.segment}</strong>
                   <span>{row.symbol || "(no symbol)"}</span>
                   <span className="muted">{row.instrumentType}</span>
+                  {expiresToday[row.id] && (
+                    <span className="expiry-today-badge" title="This instrument's nearest expiry is today">
+                      EXP
+                    </span>
+                  )}
                 </span>
                 <span className="manual-card-actions">
                   {confirmRemoveId === row.id ? (
@@ -2280,7 +2539,7 @@ export default function WorkspacePage() {
         // into draftQuantity; when it's null (no fixed SL yet), the Lot
         // field stays locked but shows the "Auto" placeholder rather than
         // a stale number.
-        const riskLotsEnforced = !row.current && row.instrumentType !== "option" && !!account?.enforce_risk_based_lots;
+        const riskLotsEnforced = !row.current && !!account?.enforce_risk_based_lots;
         // Shared by the Add and MKT buttons below - both place a brand
         // new order (MKT just forces limitPrice blank first, see its own
         // onClick), so both need the exact same pre-trade gates. Doesn't
@@ -2311,6 +2570,11 @@ export default function WorkspacePage() {
                   <strong>{row.segment}</strong>
                   <span>{row.symbol || "(no symbol)"}</span>
                   <span className="muted">{row.instrumentType}</span>
+                  {expiresToday[row.id] && (
+                    <span className="expiry-today-badge" title="This instrument's nearest expiry is today">
+                      EXP
+                    </span>
+                  )}
                   <span className="muted">{row.current ? (row.current.state === "pending" ? "Pending" : "Open") : "—"}</span>
                   {pnlSummary.unrealized != null ? (
                     <>
@@ -2335,6 +2599,11 @@ export default function WorkspacePage() {
                   <strong>{row.segment}</strong>
                   <span>{row.symbol}</span>
                   <span className="muted">{row.instrumentType}</span>
+                  {expiresToday[row.id] && (
+                    <span className="expiry-today-badge" title="This instrument's nearest expiry is today">
+                      EXP
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="manual-pnl-toggle"
@@ -2473,6 +2742,15 @@ export default function WorkspacePage() {
                         <option value="OTM1">OTM1</option>
                         <option value="OTM2">OTM2</option>
                       </select>
+                      {(atmStrike[row.id] != null || atmPremium[row.id] != null) && (
+                        <span
+                          className="manual-lot-hint"
+                          title="This underlying's current ATM strike and that leg's own live bid/ask (approximate reference, refreshed every ~15s) - shown regardless of the Strike selected above, which may trade a different one."
+                        >
+                          ATM {atmStrike[row.id] != null ? fmt(atmStrike[row.id], 0) : "..."} @{" "}
+                          {atmPremium[row.id] != null ? fmt(atmPremium[row.id]) : "..."}
+                        </span>
+                      )}
                     </label>
                   </>
                 )}
@@ -2510,6 +2788,20 @@ export default function WorkspacePage() {
                       value={row.draftSlLimit}
                       onChange={(e) => updateRow(row.id, { draftSlLimit: e.target.value })}
                       placeholder="None"
+                    />
+                  </label>
+                )}
+                {showEntrySlTarget && row.instrumentType === "option" && !!account?.enforce_risk_based_lots && (
+                  <label title="Approximate premium-terms stop, used ONLY to size Lots from Risk/trade % below - never closes the position itself (the spot-based SL Limit above is what does that). Sized against this row's own ATM-leg LTP, an approximation even when the Strike selector above is set to something other than ATM.">
+                    Premium SL
+                    <input
+                      type="number"
+                      className="manual-price-input"
+                      min="0"
+                      step="0.01"
+                      value={row.draftPremiumSl}
+                      onChange={(e) => updateRow(row.id, { draftPremiumSl: e.target.value })}
+                      placeholder={atmPremium[row.id] != null ? `ATM ${fmt(atmPremium[row.id])}` : "e.g. 40"}
                     />
                   </label>
                 )}
@@ -2624,7 +2916,7 @@ export default function WorkspacePage() {
                 {!row.current && (
                   <label>
                     <span className="manual-field-label-row">
-                      Limit
+                      {row.instrumentType === "option" ? "Spot Limit" : "Limit"}
                       <span className="manual-toggle-group manual-price-mode-toggle">
                         <button
                           type="button"
@@ -2659,6 +2951,20 @@ export default function WorkspacePage() {
                       onChange={(e) => updateRow(row.id, { draftLimitPrice: e.target.value })}
                       placeholder={row.priceMode === "market" ? "Current market price" : "e.g. 24350"}
                       title={row.priceMode === "market" ? "Live preview only - the order fills at whatever price is current when you submit" : undefined}
+                    />
+                  </label>
+                )}
+                {!row.current && row.instrumentType === "option" && (
+                  <label title="Optional - waits for the option's own ATM-reference premium (see the ATM hint above) to cross this price before actually placing the order, instead of the Spot Limit above. Blank = market (today's default): fires immediately, or once the Spot Limit above crosses if that's set instead. Setting both is not supported - Option Limit takes precedence.">
+                    Option Limit
+                    <input
+                      type="number"
+                      className="manual-price-input"
+                      min="0"
+                      step="0.01"
+                      value={row.draftOptionLimitPrice}
+                      onChange={(e) => updateRow(row.id, { draftOptionLimitPrice: e.target.value })}
+                      placeholder="Market"
                     />
                   </label>
                 )}
@@ -2764,8 +3070,8 @@ export default function WorkspacePage() {
                       <span>Qty</span>
                       <span className="manual-pending-value">{row.current.quantity != null ? fmtQty(row.current.quantity) : "Auto"}</span>
                     </div>
-                    <label className="manual-pending-cell">
-                      Trigger
+                    <label className="manual-pending-cell" title={row.current.optionLimitPrice != null ? "Waiting for the option's own ATM-reference premium to cross this - not the underlying spot." : "Waiting for the underlying's own spot price to cross this."}>
+                      {row.current.optionLimitPrice != null ? "Premium" : "Trigger"}
                       <input
                         type="number"
                         min="0"
@@ -2775,7 +3081,15 @@ export default function WorkspacePage() {
                       />
                     </label>
                     <div className="manual-pending-actions">
-                      <button type="button" className="btn-save tiny" onClick={() => void updatePendingTriggerPrice(row)}>
+                      <button
+                        type="button"
+                        className="btn-save tiny"
+                        onClick={() =>
+                          row.current!.optionLimitPrice != null
+                            ? updatePendingOptionLimitPrice(row)
+                            : void updatePendingTriggerPrice(row)
+                        }
+                      >
                         Update
                       </button>
                       <button type="button" className="btn-exit tiny" onClick={() => cancelPendingCurrent(row.id)}>

@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Quote(BaseModel):
@@ -262,3 +263,58 @@ class ResolvedUnderlying(BaseModel):
     trade_exchange: str
     lot_size: float  # int for NSE/MCX F&O; a real fraction for Delta CRYPTO perpetuals (e.g. BTCUSD=0.001)
     expiry: Optional[str] = None  # ISO date - the trade contract's expiry
+
+
+SentimentDirection = Literal["bullish", "bearish", "neutral"]
+SentimentStrength = Literal["mild", "strong", "very_strong"]
+
+
+class UnderlyingSentiment(BaseModel):
+    """One watchlist underlying's OI-based directional read - see
+    app/domain/sentiment.py. score_5m/15m are a percent-of-total-OI put-
+    minus-call OI shift; None (with `error` set) if this underlying's
+    option chain couldn't be fetched this round (e.g. a Dhan 401/429) -
+    GET /options/sentiment degrades that one underlying rather than
+    failing the whole response."""
+
+    symbol: str
+    score_5m: Optional[float] = None
+    score_15m: Optional[float] = None
+    direction: SentimentDirection
+    strength: Optional[SentimentStrength] = None
+    error: Optional[str] = None
+
+
+class ExchangeSentiment(BaseModel):
+    """NSE or MCX's combined sentiment - the mean of its watchlist
+    underlyings' scores (see app/domain/sentiment.py's SENTIMENT_UNDERLYINGS),
+    not a literal scan of the whole exchange's option universe."""
+
+    direction: SentimentDirection
+    strength: Optional[SentimentStrength] = None
+    score: Optional[float] = None
+    underlyings: list[UnderlyingSentiment]
+
+
+class MarketSentiment(BaseModel):
+    """GET /options/sentiment - backs the shell header's sentiment badges."""
+
+    exchanges: dict[str, ExchangeSentiment]
+
+
+class SentimentHistoryPoint(BaseModel):
+    """One market_data.sentiment_history row - GET /options/sentiment-history.
+    spot_price is the underlying's own price at that same recorded_at (not
+    converted/adjusted), so it can be plotted directly against direction/
+    strength to check whether price actually moved the way the OI read
+    predicted."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    recorded_at: datetime
+    direction: SentimentDirection
+    strength: Optional[SentimentStrength] = None
+    score_5m: Optional[float] = None
+    score_15m: Optional[float] = None
+    spot_price: Optional[float] = None
+    error: Optional[str] = None

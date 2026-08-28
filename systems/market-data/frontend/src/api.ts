@@ -1,3 +1,5 @@
+import { clearAuthToken, getAuthToken } from "./auth";
+
 // Which market a symbol trades on - the same open-ended union used
 // platform-wide (Strategy.segment/Account.segment in the other frontends),
 // not a Dhan-specific enum. NSE/MCX (Dhan) and CRYPTO (Delta Exchange
@@ -16,6 +18,26 @@ async function asJson<T>(res: Response, what: string): Promise<T> {
     throw new Error(`${what} failed: ${res.status}`);
   }
   return res.json();
+}
+
+// Every route below requires an admin Bearer token (require_admin, see
+// docs/architecture.md) - this wrapper layers the stored token onto an
+// otherwise-identical fetch() call, same authFetch pattern execution/
+// frontend already uses. A 401 here only ever means "token missing/
+// expired/invalid or not an admin" (never a domain error on these
+// routes), so it's safe to treat any 401 as "session expired" and clear
+// it - DhanAdminSection's own poll loop re-checks auth state and falls
+// back to the login prompt on its next tick, no full-page reload needed
+// (unlike execution/frontend's whole-app gate, this is one section of an
+// otherwise-public dashboard).
+function authFetch(input: string, init?: RequestInit): Promise<Response> {
+  const token = getAuthToken();
+  const headers = new Headers(init?.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers }).then((res) => {
+    if (res.status === 401) clearAuthToken();
+    return res;
+  });
 }
 
 export type Health = {
@@ -67,18 +89,56 @@ export type FeedStatus = {
   ticks: Record<string, FeedTick>;
 };
 
+// Dhan-only (unlike Delta below) - admin-gated server-side, see authFetch's
+// own comment.
 export async function fetchFeedStatus(): Promise<FeedStatus> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/dhan/feed-status`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/feed-status`);
   return asJson(res, "GET /dhan/feed-status");
 }
 
 export async function subscribeFeed(exchange: Exchange, symbol: string): Promise<FeedStatus> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/dhan/feed/subscribe`, {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/feed/subscribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ exchange, symbol }),
   });
   return asJson(res, "POST /dhan/feed/subscribe");
+}
+
+// Data provider (Dhan) credentials - moved here from execution/frontend
+// (its former admin console) since this is market-data's own data, not
+// execution's - see docs/architecture.md. Admin-gated server-side
+// (require_admin) same as the feed routes above.
+export type DhanStatus = {
+  renewed: boolean;
+  last_renewed_at: string | null;
+  expiry_time: string | null;
+  dhan_client_name: string | null;
+  create_time: string | null;
+  dhan_client_id: string;
+  has_access_token: boolean;
+};
+
+export async function fetchDhanStatus(): Promise<DhanStatus> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/token-status`);
+  return asJson(res, "GET /dhan/token-status");
+}
+
+// Sets both the Dhan client ID and access token at runtime - in-memory
+// only (see set_manual_credentials' own docstring), no restart needed,
+// but also doesn't survive one.
+export async function updateDhanCredentials(clientId: string, accessToken: string): Promise<DhanStatus> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/credentials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId, access_token: accessToken }),
+  });
+  return asJson(res, "PUT /dhan/credentials");
+}
+
+export async function renewDhanToken(): Promise<unknown> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/dhan/renew-token`, { method: "POST" });
+  return asJson(res, "POST /dhan/renew-token");
 }
 
 // Delta Exchange India's own live feed (app/providers/delta_feed.py) -

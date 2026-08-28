@@ -2,6 +2,8 @@ fastapi==0.111.0
 uvicorn[standard]==0.29.0
 pydantic==2.7.1
 pydantic-settings==2.2.1
+sqlalchemy==2.0.30
+psycopg[binary]==3.1.19
 apscheduler==3.10.4
 requests==2.32.3
 tzdata==2024.1

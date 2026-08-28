@@ -10,11 +10,16 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from app.adapters.accounts_client import get_user_dhan_credentials
+from app.adapters.db.models import SentimentHistory
+from app.adapters.db.session import get_db
 from app.auth import get_optional_user_id
-from app.domain.models import OptionChain, OptionLegCandle, OptionOiSummary
+from app.domain.models import MarketSentiment, OptionChain, OptionLegCandle, OptionOiSummary, SentimentHistoryPoint
 from app.domain.oi_summary import build_oi_summary
+from app.domain.sentiment import SENTIMENT_UNDERLYINGS, aggregate_exchange
+from app.domain.sentiment_fetch import fetch_underlying_sentiment
 from app.providers.router import get_provider
 
 router = APIRouter()
@@ -102,6 +107,47 @@ def get_oi_summary(exchange: str, symbol: str, expiry: str, user_id: Optional[UU
             return price_changer(symbol, expiry, strike, option_type, current_price)
 
     return build_oi_summary(chain, oi_changes, price_changes)
+
+
+@router.get("/options/sentiment", response_model=MarketSentiment)
+def get_sentiment(user_id: Optional[UUID] = Depends(get_optional_user_id)):
+    """NSE/MCX bullish-bearish read for the manual-trading SaaS header -
+    see app/domain/sentiment.py. BYO-credential-aware the same way GET
+    /options/chain etc. already are: a logged-in user with their own
+    saved Dhan credentials uses their own token/rate budget for this too,
+    not the platform default. A fixed watchlist per exchange, fetched
+    fresh each call (this route has no cache of its own beyond
+    DhanProvider's own OPTION_CHAIN_CACHE_TTL_SECONDS), so the frontend's
+    own 5-minute poll interval is what keeps this from hammering Dhan,
+    not anything here. One underlying's fetch failing (e.g. a bad/expired
+    token) degrades just that underlying (see UnderlyingSentiment.error)
+    rather than 502ing the whole response - a header badge should never
+    go blank because one of four symbols had a transient Dhan error."""
+    credentials = get_user_dhan_credentials(user_id) if user_id else None
+    exchanges = {}
+    for exchange, symbols in SENTIMENT_UNDERLYINGS.items():
+        underlyings = [fetch_underlying_sentiment(exchange, symbol, credentials)[0] for symbol in symbols]
+        exchanges[exchange] = aggregate_exchange(underlyings)
+    return MarketSentiment(exchanges=exchanges)
+
+
+@router.get("/options/sentiment-history", response_model=list[SentimentHistoryPoint])
+def get_sentiment_history(symbol: str, limit: int = Query(200, ge=1, le=2000), db: Session = Depends(get_db)):
+    """market_data.sentiment_history for one SENTIMENT_UNDERLYINGS symbol -
+    each row's own direction/strength/score alongside the underlying's spot
+    price at that same moment (app/scheduler.py's _record_sentiment_history
+    writes one row per symbol every 5 minutes), so a past OI-based read can
+    be checked against what price actually did afterward. Oldest-first
+    (chart-friendly reading order), capped to the most recent `limit` rows
+    rather than the whole table."""
+    rows = (
+        db.query(SentimentHistory)
+        .filter(SentimentHistory.symbol == symbol)
+        .order_by(SentimentHistory.recorded_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return list(reversed(rows))
 
 
 @router.get("/options/leg-history", response_model=list[OptionLegCandle])

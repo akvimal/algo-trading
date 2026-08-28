@@ -606,7 +606,7 @@ def open_manual_option_group(
     Strategy, unlike the pre-2026-08-14 design - see docs/architecture.md).
     Deliberately a sibling to open_option_group, not a call into it - that
     function takes a ResolvedOrder (always a real strategy_id, legs already
-    resolved by signal-processing's choose_strategy against an
+    resolved by signal-engine's choose_option_strategy against an
     automatically-picked expiry); this one resolves its own legs directly,
     defaulting to the nearest currently-tradeable expiry itself when
     `expiry` is None (no dropdown in the frontend as of 2026-08-14 - it

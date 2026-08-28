@@ -2,51 +2,36 @@ import { useEffect, useState } from "react";
 
 import {
   type Account,
-  type DhanStatus,
-  type FeedStatus,
-  type Settings,
   type StrategyAccount,
   type StrategySummary,
   createStrategyAccount,
   deleteStrategyAccount,
-  fetchAccounts,
-  fetchDhanStatus,
-  fetchFeedStatus,
   fetchPlatformAccounts,
-  fetchSettings,
   fetchStrategyAccounts,
   fetchStrategyNames,
-  renewDhanToken,
-  resetAccount,
   resetStrategyAccount,
-  subscribeFeed,
-  updateAccount,
-  updateDhanCredentials,
   updatePlatformAccount,
-  updateSettings,
   updateStrategyAccount,
 } from "./api";
-import Nav from "./Nav";
+import { CheckIcon, RotateCcwIcon, TrashIcon } from "./Icons";
+import { InfoDisclosure } from "./InfoDisclosure";
 import { SEGMENTS, formatPct } from "./format";
 
 const POLL_INTERVAL_MS = 5000;
 const LEVERAGE_OPTIONS = [1, 10, 25, 50, 100, 150, 200];
 
 export default function AccountsPage() {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [drafts, setDrafts] = useState<
-    Record<string, { capital: number | ""; risk: number | ""; leverage: number | ""; squareOffTime: string }>
-  >({});
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState<string | null>(null);
-  const [resetting, setResetting] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-
   // Platform-wide (user_id IS NULL) accounts - the rows the automated
   // Strategy-driven flow actually reads (see api.ts's own comment on
-  // fetchPlatformAccounts). Deliberately separate state from the per-caller
-  // `accounts`/`drafts` above - this is broker/platform config (leverage,
-  // MTF interest), not this admin's own personal paper-trading account.
+  // fetchPlatformAccounts). This admin/ops-only concept, plus dedicated
+  // strategy accounts below, is the only account data left on this page -
+  // a caller's own personal capital/risk/leverage/square-off account and
+  // the USDINR rate moved to Manual Trading's own "Risk & Accounts" page
+  // (both hit the exact same execution.accounts/execution.settings rows,
+  // and that page's own UI - risk %, min reward:risk, enforce-lots - was
+  // already the richer, actual product-facing one; this page having a
+  // second, thinner copy of the same settings was pure redundancy once
+  // this whole app opened up to every logged-in user, not just admins).
   const [platformAccounts, setPlatformAccounts] = useState<Account[]>([]);
   const [platformDrafts, setPlatformDrafts] = useState<
     Record<string, { leverage: number | ""; mtfInterestRate: number | ""; squareOffTime: string }>
@@ -54,33 +39,6 @@ export default function AccountsPage() {
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [savingPlatform, setSavingPlatform] = useState<string | null>(null);
   const [platformMessage, setPlatformMessage] = useState<string | null>(null);
-
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [usdinrDraft, setUsdinrDraft] = useState<number | "">("");
-  const [savingUsdinr, setSavingUsdinr] = useState(false);
-  const [usdinrMessage, setUsdinrMessage] = useState<string | null>(null);
-
-  // Data provider (Dhan) credentials - fetched from market-data directly
-  // (see api.ts's own comment on this section). accessTokenDraft is never
-  // pre-filled from the fetched status (has_access_token is a presence
-  // check only, market-data never echoes the real secret back) - blank
-  // means "leave the currently-configured token alone" is NOT an option
-  // here (PUT /dhan/credentials always sets both fields together), so the
-  // Save button stays disabled until both are typed.
-  const [dhanStatus, setDhanStatus] = useState<DhanStatus | null>(null);
-  const [dhanClientIdDraft, setDhanClientIdDraft] = useState("");
-  const [dhanAccessTokenDraft, setDhanAccessTokenDraft] = useState("");
-  const [savingDhan, setSavingDhan] = useState(false);
-  const [dhanMessage, setDhanMessage] = useState<string | null>(null);
-  const [renewingDhan, setRenewingDhan] = useState(false);
-
-  // Live tick feed status/subscribe (app/providers/dhan_feed.py) - same
-  // admin-only ops surface as the credentials block above.
-  const [feedStatus, setFeedStatus] = useState<FeedStatus | null>(null);
-  const [feedExchangeDraft, setFeedExchangeDraft] = useState("NSE");
-  const [feedSymbolDraft, setFeedSymbolDraft] = useState("");
-  const [subscribingFeed, setSubscribingFeed] = useState(false);
-  const [feedMessage, setFeedMessage] = useState<string | null>(null);
 
   // Optional per-strategy dedicated accounts (execution.strategy_accounts) -
   // strategies list comes from signal-generation directly (same
@@ -101,125 +59,6 @@ export default function AccountsPage() {
   const [newCapitalPerTrade, setNewCapitalPerTrade] = useState<number | "">(50000);
   const [newRiskPerTrade, setNewRiskPerTrade] = useState<number | "">(1);
   const [creatingStrategyAccount, setCreatingStrategyAccount] = useState(false);
-
-  useEffect(() => {
-    fetchSettings()
-      .then((s) => {
-        setSettings(s);
-        setUsdinrDraft(s.usdinr_rate ?? "");
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load settings"));
-    fetchDhanStatus()
-      .then((s) => {
-        setDhanStatus(s);
-        setDhanClientIdDraft(s.dhan_client_id);
-      })
-      .catch(() => {
-        // market-data may be down/unreachable - this section just shows
-        // its own "couldn't load" state below rather than blocking the
-        // rest of the page (accounts/USDINR are unrelated to it).
-      });
-    fetchFeedStatus()
-      .then(setFeedStatus)
-      .catch(() => {
-        // Same "don't block the rest of the page" reasoning as above.
-      });
-  }, []);
-
-  async function handleSaveDhanCredentials() {
-    if (!dhanClientIdDraft.trim() || !dhanAccessTokenDraft.trim()) return;
-    setSavingDhan(true);
-    setDhanMessage(null);
-    try {
-      const updated = await updateDhanCredentials(dhanClientIdDraft.trim(), dhanAccessTokenDraft.trim());
-      setDhanStatus(updated);
-      setDhanAccessTokenDraft("");
-      setDhanMessage("Data provider keys saved.");
-    } catch (err) {
-      setDhanMessage(err instanceof Error ? err.message : "Failed to save data provider keys");
-    } finally {
-      setSavingDhan(false);
-    }
-  }
-
-  async function handleRenewDhanToken() {
-    setRenewingDhan(true);
-    setDhanMessage(null);
-    try {
-      await renewDhanToken();
-      setDhanStatus(await fetchDhanStatus());
-      setDhanMessage("Token renewed.");
-    } catch (err) {
-      setDhanMessage(err instanceof Error ? err.message : "Failed to renew token");
-    } finally {
-      setRenewingDhan(false);
-    }
-  }
-
-  async function handleSubscribeFeed() {
-    if (!feedSymbolDraft.trim()) return;
-    setSubscribingFeed(true);
-    setFeedMessage(null);
-    try {
-      const updated = await subscribeFeed(feedExchangeDraft, feedSymbolDraft.trim());
-      setFeedStatus(updated);
-      setFeedMessage(`Subscribed to ${feedExchangeDraft}:${feedSymbolDraft.trim()}.`);
-    } catch (err) {
-      setFeedMessage(err instanceof Error ? err.message : "Failed to subscribe");
-    } finally {
-      setSubscribingFeed(false);
-    }
-  }
-
-  async function handleSaveUsdinr() {
-    if (usdinrDraft === "") return;
-    setSavingUsdinr(true);
-    setUsdinrMessage(null);
-    try {
-      const updated = await updateSettings({ usdinr_rate: usdinrDraft });
-      setSettings(updated);
-      setUsdinrMessage("USDINR rate saved.");
-    } catch (err) {
-      setUsdinrMessage(err instanceof Error ? err.message : "Failed to save USDINR rate");
-    } finally {
-      setSavingUsdinr(false);
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function poll() {
-      try {
-        const data = await fetchAccounts();
-        if (cancelled) return;
-        setAccounts(data);
-        setDrafts((prev) => {
-          const next = { ...prev };
-          for (const a of data) {
-            if (!(a.segment in next))
-              next[a.segment] = {
-                capital: a.capital_per_trade,
-                risk: a.risk_per_trade_pct,
-                leverage: a.leverage,
-                squareOffTime: a.square_off_time ? a.square_off_time.slice(0, 5) : "",
-              };
-          }
-          return next;
-        });
-        setError(null);
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load accounts");
-      }
-    }
-
-    poll();
-    const id = setInterval(poll, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -376,27 +215,6 @@ export default function AccountsPage() {
     }
   }
 
-  async function handleSave(segment: Account["segment"]) {
-    const draft = drafts[segment];
-    if (!draft || draft.capital === "" || draft.risk === "" || draft.leverage === "") return;
-    setSaving(segment);
-    setMessage(null);
-    try {
-      const updated = await updateAccount(segment, {
-        capital_per_trade: draft.capital,
-        risk_per_trade_pct: draft.risk,
-        leverage: draft.leverage,
-        square_off_time: draft.squareOffTime ? `${draft.squareOffTime}:00` : null,
-      });
-      setAccounts((prev) => prev.map((a) => (a.segment === segment ? updated : a)));
-      setMessage(`${segment} account saved.`);
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : `Failed to save ${segment} account`);
-    } finally {
-      setSaving(null);
-    }
-  }
-
   async function handleSavePlatform(segment: Account["segment"]) {
     const draft = platformDrafts[segment];
     if (!draft || draft.leverage === "") return;
@@ -417,257 +235,30 @@ export default function AccountsPage() {
     }
   }
 
-  async function handleReset(segment: Account["segment"]) {
-    const confirmed = window.confirm(
-      `Reset the ${segment} account's balance back to its starting balance? This doesn't undo any positions.`,
-    );
-    if (!confirmed) return;
-    setResetting(segment);
-    setMessage(null);
-    try {
-      const updated = await resetAccount(segment);
-      setAccounts((prev) => prev.map((a) => (a.segment === segment ? updated : a)));
-      setMessage(`${segment} account balance reset.`);
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : `Failed to reset ${segment} account`);
-    } finally {
-      setResetting(null);
-    }
-  }
-
   return (
-    <main>
-      <header>
-        <div className="header-row">
-          <h1>execution</h1>
-          <Nav active="accounts" />
-        </div>
-        <p className="subtitle">One paper-trading account per segment - balance moves only on realized P&amp;L.</p>
-      </header>
-
-      {error && <p className="error">Could not reach the backend: {error}</p>}
-      {message && <p className="action-message">{message}</p>}
-
-      <div className="settings-row">
-        <label>
-          USDINR rate (&#8377; per $1, CRYPTO sizing only)
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
-            placeholder="Not set"
-            value={usdinrDraft}
-            onChange={(e) => setUsdinrDraft(e.target.value === "" ? "" : Number(e.target.value))}
-          />
-        </label>
-        <button type="button" className="secondary tiny" onClick={handleSaveUsdinr} disabled={savingUsdinr || usdinrDraft === ""}>
-          {savingUsdinr ? "Saving..." : "Save"}
-        </button>
-      </div>
-      {usdinrMessage && <p className="action-message">{usdinrMessage}</p>}
-      {settings && settings.usdinr_rate == null && (
-        <p className="subtitle">No USDINR rate set - CRYPTO positions will reject until one is configured.</p>
-      )}
-
-      <h2>Data provider (Dhan)</h2>
+    <>
       <p className="subtitle">
-        Client ID and access token for NSE/MCX quotes and candles (market-data's own credentials) - saving here takes
-        effect immediately, no restart needed, but doesn't survive one (in-memory only, same as a renewed token).
+        Platform/admin account config - your own capital, risk, leverage, square-off, and USD/INR rate now live in
+        Manual Trading &rsaquo; Intraday &rsaquo; Risk &amp; Accounts (one place for every logged-in user's own
+        settings, instead of a second copy here).
       </p>
-      <div className="settings-row">
-        <label>
-          Client ID
-          <input
-            type="text"
-            autoComplete="off"
-            placeholder="Dhan client ID"
-            value={dhanClientIdDraft}
-            onChange={(e) => setDhanClientIdDraft(e.target.value)}
-          />
-        </label>
-        <label>
-          Access token
-          <input
-            type="password"
-            autoComplete="new-password"
-            placeholder={dhanStatus?.has_access_token ? "Configured (hidden) - paste a new one to replace" : "Not set"}
-            value={dhanAccessTokenDraft}
-            onChange={(e) => setDhanAccessTokenDraft(e.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          className="secondary tiny"
-          onClick={handleSaveDhanCredentials}
-          disabled={savingDhan || !dhanClientIdDraft.trim() || !dhanAccessTokenDraft.trim()}
-        >
-          {savingDhan ? "Saving..." : "Save"}
-        </button>
-        <button type="button" className="secondary tiny" onClick={handleRenewDhanToken} disabled={renewingDhan}>
-          {renewingDhan ? "Renewing..." : "Renew token"}
-        </button>
-      </div>
-      {dhanMessage && <p className="action-message">{dhanMessage}</p>}
-      {dhanStatus ? (
-        <p className="subtitle">
-          {dhanStatus.has_access_token
-            ? `Configured (client ID ${dhanStatus.dhan_client_id})${dhanStatus.dhan_client_name ? ` - ${dhanStatus.dhan_client_name}` : ""}.`
-            : "No access token configured - Dhan-backed quotes/candles (NSE, MCX) will fail until one is set."}
-        </p>
-      ) : (
-        <p className="subtitle">Could not reach market-data to check the current status.</p>
-      )}
-
-      <h2>Live feed</h2>
-      {feedStatus ? (
-        <p className="subtitle">
-          {feedStatus.connected ? "Connected" : "Not connected"}
-          {feedStatus.last_message_at ? ` · last tick ${feedStatus.last_message_at}` : ""}
-          {feedStatus.reconnect_count > 0 ? ` · reconnected ${feedStatus.reconnect_count}x` : ""}
-          {feedStatus.last_error ? ` · last error: ${feedStatus.last_error}` : ""}
-        </p>
-      ) : (
-        <p className="subtitle">Could not reach market-data to check the feed status.</p>
-      )}
-      <div className="settings-row">
-        <label>
-          Exchange
-          <select value={feedExchangeDraft} onChange={(e) => setFeedExchangeDraft(e.target.value)}>
-            {/* Dhan-only feed (see app/providers/dhan_feed.py) - no CRYPTO here, unlike SEGMENTS elsewhere on this page. */}
-            <option value="NSE">NSE</option>
-            <option value="MCX">MCX</option>
-          </select>
-        </label>
-        <label>
-          Symbol
-          <input type="text" placeholder="e.g. RELIANCE" value={feedSymbolDraft} onChange={(e) => setFeedSymbolDraft(e.target.value)} />
-        </label>
-        <button type="button" className="secondary tiny" onClick={handleSubscribeFeed} disabled={subscribingFeed || !feedSymbolDraft.trim()}>
-          {subscribingFeed ? "Subscribing..." : "Subscribe"}
-        </button>
-      </div>
-      {feedMessage && <p className="action-message">{feedMessage}</p>}
-
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Segment</th>
-              <th>Balance</th>
-              <th>Capital per trade (&#8377;)</th>
-              <th>Risk per trade (%)</th>
-              <th>Leverage (CRYPTO)</th>
-              <th>Square-off (blank = never)</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {SEGMENTS.map((segment) => {
-              const account = accounts.find((a) => a.segment === segment);
-              const draft = drafts[segment] ?? { capital: "", risk: "", leverage: "", squareOffTime: "" };
-              const delta = account ? account.current_balance - account.starting_balance : null;
-              return (
-                <tr key={segment}>
-                  <td className="symbol">{segment}</td>
-                  <td className={`num ${delta != null ? (delta >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
-                    {account ? account.current_balance.toFixed(2) : "-"}
-                    {delta != null && formatPct(account ? (delta / account.starting_balance) * 100 : null)}
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={draft.capital}
-                      onChange={(e) =>
-                        setDrafts((prev) => ({
-                          ...prev,
-                          [segment]: { ...draft, capital: e.target.value === "" ? "" : Number(e.target.value) },
-                        }))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <input
-                      type="number"
-                      min="0.01"
-                      max="100"
-                      step="0.1"
-                      value={draft.risk}
-                      onChange={(e) =>
-                        setDrafts((prev) => ({
-                          ...prev,
-                          [segment]: { ...draft, risk: e.target.value === "" ? "" : Number(e.target.value) },
-                        }))
-                      }
-                    />
-                  </td>
-                  <td>
-                    {segment === "CRYPTO" ? (
-                      <select
-                        value={draft.leverage}
-                        onChange={(e) =>
-                          setDrafts((prev) => ({
-                            ...prev,
-                            [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
-                          }))
-                        }
-                      >
-                        {/* Delta Exchange India's own BTCUSD leverage tiers - picking one of
-                            these keeps our simulated buying power comparable to what the same
-                            capital would actually get you there, rather than an arbitrary number. */}
-                        {LEVERAGE_OPTIONS.map((lev) => (
-                          <option key={lev} value={lev}>
-                            {lev}x
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                  <td>
-                    <input
-                      type="time"
-                      value={draft.squareOffTime}
-                      onChange={(e) =>
-                        setDrafts((prev) => ({
-                          ...prev,
-                          [segment]: { ...draft, squareOffTime: e.target.value },
-                        }))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <button type="button" className="tiny" onClick={() => handleSave(segment)} disabled={saving === segment}>
-                      {saving === segment ? "Saving..." : "Save"}
-                    </button>{" "}
-                    <button
-                      type="button"
-                      className="secondary tiny"
-                      onClick={() => handleReset(segment)}
-                      disabled={resetting === segment}
-                    >
-                      {resetting === segment ? "Resetting..." : "Reset balance"}
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
 
       <h2>Platform account (admin)</h2>
-      <p className="subtitle">
-        The platform-wide account the automated Strategy-driven flow actually sizes/holds against - separate from
-        this admin's own personal account above, and edited here since it belongs to no single SaaS user. This
-        includes <strong>Square-off</strong>: a webhook (e.g. Chartink) or in-house signal is checked against THIS
-        row's cutoff, not the personal account's own square-off time above - a signal received after it is
-        rejected with "received outside intraday window". Leverage/MTF interest here is broker/platform config too
-        - a Strategy opts in via its own <code>use_margin</code> field (signal-generation) before this leverage
-        ever applies to one of its orders.
-      </p>
+      <p className="subtitle">The account the automated Strategy-driven flow itself sizes/holds against.</p>
+      <InfoDisclosure summary="How square-off and leverage apply here">
+        <p>
+          Separate from your own personal account above, and edited here since it belongs to no single SaaS user.
+        </p>
+        <p>
+          <strong>Square-off</strong>: a webhook (e.g. Chartink) or in-house signal is checked against THIS row's
+          cutoff, not the personal account's own square-off time above - a signal received after it is rejected
+          with "received outside intraday window".
+        </p>
+        <p>
+          Leverage/MTF interest here is broker/platform config too - a Strategy opts in via its own{" "}
+          <code>use_margin</code> field (signal-generation) before this leverage ever applies to one of its orders.
+        </p>
+      </InfoDisclosure>
       {platformError && <p className="error">Could not reach the backend: {platformError}</p>}
       {platformMessage && <p className="action-message">{platformMessage}</p>}
       <div className="table-scroll">
@@ -759,11 +350,13 @@ export default function AccountsPage() {
                   <td>
                     <button
                       type="button"
-                      className="tiny"
+                      className="icon-btn"
                       onClick={() => handleSavePlatform(segment)}
                       disabled={savingPlatform === segment || !account}
+                      title={savingPlatform === segment ? "Saving..." : "Save"}
+                      aria-label="Save"
                     >
-                      {savingPlatform === segment ? "Saving..." : "Save"}
+                      <CheckIcon />
                     </button>
                   </td>
                 </tr>
@@ -897,30 +490,44 @@ export default function AccountsPage() {
                         }
                       />
                     </td>
-                    <td>
+                    <td className="edit-actions">
                       <button
                         type="button"
-                        className="tiny"
+                        className="icon-btn"
                         onClick={() => handleSaveStrategyAccount(account.strategy_id)}
                         disabled={savingStrategyAccount === account.strategy_id}
+                        title={savingStrategyAccount === account.strategy_id ? "Saving..." : "Save"}
+                        aria-label="Save"
                       >
-                        {savingStrategyAccount === account.strategy_id ? "Saving..." : "Save"}
-                      </button>{" "}
+                        <CheckIcon />
+                      </button>
                       <button
                         type="button"
-                        className="secondary tiny"
+                        className="icon-btn secondary"
                         onClick={() => handleResetStrategyAccount(account.strategy_id)}
                         disabled={resettingStrategyAccount === account.strategy_id}
+                        title={
+                          resettingStrategyAccount === account.strategy_id
+                            ? "Resetting..."
+                            : `Reset ${strategyName(account.strategy_id)}'s balance to its starting balance`
+                        }
+                        aria-label="Reset balance"
                       >
-                        {resettingStrategyAccount === account.strategy_id ? "Resetting..." : "Reset balance"}
-                      </button>{" "}
+                        <RotateCcwIcon />
+                      </button>
                       <button
                         type="button"
-                        className="secondary tiny"
+                        className="icon-btn danger"
                         onClick={() => handleDeleteStrategyAccount(account.strategy_id)}
                         disabled={deletingStrategyAccount === account.strategy_id}
+                        title={
+                          deletingStrategyAccount === account.strategy_id
+                            ? "Removing..."
+                            : `Remove ${strategyName(account.strategy_id)}'s dedicated account`
+                        }
+                        aria-label="Remove dedicated account"
                       >
-                        {deletingStrategyAccount === account.strategy_id ? "Removing..." : "Remove"}
+                        <TrashIcon />
                       </button>
                     </td>
                   </tr>
@@ -930,6 +537,6 @@ export default function AccountsPage() {
           </table>
         </div>
       )}
-    </main>
+    </>
   );
 }

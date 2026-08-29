@@ -539,6 +539,23 @@ export type WeekdayBucket = {
   win_rate: number;
 };
 
+// Every bar the rule's own condition matched, independent of whether it
+// went on to open a trade (see backend's simulate_trades own
+// matched_signals param) - traded=false + skip_reason explains why a
+// match didn't become one of the `trades` above (regime_filter,
+// outside_entry_window, weekday_excluded, past_square_off_time). A rule
+// scanned while a previous trade was still open never reaches the
+// condition check at all, so it can't appear here either - this only
+// distinguishes "condition never fired" from "fired but got filtered."
+export type SkipReason = "regime_filter" | "outside_entry_window" | "weekday_excluded" | "past_square_off_time";
+
+export type MatchedSignal = {
+  timestamp: string;
+  direction: "bullish" | "bearish";
+  traded: boolean;
+  skip_reason: SkipReason | null;
+};
+
 export type BacktestResult = {
   trade_count: number;
   hypothetical_pnl: number;
@@ -550,6 +567,7 @@ export type BacktestResult = {
   time_of_day_breakdown?: TimeOfDayBucket[];
   weekday_breakdown?: WeekdayBucket[];
   trades: BacktestTrade[];
+  matched_signals: MatchedSignal[];
 };
 
 // POST /rules/{id}/backtest for a universe-scoped rule - the same

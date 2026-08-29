@@ -123,7 +123,14 @@ def test_replay_finds_the_single_known_signal_and_reports_end_of_data():
 def test_replay_too_few_candles_finds_nothing():
     candles = _flat_candles([10, 11, 12])
     result = replay(_bias_fn, _MIN_BARS, candles)
-    assert result == {"trade_count": 0, "hypothetical_pnl": 0.0, "win_rate": 0.0, "max_drawdown": 0.0, "trades": []}
+    assert result == {
+        "trade_count": 0,
+        "hypothetical_pnl": 0.0,
+        "win_rate": 0.0,
+        "max_drawdown": 0.0,
+        "trades": [],
+        "matched_signals": [],
+    }
 
 
 def test_replay_omits_time_of_day_breakdown_by_default():
@@ -749,6 +756,52 @@ def test_simulate_trades_regime_filter_empty_by_default_never_calls_evaluate_reg
     monkeypatch.setattr(backtest_module, "evaluate_regime_indicator", _boom)
     trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture())  # regime_indicators defaults to ()
     assert len(trades) == 1
+
+
+# --- simulate_trades: matched_signals -------------------------------------------------------
+#
+# "The condition matched" and "a trade actually opened" are different
+# questions - matched_signals answers the first regardless of the second,
+# so a rule whose regime/entry-window/weekday gates suppress every trade
+# doesn't read as "the condition never fired" (see the docstring on
+# simulate_trades' own matched_signals param).
+
+
+def test_matched_signals_none_by_default():
+    """Existing callers (option_backtest.py, every call site above) never
+    pass matched_signals - must stay a pure no-op for them, not even an
+    empty list allocated."""
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture())
+    assert len(trades) == 1
+
+
+def test_matched_signals_records_a_traded_match():
+    matched: list[dict] = []
+    trades = simulate_trades(_bias_fn, _MIN_BARS, _entry_fixture(), matched_signals=matched)
+    assert len(trades) == 1
+    assert len(matched) == 1
+    assert matched[0]["direction"] == "bearish"
+    assert matched[0]["traded"] is True
+    assert matched[0]["skip_reason"] is None
+    assert matched[0]["timestamp"] == trades[0].entry_time
+
+
+def test_matched_signals_records_a_regime_blocked_match_as_untraded(monkeypatch):
+    monkeypatch.setattr(backtest_module, "evaluate_regime_indicator", _fake_regime_check(passing_types=set()))
+    matched: list[dict] = []
+    trades = simulate_trades(
+        _bias_fn, _MIN_BARS, _entry_fixture(), regime_indicators=[("adx", {})], matched_signals=matched
+    )
+    assert trades == []
+    assert len(matched) == 1
+    assert matched[0]["traded"] is False
+    assert matched[0]["skip_reason"] == "regime_filter"
+
+
+def test_replay_report_includes_matched_signals():
+    result = replay(_bias_fn, _MIN_BARS, _entry_fixture())
+    assert len(result["matched_signals"]) == 1
+    assert result["matched_signals"][0]["traded"] is True
 
 
 def test_simulate_trades_matches_naive_pairing_when_no_exit_config():

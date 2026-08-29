@@ -686,13 +686,25 @@ class DeltaProvider(QuoteProvider):
             self._option_chain_cache[underlying_asset] = (rows, time.monotonic())
         return rows
 
-    def get_expiry_list(self, symbol: str) -> Optional[list[str]]:
+    def get_expiry_list(self, symbol: str, credentials: object = None) -> Optional[list[str]]:
         """Every live expiry date (YYYY-MM-DD) for `symbol` (a perpetual's
         own symbol, e.g. "BTCUSD") - None if `symbol` isn't a known
         perpetual. Parsed from the option symbols themselves (see
         _parse_option_symbol) - there's no dedicated expiry-list endpoint
         the way Dhan has, and no separate call is needed since
-        _fetch_option_rows already covers every expiry."""
+        _fetch_option_rows already covers every expiry.
+
+        `credentials` is accepted-and-ignored, not actually optional to
+        omit - app/api/routes/options.py calls get_expiry_list/
+        get_option_chain uniformly across every provider via duck-typed
+        getattr, always passing credentials=... (Dhan's own BYO-credential
+        Phase 3 need); Delta's endpoints are fully public (see this
+        provider's own module docstring), but the call site has no way to
+        know that per-provider, so this just has to accept the same shape
+        as DhanProvider.get_expiry_list - omitting the param here caused a
+        TypeError on every CRYPTO option lookup (expiries, chain, and
+        anything downstream like a manual option order's own expiry
+        resolution) until fixed 2026-08-29."""
         underlying_asset = self._underlying_asset_symbol(symbol)
         if underlying_asset is None:
             return None
@@ -705,7 +717,7 @@ class DeltaProvider(QuoteProvider):
                 expiries.add(parsed[2])
         return sorted(expiries)
 
-    def get_option_chain(self, symbol: str, expiry: str) -> Optional[OptionChain]:
+    def get_option_chain(self, symbol: str, expiry: str, credentials: object = None) -> Optional[OptionChain]:
         """Full option chain for `symbol` (e.g. "BTCUSD") at `expiry`
         (YYYY-MM-DD, from get_expiry_list) - OI/Greeks/IV/bid-ask per
         strike, each leg's ITM/ATM/OTM classification computed via
@@ -716,7 +728,10 @@ class DeltaProvider(QuoteProvider):
         strikes=[] rather than None (still a real, resolvable market,
         just empty at that date); underlying_last_price is taken from any
         available row's spot_price in that case, a shared reference
-        regardless of which expiry it came from."""
+        regardless of which expiry it came from.
+
+        `credentials` is accepted-and-ignored - see get_expiry_list's own
+        comment on why this provider still needs to accept it."""
         underlying_asset = self._underlying_asset_symbol(symbol)
         if underlying_asset is None:
             return None

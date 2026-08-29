@@ -17,17 +17,6 @@ import {
   triggerSync,
   updateDhanCredentials,
 } from "./api";
-import {
-  CurrentUser,
-  applySharedToken,
-  clearAuthToken,
-  fetchCurrentUser,
-  getAuthToken,
-  login,
-  requestSharedToken,
-  setAuthToken,
-  subscribeToSharedToken,
-} from "./auth";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -288,11 +277,12 @@ function LiveFeedPanel({ title, fetchStatus, subscribe, exchangeOptions, symbolP
 
 // Client ID/access token form - moved here from execution/frontend (its
 // former admin console) since this is market-data's own data, not
-// execution's (see docs/architecture.md). Only ever rendered once
-// DhanAdminSection below has already confirmed an admin session, so no
-// auth-checking of its own. Username/Logout for the session that unlocked
-// it live in the shell's own top bar now, not repeated in this panel's
-// header - see shell/index.html.
+// execution's (see docs/architecture.md). No login gate (removed
+// 2026-08-29 at the user's request, both here and server-side on
+// dhan.py's router) - this is a single-operator, self-hosted platform, and
+// gating a config screen an operator needs to reach in order to get
+// quotes working at all added friction without protecting anything a
+// person on this same box couldn't already do.
 function DhanCredentialsPanel() {
   const [status, setStatus] = useState<DhanStatus | null>(null);
   const [clientIdDraft, setClientIdDraft] = useState("");
@@ -385,139 +375,6 @@ function DhanCredentialsPanel() {
   );
 }
 
-type DhanAuthStatus = "checking" | "unauthenticated" | "forbidden" | "authenticated";
-
-// Gates just the Dhan credentials/live-feed panels behind an admin login -
-// unlike execution/frontend's whole-app AuthGate, most of this dashboard
-// (health, instrument sync, Delta's feed) needs no login at all, since
-// only market-data's own Dhan ops routes are admin-gated server-side (see
-// docs/architecture.md). A compact inline login form, not a full-page
-// gate, so the rest of the dashboard stays visible around it - and
-// login-only (no signup toggle, unlike execution's LoginPage): this is a
-// narrow "log in as the admin who already has an account" prompt, not a
-// product signup flow.
-function checkDhanToken(token: string, onUser: (u: CurrentUser) => void, onStatus: (s: DhanAuthStatus) => void) {
-  fetchCurrentUser(token)
-    .then((u) => {
-      if (!u.is_admin) {
-        onStatus("forbidden");
-        return;
-      }
-      onUser(u);
-      onStatus("authenticated");
-    })
-    .catch(() => {
-      clearAuthToken();
-      onStatus("unauthenticated");
-    });
-}
-
-function DhanAdminSection() {
-  const [status, setStatus] = useState<DhanAuthStatus>("checking");
-  // Only the setter is needed - the fetched user object itself has no
-  // reader left in this component now that the shell's top bar (not this
-  // panel) shows the logged-in username, see shell/index.html.
-  const [, setUser] = useState<CurrentUser | null>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const token = getAuthToken();
-    if (token) {
-      checkDhanToken(token, setUser, setStatus);
-      return;
-    }
-    // No local session yet - ask the shell (see auth.ts's own comment) for
-    // one before falling back to the login prompt, so a session that
-    // already exists in a sibling tab doesn't force logging in again here
-    // too.
-    requestSharedToken().then((shared) => {
-      if (shared) {
-        applySharedToken(shared);
-        checkDhanToken(shared, setUser, setStatus);
-      } else {
-        setStatus("unauthenticated");
-      }
-    });
-  }, []);
-
-  // Ongoing - picks up a DIFFERENT frontend logging in/out later, even
-  // while this section is already sitting on the login prompt, rather
-  // than staying stuck on stale state.
-  useEffect(() => {
-    return subscribeToSharedToken((token) => {
-      if (token) {
-        applySharedToken(token);
-        checkDhanToken(token, setUser, setStatus);
-      } else if (getAuthToken()) {
-        applySharedToken(null);
-        setUser(null);
-        setStatus("unauthenticated");
-      }
-    });
-  }, []);
-
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setLoginError(null);
-    try {
-      const token = await login(email, password);
-      setAuthToken(token);
-      setPassword("");
-      checkDhanToken(token, setUser, setStatus);
-    } catch (err) {
-      setLoginError(err instanceof Error ? err.message : "Failed to log in");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  if (status === "checking") return null;
-
-  if (status !== "authenticated") {
-    return (
-      <section className="panel">
-        <h2>Data provider (Dhan)</h2>
-        <p className="status-line">
-          {status === "forbidden"
-            ? "That account isn't an admin - credentials/live feed here are the platform operator's own ops surface."
-            : "Log in as an admin to manage Dhan credentials and the live feed."}
-        </p>
-        <form className="subscribe-form" onSubmit={handleLogin}>
-          <input type="email" placeholder="Email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
-          <input
-            type="password"
-            placeholder="Password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <button type="submit" disabled={submitting || !email || !password}>
-            {submitting ? "..." : "Log in"}
-          </button>
-        </form>
-        {loginError && <p className="error">{loginError}</p>}
-      </section>
-    );
-  }
-
-  return (
-    <>
-      <DhanCredentialsPanel />
-      <LiveFeedPanel
-        title="Dhan live feed"
-        fetchStatus={fetchFeedStatus}
-        subscribe={subscribeFeed}
-        exchangeOptions={["NSE", "MCX"]}
-        symbolPlaceholder="e.g. RELIANCE"
-      />
-    </>
-  );
-}
-
 export default function App() {
   return (
     <main>
@@ -527,7 +384,14 @@ export default function App() {
       <div className="panel-grid">
         <HealthPanel />
         <DataFreshnessPanel />
-        <DhanAdminSection />
+        <DhanCredentialsPanel />
+        <LiveFeedPanel
+          title="Dhan live feed"
+          fetchStatus={fetchFeedStatus}
+          subscribe={subscribeFeed}
+          exchangeOptions={["NSE", "MCX"]}
+          symbolPlaceholder="e.g. RELIANCE"
+        />
         <LiveFeedPanel
           title="Delta live feed"
           fetchStatus={fetchDeltaFeedStatus}

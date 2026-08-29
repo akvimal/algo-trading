@@ -166,6 +166,18 @@ function exitReasonLabel(reason: string): string {
   return EXIT_REASON_LABELS[reason] ?? reason;
 }
 
+const SKIP_REASON_LABELS: Record<string, string> = {
+  regime_filter: "Regime filter disagreed",
+  outside_entry_window: "Outside entry-time window",
+  weekday_excluded: "Weekday excluded",
+  past_square_off_time: "Past square-off time",
+};
+
+function skipReasonLabel(reason: string | null): string {
+  if (reason == null) return "—";
+  return SKIP_REASON_LABELS[reason] ?? reason;
+}
+
 // toLocaleString()'s default time style includes seconds (e.g.
 // "8/7/2026, 8:50:00 AM") - noise for a backtest trades grid where every
 // entry/exit lands on a whole-minute candle boundary anyway.
@@ -1018,7 +1030,7 @@ function RuleManager() {
   // "Interval breakdown" tab (time-of-day + weekday tables) - only
   // meaningful for a plain (non-pooled) result, which is the only shape
   // with trades/time_of_day_breakdown/weekday_breakdown at the top level.
-  const [backtestResultTab, setBacktestResultTab] = useState<"trades" | "interval">("trades");
+  const [backtestResultTab, setBacktestResultTab] = useState<"trades" | "signals" | "interval">("trades");
   const [backtestResult, setBacktestResult] = useState<BacktestResult | UniverseBacktestResult | null>(null);
   const [backtesting, setBacktesting] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
@@ -2469,6 +2481,14 @@ function RuleManager() {
                     </button>
                     <button
                       type="button"
+                      className={backtestResultTab === "signals" ? "active" : ""}
+                      onClick={() => setBacktestResultTab("signals")}
+                      title="Every bar the rule's own condition matched, whether or not it opened a trade"
+                    >
+                      Signals ({backtestResult.matched_signals.length})
+                    </button>
+                    <button
+                      type="button"
                       className={backtestResultTab === "interval" ? "active" : ""}
                       onClick={() => setBacktestResultTab("interval")}
                     >
@@ -2512,6 +2532,40 @@ function RuleManager() {
                           </tbody>
                         </table>
                       </div>
+                    ))}
+                  {backtestResultTab === "signals" &&
+                    (backtestResult.matched_signals.length > 0 ? (
+                      <div className="table-scroll">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>When</th>
+                              <th>Dir</th>
+                              <th>Traded?</th>
+                              <th>If not, why</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {backtestResult.matched_signals.map((s, i) => (
+                              <tr key={i}>
+                                <td>{formatDateTimeNoSeconds(s.timestamp)}</td>
+                                <td>
+                                  <span className={`badge ${s.direction === "bullish" ? "badge-buy" : "badge-sell"}`}>
+                                    {s.direction}
+                                  </span>
+                                </td>
+                                <td>{s.traded ? "Yes" : "No"}</td>
+                                <td>{s.traded ? "—" : skipReasonLabel(s.skip_reason)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="hint">
+                        The rule's own condition never matched anywhere in this date range - check the condition
+                        expression/interval, not the exit config.
+                      </p>
                     ))}
                   {backtestResultTab === "interval" && (
                     <>

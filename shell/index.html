@@ -394,9 +394,15 @@
     // Dhan access-token expiry banner - the NSE/MCX in-house engine (and
     // any Dhan quote call) 401s the instant this token expires, but
     // nothing else surfaces that until a signal silently fails to
-    // generate. market-data's GET /dhan/token-status now decodes the
-    // token's own JWT `exp` claim (see app/providers/dhan.py), so this
-    // polls that directly rather than duplicating the decode here.
+    // generate. market-data's GET /dhan/token-expiry decodes the token's
+    // own JWT `exp` claim (see app/providers/dhan.py), so this polls that
+    // directly rather than duplicating the decode here. Deliberately NOT
+    // /dhan/token-status - that route requires a real admin JWT (see
+    // dhan.py's own router split), which the shell has no way to supply
+    // (it's a plain static nav page, not one of the SaaS-gated frontends)
+    // - this banner silently never fired for ~2 weeks (discovered live
+    // 2026-08-29) because that 401 got swallowed right below as "market-
+    // data unreachable", same as any other fetch failure.
     const MARKET_DATA_BACKEND_PORT = 8001;
     const DHAN_WARNING_WINDOW_MS = 60 * 60 * 1000; // 1 hour
     const DHAN_POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -406,7 +412,7 @@
       const base = `http://${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
       let status;
       try {
-        const res = await fetch(`${base}/dhan/token-status`);
+        const res = await fetch(`${base}/dhan/token-expiry`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         status = await res.json();
       } catch {

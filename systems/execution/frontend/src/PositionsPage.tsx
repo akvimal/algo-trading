@@ -24,6 +24,7 @@ import {
   updateOptionGroupSpotStopLoss,
   updateOptionGroupStopLoss,
 } from "./api";
+import { getAuthIsAdmin } from "./auth";
 import { PencilIcon, XIcon } from "./Icons";
 import { PnlChart, type PnlPoint } from "./PnlChart";
 import { SEGMENTS, formatPct, formatTime, localDateStr, money, moneySigned, pnlPercent, todayLocalDate } from "./format";
@@ -36,6 +37,33 @@ import { SEGMENTS, formatPct, formatTime, localDateStr, money, moneySigned, pnlP
 // them side by side rather than as two more tabs.
 function mergeByEntryTimeDesc<T extends { entry_time: string }>(own: T[], platform: T[]): T[] {
   return [...own, ...platform].sort((a, b) => new Date(b.entry_time).getTime() - new Date(a.entry_time).getTime());
+}
+
+// Shared by the poll loop and refreshAll below - the platform-wide fetches
+// are admin-only server-side (require_admin), so a non-admin caller skips
+// them entirely rather than firing them and letting the resulting 403 sink
+// the whole Promise.all (which would also discard this caller's own,
+// perfectly fetchable positions/option-groups) - see auth.ts's own
+// getAuthIsAdmin comment for the incident this fixed.
+async function fetchMergedPositionsAndGroups(
+  isAdmin: boolean,
+  signalIdFilter: string | null,
+): Promise<{ positions: Position[]; optionGroups: OptionGroup[] }> {
+  const params = { signalId: signalIdFilter ?? undefined, withLivePnl: true };
+  if (!isAdmin) {
+    const [positions, optionGroups] = await Promise.all([fetchPositions(params), fetchOptionGroups(params)]);
+    return { positions, optionGroups };
+  }
+  const [positions, optionGroups, platformPositions, platformGroups] = await Promise.all([
+    fetchPositions(params),
+    fetchOptionGroups(params),
+    fetchPlatformPositions(params),
+    fetchPlatformOptionGroups(params),
+  ]);
+  return {
+    positions: mergeByEntryTimeDesc(positions, platformPositions),
+    optionGroups: mergeByEntryTimeDesc(optionGroups, platformGroups),
+  };
 }
 
 function combinedExitPrice(g: OptionGroup): number | null {
@@ -104,6 +132,15 @@ function signalIdFromUrl(): string | null {
 }
 
 export default function PositionsPage() {
+  // Read once - only changes on login/logout, which reloads the whole
+  // page (see AuthGate.tsx's subscribeToSharedToken handler) rather than
+  // re-rendering this component in place. Gates the platform-wide
+  // (Strategy-driven, user_id IS NULL) fetches/actions below - those are
+  // admin-only server-side (require_admin) and, unlike a spot-checked
+  // action a user might click once, poll() below runs every
+  // POLL_INTERVAL_MS forever, so a non-admin calling them isn't a rare
+  // edge case, see auth.ts's own getAuthIsAdmin comment.
+  const isAdmin = getAuthIsAdmin();
   const [positions, setPositions] = useState<Position[]>([]);
   const [optionGroups, setOptionGroups] = useState<OptionGroup[]>([]);
   const [signalIdFilter] = useState<string | null>(signalIdFromUrl);
@@ -160,15 +197,10 @@ export default function PositionsPage() {
 
     async function poll() {
       try {
-        const [positionsData, groupsData, platformPositionsData, platformGroupsData] = await Promise.all([
-          fetchPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-          fetchOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-          fetchPlatformPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-          fetchPlatformOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-        ]);
+        const { positions, optionGroups } = await fetchMergedPositionsAndGroups(isAdmin, signalIdFilter);
         if (!cancelled) {
-          setPositions(mergeByEntryTimeDesc(positionsData, platformPositionsData));
-          setOptionGroups(mergeByEntryTimeDesc(groupsData, platformGroupsData));
+          setPositions(positions);
+          setOptionGroups(optionGroups);
           setError(null);
           setLastUpdated(new Date());
         }
@@ -229,14 +261,9 @@ export default function PositionsPage() {
   }, [expandedGroupId]);
 
   async function refreshAll() {
-    const [freshPositions, freshGroups, freshPlatformPositions, freshPlatformGroups] = await Promise.all([
-      fetchPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-      fetchOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-      fetchPlatformPositions({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-      fetchPlatformOptionGroups({ signalId: signalIdFilter ?? undefined, withLivePnl: true }),
-    ]);
-    setPositions(mergeByEntryTimeDesc(freshPositions, freshPlatformPositions));
-    setOptionGroups(mergeByEntryTimeDesc(freshGroups, freshPlatformGroups));
+    const { positions, optionGroups } = await fetchMergedPositionsAndGroups(isAdmin, signalIdFilter);
+    setPositions(positions);
+    setOptionGroups(optionGroups);
   }
 
   async function handleSquareOffNow() {
@@ -600,14 +627,16 @@ export default function PositionsPage() {
         <button onClick={handleClearPositions} disabled={clearing} className="danger tiny">
           {clearing ? "Clearing..." : "Clear positions"}
         </button>
-        <button
-          onClick={handleClearPlatformPositions}
-          disabled={clearingPlatform}
-          className="danger tiny"
-          title="Clears the automated Strategy-driven flow's own positions (webhook/in-house signals) - Clear positions above can't touch these, see Accounts > Platform account (admin)."
-        >
-          {clearingPlatform ? "Clearing..." : "Clear platform positions"}
-        </button>
+        {isAdmin && (
+          <button
+            onClick={handleClearPlatformPositions}
+            disabled={clearingPlatform}
+            className="danger tiny"
+            title="Clears the automated Strategy-driven flow's own positions (webhook/in-house signals) - Clear positions above can't touch these, see Accounts > Platform account (admin)."
+          >
+            {clearingPlatform ? "Clearing..." : "Clear platform positions"}
+          </button>
+        )}
       </div>
 
       {error && <p className="error">Could not reach the backend: {error}</p>}

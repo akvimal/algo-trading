@@ -13,22 +13,29 @@ subscribing (idempotent - a no-op if the background thread's already
 running) rather than relying on app.main's startup handler to have started
 it already."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
-from app.auth import require_admin
 from app.config import settings
 from app.domain.models import DhanCredentialsUpdate, FeedSubscribeRequest
 from app.providers.dhan import current_access_token, renew_access_token, renew_token_status, set_manual_credentials
 from app.providers.dhan_feed import feed_status, start_feed, subscribe
 
 # The platform operator's own ops surface (Dhan data-provider credentials,
-# token renewal, live-feed status/subscribe) - not part of the SaaS
-# product, only ever called from execution/frontend's admin-only Accounts
-# page (see docs/architecture.md § "Manual Trading SaaS"). Every route
-# here requires a real admin JWT - unlike quotes.py/candles.py/options.py,
-# which stay on the optional get_optional_user_id so the SaaS product's
-# own quote/candle/option-chain calls are unaffected.
-router = APIRouter(dependencies=[Depends(require_admin)])
+# token renewal, live-feed status/subscribe). No login required (removed
+# 2026-08-29 at the user's request) - this is a single-operator, self-
+# hosted platform, and gating the screen an operator needs in order to get
+# quotes working at all added friction without protecting anything a
+# person on this same box couldn't already do.
+router = APIRouter()
+
+
+@router.get("/dhan/token-expiry")
+def token_expiry():
+    # Narrower than /dhan/token-status below (just the expiry timestamp) -
+    # kept as its own route since shell/index.html's global "Dhan token
+    # expiring soon" banner has polled this one specifically since
+    # 2026-08-29 and there's no reason to churn its URL now.
+    return {"token_expires_at": renew_token_status()["token_expires_at"]}
 
 
 @router.post("/dhan/renew-token")

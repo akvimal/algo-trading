@@ -9,6 +9,7 @@ const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
 
 const TOKEN_KEY = "authToken";
 const EMAIL_KEY = "authEmail";
+const IS_ADMIN_KEY = "authIsAdmin";
 
 export function getAuthToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -94,6 +95,24 @@ export function getAuthEmail(): string | null {
 
 export function setAuthEmail(email: string): void {
   localStorage.setItem(EMAIL_KEY, email);
+}
+
+// Same "cached alongside the token for display" reasoning as
+// getAuthEmail/setAuthEmail above - lets PositionsPage decide, before its
+// very first poll, whether to even ATTEMPT the admin-only
+// GET /positions/platform + /option-groups/platform calls. Skipping them
+// for a non-admin isn't just tidiness: they're both fired inside the same
+// Promise.all as the caller's own positions/option-groups fetches, so a
+// 403 here previously sank the ENTIRE poll (see PositionsPage's own
+// comment) - a non-admin's own real positions never rendered at all, just
+// a permanent "Could not reach the backend: GET /positions/platform
+// failed: 403" banner, reproduced live 2026-08-29.
+export function getAuthIsAdmin(): boolean {
+  return localStorage.getItem(IS_ADMIN_KEY) === "true";
+}
+
+export function setAuthIsAdmin(isAdmin: boolean): void {
+  localStorage.setItem(IS_ADMIN_KEY, String(isAdmin));
 }
 
 async function extractErrorDetail(res: Response): Promise<string> {

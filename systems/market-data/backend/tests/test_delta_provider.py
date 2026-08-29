@@ -636,6 +636,23 @@ def test_get_expiry_list_unknown_symbol_returns_none():
 
 
 @responses.activate
+def test_get_expiry_list_accepts_credentials_kwarg_and_ignores_it():
+    """app/api/routes/options.py's GET /options/expiries calls
+    get_expiry_list uniformly across every provider via duck-typed
+    getattr, always passing credentials=... (Dhan's own BYO-credential
+    need) - omitting this kwarg here caused a TypeError on every CRYPTO
+    option-expiry lookup (reproduced live 2026-08-29, surfaced to the
+    Manual Trading frontend as a bare 'Failed to fetch' once it propagated
+    through execution's own uncaught HTTPError)."""
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+
+    provider = _provider_with_btcusd()
+    expiries = provider.get_expiry_list("BTCUSD", credentials=None)
+
+    assert expiries == ["2026-08-15", "2026-08-21"]
+
+
+@responses.activate
 def test_get_option_chain_parses_strikes_and_moneyness():
     responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
 
@@ -666,6 +683,20 @@ def test_get_option_chain_parses_strikes_and_moneyness():
     assert atm.ce.top_bid_price == 10.0
     assert atm.ce.top_ask_price == 12.0
     assert atm.ce.greeks.rho == 1.2  # Dhan's chain never sets this - Delta does
+
+
+@responses.activate
+def test_get_option_chain_accepts_credentials_kwarg_and_ignores_it():
+    """Same reasoning as test_get_expiry_list_accepts_credentials_kwarg_
+    and_ignores_it - GET /options/chain and /options/oi-summary both call
+    get_option_chain with credentials=... uniformly across providers."""
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+
+    provider = _provider_with_btcusd()
+    chain = provider.get_option_chain("BTCUSD", "2026-08-15", credentials=None)
+
+    assert chain is not None
+    assert chain.underlying_symbol == "BTCUSD"
 
 
 @responses.activate

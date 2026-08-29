@@ -340,6 +340,7 @@ def simulate_trades(
     exit_config: Optional[ExitConfig] = None,
     sl_candles: Optional[list[CandleClose]] = None,
     regime_indicators: RegimeIndicators = (),
+    matched_signals: Optional[list[dict]] = None,
 ) -> list[SimulatedTrade]:
     """The generic exit engine (SL/target/trailing/square-off/
     opposite-signal/end-of-data) - `bias_fn` is however a specific rule
@@ -377,7 +378,18 @@ def simulate_trades(
     evaluate_regime_indicator confirms `direction` on the same growing
     window - the exact same all-must-agree gate app/domain/engine.py's
     live tick applies via its own _regime_confirmed, single-timeframe
-    (the same `candles`/interval, no separate higher-timeframe fetch)."""
+    (the same `candles`/interval, no separate higher-timeframe fetch).
+
+    `matched_signals`, if given, gets one entry appended (mutated in
+    place, not returned - keeps this function's own return type/every
+    existing call site unchanged) every time `bias_fn` itself returns a
+    direction, BEFORE any of the regime/entry-window/weekday/square-off
+    skip checks below run - i.e. exactly "did the rule's own condition
+    match on this bar", independent of whether that match went on to open
+    a trade. A bar scanned while a previous trade is still open never
+    reaches bias_fn at all (see the `i = exit_index + 1` jump below), so
+    it can't appear here either - this only ever misses bars genuinely
+    never evaluated, not ones the condition disagreed with."""
     exit_config = exit_config or ExitConfig()
     trades: list[SimulatedTrade] = []
     n = len(candles)
@@ -389,9 +401,16 @@ def simulate_trades(
             i += 1
             continue
 
+        signal_entry = None
+        if matched_signals is not None:
+            signal_entry = {"timestamp": candles[i - 1].timestamp, "direction": direction, "traded": False, "skip_reason": None}
+            matched_signals.append(signal_entry)
+
         if regime_indicators and not all(
             evaluate_regime_indicator(indicator_type, params, window, direction) for indicator_type, params in regime_indicators
         ):
+            if signal_entry is not None:
+                signal_entry["skip_reason"] = "regime_filter"
             i += 1
             continue
 
@@ -400,17 +419,26 @@ def simulate_trades(
 
         if exit_config.entry_window_start is not None and exit_config.entry_window_end is not None:
             if not (exit_config.entry_window_start <= entry_dt.time() <= exit_config.entry_window_end):
+                if signal_entry is not None:
+                    signal_entry["skip_reason"] = "outside_entry_window"
                 i += 1
                 continue  # outside the requested time-of-day window - not a rejected signal, just not scanned as an entry
 
         if exit_config.entry_weekdays and _WEEKDAY_NAMES[entry_dt.weekday()] not in exit_config.entry_weekdays:
+            if signal_entry is not None:
+                signal_entry["skip_reason"] = "weekday_excluded"
             i += 1
             continue  # today's weekday isn't in the allowed list - same "not scanned as an entry" treatment
 
         if exit_config.square_off_time is not None:
             if entry_dt.time() >= exit_config.square_off_time:
+                if signal_entry is not None:
+                    signal_entry["skip_reason"] = "past_square_off_time"
                 i += 1
                 continue  # would be rejected outside the intraday window, same as execution
+
+        if signal_entry is not None:
+            signal_entry["traded"] = True
 
         trade, exit_index = _simulate_one_trade(candles, entry_index, direction, bias_fn, exit_config, sl_candles)
         trades.append(trade)
@@ -531,8 +559,13 @@ def replay(
     time_bucket_minutes' value (no "bucket size" concept for weekdays) -
     it's just gated on the same flag for lack of its own separate opt-in,
     and computing it costs nothing extra once trades are already in
-    hand."""
-    trades = simulate_trades(bias_fn, min_bars, candles, exit_config, sl_candles, regime_indicators)
+    hand. matched_signals (always included, cheap) is every bar the
+    condition itself matched, independent of whether it became a trade -
+    see simulate_trades' own docstring on this param; lets a rule with
+    surprisingly few/zero trades be told apart from one whose condition
+    never actually fired at all."""
+    matched_signals: list[dict] = []
+    trades = simulate_trades(bias_fn, min_bars, candles, exit_config, sl_candles, regime_indicators, matched_signals)
     report = {
         "trade_count": len(trades),
         "hypothetical_pnl": sum(t.pnl for t in trades),
@@ -550,6 +583,7 @@ def replay(
             }
             for t in trades
         ],
+        "matched_signals": matched_signals,
     }
     if time_bucket_minutes is not None:
         report["time_of_day_breakdown"] = _time_of_day_breakdown(trades, time_bucket_minutes)

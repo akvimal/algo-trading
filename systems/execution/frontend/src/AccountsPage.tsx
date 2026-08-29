@@ -13,6 +13,7 @@ import {
   updatePlatformAccount,
   updateStrategyAccount,
 } from "./api";
+import { getAuthIsAdmin } from "./auth";
 import { CheckIcon, RotateCcwIcon, TrashIcon } from "./Icons";
 import { InfoDisclosure } from "./InfoDisclosure";
 import { SEGMENTS, formatPct } from "./format";
@@ -21,6 +22,12 @@ const POLL_INTERVAL_MS = 5000;
 const LEVERAGE_OPTIONS = [1, 10, 25, 50, 100, 150, 200];
 
 export default function AccountsPage() {
+  // See PositionsPage.tsx's own isAdmin comment - gates the platform-wide
+  // fetch/section below the same way, fixed alongside it 2026-08-29
+  // (fetchPlatformAccounts' own comment had the same now-stale "no
+  // separate admin check is needed here" assumption from execution/
+  // frontend's old admin-only era).
+  const isAdmin = getAuthIsAdmin();
   // Platform-wide (user_id IS NULL) accounts - the rows the automated
   // Strategy-driven flow actually reads (see api.ts's own comment on
   // fetchPlatformAccounts). This admin/ops-only concept, plus dedicated
@@ -61,6 +68,7 @@ export default function AccountsPage() {
   const [creatingStrategyAccount, setCreatingStrategyAccount] = useState(false);
 
   useEffect(() => {
+    if (!isAdmin) return;
     let cancelled = false;
 
     async function poll() {
@@ -243,6 +251,8 @@ export default function AccountsPage() {
         settings, instead of a second copy here).
       </p>
 
+      {isAdmin && (
+      <>
       <h2>Platform account (admin)</h2>
       <p className="subtitle">The account the automated Strategy-driven flow itself sizes/holds against.</p>
       <InfoDisclosure summary="How square-off and leverage apply here">
@@ -365,6 +375,8 @@ export default function AccountsPage() {
           </tbody>
         </table>
       </div>
+      </>
+      )}
 
       <h2>Dedicated strategy accounts</h2>
       <p className="subtitle">

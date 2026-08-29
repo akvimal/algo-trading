@@ -7,6 +7,7 @@ import {
   getAuthToken,
   requestSharedToken,
   setAuthEmail,
+  setAuthIsAdmin,
   subscribeToSharedToken,
 } from "./auth";
 import LoginPage from "./LoginPage";
@@ -20,10 +21,15 @@ type Status = "checking" | "authenticated" | "unauthenticated";
 // the shell's own top-bar "Admin" badge rather than a separate gate here.
 // execution-backend's own API was already "any authenticated user,
 // row-scoped by user_id" the whole time (Phase 2) - only this frontend
-// gate changed. Admin-only actions (platform-wide positions/accounts
-// config, still enforced server-side via require_admin) simply surface a
-// 403 inline for a non-admin caller, same as this app already handles any
-// other backend error. Sits outside the existing "?view=" routing in
+// gate changed. Admin-only reads (platform-wide positions/option-groups,
+// still enforced server-side via require_admin) are skipped client-side
+// for a non-admin caller instead of being attempted and 403ing (see
+// auth.ts's own getAuthIsAdmin/setAuthIsAdmin, cached here right
+// alongside setAuthEmail) - PositionsPage used to fire them unconditionally
+// inside the same Promise.all as the caller's own positions fetch, so a
+// 403 there sank the whole poll and permanently hid a non-admin's own real
+// positions behind a "Could not reach the backend" banner (reproduced
+// live 2026-08-29). Sits outside the existing "?view=" routing in
 // App.tsx, which stays completely unchanged.
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>("checking");
@@ -32,6 +38,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     fetchCurrentUser(token)
       .then((u: CurrentUser) => {
         setAuthEmail(u.email);
+        setAuthIsAdmin(u.is_admin);
         setStatus("authenticated");
       })
       .catch(() => {

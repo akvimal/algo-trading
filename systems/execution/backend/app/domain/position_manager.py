@@ -498,9 +498,11 @@ def _net_pnl_with_costs(pos, exit_price: float, raw_pnl: float) -> float:
     function had a second cost to net out.
 
     NSE MTF interest: for a positional NSE spot position opened with
-    leverage > 1 (pos.margin_posted is not None and pos.segment == "NSE" -
-    margin_posted is also set for a CRYPTO future, hence the segment
-    check), computed once here at close - not accrued daily - as
+    leverage > 1 (pos.margin_posted is not None and pos.mtf_interest_rate_pct
+    is not None and pos.segment == "NSE" - margin_posted alone isn't
+    enough to mean MTF: it's also set, with no interest rate, for an
+    intraday MIS margin position AND for a CRYPTO future, hence the two
+    extra checks), computed once here at close - not accrued daily - as
     borrowed_amount * (annual rate / 365) * days_held, where borrowed_amount
     is the notional at entry minus the trader's own capital already
     frozen in margin_posted. days_held floors to 1 (an intraday-length MTF
@@ -513,7 +515,15 @@ def _net_pnl_with_costs(pos, exit_price: float, raw_pnl: float) -> float:
         pos.close_fee = close_fee
         raw_pnl = raw_pnl - float(pos.open_fee) - close_fee
 
-    if pos.segment == "NSE" and pos.margin_posted is not None:
+    if pos.segment == "NSE" and pos.margin_posted is not None and pos.mtf_interest_rate_pct is not None:
+        # mtf_interest_rate_pct is only ever set for a positional MTF
+        # position (see _open_delta_fee_fields) - an intraday MIS margin
+        # position also sets margin_posted (same field, no interest
+        # concept) but leaves mtf_interest_rate_pct None, so the extra
+        # check here is required, not redundant - without it this branch
+        # crashed on float(None) for every intraday leveraged NSE close
+        # (found live: square-off 500'd with "TypeError: float() argument
+        # must be a string or a real number, not 'NoneType'").
         notional_at_entry = float(pos.entry_price) * float(pos.quantity)
         borrowed_amount = notional_at_entry - float(pos.margin_posted)
         days_held = max(1, (pos.exit_time.date() - pos.entry_time.date()).days)

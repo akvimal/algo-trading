@@ -545,6 +545,23 @@ def test_net_pnl_with_costs_no_interest_for_unleveraged_nse_position():
     assert pos.interest_charged is None
 
 
+def test_net_pnl_with_costs_no_interest_for_intraday_mis_margin_position():
+    """Regression: an intraday MIS margin position (leverage > 1) also sets
+    margin_posted (same field MTF uses) but has NO mtf_interest_rate_pct at
+    all (real intraday margin carries no funding cost) - this used to crash
+    with TypeError: float() argument must be a string or a real number, not
+    'NoneType' on close/square-off, since the interest branch only checked
+    margin_posted, not mtf_interest_rate_pct too."""
+    pos = FakePosition(
+        id="p1", status="OPEN", segment="NSE", exchange="NSE", symbol="RELIANCE", action="BUY",
+        entry_price=100.0, quantity=1000, margin_posted=25_000.0, mtf_interest_rate_pct=None,
+        entry_time=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        exit_time=datetime(2026, 8, 1, 14, 0, tzinfo=timezone.utc),
+    )
+    assert _net_pnl_with_costs(pos, exit_price=105.0, raw_pnl=5000.0) == 5000.0
+    assert pos.interest_charged is None
+
+
 def test_is_supported_accepts_positional_spot():
     assert is_supported("positional", "spot") is True
 

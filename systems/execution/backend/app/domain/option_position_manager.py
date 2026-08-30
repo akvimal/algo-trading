@@ -142,12 +142,13 @@ def _close_delta_option_fee(segment: str, spot_price: Optional[float], quantity:
 def _reject_group(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str) -> db_models.OptionPositionGroup:
     """No leg Position rows are created for a rejected group - mirrors
     position_manager._reject's 'never really opened' philosophy, just
-    applied at the group level. user_id is always None here - only the
-    automated Strategy-driven flow calls this (see _reject_manual_group
-    for the manual/SaaS counterpart)."""
+    applied at the group level. Only the automated Strategy-driven flow
+    calls this (see _reject_manual_group for the manual/SaaS counterpart).
+    user_id mirrors order.owner_user_id, same reasoning as
+    position_manager._reject's identical comment."""
     logger.info("rejecting option signal %s: %s", order.signal_id, reason)
     row = db_models.OptionPositionGroup(
-        user_id=None,
+        user_id=uuid.UUID(order.owner_user_id) if order.owner_user_id else None,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         underlying_symbol=order.symbol,
@@ -304,19 +305,22 @@ def open_option_group(
         spot_stop_loss_indicator_params = order.stop_loss_indicator_params
         spot_stop_loss_interval = order.stop_loss_interval
 
-    # user_id=None throughout - the automated Strategy-driven flow has no
-    # per-user concept, same reasoning as position_manager.open_position's
-    # identical comment.
-    account = load_account(db, None, order.segment)
+    # owner_user_id=None (Strategy created before this field existed, or
+    # with no bearer token) reads/writes the legacy platform-wide account,
+    # same reasoning as position_manager.open_position's identical
+    # comment.
+    owner_user_id = uuid.UUID(order.owner_user_id) if order.owner_user_id else None
+    account = load_account(db, owner_user_id, order.segment)
     if account is None:
         row = _reject_group(db, order, signal_id, f"no paper-trading account configured for segment {order.segment}")
         db.commit()
         return row
 
     # Sizing/balance uses the strategy's OWN dedicated account if it has
-    # one, else the same shared segment `account` above - leverage/
-    # square_off_time always stay segment-only (see load_capital_account).
-    capital_account = load_capital_account(db, None, order.segment, order.strategy_id)
+    # one, else the owner's (or the shared segment) `account` above -
+    # leverage/square_off_time always stay segment-only (see
+    # load_capital_account).
+    capital_account = load_capital_account(db, owner_user_id, order.segment, order.strategy_id)
 
     # square_off_time is the SEGMENT's own configured cutoff now
     # (execution.accounts.square_off_time), not a per-Strategy value -
@@ -330,7 +334,9 @@ def open_option_group(
         return row
 
     open_groups = (
-        db.query(db_models.OptionPositionGroup).filter_by(user_id=None, underlying_symbol=order.symbol, status="OPEN").all()
+        db.query(db_models.OptionPositionGroup)
+        .filter_by(user_id=owner_user_id, underlying_symbol=order.symbol, status="OPEN")
+        .all()
     )
     groups_to_close, reject_reason = _resolve_signal_conflicts(open_groups, order)
     if reject_reason is not None:
@@ -495,7 +501,7 @@ def open_option_group(
     group_id = uuid.uuid4()
     group = db_models.OptionPositionGroup(
         id=group_id,
-        user_id=None,
+        user_id=owner_user_id,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         underlying_symbol=order.symbol,
@@ -529,7 +535,7 @@ def open_option_group(
     for leg_dict, symbol, premium, leg_sl, leg_target in legs_to_write:
         db.add(
             db_models.Position(
-                user_id=None,
+                user_id=owner_user_id,
                 signal_id=signal_id,
                 strategy_id=uuid.UUID(order.strategy_id),
                 symbol=symbol,

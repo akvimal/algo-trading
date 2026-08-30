@@ -138,4 +138,7 @@ def resolve(signal: SignalIngest, fetch_strategy: Callable[[str], dict]) -> Reso
         # segment='NSE'+horizon='positional'+instrument_type='spot' only -
         # see docs/contracts/resolved-order.schema.json.
         use_margin=strategy.get("use_margin", False),
+        # Whoever was logged in when the Strategy was created - see
+        # docs/contracts/resolved-order.schema.json's own comment.
+        owner_user_id=strategy.get("created_by"),
     )

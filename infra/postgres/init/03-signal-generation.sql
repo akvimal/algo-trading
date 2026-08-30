@@ -154,6 +154,17 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- shouldn't silently vanish - see app/api/routes/rules.py's delete
     -- guard.
     rule_id          UUID REFERENCES signal_generation.rules (id),
+    -- Whoever was logged in (systems/accounts) when this Strategy was
+    -- created - no FK (cross-system, accounts owns its own users table,
+    -- see the systems/* self-containment rule). NULL for one created with
+    -- no bearer token at all (e.g. make test-signal's throwaway strategy,
+    -- or any pre-existing Strategy from before this column existed).
+    -- Captured once at creation time, never changed afterward. Threaded
+    -- through to execution as resolved-order's own owner_user_id so a
+    -- Strategy-driven position can size against and be attributed to ITS
+    -- OWN creator's account instead of always the platform-wide one - see
+    -- docs/architecture.md.
+    created_by       UUID,
     -- Stop-loss: the low/high of the previous completed candle at
     -- stop_loss_interval, a flat % from entry price, or the latest value
     -- of a pluggable indicator computation (stop_loss_indicator_type +
@@ -392,3 +403,8 @@ CREATE TABLE IF NOT EXISTS signal_generation.saved_backtests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_saved_backtests_rule_id ON signal_generation.saved_backtests (rule_id);
+
+-- Strategy ownership (2026-08-30) - idempotent for existing volumes (init
+-- scripts don't re-run), same convention as use_margin above. See
+-- strategies.created_by's own comment near its CREATE TABLE definition.
+ALTER TABLE signal_generation.strategies ADD COLUMN IF NOT EXISTS created_by UUID;

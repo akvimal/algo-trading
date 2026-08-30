@@ -63,6 +63,10 @@ services:
       # Option-strategy resolution only (Phase 4b of the options trading
       # module) - see app/adapters/market_data/client.py.
       MARKET_DATA_BASE_URL: http://market-data-backend:8000
+      # Strategy ownership (2026-08-30) - decodes the same bearer tokens
+      # systems/accounts issues, purely for attribution (see app/auth.py's
+      # own comment). Must match ACCOUNTS_JWT_SECRET exactly.
+      JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
     ports:
       - "${SIGNAL_ENGINE_BACKEND_PORT}:8000"
     depends_on:

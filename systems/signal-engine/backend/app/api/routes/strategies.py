@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.auth import get_optional_user_id
 from app.domain.generation.models import (
     StopLossInterval,
     StrategyCreate,
@@ -44,6 +45,7 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule], last_sc
         instrument_type=row.instrument_type,
         rule_id=str(row.rule_id) if row.rule_id is not None else None,
         rule=RuleSummary(id=str(rule_row.id), name=rule_row.name, segment=rule_row.segment) if rule_row is not None else None,
+        created_by=str(row.created_by) if row.created_by is not None else None,
         stop_loss_method=row.stop_loss_method,
         stop_loss_interval=row.stop_loss_interval,
         stop_loss_percent=float(row.stop_loss_percent) if row.stop_loss_percent is not None else None,
@@ -149,7 +151,11 @@ def _stop_loss_fields_for_rule(
 
 
 @router.post("/strategies", response_model=StrategyOut, status_code=201)
-def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
+def create_strategy(
+    payload: StrategyCreate,
+    db: Session = Depends(get_db),
+    created_by: Optional[uuid.UUID] = Depends(get_optional_user_id),
+):
     # payload.rule_id is required iff source_type=='in_house' (enforced by
     # StrategyCreate's own validator) - external strategies carry no Rule.
     rule_row = _load_rule_or_404(db, payload.rule_id) if payload.rule_id is not None else None
@@ -174,6 +180,7 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db)):
         horizon=payload.horizon,
         instrument_type=payload.instrument_type,
         rule_id=rule_row.id if rule_row is not None else None,
+        created_by=created_by,
         stop_loss_method=stop_loss_method,
         stop_loss_interval=stop_loss_interval,
         stop_loss_percent=stop_loss_percent,

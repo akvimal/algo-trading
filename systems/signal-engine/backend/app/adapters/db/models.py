@@ -62,6 +62,12 @@ class Strategy(Base):
     # Which Rule (above) decides when this strategy's signals fire - see
     # app/domain/rule.py. in_house only - NULL for external strategies.
     rule_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.rules.id"), nullable=True)
+    # Whoever was logged in (systems/accounts) when this Strategy was
+    # created - no FK, cross-system (accounts owns its own users table, see
+    # the systems/* self-containment rule). NULL for one created with no
+    # bearer token at all. See StrategyOut's own comment for how this flows
+    # through to execution.
+    created_by = Column(UUID(as_uuid=True), nullable=True)
     stop_loss_method = Column(Text)
     stop_loss_interval = Column(Text)
     stop_loss_percent = Column(Numeric)

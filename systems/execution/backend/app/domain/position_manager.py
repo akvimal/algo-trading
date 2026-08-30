@@ -545,12 +545,14 @@ def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] =
 
 def _reject(db: Session, order: ResolvedOrder, signal_id: uuid.UUID, reason: str) -> db_models.Position:
     """quantity is left unset (NULL) - a rejected order was never sized,
-    it's not a real position. user_id is always None here - only the
-    automated Strategy-driven flow calls this (see _reject_manual for the
-    manual/SaaS counterpart)."""
+    it's not a real position. Only the automated Strategy-driven flow
+    calls this (see _reject_manual for the manual/SaaS counterpart).
+    user_id mirrors order.owner_user_id (None for a Strategy created
+    before that field existed, or with no bearer token) - so a rejected
+    signal is visible to its own creator too, not just an admin."""
     logger.info("rejecting signal %s: %s", order.signal_id, reason)
     row = db_models.Position(
-        user_id=None,
+        user_id=uuid.UUID(order.owner_user_id) if order.owner_user_id else None,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         symbol=order.symbol,
@@ -1249,22 +1251,29 @@ def open_position(
         db.commit()
         return row
 
-    # user_id=None throughout this function - the automated Strategy-
-    # driven flow has no per-user concept at all (signal-generation isn't
-    # part of the manual-trading SaaS), so it always reads/writes the
-    # legacy platform-wide account/settings rows. See load_account's own
-    # comment and docs/architecture.md's "Manual Trading SaaS" section.
-    account = load_account(db, None, order.segment)
+    # owner_user_id=None (the default, for a Strategy created before this
+    # field existed or with no bearer token) reads/writes the legacy
+    # platform-wide account/settings rows, exactly as this function always
+    # did. A Strategy created while logged in (2026-08-30, see
+    # docs/contracts/resolved-order.schema.json's own comment) instead
+    # sizes/credits against THAT user's own per-user account, lazily
+    # created on first use same as any manual-trading SaaS user - see
+    # load_account's own comment and docs/architecture.md's "Manual
+    # Trading SaaS" section. Distinct from live_trading_user_id (below) -
+    # whose real Dhan credentials place a REAL order, if this strategy is
+    # opted into live trading - the two may name different people.
+    owner_user_id = uuid.UUID(order.owner_user_id) if order.owner_user_id else None
+    account = load_account(db, owner_user_id, order.segment)
     if account is None:
         row = _reject(db, order, signal_id, f"no paper-trading account configured for segment {order.segment}")
         db.commit()
         return row
 
     # Sizing/balance uses the strategy's OWN dedicated account if it has
-    # one (execution.strategy_accounts), else the same shared segment
-    # `account` above - leverage/square_off_time always stay segment-only
-    # regardless (see load_capital_account's own docstring).
-    capital_account = load_capital_account(db, None, order.segment, order.strategy_id)
+    # one (execution.strategy_accounts), else the owner's (or the shared
+    # segment) `account` above - leverage/square_off_time always stay
+    # segment-only regardless (see load_capital_account's own docstring).
+    capital_account = load_capital_account(db, owner_user_id, order.segment, order.strategy_id)
 
     # square_off_time is the SEGMENT's own configured cutoff now
     # (execution.accounts.square_off_time), not a per-Strategy value -
@@ -1278,7 +1287,9 @@ def open_position(
         db.commit()
         return row
 
-    open_positions = db.query(db_models.Position).filter_by(user_id=None, symbol=order.symbol, status="OPEN").all()
+    open_positions = (
+        db.query(db_models.Position).filter_by(user_id=owner_user_id, symbol=order.symbol, status="OPEN").all()
+    )
     positions_to_close, reject_reason = _resolve_signal_conflicts(open_positions, order)
     if reject_reason is not None:
         row = _reject(db, order, signal_id, reject_reason)
@@ -1515,7 +1526,7 @@ def open_position(
     )
 
     row = db_models.Position(
-        user_id=None,
+        user_id=owner_user_id,
         signal_id=signal_id,
         strategy_id=uuid.UUID(order.strategy_id),
         symbol=order.symbol,
@@ -2090,12 +2101,15 @@ def record_position_pnl_snapshots(db: Session, get_ltp_batch: GetLtpBatch) -> di
 def square_off_all_open(db: Session, user_id: uuid.UUID, get_ltp_batch: GetLtpBatch) -> dict:
     """Closes every OPEN position BELONGING TO user_id at CMP - only ever
     reachable via the authenticated POST /positions/square-off route, so
-    always scoped to the caller's own positions (never the automated
-    flow's, whose positions always have user_id=None). One quote fetch per
-    distinct exchange among them. A position whose quote fetch fails is
-    left OPEN (not rejected - it's a real paper position, just not
-    closeable right now) so the next scheduled run or a manual retry can
-    close it."""
+    always scoped to the caller's own positions. This now legitimately
+    includes any Strategy-driven position the caller's own Strategy
+    created (2026-08-30, Strategy.created_by/order.owner_user_id) - only a
+    Strategy created with no bearer token (or from before that field
+    existed) keeps user_id=None, invisible/unactionable here, same as
+    before this feature. One quote fetch per distinct exchange among them.
+    A position whose quote fetch fails is left OPEN (not rejected - it's a
+    real paper position, just not closeable right now) so the next
+    scheduled run or a manual retry can close it."""
     open_positions = db.query(db_models.Position).filter_by(user_id=user_id, status="OPEN").all()
     quotes = _quotes_by_exchange(open_positions, get_ltp_batch)
     accounts = _accounts_by_segment(db, open_positions)

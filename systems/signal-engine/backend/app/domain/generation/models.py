@@ -438,5 +438,18 @@ class StrategyOut(BaseModel):
     # real column on this row - EngineRun is keyed by (strategy_id,
     # symbol), not something _to_out can read off `row` directly.
     last_scan_at: Optional[datetime] = None
+    # Whoever was logged in (systems/accounts) when this Strategy was
+    # created - None for one created with no bearer token at all (e.g.
+    # `make test-signal`'s throwaway strategy, or any pre-existing
+    # Strategy from before this field existed). Captured once at creation
+    # time, never changed afterward - see create_strategy's own comment on
+    # why (get_optional_user_id, not require_user_id: signal-engine's
+    # backend has no auth of its own to enforce, this is purely
+    # attribution). Threaded through to execution as ResolvedOrder's own
+    # owner_user_id (see docs/contracts/resolved-order.schema.json) so a
+    # Strategy-driven position can size against and be attributed to ITS
+    # OWN creator's account instead of always the platform-wide one - see
+    # docs/architecture.md.
+    created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime

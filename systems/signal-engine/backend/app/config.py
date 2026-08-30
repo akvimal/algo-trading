@@ -68,5 +68,14 @@ class Settings(BaseSettings):
     # such cushion - see app/domain/generation/engine.py's _run_one_breakout.
     breakout_ltf_settle_seconds: int = 5
 
+    # Strategy ownership (2026-08-30, see StrategyOut.created_by) - decodes
+    # the same bearer tokens systems/accounts issues, purely for
+    # attribution (this service enforces no auth of its own otherwise -
+    # see app/auth.py's get_optional_user_id, which never raises). Must
+    # match accounts' own JWT_SECRET exactly, same convention as
+    # market-data/execution's own jwt_secret.
+    jwt_secret: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+
 
 settings = Settings()

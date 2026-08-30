@@ -118,6 +118,11 @@
     "use_margin": {
       "type": "boolean",
       "description": "From the resolved Strategy. Only meaningful for segment='NSE'+horizon='positional'+instrument_type='spot' (harmlessly ignored otherwise). Opts this order into execution.accounts' platform-wide NSE leverage (Dhan MTF) and interest when the admin has configured leverage>1 there - false (default) always sizes/holds on cash regardless of that platform config. See docs/architecture.md."
+    },
+    "owner_user_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "From the resolved Strategy's created_by (signal-generation.strategies.created_by, 2026-08-30) - whoever was logged in when the Strategy was created. null for a Strategy created with no bearer token, or any pre-existing Strategy from before this field existed - execution then keeps its original platform-wide behavior (Position.user_id=NULL, sizes against the shared execution.accounts row). When set, execution sizes/credits against THAT user's own per-user account (lazily created on first use, same as any other per-user account) and sets the resulting Position's user_id to it, so a Strategy-driven position is now visible/actionable to its own creator instead of only an admin. Distinct from execution.strategy_accounts.live_trading_user_id (whose real Dhan credentials place a REAL order for this strategy, if it's opted into live trading) - the two may name different people, or only one may be set."
     }
   }
 }

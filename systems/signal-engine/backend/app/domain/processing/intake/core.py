@@ -147,5 +147,6 @@ def resolve_and_finalize_signal(db: Session, signal_id: str, signal: SignalInges
             "option_sl_scope": resolved.option_sl_scope,
             "fixed_lots": resolved.fixed_lots,
             "use_margin": resolved.use_margin,
+            "owner_user_id": resolved.owner_user_id,
         }
     )

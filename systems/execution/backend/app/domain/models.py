@@ -129,6 +129,12 @@ class ResolvedOrder(BaseModel):
     # docs/contracts/resolved-order.schema.json and
     # position_manager.open_position/_open_delta_fee_fields.
     use_margin: bool = False
+    # Whoever was logged in (systems/accounts) when the Strategy was
+    # created - null for one created with no bearer token, or any
+    # pre-existing Strategy from before this field existed. See
+    # docs/contracts/resolved-order.schema.json's own comment and
+    # position_manager.open_position.
+    owner_user_id: Optional[str] = None
 
 
 class ExecutionSettings(BaseModel):

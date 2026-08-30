@@ -2103,6 +2103,71 @@ def compute_unrealized_pnl(positions: list, get_ltp_batch: GetLtpBatch) -> dict:
     return result
 
 
+def compute_max_drawdown(pnls: list[float]) -> float:
+    """Max peak-to-trough decline of the CUMULATIVE REALIZED-pnl curve
+    built from `pnls` in the order given (caller sorts by exit_time
+    ascending) - not a mark-to-market intraday drawdown, which would need
+    equity snapshots at a finer grain than this platform keeps per
+    strategy. 0.0 for no trades or a curve that only ever climbs (peak
+    never exceeded going forward)."""
+    cumulative = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    for pnl in pnls:
+        cumulative += pnl
+        peak = max(peak, cumulative)
+        max_dd = max(max_dd, peak - cumulative)
+    return max_dd
+
+
+def compute_strategy_performance(positions: list) -> dict:
+    """One entry per distinct strategy_id found in `positions` (a
+    Strategy-driven position always has one; a manual/no-strategy
+    position has strategy_id=None and is skipped entirely - this is
+    per-Strategy performance, not a platform-wide figure). Every OPEN/
+    CLOSED/REJECTED position counts toward its own bucket - trades_closed/
+    wins/win_rate/total_realized_pnl/max_drawdown are derived from CLOSED
+    positions only, ordered by exit_time so the drawdown curve is built
+    correctly. Same simplification as accounts.py's own _unrealized_pnl:
+    each Position row (spot/future, or one option leg) counts
+    independently, not netted at the OptionPositionGroup/combined-premium
+    level - a reasonable approximation for a strategy-level summary, not
+    the position-level display. Returns {strategy_id: {...}}, win_rate/
+    max_drawdown are None/0.0 respectively when there are no closed
+    trades yet (not an error - a draft/paused strategy with only OPEN or
+    REJECTED positions is a normal, valid state)."""
+    with_strategy = [pos for pos in positions if pos.strategy_id is not None]
+    by_strategy: dict[str, dict] = {}
+    for pos in with_strategy:
+        key = str(pos.strategy_id)
+        entry = by_strategy.setdefault(
+            key,
+            {"trades_open": 0, "trades_closed": 0, "trades_rejected": 0, "wins": 0, "total_realized_pnl": 0.0, "_closed": []},
+        )
+        if pos.status == "OPEN":
+            entry["trades_open"] += 1
+        elif pos.status == "REJECTED":
+            entry["trades_rejected"] += 1
+        elif pos.status == "CLOSED":
+            entry["_closed"].append(pos)
+
+    result: dict = {}
+    for key, entry in by_strategy.items():
+        closed = sorted(entry["_closed"], key=lambda p: p.exit_time or datetime.min.replace(tzinfo=dt_timezone.utc))
+        pnls = [float(p.pnl) if p.pnl is not None else 0.0 for p in closed]
+        wins = sum(1 for p in pnls if p > 0)
+        result[key] = {
+            "trades_open": entry["trades_open"],
+            "trades_closed": len(closed),
+            "trades_rejected": entry["trades_rejected"],
+            "wins": wins,
+            "win_rate": (wins / len(closed) * 100) if closed else None,
+            "total_realized_pnl": sum(pnls),
+            "max_drawdown": compute_max_drawdown(pnls),
+        }
+    return result
+
+
 def record_position_pnl_snapshots(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     """Persists one PositionPnlSnapshot row per OPEN position with a live
     quote this tick - the write counterpart to compute_unrealized_pnl

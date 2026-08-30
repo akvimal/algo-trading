@@ -4,8 +4,10 @@ import {
   type Account,
   type CredentialsOut,
   type LiveTradingStatus,
+  type SignalCount,
   type Settings,
   type StrategyAccount,
+  type StrategyPerformance,
   type StrategySummary,
   createStrategyAccount,
   deleteStrategyAccount,
@@ -14,8 +16,10 @@ import {
   fetchLiveTradingStatus,
   fetchPlatformAccounts,
   fetchSettings,
+  fetchSignalCounts,
   fetchStrategyAccounts,
   fetchStrategyNames,
+  fetchStrategyPerformance,
   resetAccount,
   resetStrategyAccount,
   saveCredentials,
@@ -33,7 +37,7 @@ const POLL_INTERVAL_MS = 5000;
 const LEVERAGE_OPTIONS = [1, 10, 25, 50, 100, 150, 200];
 
 type Segment = Account["segment"];
-type AccountsTab = "mine" | "platform" | "live-status" | "strategy-accounts";
+type AccountsTab = "mine" | "platform" | "live-status" | "strategy-accounts" | "performance";
 
 // current_balance broken into realized (banked, since starting_balance)
 // and unrealized (live mark-to-market on OPEN positions) - the same pair
@@ -206,6 +210,15 @@ export default function AccountsPage() {
   // GET /live-trading/status, admin-only.
   const [liveStatus, setLiveStatus] = useState<LiveTradingStatus | null>(null);
   const [liveStatusError, setLiveStatusError] = useState<string | null>(null);
+
+  // "Performance" tab - total signal count comes from signal-engine
+  // (GET /signals/counts), everything else (trades/win rate/PnL/drawdown)
+  // from execution's own GET /strategies/performance - combined
+  // client-side by strategy_id, same cross-system-but-no-shared-DB
+  // pattern fetchStrategyNames already uses for the picker above.
+  const [signalCounts, setSignalCounts] = useState<SignalCount[]>([]);
+  const [strategyPerformance, setStrategyPerformance] = useState<StrategyPerformance[]>([]);
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
 
   const [newStrategyId, setNewStrategyId] = useState("");
   const [newStartingBalance, setNewStartingBalance] = useState<number | "">(200000);
@@ -610,8 +623,35 @@ export default function AccountsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function poll() {
+      const [countsResult, performanceResult] = await Promise.allSettled([fetchSignalCounts(), fetchStrategyPerformance()]);
+      if (cancelled) return;
+      if (countsResult.status === "fulfilled") setSignalCounts(countsResult.value);
+      if (performanceResult.status === "fulfilled") setStrategyPerformance(performanceResult.value);
+      if (countsResult.status === "rejected" && performanceResult.status === "rejected") {
+        setPerformanceError("Failed to load strategy performance");
+      } else {
+        setPerformanceError(null);
+      }
+    }
+
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
   function strategyName(strategyId: string): string {
     return strategies.find((s) => s.id === strategyId)?.name ?? strategyId;
+  }
+
+  function strategySegment(strategyId: string): Account["segment"] {
+    return strategies.find((s) => s.id === strategyId)?.segment ?? "NSE";
   }
 
   async function handleCreateStrategyAccount() {
@@ -815,6 +855,13 @@ export default function AccountsPage() {
           onClick={() => setActiveTab("strategy-accounts")}
         >
           Dedicated strategy accounts
+        </button>
+        <button
+          type="button"
+          className={activeTab === "performance" ? "active" : ""}
+          onClick={() => setActiveTab("performance")}
+        >
+          Performance
         </button>
       </nav>
 
@@ -1783,6 +1830,71 @@ export default function AccountsPage() {
           </table>
         </div>
       )}
+      </>
+      )}
+
+      {activeTab === "performance" && (
+      <>
+      <h2>Performance</h2>
+      <p className="subtitle">
+        Per-strategy trade performance - Total signals comes from signal-engine (every signal this strategy has ever
+        received, any status); Trades/Win rate/Realized P&amp;L/Max drawdown come from execution's own position
+        history. Every strategy that's ever received a signal shows up here, including draft/paused ones.
+      </p>
+      {performanceError && <p className="error">Could not reach the backend: {performanceError}</p>}
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Segment</th>
+              <th title="Every signal this strategy has ever received, regardless of outcome">Total signals</th>
+              <th title="Open / Closed / Rejected">Trades (O / C / R)</th>
+              <th title="Wins ÷ closed trades - '-' until this strategy has at least one closed trade">Win rate</th>
+              <th>Realized P&amp;L</th>
+              <th title="Max peak-to-trough decline of the cumulative realized-P&L curve, built from closed trades in exit order">
+                Max drawdown
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {signalCounts.length === 0 ? (
+              <tr>
+                <td colSpan={7}>No strategy has received a signal yet.</td>
+              </tr>
+            ) : (
+              signalCounts.map((sc) => {
+                const perf = strategyPerformance.find((p) => p.strategy_id === sc.strategy_id);
+                const segment = strategySegment(sc.strategy_id);
+                const currency = segment === "CRYPTO" ? "$" : "₹";
+                const locale = segment === "CRYPTO" ? "en-US" : "en-IN";
+                const pnl = perf?.total_realized_pnl ?? 0;
+                const drawdown = perf?.max_drawdown ?? 0;
+                return (
+                  <tr key={sc.strategy_id}>
+                    <td className="symbol">{strategyName(sc.strategy_id)}</td>
+                    <td>{segment}</td>
+                    <td className="num">{sc.total_signals}</td>
+                    <td className="num">
+                      {perf?.trades_open ?? 0} / {perf?.trades_closed ?? 0} / {perf?.trades_rejected ?? 0}
+                    </td>
+                    <td className="num">{perf?.win_rate != null ? `${perf.win_rate.toFixed(1)}%` : "-"}</td>
+                    <td className={`num ${pnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+                      {pnl >= 0 ? "+" : ""}
+                      {currency}
+                      {fmtMoney(pnl, locale)}
+                    </td>
+                    <td className={`num ${drawdown > 0 ? "pnl-negative" : ""}`}>
+                      {currency}
+                      {fmtMoney(drawdown, locale)}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
       </>
       )}
     </>

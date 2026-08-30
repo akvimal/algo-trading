@@ -555,6 +555,39 @@ export async function fetchStrategyNames(): Promise<StrategySummary[]> {
   return asJson(res, "GET /strategies");
 }
 
+// Total signal count per strategy - the one figure the "Performance" tab
+// can't get from execution's own data (execution has no idea how many
+// signals a strategy ever received, only what it did with the ones that
+// resolved into an order attempt). Combined client-side with
+// fetchStrategyPerformance below by strategy_id.
+export type SignalCount = { strategy_id: string; total_signals: number };
+
+export async function fetchSignalCounts(): Promise<SignalCount[]> {
+  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals/counts`);
+  return asJson(res, "GET /signals/counts");
+}
+
+// Per-strategy trade performance from execution's own Position data - see
+// position_manager.compute_strategy_performance's own docstring for
+// exactly what's counted (each Position row independently, option legs
+// not netted at the group level) and why win_rate/max_drawdown are
+// null/0 for a strategy with no CLOSED trades yet.
+export type StrategyPerformance = {
+  strategy_id: string;
+  trades_open: number;
+  trades_closed: number;
+  trades_rejected: number;
+  wins: number;
+  win_rate: number | null;
+  total_realized_pnl: number;
+  max_drawdown: number;
+};
+
+export async function fetchStrategyPerformance(): Promise<StrategyPerformance[]> {
+  const res = await authFetch(`${API_BASE}/strategies/performance`);
+  return asJson(res, "GET /strategies/performance");
+}
+
 export async function squareOffNow(): Promise<SquareOffResult> {
   const res = await authFetch(`${API_BASE}/positions/square-off`, { method: "POST" });
   return asJson(res, "POST /positions/square-off");

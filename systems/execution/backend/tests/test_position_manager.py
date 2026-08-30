@@ -19,10 +19,12 @@ from app.domain.position_manager import (
     _resolve_stop_loss,
     compute_atr,
     compute_ema,
+    compute_max_drawdown,
     compute_pnl,
     compute_quantity,
     compute_risk_based_quantity,
     compute_stop_loss_percent_price,
+    compute_strategy_performance,
     compute_supertrend,
     compute_target_percent_price,
     compute_unrealized_pnl,
@@ -1516,3 +1518,62 @@ def test_apply_nse_leverage_no_leverage_still_applies_the_buffer():
     function is called at all."""
     account = SimpleNamespace(leverage=1, leverage_buffer_pct=10)
     assert _apply_nse_leverage(10_000.0, account) == pytest.approx(9_000.0)
+
+
+# --- Strategy performance (Money page "Performance" tab) -----------------
+
+
+def test_compute_max_drawdown_on_a_rising_curve_is_zero():
+    assert compute_max_drawdown([100.0, 50.0, 200.0]) == 0.0
+
+
+def test_compute_max_drawdown_finds_the_worst_peak_to_trough_decline():
+    # cumulative: 100, 300 (peak), 100 (dd=200), 150 (dd=150), 400 (new peak)
+    assert compute_max_drawdown([100.0, 200.0, -200.0, 50.0, 250.0]) == pytest.approx(200.0)
+
+
+def test_compute_max_drawdown_empty_is_zero():
+    assert compute_max_drawdown([]) == 0.0
+
+
+def test_compute_strategy_performance_buckets_by_strategy_and_status():
+    positions = [
+        FakePosition(id="p1", status="CLOSED", segment="NSE", exchange="NSE", symbol="A", action="BUY",
+                     entry_price=100.0, quantity=10, strategy_id="s1", pnl=500.0,
+                     exit_time=datetime(2026, 8, 1, tzinfo=timezone.utc)),
+        FakePosition(id="p2", status="CLOSED", segment="NSE", exchange="NSE", symbol="A", action="BUY",
+                     entry_price=100.0, quantity=10, strategy_id="s1", pnl=-200.0,
+                     exit_time=datetime(2026, 8, 2, tzinfo=timezone.utc)),
+        FakePosition(id="p3", status="OPEN", segment="NSE", exchange="NSE", symbol="A", action="BUY",
+                     entry_price=100.0, quantity=10, strategy_id="s1"),
+        FakePosition(id="p4", status="REJECTED", segment="NSE", exchange="NSE", symbol="B", action="SELL",
+                     entry_price=50.0, quantity=5, strategy_id="s1"),
+        # A manual/no-strategy position - must be excluded entirely.
+        FakePosition(id="p5", status="CLOSED", segment="NSE", exchange="NSE", symbol="C", action="BUY",
+                     entry_price=10.0, quantity=1, strategy_id=None, pnl=1000.0,
+                     exit_time=datetime(2026, 8, 1, tzinfo=timezone.utc)),
+    ]
+
+    result = compute_strategy_performance(positions)
+
+    assert set(result.keys()) == {"s1"}
+    s1 = result["s1"]
+    assert s1["trades_open"] == 1
+    assert s1["trades_closed"] == 2
+    assert s1["trades_rejected"] == 1
+    assert s1["wins"] == 1
+    assert s1["win_rate"] == pytest.approx(50.0)
+    assert s1["total_realized_pnl"] == pytest.approx(300.0)
+    assert s1["max_drawdown"] == pytest.approx(200.0)  # peak 500 -> 300
+
+
+def test_compute_strategy_performance_no_closed_trades_yet():
+    positions = [
+        FakePosition(id="p1", status="OPEN", segment="NSE", exchange="NSE", symbol="A", action="BUY",
+                     entry_price=100.0, quantity=10, strategy_id="s2"),
+    ]
+    result = compute_strategy_performance(positions)
+    assert result["s2"]["trades_closed"] == 0
+    assert result["s2"]["win_rate"] is None
+    assert result["s2"]["max_drawdown"] == 0.0
+    assert result["s2"]["total_realized_pnl"] == 0.0

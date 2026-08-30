@@ -12,6 +12,7 @@ from app.auth import User, get_current_user, require_admin
 from app.domain.models import ManualPositionCreate, ReviewSubmit, SquareOffTimeUpdate, StopLossUpdate
 from app.domain.position_manager import (
     check_exits,
+    compute_strategy_performance,
     compute_unrealized_pnl,
     find_missing_daily_checklist,
     load_settings,
@@ -209,6 +210,24 @@ def list_platform_positions(
     was invisible on the Positions page because GET /positions is
     unconditionally user_id=user.id - this route is what makes it visible."""
     return _query_positions(db, None, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+
+
+@router.get("/strategies/performance")
+def strategies_performance(db: Session = Depends(get_db)):
+    """Per-strategy trade performance (trades open/closed/rejected, win
+    rate, total realized P&L, max drawdown) for execution's own "Performance"
+    tab (Money page) - the counterpart to signal-engine's own GET
+    /signals/counts, which the frontend combines with this by strategy_id
+    to also show a Total signals figure. Not owner-scoped (same convention
+    GET/POST/PUT /accounts/strategy already use - any logged-in caller can
+    see any strategy's own performance, matching that this is a
+    single-operator platform today, not per-tenant private data). See
+    compute_strategy_performance's own docstring for exactly what's
+    counted and its one simplification (each Position row counts
+    independently, option legs not netted at the group level)."""
+    positions = db.query(db_models.Position).filter(db_models.Position.strategy_id.isnot(None)).all()
+    performance = compute_strategy_performance(positions)
+    return [{"strategy_id": strategy_id, **stats} for strategy_id, stats in performance.items()]
 
 
 @router.get("/positions/{position_id}/pnl-history")

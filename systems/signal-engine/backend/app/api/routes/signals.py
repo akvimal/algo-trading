@@ -2,6 +2,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.db import processing_models as db_models
@@ -10,6 +11,23 @@ from app.domain.processing.intake.core import create_signal_from_ingest
 from app.domain.processing.models import SignalIngest
 
 router = APIRouter()
+
+
+@router.get("/signals/counts")
+def signal_counts(db: Session = Depends(get_db)):
+    """Total signal count per strategy_id, every source/status included -
+    the "Total signals" figure on execution's Money page "Performance" tab
+    (combined there with execution's own GET /strategies/performance by
+    strategy_id, since win-rate/PnL/drawdown live in execution's own
+    Position data, not here). A plain GROUP BY, not filtered to `live`
+    strategies or any particular source - a strategy's total signal count
+    is meaningful even while draft/paused/backtesting."""
+    rows = (
+        db.query(db_models.Signal.strategy_id, func.count(db_models.Signal.id))
+        .group_by(db_models.Signal.strategy_id)
+        .all()
+    )
+    return [{"strategy_id": str(strategy_id), "total_signals": count} for strategy_id, count in rows]
 
 
 @router.post("/signals", status_code=202)

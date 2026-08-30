@@ -3950,7 +3950,12 @@ function StrategyManager() {
                     </span>
                   </td>
                   <td className="num">{sig.price.toFixed(2)}</td>
-                  <td title={sig.rejection_reason ?? undefined}>{sig.status ?? "-"}</td>
+                  <td>
+                    {sig.status ?? "-"}
+                    {sig.status === "rejected" && sig.rejection_reason && (
+                      <span className="rejection-note">{sig.rejection_reason}</span>
+                    )}
+                  </td>
                   <td>
                     {/* In-app now (Signals tab, not a separate frontend) since the
                         signal-engine merge (2026-08-28) - a plain relative href

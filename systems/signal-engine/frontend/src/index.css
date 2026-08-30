@@ -74,6 +74,17 @@ main {
   margin: 0;
 }
 
+/* A rejected signal's actual reason, shown plainly next to the compact
+   Info-column badges instead of only on hover - a hover-only tooltip was
+   too easy to miss (e.g. testing via Postman/curl, never opening this
+   page at all, or just not thinking to hover a 1-letter status badge). */
+.rejection-note {
+  display: inline-block;
+  margin-left: 0.5rem;
+  color: var(--sell);
+  font-size: 0.8rem;
+}
+
 .login-page {
   min-height: 100vh;
   display: flex;

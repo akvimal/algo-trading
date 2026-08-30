@@ -211,6 +211,9 @@ export default function SignalsPage() {
                 <span className="badge-mini badge-mini-muted" title={s.source}>
                   {s.source}
                 </span>
+                {s.status === "rejected" && s.rejection_reason && (
+                  <span className="rejection-note">{s.rejection_reason}</span>
+                )}
               </td>
             </tr>
           ))}

@@ -672,18 +672,24 @@ tbody tr:last-child td {
   font-size: 0.72rem;
 }
 
-/* Read-only summary shown in a "Your account" card before Edit is
-   clicked - compact paragraphs instead of a full input form. */
-.manual-risk-card-readonly {
-  flex-basis: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+/* "Your account" at-a-glance row - one stat card per segment, same
+   .stat/.stat-label/.stat-value skin as PositionsPage.tsx's own top
+   summary row, but auto-fit/wider (not a fixed 5-column grid) since each
+   card here carries more than one number. Kept separate from the
+   Settings cards below - this is read-only always, no Edit toggle of its
+   own, so balance/at-a-glance info is never buried behind a click. */
+.account-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
 }
 
-.manual-risk-card-readonly p {
-  margin: 0;
-  font-size: 0.78rem;
+.account-summary-card {
+  align-items: flex-start;
+}
+
+.account-summary-detail {
+  font-size: 0.72rem;
   color: var(--text-dim);
 }
 

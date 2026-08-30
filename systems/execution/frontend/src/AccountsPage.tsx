@@ -810,16 +810,57 @@ export default function AccountsPage() {
         these. Platform/admin config (the automated Strategy-driven flow's own account) is further down.
       </p>
       {myAccountsError && <p className="error">Could not reach the backend: {myAccountsError}</p>}
+
+      <section className="account-summary">
+        {SEGMENTS.map((seg) => {
+          const account = myAccounts.find((a) => a.segment === seg);
+          if (!account) return null;
+          const currency = seg === "CRYPTO" ? "$" : "₹";
+          const locale = seg === "CRYPTO" ? "en-US" : "en-IN";
+          const riskAmount = (account.capital_per_trade * account.risk_per_trade_pct) / 100;
+          return (
+            <div className="stat account-summary-card" key={seg}>
+              <span className="stat-label">{seg}</span>
+              <BalanceBreakdown
+                currentBalance={account.current_balance}
+                realizedPnl={account.realized_pnl}
+                unrealizedPnl={account.unrealized_pnl}
+                currency={currency}
+                locale={locale}
+              />
+              <span className="account-summary-detail">
+                Capital/trade {currency}
+                {fmtMoney(account.capital_per_trade, locale)} &middot; Risk {currency}
+                {fmtMoney(riskAmount, locale)} ({account.risk_per_trade_pct}%)
+              </span>
+              {(seg === "CRYPTO" || seg === "NSE") && (
+                <span className="account-summary-detail">
+                  Leverage {account.leverage}x
+                  {seg === "NSE" && <> &middot; Buffer {account.leverage_buffer_pct}%</>}
+                </span>
+              )}
+              <span className="account-summary-detail">
+                Square-off {account.square_off_time ? account.square_off_time.slice(0, 5) : "never"}
+              </span>
+              {seg !== "CRYPTO" && (
+                <span className="account-summary-detail">
+                  Live trading {account.live_trading_enabled ? <span className="badge badge-live">LIVE</span> : "off"}
+                  {account.max_order_value != null && <> &middot; Max order {currency}{fmtMoney(account.max_order_value, locale)}</>}
+                  {account.max_daily_loss != null && <> &middot; Max daily loss {currency}{fmtMoney(account.max_daily_loss, locale)}</>}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </section>
+
       <div className="manual-settings-page">
         <section className="manual-settings-section">
+          <h4>Settings</h4>
           <div className="manual-risk-grid">
             {SEGMENTS.map((seg) => {
               const account = myAccounts.find((a) => a.segment === seg);
-              const currency = seg === "CRYPTO" ? "$" : "₹";
-              const locale = seg === "CRYPTO" ? "en-US" : "en-IN";
               const editing = myEditing[seg];
-              const draftRiskPct = Number(myDraftRisk[seg]);
-              const riskAmount = account && Number.isFinite(draftRiskPct) ? (account.capital_per_trade * draftRiskPct) / 100 : null;
               return (
                 <div className="manual-risk-card" key={seg}>
                   <span className="manual-risk-card-title">
@@ -837,50 +878,7 @@ export default function AccountsPage() {
                       </button>
                     )}
                   </span>
-                  {account && (
-                    <BalanceBreakdown
-                      currentBalance={account.current_balance}
-                      realizedPnl={account.realized_pnl}
-                      unrealizedPnl={account.unrealized_pnl}
-                      currency={currency}
-                      locale={locale}
-                    />
-                  )}
-                  {!editing ? (
-                    <div className="manual-risk-card-readonly">
-                      <p>
-                        Capital/trade {currency}
-                        {account ? fmtMoney(account.capital_per_trade, locale) : "-"}
-                        {riskAmount != null && (
-                          <>
-                            {" "}
-                            &middot; Risk {currency}
-                            {fmtMoney(riskAmount, locale)}
-                          </>
-                        )}
-                      </p>
-                      <p>
-                        Risk/trade {account?.risk_per_trade_pct ?? "-"}% &middot; Min RR 1:{account?.min_reward_risk_ratio ?? "-"}
-                      </p>
-                      {(seg === "CRYPTO" || seg === "NSE") && (
-                        <p>
-                          Leverage {account?.leverage ?? "-"}x
-                          {seg === "NSE" && <> &middot; Buffer {account?.leverage_buffer_pct ?? "-"}%</>}
-                        </p>
-                      )}
-                      <p>
-                        Square-off {account?.square_off_time ? account.square_off_time.slice(0, 5) : "never"} &middot; Enforce
-                        risk-based Lot {account?.enforce_risk_based_lots ? "yes" : "no"}
-                      </p>
-                      {seg !== "CRYPTO" && (
-                        <p>
-                          Live trading {account?.live_trading_enabled ? <span className="badge badge-live">LIVE</span> : "off"}
-                          {account?.max_order_value != null && <> &middot; Max order {currency}{fmtMoney(account.max_order_value, locale)}</>}
-                          {account?.max_daily_loss != null && <> &middot; Max daily loss {currency}{fmtMoney(account.max_daily_loss, locale)}</>}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
+                  {editing && (
                     <>
                       <label title="Caps a manual order's size - risk-based sizing, used whenever Lots isn't set explicitly.">
                         Risk/trade %

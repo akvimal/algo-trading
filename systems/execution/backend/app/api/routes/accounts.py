@@ -7,7 +7,7 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user, require_admin
 from app.domain.models import AccountUpdate, StrategyAccountCreate, StrategyAccountUpdate
-from app.domain.position_manager import load_account
+from app.domain.position_manager import get_live_trading_status, load_account
 
 router = APIRouter()
 
@@ -133,6 +133,19 @@ def update_platform_account(
     db.commit()
     db.refresh(row)
     return _to_out(row)
+
+
+@router.get("/live-trading/status")
+def live_trading_status(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Live-broker-adapter status-check helper (see docs/architecture.md) -
+    "is X actually live right now, and if not, why not" across every
+    account and strategy_accounts row, without placing an order or calling
+    out to market-data/Dhan at all. Admin-gated: this spans every user's
+    own accounts plus the platform-wide one, same reasoning
+    GET /accounts/platform above is admin-only rather than per-user
+    scoped. See get_live_trading_status's own docstring for the exact
+    "effectively_live"/"reason" semantics."""
+    return get_live_trading_status(db)
 
 
 @router.post("/accounts/{segment}/reset")

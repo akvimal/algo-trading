@@ -1,4 +1,4 @@
-.PHONY: bootstrap up down logs ps build backend-shell frontend-shell psql test-signal \
+.PHONY: bootstrap up down logs ps build backend-shell frontend-shell psql test-signal live-status \
         test-up test-down test-build test-logs test-ps test-psql
 
 bootstrap:
@@ -30,6 +30,9 @@ psql:
 
 test-signal:
 	bash scripts/simulate-chartink-alert.sh
+
+live-status:
+	bash scripts/check-live-trading-status.sh $(TOKEN)
 
 # --- Isolated local test stack: same compose file, own project name +
 # .env.test (shifted ports) - runs alongside `up` above without conflict.

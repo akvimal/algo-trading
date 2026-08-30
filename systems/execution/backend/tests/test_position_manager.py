@@ -9,6 +9,7 @@ from app.domain.position_manager import (
     _apply_realized_pnl,
     _evaluate_exits,
     _evaluate_square_off_due,
+    _live_status_reason,
     _net_pnl_with_costs,
     _resolve_capital_account,
     _resolve_signal_conflicts,
@@ -1404,3 +1405,27 @@ def test_settle_live_position_exit_is_a_no_op_if_position_is_no_longer_open():
     assert pos.exit_price == 97.5
     assert pos.pnl == -25.0
     assert pos.exit_reason == "stop_loss"
+
+
+def test_live_status_reason_paper_only_when_not_enabled():
+    assert _live_status_reason(live_enabled=False, kill_switch=False, daily_loss_tripped=False, has_user=True) == \
+        "live_trading_enabled is false - paper only"
+
+
+def test_live_status_reason_flags_missing_user_for_a_strategy():
+    assert _live_status_reason(live_enabled=True, kill_switch=False, daily_loss_tripped=False, has_user=False) == \
+        "live_trading_enabled but no live_trading_user_id set - can never go live"
+
+
+def test_live_status_reason_flags_kill_switch_over_a_correctly_configured_row():
+    assert _live_status_reason(live_enabled=True, kill_switch=True, daily_loss_tripped=False, has_user=True) == \
+        "would be live, but the platform-wide LIVE_TRADING_KILL_SWITCH is on"
+
+
+def test_live_status_reason_flags_tripped_daily_loss_cap():
+    assert _live_status_reason(live_enabled=True, kill_switch=False, daily_loss_tripped=True, has_user=True) == \
+        "would be live, but today's realized loss has reached its max_daily_loss cap"
+
+
+def test_live_status_reason_none_when_actually_live():
+    assert _live_status_reason(live_enabled=True, kill_switch=False, daily_loss_tripped=False, has_user=True) is None

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
+from app.config import settings as app_settings
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
 from app.domain.live_broker import (
     cancel_resting_order_scheduled,
@@ -760,6 +761,79 @@ def _today_realized_pnl_for_strategy(db: Session, strategy_id: str, timezone: st
         .all()
     )
     return sum(float(p.pnl) for p in rows if p.pnl is not None)
+
+
+def get_live_trading_status(db: Session) -> dict:
+    """Live-broker-adapter status-check helper (see docs/architecture.md) -
+    answers "is X actually live right now, and if not, why not" for every
+    account/strategy that could conceivably place a real order, without
+    placing one or calling out to market-data/Dhan at all (a pure DB read,
+    deliberately - this is meant to be safe to call constantly, e.g. from
+    an ops dashboard or a pre-flight script, never itself a side effect).
+
+    `effectively_live` folds in the platform kill switch too - a row can
+    have live_trading_enabled=true in the DB and still be non-live right
+    now because the kill switch is on; this is what actually answers "will
+    the next real signal on this account/strategy place a real order",
+    not just what the raw flag says. today_realized_pnl is included
+    whenever a max_daily_loss cap is set, so it's visible how close to
+    tripping that cap an account/strategy already is."""
+    kill_switch = app_settings.live_trading_kill_switch
+    exec_timezone = load_settings(db).timezone
+
+    accounts = []
+    for row in db.query(db_models.Account).all():
+        live_enabled = bool(row.live_trading_enabled)
+        today_pnl = _today_realized_pnl(db, row.user_id, row.segment, exec_timezone) if row.max_daily_loss is not None else None
+        daily_loss_tripped = today_pnl is not None and today_pnl <= -float(row.max_daily_loss)
+        accounts.append(
+            {
+                "user_id": str(row.user_id) if row.user_id is not None else None,
+                "segment": row.segment,
+                "live_trading_enabled": live_enabled,
+                "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
+                "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
+                "today_realized_pnl": today_pnl,
+                "effectively_live": live_enabled and not kill_switch and not daily_loss_tripped,
+                "reason": _live_status_reason(live_enabled, kill_switch, daily_loss_tripped, has_user=True),
+            }
+        )
+
+    strategy_accounts = []
+    for row in db.query(db_models.StrategyAccount).all():
+        live_enabled = bool(row.live_trading_enabled)
+        has_user = row.live_trading_user_id is not None
+        today_pnl = (
+            _today_realized_pnl_for_strategy(db, str(row.strategy_id), exec_timezone) if row.max_daily_loss is not None else None
+        )
+        daily_loss_tripped = today_pnl is not None and today_pnl <= -float(row.max_daily_loss)
+        strategy_accounts.append(
+            {
+                "strategy_id": str(row.strategy_id),
+                "segment": row.segment,
+                "live_trading_user_id": str(row.live_trading_user_id) if has_user else None,
+                "live_trading_enabled": live_enabled,
+                "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
+                "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
+                "today_realized_pnl": today_pnl,
+                "effectively_live": live_enabled and has_user and not kill_switch and not daily_loss_tripped,
+                "reason": _live_status_reason(live_enabled, kill_switch, daily_loss_tripped, has_user),
+            }
+        )
+
+    return {"kill_switch": kill_switch, "accounts": accounts, "strategy_accounts": strategy_accounts}
+
+
+def _live_status_reason(live_enabled: bool, kill_switch: bool, daily_loss_tripped: bool, has_user: bool) -> Optional[str]:
+    if not live_enabled:
+        return "live_trading_enabled is false - paper only"
+    if not has_user:
+        return "live_trading_enabled but no live_trading_user_id set - can never go live"
+    if kill_switch:
+        return "would be live, but the platform-wide LIVE_TRADING_KILL_SWITCH is on"
+    if daily_loss_tripped:
+        return "would be live, but today's realized loss has reached its max_daily_loss cap"
+    return None
 
 
 def get_daily_checklist(

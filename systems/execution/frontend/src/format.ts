@@ -8,6 +8,20 @@ export function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
+// Full local date+time ("30 Aug 2026, 6:42 pm") - unlike formatTime above
+// (time-only, for a grid already narrowed to one day), this is for a
+// value that can be arbitrarily old (e.g. an account's own updated_at),
+// where the date matters as much as the time.
+export function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 // Local (not UTC) YYYY-MM-DD, so the date filter/input line up with the
 // user's own calendar day rather than shifting at UTC midnight.
 export function localDateStr(iso: string): string {

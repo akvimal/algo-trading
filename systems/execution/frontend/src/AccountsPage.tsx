@@ -27,7 +27,7 @@ import {
 import { getAuthIsAdmin } from "./auth";
 import { CheckIcon, PencilIcon, RotateCcwIcon, TrashIcon, XIcon } from "./Icons";
 import { InfoDisclosure } from "./InfoDisclosure";
-import { SEGMENTS } from "./format";
+import { SEGMENTS, formatDateTime } from "./format";
 
 const POLL_INTERVAL_MS = 5000;
 const LEVERAGE_OPTIONS = [1, 10, 25, 50, 100, 150, 200];
@@ -1206,12 +1206,34 @@ export default function AccountsPage() {
       </InfoDisclosure>
       {platformError && <p className="error">Could not reach the backend: {platformError}</p>}
       {platformMessage && <p className="action-message">{platformMessage}</p>}
+
+      <section className="account-summary">
+        {SEGMENTS.map((segment) => {
+          const account = platformAccounts.find((a) => a.segment === segment);
+          if (!account) return null;
+          const currency = segment === "CRYPTO" ? "$" : "₹";
+          const locale = segment === "CRYPTO" ? "en-US" : "en-IN";
+          return (
+            <div className="stat account-summary-card" key={segment}>
+              <span className="stat-label">{segment}</span>
+              <BalanceBreakdown
+                currentBalance={account.current_balance}
+                realizedPnl={account.realized_pnl}
+                unrealizedPnl={account.unrealized_pnl}
+                currency={currency}
+                locale={locale}
+              />
+              <span className="account-summary-detail">Last updated {formatDateTime(account.updated_at)}</span>
+            </div>
+          );
+        })}
+      </section>
+
       <div className="table-scroll">
         <table>
           <thead>
             <tr>
               <th>Segment</th>
-              <th>Balance (Realized / Unrealized)</th>
               <th>Leverage</th>
               <th>Leverage buffer % (NSE)</th>
               <th>MTF interest %/yr (NSE)</th>
@@ -1224,22 +1246,9 @@ export default function AccountsPage() {
               const account = platformAccounts.find((a) => a.segment === segment);
               const draft = platformDrafts[segment] ?? { leverage: "", leverageBufferPct: "", mtfInterestRate: "", squareOffTime: "" };
               const editing = platformEditing[segment];
-              const currency = segment === "CRYPTO" ? "$" : "₹";
-              const locale = segment === "CRYPTO" ? "en-US" : "en-IN";
               return (
                 <tr key={segment}>
                   <td className="symbol">{segment}</td>
-                  <td>
-                    {account && (
-                      <BalanceBreakdown
-                        currentBalance={account.current_balance}
-                        realizedPnl={account.realized_pnl}
-                        unrealizedPnl={account.unrealized_pnl}
-                        currency={currency}
-                        locale={locale}
-                      />
-                    )}
-                  </td>
                   {!editing ? (
                     <>
                       <td>{segment === "MCX" ? "-" : `${account?.leverage ?? "-"}x`}</td>

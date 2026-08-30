@@ -675,6 +675,26 @@ display that replaced it was dropped too) until all that was left was a read-onl
 summary. Removed outright - `IntradayPage.tsx`'s sub-nav goes from 6 pages to 5, `DashboardPage.tsx`
 deleted. Workspace (already the `useState` default) is now the only landing page for Intraday.
 
+**Risk & Accounts moved into the Money tab entirely (2026-08-30)**: the user's own observation - this
+data (`execution.accounts`/`execution.settings`, capital/risk%/min-RR/leverage/square-off/enforce-lots/
+live-trading/USDINR) was always `execution`'s, common to Manual Trading AND the automated Strategy-driven
+flow, and `manual-trading/frontend`'s Risk & Accounts page (added Phase 5-6 above) was just a thin
+cross-origin UI over it parked in the wrong frontend - the shell already labels `execution/frontend`
+"Money" (`shell/index.html`), and that page already owned the other two money-config surfaces (the
+platform-wide account, dedicated per-Strategy accounts). Ported `RiskAccountsPage.tsx`'s full content
+(the per-segment cards, the live-trading section added by the live-broker-adapter work, the USD/INR rate)
+into `execution/frontend`'s own `AccountsPage.tsx` as a new "Your account" section, visible to any logged-
+in user (not admin-gated, unlike the platform/strategy sections below it) - reactivating `fetchAccounts`/
+`updateAccount`/`resetAccount`/`fetchSettings`/`updateSettings`, which had sat dead in that file's `api.ts`
+since the Phase 7 redundancy cleanup above deleted their UI but left the functions. `RiskAccountsPage.tsx`
+deleted, its sub-tab removed from `IntradayPage.tsx` (5 pages → 4). `manual-trading/frontend`'s own
+`fetchAccounts`/`Account` type stay - `WorkspacePage.tsx` still reads them directly for its own risk-based
+Lot sizing/RR gating, a read-only dependency unaffected by where the editing UI lives; its own
+`updateAccount`/`resetAccount`/`fetchSettings`/`updateSettings`/`Settings` are now genuinely unused (no
+other component ever called them) and were deleted rather than left as dead exports. Trade-off accepted
+knowingly: a Manual Trading user now needs a separate login on the Money tab to edit these settings,
+where previously no second login was needed.
+
 Added 2026-08-25, Manual tab only (intraday-focused — every manual order is already
 `horizon="intraday"`, see `open_manual_position`/`open_manual_option_group`) — a hand-built rulebook
 the user already followed in a spreadsheet (POI/order-block entries, fixed capital, 1% risk, minimum

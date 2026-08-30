@@ -142,14 +142,23 @@ export type Account = {
   current_balance: number;
   capital_per_trade: number;
   risk_per_trade_pct: number;
-  // CRYPTO and NSE (MTF positional spot) only - a margin multiplier
-  // applied before sizing (Delta Exchange India trades perpetual futures
-  // on margin; Dhan's MTF borrows cash against NSE spot equity). Defaults
-  // to 1 - present but unused for MCX. Only the PLATFORM account's own
-  // leverage is ever read by the automated flow (see the platform-account
-  // functions below) - editable here on the per-caller table for CRYPTO
-  // only; NSE's is admin/broker-config only now, edited exclusively via
-  // fetchPlatformAccounts/updatePlatformAccount below.
+  // Manual tab only (WorkspacePage.tsx's own computeRR) - minimum
+  // reward:risk a manual order's Limit(or LTP)/Target/SL Limit must clear
+  // before the Add/Update button will place/update it.
+  min_reward_risk_ratio: number;
+  // Manual tab only, spot/future rows only - when true, WorkspacePage.tsx
+  // auto-computes and locks the Lot field from risk_per_trade_pct/
+  // capital_per_trade instead of leaving it free-typed.
+  enforce_risk_based_lots: boolean;
+  // CRYPTO and NSE (both MTF positional spot AND intraday MIS margin, same
+  // field for both) - a margin multiplier applied before sizing (Delta
+  // Exchange India trades perpetual futures on margin; Dhan's MTF borrows
+  // cash against NSE spot equity held overnight; intraday MIS carries no
+  // interest at all). Defaults to 1 - present but unused for MCX. The
+  // PLATFORM account's own leverage (edited via fetchPlatformAccounts/
+  // updatePlatformAccount below) is what the automated Strategy-driven
+  // flow reads; THIS row is the caller's own, read by their own Manual tab
+  // orders - see position_manager.open_position/open_manual_position.
   leverage: number;
   // NSE MTF only - the manually configured annualized interest rate
   // charged on the borrowed portion of a leverage>1 NSE positional
@@ -162,6 +171,14 @@ export type Account = {
   // OPEN past this local time-of-day gets forcefully closed. null means
   // never force-closed (CRYPTO's default - crypto trades 24/7).
   square_off_time: string | null; // "HH:MM:SS"
+  // Live-broker-adapter (see docs/architecture.md) - opts THIS account
+  // into real Dhan order submission on the Manual tab's spot/future path.
+  // Still gated by the platform-wide kill switch on top. Only meaningful
+  // for NSE/MCX - CRYPTO can never go live (a different broker with no
+  // order API yet).
+  live_trading_enabled: boolean;
+  max_order_value: number | null;
+  max_daily_loss: number | null;
   updated_at: string;
 };
 
@@ -327,7 +344,20 @@ export async function fetchAccounts(): Promise<Account[]> {
 
 export async function updateAccount(
   segment: Account["segment"],
-  update: Partial<Pick<Account, "capital_per_trade" | "risk_per_trade_pct" | "leverage" | "square_off_time">>,
+  update: Partial<
+    Pick<
+      Account,
+      | "capital_per_trade"
+      | "risk_per_trade_pct"
+      | "min_reward_risk_ratio"
+      | "enforce_risk_based_lots"
+      | "leverage"
+      | "square_off_time"
+      | "live_trading_enabled"
+      | "max_order_value"
+      | "max_daily_loss"
+    >
+  >,
 ): Promise<Account> {
   const res = await authFetch(`${API_BASE}/accounts/${segment}`, {
     method: "PUT",

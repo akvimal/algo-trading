@@ -1331,14 +1331,13 @@ export async function deleteChecklistItem(id: string): Promise<void> {
   }
 }
 
-// One row per segment (execution.accounts) - the Manual tab's own
-// "Checklist & Risk Settings" sub-page reads/writes every field below
-// directly (same cross-system pattern the rest of the Manual tab already
-// uses to call execution). execution/frontend's own AccountsPage.tsx has
-// the same fields too (that app is now the platform admin console, not
-// part of the SaaS product - see docs/architecture.md § "Manual Trading
-// SaaS") - a SaaS user manages their own capital/leverage/square-off from
-// here instead.
+// One row per segment (execution.accounts) - fetchAccounts below is
+// READ-ONLY from this frontend (WorkspacePage.tsx's own risk-based Lot
+// sizing/RR gating - see its own comment). Editing this data (capital,
+// risk %, leverage, square-off, live trading) happens on the Money tab's
+// own "Your account" section (execution/frontend's AccountsPage.tsx) -
+// moved there from a former Manual tab sub-page since it was always
+// execution's own data (see docs/architecture.md).
 export type Account = {
   segment: Segment;
   starting_balance: number;
@@ -1376,65 +1375,11 @@ export type Account = {
   updated_at: string;
 };
 
+// Read-only from this frontend - editing lives on the Money tab's own
+// "Your account" section now (see Account's own comment above).
 export async function fetchAccounts(): Promise<Account[]> {
   const res = await authFetch(`${EXECUTION_BASE_URL}/accounts`);
   return asJson(res, "GET /accounts");
-}
-
-export async function updateAccount(
-  segment: Segment,
-  update: Partial<
-    Pick<
-      Account,
-      | "risk_per_trade_pct"
-      | "min_reward_risk_ratio"
-      | "enforce_risk_based_lots"
-      | "capital_per_trade"
-      | "leverage"
-      | "square_off_time"
-      | "live_trading_enabled"
-      | "max_order_value"
-      | "max_daily_loss"
-    >
-  >,
-): Promise<Account> {
-  const res = await authFetch(`${EXECUTION_BASE_URL}/accounts/${segment}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(update),
-  });
-  return asJson(res, "PUT /accounts/{segment}");
-}
-
-// Resets current_balance back to starting_balance - doesn't touch
-// capital_per_trade/risk_per_trade_pct or any positions. Row-scoped to the
-// caller (get_current_user, not admin-gated) - same route execution's own
-// AccountsPage used to call for this before its personal-account section
-// (this page's exact same data) moved here as the one place for it.
-export async function resetAccount(segment: Segment): Promise<Account> {
-  const res = await authFetch(`${EXECUTION_BASE_URL}/accounts/${segment}/reset`, { method: "POST" });
-  return asJson(res, "POST /accounts/{segment}/reset");
-}
-
-// CRYPTO-only in practice - the manually configured INR-per-USD rate used
-// to convert capital into USD-equivalent before sizing a CRYPTO position.
-export type Settings = {
-  timezone: string;
-  usdinr_rate: number | null;
-};
-
-export async function fetchSettings(): Promise<Settings> {
-  const res = await authFetch(`${EXECUTION_BASE_URL}/settings`);
-  return asJson(res, "GET /settings");
-}
-
-export async function updateSettings(update: { usdinr_rate: number }): Promise<Settings> {
-  const res = await authFetch(`${EXECUTION_BASE_URL}/settings`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(update),
-  });
-  return asJson(res, "PUT /settings");
 }
 
 // GET /daily-checklist?segment=X - answers/submitted_at are null if

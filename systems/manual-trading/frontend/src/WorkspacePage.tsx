@@ -724,8 +724,9 @@ export default function WorkspacePage() {
   // Per-segment risk knobs (execution.accounts) - risk_per_trade_pct feeds
   // execution's own risk-based sizing, min_reward_risk_ratio gates this
   // row's own Add/Update button below (see computeRR/rrBelowMin). Both are
-  // edited from the Intraday > Risk & Accounts page; re-fetched here on
-  // mount so a just-saved change takes effect on next load.
+  // edited from the Money tab's own "Your account" section (see
+  // docs/architecture.md); re-fetched here on mount so a just-saved change
+  // takes effect on next load.
   const [accounts, setAccounts] = useState<Account[]>([]);
   const accountsRef = useRef(accounts);
   accountsRef.current = accounts;
@@ -2765,7 +2766,7 @@ export default function WorkspacePage() {
                     step={row.instrumentType === "spot" ? "0.01" : "1"}
                     value={row.draftQuantity}
                     disabled={riskLotsEnforced}
-                    title={riskLotsEnforced ? "Auto-computed from Risk/trade % - set a stop-loss to size this. Turn off in Checklist & Risk Settings to type your own." : undefined}
+                    title={riskLotsEnforced ? "Auto-computed from Risk/trade % - set a stop-loss to size this. Turn off in Money > Your account to type your own." : undefined}
                     onChange={(e) => updateRow(row.id, { draftQuantity: e.target.value })}
                     placeholder={riskLotsEnforced ? "Set SL" : "Auto"}
                   />

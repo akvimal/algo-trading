@@ -550,3 +550,120 @@ tbody tr:last-child td {
     opacity: 1;
   }
 }
+
+/* Ported from manual-trading/frontend's RiskAccountsPage (moved into this
+   "Money" page's own "Your account" section - see docs/architecture.md) -
+   these classes are otherwise unused here, kept identical to that
+   frontend's copy rather than redesigned. */
+.checkbox-label {
+  display: flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.checkbox-label.tiny {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.manual-saved-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--buy);
+  font-size: 0.8rem;
+}
+
+.manual-settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 48rem;
+}
+
+.manual-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.manual-settings-section h4 {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.manual-risk-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.manual-risk-card {
+  flex: 1 1 14rem;
+  max-width: 15.5rem;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--surface-raised);
+  border-radius: 6px;
+}
+
+.manual-risk-card-title {
+  flex-basis: 100%;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.manual-risk-card-capital {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.manual-risk-card-capital strong {
+  color: var(--text);
+}
+
+.manual-risk-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.manual-risk-card input[type="number"] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  width: 6rem;
+}
+
+.manual-risk-card-checkbox {
+  flex-basis: 100%;
+}
+
+.manual-risk-card-live {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  margin-top: 0.2rem;
+  background: rgba(245, 166, 35, 0.08);
+  border: 1px solid rgba(245, 166, 35, 0.3);
+  border-radius: 6px;
+}

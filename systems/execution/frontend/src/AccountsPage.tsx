@@ -3,16 +3,22 @@ import { useEffect, useState } from "react";
 import {
   type Account,
   type LiveTradingStatus,
+  type Settings,
   type StrategyAccount,
   type StrategySummary,
   createStrategyAccount,
   deleteStrategyAccount,
+  fetchAccounts,
   fetchLiveTradingStatus,
   fetchPlatformAccounts,
+  fetchSettings,
   fetchStrategyAccounts,
   fetchStrategyNames,
+  resetAccount,
   resetStrategyAccount,
+  updateAccount,
   updatePlatformAccount,
+  updateSettings,
   updateStrategyAccount,
 } from "./api";
 import { getAuthIsAdmin } from "./auth";
@@ -23,6 +29,23 @@ import { SEGMENTS, formatPct } from "./format";
 const POLL_INTERVAL_MS = 5000;
 const LEVERAGE_OPTIONS = [1, 10, 25, 50, 100, 150, 200];
 
+type Segment = Account["segment"];
+
+// Whole numbers (the common case - capital/trade and risk amount are
+// almost always round configured/computed figures) show with no decimals;
+// only a genuinely fractional value (real paise from a compounding
+// balance) keeps its 2 decimals. `locale` defaults to Indian digit
+// grouping (10,00,000 not 1,000,000) to match the rest of the "Your
+// account" cards below - callers pass "en-US" for CRYPTO's USD balances.
+// Ported as-is from manual-trading's own RiskAccountsPage (see
+// docs/architecture.md) - deliberately distinct from this file's own
+// money()/moneySigned() imports (format.ts), which use a plainer style
+// that the Positions grid already depends on elsewhere.
+function fmtMoney(n: number, locale = "en-IN"): string {
+  const hasFraction = Math.round(n * 100) % 100 !== 0;
+  return n.toLocaleString(locale, hasFraction ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : { maximumFractionDigits: 0 });
+}
+
 export default function AccountsPage() {
   // See PositionsPage.tsx's own isAdmin comment - gates the platform-wide
   // fetch/section below the same way, fixed alongside it 2026-08-29
@@ -30,17 +53,45 @@ export default function AccountsPage() {
   // separate admin check is needed here" assumption from execution/
   // frontend's old admin-only era).
   const isAdmin = getAuthIsAdmin();
+
+  // "Your account" - the caller's OWN personal capital/risk/leverage/
+  // square-off/live-trading settings (execution.accounts, one row per
+  // segment) plus the USDINR rate (execution.settings) - moved here from
+  // Manual Trading's own former "Risk & Accounts" page (see
+  // docs/architecture.md) since this data was always execution's own
+  // (Manual Trading's page was just a thin cross-origin UI over the same
+  // GET/PUT /accounts and /settings routes this file already calls for
+  // the platform/strategy sections below) - the Manual tab's own
+  // WorkspacePage.tsx still reads GET /accounts directly for its own
+  // Lot-sizing math, unaffected by where the EDITING UI lives. Every
+  // logged-in user sees this section (not admin-gated) - only the
+  // platform-wide section below is.
+  const [myAccounts, setMyAccounts] = useState<Account[]>([]);
+  const [myAccountsError, setMyAccountsError] = useState<string | null>(null);
+  const [myDraftRisk, setMyDraftRisk] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftRR, setMyDraftRR] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftEnforceLots, setMyDraftEnforceLots] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  const [myDraftCapital, setMyDraftCapital] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftLeverage, setMyDraftLeverage] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftSquareOffTime, setMyDraftSquareOffTime] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftNeverSquareOff, setMyDraftNeverSquareOff] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  const [myDraftLiveEnabled, setMyDraftLiveEnabled] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  const [myDraftMaxOrderValue, setMyDraftMaxOrderValue] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftMaxDailyLoss, setMyDraftMaxDailyLoss] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [mySavingSegment, setMySavingSegment] = useState<Segment | null>(null);
+  const [myJustSavedSegment, setMyJustSavedSegment] = useState<Segment | null>(null);
+  const [myResettingSegment, setMyResettingSegment] = useState<Segment | null>(null);
+
+  // USD/INR rate (CRYPTO sizing only) - execution.settings, same "your
+  // own" scoping as the accounts above.
+  const [mySettings, setMySettings] = useState<Settings | null>(null);
+  const [myUsdinrDraft, setMyUsdinrDraft] = useState("");
+  const [mySavingUsdinr, setMySavingUsdinr] = useState(false);
+  const [myUsdinrMessage, setMyUsdinrMessage] = useState<string | null>(null);
+
   // Platform-wide (user_id IS NULL) accounts - the rows the automated
   // Strategy-driven flow actually reads (see api.ts's own comment on
-  // fetchPlatformAccounts). This admin/ops-only concept, plus dedicated
-  // strategy accounts below, is the only account data left on this page -
-  // a caller's own personal capital/risk/leverage/square-off account and
-  // the USDINR rate moved to Manual Trading's own "Risk & Accounts" page
-  // (both hit the exact same execution.accounts/execution.settings rows,
-  // and that page's own UI - risk %, min reward:risk, enforce-lots - was
-  // already the richer, actual product-facing one; this page having a
-  // second, thinner copy of the same settings was pure redundancy once
-  // this whole app opened up to every logged-in user, not just admins).
+  // fetchPlatformAccounts). Admin-only, unlike "Your account" above.
   const [platformAccounts, setPlatformAccounts] = useState<Account[]>([]);
   const [platformDrafts, setPlatformDrafts] = useState<
     Record<string, { leverage: number | ""; mtfInterestRate: number | ""; squareOffTime: string }>
@@ -85,6 +136,188 @@ export default function AccountsPage() {
   const [newCapitalPerTrade, setNewCapitalPerTrade] = useState<number | "">(50000);
   const [newRiskPerTrade, setNewRiskPerTrade] = useState<number | "">(1);
   const [creatingStrategyAccount, setCreatingStrategyAccount] = useState(false);
+
+  useEffect(() => {
+    void refreshMyAccounts();
+    fetchSettings()
+      .then((s) => {
+        setMySettings(s);
+        setMyUsdinrDraft(s.usdinr_rate != null ? String(s.usdinr_rate) : "");
+      })
+      .catch(() => {
+        // Non-CRYPTO users have no reason to care - this section just
+        // shows its own "couldn't load" state below.
+      });
+  }, []);
+
+  async function refreshMyAccounts() {
+    try {
+      const data = await fetchAccounts();
+      setMyAccounts(data);
+      setMyDraftRisk((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = String(a.risk_per_trade_pct);
+        return next;
+      });
+      setMyDraftRR((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = String(a.min_reward_risk_ratio);
+        return next;
+      });
+      setMyDraftEnforceLots((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.enforce_risk_based_lots;
+        return next;
+      });
+      setMyDraftCapital((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = String(a.capital_per_trade);
+        return next;
+      });
+      setMyDraftLeverage((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = String(a.leverage);
+        return next;
+      });
+      setMyDraftSquareOffTime((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.square_off_time ? a.square_off_time.slice(0, 5) : "";
+        return next;
+      });
+      setMyDraftNeverSquareOff((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.square_off_time == null;
+        return next;
+      });
+      setMyDraftLiveEnabled((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.live_trading_enabled;
+        return next;
+      });
+      setMyDraftMaxOrderValue((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.max_order_value != null ? String(a.max_order_value) : "";
+        return next;
+      });
+      setMyDraftMaxDailyLoss((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.max_daily_loss != null ? String(a.max_daily_loss) : "";
+        return next;
+      });
+      setMyAccountsError(null);
+    } catch (err) {
+      setMyAccountsError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleSaveMyUsdinr() {
+    const usdinr_rate = Number(myUsdinrDraft);
+    if (!Number.isFinite(usdinr_rate) || usdinr_rate <= 0) {
+      setMyUsdinrMessage("USD/INR rate must be greater than 0");
+      return;
+    }
+    setMySavingUsdinr(true);
+    setMyUsdinrMessage(null);
+    try {
+      const updated = await updateSettings({ usdinr_rate });
+      setMySettings(updated);
+      setMyUsdinrMessage("Saved.");
+    } catch (err) {
+      setMyUsdinrMessage(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setMySavingUsdinr(false);
+    }
+  }
+
+  async function saveMySegmentRisk(segment: Segment) {
+    const risk_per_trade_pct = Number(myDraftRisk[segment]);
+    const min_reward_risk_ratio = Number(myDraftRR[segment]);
+    const capital_per_trade = Number(myDraftCapital[segment]);
+    if (!Number.isFinite(risk_per_trade_pct) || risk_per_trade_pct <= 0 || risk_per_trade_pct > 100) {
+      setMyAccountsError(`${segment}: Risk/trade must be between 0 and 100`);
+      return;
+    }
+    if (!Number.isFinite(min_reward_risk_ratio) || min_reward_risk_ratio <= 0) {
+      setMyAccountsError(`${segment}: Min reward:risk must be greater than 0`);
+      return;
+    }
+    if (!Number.isFinite(capital_per_trade) || capital_per_trade <= 0) {
+      setMyAccountsError(`${segment}: Capital/trade must be greater than 0`);
+      return;
+    }
+    let leverage: number | undefined;
+    if (segment === "CRYPTO" || segment === "NSE") {
+      leverage = Number(myDraftLeverage[segment]);
+      if (!Number.isFinite(leverage) || leverage <= 0) {
+        setMyAccountsError(`${segment}: Leverage must be greater than 0`);
+        return;
+      }
+    }
+    const square_off_time = myDraftNeverSquareOff[segment] || !myDraftSquareOffTime[segment] ? null : `${myDraftSquareOffTime[segment]}:00`;
+
+    const maxOrderValueNum = myDraftMaxOrderValue[segment] === "" ? null : Number(myDraftMaxOrderValue[segment]);
+    const maxDailyLossNum = myDraftMaxDailyLoss[segment] === "" ? null : Number(myDraftMaxDailyLoss[segment]);
+    if (maxOrderValueNum != null && (!Number.isFinite(maxOrderValueNum) || maxOrderValueNum <= 0)) {
+      setMyAccountsError(`${segment}: Max order value must be greater than 0`);
+      return;
+    }
+    if (maxDailyLossNum != null && (!Number.isFinite(maxDailyLossNum) || maxDailyLossNum <= 0)) {
+      setMyAccountsError(`${segment}: Max daily loss must be greater than 0`);
+      return;
+    }
+
+    const existing = myAccounts.find((a) => a.segment === segment);
+    const turningLiveOn = myDraftLiveEnabled[segment] && !(existing?.live_trading_enabled ?? false);
+    if (turningLiveOn) {
+      const confirmed = window.confirm(
+        `Turn ON real order placement for your ${segment} account?\n\n` +
+          "Every order you place here from now on will be a REAL order sent to Dhan using your own saved " +
+          "credentials, not a paper trade. Make sure your Dhan credentials are saved (My Credentials tab, Manual " +
+          "Trading) and this is really what you want before confirming.",
+      );
+      if (!confirmed) return;
+    }
+
+    setMySavingSegment(segment);
+    try {
+      await updateAccount(segment, {
+        risk_per_trade_pct,
+        min_reward_risk_ratio,
+        enforce_risk_based_lots: myDraftEnforceLots[segment],
+        capital_per_trade,
+        ...(leverage !== undefined ? { leverage } : {}),
+        square_off_time,
+        ...(segment !== "CRYPTO"
+          ? { live_trading_enabled: myDraftLiveEnabled[segment], max_order_value: maxOrderValueNum, max_daily_loss: maxDailyLossNum }
+          : {}),
+      });
+      await refreshMyAccounts();
+      setMyJustSavedSegment(segment);
+      setTimeout(() => setMyJustSavedSegment((s) => (s === segment ? null : s)), 2500);
+      setMyAccountsError(null);
+    } catch (err) {
+      setMyAccountsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMySavingSegment(null);
+    }
+  }
+
+  async function resetMySegmentBalance(segment: Segment) {
+    const confirmed = window.confirm(
+      `Reset the ${segment} account's balance back to its starting balance? This doesn't undo any positions.`,
+    );
+    if (!confirmed) return;
+    setMyResettingSegment(segment);
+    try {
+      await resetAccount(segment);
+      await refreshMyAccounts();
+      setMyAccountsError(null);
+    } catch (err) {
+      setMyAccountsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMyResettingSegment(null);
+    }
+  }
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -313,11 +546,212 @@ export default function AccountsPage() {
 
   return (
     <>
+      <h2>Your account</h2>
       <p className="subtitle">
-        Platform/admin account config - your own capital, risk, leverage, square-off, and USD/INR rate now live in
-        Manual Trading &rsaquo; Intraday &rsaquo; Risk &amp; Accounts (one place for every logged-in user's own
-        settings, instead of a second copy here).
+        Your own personal capital, risk, leverage, square-off, and live-trading settings, per segment - the Manual
+        tab's own order entry (Manual Trading &rsaquo; Intraday &rsaquo; Workspace) sizes and enforces against
+        these. Platform/admin config (the automated Strategy-driven flow's own account) is further down.
       </p>
+      {myAccountsError && <p className="error">Could not reach the backend: {myAccountsError}</p>}
+      <div className="manual-settings-page">
+        <section className="manual-settings-section">
+          <div className="manual-risk-grid">
+            {SEGMENTS.map((seg) => {
+              const account = myAccounts.find((a) => a.segment === seg);
+              const currency = seg === "CRYPTO" ? "$" : "₹";
+              const locale = seg === "CRYPTO" ? "en-US" : "en-IN";
+              const draftRiskPct = Number(myDraftRisk[seg]);
+              const riskAmount = account && Number.isFinite(draftRiskPct) ? (account.capital_per_trade * draftRiskPct) / 100 : null;
+              return (
+                <div className="manual-risk-card" key={seg}>
+                  <span className="manual-risk-card-title">{seg}</span>
+                  {account && (
+                    <span className="manual-risk-card-capital">
+                      Capital {currency}
+                      {fmtMoney(account.capital_per_trade, locale)} &middot; Bal {currency}
+                      {fmtMoney(account.current_balance, locale)}
+                      {riskAmount != null && (
+                        <>
+                          {" "}
+                          &middot; Risk{" "}
+                          <strong>
+                            {currency}
+                            {fmtMoney(riskAmount, locale)}
+                          </strong>
+                        </>
+                      )}
+                    </span>
+                  )}
+                  <label title="Caps a manual order's size - risk-based sizing, used whenever Lots isn't set explicitly.">
+                    Risk/trade %
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={myDraftRisk[seg]}
+                      disabled={!account}
+                      onChange={(e) => setMyDraftRisk((prev) => ({ ...prev, [seg]: e.target.value }))}
+                    />
+                  </label>
+                  <label title="The RR floor the Manual tab's Add/Update button enforces on Limit (or live LTP)/Target/SL Limit.">
+                    Min reward:risk (1:x)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={myDraftRR[seg]}
+                      disabled={!account}
+                      onChange={(e) => setMyDraftRR((prev) => ({ ...prev, [seg]: e.target.value }))}
+                    />
+                  </label>
+                  <label title="Total capital allocated to a single trade in this segment - what Risk/trade % above is computed against.">
+                    Capital/trade
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={myDraftCapital[seg]}
+                      disabled={!account}
+                      onChange={(e) => setMyDraftCapital((prev) => ({ ...prev, [seg]: e.target.value }))}
+                    />
+                  </label>
+                  {(seg === "CRYPTO" || seg === "NSE") && (
+                    <label
+                      title={
+                        seg === "CRYPTO"
+                          ? "Margin multiplier applied before sizing (Delta Exchange India trades perpetual futures on margin)."
+                          : "Margin multiplier for intraday MIS orders in this segment (spot only) - no interest cost, unlike NSE MTF for positional trades (admin/broker-config only, see Platform account below)."
+                      }
+                    >
+                      Leverage
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={myDraftLeverage[seg]}
+                        disabled={!account}
+                        onChange={(e) => setMyDraftLeverage((prev) => ({ ...prev, [seg]: e.target.value }))}
+                      />
+                    </label>
+                  )}
+                  <label title="Any OPEN intraday position in this segment still open past this local time gets forcefully closed.">
+                    Square-off time
+                    <input
+                      type="time"
+                      value={myDraftSquareOffTime[seg]}
+                      disabled={!account || myDraftNeverSquareOff[seg]}
+                      onChange={(e) => setMyDraftSquareOffTime((prev) => ({ ...prev, [seg]: e.target.value }))}
+                    />
+                  </label>
+                  <label
+                    className="checkbox-label tiny manual-risk-card-checkbox"
+                    title="Never force-close - a position in this segment stays open past any time of day (e.g. CRYPTO, which trades 24/7)."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={myDraftNeverSquareOff[seg]}
+                      disabled={!account}
+                      onChange={(e) => setMyDraftNeverSquareOff((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                    />
+                    Never force-close
+                  </label>
+                  <label
+                    className="checkbox-label tiny manual-risk-card-checkbox"
+                    title="Auto-computes and locks the Lot field from Risk/trade % once a stop-loss is set, instead of leaving it free-typed."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={myDraftEnforceLots[seg]}
+                      disabled={!account}
+                      onChange={(e) => setMyDraftEnforceLots((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                    />
+                    Enforce risk-based Lot
+                  </label>
+                  {seg !== "CRYPTO" && (
+                    <div className="manual-risk-card-live">
+                      <label
+                        className="checkbox-label tiny manual-risk-card-checkbox"
+                        title="Places REAL orders on Dhan using your own saved credentials instead of paper trades. Also needs the platform-wide kill switch to be off."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={myDraftLiveEnabled[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftLiveEnabled((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                        />
+                        Live trading (real orders)
+                        {account?.live_trading_enabled && <span className="badge badge-live">LIVE</span>}
+                      </label>
+                      <label title="Optional - a single order worth more than this is rejected rather than placed live.">
+                        Max order value
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          placeholder="no cap"
+                          value={myDraftMaxOrderValue[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftMaxOrderValue((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        />
+                      </label>
+                      <label title="Optional - once today's realized loss reaches this, live trading pauses for this account for the rest of the day.">
+                        Max daily loss
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          placeholder="no cap"
+                          value={myDraftMaxDailyLoss[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftMaxDailyLoss((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  <span className="edit-actions">
+                    <button
+                      type="button"
+                      className="tiny"
+                      disabled={!account || mySavingSegment === seg}
+                      onClick={() => void saveMySegmentRisk(seg)}
+                    >
+                      {mySavingSegment === seg ? "Saving..." : "Save"}
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn secondary"
+                      disabled={!account || myResettingSegment === seg}
+                      onClick={() => void resetMySegmentBalance(seg)}
+                      title={myResettingSegment === seg ? "Resetting..." : `Reset ${seg} balance to its starting balance`}
+                      aria-label="Reset balance"
+                    >
+                      <RotateCcwIcon />
+                    </button>
+                  </span>
+                  {myJustSavedSegment === seg && <span className="manual-saved-badge">Saved</span>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="manual-settings-section">
+          <h4>USD/INR rate</h4>
+          <p className="subtitle">Manually configured - converts CRYPTO capital/balance into USD-equivalent before sizing a position.</p>
+          <div className="settings-row">
+            <label>
+              Rate
+              <input type="number" min="0" step="0.01" value={myUsdinrDraft} onChange={(e) => setMyUsdinrDraft(e.target.value)} />
+            </label>
+            <button type="button" className="tiny" disabled={mySavingUsdinr || !myUsdinrDraft} onClick={() => void handleSaveMyUsdinr()}>
+              {mySavingUsdinr ? "Saving..." : "Save"}
+            </button>
+          </div>
+          {myUsdinrMessage && <p className="manual-saved-badge">{myUsdinrMessage}</p>}
+          {mySettings == null && <p className="error">Could not load settings.</p>}
+        </section>
+      </div>
 
       {isAdmin && (
       <>

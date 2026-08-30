@@ -2,15 +2,13 @@ import { useState } from "react";
 
 import ManualStatsPage from "./ManualStatsPage";
 import MyCredentialsPage from "./MyCredentialsPage";
-import RiskAccountsPage from "./RiskAccountsPage";
 import TradeChecklistPage from "./TradeChecklistPage";
 import WorkspacePage from "./WorkspacePage";
 
-type SubTab = "workspace" | "risk" | "credentials" | "checklist" | "performance";
+type SubTab = "workspace" | "credentials" | "checklist" | "performance";
 
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: "workspace", label: "Workspace" },
-  { id: "risk", label: "Risk & Accounts" },
   { id: "credentials", label: "My Credentials" },
   { id: "checklist", label: "Trade Checklist" },
   { id: "performance", label: "Performance" },
@@ -24,7 +22,11 @@ const SUB_TABS: { id: SubTab; label: string }[] = [
 // mounted at a time, same pattern App.tsx's own top-level tab switch
 // already uses. A 6th sub-page, Dashboard (an "Open positions" summary,
 // no order entry), was removed - Workspace is the one landing page now,
-// see its own default below.
+// see its own default below. A 7th, "Risk & Accounts", moved to the Money
+// tab's own "Your account" section (see docs/architecture.md) - it was
+// always execution's own data (execution.accounts/execution.settings),
+// just with its edit UI parked here; WorkspacePage.tsx still reads GET
+// /accounts directly for its own Lot-sizing math, unaffected by the move.
 export default function IntradayPage() {
   const [subTab, setSubTab] = useState<SubTab>("workspace");
 
@@ -39,7 +41,6 @@ export default function IntradayPage() {
       </nav>
 
       {subTab === "workspace" && <WorkspacePage />}
-      {subTab === "risk" && <RiskAccountsPage />}
       {subTab === "credentials" && <MyCredentialsPage />}
       {subTab === "checklist" && <TradeChecklistPage />}
       {subTab === "performance" && <ManualStatsPage />}

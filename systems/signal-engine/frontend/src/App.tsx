@@ -2863,14 +2863,14 @@ function StrategyManager() {
   const [selected, setSelected] = useState<string | null>(null);
   const [signals, setSignals] = useState<ProviderSignal[]>([]);
   const [error, setError] = useState<string | null>(null);
-  // The grid's primary split - a strategy is either intraday or
-  // positional (Horizon's only two values now, "swing" merged away
-  // 2026-08-17 since it never had distinct behavior anywhere - see
-  // docs/architecture.md). Segment/instrument are secondary filters
-  // layered on top, not further tabs - both dimensions have more than
-  // two values (3 segments, 3 instrument types), which reads better as
-  // dropdowns than a wall of tabs.
-  const [horizonTab, setHorizonTab] = useState<"intraday" | "positional">("intraday");
+  // Horizon used to be the grid's primary split (an Intraday/Positional
+  // tab pair) - merged away 2026-08-30 since a strategy's own Horizon
+  // column (below) already shows it, and two tabs just hid whichever
+  // wasn't selected instead of adding real filtering value beyond what
+  // the Segment/Instrument dropdowns already provide. Segment/instrument
+  // stay dropdowns, not tabs - both dimensions have more than two values
+  // (3 segments, 3 instrument types), which reads better as dropdowns
+  // than a wall of tabs.
   const [segmentFilter, setSegmentFilter] = useState<"all" | Segment>("all");
   const [instrumentFilter, setInstrumentFilter] = useState<"all" | InstrumentType>("all");
 
@@ -3028,7 +3028,6 @@ function StrategyManager() {
   }, [selected]);
 
   const filteredStrategies = strategies.filter((s) => {
-    if (s.horizon !== horizonTab) return false;
     if (segmentFilter !== "all" && s.segment !== segmentFilter) return false;
     if (instrumentFilter !== "all" && s.instrument_type !== instrumentFilter) return false;
     return true;
@@ -3311,7 +3310,7 @@ function StrategyManager() {
   // - matches the <thead> below exactly. Stop-loss/Target/Active window/
   // Active weekdays/Webhooks moved into the single Info column's hover
   // tooltip (StrategyInfoCell) rather than each getting their own column.
-  const colCount = 9;
+  const colCount = 10;
 
   return (
     <>
@@ -3716,15 +3715,6 @@ function StrategyManager() {
 
       {error && <p className="error">{error}</p>}
 
-      <nav className="tabs">
-        <button type="button" className={horizonTab === "intraday" ? "active" : ""} onClick={() => setHorizonTab("intraday")}>
-          Intraday
-        </button>
-        <button type="button" className={horizonTab === "positional" ? "active" : ""} onClick={() => setHorizonTab("positional")}>
-          Positional
-        </button>
-      </nav>
-
       <div className="filter-row">
         <label className="inline-filter">
           Segment
@@ -3751,6 +3741,7 @@ function StrategyManager() {
           <tr>
             <th>Name</th>
             <th>Status</th>
+            <th>Horizon</th>
             <th>Instrument</th>
             <th>Segment</th>
             <th>Rule</th>
@@ -3785,6 +3776,7 @@ function StrategyManager() {
                     {s.status === "live" ? "Pause" : "Activate"}
                   </button>
                 </td>
+                <td>{s.horizon}</td>
                 <td>
                   {s.instrument_type}
                   {s.instrument_type === "option" && (

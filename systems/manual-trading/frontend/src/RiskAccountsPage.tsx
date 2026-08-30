@@ -41,6 +41,12 @@ export default function RiskAccountsPage() {
   const [draftLeverage, setDraftLeverage] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [draftSquareOffTime, setDraftSquareOffTime] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [draftNeverSquareOff, setDraftNeverSquareOff] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  // Live-broker-adapter (see docs/architecture.md) - real order placement,
+  // NSE/MCX only (CRYPTO can never go live - a different broker with no
+  // order API yet). Still gated by the platform-wide kill switch on top.
+  const [draftLiveEnabled, setDraftLiveEnabled] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  const [draftMaxOrderValue, setDraftMaxOrderValue] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [draftMaxDailyLoss, setDraftMaxDailyLoss] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [savingSegment, setSavingSegment] = useState<Segment | null>(null);
   const [justSavedSegment, setJustSavedSegment] = useState<Segment | null>(null);
   const [resettingSegment, setResettingSegment] = useState<Segment | null>(null);
@@ -122,6 +128,21 @@ export default function RiskAccountsPage() {
         for (const a of data) next[a.segment] = a.square_off_time == null;
         return next;
       });
+      setDraftLiveEnabled((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.live_trading_enabled;
+        return next;
+      });
+      setDraftMaxOrderValue((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.max_order_value != null ? String(a.max_order_value) : "";
+        return next;
+      });
+      setDraftMaxDailyLoss((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.max_daily_loss != null ? String(a.max_daily_loss) : "";
+        return next;
+      });
       setAccountsError(null);
     } catch (err) {
       setAccountsError(err instanceof Error ? err.message : String(err));
@@ -153,6 +174,30 @@ export default function RiskAccountsPage() {
       }
     }
     const square_off_time = draftNeverSquareOff[segment] || !draftSquareOffTime[segment] ? null : `${draftSquareOffTime[segment]}:00`;
+
+    const maxOrderValueNum = draftMaxOrderValue[segment] === "" ? null : Number(draftMaxOrderValue[segment]);
+    const maxDailyLossNum = draftMaxDailyLoss[segment] === "" ? null : Number(draftMaxDailyLoss[segment]);
+    if (maxOrderValueNum != null && (!Number.isFinite(maxOrderValueNum) || maxOrderValueNum <= 0)) {
+      setAccountsError(`${segment}: Max order value must be greater than 0`);
+      return;
+    }
+    if (maxDailyLossNum != null && (!Number.isFinite(maxDailyLossNum) || maxDailyLossNum <= 0)) {
+      setAccountsError(`${segment}: Max daily loss must be greater than 0`);
+      return;
+    }
+
+    const existing = accounts.find((a) => a.segment === segment);
+    const turningLiveOn = draftLiveEnabled[segment] && !(existing?.live_trading_enabled ?? false);
+    if (turningLiveOn) {
+      const confirmed = window.confirm(
+        `Turn ON real order placement for your ${segment} account?\n\n` +
+          "Every order you place here from now on will be a REAL order sent to Dhan using your own saved " +
+          "credentials, not a paper trade. Make sure your Dhan credentials are saved (My Credentials tab) and " +
+          "this is really what you want before confirming.",
+      );
+      if (!confirmed) return;
+    }
+
     setSavingSegment(segment);
     try {
       await updateAccount(segment, {
@@ -162,6 +207,9 @@ export default function RiskAccountsPage() {
         capital_per_trade,
         ...(leverage !== undefined ? { leverage } : {}),
         square_off_time,
+        ...(segment !== "CRYPTO"
+          ? { live_trading_enabled: draftLiveEnabled[segment], max_order_value: maxOrderValueNum, max_daily_loss: maxDailyLossNum }
+          : {}),
       });
       await refreshAccounts();
       setJustSavedSegment(segment);
@@ -302,6 +350,47 @@ export default function RiskAccountsPage() {
                   />
                   Enforce risk-based Lot
                 </label>
+                {seg !== "CRYPTO" && (
+                  <div className="manual-risk-card-live">
+                    <label
+                      className="checkbox-label tiny manual-risk-card-checkbox"
+                      title="Places REAL orders on Dhan using your own saved credentials instead of paper trades. Also needs the platform-wide kill switch to be off."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={draftLiveEnabled[seg]}
+                        disabled={!account}
+                        onChange={(e) => setDraftLiveEnabled((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                      />
+                      Live trading (real orders)
+                      {account?.live_trading_enabled && <span className="badge badge-live">LIVE</span>}
+                    </label>
+                    <label title="Optional - a single order worth more than this is rejected rather than placed live.">
+                      Max order value
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="no cap"
+                        value={draftMaxOrderValue[seg]}
+                        disabled={!account}
+                        onChange={(e) => setDraftMaxOrderValue((prev) => ({ ...prev, [seg]: e.target.value }))}
+                      />
+                    </label>
+                    <label title="Optional - once today's realized loss reaches this, live trading pauses for this account for the rest of the day.">
+                      Max daily loss
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="no cap"
+                        value={draftMaxDailyLoss[seg]}
+                        disabled={!account}
+                        onChange={(e) => setDraftMaxDailyLoss((prev) => ({ ...prev, [seg]: e.target.value }))}
+                      />
+                    </label>
+                  </div>
+                )}
                 <span className="edit-actions">
                   <button type="button" className="tiny" disabled={!account || savingSegment === seg} onClick={() => void saveSegmentRisk(seg)}>
                     {savingSegment === seg ? "Saving..." : "Save"}

@@ -747,7 +747,10 @@ export default function PositionsPage() {
               <Fragment key={p.id}>
               <tr>
                 <td>{formatTime(p.entry_time)}</td>
-                <td className="symbol">{p.symbol}</td>
+                <td className="symbol">
+                  {p.symbol}
+                  {p.is_live_broker_order && <span className="badge badge-live" title="A real Dhan order, not paper">LIVE</span>}
+                </td>
                 <td>{p.segment}</td>
                 <td>
                   <span className={`badge ${p.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{p.action}</span>
@@ -842,7 +845,10 @@ export default function PositionsPage() {
               <tr>
                 <td>{formatTime(p.entry_time)}</td>
                 <td>{p.exit_time ? formatTime(p.exit_time) : "-"}</td>
-                <td className="symbol">{p.symbol}</td>
+                <td className="symbol">
+                  {p.symbol}
+                  {p.is_live_broker_order && <span className="badge badge-live" title="A real Dhan order, not paper">LIVE</span>}
+                </td>
                 <td>{p.segment}</td>
                 <td>
                   <span className={`badge ${p.action === "BUY" ? "badge-buy" : "badge-sell"}`}>{p.action}</span>

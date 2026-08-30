@@ -458,6 +458,12 @@ tbody tr:last-child td {
   color: var(--sell);
 }
 
+.badge-live {
+  background: rgba(245, 166, 35, 0.18);
+  color: #f5a623;
+  margin-left: 0.4rem;
+}
+
 .pnl-positive {
   color: var(--buy);
 }

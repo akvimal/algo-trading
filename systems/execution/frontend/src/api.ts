@@ -48,6 +48,10 @@ export type Position = {
   close_fee: number | null;
   margin_posted: number | null;
   liquidation_price: number | null;
+  // Live-broker-adapter (see docs/architecture.md) - true only if this
+  // position's entry actually cleared through a real Dhan order, never a
+  // paper fill. false for every position opened before this existed.
+  is_live_broker_order: boolean;
 };
 
 // One leg of a multi-leg option order - see OptionGroup below. Strike/
@@ -175,7 +179,48 @@ export type StrategyAccount = {
   current_balance: number;
   capital_per_trade: number;
   risk_per_trade_pct: number;
+  // Live-broker-adapter P3 item 14 (see docs/architecture.md) - the ONLY
+  // way an automated Strategy-driven signal can ever place a real order.
+  // live_trading_user_id is whose own BYO Dhan credentials execute this
+  // strategy's real orders - null until explicitly set. Only meaningful
+  // for NSE/MCX (segment above) - a CRYPTO strategy can never go live.
+  live_trading_user_id: string | null;
+  live_trading_enabled: boolean;
+  max_order_value: number | null;
+  max_daily_loss: number | null;
   updated_at: string;
+};
+
+// GET /live-trading/status (admin-only) - "is X actually live right now,
+// and if not, why not" across every account and strategy_accounts row -
+// see position_manager.get_live_trading_status's own docstring.
+export type LiveTradingAccountStatus = {
+  user_id: string | null;
+  segment: "NSE" | "MCX" | "CRYPTO";
+  live_trading_enabled: boolean;
+  max_order_value: number | null;
+  max_daily_loss: number | null;
+  today_realized_pnl: number | null;
+  effectively_live: boolean;
+  reason: string | null;
+};
+
+export type LiveTradingStrategyStatus = {
+  strategy_id: string;
+  segment: "NSE" | "MCX" | "CRYPTO";
+  live_trading_user_id: string | null;
+  live_trading_enabled: boolean;
+  max_order_value: number | null;
+  max_daily_loss: number | null;
+  today_realized_pnl: number | null;
+  effectively_live: boolean;
+  reason: string | null;
+};
+
+export type LiveTradingStatus = {
+  kill_switch: boolean;
+  accounts: LiveTradingAccountStatus[];
+  strategy_accounts: LiveTradingStrategyStatus[];
 };
 
 export type Settings = {
@@ -339,7 +384,12 @@ export async function createStrategyAccount(
 
 export async function updateStrategyAccount(
   strategyId: string,
-  update: Pick<StrategyAccount, "capital_per_trade" | "risk_per_trade_pct">,
+  update: Partial<
+    Pick<
+      StrategyAccount,
+      "capital_per_trade" | "risk_per_trade_pct" | "live_trading_user_id" | "live_trading_enabled" | "max_order_value" | "max_daily_loss"
+    >
+  >,
 ): Promise<StrategyAccount> {
   const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
     method: "PUT",
@@ -357,6 +407,11 @@ export async function deleteStrategyAccount(strategyId: string): Promise<void> {
 export async function resetStrategyAccount(strategyId: string): Promise<StrategyAccount> {
   const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}/reset`, { method: "POST" });
   return asJson(res, `POST /accounts/strategy/${strategyId}/reset`);
+}
+
+export async function fetchLiveTradingStatus(): Promise<LiveTradingStatus> {
+  const res = await authFetch(`${API_BASE}/live-trading/status`);
+  return asJson(res, "GET /live-trading/status");
 }
 
 export async function fetchSettings(): Promise<Settings> {

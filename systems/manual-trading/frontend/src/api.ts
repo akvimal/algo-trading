@@ -1362,6 +1362,14 @@ export type Account = {
   // doesn't surface or edit it.
   mtf_annual_interest_rate_pct: number | null;
   square_off_time: string | null;
+  // Live-broker-adapter (see docs/architecture.md) - opts THIS account
+  // into real Dhan order submission on the Manual tab's spot/future path.
+  // Still gated by the platform-wide LIVE_TRADING_KILL_SWITCH on top -
+  // both must allow it. Only meaningful for NSE/MCX - CRYPTO can never go
+  // live (a different broker with no order API yet).
+  live_trading_enabled: boolean;
+  max_order_value: number | null;
+  max_daily_loss: number | null;
   updated_at: string;
 };
 
@@ -1381,6 +1389,9 @@ export async function updateAccount(
       | "capital_per_trade"
       | "leverage"
       | "square_off_time"
+      | "live_trading_enabled"
+      | "max_order_value"
+      | "max_daily_loss"
     >
   >,
 ): Promise<Account> {

@@ -1953,6 +1953,25 @@ button.btn-exit {
   flex-basis: 100%;
 }
 
+.manual-risk-card-live {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  margin-top: 0.2rem;
+  background: rgba(245, 166, 35, 0.08);
+  border: 1px solid rgba(245, 166, 35, 0.3);
+  border-radius: 6px;
+}
+
+.badge-live {
+  background: rgba(245, 166, 35, 0.18);
+  color: #f5a623;
+  margin-left: 0.4rem;
+}
+
 .manual-review-banner {
   background: rgba(232, 88, 106, 0.12);
   border: 1px solid var(--sell);

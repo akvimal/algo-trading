@@ -462,7 +462,55 @@ export async function updateSettings(update: { usdinr_rate: number }): Promise<S
 // directly on market-data's backend, CORS-enabled) - moved to market-data's
 // own frontend since it's market-data's data, not execution's (see
 // docs/architecture.md). See that system's App.tsx (DhanAdminSection) and
-// api.ts.
+// api.ts. NOT the same thing as the BYO credentials block below - that's a
+// SaaS user's own personal keys (systems/accounts), this is the platform
+// operator's own data-provider config.
+
+// ---------------------------------------------------------------------
+// BYO broker credentials (systems/accounts, see docs/architecture.md §
+// "Manual Trading SaaS") - a user's own Dhan/Delta keys, so market-data
+// resolves and uses THEIR OWN credentials/rate budget instead of the
+// platform default (Phase 3), and so the live-broker-adapter's real order
+// placement has a real credential to execute against at all (see "Your
+// account"'s own Live trading section above). Moved here from
+// manual-trading/frontend's former "My Credentials" page (see
+// docs/architecture.md) - same reasoning as "Your account" itself: this
+// was always accounts' own data with no manual-trading-specific
+// dependency, and now sits right next to the Live trading toggle that
+// actually needs it. Never returns a decrypted secret back -
+// has_dhan/has_delta/dhan_client_id_masked only; the form always starts
+// blank and shows this status text instead.
+// ---------------------------------------------------------------------
+
+const ACCOUNTS_PORT = import.meta.env.VITE_ACCOUNTS_PORT ?? "8004";
+const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
+
+export type CredentialsOut = {
+  has_dhan: boolean;
+  has_delta: boolean;
+  dhan_client_id_masked: string | null;
+};
+
+export type CredentialsUpdate = {
+  dhan_client_id?: string;
+  dhan_access_token?: string;
+  delta_api_key?: string;
+  delta_api_secret?: string;
+};
+
+export async function fetchCredentials(): Promise<CredentialsOut> {
+  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`);
+  return asJson(res, "GET /credentials");
+}
+
+export async function saveCredentials(update: CredentialsUpdate): Promise<CredentialsOut> {
+  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+  return asJson(res, "PUT /credentials");
+}
 
 // ---------------------------------------------------------------------
 // Strategy names - signal-engine's own backend (the 2026-08-28 merger of

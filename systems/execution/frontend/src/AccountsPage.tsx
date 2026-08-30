@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   type Account,
+  type CredentialsOut,
   type LiveTradingStatus,
   type Settings,
   type StrategyAccount,
@@ -9,6 +10,7 @@ import {
   createStrategyAccount,
   deleteStrategyAccount,
   fetchAccounts,
+  fetchCredentials,
   fetchLiveTradingStatus,
   fetchPlatformAccounts,
   fetchSettings,
@@ -16,6 +18,7 @@ import {
   fetchStrategyNames,
   resetAccount,
   resetStrategyAccount,
+  saveCredentials,
   updateAccount,
   updatePlatformAccount,
   updateSettings,
@@ -88,6 +91,22 @@ export default function AccountsPage() {
   const [myUsdinrDraft, setMyUsdinrDraft] = useState("");
   const [mySavingUsdinr, setMySavingUsdinr] = useState(false);
   const [myUsdinrMessage, setMyUsdinrMessage] = useState<string | null>(null);
+
+  // BYO broker credentials (systems/accounts) - moved here from
+  // manual-trading's former "My Credentials" page, see api.ts's own
+  // comment on fetchCredentials/saveCredentials. Drafts always start
+  // blank - GET /credentials never echoes a decrypted secret back, only
+  // presence flags.
+  const [credentials, setCredentials] = useState<CredentialsOut | null>(null);
+  const [credentialsError, setCredentialsError] = useState<string | null>(null);
+  const [draftDhanClientId, setDraftDhanClientId] = useState("");
+  const [draftDhanAccessToken, setDraftDhanAccessToken] = useState("");
+  const [savingDhanCreds, setSavingDhanCreds] = useState(false);
+  const [dhanCredsMessage, setDhanCredsMessage] = useState<string | null>(null);
+  const [draftDeltaApiKey, setDraftDeltaApiKey] = useState("");
+  const [draftDeltaApiSecret, setDraftDeltaApiSecret] = useState("");
+  const [savingDeltaCreds, setSavingDeltaCreds] = useState(false);
+  const [deltaCredsMessage, setDeltaCredsMessage] = useState<string | null>(null);
 
   // Platform-wide (user_id IS NULL) accounts - the rows the automated
   // Strategy-driven flow actually reads (see api.ts's own comment on
@@ -272,8 +291,8 @@ export default function AccountsPage() {
       const confirmed = window.confirm(
         `Turn ON real order placement for your ${segment} account?\n\n` +
           "Every order you place here from now on will be a REAL order sent to Dhan using your own saved " +
-          "credentials, not a paper trade. Make sure your Dhan credentials are saved (My Credentials tab, Manual " +
-          "Trading) and this is really what you want before confirming.",
+          "credentials, not a paper trade. Make sure your Dhan credentials are saved (Credentials section " +
+          "below) and this is really what you want before confirming.",
       );
       if (!confirmed) return;
     }
@@ -316,6 +335,51 @@ export default function AccountsPage() {
       setMyAccountsError(err instanceof Error ? err.message : String(err));
     } finally {
       setMyResettingSegment(null);
+    }
+  }
+
+  useEffect(() => {
+    fetchCredentials()
+      .then(setCredentials)
+      .catch((err) => setCredentialsError(err instanceof Error ? err.message : String(err)));
+  }, []);
+
+  async function handleSaveDhanCredentials() {
+    if (!draftDhanClientId.trim() || !draftDhanAccessToken.trim()) return;
+    setSavingDhanCreds(true);
+    setDhanCredsMessage(null);
+    try {
+      const updated = await saveCredentials({
+        dhan_client_id: draftDhanClientId.trim(),
+        dhan_access_token: draftDhanAccessToken.trim(),
+      });
+      setCredentials(updated);
+      setDraftDhanAccessToken("");
+      setDhanCredsMessage("Saved.");
+    } catch (err) {
+      setDhanCredsMessage(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSavingDhanCreds(false);
+    }
+  }
+
+  async function handleSaveDeltaCredentials() {
+    if (!draftDeltaApiKey.trim() || !draftDeltaApiSecret.trim()) return;
+    setSavingDeltaCreds(true);
+    setDeltaCredsMessage(null);
+    try {
+      const updated = await saveCredentials({
+        delta_api_key: draftDeltaApiKey.trim(),
+        delta_api_secret: draftDeltaApiSecret.trim(),
+      });
+      setCredentials(updated);
+      setDraftDeltaApiKey("");
+      setDraftDeltaApiSecret("");
+      setDeltaCredsMessage("Saved.");
+    } catch (err) {
+      setDeltaCredsMessage(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSavingDeltaCreds(false);
     }
   }
 
@@ -750,6 +814,71 @@ export default function AccountsPage() {
           </div>
           {myUsdinrMessage && <p className="manual-saved-badge">{myUsdinrMessage}</p>}
           {mySettings == null && <p className="error">Could not load settings.</p>}
+        </section>
+
+        <section className="manual-settings-section">
+          <h4>Credentials</h4>
+          <p className="subtitle">Your own Dhan (NSE/MCX) and Delta Exchange India (CRYPTO) keys.</p>
+          <InfoDisclosure summary="Why set these?">
+            <p>
+              Once saved, quotes/candles/option chains, your own manual orders, and the Live trading section
+              above all use YOUR credentials and rate budget instead of the platform default. Never shown back
+              once saved - paste a new value to replace it.
+            </p>
+          </InfoDisclosure>
+          {credentialsError && <p className="error">{credentialsError}</p>}
+
+          <div className="settings-row">
+            <label>
+              Dhan client ID
+              <input type="text" autoComplete="off" value={draftDhanClientId} onChange={(e) => setDraftDhanClientId(e.target.value)} />
+            </label>
+            <label>
+              Dhan access token
+              <input
+                type="password"
+                autoComplete="new-password"
+                placeholder={credentials?.has_dhan ? `Configured (${credentials.dhan_client_id_masked}) - paste a new one to replace` : "Not set"}
+                value={draftDhanAccessToken}
+                onChange={(e) => setDraftDhanAccessToken(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="tiny"
+              disabled={savingDhanCreds || !draftDhanClientId.trim() || !draftDhanAccessToken.trim()}
+              onClick={() => void handleSaveDhanCredentials()}
+            >
+              {savingDhanCreds ? "Saving..." : "Save"}
+            </button>
+            {dhanCredsMessage && <span className="manual-saved-badge">{dhanCredsMessage}</span>}
+          </div>
+
+          <div className="settings-row">
+            <label>
+              Delta API key
+              <input type="text" autoComplete="off" value={draftDeltaApiKey} onChange={(e) => setDraftDeltaApiKey(e.target.value)} />
+            </label>
+            <label>
+              Delta API secret
+              <input
+                type="password"
+                autoComplete="new-password"
+                placeholder={credentials?.has_delta ? "Configured - paste a new one to replace" : "Not set"}
+                value={draftDeltaApiSecret}
+                onChange={(e) => setDraftDeltaApiSecret(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="tiny"
+              disabled={savingDeltaCreds || !draftDeltaApiKey.trim() || !draftDeltaApiSecret.trim()}
+              onClick={() => void handleSaveDeltaCredentials()}
+            >
+              {savingDeltaCreds ? "Saving..." : "Save"}
+            </button>
+            {deltaCredsMessage && <span className="manual-saved-badge">{deltaCredsMessage}</span>}
+          </div>
         </section>
       </div>
 

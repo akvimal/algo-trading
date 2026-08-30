@@ -987,8 +987,9 @@ export async function fetchOiSummary(exchange: string, symbol: string, expiry: s
 // NSE/MCX OI-based sentiment for the header badges - GET /options/sentiment,
 // aggregated (app/domain/sentiment.py) from the same 4-underlying watchlist
 // as the OI tab above. authFetch so a user with their own saved Dhan
-// credentials (My Credentials tab) uses their own token/rate budget for
-// this too, same as fetchOiSummary/fetchOptionExpiries above.
+// credentials (Money tab's own Credentials section) uses their own
+// token/rate budget for this too, same as fetchOiSummary/fetchOptionExpiries
+// above.
 export type SentimentDirection = "bullish" | "bearish" | "neutral";
 export type SentimentStrength = "mild" | "strong" | "very_strong";
 
@@ -1751,43 +1752,6 @@ export async function deleteTradeImage(imageId: string): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------
-// BYO broker credentials (systems/accounts, see docs/architecture.md §
-// "Manual Trading SaaS") - a user's own Dhan/Delta keys, so market-data
-// resolves and uses THEIR OWN credentials/rate budget instead of the
-// platform default (Phase 3) once saved here. Never returns a decrypted
-// secret back - has_dhan/has_delta/dhan_client_id_masked only, matching
-// accounts' own CredentialsOut - the form always starts blank and shows
-// this status text instead, same UX convention execution/frontend's own
-// (now admin-only) Dhan-credentials block already established.
-// ---------------------------------------------------------------------
-
-const ACCOUNTS_PORT = import.meta.env.VITE_ACCOUNTS_PORT ?? "8004";
-const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
-
-export type CredentialsOut = {
-  has_dhan: boolean;
-  has_delta: boolean;
-  dhan_client_id_masked: string | null;
-};
-
-export type CredentialsUpdate = {
-  dhan_client_id?: string;
-  dhan_access_token?: string;
-  delta_api_key?: string;
-  delta_api_secret?: string;
-};
-
-export async function fetchCredentials(): Promise<CredentialsOut> {
-  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`);
-  return asJson(res, "GET /credentials");
-}
-
-export async function saveCredentials(update: CredentialsUpdate): Promise<CredentialsOut> {
-  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(update),
-  });
-  return asJson(res, "PUT /credentials");
-}
+// BYO broker credentials (systems/accounts) - moved to execution/frontend's
+// own "Your account" > Credentials section (see docs/architecture.md) -
+// no manual-trading-specific dependency on this ever existed.

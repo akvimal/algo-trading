@@ -695,6 +695,22 @@ other component ever called them) and were deleted rather than left as dead expo
 knowingly: a Manual Trading user now needs a separate login on the Money tab to edit these settings,
 where previously no second login was needed.
 
+**My Credentials moved into the Money tab too (2026-08-30)**: same session, same reasoning, the user's own
+follow-up observation - BYO Dhan/Delta credentials (`accounts.broker_credentials`) had zero
+manual-trading-specific dependency either (no other component in that frontend ever read them), and were
+arguably MORE naturally Money's than the account settings above - they're the one prerequisite the "Your
+account" Live trading toggle actually needs to do anything real, and that toggle's own confirm dialog had
+just started pointing at "My Credentials tab, Manual Trading" (an awkward cross-app reference introduced by
+the move above). Ported `MyCredentialsPage.tsx`'s content into `execution/frontend`'s `AccountsPage.tsx` as
+a third "Your account" subsection ("Credentials", after the risk/capital cards and USD/INR rate) - reused
+the exact same `ACCOUNTS_BASE_URL`/`VITE_ACCOUNTS_PORT` pattern `execution/frontend`'s own `auth.ts`
+already used for login/signup, so no new build/infra wiring was needed at all. `MyCredentialsPage.tsx`
+deleted, its sub-tab removed from `IntradayPage.tsx` (4 pages → 3); `manual-trading/frontend`'s own
+`fetchCredentials`/`saveCredentials`/`CredentialsOut`/`CredentialsUpdate`/`ACCOUNTS_PORT`/`ACCOUNTS_BASE_URL`
+deleted from its `api.ts` (confirmed unused by anything else there first). The Live-trading confirm
+dialog's wording updated to point at the same page ("Credentials section below") instead of a different
+app.
+
 Added 2026-08-25, Manual tab only (intraday-focused — every manual order is already
 `horizon="intraday"`, see `open_manual_position`/`open_manual_option_group`) — a hand-built rulebook
 the user already followed in a spreadsheet (POI/order-block entries, fixed capital, 1% risk, minimum

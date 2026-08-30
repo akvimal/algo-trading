@@ -362,6 +362,7 @@ export async function updateAccount(
   update: Partial<
     Pick<
       Account,
+      | "starting_balance"
       | "capital_per_trade"
       | "risk_per_trade_pct"
       | "min_reward_risk_ratio"
@@ -396,7 +397,7 @@ export async function fetchPlatformAccounts(): Promise<Account[]> {
 
 export async function updatePlatformAccount(
   segment: Account["segment"],
-  update: Partial<Pick<Account, "leverage" | "leverage_buffer_pct" | "mtf_annual_interest_rate_pct" | "square_off_time">>,
+  update: Partial<Pick<Account, "starting_balance" | "leverage" | "leverage_buffer_pct" | "mtf_annual_interest_rate_pct" | "square_off_time">>,
 ): Promise<Account> {
   const res = await authFetch(`${API_BASE}/accounts/platform/${segment}`, {
     method: "PUT",

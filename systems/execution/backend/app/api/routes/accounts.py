@@ -71,20 +71,25 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
 
 @router.put("/accounts/{segment}")
 def update_account(segment: str, update: AccountUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """capital_per_trade/risk_per_trade_pct/min_reward_risk_ratio/
-    enforce_risk_based_lots/leverage/leverage_buffer_pct/mtf_annual_interest_rate_pct/
-    square_off_time are editable here -
-    use POST /accounts/{segment}/reset to touch
-    current_balance, a deliberately separate action so it's never a side
-    effect of a sizing tweak. square_off_time is the one field where
-    `null` is itself a meaningful value (never force-close, e.g. CRYPTO),
-    not just "leave unchanged" - model_fields_set distinguishes an
-    explicit {"square_off_time": null} from the key being omitted
-    entirely, same pattern signal-generation's update_strategy uses for
-    fixed_lots."""
+    """starting_balance/capital_per_trade/risk_per_trade_pct/
+    min_reward_risk_ratio/enforce_risk_based_lots/leverage/
+    leverage_buffer_pct/mtf_annual_interest_rate_pct/square_off_time are
+    editable here. Setting starting_balance also re-baselines
+    current_balance to match (see AccountUpdate's own docstring) - use
+    POST /accounts/{segment}/reset instead if you just want
+    current_balance restored to whatever starting_balance ALREADY is,
+    a deliberately separate action so it's never a side effect of a
+    sizing tweak. square_off_time is the one field where `null` is itself
+    a meaningful value (never force-close, e.g. CRYPTO), not just "leave
+    unchanged" - model_fields_set distinguishes an explicit
+    {"square_off_time": null} from the key being omitted entirely, same
+    pattern signal-generation's update_strategy uses for fixed_lots."""
     row = load_account(db, user.id, segment.upper())
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
+    if update.starting_balance is not None:
+        row.starting_balance = update.starting_balance
+        row.current_balance = update.starting_balance
     if update.capital_per_trade is not None:
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
@@ -129,15 +134,20 @@ def list_platform_accounts(admin: User = Depends(require_admin), db: Session = D
 def update_platform_account(
     segment: str, update: AccountUpdate, admin: User = Depends(require_admin), db: Session = Depends(get_db)
 ):
-    """Same field-by-field update as PUT /accounts/{segment} above, just
-    against the platform-wide row (user_id IS NULL) instead of the
-    caller's own - the only route that can write it. Admin-gated since
-    this is broker/platform config (leverage, MTF interest rate, etc.),
-    not a per-SaaS-user setting - see the per-Strategy use_margin field
-    (signal-generation) for how a strategy opts into it."""
+    """Same field-by-field update as PUT /accounts/{segment} above
+    (including the starting_balance re-baselining behavior - see
+    AccountUpdate's own docstring), just against the platform-wide row
+    (user_id IS NULL) instead of the caller's own - the only route that
+    can write it. Admin-gated since this is broker/platform config
+    (leverage, MTF interest rate, etc.), not a per-SaaS-user setting -
+    see the per-Strategy use_margin field (signal-generation) for how a
+    strategy opts into it."""
     row = load_account(db, None, segment.upper())
     if row is None:
         raise HTTPException(status_code=404, detail=f"no platform account for segment {segment}")
+    if update.starting_balance is not None:
+        row.starting_balance = update.starting_balance
+        row.current_balance = update.starting_balance
     if update.capital_per_trade is not None:
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:

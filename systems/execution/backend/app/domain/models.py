@@ -219,9 +219,15 @@ class AccountOut(BaseModel):
 
 class AccountUpdate(BaseModel):
     """PUT /accounts/{segment} - all fields optional, only what's provided
-    changes. Does not touch current_balance - see POST /accounts/{segment}/reset
-    for that."""
+    changes. Setting starting_balance also re-baselines current_balance to
+    the same value (a deliberate re-seed, not just "change the number the
+    account started at while keeping today's realized P&L standing" -
+    those two can't be pulled apart meaningfully, since current_balance
+    only ever moved relative to the OLD starting point). See
+    POST /accounts/{segment}/reset for resetting current_balance back to
+    whatever starting_balance already is, without changing it."""
 
+    starting_balance: Optional[float] = Field(default=None, gt=0)
     capital_per_trade: Optional[float] = Field(default=None, gt=0)
     risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
     min_reward_risk_ratio: Optional[float] = Field(default=None, gt=0)

@@ -135,6 +135,7 @@ export default function AccountsPage() {
   const [myDraftRR, setMyDraftRR] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftEnforceLots, setMyDraftEnforceLots] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
   const [myDraftCapital, setMyDraftCapital] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftStartingBalance, setMyDraftStartingBalance] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftLeverage, setMyDraftLeverage] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftLeverageBuffer, setMyDraftLeverageBuffer] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftSquareOffTime, setMyDraftSquareOffTime] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
@@ -174,7 +175,10 @@ export default function AccountsPage() {
   // fetchPlatformAccounts). Admin-only, unlike "Your account" above.
   const [platformAccounts, setPlatformAccounts] = useState<Account[]>([]);
   const [platformDrafts, setPlatformDrafts] = useState<
-    Record<string, { leverage: number | ""; leverageBufferPct: number | ""; mtfInterestRate: number | ""; squareOffTime: string }>
+    Record<
+      string,
+      { startingBalance: number | ""; leverage: number | ""; leverageBufferPct: number | ""; mtfInterestRate: number | ""; squareOffTime: string }
+    >
   >({});
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [savingPlatform, setSavingPlatform] = useState<string | null>(null);
@@ -263,6 +267,11 @@ export default function AccountsPage() {
         for (const a of data) next[a.segment] = String(a.capital_per_trade);
         return next;
       });
+      setMyDraftStartingBalance((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = String(a.starting_balance);
+        return next;
+      });
       setMyDraftLeverage((prev) => {
         const next = { ...prev };
         for (const a of data) next[a.segment] = String(a.leverage);
@@ -339,6 +348,11 @@ export default function AccountsPage() {
       setMyAccountsError(`${segment}: Capital/trade must be greater than 0`);
       return;
     }
+    const startingBalance = Number(myDraftStartingBalance[segment]);
+    if (!Number.isFinite(startingBalance) || startingBalance <= 0) {
+      setMyAccountsError(`${segment}: Starting balance must be greater than 0`);
+      return;
+    }
     let leverage: number | undefined;
     if (segment === "CRYPTO" || segment === "NSE") {
       leverage = Number(myDraftLeverage[segment]);
@@ -369,6 +383,16 @@ export default function AccountsPage() {
     }
 
     const existing = myAccounts.find((a) => a.segment === segment);
+    const startingBalanceChanged = existing != null && startingBalance !== existing.starting_balance;
+    if (startingBalanceChanged) {
+      const currency = segment === "CRYPTO" ? "$" : "₹";
+      const confirmed = window.confirm(
+        `Change ${segment}'s starting balance from ${currency}${existing.starting_balance} to ${currency}${startingBalance}?\n\n` +
+          `This also resets the current balance to match (currently ${currency}${existing.current_balance.toFixed(2)}) - ` +
+          "any realized P&L standing on this account is cleared relative to the new baseline. This can't be undone.",
+      );
+      if (!confirmed) return;
+    }
     const turningLiveOn = myDraftLiveEnabled[segment] && !(existing?.live_trading_enabled ?? false);
     if (turningLiveOn) {
       const confirmed = window.confirm(
@@ -383,6 +407,7 @@ export default function AccountsPage() {
     setMySavingSegment(segment);
     try {
       await updateAccount(segment, {
+        ...(startingBalanceChanged ? { starting_balance: startingBalance } : {}),
         risk_per_trade_pct,
         min_reward_risk_ratio,
         enforce_risk_based_lots: myDraftEnforceLots[segment],
@@ -417,6 +442,7 @@ export default function AccountsPage() {
     setMyDraftRR((prev) => ({ ...prev, [segment]: String(account.min_reward_risk_ratio) }));
     setMyDraftEnforceLots((prev) => ({ ...prev, [segment]: account.enforce_risk_based_lots }));
     setMyDraftCapital((prev) => ({ ...prev, [segment]: String(account.capital_per_trade) }));
+    setMyDraftStartingBalance((prev) => ({ ...prev, [segment]: String(account.starting_balance) }));
     setMyDraftLeverage((prev) => ({ ...prev, [segment]: String(account.leverage) }));
     setMyDraftLeverageBuffer((prev) => ({ ...prev, [segment]: String(account.leverage_buffer_pct) }));
     setMyDraftSquareOffTime((prev) => ({ ...prev, [segment]: account.square_off_time ? account.square_off_time.slice(0, 5) : "" }));
@@ -514,6 +540,7 @@ export default function AccountsPage() {
           for (const a of data) {
             if (!(a.segment in next))
               next[a.segment] = {
+                startingBalance: a.starting_balance,
                 leverage: a.leverage,
                 leverageBufferPct: a.leverage_buffer_pct,
                 mtfInterestRate: a.mtf_annual_interest_rate_pct ?? "",
@@ -785,11 +812,23 @@ export default function AccountsPage() {
 
   async function handleSavePlatform(segment: Account["segment"]) {
     const draft = platformDrafts[segment];
-    if (!draft || draft.leverage === "") return;
+    if (!draft || draft.leverage === "" || draft.startingBalance === "") return;
+    const account = platformAccounts.find((a) => a.segment === segment);
+    const startingBalanceChanged = account != null && draft.startingBalance !== account.starting_balance;
+    if (startingBalanceChanged) {
+      const currency = segment === "CRYPTO" ? "$" : "₹";
+      const confirmed = window.confirm(
+        `Change the platform ${segment} account's starting balance from ${currency}${account.starting_balance} to ${currency}${draft.startingBalance}?\n\n` +
+          `This also resets the current balance to match (currently ${currency}${account.current_balance.toFixed(2)}) - ` +
+          "any realized P&L standing on this account is cleared relative to the new baseline. This can't be undone.",
+      );
+      if (!confirmed) return;
+    }
     setSavingPlatform(segment);
     setPlatformMessage(null);
     try {
       const updated = await updatePlatformAccount(segment, {
+        ...(startingBalanceChanged ? { starting_balance: draft.startingBalance } : {}),
         leverage: draft.leverage,
         ...(segment === "NSE" && draft.leverageBufferPct !== "" ? { leverage_buffer_pct: draft.leverageBufferPct } : {}),
         mtf_annual_interest_rate_pct: draft.mtfInterestRate === "" ? null : draft.mtfInterestRate,
@@ -813,6 +852,7 @@ export default function AccountsPage() {
     setPlatformDrafts((prev) => ({
       ...prev,
       [segment]: {
+        startingBalance: account.starting_balance,
         leverage: account.leverage,
         leverageBufferPct: account.leverage_buffer_pct,
         mtfInterestRate: account.mtf_annual_interest_rate_pct ?? "",
@@ -976,6 +1016,17 @@ export default function AccountsPage() {
                           value={myDraftCapital[seg]}
                           disabled={!account}
                           onChange={(e) => setMyDraftCapital((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        />
+                      </label>
+                      <label title="Changing this also resets the current balance to match - clears realized P&L standing relative to the new baseline. Use the Reset button below instead if you just want the current balance restored to today's starting balance unchanged.">
+                        Starting balance
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={myDraftStartingBalance[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftStartingBalance((prev) => ({ ...prev, [seg]: e.target.value }))}
                         />
                       </label>
                       {(seg === "CRYPTO" || seg === "NSE") && (
@@ -1298,6 +1349,9 @@ export default function AccountsPage() {
           <thead>
             <tr>
               <th>Segment</th>
+              <th title="Changing this also resets the current balance to match - clears realized P&L standing relative to the new baseline.">
+                Starting balance
+              </th>
               <th>Leverage</th>
               <th>Leverage buffer % (NSE)</th>
               <th>MTF interest %/yr (NSE)</th>
@@ -1308,13 +1362,14 @@ export default function AccountsPage() {
           <tbody>
             {SEGMENTS.map((segment) => {
               const account = platformAccounts.find((a) => a.segment === segment);
-              const draft = platformDrafts[segment] ?? { leverage: "", leverageBufferPct: "", mtfInterestRate: "", squareOffTime: "" };
+              const draft = platformDrafts[segment] ?? { startingBalance: "", leverage: "", leverageBufferPct: "", mtfInterestRate: "", squareOffTime: "" };
               const editing = platformEditing[segment];
               return (
                 <tr key={segment}>
                   <td className="symbol">{segment}</td>
                   {!editing ? (
                     <>
+                      <td>{account ? `${segment === "CRYPTO" ? "$" : "₹"}${account.starting_balance}` : "-"}</td>
                       <td>{segment === "MCX" ? "-" : `${account?.leverage ?? "-"}x`}</td>
                       <td>{segment === "NSE" ? `${account?.leverage_buffer_pct ?? "-"}%` : "-"}</td>
                       <td>{segment === "NSE" ? account?.mtf_annual_interest_rate_pct ?? "not set" : "-"}</td>
@@ -1334,6 +1389,20 @@ export default function AccountsPage() {
                     </>
                   ) : (
                     <>
+                      <td>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={draft.startingBalance}
+                          onChange={(e) =>
+                            setPlatformDrafts((prev) => ({
+                              ...prev,
+                              [segment]: { ...draft, startingBalance: e.target.value === "" ? "" : Number(e.target.value) },
+                            }))
+                          }
+                        />
+                      </td>
                       <td>
                         {segment === "CRYPTO" ? (
                           <select

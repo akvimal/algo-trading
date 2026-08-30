@@ -67,6 +67,16 @@ class Account(Base):
     # open_manual_position's own sizing branches), harmlessly unused for
     # MCX - see app/domain/models.py's AccountOut.leverage.
     leverage = Column(Numeric, nullable=False, default=1)
+    # NSE only (both MTF and intraday MIS margin, same scope as leverage
+    # above but NOT applied to CRYPTO's own leverage - see
+    # position_manager.open_position/open_manual_position). Shaves this %
+    # off the leveraged effective_capital before sizing, as headroom
+    # against slippage between the signal/order price and the actual fill
+    # price - without it, a position sized against the full leveraged
+    # notional could exceed the account's real margin capacity on a fill
+    # that's even slightly worse than the price it was sized against.
+    # Default 10 (not 0) - see app/domain/models.py's AccountOut.leverage_buffer_pct.
+    leverage_buffer_pct = Column(Numeric, nullable=False, default=10)
     # NSE MTF only - see infra/postgres/init/02-execution.sql's own comment.
     mtf_annual_interest_rate_pct = Column(Numeric, nullable=True)
     # NULL means never force-closed (CRYPTO's default) - see app/domain/models.py's AccountOut.square_off_time.

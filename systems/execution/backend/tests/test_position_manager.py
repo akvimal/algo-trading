@@ -7,6 +7,7 @@ import pytest
 
 from app.domain.position_manager import (
     _STOP_LOSS_COMPUTE_FUNCS,
+    _apply_nse_leverage,
     _apply_realized_pnl,
     _evaluate_exits,
     _evaluate_square_off_due,
@@ -1477,3 +1478,24 @@ def test_open_delta_fee_fields_positional_nse_mtf_unaffected_by_intraday_branch(
     assert margin_posted == pytest.approx(250.0)  # (100*10) / 4
     assert liquidation_price is None
     assert interest == 18.0
+
+
+def test_apply_nse_leverage_shaves_off_the_configured_buffer():
+    """10,000 capital, 5x leverage, 10% buffer -> sizes against 45,000
+    (50,000 leveraged notional minus a 10% slippage-headroom buffer), not
+    the full 50,000 - see docs/architecture.md."""
+    account = SimpleNamespace(leverage=5, leverage_buffer_pct=10)
+    assert _apply_nse_leverage(10_000.0, account) == pytest.approx(45_000.0)
+
+
+def test_apply_nse_leverage_zero_buffer_uses_the_full_leveraged_notional():
+    account = SimpleNamespace(leverage=5, leverage_buffer_pct=0)
+    assert _apply_nse_leverage(10_000.0, account) == pytest.approx(50_000.0)
+
+
+def test_apply_nse_leverage_no_leverage_still_applies_the_buffer():
+    """leverage=1 doesn't skip the buffer - only open_position/
+    open_manual_position's own `leverage > 1` guard decides whether this
+    function is called at all."""
+    account = SimpleNamespace(leverage=1, leverage_buffer_pct=10)
+    assert _apply_nse_leverage(10_000.0, account) == pytest.approx(9_000.0)

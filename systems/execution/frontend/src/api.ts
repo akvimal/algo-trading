@@ -160,6 +160,12 @@ export type Account = {
   // flow reads; THIS row is the caller's own, read by their own Manual tab
   // orders - see position_manager.open_position/open_manual_position.
   leverage: number;
+  // NSE only (both MTF and intraday MIS margin - NOT applied to CRYPTO's
+  // own leverage above). Shaves this % off the leveraged capital before
+  // sizing, as headroom against slippage between the signal/order price
+  // and the actual fill price. Defaults to 10 - see
+  // position_manager._apply_nse_leverage.
+  leverage_buffer_pct: number;
   // NSE MTF only - the manually configured annualized interest rate
   // charged on the borrowed portion of a leverage>1 NSE positional
   // position. null until set - such an order is rejected rather than
@@ -352,6 +358,7 @@ export async function updateAccount(
       | "min_reward_risk_ratio"
       | "enforce_risk_based_lots"
       | "leverage"
+      | "leverage_buffer_pct"
       | "square_off_time"
       | "live_trading_enabled"
       | "max_order_value"
@@ -380,7 +387,7 @@ export async function fetchPlatformAccounts(): Promise<Account[]> {
 
 export async function updatePlatformAccount(
   segment: Account["segment"],
-  update: Partial<Pick<Account, "leverage" | "mtf_annual_interest_rate_pct" | "square_off_time">>,
+  update: Partial<Pick<Account, "leverage" | "leverage_buffer_pct" | "mtf_annual_interest_rate_pct" | "square_off_time">>,
 ): Promise<Account> {
   const res = await authFetch(`${API_BASE}/accounts/platform/${segment}`, {
     method: "PUT",

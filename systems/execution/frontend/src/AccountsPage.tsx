@@ -76,6 +76,7 @@ export default function AccountsPage() {
   const [myDraftEnforceLots, setMyDraftEnforceLots] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
   const [myDraftCapital, setMyDraftCapital] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftLeverage, setMyDraftLeverage] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftLeverageBuffer, setMyDraftLeverageBuffer] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftSquareOffTime, setMyDraftSquareOffTime] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftNeverSquareOff, setMyDraftNeverSquareOff] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
   const [myDraftLiveEnabled, setMyDraftLiveEnabled] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
@@ -113,7 +114,7 @@ export default function AccountsPage() {
   // fetchPlatformAccounts). Admin-only, unlike "Your account" above.
   const [platformAccounts, setPlatformAccounts] = useState<Account[]>([]);
   const [platformDrafts, setPlatformDrafts] = useState<
-    Record<string, { leverage: number | ""; mtfInterestRate: number | ""; squareOffTime: string }>
+    Record<string, { leverage: number | ""; leverageBufferPct: number | ""; mtfInterestRate: number | ""; squareOffTime: string }>
   >({});
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [savingPlatform, setSavingPlatform] = useState<string | null>(null);
@@ -198,6 +199,11 @@ export default function AccountsPage() {
         for (const a of data) next[a.segment] = String(a.leverage);
         return next;
       });
+      setMyDraftLeverageBuffer((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = String(a.leverage_buffer_pct);
+        return next;
+      });
       setMyDraftSquareOffTime((prev) => {
         const next = { ...prev };
         for (const a of data) next[a.segment] = a.square_off_time ? a.square_off_time.slice(0, 5) : "";
@@ -272,6 +278,14 @@ export default function AccountsPage() {
         return;
       }
     }
+    let leverageBufferPct: number | undefined;
+    if (segment === "NSE") {
+      leverageBufferPct = Number(myDraftLeverageBuffer[segment]);
+      if (!Number.isFinite(leverageBufferPct) || leverageBufferPct < 0 || leverageBufferPct >= 100) {
+        setMyAccountsError(`${segment}: Leverage buffer must be between 0 and 100`);
+        return;
+      }
+    }
     const square_off_time = myDraftNeverSquareOff[segment] || !myDraftSquareOffTime[segment] ? null : `${myDraftSquareOffTime[segment]}:00`;
 
     const maxOrderValueNum = myDraftMaxOrderValue[segment] === "" ? null : Number(myDraftMaxOrderValue[segment]);
@@ -305,6 +319,7 @@ export default function AccountsPage() {
         enforce_risk_based_lots: myDraftEnforceLots[segment],
         capital_per_trade,
         ...(leverage !== undefined ? { leverage } : {}),
+        ...(leverageBufferPct !== undefined ? { leverage_buffer_pct: leverageBufferPct } : {}),
         square_off_time,
         ...(segment !== "CRYPTO"
           ? { live_trading_enabled: myDraftLiveEnabled[segment], max_order_value: maxOrderValueNum, max_daily_loss: maxDailyLossNum }
@@ -398,6 +413,7 @@ export default function AccountsPage() {
             if (!(a.segment in next))
               next[a.segment] = {
                 leverage: a.leverage,
+                leverageBufferPct: a.leverage_buffer_pct,
                 mtfInterestRate: a.mtf_annual_interest_rate_pct ?? "",
                 squareOffTime: a.square_off_time ? a.square_off_time.slice(0, 5) : "",
               };
@@ -596,6 +612,7 @@ export default function AccountsPage() {
     try {
       const updated = await updatePlatformAccount(segment, {
         leverage: draft.leverage,
+        ...(segment === "NSE" && draft.leverageBufferPct !== "" ? { leverage_buffer_pct: draft.leverageBufferPct } : {}),
         mtf_annual_interest_rate_pct: draft.mtfInterestRate === "" ? null : draft.mtfInterestRate,
         square_off_time: draft.squareOffTime ? `${draft.squareOffTime}:00` : null,
       });
@@ -696,6 +713,20 @@ export default function AccountsPage() {
                         value={myDraftLeverage[seg]}
                         disabled={!account}
                         onChange={(e) => setMyDraftLeverage((prev) => ({ ...prev, [seg]: e.target.value }))}
+                      />
+                    </label>
+                  )}
+                  {seg === "NSE" && (
+                    <label title="Shaves this % off the leveraged capital before sizing, as headroom against slippage between the signal/order price and the actual fill price - e.g. leverage 5x with a 10% buffer sizes against 4.5x, not the full 5x.">
+                      Leverage buffer %
+                      <input
+                        type="number"
+                        min="0"
+                        max="99"
+                        step="1"
+                        value={myDraftLeverageBuffer[seg]}
+                        disabled={!account}
+                        onChange={(e) => setMyDraftLeverageBuffer((prev) => ({ ...prev, [seg]: e.target.value }))}
                       />
                     </label>
                   )}
@@ -899,6 +930,11 @@ export default function AccountsPage() {
           Leverage/MTF interest here is broker/platform config too - a Strategy opts in via its own{" "}
           <code>use_margin</code> field (signal-generation) before this leverage ever applies to one of its orders.
         </p>
+        <p>
+          <strong>Leverage buffer %</strong> (NSE only): shaved off the leveraged capital before sizing, as headroom
+          against slippage between the signal price and the actual fill - e.g. 5x leverage with a 10% buffer sizes
+          against 4.5x, not the full 5x.
+        </p>
       </InfoDisclosure>
       {platformError && <p className="error">Could not reach the backend: {platformError}</p>}
       {platformMessage && <p className="action-message">{platformMessage}</p>}
@@ -908,6 +944,7 @@ export default function AccountsPage() {
             <tr>
               <th>Segment</th>
               <th>Leverage</th>
+              <th>Leverage buffer % (NSE)</th>
               <th>MTF interest %/yr (NSE)</th>
               <th>Square-off (blank = never)</th>
               <th></th>
@@ -916,7 +953,7 @@ export default function AccountsPage() {
           <tbody>
             {SEGMENTS.map((segment) => {
               const account = platformAccounts.find((a) => a.segment === segment);
-              const draft = platformDrafts[segment] ?? { leverage: "", mtfInterestRate: "", squareOffTime: "" };
+              const draft = platformDrafts[segment] ?? { leverage: "", leverageBufferPct: "", mtfInterestRate: "", squareOffTime: "" };
               return (
                 <tr key={segment}>
                   <td className="symbol">{segment}</td>
@@ -948,6 +985,26 @@ export default function AccountsPage() {
                           setPlatformDrafts((prev) => ({
                             ...prev,
                             [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
+                          }))
+                        }
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td>
+                    {segment === "NSE" ? (
+                      <input
+                        type="number"
+                        min="0"
+                        max="99"
+                        step="1"
+                        title="Shaves this % off the leveraged capital before sizing, as headroom against slippage between the signal/order price and the actual fill price."
+                        value={draft.leverageBufferPct}
+                        onChange={(e) =>
+                          setPlatformDrafts((prev) => ({
+                            ...prev,
+                            [segment]: { ...draft, leverageBufferPct: e.target.value === "" ? "" : Number(e.target.value) },
                           }))
                         }
                       />

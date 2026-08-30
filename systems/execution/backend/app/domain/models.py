@@ -178,6 +178,15 @@ class AccountOut(BaseModel):
     # MCX. See position_manager.open_position/open_manual_position's own
     # sizing branches.
     leverage: float
+    # NSE only (both MTF and intraday MIS margin - NOT applied to CRYPTO's
+    # own leverage above). Shaves this % off the leveraged effective_capital
+    # before sizing - headroom against slippage between the signal/order
+    # price and the actual fill price, so a position sized against the
+    # leveraged notional doesn't risk exceeding the account's real margin
+    # capacity. Default 10 (not 0 - a real account should keep some
+    # buffer unless explicitly set to 0). See position_manager.open_position/
+    # open_manual_position's own sizing branches.
+    leverage_buffer_pct: float
     # NSE MTF only - the manually configured annualized interest rate on
     # the borrowed portion of a leverage > 1 NSE positional position. NULL
     # until set - such a position is REJECTED rather than opened with
@@ -211,6 +220,7 @@ class AccountUpdate(BaseModel):
     min_reward_risk_ratio: Optional[float] = Field(default=None, gt=0)
     enforce_risk_based_lots: Optional[bool] = None
     leverage: Optional[float] = Field(default=None, gt=0)
+    leverage_buffer_pct: Optional[float] = Field(default=None, ge=0, lt=100)
     # Explicitly settable back to null (disables NSE MTF leverage>1 orders
     # again) - same model_fields_set-distinguished pattern square_off_time
     # below already uses.

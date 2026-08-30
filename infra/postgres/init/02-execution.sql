@@ -103,6 +103,14 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     -- enforcement of this flag exists (or is needed).
     enforce_risk_based_lots BOOLEAN NOT NULL DEFAULT false,
     leverage            NUMERIC NOT NULL DEFAULT 1 CHECK (leverage > 0),
+    -- NSE only (both MTF and intraday MIS margin - NOT applied to
+    -- CRYPTO's own leverage above). Shaves this % off the leveraged
+    -- effective_capital before sizing, as headroom against slippage
+    -- between the signal/order price and the actual fill price - see
+    -- position_manager.open_position/open_manual_position. Default 10,
+    -- not 0 - a real account should keep some buffer unless explicitly
+    -- set to 0.
+    leverage_buffer_pct NUMERIC NOT NULL DEFAULT 10 CHECK (leverage_buffer_pct >= 0 AND leverage_buffer_pct < 100),
     -- NSE MTF (margin trading facility) only - the manually configured
     -- annualized interest rate charged on the borrowed portion of a
     -- leveraged NSE positional spot position (leverage > 1). NULL by
@@ -868,3 +876,6 @@ ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS max_daily_loss 
 ALTER TABLE execution.strategy_accounts DROP CONSTRAINT IF EXISTS strategy_accounts_live_requires_user;
 ALTER TABLE execution.strategy_accounts ADD CONSTRAINT strategy_accounts_live_requires_user
     CHECK (NOT live_trading_enabled OR live_trading_user_id IS NOT NULL);
+
+-- Leverage buffer (2026-08-30) - see accounts.leverage_buffer_pct's own comment.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS leverage_buffer_pct NUMERIC NOT NULL DEFAULT 10 CHECK (leverage_buffer_pct >= 0 AND leverage_buffer_pct < 100);

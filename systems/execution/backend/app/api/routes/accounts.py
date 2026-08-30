@@ -24,6 +24,7 @@ def _to_out(row: db_models.Account) -> dict:
         "min_reward_risk_ratio": float(row.min_reward_risk_ratio),
         "enforce_risk_based_lots": row.enforce_risk_based_lots,
         "leverage": float(row.leverage),
+        "leverage_buffer_pct": float(row.leverage_buffer_pct),
         "mtf_annual_interest_rate_pct": float(row.mtf_annual_interest_rate_pct) if row.mtf_annual_interest_rate_pct is not None else None,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "live_trading_enabled": row.live_trading_enabled,
@@ -46,7 +47,7 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
 @router.put("/accounts/{segment}")
 def update_account(segment: str, update: AccountUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """capital_per_trade/risk_per_trade_pct/min_reward_risk_ratio/
-    enforce_risk_based_lots/leverage/mtf_annual_interest_rate_pct/
+    enforce_risk_based_lots/leverage/leverage_buffer_pct/mtf_annual_interest_rate_pct/
     square_off_time are editable here -
     use POST /accounts/{segment}/reset to touch
     current_balance, a deliberately separate action so it's never a side
@@ -69,6 +70,8 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.enforce_risk_based_lots = update.enforce_risk_based_lots
     if update.leverage is not None:
         row.leverage = update.leverage
+    if update.leverage_buffer_pct is not None:
+        row.leverage_buffer_pct = update.leverage_buffer_pct
     if "mtf_annual_interest_rate_pct" in update.model_fields_set:
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
@@ -120,6 +123,8 @@ def update_platform_account(
         row.enforce_risk_based_lots = update.enforce_risk_based_lots
     if update.leverage is not None:
         row.leverage = update.leverage
+    if update.leverage_buffer_pct is not None:
+        row.leverage_buffer_pct = update.leverage_buffer_pct
     if "mtf_annual_interest_rate_pct" in update.model_fields_set:
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:

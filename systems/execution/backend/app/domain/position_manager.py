@@ -71,6 +71,19 @@ def compute_quantity(capital_per_trade: float, price: float, lot_size: float = 1
     return lots * lot_size
 
 
+def _apply_nse_leverage(effective_capital: float, account: db_models.Account) -> float:
+    """Scales effective_capital by account.leverage, then shaves off
+    account.leverage_buffer_pct - headroom against slippage between the
+    signal/order price and the actual fill price, so a position sized
+    against the leveraged notional doesn't risk exceeding the account's
+    real margin capacity on a fill that's even slightly worse than the
+    price it was sized against. NSE only (both MTF and intraday MIS
+    margin) - CRYPTO's own leverage scaling doesn't call this, unaffected.
+    See position_manager.open_position/open_manual_position's own call
+    sites and docs/architecture.md."""
+    return effective_capital * float(account.leverage) * (1 - float(account.leverage_buffer_pct) / 100)
+
+
 def compute_stop_loss_percent_price(action: str, entry_price: float, stop_loss_percent: float) -> float:
     if action == "BUY":
         return entry_price * (1 - stop_loss_percent / 100)
@@ -1359,7 +1372,7 @@ def open_position(
             )
             db.commit()
             return row
-        effective_capital = effective_capital * float(account.leverage)
+        effective_capital = _apply_nse_leverage(effective_capital, account)
     elif order.segment == "NSE" and order.horizon == "intraday" and order.instrument_type == "spot" and float(account.leverage) > 1:
         # Intraday MIS margin (a broker margin against same-day-squared-off
         # equity, unlike MTF above which borrows cash against equity held
@@ -1370,7 +1383,7 @@ def open_position(
         # flat by end of day), unlike MTF's genuine overnight borrowing
         # cost - see _net_pnl_with_costs, which this path never reaches
         # (mtf_interest_rate_pct stays unset on the resulting position).
-        effective_capital = effective_capital * float(account.leverage)
+        effective_capital = _apply_nse_leverage(effective_capital, account)
 
     # Only futures carry a lot concept - spot (NSE cash equity) keeps
     # lot_size=1 with no extra network call, so that path's latency is
@@ -1772,7 +1785,7 @@ def open_manual_position(
         # horizon='intraday', see its own docstring) - no interest cost,
         # unlike NSE MTF (positional-only, not reachable from the Manual
         # tab at all).
-        effective_capital = effective_capital * float(account.leverage)
+        effective_capital = _apply_nse_leverage(effective_capital, account)
 
     capital_unit = "USD" if segment == "CRYPTO" else "INR"
     if quantity is not None:

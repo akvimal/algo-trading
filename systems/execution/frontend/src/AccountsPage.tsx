@@ -25,14 +25,52 @@ import {
   updateStrategyAccount,
 } from "./api";
 import { getAuthIsAdmin } from "./auth";
-import { CheckIcon, RotateCcwIcon, TrashIcon } from "./Icons";
+import { CheckIcon, PencilIcon, RotateCcwIcon, TrashIcon, XIcon } from "./Icons";
 import { InfoDisclosure } from "./InfoDisclosure";
-import { SEGMENTS, formatPct } from "./format";
+import { SEGMENTS } from "./format";
 
 const POLL_INTERVAL_MS = 5000;
 const LEVERAGE_OPTIONS = [1, 10, 25, 50, 100, 150, 200];
 
 type Segment = Account["segment"];
+type AccountsTab = "mine" | "platform" | "live-status" | "strategy-accounts";
+
+// current_balance broken into realized (banked, since starting_balance)
+// and unrealized (live mark-to-market on OPEN positions) - the same pair
+// shown for "Your account"/Platform/Dedicated strategy accounts, so one
+// shared renderer keeps the three displays consistent.
+function BalanceBreakdown({
+  currentBalance,
+  realizedPnl,
+  unrealizedPnl,
+  currency = "₹",
+  locale = "en-IN",
+}: {
+  currentBalance: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  currency?: string;
+  locale?: string;
+}) {
+  return (
+    <span className="balance-breakdown">
+      <strong>
+        {currency}
+        {fmtMoney(currentBalance, locale)}
+      </strong>
+      <span className={`balance-breakdown-detail ${realizedPnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+        Realized {realizedPnl >= 0 ? "+" : ""}
+        {currency}
+        {fmtMoney(realizedPnl, locale)}
+      </span>
+      <span className={`balance-breakdown-detail ${unrealizedPnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+        Unrealized {unrealizedPnl >= 0 ? "+" : ""}
+        {currency}
+        {fmtMoney(unrealizedPnl, locale)}
+      </span>
+    </span>
+  );
+}
 
 // Whole numbers (the common case - capital/trade and risk amount are
 // almost always round configured/computed figures) show with no decimals;
@@ -56,6 +94,24 @@ export default function AccountsPage() {
   // separate admin check is needed here" assumption from execution/
   // frontend's old admin-only era).
   const isAdmin = getAuthIsAdmin();
+
+  // Top-level page layout - one section visible at a time instead of a
+  // long stack of every form (each was already independently useful, just
+  // not all needed at once). "platform"/"live-status" are admin-only, same
+  // gating the sections themselves already had.
+  const [activeTab, setActiveTab] = useState<AccountsTab>("mine");
+
+  // Every editable section below defaults to READ-ONLY - a saved value is
+  // shown as plain text, not a live input, so loading the page can never
+  // itself risk a fat-fingered edit. Clicking Edit (PencilIcon) copies the
+  // current server value into that row/card's own draft state (already
+  // kept in sync by each section's own poll/refresh below) and reveals the
+  // input fields; Cancel (XIcon) discards the draft and reverts to
+  // read-only without saving; Save persists then reverts to read-only too.
+  const [myEditing, setMyEditing] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  const [myEditingUsdinr, setMyEditingUsdinr] = useState(false);
+  const [platformEditing, setPlatformEditing] = useState<Record<string, boolean>>({});
+  const [strategyEditing, setStrategyEditing] = useState<Record<string, boolean>>({});
 
   // "Your account" - the caller's OWN personal capital/risk/leverage/
   // square-off/live-trading settings (execution.accounts, one row per
@@ -329,11 +385,44 @@ export default function AccountsPage() {
       setMyJustSavedSegment(segment);
       setTimeout(() => setMyJustSavedSegment((s) => (s === segment ? null : s)), 2500);
       setMyAccountsError(null);
+      setMyEditing((prev) => ({ ...prev, [segment]: false }));
     } catch (err) {
       setMyAccountsError(err instanceof Error ? err.message : String(err));
     } finally {
       setMySavingSegment(null);
     }
+  }
+
+  // Shared by startMyEdit/cancelMyEdit below - re-derives `segment`'s
+  // drafts from the account row already held in myAccounts (kept current
+  // by refreshMyAccounts) rather than re-fetching, so entering edit mode
+  // never shows a stale draft and cancelling always discards local typing.
+  function syncMyDraftsFromAccount(segment: Segment) {
+    const account = myAccounts.find((a) => a.segment === segment);
+    if (!account) return;
+    setMyDraftRisk((prev) => ({ ...prev, [segment]: String(account.risk_per_trade_pct) }));
+    setMyDraftRR((prev) => ({ ...prev, [segment]: String(account.min_reward_risk_ratio) }));
+    setMyDraftEnforceLots((prev) => ({ ...prev, [segment]: account.enforce_risk_based_lots }));
+    setMyDraftCapital((prev) => ({ ...prev, [segment]: String(account.capital_per_trade) }));
+    setMyDraftLeverage((prev) => ({ ...prev, [segment]: String(account.leverage) }));
+    setMyDraftLeverageBuffer((prev) => ({ ...prev, [segment]: String(account.leverage_buffer_pct) }));
+    setMyDraftSquareOffTime((prev) => ({ ...prev, [segment]: account.square_off_time ? account.square_off_time.slice(0, 5) : "" }));
+    setMyDraftNeverSquareOff((prev) => ({ ...prev, [segment]: account.square_off_time == null }));
+    setMyDraftLiveEnabled((prev) => ({ ...prev, [segment]: account.live_trading_enabled }));
+    setMyDraftMaxOrderValue((prev) => ({ ...prev, [segment]: account.max_order_value != null ? String(account.max_order_value) : "" }));
+    setMyDraftMaxDailyLoss((prev) => ({ ...prev, [segment]: account.max_daily_loss != null ? String(account.max_daily_loss) : "" }));
+  }
+
+  function startMyEdit(segment: Segment) {
+    syncMyDraftsFromAccount(segment);
+    setMyAccountsError(null);
+    setMyEditing((prev) => ({ ...prev, [segment]: true }));
+  }
+
+  function cancelMyEdit(segment: Segment) {
+    syncMyDraftsFromAccount(segment);
+    setMyAccountsError(null);
+    setMyEditing((prev) => ({ ...prev, [segment]: false }));
   }
 
   async function resetMySegmentBalance(segment: Segment) {
@@ -560,11 +649,44 @@ export default function AccountsPage() {
       });
       setStrategyAccounts((prev) => prev.map((a) => (a.strategy_id === strategyId ? updated : a)));
       setStrategyAccountMessage(`${strategyName(strategyId)}'s dedicated account saved.`);
+      setStrategyEditing((prev) => ({ ...prev, [strategyId]: false }));
     } catch (err) {
       setStrategyAccountMessage(err instanceof Error ? err.message : "Failed to save dedicated account");
     } finally {
       setSavingStrategyAccount(null);
     }
+  }
+
+  // Shared by startStrategyEdit/cancelStrategyEdit below - the per-strategy
+  // poll only ever seeds a draft once (it must not clobber one being
+  // actively typed into), so entering/leaving edit mode must explicitly
+  // resync from strategyAccounts itself or a stale draft could show.
+  function syncStrategyDraftFromAccount(strategyId: string) {
+    const account = strategyAccounts.find((a) => a.strategy_id === strategyId);
+    if (!account) return;
+    setStrategyDrafts((prev) => ({
+      ...prev,
+      [strategyId]: {
+        capital: account.capital_per_trade,
+        risk: account.risk_per_trade_pct,
+        liveUserId: account.live_trading_user_id ?? "",
+        liveEnabled: account.live_trading_enabled,
+        maxOrderValue: account.max_order_value ?? "",
+        maxDailyLoss: account.max_daily_loss ?? "",
+      },
+    }));
+  }
+
+  function startStrategyEdit(strategyId: string) {
+    syncStrategyDraftFromAccount(strategyId);
+    setStrategyAccountMessage(null);
+    setStrategyEditing((prev) => ({ ...prev, [strategyId]: true }));
+  }
+
+  function cancelStrategyEdit(strategyId: string) {
+    syncStrategyDraftFromAccount(strategyId);
+    setStrategyAccountMessage(null);
+    setStrategyEditing((prev) => ({ ...prev, [strategyId]: false }));
   }
 
   async function handleResetStrategyAccount(strategyId: string) {
@@ -618,6 +740,7 @@ export default function AccountsPage() {
       });
       setPlatformAccounts((prev) => prev.map((a) => (a.segment === segment ? updated : a)));
       setPlatformMessage(`Platform ${segment} account saved.`);
+      setPlatformEditing((prev) => ({ ...prev, [segment]: false }));
     } catch (err) {
       setPlatformMessage(err instanceof Error ? err.message : `Failed to save platform ${segment} account`);
     } finally {
@@ -625,8 +748,61 @@ export default function AccountsPage() {
     }
   }
 
+  // Shared by startPlatformEdit/cancelPlatformEdit below - same "poll only
+  // ever seeds a draft once" reasoning as syncStrategyDraftFromAccount.
+  function syncPlatformDraftFromAccount(segment: Account["segment"]) {
+    const account = platformAccounts.find((a) => a.segment === segment);
+    if (!account) return;
+    setPlatformDrafts((prev) => ({
+      ...prev,
+      [segment]: {
+        leverage: account.leverage,
+        leverageBufferPct: account.leverage_buffer_pct,
+        mtfInterestRate: account.mtf_annual_interest_rate_pct ?? "",
+        squareOffTime: account.square_off_time ? account.square_off_time.slice(0, 5) : "",
+      },
+    }));
+  }
+
+  function startPlatformEdit(segment: Account["segment"]) {
+    syncPlatformDraftFromAccount(segment);
+    setPlatformMessage(null);
+    setPlatformEditing((prev) => ({ ...prev, [segment]: true }));
+  }
+
+  function cancelPlatformEdit(segment: Account["segment"]) {
+    syncPlatformDraftFromAccount(segment);
+    setPlatformMessage(null);
+    setPlatformEditing((prev) => ({ ...prev, [segment]: false }));
+  }
+
   return (
     <>
+      <nav className="tabs">
+        <button type="button" className={activeTab === "mine" ? "active" : ""} onClick={() => setActiveTab("mine")}>
+          Your account
+        </button>
+        {isAdmin && (
+          <button type="button" className={activeTab === "platform" ? "active" : ""} onClick={() => setActiveTab("platform")}>
+            Platform (admin)
+          </button>
+        )}
+        {isAdmin && (
+          <button type="button" className={activeTab === "live-status" ? "active" : ""} onClick={() => setActiveTab("live-status")}>
+            Live trading status
+          </button>
+        )}
+        <button
+          type="button"
+          className={activeTab === "strategy-accounts" ? "active" : ""}
+          onClick={() => setActiveTab("strategy-accounts")}
+        >
+          Dedicated strategy accounts
+        </button>
+      </nav>
+
+      {activeTab === "mine" && (
+      <>
       <h2>Your account</h2>
       <p className="subtitle">
         Your own personal capital, risk, leverage, square-off, and live-trading settings, per segment - the Manual
@@ -641,178 +817,235 @@ export default function AccountsPage() {
               const account = myAccounts.find((a) => a.segment === seg);
               const currency = seg === "CRYPTO" ? "$" : "₹";
               const locale = seg === "CRYPTO" ? "en-US" : "en-IN";
+              const editing = myEditing[seg];
               const draftRiskPct = Number(myDraftRisk[seg]);
               const riskAmount = account && Number.isFinite(draftRiskPct) ? (account.capital_per_trade * draftRiskPct) / 100 : null;
               return (
                 <div className="manual-risk-card" key={seg}>
-                  <span className="manual-risk-card-title">{seg}</span>
+                  <span className="manual-risk-card-title">
+                    {seg}
+                    {!editing && (
+                      <button
+                        type="button"
+                        className="icon-btn edit-icon"
+                        disabled={!account}
+                        onClick={() => startMyEdit(seg)}
+                        title="Edit"
+                        aria-label={`Edit ${seg} account`}
+                      >
+                        <PencilIcon />
+                      </button>
+                    )}
+                  </span>
                   {account && (
-                    <span className="manual-risk-card-capital">
-                      Capital {currency}
-                      {fmtMoney(account.capital_per_trade, locale)} &middot; Bal {currency}
-                      {fmtMoney(account.current_balance, locale)}
-                      {riskAmount != null && (
-                        <>
-                          {" "}
-                          &middot; Risk{" "}
-                          <strong>
-                            {currency}
+                    <BalanceBreakdown
+                      currentBalance={account.current_balance}
+                      realizedPnl={account.realized_pnl}
+                      unrealizedPnl={account.unrealized_pnl}
+                      currency={currency}
+                      locale={locale}
+                    />
+                  )}
+                  {!editing ? (
+                    <div className="manual-risk-card-readonly">
+                      <p>
+                        Capital/trade {currency}
+                        {account ? fmtMoney(account.capital_per_trade, locale) : "-"}
+                        {riskAmount != null && (
+                          <>
+                            {" "}
+                            &middot; Risk {currency}
                             {fmtMoney(riskAmount, locale)}
-                          </strong>
-                        </>
+                          </>
+                        )}
+                      </p>
+                      <p>
+                        Risk/trade {account?.risk_per_trade_pct ?? "-"}% &middot; Min RR 1:{account?.min_reward_risk_ratio ?? "-"}
+                      </p>
+                      {(seg === "CRYPTO" || seg === "NSE") && (
+                        <p>
+                          Leverage {account?.leverage ?? "-"}x
+                          {seg === "NSE" && <> &middot; Buffer {account?.leverage_buffer_pct ?? "-"}%</>}
+                        </p>
                       )}
-                    </span>
-                  )}
-                  <label title="Caps a manual order's size - risk-based sizing, used whenever Lots isn't set explicitly.">
-                    Risk/trade %
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      value={myDraftRisk[seg]}
-                      disabled={!account}
-                      onChange={(e) => setMyDraftRisk((prev) => ({ ...prev, [seg]: e.target.value }))}
-                    />
-                  </label>
-                  <label title="The RR floor the Manual tab's Add/Update button enforces on Limit (or live LTP)/Target/SL Limit.">
-                    Min reward:risk (1:x)
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={myDraftRR[seg]}
-                      disabled={!account}
-                      onChange={(e) => setMyDraftRR((prev) => ({ ...prev, [seg]: e.target.value }))}
-                    />
-                  </label>
-                  <label title="Total capital allocated to a single trade in this segment - what Risk/trade % above is computed against.">
-                    Capital/trade
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={myDraftCapital[seg]}
-                      disabled={!account}
-                      onChange={(e) => setMyDraftCapital((prev) => ({ ...prev, [seg]: e.target.value }))}
-                    />
-                  </label>
-                  {(seg === "CRYPTO" || seg === "NSE") && (
-                    <label
-                      title={
-                        seg === "CRYPTO"
-                          ? "Margin multiplier applied before sizing (Delta Exchange India trades perpetual futures on margin)."
-                          : "Margin multiplier for intraday MIS orders in this segment (spot only) - no interest cost, unlike NSE MTF for positional trades (admin/broker-config only, see Platform account below)."
-                      }
-                    >
-                      Leverage
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={myDraftLeverage[seg]}
-                        disabled={!account}
-                        onChange={(e) => setMyDraftLeverage((prev) => ({ ...prev, [seg]: e.target.value }))}
-                      />
-                    </label>
-                  )}
-                  {seg === "NSE" && (
-                    <label title="Shaves this % off the leveraged capital before sizing, as headroom against slippage between the signal/order price and the actual fill price - e.g. leverage 5x with a 10% buffer sizes against 4.5x, not the full 5x.">
-                      Leverage buffer %
-                      <input
-                        type="number"
-                        min="0"
-                        max="99"
-                        step="1"
-                        value={myDraftLeverageBuffer[seg]}
-                        disabled={!account}
-                        onChange={(e) => setMyDraftLeverageBuffer((prev) => ({ ...prev, [seg]: e.target.value }))}
-                      />
-                    </label>
-                  )}
-                  <label title="Any OPEN intraday position in this segment still open past this local time gets forcefully closed.">
-                    Square-off time
-                    <input
-                      type="time"
-                      value={myDraftSquareOffTime[seg]}
-                      disabled={!account || myDraftNeverSquareOff[seg]}
-                      onChange={(e) => setMyDraftSquareOffTime((prev) => ({ ...prev, [seg]: e.target.value }))}
-                    />
-                  </label>
-                  <label
-                    className="checkbox-label tiny manual-risk-card-checkbox"
-                    title="Never force-close - a position in this segment stays open past any time of day (e.g. CRYPTO, which trades 24/7)."
-                  >
-                    <input
-                      type="checkbox"
-                      checked={myDraftNeverSquareOff[seg]}
-                      disabled={!account}
-                      onChange={(e) => setMyDraftNeverSquareOff((prev) => ({ ...prev, [seg]: e.target.checked }))}
-                    />
-                    Never force-close
-                  </label>
-                  <label
-                    className="checkbox-label tiny manual-risk-card-checkbox"
-                    title="Auto-computes and locks the Lot field from Risk/trade % once a stop-loss is set, instead of leaving it free-typed."
-                  >
-                    <input
-                      type="checkbox"
-                      checked={myDraftEnforceLots[seg]}
-                      disabled={!account}
-                      onChange={(e) => setMyDraftEnforceLots((prev) => ({ ...prev, [seg]: e.target.checked }))}
-                    />
-                    Enforce risk-based Lot
-                  </label>
-                  {seg !== "CRYPTO" && (
-                    <div className="manual-risk-card-live">
+                      <p>
+                        Square-off {account?.square_off_time ? account.square_off_time.slice(0, 5) : "never"} &middot; Enforce
+                        risk-based Lot {account?.enforce_risk_based_lots ? "yes" : "no"}
+                      </p>
+                      {seg !== "CRYPTO" && (
+                        <p>
+                          Live trading {account?.live_trading_enabled ? <span className="badge badge-live">LIVE</span> : "off"}
+                          {account?.max_order_value != null && <> &middot; Max order {currency}{fmtMoney(account.max_order_value, locale)}</>}
+                          {account?.max_daily_loss != null && <> &middot; Max daily loss {currency}{fmtMoney(account.max_daily_loss, locale)}</>}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <label title="Caps a manual order's size - risk-based sizing, used whenever Lots isn't set explicitly.">
+                        Risk/trade %
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          value={myDraftRisk[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftRisk((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        />
+                      </label>
+                      <label title="The RR floor the Manual tab's Add/Update button enforces on Limit (or live LTP)/Target/SL Limit.">
+                        Min reward:risk (1:x)
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          value={myDraftRR[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftRR((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        />
+                      </label>
+                      <label title="Total capital allocated to a single trade in this segment - what Risk/trade % above is computed against.">
+                        Capital/trade
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={myDraftCapital[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftCapital((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        />
+                      </label>
+                      {(seg === "CRYPTO" || seg === "NSE") && (
+                        <label
+                          title={
+                            seg === "CRYPTO"
+                              ? "Margin multiplier applied before sizing (Delta Exchange India trades perpetual futures on margin)."
+                              : "Margin multiplier for intraday MIS orders in this segment (spot only) - no interest cost, unlike NSE MTF for positional trades (admin/broker-config only, see Platform account below)."
+                          }
+                        >
+                          Leverage
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={myDraftLeverage[seg]}
+                            disabled={!account}
+                            onChange={(e) => setMyDraftLeverage((prev) => ({ ...prev, [seg]: e.target.value }))}
+                          />
+                        </label>
+                      )}
+                      {seg === "NSE" && (
+                        <label title="Shaves this % off the leveraged capital before sizing, as headroom against slippage between the signal/order price and the actual fill price - e.g. leverage 5x with a 10% buffer sizes against 4.5x, not the full 5x.">
+                          Leverage buffer %
+                          <input
+                            type="number"
+                            min="0"
+                            max="99"
+                            step="1"
+                            value={myDraftLeverageBuffer[seg]}
+                            disabled={!account}
+                            onChange={(e) => setMyDraftLeverageBuffer((prev) => ({ ...prev, [seg]: e.target.value }))}
+                          />
+                        </label>
+                      )}
+                      <label title="Any OPEN intraday position in this segment still open past this local time gets forcefully closed.">
+                        Square-off time
+                        <input
+                          type="time"
+                          value={myDraftSquareOffTime[seg]}
+                          disabled={!account || myDraftNeverSquareOff[seg]}
+                          onChange={(e) => setMyDraftSquareOffTime((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        />
+                      </label>
                       <label
                         className="checkbox-label tiny manual-risk-card-checkbox"
-                        title="Places REAL orders on Dhan using your own saved credentials instead of paper trades. Also needs the platform-wide kill switch to be off."
+                        title="Never force-close - a position in this segment stays open past any time of day (e.g. CRYPTO, which trades 24/7)."
                       >
                         <input
                           type="checkbox"
-                          checked={myDraftLiveEnabled[seg]}
+                          checked={myDraftNeverSquareOff[seg]}
                           disabled={!account}
-                          onChange={(e) => setMyDraftLiveEnabled((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                          onChange={(e) => setMyDraftNeverSquareOff((prev) => ({ ...prev, [seg]: e.target.checked }))}
                         />
-                        Live trading (real orders)
-                        {account?.live_trading_enabled && <span className="badge badge-live">LIVE</span>}
+                        Never force-close
                       </label>
-                      <label title="Optional - a single order worth more than this is rejected rather than placed live.">
-                        Max order value
+                      <label
+                        className="checkbox-label tiny manual-risk-card-checkbox"
+                        title="Auto-computes and locks the Lot field from Risk/trade % once a stop-loss is set, instead of leaving it free-typed."
+                      >
                         <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          placeholder="no cap"
-                          value={myDraftMaxOrderValue[seg]}
+                          type="checkbox"
+                          checked={myDraftEnforceLots[seg]}
                           disabled={!account}
-                          onChange={(e) => setMyDraftMaxOrderValue((prev) => ({ ...prev, [seg]: e.target.value }))}
+                          onChange={(e) => setMyDraftEnforceLots((prev) => ({ ...prev, [seg]: e.target.checked }))}
                         />
+                        Enforce risk-based Lot
                       </label>
-                      <label title="Optional - once today's realized loss reaches this, live trading pauses for this account for the rest of the day.">
-                        Max daily loss
-                        <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          placeholder="no cap"
-                          value={myDraftMaxDailyLoss[seg]}
-                          disabled={!account}
-                          onChange={(e) => setMyDraftMaxDailyLoss((prev) => ({ ...prev, [seg]: e.target.value }))}
-                        />
-                      </label>
-                    </div>
+                      {seg !== "CRYPTO" && (
+                        <div className="manual-risk-card-live">
+                          <label
+                            className="checkbox-label tiny manual-risk-card-checkbox"
+                            title="Places REAL orders on Dhan using your own saved credentials instead of paper trades. Also needs the platform-wide kill switch to be off."
+                          >
+                            <input
+                              type="checkbox"
+                              checked={myDraftLiveEnabled[seg]}
+                              disabled={!account}
+                              onChange={(e) => setMyDraftLiveEnabled((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                            />
+                            Live trading (real orders)
+                            {account?.live_trading_enabled && <span className="badge badge-live">LIVE</span>}
+                          </label>
+                          <label title="Optional - a single order worth more than this is rejected rather than placed live.">
+                            Max order value
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              placeholder="no cap"
+                              value={myDraftMaxOrderValue[seg]}
+                              disabled={!account}
+                              onChange={(e) => setMyDraftMaxOrderValue((prev) => ({ ...prev, [seg]: e.target.value }))}
+                            />
+                          </label>
+                          <label title="Optional - once today's realized loss reaches this, live trading pauses for this account for the rest of the day.">
+                            Max daily loss
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              placeholder="no cap"
+                              value={myDraftMaxDailyLoss[seg]}
+                              disabled={!account}
+                              onChange={(e) => setMyDraftMaxDailyLoss((prev) => ({ ...prev, [seg]: e.target.value }))}
+                            />
+                          </label>
+                        </div>
+                      )}
+                      <span className="edit-actions">
+                        <button
+                          type="button"
+                          className="tiny"
+                          disabled={!account || mySavingSegment === seg}
+                          onClick={() => void saveMySegmentRisk(seg)}
+                        >
+                          {mySavingSegment === seg ? "Saving..." : "Save"}
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn secondary"
+                          disabled={mySavingSegment === seg}
+                          onClick={() => cancelMyEdit(seg)}
+                          title="Cancel"
+                          aria-label="Cancel"
+                        >
+                          <XIcon />
+                        </button>
+                      </span>
+                    </>
                   )}
                   <span className="edit-actions">
-                    <button
-                      type="button"
-                      className="tiny"
-                      disabled={!account || mySavingSegment === seg}
-                      onClick={() => void saveMySegmentRisk(seg)}
-                    >
-                      {mySavingSegment === seg ? "Saving..." : "Save"}
-                    </button>
                     <button
                       type="button"
                       className="icon-btn secondary"
@@ -834,21 +1067,56 @@ export default function AccountsPage() {
         <section className="manual-settings-section">
           <h4>USD/INR rate</h4>
           <p className="subtitle">Manually configured - converts CRYPTO capital/balance into USD-equivalent before sizing a position.</p>
-          <div className="settings-row">
-            <label>
-              Rate
-              <input type="number" min="0" step="0.01" value={myUsdinrDraft} onChange={(e) => setMyUsdinrDraft(e.target.value)} />
-            </label>
-            <button type="button" className="tiny" disabled={mySavingUsdinr || !myUsdinrDraft} onClick={() => void handleSaveMyUsdinr()}>
-              {mySavingUsdinr ? "Saving..." : "Save"}
-            </button>
-          </div>
+          {!myEditingUsdinr ? (
+            <div className="settings-row">
+              <span>Rate: {myUsdinrDraft || "not set"}</span>
+              <button
+                type="button"
+                className="icon-btn edit-icon"
+                onClick={() => setMyEditingUsdinr(true)}
+                title="Edit"
+                aria-label="Edit USD/INR rate"
+              >
+                <PencilIcon />
+              </button>
+            </div>
+          ) : (
+            <div className="settings-row">
+              <label>
+                Rate
+                <input type="number" min="0" step="0.01" value={myUsdinrDraft} onChange={(e) => setMyUsdinrDraft(e.target.value)} />
+              </label>
+              <button
+                type="button"
+                className="tiny"
+                disabled={mySavingUsdinr || !myUsdinrDraft}
+                onClick={() => {
+                  void handleSaveMyUsdinr();
+                  setMyEditingUsdinr(false);
+                }}
+              >
+                {mySavingUsdinr ? "Saving..." : "Save"}
+              </button>
+              <button
+                type="button"
+                className="icon-btn secondary"
+                onClick={() => {
+                  setMyUsdinrDraft(mySettings?.usdinr_rate != null ? String(mySettings.usdinr_rate) : "");
+                  setMyEditingUsdinr(false);
+                }}
+                title="Cancel"
+                aria-label="Cancel"
+              >
+                <XIcon />
+              </button>
+            </div>
+          )}
           {myUsdinrMessage && <p className="manual-saved-badge">{myUsdinrMessage}</p>}
           {mySettings == null && <p className="error">Could not load settings.</p>}
         </section>
 
-        <section className="manual-settings-section">
-          <h4>Credentials</h4>
+        <details className="manual-settings-section">
+          <summary>Credentials</summary>
           <p className="subtitle">Your own Dhan (NSE/MCX) and Delta Exchange India (CRYPTO) keys.</p>
           <InfoDisclosure summary="Why set these?">
             <p>
@@ -910,10 +1178,12 @@ export default function AccountsPage() {
             </button>
             {deltaCredsMessage && <span className="manual-saved-badge">{deltaCredsMessage}</span>}
           </div>
-        </section>
+        </details>
       </div>
+      </>
+      )}
 
-      {isAdmin && (
+      {activeTab === "platform" && isAdmin && (
       <>
       <h2>Platform account (admin)</h2>
       <p className="subtitle">The account the automated Strategy-driven flow itself sizes/holds against.</p>
@@ -943,6 +1213,7 @@ export default function AccountsPage() {
           <thead>
             <tr>
               <th>Segment</th>
+              <th>Balance (Realized / Unrealized)</th>
               <th>Leverage</th>
               <th>Leverage buffer % (NSE)</th>
               <th>MTF interest %/yr (NSE)</th>
@@ -954,116 +1225,167 @@ export default function AccountsPage() {
             {SEGMENTS.map((segment) => {
               const account = platformAccounts.find((a) => a.segment === segment);
               const draft = platformDrafts[segment] ?? { leverage: "", leverageBufferPct: "", mtfInterestRate: "", squareOffTime: "" };
+              const editing = platformEditing[segment];
+              const currency = segment === "CRYPTO" ? "$" : "₹";
+              const locale = segment === "CRYPTO" ? "en-US" : "en-IN";
               return (
                 <tr key={segment}>
                   <td className="symbol">{segment}</td>
                   <td>
-                    {segment === "CRYPTO" ? (
-                      <select
-                        value={draft.leverage}
-                        onChange={(e) =>
-                          setPlatformDrafts((prev) => ({
-                            ...prev,
-                            [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
-                          }))
-                        }
-                      >
-                        {LEVERAGE_OPTIONS.map((lev) => (
-                          <option key={lev} value={lev}>
-                            {lev}x
-                          </option>
-                        ))}
-                      </select>
-                    ) : segment === "NSE" ? (
-                      <input
-                        type="number"
-                        min="1"
-                        step="0.1"
-                        title="Dhan MTF (margin trading facility) for a positional order from a Strategy with use_margin=true, OR intraday MIS margin for any NSE spot order (Strategy-driven or Manual tab) - same leverage value drives both, no interest is ever charged on the intraday side."
-                        value={draft.leverage}
-                        onChange={(e) =>
-                          setPlatformDrafts((prev) => ({
-                            ...prev,
-                            [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
-                          }))
-                        }
+                    {account && (
+                      <BalanceBreakdown
+                        currentBalance={account.current_balance}
+                        realizedPnl={account.realized_pnl}
+                        unrealizedPnl={account.unrealized_pnl}
+                        currency={currency}
+                        locale={locale}
                       />
-                    ) : (
-                      "-"
                     )}
                   </td>
-                  <td>
-                    {segment === "NSE" ? (
-                      <input
-                        type="number"
-                        min="0"
-                        max="99"
-                        step="1"
-                        title="Shaves this % off the leveraged capital before sizing, as headroom against slippage between the signal/order price and the actual fill price."
-                        value={draft.leverageBufferPct}
-                        onChange={(e) =>
-                          setPlatformDrafts((prev) => ({
-                            ...prev,
-                            [segment]: { ...draft, leverageBufferPct: e.target.value === "" ? "" : Number(e.target.value) },
-                          }))
-                        }
-                      />
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                  <td>
-                    {segment === "NSE" ? (
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.1"
-                        placeholder="e.g. 18"
-                        title="Required before a positional use_margin order can use leverage > 1 above."
-                        value={draft.mtfInterestRate}
-                        onChange={(e) =>
-                          setPlatformDrafts((prev) => ({
-                            ...prev,
-                            [segment]: { ...draft, mtfInterestRate: e.target.value === "" ? "" : Number(e.target.value) },
-                          }))
-                        }
-                      />
-                    ) : (
-                      "-"
-                    )}
-                  </td>
-                  <td>
-                    <input
-                      type="time"
-                      title="The automated Strategy-driven flow (webhooks, in-house engine) always sizes/holds against THIS account, not any admin's own personal one above - this is the square-off cutoff a Chartink/in-house signal actually gets checked against."
-                      value={draft.squareOffTime}
-                      onChange={(e) =>
-                        setPlatformDrafts((prev) => ({
-                          ...prev,
-                          [segment]: { ...draft, squareOffTime: e.target.value },
-                        }))
-                      }
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="icon-btn"
-                      onClick={() => handleSavePlatform(segment)}
-                      disabled={savingPlatform === segment || !account}
-                      title={savingPlatform === segment ? "Saving..." : "Save"}
-                      aria-label="Save"
-                    >
-                      <CheckIcon />
-                    </button>
-                  </td>
+                  {!editing ? (
+                    <>
+                      <td>{segment === "MCX" ? "-" : `${account?.leverage ?? "-"}x`}</td>
+                      <td>{segment === "NSE" ? `${account?.leverage_buffer_pct ?? "-"}%` : "-"}</td>
+                      <td>{segment === "NSE" ? account?.mtf_annual_interest_rate_pct ?? "not set" : "-"}</td>
+                      <td>{account?.square_off_time ? account.square_off_time.slice(0, 5) : "never"}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="icon-btn edit-icon"
+                          disabled={!account}
+                          onClick={() => startPlatformEdit(segment)}
+                          title="Edit"
+                          aria-label={`Edit platform ${segment} account`}
+                        >
+                          <PencilIcon />
+                        </button>
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td>
+                        {segment === "CRYPTO" ? (
+                          <select
+                            value={draft.leverage}
+                            onChange={(e) =>
+                              setPlatformDrafts((prev) => ({
+                                ...prev,
+                                [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
+                              }))
+                            }
+                          >
+                            {LEVERAGE_OPTIONS.map((lev) => (
+                              <option key={lev} value={lev}>
+                                {lev}x
+                              </option>
+                            ))}
+                          </select>
+                        ) : segment === "NSE" ? (
+                          <input
+                            type="number"
+                            min="1"
+                            step="0.1"
+                            title="Dhan MTF (margin trading facility) for a positional order from a Strategy with use_margin=true, OR intraday MIS margin for any NSE spot order (Strategy-driven or Manual tab) - same leverage value drives both, no interest is ever charged on the intraday side."
+                            value={draft.leverage}
+                            onChange={(e) =>
+                              setPlatformDrafts((prev) => ({
+                                ...prev,
+                                [segment]: { ...draft, leverage: e.target.value === "" ? "" : Number(e.target.value) },
+                              }))
+                            }
+                          />
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td>
+                        {segment === "NSE" ? (
+                          <input
+                            type="number"
+                            min="0"
+                            max="99"
+                            step="1"
+                            title="Shaves this % off the leveraged capital before sizing, as headroom against slippage between the signal/order price and the actual fill price."
+                            value={draft.leverageBufferPct}
+                            onChange={(e) =>
+                              setPlatformDrafts((prev) => ({
+                                ...prev,
+                                [segment]: { ...draft, leverageBufferPct: e.target.value === "" ? "" : Number(e.target.value) },
+                              }))
+                            }
+                          />
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td>
+                        {segment === "NSE" ? (
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            placeholder="e.g. 18"
+                            title="Required before a positional use_margin order can use leverage > 1 above."
+                            value={draft.mtfInterestRate}
+                            onChange={(e) =>
+                              setPlatformDrafts((prev) => ({
+                                ...prev,
+                                [segment]: { ...draft, mtfInterestRate: e.target.value === "" ? "" : Number(e.target.value) },
+                              }))
+                            }
+                          />
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td>
+                        <input
+                          type="time"
+                          title="The automated Strategy-driven flow (webhooks, in-house engine) always sizes/holds against THIS account, not any admin's own personal one above - this is the square-off cutoff a Chartink/in-house signal actually gets checked against."
+                          value={draft.squareOffTime}
+                          onChange={(e) =>
+                            setPlatformDrafts((prev) => ({
+                              ...prev,
+                              [segment]: { ...draft, squareOffTime: e.target.value },
+                            }))
+                          }
+                        />
+                      </td>
+                      <td className="edit-actions">
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => handleSavePlatform(segment)}
+                          disabled={savingPlatform === segment || !account}
+                          title={savingPlatform === segment ? "Saving..." : "Save"}
+                          aria-label="Save"
+                        >
+                          <CheckIcon />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn secondary"
+                          disabled={savingPlatform === segment}
+                          onClick={() => cancelPlatformEdit(segment)}
+                          title="Cancel"
+                          aria-label="Cancel"
+                        >
+                          <XIcon />
+                        </button>
+                      </td>
+                    </>
+                  )}
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+      </>
+      )}
 
+      {activeTab === "live-status" && isAdmin && (
+      <>
       <h2>Live trading status</h2>
       <p className="subtitle">
         Is X actually live right now, and if not, why not - a read-only view, never places an order. See
@@ -1132,6 +1454,8 @@ export default function AccountsPage() {
       </>
       )}
 
+      {activeTab === "strategy-accounts" && (
+      <>
       <h2>Dedicated strategy accounts</h2>
       <p className="subtitle">
         Optional - a strategy with its own account here sizes/tracks P&amp;L against it instead of sharing its
@@ -1226,160 +1550,216 @@ export default function AccountsPage() {
                   strategyDrafts[account.strategy_id] ??
                   { capital: "", risk: "", liveUserId: "", liveEnabled: false, maxOrderValue: "", maxDailyLoss: "" };
                 const canGoLive = account.segment !== "CRYPTO";
-                const delta = account.current_balance - account.starting_balance;
+                const editing = strategyEditing[account.strategy_id];
+                const currency = account.segment === "CRYPTO" ? "$" : "₹";
+                const locale = account.segment === "CRYPTO" ? "en-US" : "en-IN";
                 return (
                   <tr key={account.strategy_id}>
                     <td className="symbol">{strategyName(account.strategy_id)}</td>
                     <td>{account.segment}</td>
-                    <td className={`num ${delta >= 0 ? "pnl-positive" : "pnl-negative"}`}>
-                      {account.current_balance.toFixed(2)}
-                      {formatPct((delta / account.starting_balance) * 100)}
-                    </td>
                     <td>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={draft.capital}
-                        onChange={(e) =>
-                          setStrategyDrafts((prev) => ({
-                            ...prev,
-                            [account.strategy_id]: { ...draft, capital: e.target.value === "" ? "" : Number(e.target.value) },
-                          }))
-                        }
+                      <BalanceBreakdown
+                        currentBalance={account.current_balance}
+                        realizedPnl={account.realized_pnl}
+                        unrealizedPnl={account.unrealized_pnl}
+                        currency={currency}
+                        locale={locale}
                       />
                     </td>
-                    <td>
-                      <input
-                        type="number"
-                        min="0.01"
-                        max="100"
-                        step="0.1"
-                        value={draft.risk}
-                        onChange={(e) =>
-                          setStrategyDrafts((prev) => ({
-                            ...prev,
-                            [account.strategy_id]: { ...draft, risk: e.target.value === "" ? "" : Number(e.target.value) },
-                          }))
-                        }
-                      />
-                    </td>
-                    <td>
-                      {canGoLive ? (
-                        <>
-                          <input
-                            type="checkbox"
-                            checked={draft.liveEnabled}
-                            onChange={(e) =>
-                              setStrategyDrafts((prev) => ({
-                                ...prev,
-                                [account.strategy_id]: { ...draft, liveEnabled: e.target.checked },
-                              }))
+                    {!editing ? (
+                      <>
+                        <td>{account.capital_per_trade}</td>
+                        <td>{account.risk_per_trade_pct}</td>
+                        <td>
+                          {canGoLive ? (
+                            account.live_trading_enabled ? (
+                              <span className="badge badge-live">LIVE</span>
+                            ) : (
+                              "off"
+                            )
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td>{canGoLive ? account.live_trading_user_id ?? "-" : "-"}</td>
+                        <td>
+                          {canGoLive
+                            ? `${account.max_order_value ?? "no cap"} / ${account.max_daily_loss ?? "no cap"}`
+                            : "-"}
+                        </td>
+                        <td className="edit-actions">
+                          <button
+                            type="button"
+                            className="icon-btn edit-icon"
+                            onClick={() => startStrategyEdit(account.strategy_id)}
+                            title="Edit"
+                            aria-label={`Edit ${strategyName(account.strategy_id)}'s dedicated account`}
+                          >
+                            <PencilIcon />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn secondary"
+                            onClick={() => handleResetStrategyAccount(account.strategy_id)}
+                            disabled={resettingStrategyAccount === account.strategy_id}
+                            title={
+                              resettingStrategyAccount === account.strategy_id
+                                ? "Resetting..."
+                                : `Reset ${strategyName(account.strategy_id)}'s balance to its starting balance`
                             }
-                          />
-                          {account.live_trading_enabled && <span className="badge badge-live">LIVE</span>}
-                        </>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td>
-                      {canGoLive ? (
-                        <input
-                          type="text"
-                          placeholder="user id"
-                          value={draft.liveUserId}
-                          onChange={(e) =>
-                            setStrategyDrafts((prev) => ({
-                              ...prev,
-                              [account.strategy_id]: { ...draft, liveUserId: e.target.value },
-                            }))
-                          }
-                        />
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td>
-                      {canGoLive ? (
-                        <span className="settings-row">
+                            aria-label="Reset balance"
+                          >
+                            <RotateCcwIcon />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn danger"
+                            onClick={() => handleDeleteStrategyAccount(account.strategy_id)}
+                            disabled={deletingStrategyAccount === account.strategy_id}
+                            title={
+                              deletingStrategyAccount === account.strategy_id
+                                ? "Removing..."
+                                : `Remove ${strategyName(account.strategy_id)}'s dedicated account`
+                            }
+                            aria-label="Remove dedicated account"
+                          >
+                            <TrashIcon />
+                          </button>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
                           <input
                             type="number"
                             min="1"
                             step="1"
-                            placeholder="no cap"
-                            value={draft.maxOrderValue}
+                            value={draft.capital}
                             onChange={(e) =>
                               setStrategyDrafts((prev) => ({
                                 ...prev,
-                                [account.strategy_id]: { ...draft, maxOrderValue: e.target.value === "" ? "" : Number(e.target.value) },
+                                [account.strategy_id]: { ...draft, capital: e.target.value === "" ? "" : Number(e.target.value) },
                               }))
                             }
                           />
+                        </td>
+                        <td>
                           <input
                             type="number"
-                            min="1"
-                            step="1"
-                            placeholder="no cap"
-                            value={draft.maxDailyLoss}
+                            min="0.01"
+                            max="100"
+                            step="0.1"
+                            value={draft.risk}
                             onChange={(e) =>
                               setStrategyDrafts((prev) => ({
                                 ...prev,
-                                [account.strategy_id]: { ...draft, maxDailyLoss: e.target.value === "" ? "" : Number(e.target.value) },
+                                [account.strategy_id]: { ...draft, risk: e.target.value === "" ? "" : Number(e.target.value) },
                               }))
                             }
                           />
-                        </span>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td className="edit-actions">
-                      <button
-                        type="button"
-                        className="icon-btn"
-                        onClick={() => handleSaveStrategyAccount(account.strategy_id)}
-                        disabled={savingStrategyAccount === account.strategy_id}
-                        title={savingStrategyAccount === account.strategy_id ? "Saving..." : "Save"}
-                        aria-label="Save"
-                      >
-                        <CheckIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-btn secondary"
-                        onClick={() => handleResetStrategyAccount(account.strategy_id)}
-                        disabled={resettingStrategyAccount === account.strategy_id}
-                        title={
-                          resettingStrategyAccount === account.strategy_id
-                            ? "Resetting..."
-                            : `Reset ${strategyName(account.strategy_id)}'s balance to its starting balance`
-                        }
-                        aria-label="Reset balance"
-                      >
-                        <RotateCcwIcon />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-btn danger"
-                        onClick={() => handleDeleteStrategyAccount(account.strategy_id)}
-                        disabled={deletingStrategyAccount === account.strategy_id}
-                        title={
-                          deletingStrategyAccount === account.strategy_id
-                            ? "Removing..."
-                            : `Remove ${strategyName(account.strategy_id)}'s dedicated account`
-                        }
-                        aria-label="Remove dedicated account"
-                      >
-                        <TrashIcon />
-                      </button>
-                    </td>
+                        </td>
+                        <td>
+                          {canGoLive ? (
+                            <>
+                              <input
+                                type="checkbox"
+                                checked={draft.liveEnabled}
+                                onChange={(e) =>
+                                  setStrategyDrafts((prev) => ({
+                                    ...prev,
+                                    [account.strategy_id]: { ...draft, liveEnabled: e.target.checked },
+                                  }))
+                                }
+                              />
+                              {account.live_trading_enabled && <span className="badge badge-live">LIVE</span>}
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td>
+                          {canGoLive ? (
+                            <input
+                              type="text"
+                              placeholder="user id"
+                              value={draft.liveUserId}
+                              onChange={(e) =>
+                                setStrategyDrafts((prev) => ({
+                                  ...prev,
+                                  [account.strategy_id]: { ...draft, liveUserId: e.target.value },
+                                }))
+                              }
+                            />
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td>
+                          {canGoLive ? (
+                            <span className="settings-row">
+                              <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                placeholder="no cap"
+                                value={draft.maxOrderValue}
+                                onChange={(e) =>
+                                  setStrategyDrafts((prev) => ({
+                                    ...prev,
+                                    [account.strategy_id]: { ...draft, maxOrderValue: e.target.value === "" ? "" : Number(e.target.value) },
+                                  }))
+                                }
+                              />
+                              <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                placeholder="no cap"
+                                value={draft.maxDailyLoss}
+                                onChange={(e) =>
+                                  setStrategyDrafts((prev) => ({
+                                    ...prev,
+                                    [account.strategy_id]: { ...draft, maxDailyLoss: e.target.value === "" ? "" : Number(e.target.value) },
+                                  }))
+                                }
+                              />
+                            </span>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td className="edit-actions">
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => handleSaveStrategyAccount(account.strategy_id)}
+                            disabled={savingStrategyAccount === account.strategy_id}
+                            title={savingStrategyAccount === account.strategy_id ? "Saving..." : "Save"}
+                            aria-label="Save"
+                          >
+                            <CheckIcon />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn secondary"
+                            disabled={savingStrategyAccount === account.strategy_id}
+                            onClick={() => cancelStrategyEdit(account.strategy_id)}
+                            title="Cancel"
+                            aria-label="Cancel"
+                          >
+                            <XIcon />
+                          </button>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
     </>
   );

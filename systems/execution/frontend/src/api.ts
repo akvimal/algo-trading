@@ -140,6 +140,11 @@ export type Account = {
   segment: "NSE" | "MCX" | "CRYPTO";
   starting_balance: number;
   current_balance: number;
+  // current_balance - starting_balance, computed server-side.
+  // unrealized_pnl is a live mark-to-market sum across this account's own
+  // OPEN positions (segment+owner scoped) - see execution's accounts.py.
+  realized_pnl: number;
+  unrealized_pnl: number;
   capital_per_trade: number;
   risk_per_trade_pct: number;
   // Manual tab only (WorkspacePage.tsx's own computeRR) - minimum
@@ -200,6 +205,10 @@ export type StrategyAccount = {
   segment: "NSE" | "MCX" | "CRYPTO";
   starting_balance: number;
   current_balance: number;
+  // See Account's own identical pair - same meaning, scoped to this
+  // strategy's own OPEN positions.
+  realized_pnl: number;
+  unrealized_pnl: number;
   capital_per_trade: number;
   risk_per_trade_pct: number;
   // Live-broker-adapter P3 item 14 (see docs/architecture.md) - the ONLY

@@ -163,6 +163,13 @@ class AccountOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     starting_balance: float
     current_balance: float
+    # current_balance - starting_balance, computed server-side purely for
+    # display convenience (the frontend would otherwise compute the exact
+    # same subtraction itself). unrealized_pnl is the live mark-to-market
+    # sum across this account's own OPEN positions (segment+owner scoped) -
+    # see accounts.py's own _unrealized_pnl.
+    realized_pnl: float
+    unrealized_pnl: float
     capital_per_trade: float
     risk_per_trade_pct: float
     # Manual tab only - see Account.min_reward_risk_ratio's own comment.
@@ -252,6 +259,10 @@ class StrategyAccountOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     starting_balance: float
     current_balance: float
+    # See AccountOut's own identical pair - same meaning, scoped to this
+    # strategy's own OPEN positions (strategy_id, not owner/segment).
+    realized_pnl: float
+    unrealized_pnl: float
     capital_per_trade: float
     risk_per_trade_pct: float
     # Live-broker-adapter P3 item 14 (see docs/architecture.md) - the ONLY

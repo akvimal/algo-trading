@@ -655,6 +655,62 @@ tbody tr:last-child td {
   flex-basis: 100%;
 }
 
+/* Current balance broken into realized/unrealized (BalanceBreakdown) -
+   used on "Your account" cards, the Platform admin table, and the
+   Dedicated strategy accounts table, so all three stay visually
+   consistent. */
+.balance-breakdown {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.6rem;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+
+.balance-breakdown-detail {
+  font-size: 0.72rem;
+}
+
+/* Read-only summary shown in a "Your account" card before Edit is
+   clicked - compact paragraphs instead of a full input form. */
+.manual-risk-card-readonly {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.manual-risk-card-readonly p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+/* Credentials section is a <details> now (collapsible, closed by
+   default) rather than an always-expanded section - same summary skin
+   as .info-disclosure for a consistent disclosure-triangle look. */
+.manual-settings-section > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  list-style: none;
+}
+
+.manual-settings-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.manual-settings-section > summary::before {
+  content: "▸ ";
+}
+
+.manual-settings-section[open] > summary::before {
+  content: "▾ ";
+}
+
 .manual-risk-card-live {
   flex-basis: 100%;
   display: flex;

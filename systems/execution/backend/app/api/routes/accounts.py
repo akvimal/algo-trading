@@ -5,20 +5,45 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.adapters.quotes.client import get_ltp_batch
 from app.auth import User, get_current_user, require_admin
 from app.domain.models import AccountUpdate, StrategyAccountCreate, StrategyAccountUpdate
-from app.domain.position_manager import get_live_trading_status, load_account
+from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
 
 router = APIRouter()
 
 _SEGMENTS = ("NSE", "MCX", "CRYPTO")
 
 
-def _to_out(row: db_models.Account) -> dict:
+def _unrealized_pnl(db: Session, open_positions: list) -> float:
+    """Live mark-to-market sum across `open_positions` (already filtered to
+    status='OPEN' by the caller) - 0.0 for none, or if every quote fetch
+    fails (compute_unrealized_pnl silently drops those, same convention
+    the Positions grid's own with_live_pnl already uses). Includes option
+    legs too (each Position row, spot/future/option alike, carries its own
+    action/entry_price/quantity that compute_pnl works off generically) -
+    a simplification for an account-level summary figure: it sums each
+    leg's own mark-to-market independently rather than netting a spread's
+    combined premium the way OptionPositionGroup's own SL/target
+    monitoring does, so it can differ slightly from what a 2-leg group's
+    own live P&L shows elsewhere."""
+    if not open_positions:
+        return 0.0
+    mtm = compute_unrealized_pnl(open_positions, get_ltp_batch)
+    return sum(pnl for _, pnl in mtm.values())
+
+
+def _to_out(db: Session, row: db_models.Account) -> dict:
+    open_positions = db.query(db_models.Position).filter_by(user_id=row.user_id, segment=row.segment, status="OPEN").all()
     return {
         "segment": row.segment,
         "starting_balance": float(row.starting_balance),
         "current_balance": float(row.current_balance),
+        # Realized P&L is just current_balance vs. where it started - no
+        # separate ledger, matches the delta the Dedicated strategy
+        # accounts table already computes client-side today.
+        "realized_pnl": float(row.current_balance) - float(row.starting_balance),
+        "unrealized_pnl": _unrealized_pnl(db, open_positions),
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "min_reward_risk_ratio": float(row.min_reward_risk_ratio),
@@ -41,7 +66,7 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
     first time each is touched, so a brand-new signup always sees all 3
     immediately rather than 404ing until they've placed a trade)."""
     rows = {seg: load_account(db, user.id, seg) for seg in _SEGMENTS}
-    return [_to_out(rows[s]) for s in _SEGMENTS if rows[s] is not None]
+    return [_to_out(db, rows[s]) for s in _SEGMENTS if rows[s] is not None]
 
 
 @router.put("/accounts/{segment}")
@@ -84,7 +109,7 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.max_daily_loss = update.max_daily_loss
     db.commit()
     db.refresh(row)
-    return _to_out(row)
+    return _to_out(db, row)
 
 
 @router.get("/accounts/platform")
@@ -97,7 +122,7 @@ def list_platform_accounts(admin: User = Depends(require_admin), db: Session = D
     raw `make psql` UPDATE to configure e.g. NSE MTF leverage/interest.
     See docs/architecture.md's "Positional spot holding + NSE MTF" section."""
     rows = {seg: load_account(db, None, seg) for seg in _SEGMENTS}
-    return [_to_out(rows[s]) for s in _SEGMENTS if rows[s] is not None]
+    return [_to_out(db, rows[s]) for s in _SEGMENTS if rows[s] is not None]
 
 
 @router.put("/accounts/platform/{segment}")
@@ -137,7 +162,7 @@ def update_platform_account(
         row.max_daily_loss = update.max_daily_loss
     db.commit()
     db.refresh(row)
-    return _to_out(row)
+    return _to_out(db, row)
 
 
 @router.get("/live-trading/status")
@@ -164,7 +189,7 @@ def reset_account(segment: str, user: User = Depends(get_current_user), db: Sess
     row.current_balance = row.starting_balance
     db.commit()
     db.refresh(row)
-    return _to_out(row)
+    return _to_out(db, row)
 
 
 # --- Optional per-strategy account override (execution.strategy_accounts) -
@@ -175,12 +200,15 @@ def reset_account(segment: str, user: User = Depends(get_current_user), db: Sess
 # sharing the segment account exactly as before this existed. -----------
 
 
-def _strategy_account_to_out(row: db_models.StrategyAccount) -> dict:
+def _strategy_account_to_out(db: Session, row: db_models.StrategyAccount) -> dict:
+    open_positions = db.query(db_models.Position).filter_by(strategy_id=row.strategy_id, segment=row.segment, status="OPEN").all()
     return {
         "strategy_id": str(row.strategy_id),
         "segment": row.segment,
         "starting_balance": float(row.starting_balance),
         "current_balance": float(row.current_balance),
+        "realized_pnl": float(row.current_balance) - float(row.starting_balance),
+        "unrealized_pnl": _unrealized_pnl(db, open_positions),
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "live_trading_user_id": str(row.live_trading_user_id) if row.live_trading_user_id is not None else None,
@@ -194,7 +222,7 @@ def _strategy_account_to_out(row: db_models.StrategyAccount) -> dict:
 @router.get("/accounts/strategy")
 def list_strategy_accounts(db: Session = Depends(get_db)):
     rows = db.query(db_models.StrategyAccount).all()
-    return [_strategy_account_to_out(r) for r in rows]
+    return [_strategy_account_to_out(db, r) for r in rows]
 
 
 @router.get("/accounts/strategy/{strategy_id}")
@@ -202,7 +230,7 @@ def get_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
     row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
     if row is None:
         raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
-    return _strategy_account_to_out(row)
+    return _strategy_account_to_out(db, row)
 
 
 @router.post("/accounts/strategy/{strategy_id}")
@@ -225,7 +253,7 @@ def create_strategy_account(strategy_id: str, create: StrategyAccountCreate, db:
     db.add(row)
     db.commit()
     db.refresh(row)
-    return _strategy_account_to_out(row)
+    return _strategy_account_to_out(db, row)
 
 
 @router.put("/accounts/strategy/{strategy_id}")
@@ -258,7 +286,7 @@ def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db:
         raise HTTPException(status_code=422, detail="live_trading_enabled requires live_trading_user_id to be set")
     db.commit()
     db.refresh(row)
-    return _strategy_account_to_out(row)
+    return _strategy_account_to_out(db, row)
 
 
 @router.delete("/accounts/strategy/{strategy_id}")
@@ -284,4 +312,4 @@ def reset_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
     row.current_balance = row.starting_balance
     db.commit()
     db.refresh(row)
-    return _strategy_account_to_out(row)
+    return _strategy_account_to_out(db, row)

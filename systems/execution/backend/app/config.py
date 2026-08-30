@@ -45,5 +45,34 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
 
+    # Live-broker-adapter P0 (see docs/architecture.md) - protects
+    # POST /internal/dhan/order-update, the route market-data relays Dhan's
+    # own order-status postback to (market-data holds no order state of its
+    # own - see broker_orders' "each system owns its own schema" placement
+    # here instead). Must match market-data's/accounts' identical
+    # INTERNAL_SERVICE_SECRET.
+    internal_service_secret: str = "change-me-in-production"
+
+    # Platform-wide kill switch for real order submission - an env var
+    # (not a DB row) so it can be flipped instantly, with no DB write in
+    # the loop, to stop every account's real trading at once. True BLOCKS
+    # all real submission regardless of any account's own
+    # execution.accounts.live_trading_enabled opt-in (checked first, before
+    # that per-account flag, in position_manager's submission path) - the
+    # per-account flag is a separate, independent gate on top, not
+    # something this switch's default state grants. Defaults false (not
+    # killed) - real trading still requires each account to separately opt
+    # in via its own live_trading_enabled.
+    live_trading_kill_switch: bool = False
+
+    # How often the reconciliation job (scheduler.py) checks for
+    # broker_orders rows stuck in SUBMITTING past broker_order_submit_timeout_seconds -
+    # a crash between writing that row and recording Dhan's place_order
+    # response leaves it there; the job resolves it against Dhan's own
+    # order book (GET /dhan/order-book, matched by client_order_id) rather
+    # than ever retrying the submission blind.
+    broker_order_reconciliation_poll_seconds: int = 30
+    broker_order_submit_timeout_seconds: int = 60
+
 
 settings = Settings()

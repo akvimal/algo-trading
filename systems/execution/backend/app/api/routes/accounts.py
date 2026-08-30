@@ -26,6 +26,9 @@ def _to_out(row: db_models.Account) -> dict:
         "leverage": float(row.leverage),
         "mtf_annual_interest_rate_pct": float(row.mtf_annual_interest_rate_pct) if row.mtf_annual_interest_rate_pct is not None else None,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
+        "live_trading_enabled": row.live_trading_enabled,
+        "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
+        "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
         "updated_at": row.updated_at.isoformat(),
     }
 
@@ -70,6 +73,12 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
         row.square_off_time = update.square_off_time
+    if update.live_trading_enabled is not None:
+        row.live_trading_enabled = update.live_trading_enabled
+    if "max_order_value" in update.model_fields_set:
+        row.max_order_value = update.max_order_value
+    if "max_daily_loss" in update.model_fields_set:
+        row.max_daily_loss = update.max_daily_loss
     db.commit()
     db.refresh(row)
     return _to_out(row)
@@ -115,6 +124,12 @@ def update_platform_account(
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
         row.square_off_time = update.square_off_time
+    if update.live_trading_enabled is not None:
+        row.live_trading_enabled = update.live_trading_enabled
+    if "max_order_value" in update.model_fields_set:
+        row.max_order_value = update.max_order_value
+    if "max_daily_loss" in update.model_fields_set:
+        row.max_daily_loss = update.max_daily_loss
     db.commit()
     db.refresh(row)
     return _to_out(row)
@@ -150,6 +165,10 @@ def _strategy_account_to_out(row: db_models.StrategyAccount) -> dict:
         "current_balance": float(row.current_balance),
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
+        "live_trading_user_id": str(row.live_trading_user_id) if row.live_trading_user_id is not None else None,
+        "live_trading_enabled": row.live_trading_enabled,
+        "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
+        "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
         "updated_at": row.updated_at.isoformat(),
     }
 
@@ -193,6 +212,15 @@ def create_strategy_account(strategy_id: str, create: StrategyAccountCreate, db:
 
 @router.put("/accounts/strategy/{strategy_id}")
 def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db: Session = Depends(get_db)):
+    """Live-broker-adapter P3 item 14 (see docs/architecture.md) -
+    live_trading_user_id/live_trading_enabled/max_order_value/
+    max_daily_loss are the only way to opt an automated Strategy into
+    placing REAL orders; every other strategy stays paper-only forever
+    (the shared platform account has no such fields at all). Enforces the
+    DB's own "live_trading_enabled requires live_trading_user_id" CHECK
+    here too, with a clean 422 - considers both what's already stored AND
+    what this same request is changing, so either order (set the user id
+    first, or in the same call as enabling) works."""
     row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
     if row is None:
         raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
@@ -200,6 +228,16 @@ def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db:
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
         row.risk_per_trade_pct = update.risk_per_trade_pct
+    if "live_trading_user_id" in update.model_fields_set:
+        row.live_trading_user_id = uuid.UUID(update.live_trading_user_id) if update.live_trading_user_id else None
+    if update.live_trading_enabled is not None:
+        row.live_trading_enabled = update.live_trading_enabled
+    if "max_order_value" in update.model_fields_set:
+        row.max_order_value = update.max_order_value
+    if "max_daily_loss" in update.model_fields_set:
+        row.max_daily_loss = update.max_daily_loss
+    if row.live_trading_enabled and row.live_trading_user_id is None:
+        raise HTTPException(status_code=422, detail="live_trading_enabled requires live_trading_user_id to be set")
     db.commit()
     db.refresh(row)
     return _strategy_account_to_out(row)

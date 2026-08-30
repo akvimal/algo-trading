@@ -18,6 +18,16 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
+from app.domain.live_broker import (
+    cancel_resting_order_scheduled,
+    is_live_enabled,
+    modify_resting_order_scheduled,
+    submit_entry_order_scheduled,
+    submit_exit_order_scheduled,
+    submit_live_order,
+    submit_resting_stop_loss,
+    submit_resting_stop_loss_scheduled,
+)
 from app.domain.models import ChecklistAnswer, ExecutionSettings, ResolvedOrder
 
 logger = logging.getLogger(__name__)
@@ -711,6 +721,47 @@ def _today_in_tz(timezone: str) -> date:
     return datetime.now(ZoneInfo(timezone)).date()
 
 
+def _today_realized_pnl(db: Session, user_id: uuid.UUID, segment: str, timezone: str) -> float:
+    """Sum of pnl across every CLOSED position for this user+segment that
+    exited today (server-side "today", same _today_in_tz reference point
+    everything else here uses) - live-broker-adapter P2's max_daily_loss
+    cap (see open_manual_position's own live-gate comment). Includes
+    every exit_reason (stop_loss/target/square_off/manual/counter_signal),
+    not just real-broker ones - a bad paper day and a bad live day both
+    count against the same cap once live trading is what's actually at
+    risk that day. 0.0 (not None) if nothing closed today, so callers
+    never need a None-check of their own."""
+    today = _today_in_tz(timezone)
+    start_of_day = datetime.combine(today, time.min, tzinfo=ZoneInfo(timezone)).astimezone(dt_timezone.utc)
+    rows = (
+        db.query(db_models.Position)
+        .filter(db_models.Position.user_id == user_id)
+        .filter(db_models.Position.segment == segment)
+        .filter(db_models.Position.status == "CLOSED")
+        .filter(db_models.Position.exit_time >= start_of_day)
+        .all()
+    )
+    return sum(float(p.pnl) for p in rows if p.pnl is not None)
+
+
+def _today_realized_pnl_for_strategy(db: Session, strategy_id: str, timezone: str) -> float:
+    """Same as _today_realized_pnl above, but for the automated Strategy-
+    driven flow's own max_daily_loss cap (execution.strategy_accounts,
+    live-broker-adapter P3 item 14) - those positions always carry
+    user_id=NULL (see open_position's own comment), so the cap has to be
+    scoped by strategy_id instead."""
+    today = _today_in_tz(timezone)
+    start_of_day = datetime.combine(today, time.min, tzinfo=ZoneInfo(timezone)).astimezone(dt_timezone.utc)
+    rows = (
+        db.query(db_models.Position)
+        .filter(db_models.Position.strategy_id == uuid.UUID(str(strategy_id)))
+        .filter(db_models.Position.status == "CLOSED")
+        .filter(db_models.Position.exit_time >= start_of_day)
+        .all()
+    )
+    return sum(float(p.pnl) for p in rows if p.pnl is not None)
+
+
 def get_daily_checklist(
     db: Session, user_id: uuid.UUID, settings: ExecutionSettings, segment: str
 ) -> Optional[db_models.DailyChecklistLog]:
@@ -951,11 +1002,16 @@ def _resolve_stop_loss(
     get_candle_history: GetCandleHistory,
 ) -> tuple[Optional[float], Optional[str]]:
     """Computes a stop-loss price for `method` ('percent'/'previous_candle'/
-    'indicator') at open time - returns (price, None) on success or
-    (None, reason) on failure (no completed candle yet, not enough
+    'indicator'/'breakeven') at open time - returns (price, None) on success
+    or (None, reason) on failure (no completed candle yet, not enough
     indicator history yet, unrecognized indicator_type, or an indicator
     value that lands on the wrong side of entry). method=None returns
     (None, None) - no stop-loss requested at all.
+
+    'breakeven' gets an identical initial stop to 'percent' (entry +/-
+    percent%) - the only difference is what _evaluate_exits does with it
+    afterward (snap-to-entry-then-freeze on the first favorable percent%
+    move, instead of continuously re-trailing every tick).
 
     Shared by open_position (Strategy-driven, every field sourced from a
     ResolvedOrder already validated upstream in signal-generation) and
@@ -966,7 +1022,7 @@ def _resolve_stop_loss(
     if method is None:
         return None, None
 
-    if method == "percent":
+    if method in ("percent", "breakeven"):
         return compute_stop_loss_percent_price(action, price, percent), None
 
     if method == "previous_candle":
@@ -1293,13 +1349,63 @@ def open_position(
     else:
         quantity = compute_quantity(effective_capital, order.price, lot_size)
 
+    # Live-broker-adapter P3 item 14 (see docs/architecture.md) - the ONLY
+    # way an automated signal ever places a real order: capital_account
+    # must be a dedicated execution.strategy_accounts row (the shared
+    # platform account has no live_trading_user_id field at all, so
+    # getattr always returns None for it) with live_trading_enabled AND a
+    # live_trading_user_id explicitly set. entry_price/final_quantity are
+    # local overridable copies of order.price/quantity, same pattern
+    # open_manual_position's own live path uses - order itself is the
+    # signal contract and is never mutated.
+    entry_price = order.price
+    final_quantity = quantity
+    live_user_id = getattr(capital_account, "live_trading_user_id", None)
+    broker_order = None
+    if (
+        live_user_id is not None
+        and is_live_enabled(capital_account)
+        and order.segment in ("NSE", "MCX")
+        and order.instrument_type in ("spot", "future")
+    ):
+        order_value = entry_price * final_quantity
+        if capital_account.max_order_value is not None and order_value > float(capital_account.max_order_value):
+            row = _reject(
+                db, order, signal_id,
+                f"order value ({order_value}) exceeds this strategy's max_order_value cap ({capital_account.max_order_value})",
+            )
+            db.commit()
+            return row
+        if capital_account.max_daily_loss is not None:
+            realized_today = _today_realized_pnl_for_strategy(db, order.strategy_id, settings.timezone)
+            if realized_today <= -float(capital_account.max_daily_loss):
+                row = _reject(
+                    db, order, signal_id,
+                    f"daily loss cap reached for this strategy ({realized_today:.2f} realized today, cap is "
+                    f"{capital_account.max_daily_loss}) - live trading is paused for the rest of today",
+                )
+                db.commit()
+                return row
+
+        broker_order, live_error = submit_entry_order_scheduled(
+            db, live_user_id, order.segment, order.symbol, order.action, final_quantity,
+        )
+        if live_error is not None:
+            row = _reject(db, order, signal_id, live_error)
+            db.commit()
+            return row
+        if broker_order.average_fill_price is not None:
+            entry_price = float(broker_order.average_fill_price)
+        if broker_order.filled_quantity:
+            final_quantity = broker_order.filled_quantity
+
     open_fee, margin_posted, liquidation_price, mtf_interest_rate_pct = _open_delta_fee_fields(
         order.segment,
         order.instrument_type,
         order.horizon,
         order.action,
-        order.price,
-        quantity,
+        entry_price,
+        final_quantity,
         account,
         capital_account,
         settings.usdinr_rate,
@@ -1316,9 +1422,11 @@ def open_position(
         action=order.action,
         horizon=order.horizon,
         instrument_type=order.instrument_type,
-        quantity=quantity,
-        entry_price=order.price,
+        quantity=final_quantity,
+        entry_price=entry_price,
         status="OPEN",
+        is_live_broker_order=broker_order is not None,
+        live_trading_user_id=live_user_id if broker_order is not None else None,
         stop_loss_price=stop_loss_price,
         initial_stop_loss_price=stop_loss_price,
         target_price=target_price,
@@ -1342,6 +1450,23 @@ def open_position(
     )
     db.add(row)
     db.commit()
+    if broker_order is not None:
+        broker_order.position_id = row.id
+        db.commit()
+        # Live-broker-adapter P3 item 14 - same best-effort resting
+        # protection open_manual_position's own live path places; a
+        # failure here just falls back to the in-app CMP monitor, see
+        # submit_resting_stop_loss_scheduled's own docstring.
+        if stop_loss_price is not None:
+            closing_action = "SELL" if order.action == "BUY" else "BUY"
+            _sl_order, sl_error = submit_resting_stop_loss_scheduled(
+                db, live_user_id, row.id, order.segment, order.symbol, closing_action, final_quantity, stop_loss_price,
+            )
+            if sl_error is not None:
+                logger.warning(
+                    "resting stop-loss order failed for live automated position %s: %s - falling back to in-app monitoring only",
+                    row.id, sl_error,
+                )
     return row
 
 
@@ -1368,6 +1493,7 @@ def open_manual_position(
     plan_checklist: Optional[list[dict]] = None,
     order_type: Optional[str] = None,
     square_off_time: Optional[time] = None,
+    token: Optional[str] = None,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -1421,7 +1547,17 @@ def open_manual_position(
     row for future performance review - it's purely a label the caller
     (ManualTab.tsx) already resolved before calling this function; `price`
     above is the same real number either way (a fresh live LTP for
-    'market', the caller-typed trigger for 'limit')."""
+    'market', the caller-typed trigger for 'limit').
+
+    `token` (live-broker-adapter P1, see docs/architecture.md) - the
+    caller's own bearer token, forwarded so market-data can resolve THIS
+    user's own BYO Dhan credentials for a real order. Only used when the
+    account has live_trading_enabled AND the platform-wide kill switch
+    allows it AND segment is NSE/MCX (see app/domain/live_broker.py) -
+    every other call behaves exactly as before this parameter existed. A
+    live order is placed as a real MARKET/INTRADAY Dhan order and this
+    function waits for its postback to confirm TRADED before creating any
+    Position row at all - see submit_live_order's own docstring."""
     signal_id = uuid.uuid4()
 
     if not is_supported("intraday", instrument_type):
@@ -1564,6 +1700,65 @@ def open_manual_position(
         else:
             final_quantity = compute_quantity(effective_capital, price, lot_size)
 
+    # Live-broker-adapter P1 (see docs/architecture.md) - a hard money-safety
+    # cap, opt-in per account (NULL = no cap), checked regardless of whether
+    # this order actually goes live below - same "in the same place the
+    # existing paper balance check already lives" placement as that check.
+    order_value = price * final_quantity
+    if account.max_order_value is not None and order_value > float(account.max_order_value):
+        row = _reject_manual(
+            db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
+            f"order value ({order_value}) exceeds this account's max_order_value cap ({account.max_order_value})",
+        )
+        db.commit()
+        return row
+
+    # Live-broker-adapter P1 - only NSE/MCX spot/future (CRYPTO is a
+    # different broker with no order API yet - see the plan's own P3 item
+    # 16; options go through open_manual_option_group instead, untouched
+    # by this function entirely). is_supported() at the top of this
+    # function already guarantees instrument_type is spot/future here.
+    broker_order = None
+    if is_live_enabled(account) and segment in ("NSE", "MCX"):
+        # Live-broker-adapter P2 (see docs/architecture.md) - trips the
+        # kill-switch-equivalent for THIS account for the rest of today
+        # once its realized loss reaches the configured cap. Only gates
+        # live orders (a paper account hitting this has nothing real at
+        # risk) - checked fresh every live submission, not cached, so it
+        # self-clears at the next calendar day without any reset step.
+        if account.max_daily_loss is not None:
+            realized_today = _today_realized_pnl(db, user_id, segment, settings.timezone)
+            if realized_today <= -float(account.max_daily_loss):
+                row = _reject_manual(
+                    db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
+                    f"daily loss cap reached for this account ({realized_today:.2f} realized today, cap is "
+                    f"{account.max_daily_loss}) - live trading is paused for the rest of today",
+                )
+                db.commit()
+                return row
+        if not token:
+            row = _reject_manual(
+                db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
+                "live trading is enabled for this account but no authenticated bearer token was available to place the real order",
+            )
+            db.commit()
+            return row
+        broker_order, live_error = submit_live_order(
+            db, user_id, token, position_id=None, purpose="entry",
+            exchange=segment, symbol=symbol, action=action, quantity=final_quantity,
+        )
+        if live_error is not None:
+            row = _reject_manual(db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price, live_error)
+            db.commit()
+            return row
+        # Real fill data from Dhan's postback, when present - see
+        # internal.py's own caveat on why these fields are best-effort and
+        # fall back to the originally computed price/quantity otherwise.
+        if broker_order.average_fill_price is not None:
+            price = float(broker_order.average_fill_price)
+        if broker_order.filled_quantity:
+            final_quantity = broker_order.filled_quantity
+
     # horizon="intraday" hardcoded - every Manual tab position is intraday
     # (see docs/architecture.md's Trade discipline checklist section), so
     # this can never hit the NSE MTF branch inside _open_delta_fee_fields.
@@ -1584,6 +1779,8 @@ def open_manual_position(
         quantity=final_quantity,
         entry_price=price,
         status="OPEN",
+        is_live_broker_order=broker_order is not None,
+        live_trading_user_id=user_id if broker_order is not None else None,
         stop_loss_price=stop_loss_price,
         initial_stop_loss_price=stop_loss_price,
         trailing_stop_enabled=trailing_stop_enabled,
@@ -1601,6 +1798,27 @@ def open_manual_position(
     )
     db.add(row)
     db.commit()
+    if broker_order is not None:
+        broker_order.position_id = row.id
+        db.commit()
+        # Live-broker-adapter P2 - real, resting protection on the exchange
+        # itself, placed immediately once the entry is confirmed TRADED.
+        # Best-effort: a failure here does NOT reject/unwind the (already
+        # real) entry - it just falls back to the existing in-app CMP-based
+        # exit-monitor as the sole safety net, same as before this existed
+        # (see submit_resting_stop_loss's own docstring, and
+        # _settle_live_exit's reactive-market-exit fallback below).
+        if stop_loss_price is not None:
+            closing_action = "SELL" if action == "BUY" else "BUY"
+            _sl_order, sl_error = submit_resting_stop_loss(
+                db, user_id, token, position_id=row.id, exchange=segment, symbol=symbol,
+                action=closing_action, quantity=final_quantity, trigger_price=stop_loss_price,
+            )
+            if sl_error is not None:
+                logger.warning(
+                    "resting stop-loss order failed for live position %s: %s - falling back to in-app monitoring only",
+                    row.id, sl_error,
+                )
     return row
 
 
@@ -1798,7 +2016,12 @@ def square_off_all_open(db: Session, user_id: uuid.UUID, get_ltp_batch: GetLtpBa
 
 
 def square_off_position(
-    db: Session, user_id: uuid.UUID, position_id: uuid.UUID, get_ltp_batch: GetLtpBatch, quantity: Optional[float] = None
+    db: Session,
+    user_id: uuid.UUID,
+    position_id: uuid.UUID,
+    get_ltp_batch: GetLtpBatch,
+    quantity: Optional[float] = None,
+    token: Optional[str] = None,
 ) -> dict:
     """Closes exactly one OPEN position by id - the per-row 'Square off'
     button in the frontend's Positions grid, as opposed to
@@ -1814,7 +2037,19 @@ def square_off_position(
     ever shared one) so each partial exit is a durable, queryable record
     rather than only living in whatever called this. Omitted or equal to
     the full held quantity behaves exactly as before this parameter
-    existed."""
+    existed.
+
+    Live-broker-adapter P1 (see docs/architecture.md) - if `pos` was opened
+    as a real broker order (pos.is_live_broker_order), this ALWAYS submits
+    a real closing order via app/domain/live_broker.py before touching any
+    DB state, regardless of the account's CURRENT live_trading_enabled
+    (which may have changed since this position opened - a real position
+    must always close through the same real path it opened through, never
+    silently downgrade to a paper close). Only a FULL close is supported
+    live for now - a partial close of a live position returns
+    'live_partial_not_supported' rather than only paper-closing part of a
+    real position. `token` is required whenever pos.is_live_broker_order is
+    true; omitted for every paper position, unaffected."""
     pos = db.get(db_models.Position, position_id)
     if pos is None or pos.user_id != user_id:
         return {"status": "not_found"}
@@ -1830,6 +2065,21 @@ def square_off_position(
     cmp_price = quotes.get(pos.symbol)
     if cmp_price is None:
         return {"status": "quote_unavailable"}
+
+    if pos.is_live_broker_order:
+        if close_quantity != held_quantity:
+            return {"status": "live_partial_not_supported"}
+        if not token:
+            return {"status": "live_token_required"}
+        closing_action = "SELL" if pos.action == "BUY" else "BUY"
+        broker_order, live_error = submit_live_order(
+            db, user_id, token, position_id=pos.id, purpose="exit",
+            exchange=pos.segment, symbol=pos.symbol, action=closing_action, quantity=close_quantity,
+        )
+        if live_error is not None:
+            return {"status": "live_order_failed", "reason": live_error}
+        if broker_order.average_fill_price is not None:
+            cmp_price = float(broker_order.average_fill_price)
 
     account = load_capital_account(db, user_id, pos.segment, pos.strategy_id)
     usdinr_rate = load_settings(db, user_id).usdinr_rate
@@ -1923,14 +2173,23 @@ def _evaluate_square_off_due(
     call, which just passes one float."""
     due = [p for p in positions if p.square_off_time is not None and now_local >= p.square_off_time]
     if not due:
-        return {"closed": 0, "failed": 0, "checked": 0}
+        return {"closed": 0, "failed": 0, "checked": 0, "live_square_offs_needed": []}
 
     quotes = _quotes_by_exchange(due, get_ltp_batch)
     rates = usdinr_rate_by_user or {}
     closed = 0
     failed = 0
+    # Live-broker-adapter P2 - a live position due for square-off closes
+    # through a real order (square_off_due_positions, the DB-committing
+    # wrapper), never this paper write - see _evaluate_exits' identical
+    # live_exits_needed pattern for the same "pure logic, no DB/HTTP here"
+    # reasoning.
+    live_square_offs_needed: list = []
 
     for pos in due:
+        if getattr(pos, "is_live_broker_order", False):
+            live_square_offs_needed.append(pos)
+            continue
         cmp_price = quotes.get((pos.exchange, pos.symbol))
         if cmp_price is None:
             failed += 1
@@ -1947,7 +2206,7 @@ def _evaluate_square_off_due(
         pos.exit_reason = "square_off"
         closed += 1
 
-    return {"closed": closed, "failed": failed, "checked": len(due)}
+    return {"closed": closed, "failed": failed, "checked": len(due), "live_square_offs_needed": live_square_offs_needed}
 
 
 def square_off_due_positions(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
@@ -1974,6 +2233,13 @@ def square_off_due_positions(db: Session, get_ltp_batch: GetLtpBatch) -> dict:
     usdinr_rates = _usdinr_rate_by_user(db, open_positions)
     result = _evaluate_square_off_due(open_positions, get_ltp_batch, now_local, accounts, strategy_accounts, usdinr_rates)
     db.commit()
+
+    live_square_offs_needed = result.pop("live_square_offs_needed", [])
+    for pos in live_square_offs_needed:
+        _settle_live_exit(db, pos, "square_off")
+    if live_square_offs_needed:
+        db.commit()
+
     return result
 
 
@@ -2009,18 +2275,27 @@ def _evaluate_exits(
     (previous_candle method), or the latest indicator value (indicator
     method, via _STOP_LOSS_COMPUTE_FUNCS) - and only if the new candidate
     is MORE favorable than the stored value. It never loosens.
+    stop_loss_method='breakeven' is the one exception to "continuous
+    ratchet": it moves exactly once, snapping to entry_price the first
+    time price moves stop_loss_percent% favorably, then freezes there for
+    the rest of the position's life (breakeven_triggered records this).
     get_candle_history is Optional (default None) purely so existing
     callers/tests that only ever exercise percent/previous_candle
     positions don't need updating - a position with
     stop_loss_method='indicator' but no get_candle_history supplied is
     simply skipped for trailing, same as a candle fetch failure below."""
     if not positions:
-        return {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 0}
+        return {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 0, "live_exits_needed": []}
 
     quotes = _quotes_by_exchange(positions, get_ltp_batch)
     closed_stop_loss = 0
     closed_target = 0
     trailed = 0
+    # Live-broker-adapter P2 - (pos, reason) pairs a live position's own
+    # sl_hit/target_hit flagged, for check_exits (the DB-committing
+    # wrapper) to actually close for real - see the sl_hit/target_hit
+    # branch below.
+    live_exits_needed: list[tuple[object, str]] = []
     # Dedupe candle fetches within this run - several positions may share
     # the same (exchange, symbol, interval); market-data's own
     # interval-length TTL cache further dedupes across separate runs.
@@ -2074,6 +2349,14 @@ def _evaluate_exits(
         )
 
         if sl_hit or target_hit:
+            if getattr(pos, "is_live_broker_order", False):
+                # A live position's actual close must go through a real
+                # broker order, never a paper write - see
+                # position_manager._settle_live_exit (the DB-committing
+                # wrapper, check_exits, handles this list; this pure
+                # function only ever collects candidates, no DB/HTTP here).
+                live_exits_needed.append((pos, "stop_loss" if sl_hit else "target"))
+                continue
             pos.exit_price = cmp_price
             pos.exit_time = datetime.now(dt_timezone.utc)
             raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
@@ -2129,6 +2412,23 @@ def _evaluate_exits(
                         (pos.action == "BUY" and raw_candidate < cmp_price) or (pos.action == "SELL" and raw_candidate > cmp_price)
                     ):
                         candidate_stop = raw_candidate
+            elif pos.stop_loss_method == "breakeven" and not pos.breakeven_triggered:
+                # One-shot: once price has moved stop_loss_percent%
+                # favorably from entry, snap the stop to entry_price and
+                # flag it triggered - every subsequent tick then falls
+                # through this elif (breakeven_triggered is already True)
+                # with candidate_stop staying None, so the stop stays
+                # frozen at entry for good ("let it ride", not a
+                # continuous trail like the 'percent' method above).
+                entry_price = float(pos.entry_price)
+                pct = float(pos.stop_loss_percent)
+                moved_favorably = (
+                    (pos.action == "BUY" and cmp_price >= entry_price * (1 + pct / 100))
+                    or (pos.action == "SELL" and cmp_price <= entry_price * (1 - pct / 100))
+                )
+                if moved_favorably:
+                    candidate_stop = entry_price
+                    pos.breakeven_triggered = True
 
             if candidate_stop is not None:
                 current_stop = float(pos.stop_loss_price)
@@ -2142,7 +2442,106 @@ def _evaluate_exits(
         "closed_target": closed_target,
         "trailed": trailed,
         "checked": len(positions),
+        "live_exits_needed": live_exits_needed,
     }
+
+
+def settle_live_position_exit(db: Session, pos: db_models.Position, exit_price: float, exit_reason: str) -> None:
+    """Applies a REAL close to a live position's DB row - shared by every
+    path that can learn a live position actually closed: the exit-monitor/
+    square-off scheduler jobs below (once their own submitted order
+    confirms TRADED) AND the Dhan postback handler (app/api/routes/
+    internal.py, for a RESTING order Dhan's own engine fills on its own
+    schedule, which neither scheduler job is watching for). Idempotent -
+    a no-op if `pos` is no longer OPEN, since both of those paths can
+    plausibly race to settle the same position (a postback arriving just
+    after the scheduler's own synchronous wait already settled it, or
+    vice versa)."""
+    if pos.status != "OPEN":
+        return
+    account = load_capital_account(db, pos.user_id, pos.segment, pos.strategy_id)
+    usdinr_rate = load_settings(db, pos.user_id).usdinr_rate
+    raw_pnl = compute_pnl(pos.action, float(pos.entry_price), exit_price, float(pos.quantity))
+    pos.exit_price = exit_price
+    pos.exit_time = datetime.now(dt_timezone.utc)
+    _apply_realized_pnl(pos, account, _net_pnl_with_costs(pos, exit_price, raw_pnl), usdinr_rate)
+    pos.status = "CLOSED"
+    pos.exit_reason = exit_reason
+
+
+def _active_resting_stop_loss(db: Session, position_id: uuid.UUID) -> Optional[db_models.BrokerOrder]:
+    return (
+        db.query(db_models.BrokerOrder)
+        .filter(db_models.BrokerOrder.position_id == position_id, db_models.BrokerOrder.purpose == "stop_loss")
+        .filter(db_models.BrokerOrder.status == "pending")
+        .order_by(db_models.BrokerOrder.requested_at.desc())
+        .first()
+    )
+
+
+def _settle_live_exit(db: Session, pos: db_models.Position, reason: str) -> None:
+    """Closes a live position for real - reason is 'stop_loss'/'target'
+    (from check_exits' own CMP-based detection) or 'square_off' (from
+    square_off_due_positions). If a resting stop-loss order is still
+    resting on the exchange for this position, it's CANCELLED first - a
+    real position must never have two independent real closing orders in
+    flight at once (the resting SL and a fresh reactive market order could
+    otherwise both eventually execute). A cancel failure skips this tick
+    entirely (logged, not raised) rather than risk a duplicate real
+    order - the position may already be filling on the resting order and
+    will settle via its own postback, or this simply retries next tick."""
+    resting = _active_resting_stop_loss(db, pos.id)
+    if resting is not None:
+        cancel_error = cancel_resting_order_scheduled(db, pos.live_trading_user_id, resting)
+        if cancel_error is not None:
+            logger.warning(
+                "position %s: flagged for a real %s exit but could not cancel its resting stop-loss order first (%s) - "
+                "skipping this tick to avoid a duplicate real order",
+                pos.id, reason, cancel_error,
+            )
+            return
+
+    closing_action = "SELL" if pos.action == "BUY" else "BUY"
+    order, error = submit_exit_order_scheduled(
+        db, pos.live_trading_user_id, pos.id, pos.segment, pos.symbol, closing_action, float(pos.quantity)
+    )
+    if error is not None:
+        logger.warning("live %s exit failed for position %s, will retry next tick: %s", reason, pos.id, error)
+        return
+
+    if order.average_fill_price is not None:
+        exit_price = float(order.average_fill_price)
+    elif reason == "stop_loss":
+        exit_price = float(pos.stop_loss_price)
+    elif reason == "target":
+        exit_price = float(pos.target_price)
+    else:
+        # square_off - no stop/target price to fall back to; the exit
+        # order confirmed TRADED (submit_exit_order_scheduled only returns
+        # error=None once it has), so raw_response should carry SOME price
+        # even if average_fill_price's exact field name is still
+        # unconfirmed - see internal.py's own caveat on that.
+        exit_price = float(pos.entry_price)
+    settle_live_position_exit(db, pos, exit_price, reason)
+
+
+def _reconcile_trailing_stop(db: Session, pos: db_models.Position, new_trigger_price: float) -> None:
+    """Throttled/coalesced Modify Order call for a live position's resting
+    stop-loss order - only called by check_exits when _evaluate_exits
+    actually changed pos.stop_loss_price this tick (the caller's own
+    before/after diff IS the throttle: at most one Modify Order call per
+    position per 30s exit-monitor tick, never one per poll of an unchanged
+    value - see modify_resting_order_scheduled's own docstring). No active
+    resting order to modify is logged, not raised - the position stays
+    protected by the in-app CMP monitor alone in that case, same fallback
+    submit_resting_stop_loss's own docstring describes."""
+    order = _active_resting_stop_loss(db, pos.id)
+    if order is None:
+        logger.warning("live position %s trailed to %s but has no active resting stop-loss order to modify", pos.id, new_trigger_price)
+        return
+    error = modify_resting_order_scheduled(db, pos.live_trading_user_id, order, new_trigger_price)
+    if error is not None:
+        logger.warning("failed to modify resting stop-loss for position %s: %s", pos.id, error)
 
 
 def check_exits(
@@ -2152,7 +2551,17 @@ def check_exits(
     target, ahead of square-off - the continuous monitoring loop
     square_off_all_open alone doesn't provide. See _evaluate_exits for
     the actual logic; this just queries the DB-eligible candidates and
-    commits the result."""
+    commits the result.
+
+    Live-broker-adapter P2 (see docs/architecture.md) - _evaluate_exits
+    itself never closes a live position (is_live_broker_order=True) or
+    calls Dhan; it only mutates stop_loss_price (trailing) and flags a
+    stop/target hit in its own "live_exits_needed" return list, since it's
+    pure logic with no DB/HTTP access. This wrapper does the real work for
+    both: submits a real reactive market exit for anything flagged
+    (_settle_live_exit), and diffs each live position's stop_loss_price
+    before/after to call Modify Order on its resting stop exactly when it
+    actually trailed (_reconcile_trailing_stop) - never on every tick."""
     candidates = (
         db.query(db_models.Position)
         .filter(db_models.Position.status == "OPEN")
@@ -2170,6 +2579,22 @@ def check_exits(
     accounts = _accounts_by_segment(db, candidates)
     strategy_accounts = _strategy_accounts_by_id(db, candidates)
     usdinr_rates = _usdinr_rate_by_user(db, candidates)
+    prior_live_stops = {p.id: p.stop_loss_price for p in candidates if p.is_live_broker_order}
+
     result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts, usdinr_rates)
     db.commit()
+
+    live_exits_needed = result.pop("live_exits_needed", [])
+    for pos, reason in live_exits_needed:
+        _settle_live_exit(db, pos, reason)
+    db.commit()
+
+    for pos_id, prior_stop in prior_live_stops.items():
+        pos = next((p for p in candidates if p.id == pos_id), None)
+        if pos is None or pos.status != "OPEN" or pos.stop_loss_price is None:
+            continue
+        if prior_stop is None or float(pos.stop_loss_price) != float(prior_stop):
+            _reconcile_trailing_stop(db, pos, float(pos.stop_loss_price))
+    db.commit()
+
     return result

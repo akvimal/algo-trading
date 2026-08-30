@@ -20,7 +20,7 @@ export const ALL_WEEKDAYS: Weekday[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 // meant to trade every day still needs Sat/Sun checked explicitly.
 export const DEFAULT_ACTIVE_WEEKDAYS: Weekday[] = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 export type Interval = "1min" | "3min" | "5min" | "15min" | "30min" | "60min" | "daily";
-export type StopLossMethod = "previous_candle" | "percent" | "indicator";
+export type StopLossMethod = "previous_candle" | "percent" | "indicator" | "breakeven";
 // Backtest-only - "touch" (default, matches live execution's continuous
 // CMP monitoring) vs "close" (a what-if: only exits once a bar's CLOSE
 // crosses the stop level). See backend's ExitConfig docstring.

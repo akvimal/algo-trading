@@ -3137,7 +3137,7 @@ function StrategyManager() {
       stop_loss_method: slMethod || undefined,
       stop_loss_interval:
         slMethod === "previous_candle" || slMethod === "indicator" ? slInterval || undefined : undefined,
-      stop_loss_percent: slMethod === "percent" && slPercent ? Number(slPercent) : undefined,
+      stop_loss_percent: (slMethod === "percent" || slMethod === "breakeven") && slPercent ? Number(slPercent) : undefined,
       stop_loss_indicator_type: slMethod === "indicator" ? slIndicatorType : undefined,
       stop_loss_indicator_params:
         slMethod === "indicator" ? buildStopLossIndicatorParams(slIndicatorType, slIndicatorPeriod, slIndicatorMultiplier) : undefined,
@@ -3546,13 +3546,20 @@ function StrategyManager() {
                         // clear a stale checked value from before switching
                         // away, so it can't silently submit for a method
                         // whose UI no longer shows the checkbox at all.
-                        if (next !== "percent") setTrailingEnabled(false);
+                        // 'breakeven' is the opposite case - trailing isn't
+                        // optional for it (it's how the one-shot snap-to-
+                        // entry actually runs, see validate_stop_loss_fields),
+                        // so force it on rather than exposing a checkbox
+                        // that could be unchecked into a silently-inert stop.
+                        if (next === "breakeven") setTrailingEnabled(true);
+                        else if (next !== "percent") setTrailingEnabled(false);
                       }}
                     >
                       <option value="">&mdash;</option>
                       <option value="previous_candle">Previous candle low/high</option>
                       <option value="percent">% from entry</option>
                       <option value="indicator">Indicator</option>
+                      <option value="breakeven">Breakeven (trail to cost)</option>
                     </select>
                   </label>
                 </div>
@@ -3577,9 +3584,9 @@ function StrategyManager() {
                         </select>
                       </label>
                     )}
-                    {displayMethod === "percent" && (
+                    {(displayMethod === "percent" || displayMethod === "breakeven") && (
                       <label>
-                        SL %
+                        {displayMethod === "breakeven" ? "SL % (also the breakeven trigger)" : "SL %"}
                         <input
                           type="number"
                           min="0"

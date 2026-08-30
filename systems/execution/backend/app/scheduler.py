@@ -26,6 +26,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.adapters.db.session import SessionLocal
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle
 from app.config import settings
+from app.domain.broker_reconciliation import reconcile_stuck_broker_orders
 from app.domain.option_position_manager import check_option_group_exits, record_option_group_pnl_snapshots, square_off_due_option_groups
 from app.domain.position_manager import check_exits, record_position_pnl_snapshots, square_off_due_positions
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 _scheduler = BackgroundScheduler()
 _SQUARE_OFF_JOB_ID = "square-off-due"
 _EXIT_MONITOR_JOB_ID = "exit-monitor"
+_BROKER_RECONCILIATION_JOB_ID = "broker-order-reconciliation"
 
 
 def run_square_off_due() -> dict:
@@ -67,6 +69,11 @@ def run_check_exits() -> dict:
     return result
 
 
+def run_broker_reconciliation() -> dict:
+    with SessionLocal() as db:
+        return reconcile_stuck_broker_orders(db)
+
+
 def start_scheduler() -> None:
     _scheduler.add_job(
         run_square_off_due,
@@ -78,6 +85,12 @@ def start_scheduler() -> None:
         run_check_exits,
         IntervalTrigger(seconds=settings.exit_monitor_poll_seconds),
         id=_EXIT_MONITOR_JOB_ID,
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        run_broker_reconciliation,
+        IntervalTrigger(seconds=settings.broker_order_reconciliation_poll_seconds),
+        id=_BROKER_RECONCILIATION_JOB_ID,
         replace_existing=True,
     )
     if not _scheduler.running:

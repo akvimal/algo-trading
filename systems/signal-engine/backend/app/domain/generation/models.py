@@ -78,7 +78,15 @@ Status = Literal["draft", "backtesting", "live", "paused"]
 # - 'ema'/'supertrend' today, more addable there without touching this
 # Literal again). Uses stop_loss_interval (candle timeframe, reused) plus
 # the two new stop_loss_indicator_* fields below - never stop_loss_percent.
-StopLossMethod = Literal["previous_candle", "percent", "indicator"]
+# 'breakeven': a one-shot variant of 'percent' (added 2026-08-29) - opens
+# with the identical initial stop (entry +/- stop_loss_percent%), but once
+# price first moves stop_loss_percent% favorably from entry, the stop
+# snaps to entry_price itself and freezes there for good (no further
+# trailing) - execution.positions.breakeven_triggered records whether
+# that snap has already happened. Reuses stop_loss_percent for both the
+# initial distance and the trigger threshold rather than adding a second
+# field, same as 'percent' otherwise never sets interval/indicator_*.
+StopLossMethod = Literal["previous_candle", "percent", "indicator", "breakeven"]
 # 1/5/15/25/60 are Dhan's native charts/intraday intervals; 3/30 are
 # locally aggregated from 1min bars (any "Nmin" shape works - see
 # market-data's resolve_interval_minutes/aggregate_candles) same as
@@ -211,13 +219,21 @@ def validate_stop_loss_fields(
             raise ValueError("stop_loss_method='previous_candle' must not set stop_loss_percent")
         if indicator_type is not None or indicator_params is not None:
             raise ValueError("stop_loss_method='previous_candle' must not set stop_loss_indicator_type/stop_loss_indicator_params")
-    elif method == "percent":
+    elif method in ("percent", "breakeven"):
         if percent is None:
-            raise ValueError("stop_loss_method='percent' requires stop_loss_percent")
+            raise ValueError(f"stop_loss_method='{method}' requires stop_loss_percent")
         if interval is not None:
-            raise ValueError("stop_loss_method='percent' must not set stop_loss_interval")
+            raise ValueError(f"stop_loss_method='{method}' must not set stop_loss_interval")
         if indicator_type is not None or indicator_params is not None:
-            raise ValueError("stop_loss_method='percent' must not set stop_loss_indicator_type/stop_loss_indicator_params")
+            raise ValueError(f"stop_loss_method='{method}' must not set stop_loss_indicator_type/stop_loss_indicator_params")
+        # Unlike 'percent' (a flat stop is a valid, if inert-trailing,
+        # choice), 'breakeven' does nothing at all without trailing - its
+        # one-shot snap-to-entry only happens inside _evaluate_exits'
+        # trailing_stop_enabled-gated block (execution's
+        # position_manager.py). A breakeven stop with trailing off would
+        # silently behave as an ordinary flat percent stop forever.
+        if method == "breakeven" and not trailing_enabled:
+            raise ValueError("stop_loss_method='breakeven' requires trailing_stop_enabled=true")
     elif method == "indicator":
         if interval is None:
             raise ValueError("stop_loss_method='indicator' requires stop_loss_interval")

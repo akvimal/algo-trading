@@ -80,6 +80,18 @@ RENEW_TOKEN_URL = "https://api.dhan.co/v2/RenewToken"
 OPTION_CHAIN_URL = "https://api.dhan.co/v2/optionchain"
 OPTION_EXPIRY_LIST_URL = "https://api.dhan.co/v2/optionchain/expirylist"
 ROLLING_OPTION_URL = "https://api.dhan.co/v2/charts/rollingoption"
+# Dhan Order API v2 (place/modify/cancel/get/order-book/funds) -
+# https://dhanhq.co/docs/v2/orders/ and /docs/v2/funds/. UNLIKE every URL
+# above, these field names/shapes are NOT yet verified against a live
+# Dhan response the way this file's own module docstring says every
+# other endpoint here was - place_order/modify_order/cancel_order/
+# get_order/get_order_book/get_funds below are best-effort from general
+# API documentation, written before any real order was ever placed
+# through this platform (see docs/architecture.md's "live broker
+# adapter" roadmap item). CONFIRM every field name/response shape against
+# a live Dhan sandbox call before this is ever pointed at a real account.
+ORDERS_URL = "https://api.dhan.co/v2/orders"
+FUNDS_URL = "https://api.dhan.co/v2/fundlimit"
 
 # Dhan's charts/intraday only *natively* supports these interval values
 # (minutes) - notably 25, not 30, and no daily granularity at all
@@ -146,6 +158,13 @@ QUOTE_CACHE_TTL_SECONDS = 3.0
 # queue - callers already treat a failed quote as "unavailable, try again
 # later" rather than something to block indefinitely on.
 MAX_THROTTLE_WAIT_SECONDS = 4.0
+
+# Dhan's documented order-API rate limit is NOT yet confirmed against
+# current docs (unlike MIN_LTP_CALL_INTERVAL_SECONDS/
+# MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS below, which were) - this is a
+# deliberately conservative placeholder. Narrow it only after checking
+# Dhan's current published order-API rate limit.
+MIN_ORDER_CALL_INTERVAL_SECONDS = 1.0
 
 # Dhan documents this one explicitly (unlike LTP/candle above, which are
 # empirically-derived): 1 unique request per 3 seconds. Own lock/timestamp
@@ -683,6 +702,14 @@ class DhanProvider(QuoteProvider):
 
         self._expiry_list_cache: dict[str, tuple[list[str], float]] = {}
         self._expiry_list_cache_lock = threading.Lock()
+
+        # Order-placement throttle - same per-credential-key shape as the
+        # quote/candle/option-chain throttles above, deliberately kept
+        # entirely separate (own lock, own timestamp dict) so a burst of
+        # order activity never contends with or is contended by ordinary
+        # quote polling.
+        self._order_lock = threading.Lock()
+        self._last_order_call_at: dict[Optional[str], float] = {}
 
         # In-memory OI time series backing GET /options/oi-summary's
         # 5m/15m change figures - see _record_oi_history's own comment.
@@ -1698,3 +1725,173 @@ class DhanProvider(QuoteProvider):
             chunk_start = chunk_end + timedelta(days=1)
 
         return candles
+
+    # --- Order placement (P0 of the live-broker-adapter roadmap item, see
+    # docs/architecture.md) - see this module's own ORDERS_URL/FUNDS_URL
+    # comment above: unlike every read-only method in this file, the exact
+    # request/response field names below are NOT yet confirmed against a
+    # live Dhan call. Every method here is credentials-aware the same way
+    # get_ltp_batch/get_option_chain already are (BYO per-user, falling
+    # back to the platform-default only when `credentials` is None) -
+    # `execution` never holds a Dhan credential directly, only market-data
+    # does, so this is the one place a real order can be placed from at
+    # all. -------------------------------------------------------------
+
+    def _order_headers(self, access_token: str, client_id: str) -> dict:
+        return {"Accept": "application/json", "Content-Type": "application/json", "access-token": access_token, "client-id": client_id}
+
+    def _order_credentials(self, credentials: Optional["DhanCredentials"]) -> tuple[str, str]:
+        access_token = credentials.access_token if credentials else current_access_token()
+        client_id = credentials.client_id if credentials else settings.dhan_client_id
+        if not client_id or not access_token:
+            raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
+        return access_token, client_id
+
+    def _raise_for_order_response(self, resp, label: str) -> None:
+        if resp.status_code == 401:
+            raise RuntimeError("Dhan API rejected the access token (401) - it may need to be regenerated")
+        if resp.status_code == 429:
+            raise RuntimeError(f"Dhan API rate limit hit (429) on {label} - retry shortly")
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            raise RuntimeError(f"Dhan API error ({resp.status_code}) on {label}: {resp.text[:200]}") from exc
+
+    def place_order(
+        self,
+        symbol: str,
+        transaction_type: str,
+        quantity: int,
+        order_type: str,
+        product_type: str,
+        price: Optional[float] = None,
+        trigger_price: Optional[float] = None,
+        correlation_id: Optional[str] = None,
+        credentials: Optional["DhanCredentials"] = None,
+    ) -> dict:
+        """Places a REAL order on Dhan - `symbol` resolves to a security
+        ID/exchange segment the same way resolve_feed_target already does
+        for the live market-feed WebSocket (this provider's own
+        instrument-master cache, not a caller-supplied Dhan ID - execution
+        never needs to know Dhan's internal IDs). `transaction_type`
+        ('BUY'/'SELL'), `order_type` ('MARKET'/'LIMIT'/'STOP_LOSS'/
+        'STOP_LOSS_MARKET'), and `product_type' ('CNC'/'INTRADAY'/'MARGIN'/
+        'MTF') are passed through to Dhan as-is - validating that the
+        combination makes sense (e.g. a STOP_LOSS order needs both `price`
+        and `trigger_price`) is the caller's job, not this transport-layer
+        method's. `correlation_id`, if given, is forwarded as Dhan's own
+        client-supplied order reference (their `correlationId` field per
+        general v2 docs) - execution's own broker_orders.client_order_id
+        should be threaded through here for the submit-then-crash
+        idempotency story the live-broker-adapter plan calls for; whether
+        Dhan actually honors it as a dedup key (vs. just an opaque label
+        echoed back) needs confirming live, not assumed."""
+        target = self.resolve_feed_target(symbol)
+        if target is None:
+            raise RuntimeError(f"unknown symbol '{symbol}' ({self.name}) - instrument master may need a sync")
+        segment_key, security_id = target
+
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "order")
+
+        body = {
+            "dhanClientId": client_id,
+            "correlationId": correlation_id,
+            "transactionType": transaction_type,
+            "exchangeSegment": segment_key,
+            "productType": product_type,
+            "orderType": order_type,
+            "validity": "DAY",
+            "securityId": security_id,
+            "quantity": quantity,
+            "disclosedQuantity": 0,
+            "price": price or 0,
+            "triggerPrice": trigger_price or 0,
+            "afterMarketOrder": False,
+        }
+        resp = requests.post(ORDERS_URL, headers=self._order_headers(access_token, client_id), json=body, timeout=15)
+        self._raise_for_order_response(resp, "place-order")
+        return resp.json()
+
+    def modify_order(
+        self,
+        order_id: str,
+        order_type: str,
+        quantity: int,
+        price: Optional[float] = None,
+        trigger_price: Optional[float] = None,
+        credentials: Optional["DhanCredentials"] = None,
+    ) -> dict:
+        """Modifies an already-placed order still resting on the exchange -
+        the mechanism the live-broker-adapter plan's throttled trailing-SL
+        reconciliation calls to move a resting SL/SL-M order's trigger
+        price, instead of Dhan's own order book tracking a full order
+        history. See place_order's own docstring on unverified field
+        shapes - this one especially, since Dhan's modify payload only
+        needs to carry what's CHANGING, and which fields are optional-vs-
+        required here isn't confirmed."""
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "modify-order")
+
+        body = {
+            "dhanClientId": client_id,
+            "orderId": order_id,
+            "orderType": order_type,
+            "quantity": quantity,
+            "price": price or 0,
+            "triggerPrice": trigger_price or 0,
+            "validity": "DAY",
+        }
+        resp = requests.put(f"{ORDERS_URL}/{order_id}", headers=self._order_headers(access_token, client_id), json=body, timeout=15)
+        self._raise_for_order_response(resp, "modify-order")
+        return resp.json()
+
+    def cancel_order(self, order_id: str, credentials: Optional["DhanCredentials"] = None) -> dict:
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "cancel-order")
+
+        resp = requests.delete(f"{ORDERS_URL}/{order_id}", headers=self._order_headers(access_token, client_id), timeout=15)
+        self._raise_for_order_response(resp, "cancel-order")
+        return resp.json()
+
+    def get_order(self, order_id: str, credentials: Optional["DhanCredentials"] = None) -> Optional[dict]:
+        """None on a 404 (unknown order id) - every other non-2xx still
+        raises, same convention _security_id-based lookups elsewhere in
+        this file use for "doesn't exist" vs. "something's actually
+        wrong"."""
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "get-order")
+
+        resp = requests.get(f"{ORDERS_URL}/{order_id}", headers=self._order_headers(access_token, client_id), timeout=15)
+        if resp.status_code == 404:
+            return None
+        self._raise_for_order_response(resp, "get-order")
+        return resp.json()
+
+    def get_order_book(self, credentials: Optional["DhanCredentials"] = None) -> list[dict]:
+        """Every order for this credential's account, regardless of our
+        own DB state - the reconciliation job's own source of truth when a
+        broker_orders row is stuck SUBMITTING with no broker_order_id yet
+        (a crash between calling place_order and recording its response),
+        matched back to our own row by correlationId (see place_order's
+        own docstring on why that match isn't yet confirmed to actually
+        work against Dhan's real API)."""
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "order-book")
+
+        resp = requests.get(ORDERS_URL, headers=self._order_headers(access_token, client_id), timeout=15)
+        self._raise_for_order_response(resp, "order-book")
+        data = resp.json()
+        return data if isinstance(data, list) else data.get("data", [])
+
+    def get_funds(self, credentials: Optional["DhanCredentials"] = None) -> dict:
+        """Real available funds/margin - replaces trusting the simulated
+        execution.accounts.current_balance ledger (never reconciled
+        against anything real) for any live_trading_enabled account, per
+        the live-broker-adapter plan's own P0 scope."""
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "funds")
+
+        resp = requests.get(FUNDS_URL, headers=self._order_headers(access_token, client_id), timeout=15)
+        self._raise_for_order_response(resp, "funds")
+        return resp.json()

@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- is set. Interval values (1/5/15/25/60min, no 'daily', no '30min')
     -- match Dhan's charts/intraday API exactly - see market-data's
     -- DhanProvider.get_previous_candle.
-    stop_loss_method    TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
+    stop_loss_method    TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven')),
     stop_loss_interval  TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent   NUMERIC CHECK (stop_loss_percent > 0 AND stop_loss_percent < 100),
     -- 'ema'/'supertrend' today - MUST be widened here in lockstep with
@@ -190,6 +190,16 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
             AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL)
         OR (stop_loss_method = 'indicator' AND stop_loss_interval IS NOT NULL AND stop_loss_percent IS NULL
             AND stop_loss_indicator_type IS NOT NULL AND stop_loss_indicator_params IS NOT NULL)
+        -- 'breakeven': same field shape as 'percent' (stop_loss_percent is
+        -- both the initial stop distance and the favorable-move trigger
+        -- threshold, see StopLossMethod's own comment in signal-generation's
+        -- app/domain/generation/models.py) - added 2026-08-29. Also requires
+        -- trailing_stop_enabled=true (unlike 'percent', a flat/non-trailing
+        -- breakeven stop would never actually snap to entry - see
+        -- validate_stop_loss_fields's identical check).
+        OR (stop_loss_method = 'breakeven' AND stop_loss_percent IS NOT NULL AND stop_loss_interval IS NULL
+            AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL
+            AND trailing_stop_enabled = true)
     ),
     -- Which market this strategy trades in - distinct from `exchange`
     -- above (still fixed to NSE, the only one actually wired up
@@ -301,6 +311,30 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
 
 CREATE INDEX IF NOT EXISTS idx_strategies_status ON signal_generation.strategies (status);
 CREATE INDEX IF NOT EXISTS idx_strategies_rule_id ON signal_generation.strategies (rule_id);
+
+-- 'breakeven' stop-loss method (2026-08-29) - a fresh CREATE TABLE above
+-- already lists it, but an existing volume's own inline CHECK constraints
+-- were fixed at their original CREATE TABLE time and don't pick up an
+-- edited CREATE TABLE statement automatically (init scripts never re-run) -
+-- these two ALTERs re-widen them on an already-existing strategies table.
+ALTER TABLE signal_generation.strategies DROP CONSTRAINT IF EXISTS strategies_stop_loss_method_check;
+ALTER TABLE signal_generation.strategies ADD CONSTRAINT strategies_stop_loss_method_check
+    CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven'));
+ALTER TABLE signal_generation.strategies DROP CONSTRAINT IF EXISTS stop_loss_fields_consistent;
+ALTER TABLE signal_generation.strategies ADD CONSTRAINT stop_loss_fields_consistent CHECK (
+    (stop_loss_method IS NULL AND stop_loss_interval IS NULL AND stop_loss_percent IS NULL
+        AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL
+        AND trailing_stop_enabled = false)
+    OR (stop_loss_method = 'previous_candle' AND stop_loss_interval IS NOT NULL AND stop_loss_percent IS NULL
+        AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL)
+    OR (stop_loss_method = 'percent' AND stop_loss_percent IS NOT NULL AND stop_loss_interval IS NULL
+        AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL)
+    OR (stop_loss_method = 'indicator' AND stop_loss_interval IS NOT NULL AND stop_loss_percent IS NULL
+        AND stop_loss_indicator_type IS NOT NULL AND stop_loss_indicator_params IS NOT NULL)
+    OR (stop_loss_method = 'breakeven' AND stop_loss_percent IS NOT NULL AND stop_loss_interval IS NULL
+        AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL
+        AND trailing_stop_enabled = true)
+);
 
 -- Idempotent for existing volumes (init scripts don't re-run) - matches the
 -- same convention used in 02-execution.sql/04-accounts.sql.

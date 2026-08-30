@@ -224,6 +224,39 @@ def test_validate_stop_loss_fields_no_method_rejects_trailing():
         validate_stop_loss_fields(None, None, None, True)
 
 
+def test_validate_stop_loss_fields_breakeven_requires_percent():
+    with pytest.raises(ValueError):
+        validate_stop_loss_fields("breakeven", None, None, True)
+
+
+def test_validate_stop_loss_fields_breakeven_accepts_percent():
+    validate_stop_loss_fields("breakeven", None, 0.5, True)  # should not raise
+
+
+def test_validate_stop_loss_fields_breakeven_requires_trailing_enabled():
+    with pytest.raises(ValueError):
+        validate_stop_loss_fields("breakeven", None, 0.5, False)
+
+
+def test_validate_stop_loss_fields_breakeven_rejects_interval():
+    with pytest.raises(ValueError):
+        validate_stop_loss_fields("breakeven", "5min", 0.5, True)
+
+
+def test_validate_stop_loss_fields_breakeven_rejects_indicator_fields():
+    with pytest.raises(ValueError):
+        validate_stop_loss_fields("breakeven", None, 0.5, True, indicator_type="ema", indicator_params={"period": 50})
+
+
+def test_strategy_create_accepts_breakeven_stop_loss():
+    s = StrategyCreate(
+        name="x", source_type="chartink", horizon="intraday", instrument_type="spot",
+        stop_loss_method="breakeven", stop_loss_percent=0.5, trailing_stop_enabled=True,
+    )
+    assert s.stop_loss_method == "breakeven"
+    assert s.stop_loss_percent == 0.5
+
+
 def test_strategy_create_defaults_segment_to_nse():
     s = StrategyCreate(name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID)
     assert s.segment == "NSE"

@@ -164,6 +164,218 @@ def get_option_chain(exchange: str, symbol: str, expiry: str, token: Optional[st
     return resp.json()
 
 
+def _require_auth_headers(token: str) -> dict:
+    """Unlike _auth_headers above (Optional, degrades to the platform-
+    default credential), every live-broker-adapter order-placement call
+    below MUST be attributed to a real, specific user - market-data's own
+    require_user_id route dependency 401s outright with no token at all,
+    and get_user_dhan_credentials_strict never falls back to the platform
+    default even if one were forwarded. A blank/missing token here is a
+    caller bug (a real order route invoked outside a real user's request
+    context), not a degrade-gracefully case - see live-broker-adapter
+    plan P0 item 1."""
+    if not token:
+        raise RuntimeError("a real user bearer token is required to place/modify/cancel a real Dhan order")
+    return {"Authorization": f"Bearer {token}"}
+
+
+def place_broker_order(
+    exchange: str,
+    symbol: str,
+    transaction_type: str,
+    quantity: int,
+    order_type: str,
+    product_type: str,
+    token: str,
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+    correlation_id: Optional[str] = None,
+) -> dict:
+    """POST market-data's /dhan/orders - places a REAL order. `correlation_id`
+    should always be the caller's own broker_orders.client_order_id (see
+    that table's own comment on the submit-then-crash idempotency story)."""
+    resp = requests.post(
+        f"{settings.market_data_base_url}/dhan/orders",
+        json={
+            "exchange": exchange,
+            "symbol": symbol,
+            "transaction_type": transaction_type,
+            "quantity": quantity,
+            "order_type": order_type,
+            "product_type": product_type,
+            "price": price,
+            "trigger_price": trigger_price,
+            "correlation_id": correlation_id,
+        },
+        headers=_require_auth_headers(token),
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]
+
+
+def modify_broker_order(
+    exchange: str,
+    broker_order_id: str,
+    order_type: str,
+    quantity: int,
+    token: str,
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+) -> dict:
+    """PUT market-data's /dhan/orders/{id} - the throttled trailing-SL
+    reconciliation job's own mechanism to move a resting SL/SL-M order's
+    trigger price (live-broker-adapter plan P2)."""
+    resp = requests.put(
+        f"{settings.market_data_base_url}/dhan/orders/{broker_order_id}",
+        params={"exchange": exchange},
+        json={"order_type": order_type, "quantity": quantity, "price": price, "trigger_price": trigger_price},
+        headers=_require_auth_headers(token),
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]
+
+
+def cancel_broker_order(exchange: str, broker_order_id: str, token: str) -> dict:
+    resp = requests.delete(
+        f"{settings.market_data_base_url}/dhan/orders/{broker_order_id}",
+        params={"exchange": exchange},
+        headers=_require_auth_headers(token),
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]
+
+
+def get_broker_order_book(exchange: str, token: str) -> list[dict]:
+    """Every order currently on this user's Dhan account, regardless of our
+    own DB state - the reconciliation job's own source of truth for a
+    broker_orders row stuck 'submitting' with no broker_order_id yet."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/dhan/order-book",
+        params={"exchange": exchange},
+        headers=_require_auth_headers(token),
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["orders"]
+
+
+def get_broker_funds(exchange: str, token: str) -> dict:
+    """Real available funds/margin (Dhan's Fund Limit API, via market-data) -
+    replaces trusting the simulated execution.accounts.current_balance
+    ledger for any live_trading_enabled account - live-broker-adapter plan
+    P0 item 5."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/dhan/funds",
+        params={"exchange": exchange},
+        headers=_require_auth_headers(token),
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]
+
+
+def get_broker_order_book_internal(exchange: str, user_id: str) -> list[dict]:
+    """service-to-service counterpart to get_broker_order_book above - for
+    the reconciliation job (app/scheduler.py), which runs with no live
+    user bearer token to forward (a scheduled job has no request/session
+    context at all). Calls market-data's shared-secret-gated GET
+    /internal/dhan/order-book instead - see that route's own docstring."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/internal/dhan/order-book",
+        params={"exchange": exchange, "user_id": user_id},
+        headers={"X-Internal-Secret": settings.internal_service_secret},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["orders"]
+
+
+def place_broker_order_internal(
+    exchange: str,
+    symbol: str,
+    transaction_type: str,
+    quantity: int,
+    order_type: str,
+    product_type: str,
+    user_id: str,
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+    correlation_id: Optional[str] = None,
+) -> dict:
+    """service-to-service counterpart to place_broker_order above - for the
+    exit-monitor/square-off scheduler jobs (app/scheduler.py), which have
+    no live user bearer token to forward. Used ONLY to close an already-
+    open live position for real (never to open a new one - a live entry
+    only ever happens from a real logged-in HTTP request) - see
+    app/domain/live_broker.py's submit_exit_order_scheduled."""
+    resp = requests.post(
+        f"{settings.market_data_base_url}/internal/dhan/orders",
+        json={
+            "exchange": exchange,
+            "symbol": symbol,
+            "transaction_type": transaction_type,
+            "quantity": quantity,
+            "order_type": order_type,
+            "product_type": product_type,
+            "price": price,
+            "trigger_price": trigger_price,
+            "correlation_id": correlation_id,
+            "user_id": user_id,
+        },
+        headers={"X-Internal-Secret": settings.internal_service_secret},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]
+
+
+def modify_broker_order_internal(
+    exchange: str,
+    broker_order_id: str,
+    order_type: str,
+    quantity: int,
+    user_id: str,
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+) -> dict:
+    """service-to-service counterpart to modify_broker_order above - the
+    throttled trailing-SL reconciliation job's own mechanism, called from
+    the exit-monitor scheduler job (no live user token available there)."""
+    resp = requests.put(
+        f"{settings.market_data_base_url}/internal/dhan/orders/{broker_order_id}",
+        json={
+            "exchange": exchange,
+            "order_type": order_type,
+            "quantity": quantity,
+            "price": price,
+            "trigger_price": trigger_price,
+            "user_id": user_id,
+        },
+        headers={"X-Internal-Secret": settings.internal_service_secret},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]
+
+
+def cancel_broker_order_internal(exchange: str, broker_order_id: str, user_id: str) -> dict:
+    """service-to-service counterpart to cancel_broker_order above - pulls a
+    resting order from the scheduler (e.g. a resting stop-loss that must be
+    cancelled before a reactive market exit fires for the same position -
+    see position_manager._settle_live_exit's own docstring on why)."""
+    resp = requests.delete(
+        f"{settings.market_data_base_url}/internal/dhan/orders/{broker_order_id}",
+        params={"exchange": exchange, "user_id": user_id},
+        headers={"X-Internal-Secret": settings.internal_service_secret},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]
+
+
 def get_lot_size(exchange: str, symbol: str) -> Optional[float]:
     """Lot size for an already-resolved trading symbol (see market-data's
     GET /instruments/lot-size) - None if unknown, not an error. Only

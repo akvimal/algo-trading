@@ -24,6 +24,7 @@ from app.domain.position_manager import (
     compute_unrealized_pnl,
     is_supported,
     is_within_intraday_window,
+    settle_live_position_exit,
 )
 
 
@@ -45,6 +46,7 @@ class FakePosition:
     stop_loss_percent: Optional[float] = None
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
+    breakeven_triggered: bool = False
     entry_time: Optional[object] = None
     exit_price: Optional[float] = None
     exit_time: Optional[object] = None
@@ -62,6 +64,11 @@ class FakePosition:
     # default every existing test predates and still exercises) - see
     # infra/postgres/init/02-execution.sql's own comment on this column.
     user_id: Optional[str] = None
+    # Live-broker-adapter P2 - see infra/postgres/init/02-execution.sql's
+    # own comment on this column. False (paper) for every existing test.
+    is_live_broker_order: bool = False
+    # Live-broker-adapter P3 item 14 - see that column's own comment.
+    live_trading_user_id: Optional[str] = None
 
 
 @dataclass
@@ -363,6 +370,50 @@ def test_evaluate_exits_closes_sell_on_stop_loss_hit():
 
     assert result["closed_stop_loss"] == 1
     assert positions[0].exit_reason == "stop_loss"
+
+
+def test_evaluate_exits_flags_live_position_on_stop_loss_hit_instead_of_paper_closing_it():
+    """Live-broker-adapter P2 - a live position's actual close must go
+    through a real broker order (position_manager._settle_live_exit, the
+    DB-committing wrapper check_exits calls), never this pure function's
+    own paper write - see its own live_exits_needed comment."""
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=98.0, is_live_broker_order=True),
+    ]
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 97.5}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["closed_stop_loss"] == 0
+    assert result["live_exits_needed"] == [(positions[0], "stop_loss")]
+    assert positions[0].status == "OPEN"  # untouched - not paper-closed
+
+
+def test_evaluate_exits_flags_live_position_on_target_hit_instead_of_paper_closing_it():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, target_price=104.0, is_live_broker_order=True),
+    ]
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 104.5}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["closed_target"] == 0
+    assert result["live_exits_needed"] == [(positions[0], "target")]
+    assert positions[0].status == "OPEN"
+
+
+def test_evaluate_exits_still_trails_a_live_position_even_though_it_never_closes_it():
+    """Trailing itself stays pure DB-state (pos.stop_loss_price) - only the
+    ACTUAL close and the Modify Order call are deferred to the
+    DB-committing wrapper (check_exits' own _reconcile_trailing_stop)."""
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=95.0, trailing_stop_enabled=True,
+                     stop_loss_method="percent", stop_loss_percent=2.0, is_live_broker_order=True),
+    ]
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 110.0}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["trailed"] == 1
+    assert positions[0].stop_loss_price == compute_stop_loss_percent_price("BUY", 110.0, 2.0)
+    assert positions[0].status == "OPEN"
 
 
 def test_evaluate_exits_closes_buy_on_target_hit():
@@ -688,6 +739,77 @@ def test_evaluate_exits_percent_trailing_never_loosens():
 
     assert result["trailed"] == 0
     assert positions[0].stop_loss_price == 98.0
+
+
+def test_evaluate_exits_breakeven_triggers_and_snaps_to_entry_for_buy():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=99.5, trailing_stop_enabled=True,
+                     stop_loss_method="breakeven", stop_loss_percent=0.5),
+    ]
+    # cmp=100.5 is exactly the +0.5% favorable threshold -> snaps to entry_price=100.0
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 100.5}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["trailed"] == 1
+    assert positions[0].stop_loss_price == 100.0
+    assert positions[0].breakeven_triggered is True
+    assert positions[0].status == "OPEN"
+
+
+def test_evaluate_exits_breakeven_does_not_trigger_before_threshold():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=99.5, trailing_stop_enabled=True,
+                     stop_loss_method="breakeven", stop_loss_percent=0.5),
+    ]
+    # cmp=100.2 hasn't reached the +0.5% threshold yet -> stop stays put, not yet triggered
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 100.2}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["trailed"] == 0
+    assert positions[0].stop_loss_price == 99.5
+    assert positions[0].breakeven_triggered is False
+
+
+def test_evaluate_exits_breakeven_freezes_after_triggering_once():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=100.0, trailing_stop_enabled=True,
+                     stop_loss_method="breakeven", stop_loss_percent=0.5, breakeven_triggered=True),
+    ]
+    # Already triggered, already at entry - a further favorable move must NOT trail it any further ("let it ride").
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 105.0}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["trailed"] == 0
+    assert positions[0].stop_loss_price == 100.0
+    assert positions[0].breakeven_triggered is True
+
+
+def test_evaluate_exits_breakeven_triggers_and_snaps_to_entry_for_sell():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="SELL",
+                     entry_price=100.0, quantity=10, stop_loss_price=100.5, trailing_stop_enabled=True,
+                     stop_loss_method="breakeven", stop_loss_percent=0.5),
+    ]
+    # SELL: cmp=99.5 is the -0.5% favorable threshold -> snaps to entry_price=100.0
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 99.5}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["trailed"] == 1
+    assert positions[0].stop_loss_price == 100.0
+    assert positions[0].breakeven_triggered is True
+
+
+def test_evaluate_exits_breakeven_stop_hit_after_freeze_closes_position():
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, stop_loss_price=100.0, trailing_stop_enabled=True,
+                     stop_loss_method="breakeven", stop_loss_percent=0.5, breakeven_triggered=True),
+    ]
+    # sl_hit is method-agnostic - a frozen breakeven stop still closes the position like any other.
+    result = _evaluate_exits(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 100.0}, get_previous_candle=lambda *a: None, accounts_by_segment=_accounts())
+
+    assert result["closed_stop_loss"] == 1
+    assert positions[0].status == "CLOSED"
+    assert positions[0].exit_reason == "stop_loss"
 
 
 def test_evaluate_exits_trails_previous_candle_stop_and_dedupes_fetch():
@@ -1111,7 +1233,7 @@ def test_evaluate_square_off_due_closes_position_past_its_own_time():
     ]
     result = _evaluate_square_off_due(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 105.0}, now_local=time(14, 30), accounts_by_segment=_accounts())
 
-    assert result == {"closed": 1, "failed": 0, "checked": 1}
+    assert result == {"closed": 1, "failed": 0, "checked": 1, "live_square_offs_needed": []}
     assert positions[0].status == "CLOSED"
     assert positions[0].exit_reason == "square_off"
     assert positions[0].exit_price == 105.0
@@ -1125,7 +1247,7 @@ def test_evaluate_square_off_due_leaves_position_open_before_its_own_time():
     ]
     result = _evaluate_square_off_due(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 105.0}, now_local=time(14, 30), accounts_by_segment=_accounts())
 
-    assert result == {"closed": 0, "failed": 0, "checked": 0}
+    assert result == {"closed": 0, "failed": 0, "checked": 0, "live_square_offs_needed": []}
     assert positions[0].status == "OPEN"
 
 
@@ -1153,7 +1275,7 @@ def test_evaluate_square_off_due_skips_positions_with_no_stored_time():
     ]
     result = _evaluate_square_off_due(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 105.0}, now_local=time(23, 0), accounts_by_segment=_accounts())
 
-    assert result == {"closed": 0, "failed": 0, "checked": 0}
+    assert result == {"closed": 0, "failed": 0, "checked": 0, "live_square_offs_needed": []}
     assert positions[0].status == "OPEN"
 
 
@@ -1164,8 +1286,24 @@ def test_evaluate_square_off_due_leaves_position_open_when_quote_fetch_fails():
     ]
     result = _evaluate_square_off_due(positions, get_ltp_batch=lambda ex, syms: {}, now_local=time(15, 0), accounts_by_segment=_accounts())
 
-    assert result == {"closed": 0, "failed": 1, "checked": 1}
+    assert result == {"closed": 0, "failed": 1, "checked": 1, "live_square_offs_needed": []}
     assert positions[0].status == "OPEN"
+
+
+def test_evaluate_square_off_due_flags_live_position_instead_of_paper_closing_it():
+    """Live-broker-adapter P2 - a live position due for square-off must
+    close through a real broker order (the DB-committing wrapper,
+    square_off_due_positions), never this pure function's own paper
+    write - see its own live_square_offs_needed comment."""
+    positions = [
+        FakePosition(id="p1", status="OPEN", exchange="NSE", symbol="RELIANCE", action="BUY",
+                     entry_price=100.0, quantity=10, square_off_time=time(14, 0), is_live_broker_order=True),
+    ]
+    result = _evaluate_square_off_due(positions, get_ltp_batch=lambda ex, syms: {"RELIANCE": 105.0}, now_local=time(15, 0), accounts_by_segment=_accounts())
+
+    assert result["closed"] == 0
+    assert result["live_square_offs_needed"] == [positions[0]]
+    assert positions[0].status == "OPEN"  # untouched - not paper-closed
 
 
 def test_evaluate_square_off_due_credits_its_segment_account():
@@ -1245,3 +1383,24 @@ def test_resolve_signal_conflicts_mixed_book_closes_opposite_and_still_blocks_sa
     positions_to_close, reject_reason = _resolve_signal_conflicts([same, opposite], order)
     assert positions_to_close == [opposite]
     assert reject_reason == "symbol already has an open position in the same direction and duplicate_signal_policy=skip"
+
+
+def test_settle_live_position_exit_is_a_no_op_if_position_is_no_longer_open():
+    """Live-broker-adapter P2's critical safety property: the postback
+    handler and the exit-monitor/square-off scheduler jobs can both
+    plausibly race to settle the same live position (a postback arriving
+    just after the scheduler's own synchronous wait already settled it, or
+    vice versa) - settle_live_position_exit must never double-apply
+    realized P&L. Uses a plain FakePosition (no real DB) since the
+    already-CLOSED short-circuit returns before touching load_capital_account/
+    load_settings at all."""
+    pos = FakePosition(id="p1", status="CLOSED", exchange="NSE", symbol="RELIANCE", action="BUY",
+                        entry_price=100.0, quantity=10, exit_price=97.5, pnl=-25.0, exit_reason="stop_loss")
+
+    settle_live_position_exit(db=None, pos=pos, exit_price=999.0, exit_reason="square_off")
+
+    # Untouched - the guard returned before this could ever be reached.
+    assert pos.status == "CLOSED"
+    assert pos.exit_price == 97.5
+    assert pos.pnl == -25.0
+    assert pos.exit_reason == "stop_loss"

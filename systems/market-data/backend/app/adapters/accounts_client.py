@@ -67,3 +67,32 @@ def get_user_dhan_credentials(user_id: UUID) -> Optional[DhanCredentials]:
     with _cache_lock:
         _cache[user_id] = (result, time.monotonic())
     return result
+
+
+def get_user_dhan_credentials_strict(user_id: UUID) -> DhanCredentials:
+    """For the live-broker-adapter's order-placement routes ONLY (see
+    app/auth.py's require_user_id) - unlike get_user_dhan_credentials
+    above, this NEVER falls back to the platform-default credential and
+    NEVER returns None. A real order must always run on the specific
+    person's own broker account it's attributed to; silently using the
+    platform-wide default (or another user's cached credential) for a
+    real trade would be a serious mistake a quote lookup's "degrade
+    gracefully" convention must not carry over to. Deliberately bypasses
+    the cache above too - a real order is worth one extra round trip to
+    accounts to get the freshest possible answer, and a stale
+    has_dhan=False cached during an accounts blip must never block a
+    legitimate order once accounts recovers."""
+    try:
+        resp = requests.get(
+            f"{settings.accounts_base_url}/internal/credentials/{user_id}/dhan",
+            headers={"X-Internal-Secret": settings.internal_service_secret},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"could not reach accounts to resolve Dhan credentials for user {user_id}") from exc
+
+    if not data.get("has_dhan"):
+        raise RuntimeError(f"user {user_id} has no Dhan credentials configured - cannot place a real order on their behalf")
+    return DhanCredentials(client_id=data["dhan_client_id"], access_token=data["dhan_access_token"], throttle_key=str(user_id))

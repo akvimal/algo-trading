@@ -29,6 +29,24 @@ def get_optional_user_id(credentials: Optional[HTTPAuthorizationCredentials] = D
         return None
 
 
+def require_user_id(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> UUID:
+    """Like require_admin below, but without the is_admin check - for the
+    live-broker-adapter's order-placement routes (app/api/routes/dhan.py),
+    which unlike every other route in this service (optional auth, falls
+    back to the platform-default Dhan credential) must have a real,
+    specific person attached to every real order placed. No fallback to
+    an anonymous/platform-wide credential is acceptable here - see
+    accounts_client.get_user_dhan_credentials_strict, which this pairs
+    with."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        return UUID(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
+
+
 def require_admin(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> UUID:
     """Unlike get_optional_user_id above, this DOES raise - for the Dhan
     platform-credentials/renew-token/feed-status routes (app/api/routes/

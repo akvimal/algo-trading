@@ -55,6 +55,22 @@ def test_manual_position_create_percent_method_requires_percent():
         ManualPositionCreate(**_base(stop_loss_method="percent"))
 
 
+def test_manual_position_create_breakeven_method_valid():
+    m = ManualPositionCreate(**_base(stop_loss_method="breakeven", stop_loss_percent=0.5, trailing_stop_enabled=True))
+    assert m.stop_loss_method == "breakeven"
+    assert m.trailing_stop_enabled is True
+
+
+def test_manual_position_create_breakeven_method_requires_percent():
+    with pytest.raises(ValidationError, match="requires stop_loss_percent"):
+        ManualPositionCreate(**_base(stop_loss_method="breakeven", trailing_stop_enabled=True))
+
+
+def test_manual_position_create_breakeven_method_requires_trailing_enabled():
+    with pytest.raises(ValidationError, match="requires trailing_stop_enabled"):
+        ManualPositionCreate(**_base(stop_loss_method="breakeven", stop_loss_percent=0.5))
+
+
 def test_manual_position_create_previous_candle_requires_interval():
     with pytest.raises(ValidationError, match="requires stop_loss_interval"):
         ManualPositionCreate(**_base(stop_loss_method="previous_candle"))

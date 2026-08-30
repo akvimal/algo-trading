@@ -69,6 +69,12 @@ class Account(Base):
     mtf_annual_interest_rate_pct = Column(Numeric, nullable=True)
     # NULL means never force-closed (CRYPTO's default) - see app/domain/models.py's AccountOut.square_off_time.
     square_off_time = Column(Time, nullable=True)
+    # Live-broker-adapter P0 (see docs/architecture.md) - one of TWO gates
+    # (alongside LIVE_TRADING_KILL_SWITCH, app/config.py) that must both
+    # pass before any real order reaches Dhan for this account.
+    live_trading_enabled = Column(Boolean, nullable=False, default=False)
+    max_order_value = Column(Numeric, nullable=True)
+    max_daily_loss = Column(Numeric, nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -87,6 +93,12 @@ class StrategyAccount(Base):
     current_balance = Column(Numeric, nullable=False)
     capital_per_trade = Column(Numeric, nullable=False)
     risk_per_trade_pct = Column(Numeric, nullable=False)
+    # Live-broker-adapter P3 item 14 - see infra/postgres/init/
+    # 02-execution.sql's own comment on this column.
+    live_trading_user_id = Column(UUID(as_uuid=True), nullable=True)
+    live_trading_enabled = Column(Boolean, nullable=False, default=False)
+    max_order_value = Column(Numeric, nullable=True)
+    max_daily_loss = Column(Numeric, nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -280,6 +292,12 @@ class Position(Base):
     pnl = Column(Numeric)
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
+    # Live-broker-adapter P1 - see infra/postgres/init/02-execution.sql's
+    # own comment on this column.
+    is_live_broker_order = Column(Boolean, nullable=False, default=False)
+    # Live-broker-adapter P3 item 14 - see infra/postgres/init/
+    # 02-execution.sql's own comment on this column.
+    live_trading_user_id = Column(UUID(as_uuid=True), nullable=True)
     stop_loss_price = Column(Numeric)  # current (may trail) - null if the strategy set no stop-loss method
     initial_stop_loss_price = Column(Numeric)  # audit trail - the stop as computed at open, never changes
     target_price = Column(Numeric)
@@ -297,6 +315,11 @@ class Position(Base):
     # stop_loss_fields_consistent CHECK does "IS NULL" comparisons; no such
     # constraint here, but kept consistent).
     stop_loss_indicator_params = Column(JSONB(none_as_null=True))
+    # stop_loss_method='breakeven' only - has the stop already snapped to
+    # entry_price and frozen there? Never explicitly set at open time (a
+    # brand-new position is always False) - default=False client-side is
+    # enough, see position_manager.py's _evaluate_exits.
+    breakeven_triggered = Column(Boolean, nullable=False, default=False)
     # 'square_off' | 'stop_loss' | 'target' | 'manual' | 'counter_signal', set when status becomes CLOSED
     exit_reason = Column(Text)
     # The square-off time this position's Strategy set (required there) -
@@ -365,3 +388,40 @@ class OptionGroupPnlSnapshot(Base):
     combined_price = Column(Numeric, nullable=False)
     unrealized_pnl = Column(Numeric, nullable=False)
     recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class BrokerOrder(Base):
+    """One real order attempt (entry, exit, or a resting stop-loss) sent to
+    Dhan - see infra/postgres/init/02-execution.sql's own comment on this
+    table for the full submit-then-crash idempotency design (live-broker-
+    adapter plan P0 item 3). No FK ondelete behavior needed on position_id/
+    option_group_id beyond the plain REFERENCES the SQL already declares -
+    this schema never models deletes (same convention trade_images above
+    already follows)."""
+
+    __tablename__ = "broker_orders"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=True)
+    position_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.positions.id"), nullable=True)
+    option_group_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.option_position_groups.id"), nullable=True)
+    purpose = Column(Text, nullable=False)  # 'entry' | 'exit' | 'stop_loss'
+    client_order_id = Column(Text, nullable=False, unique=True)
+    broker_order_id = Column(Text, nullable=True)
+    status = Column(Text, nullable=False, default="submitting")  # 'submitting'|'pending'|'traded'|'rejected'|'cancelled'|'failed'
+    exchange = Column(Text, nullable=False)  # 'NSE' | 'MCX'
+    symbol = Column(Text, nullable=False)
+    segment = Column(Text, nullable=False)  # 'NSE' | 'MCX'
+    action = Column(Text, nullable=False)  # 'BUY' | 'SELL'
+    quantity = Column(Integer, nullable=False)
+    order_type = Column(Text, nullable=False)  # 'MARKET'|'LIMIT'|'STOP_LOSS'|'STOP_LOSS_MARKET'
+    product_type = Column(Text, nullable=False)  # 'CNC'|'INTRADAY'|'MARGIN'|'MTF'
+    price = Column(Numeric, nullable=True)
+    trigger_price = Column(Numeric, nullable=True)
+    filled_quantity = Column(Integer, nullable=False, default=0)
+    average_fill_price = Column(Numeric, nullable=True)
+    raw_response = Column(JSONB(none_as_null=True))
+    failure_reason = Column(Text, nullable=True)
+    requested_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

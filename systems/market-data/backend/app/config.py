@@ -90,5 +90,22 @@ class Settings(BaseSettings):
     internal_service_secret: str = "change-me-in-production"
     accounts_base_url: str = "http://accounts-backend:8000"
 
+    # Live-broker-adapter P0 (see docs/architecture.md) - order-placement
+    # routes require a real logged-in user (app/auth.py's require_user_id,
+    # unlike the optional-auth quote/candle/option-chain routes above) and
+    # strictly their OWN BYO Dhan credentials (never the platform-default
+    # fallback - see accounts_client.get_user_dhan_credentials_strict).
+    # dhan_postback_secret is a shared-secret PATH segment for Dhan's own
+    # order-update postback (Dhan doesn't cryptographically sign postback
+    # requests, so this is the only thing keeping the URL from being
+    # spoofable by anyone who guesses it) - register
+    # https://<this-host>/dhan/order-update/<dhan_postback_secret> with
+    # Dhan as the postback URL, never the bare /dhan/order-update path.
+    # execution_base_url is where the validated postback gets relayed to -
+    # market-data holds no order state of its own (see broker_orders'
+    # own "each system owns its own schema" placement in execution).
+    dhan_postback_secret: str = "change-me-in-production"
+    execution_base_url: str = "http://execution-backend:8000"
+
 
 settings = Settings()

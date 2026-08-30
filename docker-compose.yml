@@ -129,6 +129,14 @@ services:
       JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       ACCOUNTS_BASE_URL: http://accounts-backend:8000
+      # Live-broker-adapter P0 (see docs/architecture.md) - DHAN_POSTBACK_SECRET
+      # is the shared-secret PATH segment for Dhan's own order-update
+      # postback (register https://<this-host>/dhan/order-update/<secret>
+      # with Dhan, never the bare path - see app/config.py's own comment).
+      # EXECUTION_BASE_URL is where a validated postback gets relayed -
+      # market-data holds no order state of its own.
+      DHAN_POSTBACK_SECRET: ${DHAN_POSTBACK_SECRET}
+      EXECUTION_BASE_URL: http://execution-backend:8000
     volumes:
       # PUT /dhan/credentials persists here (app/providers/dhan.py) so a
       # UI-submitted Dhan token survives a container restart instead of
@@ -178,6 +186,17 @@ services:
       # Verifies the same bearer tokens accounts-backend issues - see
       # app/auth.py's own comment. Must match ACCOUNTS_JWT_SECRET exactly.
       JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
+      # Live-broker-adapter P0 (see docs/architecture.md) - protects
+      # POST /internal/dhan/order-update (market-data relaying Dhan's own
+      # postback). Must match market-data's/accounts' identical
+      # INTERNAL_SERVICE_SECRET. LIVE_TRADING_KILL_SWITCH=true instantly
+      # BLOCKS real order submission for every account at once, regardless
+      # of any account's own live_trading_enabled opt-in - default false
+      # (not killed) leaves that decision to each account's own flag,
+      # which itself still defaults to false (paper-only) until someone
+      # deliberately opts an account in.
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      LIVE_TRADING_KILL_SWITCH: ${LIVE_TRADING_KILL_SWITCH:-false}
     ports:
       - "${EXECUTION_BACKEND_PORT}:8000"
     depends_on:

@@ -3,7 +3,7 @@ import logging
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import accounts, checklist, health, option_groups, positions, trade_images
+from app.api.routes import accounts, checklist, health, internal, option_groups, positions, trade_images
 from app.api.routes import settings as settings_routes
 from app.auth import get_current_user
 from app.consumers.orders_consumer import start_background as start_consumer
@@ -28,6 +28,10 @@ app.add_middleware(
 # of this phase actually enforcing tenant isolation.
 _auth_dep = [Depends(get_current_user)]
 app.include_router(health.router)
+# Shared-secret protected (see internal.py's own _require_internal_secret),
+# NOT the app-wide user-JWT dependency below - market-data (relaying Dhan's
+# order-update postback) has no user bearer token to forward here.
+app.include_router(internal.router)
 app.include_router(positions.router, dependencies=_auth_dep)
 app.include_router(option_groups.router, dependencies=_auth_dep)
 app.include_router(settings_routes.router, dependencies=_auth_dep)

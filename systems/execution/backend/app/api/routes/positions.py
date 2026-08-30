@@ -75,6 +75,10 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         "unrealized_pnl": unrealized_pnl,
         "status": row.status,
         "rejection_reason": row.rejection_reason,
+        # Live-broker-adapter P1 - true only if this position's entry
+        # actually cleared through a real Dhan order (see
+        # infra/postgres/init/02-execution.sql's own comment on this column).
+        "is_live_broker_order": row.is_live_broker_order,
         "stop_loss_price": float(row.stop_loss_price) if row.stop_loss_price is not None else None,
         "target_price": float(row.target_price) if row.target_price is not None else None,
         "trailing_stop_enabled": row.trailing_stop_enabled,
@@ -288,6 +292,7 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         [a.model_dump() for a in payload.plan_checklist],
         payload.order_type,
         payload.square_off_time,
+        token=user.token,
     )
     return _position_to_out(row)
 
@@ -442,7 +447,7 @@ def square_off_one(
         raise HTTPException(status_code=404, detail="position not found")
     owner_id = _authorized_owner_id(pos.user_id, user)
 
-    result = square_off_position(db, owner_id, parsed_id, functools.partial(get_ltp_batch, token=user.token), quantity)
+    result = square_off_position(db, owner_id, parsed_id, functools.partial(get_ltp_batch, token=user.token), quantity, token=user.token)
     if result["status"] == "not_found":
         raise HTTPException(status_code=404, detail="position not found")
     if result["status"] == "not_open":
@@ -451,6 +456,12 @@ def square_off_one(
         raise HTTPException(status_code=422, detail=f"quantity must be > 0 and <= {result['held_quantity']} held")
     if result["status"] == "quote_unavailable":
         raise HTTPException(status_code=502, detail="could not fetch a live quote for this position - still OPEN")
+    if result["status"] == "live_partial_not_supported":
+        raise HTTPException(status_code=422, detail="partial square-off is not supported for a live position yet - close it in full")
+    if result["status"] == "live_token_required":
+        raise HTTPException(status_code=401, detail="closing a live position requires an authenticated request")
+    if result["status"] == "live_order_failed":
+        raise HTTPException(status_code=502, detail=f"real closing order failed - position is still OPEN: {result['reason']}")
     return result
 
 

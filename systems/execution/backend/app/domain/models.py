@@ -71,8 +71,12 @@ def _validate_stop_loss_config(
         if trailing_stop_enabled:
             raise ValueError("trailing_stop_enabled requires a stop_loss_method")
         return
-    if stop_loss_method == "percent" and stop_loss_percent is None:
-        raise ValueError("stop_loss_method='percent' requires stop_loss_percent")
+    if stop_loss_method in ("percent", "breakeven") and stop_loss_percent is None:
+        raise ValueError(f"stop_loss_method='{stop_loss_method}' requires stop_loss_percent")
+    # See signal-generation's identical check (app/domain/generation/models.py's
+    # validate_stop_loss_fields) - 'breakeven' does nothing without trailing.
+    if stop_loss_method == "breakeven" and not trailing_stop_enabled:
+        raise ValueError("stop_loss_method='breakeven' requires trailing_stop_enabled=true")
     if stop_loss_method in ("previous_candle", "indicator") and stop_loss_interval is None:
         raise ValueError(f"stop_loss_method='{stop_loss_method}' requires stop_loss_interval")
     if stop_loss_method == "indicator":
@@ -102,7 +106,7 @@ class ResolvedOrder(BaseModel):
     price: float
     resolved_at: datetime
     status: str
-    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator", "breakeven"]] = None
     stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = None
     # stop_loss_method='indicator' only - see
@@ -176,6 +180,15 @@ class AccountOut(BaseModel):
     # be a per-Strategy field; moved here since it's a market-hours
     # concept, not a per-strategy one - see docs/architecture.md.
     square_off_time: Optional[time] = None
+    # Live-broker-adapter P0/P1 (see docs/architecture.md) - opts THIS
+    # account into real Dhan order submission on the Manual tab's spot/
+    # future path (app/domain/live_broker.py). Still gated by the
+    # platform-wide LIVE_TRADING_KILL_SWITCH env var on top - both must
+    # allow it. Defaults false (paper-only). max_order_value/max_daily_loss
+    # are optional safety caps, meaningful only once this is true.
+    live_trading_enabled: bool
+    max_order_value: Optional[float] = None
+    max_daily_loss: Optional[float] = None
     updated_at: datetime
 
 
@@ -199,6 +212,15 @@ class AccountUpdate(BaseModel):
     # pattern Strategy.fixed_lots' PATCH handler already uses) to
     # distinguish "omitted" from "explicitly cleared."
     square_off_time: Optional[time] = None
+    # Live-broker-adapter P0/P1 - see AccountOut's own comment. None here
+    # means "leave unchanged" for live_trading_enabled (a plain bool
+    # toggle, same convention enforce_risk_based_lots already uses);
+    # max_order_value/max_daily_loss follow square_off_time's own
+    # model_fields_set-distinguished pattern instead, since an explicit
+    # null IS meaningful for them too (removes the cap, not "unchanged").
+    live_trading_enabled: Optional[bool] = None
+    max_order_value: Optional[float] = Field(default=None, gt=0)
+    max_daily_loss: Optional[float] = Field(default=None, gt=0)
 
 
 class StrategyAccountOut(BaseModel):
@@ -213,13 +235,26 @@ class StrategyAccountOut(BaseModel):
     current_balance: float
     capital_per_trade: float
     risk_per_trade_pct: float
+    # Live-broker-adapter P3 item 14 (see docs/architecture.md) - the ONLY
+    # way an automated Strategy-driven signal can ever place a real order:
+    # the platform-wide shared account (execution.accounts, user_id NULL)
+    # has no such field at all and can never go live. live_trading_user_id
+    # is whose own BYO Dhan credentials execute this strategy's real
+    # orders - None until explicitly set via PUT.
+    live_trading_user_id: Optional[str] = None
+    live_trading_enabled: bool
+    max_order_value: Optional[float] = None
+    max_daily_loss: Optional[float] = None
     updated_at: datetime
 
 
 class StrategyAccountCreate(BaseModel):
     """POST /accounts/strategy/{strategy_id} - segment isn't editable
     afterward (same reasoning Account's own segment PK isn't), so it's
-    required here and absent from StrategyAccountUpdate below."""
+    required here and absent from StrategyAccountUpdate below. Live-
+    trading fields aren't settable at creation - opted into afterward via
+    PUT, same as every other account here (a fresh row is always
+    paper-only until someone deliberately changes that)."""
 
     segment: Literal["NSE", "MCX", "CRYPTO"]
     starting_balance: float = Field(gt=0)
@@ -230,10 +265,21 @@ class StrategyAccountCreate(BaseModel):
 class StrategyAccountUpdate(BaseModel):
     """PUT /accounts/strategy/{strategy_id} - same shape as AccountUpdate
     minus leverage/square_off_time (not fields on this table at all).
-    Doesn't touch current_balance - see the /reset route for that."""
+    Doesn't touch current_balance - see the /reset route for that.
+    live_trading_user_id/max_order_value/max_daily_loss follow
+    AccountUpdate's own model_fields_set-distinguished nullable pattern
+    (an explicit null clears the field, omitting it leaves it unchanged);
+    live_trading_enabled is a plain bool toggle like Account's own -
+    the route enforces DB's own "live_trading_enabled requires
+    live_trading_user_id" constraint with a clean 422 before it ever
+    reaches the DB CHECK."""
 
     capital_per_trade: Optional[float] = Field(default=None, gt=0)
     risk_per_trade_pct: Optional[float] = Field(default=None, gt=0, le=100)
+    live_trading_user_id: Optional[str] = None
+    live_trading_enabled: Optional[bool] = None
+    max_order_value: Optional[float] = Field(default=None, gt=0)
+    max_daily_loss: Optional[float] = Field(default=None, gt=0)
 
 
 class ChecklistItemOut(BaseModel):
@@ -398,7 +444,7 @@ class ManualPositionCreate(BaseModel):
     # 0.001) - see open_manual_position's own comment at the multiply.
     quantity: Optional[float] = Field(default=None, gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
-    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator", "breakeven"]] = None
     stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0)
     stop_loss_indicator_type: Optional[str] = None
@@ -511,7 +557,7 @@ class StopLossUpdate(BaseModel):
     setting a stop-loss, not optionally skipping it."""
 
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
-    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
+    stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator", "breakeven"]] = None
     stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0)
     stop_loss_indicator_type: Optional[str] = None

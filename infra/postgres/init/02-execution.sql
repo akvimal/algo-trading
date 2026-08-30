@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     -- _net_pnl_with_costs.
     mtf_annual_interest_rate_pct NUMERIC CHECK (mtf_annual_interest_rate_pct >= 0),
     square_off_time     TIME,
+    -- Live-broker-adapter P0 (see docs/architecture.md) - one of TWO gates
+    -- (alongside execution's own LIVE_TRADING_KILL_SWITCH env var - see
+    -- app/config.py) that must BOTH pass before any real order reaches
+    -- Dhan for this account. Defaults false: an account never trades real
+    -- money until a person explicitly opts it in here. max_order_value/
+    -- max_daily_loss are only meaningful once this is true - see
+    -- position_manager's submission-gating checks.
+    live_trading_enabled BOOLEAN NOT NULL DEFAULT false,
+    max_order_value      NUMERIC CHECK (max_order_value > 0),
+    max_daily_loss        NUMERIC CHECK (max_daily_loss > 0),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_accounts_user_segment UNIQUE NULLS NOT DISTINCT (user_id, segment)
 );
@@ -146,7 +156,31 @@ CREATE TABLE IF NOT EXISTS execution.strategy_accounts (
     current_balance     NUMERIC NOT NULL,
     capital_per_trade   NUMERIC NOT NULL CHECK (capital_per_trade > 0),
     risk_per_trade_pct  NUMERIC NOT NULL CHECK (risk_per_trade_pct > 0 AND risk_per_trade_pct <= 100),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    -- Live-broker-adapter P3 item 14 (see docs/architecture.md) - the
+    -- automated Strategy-driven flow (open_position) has no per-user
+    -- concept at all (positions.user_id stays NULL for it, same as
+    -- before this existed - see that column's own comment), so there is
+    -- no bearer token/tenant to attribute a REAL order to. A strategy
+    -- only ever goes live by EXPLICITLY creating this override row (the
+    -- shared platform-wide execution.accounts row can never go live - it
+    -- structurally has no live_trading_user_id at all) and naming a real
+    -- person's own user id here, whose BYO Dhan credentials
+    -- (accounts.broker_credentials) then execute every real order this
+    -- strategy places - see app/domain/live_broker.py's
+    -- submit_entry_order_scheduled/submit_resting_stop_loss_scheduled (no
+    -- user bearer token exists for this path either - a Redis consumer,
+    -- not an HTTP request - so these go through market-data's internal
+    -- shared-secret routes, same as the scheduler jobs). No FK (no
+    -- cross-schema FK exists anywhere in this codebase - see
+    -- docs/architecture.md's "systems stay self-contained" rule); this is
+    -- also cross-SYSTEM (accounts.users), which could never be an FK
+    -- regardless.
+    live_trading_user_id UUID,
+    live_trading_enabled BOOLEAN NOT NULL DEFAULT false,
+    max_order_value      NUMERIC CHECK (max_order_value > 0),
+    max_daily_loss        NUMERIC CHECK (max_daily_loss > 0),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT strategy_accounts_live_requires_user CHECK (NOT live_trading_enabled OR live_trading_user_id IS NOT NULL)
 );
 
 -- The 3 legacy platform-wide accounts (user_id NULL) - unchanged values,
@@ -200,6 +234,27 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     pnl              NUMERIC,
     status           TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'REJECTED')),
     rejection_reason TEXT,
+    -- Live-broker-adapter P1 (see docs/architecture.md) - stamped true at
+    -- open time if this position's entry actually cleared through a real
+    -- broker_orders row (Dhan TRADED), never re-derived from the
+    -- account's own live_trading_enabled (which can change after this
+    -- position opened) - a real position must always close through the
+    -- same real path it opened through, see app/domain/live_broker.py and
+    -- square_off_position's own comment.
+    is_live_broker_order BOOLEAN NOT NULL DEFAULT false,
+    -- Live-broker-adapter P3 item 14 - the specific person whose BYO Dhan
+    -- credentials actually execute this position's real broker orders,
+    -- ONLY set when is_live_broker_order is true. Deliberately independent
+    -- of user_id above: user_id follows the existing SaaS-tenancy
+    -- convention (NULL for every Strategy-driven position, live or not -
+    -- see that column's own comment), while this is always the real
+    -- credential owner regardless of path - a manual live position sets
+    -- both to the same value (the requesting user IS the credential
+    -- owner); an automated live position sets user_id=NULL but this to
+    -- execution.strategy_accounts.live_trading_user_id. Every scheduled/
+    -- internal-route real-order call (trailing Modify Order, reactive
+    -- exit, real square-off) reads THIS column, never user_id.
+    live_trading_user_id UUID,
     -- stop_loss_price: current stop, may trail upward/downward (BUY/SELL)
     -- over the position's life - null if its Strategy set no stop-loss
     -- method. initial_stop_loss_price: the stop as computed at open,
@@ -218,7 +273,7 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- execution never calls signal-generation directly) so the
     -- exit-monitor job's trailing logic knows HOW to recompute a
     -- candidate stop without needing the strategy again.
-    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator')),
+    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven')),
     stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent       NUMERIC,
     -- stop_loss_method='indicator' only - 'ema'/'supertrend' today. MUST be
@@ -228,6 +283,11 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- indicator type is added.
     stop_loss_indicator_type   TEXT CHECK (stop_loss_indicator_type IN ('ema', 'supertrend')),
     stop_loss_indicator_params JSONB,
+    -- stop_loss_method='breakeven' only - has this position's stop already
+    -- snapped to entry_price and frozen there? False for every other
+    -- method (never read or written for them) - see position_manager.py's
+    -- _evaluate_exits, added 2026-08-29.
+    breakeven_triggered     BOOLEAN NOT NULL DEFAULT false,
     exit_reason             TEXT CHECK (exit_reason IN ('square_off', 'stop_loss', 'target', 'manual', 'counter_signal', 'liquidation')),
     -- This position's segment's own square-off time (execution.accounts.
     -- square_off_time) - copied at open time, never changed afterward.
@@ -722,3 +782,89 @@ ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS order_type TEXT CHECK (
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS order_type TEXT CHECK (order_type IN ('market', 'limit'));
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS mtf_interest_rate_pct NUMERIC;
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS interest_charged NUMERIC;
+
+-- 'breakeven' stop-loss method (2026-08-29) - see signal-generation's own
+-- identical-reasoning migration comment (03-signal-generation.sql) for why
+-- an existing volume needs this ALTER even though the CREATE TABLE above
+-- was also edited.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS breakeven_triggered BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_stop_loss_method_check;
+ALTER TABLE execution.positions ADD CONSTRAINT positions_stop_loss_method_check
+    CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven'));
+
+-- Live-broker-adapter P0 (see docs/architecture.md) - pre-existing volumes
+-- need these ALTERs even though the CREATE TABLE above was also edited,
+-- same pattern this file already uses everywhere else.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS live_trading_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS max_order_value NUMERIC CHECK (max_order_value > 0);
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS max_daily_loss NUMERIC CHECK (max_daily_loss > 0);
+
+-- One row per real order attempt (entry, exit, or a resting stop-loss) sent
+-- to Dhan - NOT columns bolted onto positions, since one position can have
+-- multiple broker orders across its life (entry, a resting SL that gets
+-- Modify-Order'd repeatedly as it trails, and an eventual exit). See the
+-- live-broker-adapter plan's own P0 item 3.
+--
+-- Submit-then-crash safety: a row is written with status='submitting' and
+-- its client_order_id BEFORE calling Dhan's place-order API, then updated
+-- after Dhan responds. This makes the crash-mid-flight case (process dies
+-- between the outbound call and recording its response) resolvable instead
+-- of dangerous - orders_consumer.py's at-least-once redelivery is only
+-- safe today because open_position has no external side effect before its
+-- own idempotency check; a real broker call does, so client_order_id (our
+-- own idempotency key, threaded through as Dhan's correlationId - see
+-- DhanProvider.place_order's own docstring on why that dedup isn't yet
+-- confirmed to actually work Dhan-side) is what the reconciliation job
+-- (app/scheduler.py) uses to match a stuck 'submitting' row against Dhan's
+-- own order book (GET /dhan/order-book) rather than ever blindly retrying.
+CREATE TABLE IF NOT EXISTS execution.broker_orders (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID,
+    position_id         UUID REFERENCES execution.positions (id),
+    option_group_id     UUID REFERENCES execution.option_position_groups (id),
+    purpose             TEXT NOT NULL CHECK (purpose IN ('entry', 'exit', 'stop_loss')),
+    -- Our own idempotency key, generated before the outbound Dhan call -
+    -- unique so a redelivered/retried submission can never double-place.
+    client_order_id     TEXT NOT NULL UNIQUE,
+    broker_order_id     TEXT,
+    status              TEXT NOT NULL DEFAULT 'submitting'
+        CHECK (status IN ('submitting', 'pending', 'traded', 'rejected', 'cancelled', 'failed')),
+    exchange            TEXT NOT NULL CHECK (exchange IN ('NSE', 'MCX')),
+    symbol              TEXT NOT NULL,
+    segment             TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX')),
+    action              TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+    quantity            INTEGER NOT NULL CHECK (quantity > 0),
+    order_type          TEXT NOT NULL CHECK (order_type IN ('MARKET', 'LIMIT', 'STOP_LOSS', 'STOP_LOSS_MARKET')),
+    product_type        TEXT NOT NULL CHECK (product_type IN ('CNC', 'INTRADAY', 'MARGIN', 'MTF')),
+    price               NUMERIC,
+    trigger_price       NUMERIC,
+    filled_quantity     INTEGER NOT NULL DEFAULT 0,
+    average_fill_price  NUMERIC,
+    -- Dhan's raw place-order/postback response, verbatim - see
+    -- OrderResponse's own docstring (market-data) on why the exact shape
+    -- isn't mirrored field-by-field yet.
+    raw_response        JSONB,
+    failure_reason      TEXT,
+    requested_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK ((position_id IS NULL) OR (option_group_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_broker_orders_position ON execution.broker_orders (position_id) WHERE position_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_broker_orders_option_group ON execution.broker_orders (option_group_id) WHERE option_group_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_broker_orders_status ON execution.broker_orders (status) WHERE status IN ('submitting', 'pending');
+
+-- Live-broker-adapter P1 (see docs/architecture.md) - pre-existing volumes
+-- need these ALTERs even though the CREATE TABLE/accounts definitions
+-- above were also edited, same pattern this file already uses everywhere.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS is_live_broker_order BOOLEAN NOT NULL DEFAULT false;
+
+-- Live-broker-adapter P3 item 14 - see this file's own comments on
+-- strategy_accounts' 4 new columns and positions.live_trading_user_id.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS live_trading_user_id UUID;
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_user_id UUID;
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS max_order_value NUMERIC CHECK (max_order_value > 0);
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS max_daily_loss NUMERIC CHECK (max_daily_loss > 0);
+ALTER TABLE execution.strategy_accounts DROP CONSTRAINT IF EXISTS strategy_accounts_live_requires_user;
+ALTER TABLE execution.strategy_accounts ADD CONSTRAINT strategy_accounts_live_requires_user
+    CHECK (NOT live_trading_enabled OR live_trading_user_id IS NOT NULL);

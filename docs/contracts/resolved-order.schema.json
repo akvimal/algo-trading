@@ -63,8 +63,8 @@
     "status": { "type": "string", "enum": ["pending", "sent", "rejected"] },
     "stop_loss_method": {
       "type": ["string", "null"],
-      "enum": ["previous_candle", "percent", "indicator", null],
-      "description": "From the resolved Strategy. null means no stop-loss configured - execution falls back to plain capital_per_trade sizing with no stop/target monitoring."
+      "enum": ["previous_candle", "percent", "indicator", "breakeven", null],
+      "description": "From the resolved Strategy. null means no stop-loss configured - execution falls back to plain capital_per_trade sizing with no stop/target monitoring. 'breakeven' (added 2026-08-29): a one-shot variant of 'percent' - opens with the identical initial stop, but once price first moves stop_loss_percent% favorably from entry, the stop snaps to entry_price and freezes there (execution.positions.breakeven_triggered records the one-shot state)."
     },
     "stop_loss_interval": {
       "type": ["string", "null"],
@@ -75,7 +75,7 @@
       "type": ["number", "null"],
       "exclusiveMinimum": 0,
       "exclusiveMaximum": 100,
-      "description": "Only set when stop_loss_method='percent'."
+      "description": "Set when stop_loss_method='percent' or 'breakeven' - for 'breakeven' this is both the initial stop distance and the favorable-move trigger threshold."
     },
     "stop_loss_indicator_type": {
       "type": ["string", "null"],

@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -300,6 +301,97 @@ class MarketSentiment(BaseModel):
     """GET /options/sentiment - backs the shell header's sentiment badges."""
 
     exchanges: dict[str, ExchangeSentiment]
+
+
+class PlaceOrderRequest(BaseModel):
+    """POST /dhan/orders body - live-broker-adapter P0 (see
+    docs/architecture.md). `symbol` is this service's own plain symbol
+    (resolved to a Dhan security ID/segment server-side via
+    resolve_feed_target, see DhanProvider.place_order), not a Dhan ID -
+    execution never needs to know those. `correlation_id` should carry
+    execution's own broker_orders.client_order_id, for the submit-then-
+    crash idempotency story - see DhanProvider.place_order's own docstring
+    on why that dedup isn't yet confirmed to actually work Dhan-side."""
+
+    symbol: str
+    exchange: str
+    transaction_type: Literal["BUY", "SELL"]
+    quantity: int = Field(gt=0)
+    order_type: Literal["MARKET", "LIMIT", "STOP_LOSS", "STOP_LOSS_MARKET"]
+    product_type: Literal["CNC", "INTRADAY", "MARGIN", "MTF"]
+    price: Optional[float] = None
+    trigger_price: Optional[float] = None
+    correlation_id: Optional[str] = None
+
+
+class InternalPlaceOrderRequest(PlaceOrderRequest):
+    """service-to-service counterpart to PlaceOrderRequest - live-broker-
+    adapter P2 (see docs/architecture.md), for execution's scheduler jobs
+    (real square-off, reactive live exits), which have no live user bearer
+    token to forward. `user_id` stands in for require_user_id's decoded
+    JWT claim - see GET /internal/dhan/order-book's own docstring for the
+    same shared-secret-instead-of-JWT reasoning."""
+
+    user_id: UUID
+
+
+class ModifyOrderRequest(BaseModel):
+    """PUT /dhan/orders/{order_id} body - only what the trailing-SL
+    reconciliation job (execution) actually needs to change on a resting
+    order, see DhanProvider.modify_order's own docstring."""
+
+    order_type: Literal["MARKET", "LIMIT", "STOP_LOSS", "STOP_LOSS_MARKET"]
+    quantity: int = Field(gt=0)
+    price: Optional[float] = None
+    trigger_price: Optional[float] = None
+
+
+class InternalModifyOrderRequest(ModifyOrderRequest):
+    """service-to-service counterpart to ModifyOrderRequest - see
+    InternalPlaceOrderRequest's own docstring. Needs `exchange` too (unlike
+    the user-token route, which takes it as a query param) since this
+    isn't nested under a path that already carries it."""
+
+    user_id: UUID
+    exchange: str
+
+
+class OrderResponse(BaseModel):
+    """Deliberately a thin, permissive passthrough of Dhan's own raw
+    response rather than a strict field-by-field mirror - see
+    DhanProvider.place_order's own docstring on why the exact response
+    shape isn't yet confirmed live. execution's caller is expected to
+    read `raw` for whatever Dhan actually sent back (order id, status,
+    etc.) rather than this service guessing at a stable contract for
+    something that hasn't been exercised against the real API yet."""
+
+    raw: dict
+
+
+class OrderBookResponse(BaseModel):
+    orders: list[dict]
+
+
+class FundsResponse(BaseModel):
+    raw: dict
+
+
+class DhanOrderUpdatePostback(BaseModel):
+    """POST /dhan/order-update/{secret} body - Dhan's own postback shape
+    isn't documented/confirmed live yet (see config.py's own comment on
+    the secret-path-segment protection this route relies on instead of a
+    signature check), so this is deliberately permissive: every field
+    Optional, extra fields ignored rather than 422ing a payload Dhan
+    actually sent just because this mirror is incomplete. Relayed
+    as-is (see the route) to execution's own internal ingestion endpoint,
+    which is what actually interprets/validates it against broker_orders -
+    market-data holds no order state of its own to validate against."""
+
+    model_config = ConfigDict(extra="allow")
+
+    orderId: Optional[str] = None
+    orderStatus: Optional[str] = None
+    correlationId: Optional[str] = None
 
 
 class SentimentHistoryPoint(BaseModel):

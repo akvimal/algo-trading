@@ -163,11 +163,14 @@ class AccountOut(BaseModel):
     min_reward_risk_ratio: float
     # Manual tab only - see Account.enforce_risk_based_lots's own comment.
     enforce_risk_based_lots: bool
-    # CRYPTO and NSE (MTF positional spot) only - a margin multiplier
-    # applied to effective_capital before sizing (Delta Exchange India
-    # trades perpetual futures on margin; Dhan's MTF borrows cash against
-    # NSE spot equity). Defaults to 1 (no leverage) - harmlessly present
-    # but unused for MCX. See position_manager.open_position.
+    # CRYPTO and NSE only - a margin multiplier applied to effective_capital
+    # before sizing (Delta Exchange India trades perpetual futures on
+    # margin; NSE spot uses the same field for BOTH positional MTF -
+    # borrowed cash held overnight, with a real interest cost - and
+    # intraday MIS margin - no interest, position always flat by end of
+    # day). Defaults to 1 (no leverage) - harmlessly present but unused for
+    # MCX. See position_manager.open_position/open_manual_position's own
+    # sizing branches.
     leverage: float
     # NSE MTF only - the manually configured annualized interest rate on
     # the borrowed portion of a leverage > 1 NSE positional position. NULL

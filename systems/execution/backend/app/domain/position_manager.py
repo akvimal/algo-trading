@@ -1181,7 +1181,15 @@ def _open_delta_fee_fields(
     MTF is a cash borrowing cost against a bought asset, not a leveraged
     derivative with liquidation risk, and its cost (interest) only becomes
     known at close (see _net_pnl_with_costs), unlike CRYPTO's point-in-time
-    open_fee."""
+    open_fee.
+
+    A horizon='intraday' NSE spot position with leverage > 1 also gets
+    margin_posted (same notional/leverage math, reusing the same
+    account.leverage field - see the two callers' own sizing branches) but
+    NEVER an interest rate - real intraday MIS margin carries no funding
+    cost since the position is always flat by end of day, unlike MTF's
+    genuine overnight borrowing. use_margin is irrelevant here (that flag
+    only gates the positional MTF branch above)."""
     if segment == "CRYPTO" and instrument_type == "future":
         notional = price * quantity
         open_fee = compute_futures_trading_fee(notional)
@@ -1199,6 +1207,15 @@ def _open_delta_fee_fields(
         notional = price * quantity
         margin_posted = notional / float(account.leverage)
         return None, margin_posted, None, float(account.mtf_annual_interest_rate_pct)
+
+    if segment == "NSE" and horizon == "intraday" and instrument_type == "spot" and float(account.leverage) > 1:
+        # Intraday MIS margin - same margin_posted meaning as MTF above
+        # (capital actually posted, notional/leverage), but no interest
+        # charge - see position_manager.open_position/open_manual_position's
+        # own identical-reasoning comment on their sizing branches.
+        notional = price * quantity
+        margin_posted = notional / float(account.leverage)
+        return None, margin_posted, None, None
 
     return None, None, None, None
 
@@ -1317,11 +1334,11 @@ def open_position(
         # manually configured rate (GET/PUT /accounts/NSE), not a live
         # feed - same "operator enters it" convention as
         # settings.usdinr_rate. Only ever applies to a positional order
-        # with use_margin=True (Strategy-level opt-in) - an intraday NSE
-        # order (Strategy-driven or Manual tab) never reads leverage at
-        # all, and a positional order with use_margin=False always sizes
-        # on cash regardless of how leverage/the rate are configured, so
-        # this can't change behavior for either of those cases.
+        # with use_margin=True (Strategy-level opt-in) - a positional order
+        # with use_margin=False always sizes on cash regardless of how
+        # leverage/the rate are configured. An intraday NSE spot order
+        # reads the SAME account.leverage too, just via its own elif below
+        # (no interest gate there - see that branch's own comment).
         if account.mtf_annual_interest_rate_pct is None:
             row = _reject(
                 db,
@@ -1331,6 +1348,17 @@ def open_position(
             )
             db.commit()
             return row
+        effective_capital = effective_capital * float(account.leverage)
+    elif order.segment == "NSE" and order.horizon == "intraday" and order.instrument_type == "spot" and float(account.leverage) > 1:
+        # Intraday MIS margin (a broker margin against same-day-squared-off
+        # equity, unlike MTF above which borrows cash against equity held
+        # overnight) - same account.leverage field as the positional MTF
+        # branch above (a deliberate reuse, not a separate rate - see
+        # docs/architecture.md), but no interest gate: real intraday MIS
+        # margin carries no funding cost at all (the position is always
+        # flat by end of day), unlike MTF's genuine overnight borrowing
+        # cost - see _net_pnl_with_costs, which this path never reaches
+        # (mtf_interest_rate_pct stays unset on the resulting position).
         effective_capital = effective_capital * float(account.leverage)
 
     # Only futures carry a lot concept - spot (NSE cash equity) keeps
@@ -1726,6 +1754,13 @@ def open_manual_position(
             db.commit()
             return row
         effective_capital = effective_capital / settings.usdinr_rate
+        effective_capital = effective_capital * float(account.leverage)
+    elif segment == "NSE" and instrument_type == "spot" and float(account.leverage) > 1:
+        # Intraday MIS margin - same account.leverage field/reasoning as
+        # open_position's own identical elif (this function is always
+        # horizon='intraday', see its own docstring) - no interest cost,
+        # unlike NSE MTF (positional-only, not reachable from the Manual
+        # tab at all).
         effective_capital = effective_capital * float(account.leverage)
 
     capital_unit = "USD" if segment == "CRYPTO" else "INR"

@@ -35,9 +35,15 @@ export default function RiskAccountsPage() {
   // draftSquareOffTime holds an <input type="time"> value ("HH:MM")
   // reconciled to/from the backend's "HH:MM:SS"/null.
   const [draftCapital, setDraftCapital] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
-  // CRYPTO only - see Account.leverage's own comment (NSE's own leverage/
-  // MTF interest is admin/broker-config only now, execution/frontend's
-  // AccountsPage "Platform account (admin)" section, not here).
+  // CRYPTO and NSE only (MCX never shows this input) - see Account.leverage's
+  // own comment. NSE's own MTF interest rate stays admin/broker-config
+  // only (execution/frontend's AccountsPage "Platform account (admin)"
+  // section, not here) - only relevant to the platform-wide account the
+  // automated flow sizes against for a POSITIONAL order. The Manual tab is
+  // always intraday (see position_manager.open_manual_position's own
+  // docstring), so a SaaS user's own NSE leverage below only ever drives
+  // intraday MIS margin sizing for their own Manual tab orders - never MTF,
+  // and never any interest cost.
   const [draftLeverage, setDraftLeverage] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [draftSquareOffTime, setDraftSquareOffTime] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [draftNeverSquareOff, setDraftNeverSquareOff] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
@@ -166,7 +172,7 @@ export default function RiskAccountsPage() {
       return;
     }
     let leverage: number | undefined;
-    if (segment === "CRYPTO") {
+    if (segment === "CRYPTO" || segment === "NSE") {
       leverage = Number(draftLeverage[segment]);
       if (!Number.isFinite(leverage) || leverage <= 0) {
         setAccountsError(`${segment}: Leverage must be greater than 0`);
@@ -310,8 +316,14 @@ export default function RiskAccountsPage() {
                     onChange={(e) => setDraftCapital((prev) => ({ ...prev, [seg]: e.target.value }))}
                   />
                 </label>
-                {seg === "CRYPTO" && (
-                  <label title="Margin multiplier applied before sizing (Delta Exchange India trades perpetual futures on margin).">
+                {(seg === "CRYPTO" || seg === "NSE") && (
+                  <label
+                    title={
+                      seg === "CRYPTO"
+                        ? "Margin multiplier applied before sizing (Delta Exchange India trades perpetual futures on margin)."
+                        : "Margin multiplier for intraday MIS orders in this segment (spot only) - no interest cost, unlike NSE MTF for positional trades (admin/broker-config only, not here)."
+                    }
+                  >
                     Leverage
                     <input
                       type="number"

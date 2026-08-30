@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
+from types import SimpleNamespace
 from typing import Optional
 
 import pytest
@@ -11,6 +12,7 @@ from app.domain.position_manager import (
     _evaluate_square_off_due,
     _live_status_reason,
     _net_pnl_with_costs,
+    _open_delta_fee_fields,
     _resolve_capital_account,
     _resolve_signal_conflicts,
     _resolve_stop_loss,
@@ -1429,3 +1431,49 @@ def test_live_status_reason_flags_tripped_daily_loss_cap():
 
 def test_live_status_reason_none_when_actually_live():
     assert _live_status_reason(live_enabled=True, kill_switch=False, daily_loss_tripped=False, has_user=True) is None
+
+
+def test_open_delta_fee_fields_intraday_nse_spot_no_leverage_is_unaffected():
+    """leverage=1 (the default) must be a complete no-op - existing
+    intraday NSE spot behavior stays exactly as it was before margin
+    sizing existed."""
+    account = SimpleNamespace(leverage=1)
+    result = _open_delta_fee_fields("NSE", "spot", "intraday", "BUY", 100.0, 10, account, account)
+    assert result == (None, None, None, None)
+
+
+def test_open_delta_fee_fields_intraday_nse_spot_margin_computes_margin_posted_with_no_interest():
+    """Intraday MIS margin reuses account.leverage (same field the
+    positional MTF branch uses) but never charges interest - the position
+    is always flat by end of day, unlike MTF's genuine overnight
+    borrowing cost."""
+    account = SimpleNamespace(leverage=5)
+    open_fee, margin_posted, liquidation_price, interest = _open_delta_fee_fields(
+        "NSE", "spot", "intraday", "BUY", 100.0, 10, account, account
+    )
+    assert open_fee is None
+    assert margin_posted == pytest.approx(200.0)  # (100*10) / 5
+    assert liquidation_price is None
+    assert interest is None
+
+
+def test_open_delta_fee_fields_intraday_nse_future_never_gets_margin():
+    """Only spot - a future's own lot-based sizing already implicitly
+    prices in margin, this branch must not double-apply leverage to it."""
+    account = SimpleNamespace(leverage=5)
+    result = _open_delta_fee_fields("NSE", "future", "intraday", "BUY", 100.0, 10, account, account)
+    assert result == (None, None, None, None)
+
+
+def test_open_delta_fee_fields_positional_nse_mtf_unaffected_by_intraday_branch():
+    """Regression check - the pre-existing positional MTF branch (margin
+    posted + a real interest rate) still fires exactly as before now that
+    an intraday sibling branch exists alongside it."""
+    account = SimpleNamespace(leverage=4, mtf_annual_interest_rate_pct=18.0)
+    open_fee, margin_posted, liquidation_price, interest = _open_delta_fee_fields(
+        "NSE", "spot", "positional", "BUY", 100.0, 10, account, account, use_margin=True
+    )
+    assert open_fee is None
+    assert margin_posted == pytest.approx(250.0)  # (100*10) / 4
+    assert liquidation_price is None
+    assert interest == 18.0

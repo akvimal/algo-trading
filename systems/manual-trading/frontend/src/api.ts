@@ -1351,11 +1351,14 @@ export type Account = {
   // (a purely client-side Lot auto-fill + lock, no server-side
   // enforcement of its own).
   enforce_risk_based_lots: boolean;
-  // CRYPTO only from this SaaS surface - NSE's own leverage/MTF interest
-  // is admin/broker-config only now (execution/frontend's AccountsPage
-  // "Platform account (admin)" section), not editable per-SaaS-user, since
-  // the automated flow never reads a SaaS user's own account row at all -
-  // see docs/architecture.md's "Positional spot holding + NSE MTF" section.
+  // CRYPTO and NSE from this SaaS surface - MTF (positional, an interest
+  // cost) is admin/broker-config only (execution/frontend's AccountsPage
+  // "Platform account (admin)" section) since the automated flow sizes
+  // against the platform account, not a SaaS user's own; intraday MIS
+  // margin (no interest cost) DOES read a SaaS user's own NSE leverage
+  // here though, since the Manual tab always sizes against the caller's
+  // own account - see docs/architecture.md's "Positional spot holding and
+  // NSE MTF" section.
   leverage: number;
   // Admin/broker-config only (see leverage above) - present here only
   // because GET /accounts returns every field on the row; RiskAccountsPage

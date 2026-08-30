@@ -62,8 +62,10 @@ class Account(Base):
     # sent as an explicit quantity at order time, same as a manually
     # typed one, so this needs no new server-side enforcement of its own.
     enforce_risk_based_lots = Column(Boolean, nullable=False, default=False)
-    # CRYPTO and NSE (MTF positional spot) only, harmlessly unused for MCX -
-    # see app/domain/models.py's AccountOut.leverage.
+    # CRYPTO and NSE (both MTF positional spot AND intraday MIS margin,
+    # same field for both - see position_manager.open_position/
+    # open_manual_position's own sizing branches), harmlessly unused for
+    # MCX - see app/domain/models.py's AccountOut.leverage.
     leverage = Column(Numeric, nullable=False, default=1)
     # NSE MTF only - see infra/postgres/init/02-execution.sql's own comment.
     mtf_annual_interest_rate_pct = Column(Numeric, nullable=True)

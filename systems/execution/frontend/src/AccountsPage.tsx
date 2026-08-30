@@ -379,7 +379,7 @@ export default function AccountsPage() {
                         type="number"
                         min="1"
                         step="0.1"
-                        title="Dhan MTF (margin trading facility) - only applies to a positional order from a Strategy with use_margin=true, never intraday or a Manual tab order."
+                        title="Dhan MTF (margin trading facility) for a positional order from a Strategy with use_margin=true, OR intraday MIS margin for any NSE spot order (Strategy-driven or Manual tab) - same leverage value drives both, no interest is ever charged on the intraday side."
                         value={draft.leverage}
                         onChange={(e) =>
                           setPlatformDrafts((prev) => ({

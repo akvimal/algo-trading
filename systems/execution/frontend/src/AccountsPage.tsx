@@ -561,12 +561,29 @@ export default function AccountsPage() {
   }, []);
 
   useEffect(() => {
-    fetchStrategyNames()
-      .then(setStrategies)
-      .catch(() => {
+    // Polled, not fetched once on mount - signal-generation is a separate
+    // frontend/tab, so a strategy created there while this page is
+    // already open used to never appear in the picker below until a full
+    // reload (found live: create a strategy, switch to this tab, the new
+    // one is missing from "Dedicated strategy accounts" until refresh).
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const data = await fetchStrategyNames();
+        if (!cancelled) setStrategies(data);
+      } catch {
         // signal-generation may be unreachable - the create form just
         // shows an empty picker below rather than blocking this page.
-      });
+      }
+    }
+
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   useEffect(() => {

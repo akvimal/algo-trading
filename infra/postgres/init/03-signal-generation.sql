@@ -144,6 +144,13 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- an external webhook provider (chartink, tradingview, or any new
     -- one), free-form so a new provider needs no schema/code change here.
     source_type      TEXT NOT NULL CHECK (source_type <> ''),
+    -- Free-text label for the provider's OWN name for the thing that
+    -- fires this strategy's signals (e.g. the Chartink scan's title) -
+    -- purely descriptive, never matched against by intake/resolution
+    -- (unlike source_type itself). external strategies only; NULL for
+    -- in_house (which has a real Rule name via rule_id instead). Editable
+    -- any time via PATCH, unlike source_type.
+    source_rule_name TEXT,
     exchange         TEXT NOT NULL CHECK (exchange IN ('NSE')),
     horizon          TEXT NOT NULL CHECK (horizon IN ('intraday', 'positional')),
     instrument_type  TEXT NOT NULL CHECK (instrument_type IN ('spot', 'future', 'option')),

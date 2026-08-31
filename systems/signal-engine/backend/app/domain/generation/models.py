@@ -250,6 +250,11 @@ def validate_stop_loss_fields(
 class StrategyCreate(BaseModel):
     name: str = Field(min_length=1)
     source_type: SourceType
+    # Provider's own name for the thing that fires this strategy's signals
+    # (e.g. the Chartink scan's title) - purely descriptive, never matched
+    # against by intake/resolution (unlike source_type itself). Optional,
+    # external strategies only - in_house has a real Rule name instead.
+    source_rule_name: Optional[str] = None
     exchange: Literal["NSE"] = "NSE"
     horizon: Horizon
     instrument_type: InstrumentType
@@ -367,6 +372,9 @@ class StrategyUpdate(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1)
     status: Optional[Status] = None
+    # Unlike source_type itself, this IS patchable any time (external
+    # strategies only) - see StrategyCreate's own comment.
+    source_rule_name: Optional[str] = None
     horizon: Optional[Horizon] = None
     instrument_type: Optional[InstrumentType] = None
     rule_id: Optional[str] = None
@@ -402,6 +410,7 @@ class StrategyOut(BaseModel):
     id: str
     name: str
     source_type: SourceType
+    source_rule_name: Optional[str] = None
     exchange: str
     horizon: Horizon
     instrument_type: InstrumentType

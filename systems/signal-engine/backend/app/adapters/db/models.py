@@ -56,6 +56,10 @@ class Strategy(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(Text, nullable=False)
     source_type = Column(Text, nullable=False)
+    # Provider's own name for the thing that fires this strategy's signals
+    # (e.g. the Chartink scan's title) - purely descriptive, external
+    # strategies only. See infra/postgres/init/03-signal-generation.sql.
+    source_rule_name = Column(Text, nullable=True)
     exchange = Column(Text, nullable=False)
     horizon = Column(Text, nullable=False)
     instrument_type = Column(Text, nullable=False)

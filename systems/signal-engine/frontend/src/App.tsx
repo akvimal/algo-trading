@@ -2880,6 +2880,12 @@ function StrategyManager() {
   // longer be derived from a picked Rule's own source_type.
   const [sourceKind, setSourceKind] = useState<"in_house" | "external">("in_house");
   const [externalSourceName, setExternalSourceName] = useState("");
+  // The provider's own name for the specific scan/rule that feeds this
+  // strategy (e.g. a Chartink scan's title) - purely descriptive, distinct
+  // from externalSourceName above (which is source_type itself, locked
+  // after creation). This one IS editable after creation - see
+  // Strategy.source_rule_name in api.ts.
+  const [externalRuleName, setExternalRuleName] = useState("");
   const [horizon, setHorizon] = useState<Horizon>("intraday");
   const [instrumentType, setInstrumentType] = useState<InstrumentType>("spot");
   const [ruleId, setRuleId] = useState("");
@@ -3099,6 +3105,7 @@ function StrategyManager() {
     setName("");
     setSourceKind("in_house");
     setExternalSourceName("");
+    setExternalRuleName("");
     setRuleId("");
     setSlMethod("");
     setSlInterval("");
@@ -3130,6 +3137,7 @@ function StrategyManager() {
     setSaving(true);
     const payload = {
       name,
+      source_rule_name: createIsInHouse ? undefined : externalRuleName.trim() || undefined,
       horizon,
       instrument_type: instrumentType,
       rule_id: createIsInHouse ? ruleId : undefined,
@@ -3193,6 +3201,7 @@ function StrategyManager() {
     setName(s.name);
     setSourceKind(s.source_type === "in_house" ? "in_house" : "external");
     setExternalSourceName(s.source_type === "in_house" ? "" : s.source_type);
+    setExternalRuleName(s.source_rule_name ?? "");
     setHorizon(s.horizon);
     setInstrumentType(s.instrument_type);
     setRuleId(s.rule_id ?? "");
@@ -3353,18 +3362,28 @@ function StrategyManager() {
                         <select
                           value={externalSourceName.toLowerCase() === "chartink" ? "chartink" : "other"}
                           onChange={(e) => setExternalSourceName(e.target.value === "chartink" ? "chartink" : "")}
+                          disabled={!!editingId}
                         >
                           <option value="chartink">Chartink</option>
                           <option value="other">Other</option>
                         </select>
                       </label>
                       <label>
-                        Rule (Provider&apos;s)
+                        Provider Id
                         <input
                           value={externalSourceName}
                           onChange={(e) => setExternalSourceName(e.target.value)}
                           required
+                          disabled={!!editingId}
                           placeholder="e.g. chartink, tradingview"
+                        />
+                      </label>
+                      <label>
+                        Rule Name (Provider&apos;s)
+                        <input
+                          value={externalRuleName}
+                          onChange={(e) => setExternalRuleName(e.target.value)}
+                          placeholder="e.g. the Chartink scan's title"
                         />
                       </label>
                     </>
@@ -3383,6 +3402,9 @@ function StrategyManager() {
                     </label>
                   )}
                 </div>
+                {!createIsInHouse && !!editingId && (
+                  <p className="hint">External Provider/Provider Id can&apos;t be changed after creation - delete and recreate the strategy if needed. Rule Name can be edited any time.</p>
+                )}
                 {createIsInHouse && createRuleOptions.length === 0 && (
                   <p className="hint">No rules yet - create one on the Rules tab first.</p>
                 )}
@@ -3806,7 +3828,7 @@ function StrategyManager() {
                   )}
                 </td>
                 <td>{s.segment}</td>
-                <td className="muted">{s.rule?.name ?? "-"}</td>
+                <td className="muted">{s.source_type === "in_house" ? s.rule?.name ?? "-" : s.source_rule_name ?? "-"}</td>
                 <td className="muted">{formatDateTimeNoSeconds(s.created_at)}</td>
                 <td className="muted">{s.last_scan_at ? formatDateTimeNoSeconds(s.last_scan_at) : "never"}</td>
                 <td onClick={(e) => e.stopPropagation()}>

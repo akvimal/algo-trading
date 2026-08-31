@@ -374,6 +374,12 @@ export type Strategy = {
   id: string;
   name: string;
   source_type: SourceType;
+  // Provider's own name for the thing that fires this strategy's signals
+  // (e.g. the Chartink scan's title) - purely descriptive, never matched
+  // against anywhere (unlike source_type itself). External strategies
+  // only; null for in_house (which has a real Rule name via `rule`
+  // instead). Unlike source_type, this IS editable after creation.
+  source_rule_name: string | null;
   exchange: string;
   horizon: Horizon;
   instrument_type: InstrumentType;
@@ -435,6 +441,8 @@ export type Strategy = {
 export type StrategyCreate = {
   name: string;
   source_type: SourceType;
+  // External strategies only, optional. See Strategy's own comment above.
+  source_rule_name?: string | null;
   horizon: Horizon;
   instrument_type: InstrumentType;
   // Required iff source_type === 'in_house'; omit/null for external.
@@ -468,6 +476,9 @@ export type StrategyCreate = {
 export type StrategyEdit = {
   name?: string;
   status?: StrategyStatus;
+  // Unlike source_type itself, this IS editable after creation (external
+  // strategies only) - see backend's StrategyUpdate docstring.
+  source_rule_name?: string;
   horizon?: Horizon;
   instrument_type?: InstrumentType;
   rule_id?: string;

@@ -40,6 +40,7 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule], last_sc
         id=str(row.id),
         name=row.name,
         source_type=row.source_type,
+        source_rule_name=row.source_rule_name,
         exchange=row.exchange,
         horizon=row.horizon,
         instrument_type=row.instrument_type,
@@ -176,6 +177,7 @@ def create_strategy(
     row = db_models.Strategy(
         name=payload.name,
         source_type=payload.source_type,
+        source_rule_name=payload.source_rule_name,
         exchange=payload.exchange,
         horizon=payload.horizon,
         instrument_type=payload.instrument_type,
@@ -278,6 +280,10 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.name = payload.name
     if payload.status is not None:
         row.status = payload.status
+    if payload.source_rule_name is not None:
+        if row.source_type == "in_house":
+            raise HTTPException(status_code=422, detail="source_rule_name only applies to external strategies")
+        row.source_rule_name = payload.source_rule_name
     if payload.horizon is not None:
         row.horizon = payload.horizon
     if payload.instrument_type is not None:

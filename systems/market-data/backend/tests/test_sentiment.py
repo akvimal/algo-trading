@@ -2,8 +2,11 @@
 built OptionOiSummary, no Dhan/network dependency. See test_oi_summary.py
 for the summary-building tests this sits on top of."""
 
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
+
 from app.domain.models import OptionOiSummary
-from app.domain.sentiment import aggregate_exchange, score_underlying
+from app.domain.sentiment import aggregate_exchange, exchange_for_symbol, is_within_session, score_underlying, session_bounds
 
 
 def _summary(call_oi: int, put_oi: int, call_chg_5m, put_chg_5m, call_chg_15m, put_chg_15m) -> OptionOiSummary:
@@ -119,3 +122,45 @@ def test_aggregate_exchange_all_missing_is_neutral_with_no_score():
 
     assert result.direction == "neutral"
     assert result.score is None
+
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def test_is_within_session_nse_open_and_closed():
+    assert is_within_session("NSE", datetime(2026, 8, 31, 10, 0, tzinfo=IST)) is True
+    assert is_within_session("NSE", datetime(2026, 8, 31, 9, 15, tzinfo=IST)) is True  # boundary, inclusive
+    assert is_within_session("NSE", datetime(2026, 8, 31, 15, 30, tzinfo=IST)) is True  # boundary, inclusive
+    assert is_within_session("NSE", datetime(2026, 8, 31, 8, 59, tzinfo=IST)) is False
+    assert is_within_session("NSE", datetime(2026, 8, 31, 15, 31, tzinfo=IST)) is False
+
+
+def test_is_within_session_mcx_wider_window():
+    assert is_within_session("MCX", datetime(2026, 8, 31, 22, 0, tzinfo=IST)) is True
+    assert is_within_session("MCX", datetime(2026, 8, 31, 23, 45, tzinfo=IST)) is False
+
+
+def test_is_within_session_unconfigured_exchange_always_true():
+    # CRYPTO (and anything else with no SEGMENT_SESSION_HOURS entry) trades
+    # 24/7 - always in session, any time of day.
+    assert is_within_session("CRYPTO", datetime(2026, 8, 31, 3, 0, tzinfo=IST)) is True
+
+
+def test_exchange_for_symbol_known_and_unknown():
+    assert exchange_for_symbol("NIFTY") == "NSE"
+    assert exchange_for_symbol("GOLDM") == "MCX"
+    assert exchange_for_symbol("NOT_A_WATCHLIST_SYMBOL") is None
+
+
+def test_session_bounds_resolves_to_that_days_configured_window():
+    start, end = session_bounds("NSE", date(2026, 8, 31), IST)
+
+    assert start == datetime(2026, 8, 31, 9, 15, tzinfo=IST)
+    assert end == datetime(2026, 8, 31, 15, 30, tzinfo=IST)
+
+
+def test_session_bounds_unconfigured_exchange_spans_whole_day():
+    start, end = session_bounds("CRYPTO", date(2026, 8, 31), IST)
+
+    assert start == datetime(2026, 8, 31, 0, 0, tzinfo=IST)
+    assert end == datetime.combine(date(2026, 8, 31), time.max, tzinfo=IST)

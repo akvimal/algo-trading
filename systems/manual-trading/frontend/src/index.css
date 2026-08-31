@@ -2418,6 +2418,34 @@ button.btn-exit {
   width: 100%;
 }
 
+/* Prev/Next day + date-input navigator above the chart - a past day's
+   history is static (fetched once, no poll), see SentimentHistoryChart.tsx's
+   own isToday check. */
+.sentiment-history-daynav {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.sentiment-history-daynav input[type="date"] {
+  font-size: 0.8rem;
+}
+
+/* The visible 3-hour window's own time range, above the pan slider (see
+   SentimentHistoryChart.tsx's WINDOW_MS). */
+.sentiment-history-window-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin: 0 0 0.15rem;
+}
+
+.sentiment-history-slider {
+  width: 100%;
+  margin: 0 0 0.5rem;
+  display: block;
+}
+
 /* Floats near the hovered point (left set inline in JS, as a % of the
    chart's own width) rather than sitting statically below the chart -
    needs position:absolute + a positioned ancestor (.sentiment-history-chart

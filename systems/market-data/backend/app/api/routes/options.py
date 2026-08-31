@@ -5,9 +5,10 @@ future non-Dhan provider (e.g. Delta Exchange) that doesn't support this
 gets a clean 404 instead of an AttributeError, same reasoning as
 app/providers/dhan_feed.py's _resolve_target."""
 
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -16,9 +17,10 @@ from app.adapters.accounts_client import get_user_dhan_credentials
 from app.adapters.db.models import SentimentHistory
 from app.adapters.db.session import get_db
 from app.auth import get_optional_user_id
-from app.domain.models import MarketSentiment, OptionChain, OptionLegCandle, OptionOiSummary, SentimentHistoryPoint
+from app.config import settings
+from app.domain.models import MarketSentiment, OptionChain, OptionLegCandle, OptionOiSummary, SentimentHistoryDay, SentimentHistoryPoint
 from app.domain.oi_summary import build_oi_summary
-from app.domain.sentiment import SENTIMENT_UNDERLYINGS, aggregate_exchange
+from app.domain.sentiment import SENTIMENT_UNDERLYINGS, aggregate_exchange, exchange_for_symbol, session_bounds
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
 from app.providers.router import get_provider
 
@@ -131,23 +133,54 @@ def get_sentiment(user_id: Optional[UUID] = Depends(get_optional_user_id)):
     return MarketSentiment(exchanges=exchanges)
 
 
-@router.get("/options/sentiment-history", response_model=list[SentimentHistoryPoint])
-def get_sentiment_history(symbol: str, limit: int = Query(200, ge=1, le=2000), db: Session = Depends(get_db)):
-    """market_data.sentiment_history for one SENTIMENT_UNDERLYINGS symbol -
-    each row's own direction/strength/score alongside the underlying's spot
-    price at that same moment (app/scheduler.py's _record_sentiment_history
-    writes one row per symbol every 5 minutes), so a past OI-based read can
-    be checked against what price actually did afterward. Oldest-first
-    (chart-friendly reading order), capped to the most recent `limit` rows
-    rather than the whole table."""
+@router.get("/options/sentiment-history", response_model=SentimentHistoryDay)
+def get_sentiment_history(symbol: str, date: Optional[date] = Query(None), db: Session = Depends(get_db)):
+    """market_data.sentiment_history for one SENTIMENT_UNDERLYINGS symbol,
+    scoped to one calendar day (`date`, default today - both in
+    settings.timezone) - each row's own direction/strength/score alongside
+    the underlying's spot price at that same moment (app/scheduler.py's
+    _record_sentiment_history writes one row per symbol every 5 minutes,
+    only while that symbol's exchange is_within_session), so a past OI-
+    based read can be checked against what price actually did afterward.
+    Oldest-first (chart-friendly reading order) - no row-count cap needed
+    now that a query is always bounded to a single day rather than "most
+    recent N rows" (previously up to 2000): a session-bounded day is
+    inherently small (NSE ~75 rows, MCX ~174, at the 5-minute cadence).
+
+    Also returns that day's session_start/session_end (see
+    app.domain.sentiment.session_bounds) so SentimentHistoryChart.tsx can
+    bound its x-axis to the exchange's actual trading session instead of
+    just whatever data happens to exist - the same day-picker UX as
+    date-scoped views elsewhere in this codebase (e.g. the Rules tab's
+    backtest range)."""
+    tz = ZoneInfo(settings.timezone)
+    day = date or datetime.now(tz).date()
+    exchange = exchange_for_symbol(symbol) or (
+        db.query(SentimentHistory.exchange).filter(SentimentHistory.symbol == symbol).limit(1).scalar()
+    )
+    if exchange is None:
+        raise HTTPException(status_code=404, detail=f"unknown sentiment-history symbol '{symbol}'")
+
+    session_start, session_end = session_bounds(exchange, day, tz)
+    day_start = datetime.combine(day, datetime.min.time(), tzinfo=tz)
+    day_end = day_start + timedelta(days=1)
+
     rows = (
         db.query(SentimentHistory)
-        .filter(SentimentHistory.symbol == symbol)
-        .order_by(SentimentHistory.recorded_at.desc())
-        .limit(limit)
+        .filter(
+            SentimentHistory.symbol == symbol,
+            SentimentHistory.recorded_at >= day_start,
+            SentimentHistory.recorded_at < day_end,
+        )
+        .order_by(SentimentHistory.recorded_at.asc())
         .all()
     )
-    return list(reversed(rows))
+    return SentimentHistoryDay(
+        exchange=exchange,
+        session_start=session_start,
+        session_end=session_end,
+        points=[SentimentHistoryPoint.model_validate(row) for row in rows],
+    )
 
 
 @router.get("/options/leg-history", response_model=list[OptionLegCandle])

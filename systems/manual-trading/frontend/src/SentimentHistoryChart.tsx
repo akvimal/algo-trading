@@ -4,8 +4,17 @@ import { type SentimentDirection, type SentimentHistoryPoint, fetchSentimentHist
 
 // Same cadence the scheduled recorder itself writes at (see market-data's
 // app/scheduler.py) - no value polling more often than a new row could
-// actually land.
+// actually land. Only polled while viewing TODAY (see the effect below) -
+// a past day's history never changes once written.
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
+
+// The visible x-axis window is fixed at 3 hours (not the full session,
+// which can be up to 14.5h for MCX) - a horizontal slider pans across the
+// rest of the session instead, same idea as a candlestick chart's own
+// zoomed default view. Keeps points spread out enough to actually read
+// (direction/strength dot sizes, the score subplot's bars) instead of
+// compressed across a whole day's width.
+const WINDOW_MS = 3 * 60 * 60 * 1000;
 
 const WIDTH = 900;
 const PAD_LEFT = 64;
@@ -63,61 +72,184 @@ function formatClock(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function formatAxisTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+function formatAxisTime(t: number): string {
+  return new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
-// Spot price over time for one sentiment-badge symbol, each point colored
-// by that snapshot's own OI-based direction (green=bullish, red=bearish,
+// Plain "YYYY-MM-DD" in the VIEWER's own local time - good enough for a
+// day-picker default/Prev/Next-disable check; the backend resolves "today"
+// itself (settings.timezone, IST) when `date` is omitted, so this is only
+// ever used for user-driven navigation, not sent as the very first fetch.
+function todayDateString(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function addDays(dateStr: string, delta: number): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + delta);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatDayHeading(dateStr: string): string {
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+// Spot price over time for one sentiment-badge symbol, for one calendar
+// day at a time (Prev/Next/date-pick navigation), each point colored by
+// that snapshot's own OI-based direction (green=bullish, red=bearish,
 // gray=neutral) - lets you eyeball whether price actually moved the way a
 // past OI read predicted (e.g. a run of bullish reads followed by the
 // line trending up), which was the whole point of persisting this history
-// (see market-data's market_data.sentiment_history table). A second,
-// synced subplot underneath plots the raw score_15m (bars) and score_5m
-// (dots) that direction/strength above is actually bucketed from - the
-// building/fading momentum shows up here before it ever flips a bucket.
-// Hand-rolled SVG, same approach as execution/frontend's PnlChart.tsx and
-// this app's own OiBarChart.tsx - no charting library in this codebase.
+// (see market-data's market_data.sentiment_history table). The x-axis
+// shows a fixed WINDOW_MS-wide slice of that day's own trading-session
+// window (session_start/session_end from the backend, resolved from
+// SEGMENT_SESSION_HOURS) - not the data's own min/max, and not the full
+// session at once - with a horizontal slider to pan across the rest of
+// the session; defaults to the most recent WINDOW_MS (up to "now" if
+// viewing today, else up to session_end). A second, synced subplot
+// underneath plots the raw score_15m (bars) and score_5m (dots) that
+// direction/strength above is actually bucketed from - the building/fading momentum shows up here
+// before it ever flips a bucket. Hand-rolled SVG, same approach as
+// execution/frontend's PnlChart.tsx and this app's own OiBarChart.tsx - no
+// charting library in this codebase.
 export function SentimentHistoryChart({ symbol }: { symbol: string }) {
-  const [points, setPoints] = useState<SentimentHistoryPoint[] | null>(null);
+  const [date, setDate] = useState(todayDateString);
+  const [day, setDay] = useState<{ exchange: string; sessionStart: number; sessionEnd: number; points: SentimentHistoryPoint[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  // null = not yet panned by the user this day - falls back to the
+  // "most recent WINDOW_MS" default computed below once `day` loads.
+  // Reset to null whenever the date/symbol changes so switching days
+  // doesn't carry over a manually-panned position from a different one.
+  const [windowStart, setWindowStart] = useState<number | null>(null);
+
+  const isToday = date === todayDateString();
 
   useEffect(() => {
     let cancelled = false;
-    setPoints(null);
+    setDay(null);
     setError(null);
     setHoverIndex(null);
+    setWindowStart(null);
 
     async function poll() {
       try {
-        const data = await fetchSentimentHistory(symbol);
-        if (!cancelled) setPoints(data);
+        const data = await fetchSentimentHistory(symbol, date);
+        if (!cancelled) {
+          setDay({
+            exchange: data.exchange,
+            sessionStart: new Date(data.session_start).getTime(),
+            sessionEnd: new Date(data.session_end).getTime(),
+            points: data.points,
+          });
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
     }
 
     void poll();
+    if (!isToday) return () => { cancelled = true; };
     const interval = setInterval(() => void poll(), POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [symbol]);
+  }, [symbol, date, isToday]);
 
   if (error) return <p className="error">{error}</p>;
-  if (points === null) return <p className="muted">Loading sentiment history...</p>;
 
-  const withPrice = points.filter((p) => p.spot_price != null);
-  if (withPrice.length < 2) {
-    return <p className="muted">Not enough sentiment history yet for {symbol} - check back after a few more 5-minute ticks.</p>;
+  const dayNav = (
+    <div className="sentiment-history-daynav">
+      <button type="button" className="icon-btn" onClick={() => setDate((d) => addDays(d, -1))} aria-label="Previous day">
+        ‹
+      </button>
+      <input type="date" value={date} max={todayDateString()} onChange={(e) => setDate(e.target.value)} />
+      <button type="button" className="icon-btn" onClick={() => setDate((d) => addDays(d, 1))} disabled={isToday} aria-label="Next day">
+        ›
+      </button>
+      {!isToday && (
+        <button type="button" className="tiny secondary" onClick={() => setDate(todayDateString())}>
+          Today
+        </button>
+      )}
+    </div>
+  );
+
+  if (day === null) {
+    return (
+      <div className="sentiment-history-chart">
+        {dayNav}
+        <p className="muted">Loading sentiment history for {formatDayHeading(date)}...</p>
+      </div>
+    );
+  }
+
+  const { sessionStart, sessionEnd, points } = day;
+  const allWithPrice = points.filter((p) => p.spot_price != null);
+
+  if (allWithPrice.length === 0) {
+    return (
+      <div className="sentiment-history-chart">
+        {dayNav}
+        <p className="muted">
+          No sentiment history recorded for {symbol} on {formatDayHeading(date)}
+          {isToday ? " yet - check back after the next 5-minute tick" : " - the market may not have been in session that day"}.
+        </p>
+      </div>
+    );
+  }
+
+  // The visible x-axis window is a fixed WINDOW_MS slice of the session
+  // (clamped to the session's own length, for a segment whose session is
+  // somehow shorter), pannable via the slider below - see this
+  // component's own docblock and WINDOW_MS's.
+  const sessionSpan = Math.max(1, sessionEnd - sessionStart);
+  const windowMs = Math.min(WINDOW_MS, sessionSpan);
+  const maxWindowStart = Math.max(sessionStart, sessionEnd - windowMs);
+  const defaultWindowEnd = isToday ? Math.min(Date.now(), sessionEnd) : sessionEnd;
+  const defaultWindowStart = Math.min(maxWindowStart, Math.max(sessionStart, defaultWindowEnd - windowMs));
+  const effectiveWindowStart =
+    windowStart != null ? Math.min(Math.max(windowStart, sessionStart), maxWindowStart) : defaultWindowStart;
+  const windowEnd = effectiveWindowStart + windowMs;
+
+  const slider = maxWindowStart > sessionStart && (
+    <input
+      type="range"
+      className="sentiment-history-slider"
+      min={sessionStart}
+      max={maxWindowStart}
+      step={5 * 60 * 1000} // 5 min - matches the recorder's own cadence
+      value={effectiveWindowStart}
+      onChange={(e) => setWindowStart(Number(e.target.value))}
+      aria-label={`Pan the visible ${(WINDOW_MS / 3600000).toFixed(0)}-hour window across the trading session`}
+    />
+  );
+
+  const withPrice = allWithPrice.filter((p) => {
+    const t = new Date(p.recorded_at).getTime();
+    return t >= effectiveWindowStart && t <= windowEnd;
+  });
+
+  const minTime = effectiveWindowStart;
+  const maxTime = windowEnd;
+
+  if (withPrice.length === 0) {
+    return (
+      <div className="sentiment-history-chart">
+        {dayNav}
+        <p className="sentiment-history-window-label">
+          {formatAxisTime(minTime)} – {formatAxisTime(maxTime)}
+        </p>
+        {slider}
+        <p className="muted">No sentiment history in this window - pan the slider to see {symbol}'s recorded history for this day.</p>
+      </div>
+    );
   }
 
   const times = withPrice.map((p) => new Date(p.recorded_at).getTime());
   const prices = withPrice.map((p) => p.spot_price as number);
-  const minTime = times[0];
-  const maxTime = times[times.length - 1];
   const timeSpan = Math.max(1, maxTime - minTime);
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
@@ -148,15 +280,12 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
   // really is.
   const barWidth = Math.max(2, Math.min(8, PLOT_WIDTH / withPrice.length - 2));
 
-  // A handful of evenly-spaced x-axis time labels rather than one per
-  // point - at 5-minute cadence a real history run has far too many
-  // points to label each one without them overlapping.
+  // A handful of evenly-spaced x-axis time labels across the visible
+  // WINDOW (not just where data happens to land) - fixed count/spacing
+  // regardless of how many points exist, so a partial/gappy window still
+  // gets a complete, evenly-ticked axis.
   const AXIS_TICK_COUNT = 6;
-  const axisTickIndices = Array.from(new Set(
-    Array.from({ length: Math.min(AXIS_TICK_COUNT, withPrice.length) }, (_, i) =>
-      Math.round((i * (withPrice.length - 1)) / Math.max(1, Math.min(AXIS_TICK_COUNT, withPrice.length) - 1)),
-    ),
-  ));
+  const axisTickTimes = Array.from({ length: AXIS_TICK_COUNT }, (_, i) => minTime + (i * timeSpan) / (AXIS_TICK_COUNT - 1));
 
   function handleMove(e: React.MouseEvent<SVGRectElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -180,7 +309,12 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
 
   return (
     <div className="sentiment-history-chart">
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label={`${symbol} spot price and OI shift over time`}>
+      {dayNav}
+      <p className="sentiment-history-window-label">
+        {formatAxisTime(minTime)} – {formatAxisTime(maxTime)}
+      </p>
+      {slider}
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label={`${symbol} spot price and OI shift, ${formatAxisTime(minTime)}-${formatAxisTime(maxTime)} on ${date}`}>
         {/* Price plot */}
         <text x={PAD_LEFT - 8} y={PRICE_TOP + 4} textAnchor="end" fontSize={10} fill="var(--text-dim)">
           {maxPrice.toFixed(2)}
@@ -222,10 +356,11 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
           ) : null,
         )}
 
-        {/* x-axis time labels, shared by both plots */}
-        {axisTickIndices.map((i) => (
-          <text key={i} x={x(times[i])} y={XAXIS_Y} textAnchor="middle" fontSize={9} fill="var(--text-dim)">
-            {formatAxisTime(withPrice[i].recorded_at)}
+        {/* x-axis time labels, shared by both plots - spans the full
+            session window, not just where data landed. */}
+        {axisTickTimes.map((t, i) => (
+          <text key={i} x={x(t)} y={XAXIS_Y} textAnchor="middle" fontSize={9} fill="var(--text-dim)">
+            {formatAxisTime(t)}
           </text>
         ))}
 

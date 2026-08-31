@@ -1,4 +1,6 @@
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -7,7 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.adapters.db.models import SentimentHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
-from app.domain.sentiment import SENTIMENT_UNDERLYINGS
+from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
 from app.providers import nse_indices
 from app.providers.dhan import renew_access_token
@@ -39,15 +41,28 @@ def _renew_dhan_token() -> None:
 
 def _record_sentiment_history() -> None:
     """Writes one market_data.sentiment_history row per SENTIMENT_UNDERLYINGS
-    symbol - always the platform-default Dhan credential (credentials=None),
-    since this is a background job with no caller to attribute a BYO
-    credential to, unlike GET /options/sentiment itself. Same cadence as
-    that route's own frontend pollers (5 minutes, see SentimentBadges.tsx/
-    shell/index.html) - no value recording more often than the OI-change
-    windows the score itself is computed over (5m/15m) actually shift."""
+    symbol whose exchange is currently in session (is_within_session) -
+    always the platform-default Dhan credential (credentials=None), since
+    this is a background job with no caller to attribute a BYO credential
+    to, unlike GET /options/sentiment itself. Same cadence as that route's
+    own frontend pollers (5 minutes, see SentimentBadges.tsx/shell/
+    index.html) - no value recording more often than the OI-change windows
+    the score itself is computed over (5m/15m) actually shift.
+
+    Skipping outside session hours (added so SentimentHistoryChart.tsx's
+    day view isn't mostly off-hours error/stale-price noise - see
+    docs/architecture.md's sentiment-history section) means a segment
+    simply has no rows at all outside its own SEGMENT_SESSION_HOURS window,
+    rather than rows with error='...' - the chart's x-axis is bounded to
+    that same session window regardless, so this doesn't create a visible
+    gap there, just avoids a wasted Dhan option-chain call and a noisy row
+    for a market that isn't even open."""
     db = SessionLocal()
     try:
+        now = datetime.now(ZoneInfo(settings.timezone))
         for exchange, symbols in SENTIMENT_UNDERLYINGS.items():
+            if not is_within_session(exchange, now):
+                continue
             for symbol in symbols:
                 sentiment, spot_price = fetch_underlying_sentiment(exchange, symbol)
                 db.add(

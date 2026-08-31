@@ -14,6 +14,7 @@ Pure functions only (no Dhan/network dependency) - the caller
 whatever OptionOiSummary it got (or None on a per-underlying fetch failure).
 """
 
+from datetime import date, datetime, time as dt_time, tzinfo
 from typing import Optional
 
 from app.domain.models import ExchangeSentiment, OptionOiSummary, SentimentDirection, SentimentStrength, UnderlyingSentiment
@@ -22,6 +23,63 @@ SENTIMENT_UNDERLYINGS: dict[str, list[str]] = {
     "NSE": ["NIFTY", "BANKNIFTY"],
     "MCX": ["GOLDM", "CRUDEOILM"],
 }
+
+# Approximate real trading-session bounds per exchange, local time
+# (settings.timezone, Asia/Kolkata) - used to stop app/scheduler.py's
+# _record_sentiment_history from writing history rows (mostly error/stale-
+# price noise, since the option chain isn't live outside session) while a
+# segment's market is actually closed, and to bound
+# SentimentHistoryChart.tsx's own x-axis to a consistent, comparable
+# window day over day. Weekday/holiday-agnostic - no trading-calendar
+# concept exists anywhere in this codebase, so a weekend/holiday still
+# reads "in session" by clock time alone; any real fetch attempted then
+# just degrades to an error row the same way an unexpected market closure
+# during session hours already does (see score_underlying). MCX's real
+# session varies by commodity (agri contracts often close ~17:00, others
+# ~23:30) - this is one conservative window covering every
+# SENTIMENT_UNDERLYINGS MCX symbol, not a precise per-contract one.
+SEGMENT_SESSION_HOURS: dict[str, tuple[dt_time, dt_time]] = {
+    "NSE": (dt_time(9, 15), dt_time(15, 30)),
+    "MCX": (dt_time(9, 0), dt_time(23, 30)),
+}
+# CRYPTO deliberately absent - trades 24/7, same "no cutoff" treatment
+# execution.accounts.square_off_time=NULL already gives it elsewhere.
+
+
+def is_within_session(exchange: str, now: datetime) -> bool:
+    """True if `now` (already converted to the exchange's local trading
+    timezone by the caller) falls within that exchange's SEGMENT_SESSION_
+    HOURS window. An exchange with no configured window (CRYPTO) is always
+    in session."""
+    hours = SEGMENT_SESSION_HOURS.get(exchange)
+    if hours is None:
+        return True
+    start, end = hours
+    return start <= now.time() <= end
+
+
+def exchange_for_symbol(symbol: str) -> Optional[str]:
+    """Reverse lookup into SENTIMENT_UNDERLYINGS - which exchange a
+    sentiment-watchlist symbol belongs to, for GET /options/sentiment-
+    history (which only receives `symbol`, not `exchange`, from the
+    caller). None for a symbol outside the fixed watchlist."""
+    for exchange, symbols in SENTIMENT_UNDERLYINGS.items():
+        if symbol in symbols:
+            return exchange
+    return None
+
+
+def session_bounds(exchange: str, day: date, tz: tzinfo) -> tuple[datetime, datetime]:
+    """This exchange's SEGMENT_SESSION_HOURS window resolved to actual
+    datetimes for one calendar `day` in timezone `tz` - the single
+    definition both the scheduled recorder (is_within_session) and GET
+    /options/sentiment-history (for SentimentHistoryChart.tsx's x-axis)
+    anchor to, so they can never drift apart. An exchange with no
+    configured window spans the whole day, matching is_within_session's
+    own "always in session" default."""
+    hours = SEGMENT_SESSION_HOURS.get(exchange)
+    start_t, end_t = hours if hours is not None else (dt_time.min, dt_time.max)
+    return datetime.combine(day, start_t, tzinfo=tz), datetime.combine(day, end_t, tzinfo=tz)
 
 # Percent-of-total-OI put-minus-call shift, 15m window. Not derived from
 # anything - a reasonable starting bucket, tune freely.

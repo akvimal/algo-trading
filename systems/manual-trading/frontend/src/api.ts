@@ -1034,8 +1034,24 @@ export type SentimentHistoryPoint = {
   error: string | null;
 };
 
-export async function fetchSentimentHistory(symbol: string, limit = 200): Promise<SentimentHistoryPoint[]> {
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/options/sentiment-history?symbol=${encodeURIComponent(symbol)}&limit=${limit}`);
+// GET /options/sentiment-history's full response - one calendar day's
+// points, plus that same day's session_start/session_end (already
+// resolved server-side from market-data's SEGMENT_SESSION_HOURS) so
+// SentimentHistoryChart.tsx can bound its x-axis to the exchange's actual
+// trading session instead of just whatever data happens to exist.
+export type SentimentHistoryDay = {
+  exchange: string;
+  session_start: string;
+  session_end: string;
+  points: SentimentHistoryPoint[];
+};
+
+// `date` is a plain "YYYY-MM-DD" string (day-picker in
+// SentimentHistoryChart.tsx), omitted for today - see backend's own
+// default (settings.timezone's "today").
+export async function fetchSentimentHistory(symbol: string, date?: string): Promise<SentimentHistoryDay> {
+  const dateParam = date ? `&date=${date}` : "";
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/options/sentiment-history?symbol=${encodeURIComponent(symbol)}${dateParam}`);
   return asJson(res, "GET /options/sentiment-history");
 }
 

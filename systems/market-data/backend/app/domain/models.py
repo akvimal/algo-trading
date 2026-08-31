@@ -410,3 +410,17 @@ class SentimentHistoryPoint(BaseModel):
     score_15m: Optional[float] = None
     spot_price: Optional[float] = None
     error: Optional[str] = None
+
+
+class SentimentHistoryDay(BaseModel):
+    """GET /options/sentiment-history's full response - one calendar day's
+    points, PLUS that same day's session_start/session_end already resolved
+    from app.domain.sentiment.SEGMENT_SESSION_HOURS (see session_bounds) -
+    so SentimentHistoryChart.tsx doesn't need its own copy of session-hours
+    logic to bound its x-axis. One definition, in this backend, shared by
+    both the scheduled recorder (is_within_session) and this read path."""
+
+    exchange: str
+    session_start: datetime
+    session_end: datetime
+    points: list[SentimentHistoryPoint]

@@ -283,6 +283,15 @@ class UnderlyingSentiment(BaseModel):
     score_15m: Optional[float] = None
     direction: SentimentDirection
     strength: Optional[SentimentStrength] = None
+    # The ATM strike's own call/put buildup classification (see
+    # app/domain/sentiment.py's _atm_buildups) - that leg's own OI change
+    # vs its own PREMIUM change, the same per-leg read OptionOiLeg.buildup
+    # already carries on the OI-by-strike table. Deliberately two separate
+    # values, not merged into one label - a rising call OI and a rising
+    # put OI mean different things, same reason score_5m/15m itself is a
+    # put-minus-call SKEW rather than a summed figure.
+    atm_call_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
+    atm_put_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
     error: Optional[str] = None
 
 
@@ -409,6 +418,11 @@ class SentimentHistoryPoint(BaseModel):
     score_5m: Optional[float] = None
     score_15m: Optional[float] = None
     spot_price: Optional[float] = None
+    # See UnderlyingSentiment's own comment - the ATM strike's own
+    # call/put buildup classification at this snapshot, deliberately kept
+    # as two separate values.
+    atm_call_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
+    atm_put_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
     error: Optional[str] = None
 
 

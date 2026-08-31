@@ -2471,6 +2471,13 @@ button.btn-exit {
   pointer-events: none;
 }
 
+.sentiment-history-tooltip-buildup {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.75rem;
+  align-items: center;
+}
+
 .sentiment-history-legend {
   display: flex;
   flex-wrap: wrap;

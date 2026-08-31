@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { type SentimentDirection, type SentimentHistoryPoint, fetchSentimentHistory } from "./api";
+import { buildupBadge } from "./OiSummaryPage";
 
 // Same cadence the scheduled recorder itself writes at (see market-data's
 // app/scheduler.py) - no value polling more often than a new row could
@@ -222,7 +223,16 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
       max={maxWindowStart}
       step={5 * 60 * 1000} // 5 min - matches the recorder's own cadence
       value={effectiveWindowStart}
-      onChange={(e) => setWindowStart(Number(e.target.value))}
+      onChange={(e) => {
+        setWindowStart(Number(e.target.value));
+        // Panning changes withPrice's own length (the current window's
+        // filtered subset) - a stale hoverIndex from before the pan can
+        // point past the end of the new one. Bounds-checked defensively
+        // too (see `hovered` above), but reset here as well so the
+        // tooltip doesn't linger on a now-meaningless index instead of
+        // just disappearing.
+        setHoverIndex(null);
+      }}
       aria-label={`Pan the visible ${(WINDOW_MS / 3600000).toFixed(0)}-hour window across the trading session`}
     />
   );
@@ -302,9 +312,17 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
     setHoverIndex(nearest);
   }
 
-  const hovered = hoverIndex != null ? withPrice[hoverIndex] : null;
-  const hoveredX = hoverIndex != null ? x(times[hoverIndex]) : 0;
-  const hoveredPriceY = hoverIndex != null ? yPrice(withPrice[hoverIndex].spot_price as number) : 0;
+  // hoverIndex is bounds-checked against THIS render's withPrice, not just
+  // non-null - panning the slider or navigating days changes withPrice's
+  // own length (it's the current window's filtered subset now, not the
+  // whole day), so a hoverIndex set before that change can point past the
+  // new array's end. Reproduced live: "Cannot read properties of
+  // undefined (reading 'spot_price')" after panning while a point was
+  // hovered. The effect below also resets hoverIndex on every window
+  // change, so this is a defensive second layer, not the only guard.
+  const hovered = hoverIndex != null && hoverIndex < withPrice.length ? withPrice[hoverIndex] : null;
+  const hoveredX = hovered ? x(times[hoverIndex as number]) : 0;
+  const hoveredPriceY = hovered ? yPrice(hovered.spot_price as number) : 0;
   const tooltipOnLeft = hoveredX > WIDTH - 170;
 
   return (
@@ -396,6 +414,12 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
             5m {hovered.score_5m != null ? `${hovered.score_5m.toFixed(2)}%` : "-"} · 15m{" "}
             {hovered.score_15m != null ? `${hovered.score_15m.toFixed(2)}%` : "-"}
           </div>
+          {(hovered.atm_call_buildup || hovered.atm_put_buildup) && (
+            <div className="sentiment-history-tooltip-buildup">
+              <span>Call {buildupBadge(hovered.atm_call_buildup)}</span>
+              <span>Put {buildupBadge(hovered.atm_put_buildup)}</span>
+            </div>
+          )}
         </div>
       )}
       <div className="sentiment-history-legend">

@@ -74,6 +74,8 @@ def _record_sentiment_history() -> None:
                         score_5m=sentiment.score_5m,
                         score_15m=sentiment.score_15m,
                         spot_price=spot_price,
+                        atm_call_buildup=sentiment.atm_call_buildup,
+                        atm_put_buildup=sentiment.atm_put_buildup,
                         error=sentiment.error,
                     )
                 )

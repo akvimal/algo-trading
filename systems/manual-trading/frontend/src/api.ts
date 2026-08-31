@@ -999,6 +999,13 @@ export type UnderlyingSentiment = {
   score_15m: number | null;
   direction: SentimentDirection;
   strength: SentimentStrength | null;
+  // The ATM strike's own call/put buildup (see OiBuildup above) - that
+  // leg's own OI change vs its own premium change, same per-leg read the
+  // OI-by-strike table already shows. Two separate values, deliberately
+  // not merged into one - a rising call OI and a rising put OI mean
+  // different things.
+  atm_call_buildup: OiBuildup | null;
+  atm_put_buildup: OiBuildup | null;
   error: string | null;
 };
 
@@ -1031,6 +1038,10 @@ export type SentimentHistoryPoint = {
   score_5m: number | null;
   score_15m: number | null;
   spot_price: number | null;
+  // See UnderlyingSentiment's own comment - the ATM strike's own call/put
+  // buildup classification at this snapshot.
+  atm_call_buildup: OiBuildup | null;
+  atm_put_buildup: OiBuildup | null;
   error: string | null;
 };
 

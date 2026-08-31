@@ -110,14 +110,16 @@ function fmtLtp(n: number): string {
 // _classify_buildup for the exact rule. icon+short label kept compact
 // since the table's already wide; full phrase + rationale is the
 // tooltip/legend.
-const BUILDUP_META: Record<OiBuildup, { icon: string; short: string; label: string; cls: string }> = {
+// Exported so SentimentHistoryChart.tsx can show the same badges for the
+// ATM strike's own buildup read, rather than a second, drifting copy.
+export const BUILDUP_META: Record<OiBuildup, { icon: string; short: string; label: string; cls: string }> = {
   long_buildup: { icon: "▲", short: "LB", label: "Long Buildup — price up, OI up (fresh longs)", cls: "oi-buildup-long-buildup" },
   short_buildup: { icon: "▼", short: "SB", label: "Short Buildup — price down, OI up (fresh shorts)", cls: "oi-buildup-short-buildup" },
   short_covering: { icon: "△", short: "SC", label: "Short Covering — price up, OI down (shorts exiting)", cls: "oi-buildup-short-covering" },
   long_unwinding: { icon: "▽", short: "LU", label: "Long Unwinding — price down, OI down (longs exiting)", cls: "oi-buildup-long-unwinding" },
 };
 
-function buildupBadge(b: OiBuildup | null) {
+export function buildupBadge(b: OiBuildup | null) {
   if (!b) return <span className="muted">-</span>;
   const m = BUILDUP_META[b];
   return (

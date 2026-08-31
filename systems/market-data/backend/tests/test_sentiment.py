@@ -5,7 +5,7 @@ for the summary-building tests this sits on top of."""
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from app.domain.models import OptionOiSummary
+from app.domain.models import OptionOiLeg, OptionOiSummary, OptionOiSummaryStrike
 from app.domain.sentiment import aggregate_exchange, exchange_for_symbol, is_within_session, score_underlying, session_bounds
 
 
@@ -122,6 +122,61 @@ def test_aggregate_exchange_all_missing_is_neutral_with_no_score():
 
     assert result.direction == "neutral"
     assert result.score is None
+
+
+def _leg(moneyness: str, buildup) -> OptionOiLeg:
+    return OptionOiLeg(
+        oi=100000,
+        implied_volatility=15.0,
+        last_price=100.0,
+        volume=1000,
+        top_bid_price=99.5,
+        top_ask_price=100.5,
+        moneyness=moneyness,
+        buildup=buildup,
+    )
+
+
+def test_score_underlying_surfaces_the_atm_strikes_own_call_and_put_buildup():
+    """The ATM strike's own per-leg buildup (already computed by
+    build_oi_summary/_classify_buildup - that leg's own OI change vs its
+    own PREMIUM change) should pass through onto UnderlyingSentiment,
+    deliberately as two separate values rather than one merged label - a
+    rising call OI and a rising put OI mean different things."""
+    summary = _summary(500000, 500000, 0, 20000, 0, 20000)
+    summary = summary.model_copy(
+        update={
+            "strikes": [
+                OptionOiSummaryStrike(strike=23900, call=_leg("OTM", "short_covering"), put=_leg("OTM", "long_unwinding")),
+                OptionOiSummaryStrike(strike=24000, call=_leg("ATM", "long_buildup"), put=_leg("ATM", "short_buildup")),
+                OptionOiSummaryStrike(strike=24100, call=_leg("ITM", None), put=_leg("ITM", None)),
+            ]
+        }
+    )
+
+    result = score_underlying("NIFTY", summary)
+
+    assert result.atm_call_buildup == "long_buildup"
+    assert result.atm_put_buildup == "short_buildup"
+
+
+def test_score_underlying_atm_buildup_none_when_no_strike_is_marked_atm():
+    summary = _summary(500000, 500000, 0, 20000, 0, 20000)
+    summary = summary.model_copy(
+        update={"strikes": [OptionOiSummaryStrike(strike=23900, call=_leg("OTM", "short_covering"), put=_leg("ITM", "long_unwinding"))]}
+    )
+
+    result = score_underlying("NIFTY", summary)
+
+    assert result.atm_call_buildup is None
+    assert result.atm_put_buildup is None
+
+
+def test_score_underlying_atm_buildup_none_when_no_summary():
+    result = score_underlying("NIFTY", None, error="fetch failed")
+
+    assert result.atm_call_buildup is None
+    assert result.atm_put_buildup is None
 
 
 IST = ZoneInfo("Asia/Kolkata")

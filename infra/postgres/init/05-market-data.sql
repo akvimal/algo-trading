@@ -25,6 +25,13 @@ CREATE TABLE IF NOT EXISTS market_data.sentiment_history (
     score_5m     DOUBLE PRECISION,
     score_15m    DOUBLE PRECISION,
     spot_price   DOUBLE PRECISION,
+    -- The ATM strike's own call/put buildup classification at this
+    -- snapshot (long_buildup/short_buildup/short_covering/long_unwinding
+    -- or NULL) - see app.domain.sentiment._atm_buildups. Two separate
+    -- columns, deliberately not merged into one - a rising call OI and a
+    -- rising put OI mean different things.
+    atm_call_buildup TEXT,
+    atm_put_buildup  TEXT,
     error        TEXT
 );
 

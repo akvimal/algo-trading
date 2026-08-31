@@ -135,6 +135,26 @@ def _pct_shift(summary: OptionOiSummary, call_chg: Optional[int], put_chg: Optio
     return (put_chg - call_chg) / total_oi * 100
 
 
+def _atm_buildups(summary: OptionOiSummary) -> tuple[Optional[str], Optional[str]]:
+    """The ATM strike's own call/put buildup classification (already
+    computed by build_oi_summary/_classify_buildup - that leg's own OI
+    change vs its own PREMIUM change, the same well-defined per-leg read
+    the OI-by-strike table already shows) - NOT derived from a chain-wide
+    summed/combined OI figure, which would conflate calls and puts and
+    lose the very direction this classification depends on. Two separate
+    values, deliberately not merged into one label, for the same reason:
+    a rising call OI and a rising put OI mean different (often opposite)
+    things. None/None if no strike is currently marked ATM (e.g. the
+    chain fetch failed) or that leg has no buildup read yet (see
+    OptionOiLeg.buildup's own docstring)."""
+    for row in summary.strikes:
+        if row.call is not None and row.call.moneyness == "ATM":
+            return row.call.buildup, row.put.buildup if row.put is not None else None
+        if row.put is not None and row.put.moneyness == "ATM":
+            return row.call.buildup if row.call is not None else None, row.put.buildup
+    return None, None
+
+
 def score_underlying(symbol: str, summary: Optional[OptionOiSummary], error: Optional[str] = None) -> UnderlyingSentiment:
     if summary is None:
         return UnderlyingSentiment(symbol=symbol, direction="neutral", error=error or "no data")
@@ -142,7 +162,16 @@ def score_underlying(symbol: str, summary: Optional[OptionOiSummary], error: Opt
     score_5m = _pct_shift(summary, summary.total_call_oi_change_5m, summary.total_put_oi_change_5m)
     score_15m = _pct_shift(summary, summary.total_call_oi_change_15m, summary.total_put_oi_change_15m)
     direction, strength, _ = _classify(score_5m, score_15m)
-    return UnderlyingSentiment(symbol=symbol, score_5m=score_5m, score_15m=score_15m, direction=direction, strength=strength)
+    atm_call_buildup, atm_put_buildup = _atm_buildups(summary)
+    return UnderlyingSentiment(
+        symbol=symbol,
+        score_5m=score_5m,
+        score_15m=score_15m,
+        direction=direction,
+        strength=strength,
+        atm_call_buildup=atm_call_buildup,
+        atm_put_buildup=atm_put_buildup,
+    )
 
 
 def aggregate_exchange(underlyings: list[UnderlyingSentiment]) -> ExchangeSentiment:

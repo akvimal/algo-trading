@@ -36,4 +36,9 @@ class SentimentHistory(Base):
     score_5m = Column(Float)
     score_15m = Column(Float)
     spot_price = Column(Float)
+    # The ATM strike's own call/put buildup classification at this
+    # snapshot - see app.domain.sentiment._atm_buildups. Two separate
+    # columns, deliberately not merged into one.
+    atm_call_buildup = Column(Text)
+    atm_put_buildup = Column(Text)
     error = Column(Text)

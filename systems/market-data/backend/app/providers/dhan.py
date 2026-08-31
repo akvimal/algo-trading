@@ -242,6 +242,33 @@ _renewed_token: Optional[str] = None  # None until the first successful renewal
 _last_renewed_at: Optional[datetime] = None
 _last_renewal_response: Optional[dict] = None  # raw Dhan response, for the status endpoint
 
+# Same "genuinely global, not per-instance" reasoning as the token state
+# above - router.py's dhan-nse/dhan-mcx instances are two objects in THIS
+# process, but Dhan itself sees one real account making every one of these
+# calls, so their rate-limit clocks must be shared too. Used to live as
+# per-instance `self._lock`/`self._last_ltp_call_at` etc. (and the
+# equivalent candle/option-chain/order pairs) - each instance kept its OWN
+# clock, so e.g. a burst of NSE + MCX option-chain calls (OiSummaryPage.tsx
+# loads all 4 watchlist tabs, 2 NSE + 2 MCX, at once) could both start from
+# an untouched clock and fire within the same instant, each individually
+# "compliant" with its own 3s throttle while Dhan's real account-wide
+# budget rejects the second one with a 429 - reproduced live (GET
+# /options/oi-summary failing intermittently with "Dhan API rate limit hit
+# (429) on optionchain"). Keyed by throttle_key exactly as before (None =
+# platform-default credential, str(user_id) for a BYO one - see
+# DhanCredentials/_throttle below) - that dimension was already correct,
+# this only fixes the missing NSE/MCX sharing. Response CACHES (quote/
+# candle/option-chain/expiry-list) stay per-instance/self. - genuinely
+# different data per segment, not a throttle-clock problem.
+_ltp_throttle_lock = threading.Lock()
+_last_ltp_call_at: dict[Optional[str], float] = {}
+_candle_throttle_lock = threading.Lock()
+_last_candle_call_at: dict[Optional[str], float] = {}
+_option_chain_throttle_lock = threading.Lock()
+_last_option_chain_call_at: dict[Optional[str], float] = {}
+_order_throttle_lock = threading.Lock()
+_last_order_call_at: dict[Optional[str], float] = {}
+
 
 def _persist_credentials(client_id: str, access_token: str) -> None:
     """Best-effort durable copy of the active credentials - a plain JSON
@@ -654,6 +681,12 @@ class DhanProvider(QuoteProvider):
         self._default_config = self._configs[0]
         self.name = name
 
+        # Guards this instance's own symbol-table swap on sync (below) -
+        # correctly per-instance/self., unlike the throttle locks that used
+        # to live here too (moved to module level, see _ltp_throttle_lock's
+        # own comment near _token_lock) - NSE and MCX genuinely have
+        # different symbol tables, so there's no cross-instance sharing
+        # concern for this one.
         self._lock = threading.Lock()
         self._symbol_to_security_id: dict[str, str] = {}
         # Per-symbol metadata beyond the security id - which Dhan segment
@@ -675,19 +708,15 @@ class DhanProvider(QuoteProvider):
         # set underlying_of.
         self._underlying_to_contracts: dict[str, list[ContractInfo]] = {}
         self._last_synced_at: Optional[datetime] = None
-        # Rate-limit throttle timestamps, keyed by a throttle key (None =
-        # the platform-default credential; a BYO user's own str(user_id)
-        # otherwise - see DhanCredentials/_throttle above/below) rather
-        # than a single scalar, so a user with their own Dhan account gets
-        # their own independent rate budget instead of contending with
-        # the platform's (or another user's) - see docs/architecture.md
-        # Phase 3.
-        self._last_ltp_call_at: dict[Optional[str], float] = {}
+        # Rate-limit throttle CLOCKS (lock + last-call timestamps) are
+        # module-level now, shared by every DhanProvider instance - see
+        # _ltp_throttle_lock/_last_ltp_call_at etc.'s own comment above
+        # (near _token_lock) for why. Only the response CACHES stay
+        # per-instance below - genuinely different data per segment
+        # (NSE vs MCX quotes/candles/chains), not a throttle problem.
         self._quote_cache: dict[str, tuple[float, float]] = {}  # symbol -> (price, fetched_at)
         self._quote_cache_lock = threading.Lock()
 
-        self._candle_lock = threading.Lock()
-        self._last_candle_call_at: dict[Optional[str], float] = {}
         # (symbol, interval) -> (candle, fetched_at) - TTL is the
         # interval's own length (see _cached_candle), not the 3s quote
         # TTL, since a completed candle doesn't change until the next one
@@ -695,21 +724,11 @@ class DhanProvider(QuoteProvider):
         self._candle_cache: dict[tuple[str, str], tuple[Candle, float]] = {}
         self._candle_cache_lock = threading.Lock()
 
-        self._option_chain_lock = threading.Lock()
-        self._last_option_chain_call_at: dict[Optional[str], float] = {}
         self._option_chain_cache: dict[tuple[str, str], tuple[OptionChain, float]] = {}
         self._option_chain_cache_lock = threading.Lock()
 
         self._expiry_list_cache: dict[str, tuple[list[str], float]] = {}
         self._expiry_list_cache_lock = threading.Lock()
-
-        # Order-placement throttle - same per-credential-key shape as the
-        # quote/candle/option-chain throttles above, deliberately kept
-        # entirely separate (own lock, own timestamp dict) so a burst of
-        # order activity never contends with or is contended by ordinary
-        # quote polling.
-        self._order_lock = threading.Lock()
-        self._last_order_call_at: dict[Optional[str], float] = {}
 
         # In-memory OI time series backing GET /options/oi-summary's
         # 5m/15m change figures - see _record_oi_history's own comment.
@@ -738,9 +757,12 @@ class DhanProvider(QuoteProvider):
         }
 
     def _throttle(self, lock: threading.Lock, timestamps: dict, key: Optional[str], min_interval: float, label: str) -> None:
-        """Shared wait-then-stamp logic for the LTP/candle/option-chain
-        throttle families below - `timestamps` is one of
-        self._last_ltp_call_at/_last_candle_call_at/_last_option_chain_call_at,
+        """Shared wait-then-stamp logic for the LTP/candle/option-chain/
+        order throttle families below - `timestamps` is one of the
+        module-level _last_ltp_call_at/_last_candle_call_at/
+        _last_option_chain_call_at/_last_order_call_at dicts (near
+        _token_lock - see that comment for why these are module-level,
+        shared across every DhanProvider instance, not per-instance),
         keyed by `key` (None = platform-default credential, str(user_id)
         for a BYO one - see DhanCredentials's own docstring) so each gets
         an independent rate-limit clock."""
@@ -992,7 +1014,7 @@ class DhanProvider(QuoteProvider):
         if not client_id or not access_token:
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
-        self._throttle(self._lock, self._last_ltp_call_at, credentials.throttle_key if credentials else None, MIN_LTP_CALL_INTERVAL_SECONDS, "quote")
+        self._throttle(_ltp_throttle_lock, _last_ltp_call_at, credentials.throttle_key if credentials else None, MIN_LTP_CALL_INTERVAL_SECONDS, "quote")
 
         body: dict[str, list[int]] = {}
         for security_id, (_symbol, segment_key) in pending.items():
@@ -1088,7 +1110,7 @@ class DhanProvider(QuoteProvider):
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
         self._throttle(
-            self._candle_lock, self._last_candle_call_at, credentials.throttle_key if credentials else None,
+            _candle_throttle_lock, _last_candle_call_at, credentials.throttle_key if credentials else None,
             MIN_CANDLE_CALL_INTERVAL_SECONDS, "candle",
         )
 
@@ -1164,7 +1186,7 @@ class DhanProvider(QuoteProvider):
         strings (no datetime.combine/timezone dance the intraday path
         needs) and no `interval` field at all - this endpoint is
         daily-only. Reuses the exact same throttle state as
-        _fetch_native_candles (self._candle_lock/MIN_CANDLE_CALL_INTERVAL_SECONDS)
+        _fetch_native_candles (_candle_throttle_lock/MIN_CANDLE_CALL_INTERVAL_SECONDS)
         rather than an independent one - both are charts/* endpoints on the
         same Dhan API key, and there's no confirmed evidence they carry
         separate rate budgets; split this out later if live use shows that
@@ -1181,7 +1203,7 @@ class DhanProvider(QuoteProvider):
             raise RuntimeError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN are not configured")
 
         self._throttle(
-            self._candle_lock, self._last_candle_call_at, credentials.throttle_key if credentials else None,
+            _candle_throttle_lock, _last_candle_call_at, credentials.throttle_key if credentials else None,
             MIN_CANDLE_CALL_INTERVAL_SECONDS, "candle",
         )
 
@@ -1336,7 +1358,7 @@ class DhanProvider(QuoteProvider):
         return {"Accept": "application/json", "Content-Type": "application/json", "access-token": access_token, "client-id": client_id}
 
     def _throttle_option_chain_call(self, key: Optional[str] = None) -> None:
-        self._throttle(self._option_chain_lock, self._last_option_chain_call_at, key, MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS, "option-chain")
+        self._throttle(_option_chain_throttle_lock, _last_option_chain_call_at, key, MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS, "option-chain")
 
     def get_expiry_list(self, symbol: str, credentials: Optional[DhanCredentials] = None) -> Optional[list[str]]:
         """Every active option expiry date (YYYY-MM-DD) for `symbol` (e.g.
@@ -1671,7 +1693,7 @@ class DhanProvider(QuoteProvider):
             # Phase 3 scoped BYO credentials to - always the platform-
             # default credential/throttle slot (key=None).
             self._throttle(
-                self._option_chain_lock, self._last_option_chain_call_at, None, MIN_OPTION_HISTORY_CALL_INTERVAL_SECONDS, "option-history"
+                _option_chain_throttle_lock, _last_option_chain_call_at, None, MIN_OPTION_HISTORY_CALL_INTERVAL_SECONDS, "option-history"
             )
 
             resp = requests.post(
@@ -1792,7 +1814,7 @@ class DhanProvider(QuoteProvider):
         segment_key, security_id = target
 
         access_token, client_id = self._order_credentials(credentials)
-        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "order")
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "order")
 
         body = {
             "dhanClientId": client_id,
@@ -1831,7 +1853,7 @@ class DhanProvider(QuoteProvider):
         needs to carry what's CHANGING, and which fields are optional-vs-
         required here isn't confirmed."""
         access_token, client_id = self._order_credentials(credentials)
-        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "modify-order")
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "modify-order")
 
         body = {
             "dhanClientId": client_id,
@@ -1848,7 +1870,7 @@ class DhanProvider(QuoteProvider):
 
     def cancel_order(self, order_id: str, credentials: Optional["DhanCredentials"] = None) -> dict:
         access_token, client_id = self._order_credentials(credentials)
-        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "cancel-order")
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "cancel-order")
 
         resp = requests.delete(f"{ORDERS_URL}/{order_id}", headers=self._order_headers(access_token, client_id), timeout=15)
         self._raise_for_order_response(resp, "cancel-order")
@@ -1860,7 +1882,7 @@ class DhanProvider(QuoteProvider):
         this file use for "doesn't exist" vs. "something's actually
         wrong"."""
         access_token, client_id = self._order_credentials(credentials)
-        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "get-order")
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "get-order")
 
         resp = requests.get(f"{ORDERS_URL}/{order_id}", headers=self._order_headers(access_token, client_id), timeout=15)
         if resp.status_code == 404:
@@ -1877,7 +1899,7 @@ class DhanProvider(QuoteProvider):
         own docstring on why that match isn't yet confirmed to actually
         work against Dhan's real API)."""
         access_token, client_id = self._order_credentials(credentials)
-        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "order-book")
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "order-book")
 
         resp = requests.get(ORDERS_URL, headers=self._order_headers(access_token, client_id), timeout=15)
         self._raise_for_order_response(resp, "order-book")
@@ -1890,7 +1912,7 @@ class DhanProvider(QuoteProvider):
         against anything real) for any live_trading_enabled account, per
         the live-broker-adapter plan's own P0 scope."""
         access_token, client_id = self._order_credentials(credentials)
-        self._throttle(self._order_lock, self._last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "funds")
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "funds")
 
         resp = requests.get(FUNDS_URL, headers=self._order_headers(access_token, client_id), timeout=15)
         self._raise_for_order_response(resp, "funds")

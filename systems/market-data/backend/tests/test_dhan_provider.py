@@ -4,6 +4,7 @@ import time
 import responses
 
 from app.config import settings
+from app.providers import dhan
 from app.providers.dhan import LTP_URL, INSTRUMENT_MASTER_URL, DhanCredentials, DhanProvider
 
 FAKE_CSV = (
@@ -106,7 +107,7 @@ def test_get_ltp_fails_fast_when_throttle_queue_too_deep(monkeypatch):
     # up well past MAX_THROTTLE_WAIT_SECONDS, so this should raise
     # immediately rather than block the test (or a real request) for
     # several seconds.
-    provider._last_ltp_call_at[None] = time.monotonic() + 3.0
+    dhan._last_ltp_call_at[None] = time.monotonic() + 3.0
 
     try:
         provider.get_ltp("RELIANCE")
@@ -155,7 +156,7 @@ def test_get_ltp_batch_byo_credentials_have_their_own_throttle_slot(monkeypatch)
     provider.sync_instruments()
     # Simulate the PLATFORM-default queue backed up - a BYO user's own
     # call (different throttle_key) must still succeed immediately.
-    provider._last_ltp_call_at[None] = time.monotonic() + 3.0
+    dhan._last_ltp_call_at[None] = time.monotonic() + 3.0
 
     creds = DhanCredentials(client_id="user-client", access_token="user-token", throttle_key="user-1")
     price = provider.get_ltp("RELIANCE", credentials=creds)

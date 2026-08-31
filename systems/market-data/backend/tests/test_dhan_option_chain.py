@@ -11,6 +11,7 @@ import time
 import responses
 
 from app.config import settings
+from app.providers import dhan
 from app.providers.dhan import LTP_URL, NSE_INDEX, OPTION_CHAIN_URL, OPTION_EXPIRY_LIST_URL, DhanProvider
 
 
@@ -182,11 +183,40 @@ def test_get_option_chain_fails_fast_when_throttle_queue_too_deep(monkeypatch):
     # Simulate a request already in-flight far enough ahead that the
     # implied wait exceeds MAX_THROTTLE_WAIT_SECONDS - should raise
     # immediately rather than block the test for several seconds.
-    provider._last_option_chain_call_at[None] = time.monotonic() + 5.0
+    dhan._last_option_chain_call_at[None] = time.monotonic() + 5.0
 
     try:
         provider.get_option_chain("NIFTY", "2026-08-14")
         assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "backed up" in str(exc)
+
+
+def test_option_chain_throttle_is_shared_across_dhan_provider_instances(monkeypatch):
+    """router.py builds two DhanProvider instances (dhan-nse, dhan-mcx) for
+    what is really ONE Dhan account - a backed-up throttle queue on one
+    instance must block a call on the OTHER instance too, not just calls
+    on the same instance. Reproduces (as a fast, deterministic unit test)
+    the live bug this fixed: OiSummaryPage.tsx loading all 4 watchlist
+    tabs (2 NSE + 2 MCX) at once fired near-simultaneous real Dhan calls
+    from dhan-nse and dhan-mcx, each individually "compliant" with its own
+    then-per-instance 3s throttle, and Dhan's real account-wide budget
+    429'd the second one."""
+    monkeypatch.setattr(settings, "dhan_client_id", "test-client")
+    monkeypatch.setattr(settings, "dhan_access_token", "test-token")
+
+    nse_provider = _provider_with_nifty()
+    mcx_provider = DhanProvider([NSE_INDEX], name="dhan-mcx")
+    mcx_provider._symbol_to_security_id = {"GOLDM": "99"}
+    mcx_provider._symbol_to_config = {"GOLDM": NSE_INDEX}
+
+    # Simulate dhan-nse's queue backed up - dhan-mcx must see the SAME
+    # backed-up clock (shared module-level state), not its own clean one.
+    dhan._last_option_chain_call_at[None] = time.monotonic() + 5.0
+
+    try:
+        mcx_provider.get_option_chain("GOLDM", "2026-08-14")
+        assert False, "expected RuntimeError - dhan-mcx should share dhan-nse's throttle clock"
     except RuntimeError as exc:
         assert "backed up" in str(exc)
 

@@ -6,6 +6,7 @@ import responses
 
 from app.config import settings
 from app.domain.models import Candle
+from app.providers import dhan
 from app.providers.dhan import CANDLE_URL, HISTORICAL_URL, INSTRUMENT_MASTER_URL, DhanProvider, _aggregate_candles, _interval_minutes
 
 FAKE_CSV = (
@@ -143,7 +144,7 @@ def test_get_previous_candle_fails_fast_when_throttle_queue_too_deep(monkeypatch
 
     provider = DhanProvider()
     provider._symbol_to_security_id = {"RELIANCE": "2885"}
-    provider._last_candle_call_at[None] = time.monotonic() + 3.0
+    dhan._last_candle_call_at[None] = time.monotonic() + 3.0
 
     try:
         provider.get_previous_candle("RELIANCE", "5min")
@@ -160,7 +161,7 @@ def test_candle_throttle_is_independent_of_ltp_throttle(monkeypatch):
 
     provider = DhanProvider()
     provider._symbol_to_security_id = {"RELIANCE": "2885"}
-    provider._last_ltp_call_at[None] = time.monotonic() + 3.0  # LTP queue backed up
+    dhan._last_ltp_call_at[None] = time.monotonic() + 3.0  # LTP queue backed up
 
     with responses.RequestsMock() as rsps:
         rsps.add(responses.POST, CANDLE_URL, json=_candle_response(5), status=200)

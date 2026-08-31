@@ -16,6 +16,7 @@ each, confirmed live 2026-08-14: ~12s for 2 symbols) - resolve_and_finalize_sign
 now runs from app/consumers/signal_resolution_consumer.py instead, off
 the caller's request/response cycle entirely. See docs/architecture.md."""
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -28,6 +29,8 @@ from app.domain.processing.models import SignalIngest
 from app.domain.processing.resolution.errors import ResolutionError
 from app.domain.processing.resolution.generation_lookup import fetch_strategy
 from app.domain.processing.resolution.pipeline import resolve
+
+logger = logging.getLogger(__name__)
 
 
 def archive_raw_payload(db: Session, provider: str, raw_payload: dict) -> db_models.RawSignalPayload:
@@ -103,8 +106,23 @@ def resolve_and_finalize_signal(db: Session, signal_id: str, signal: SignalInges
     redelivery (Redis Streams at-least-once): resolve() is a pure
     computation, and re-publishing the same signal_id to orders.resolved
     is a no-op there too - execution's open_position/open_option_group are
-    already idempotent on signal_id (see orders_consumer.py)."""
-    order_row = db.query(db_models.ResolvedOrder).filter_by(signal_id=uuid.UUID(signal_id)).one()
+    already idempotent on signal_id (see orders_consumer.py).
+
+    order_row is expected to always exist (create_signal_from_ingest
+    inserts it, committed, before ever publishing this signal_id onto
+    signals.pending_resolution - no legitimate race with this function
+    running before that commit is visible). A missing row means the
+    stream had a stale/orphaned entry from before the order it referenced
+    was deleted (or the consumer group's own read position replayed
+    history older than the DB's current state - confirmed live 2026-08-31
+    on VPS, see _ensure_group's own docstring on id="$" vs "0") - logged
+    and treated as a no-op (nothing left to update) rather than raising,
+    so a permanently-unprocessable stale message doesn't get retried
+    forever by _reclaim_stale_pending."""
+    order_row = db.query(db_models.ResolvedOrder).filter_by(signal_id=uuid.UUID(signal_id)).one_or_none()
+    if order_row is None:
+        logger.warning("no ResolvedOrder row for signal_id=%s - stale/orphaned stream entry, skipping", signal_id)
+        return
 
     try:
         resolved = resolve(signal, lambda strategy_id: fetch_strategy(db, strategy_id))

@@ -5,6 +5,7 @@ consumer before Phase 4d; SessionLocal/redis are both monkeypatched away
 here rather than requiring a real DB/Redis connection, same "plain fakes"
 preference the rest of this test suite uses."""
 
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -149,3 +150,45 @@ def test_reclaim_logs_and_continues_when_a_claimed_message_fails_again(monkeypat
     consumer._reclaim_stale_pending()  # must not raise
 
     assert consumer._client.acked == []
+
+
+class _StoppingClient:
+    """xreadgroup/xautoclaim fake that stops run()'s loop after a couple
+    of iterations - just enough to prove _ensure_group() gets called more
+    than once per run(), not just before the loop."""
+
+    def __init__(self, stop_event: threading.Event):
+        self._stop_event = stop_event
+        self.xreadgroup_calls = 0
+
+    def xautoclaim(self, stream, group, consumer_name, min_idle_time, start_id, count):
+        return "0-0", [], []
+
+    def xreadgroup(self, group, consumer_name, streams, count, block):
+        self.xreadgroup_calls += 1
+        if self.xreadgroup_calls >= 2:
+            self._stop_event.set()
+        return []
+
+
+def test_run_recreates_the_consumer_group_every_iteration_not_just_once(monkeypatch):
+    """Regression test for a real incident (2026-08-31, on the identical
+    signal-engine twin of this consumer, deployed on the VPS): Redis lost
+    the stream/consumer group while the thread kept running uninterrupted
+    (a Redis restart with no persistence, or its container/volume being
+    recreated) - _ensure_group() used to run only once, before the loop,
+    so from that point on the thread NOGROUP-looped on every
+    xautoclaim/xreadgroup call forever, with no way to recover short of
+    restarting the whole service. Fixed by re-running _ensure_group()
+    every iteration instead (a cheap no-op via BUSYGROUP once the group
+    already exists) - this proves it's actually called more than once per
+    run(), not just at startup."""
+    ensure_group_calls = []
+    monkeypatch.setattr(consumer, "_ensure_group", lambda: ensure_group_calls.append(1))
+
+    stop_event = threading.Event()
+    monkeypatch.setattr(consumer, "_client", _StoppingClient(stop_event))
+
+    consumer.run(stop_event)
+
+    assert len(ensure_group_calls) >= 2

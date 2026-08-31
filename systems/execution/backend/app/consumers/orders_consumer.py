@@ -41,8 +41,21 @@ _client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
 
 def _ensure_group() -> None:
+    """id="$" (start from whatever's newest right now), not "0" (start
+    from the very first entry ever written) - confirmed live 2026-08-31 on
+    the identical signal-engine twin of this consumer why this matters:
+    id="0" is only "safe" (nothing to miss) on a truly first-ever group
+    creation, where the stream is empty anyway so the two are equivalent -
+    it's actively harmful on a RECREATION after Redis loses the group
+    (e.g. a Redis restart with no persistence, or its volume/container
+    being recreated) against a stream that already has real history,
+    since the group then replays that ENTIRE backlog before ever reaching
+    today's live orders - some of it permanently unprocessable, the rest
+    just stale enough that opening a position off it "now" would be
+    wrong. id="$" makes both cases behave the same correct way: skip
+    straight to genuinely new messages."""
     try:
-        _client.xgroup_create(settings.redis_stream, settings.redis_consumer_group, id="0", mkstream=True)
+        _client.xgroup_create(settings.redis_stream, settings.redis_consumer_group, id="$", mkstream=True)
     except ResponseError as exc:
         if "BUSYGROUP" not in str(exc):
             raise
@@ -106,10 +119,22 @@ def _reclaim_stale_pending() -> None:
 
 
 def run(stop_event: threading.Event) -> None:
-    _ensure_group()
     logger.info("execution consumer started (group=%s)", settings.redis_consumer_group)
     while not stop_event.is_set():
         try:
+            # Re-run every iteration, not just once before the loop - a
+            # no-op when the group already exists (xgroup_create's
+            # BUSYGROUP is swallowed), but self-heals if Redis loses the
+            # stream/group underneath this still-running thread (a Redis
+            # restart with no persistence, or its volume/container being
+            # recreated - confirmed live 2026-08-31 on the identical
+            # signal-engine twin of this consumer: it never crashed or
+            # stopped logging its own "started" line, it just NOGROUP-
+            # looped on xautoclaim/xreadgroup forever with no way to
+            # recover short of restarting the whole service). Cheap enough
+            # (one Redis round-trip) to not bother special-casing "only
+            # after a NOGROUP error".
+            _ensure_group()
             _reclaim_stale_pending()
             response = _client.xreadgroup(
                 settings.redis_consumer_group,

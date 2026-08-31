@@ -27,6 +27,9 @@ class _FakeQuery:
     def one(self):
         return self._row
 
+    def one_or_none(self):
+        return self._row
+
 
 class _FakeDb:
     def __init__(self, row):
@@ -110,3 +113,20 @@ def test_resolve_and_finalize_signal_publish_dict_matches_every_resolved_order_d
 
     draft_fields = set(ResolvedOrderDraft.model_fields.keys())
     assert draft_fields <= set(published.keys())
+
+
+def test_resolve_and_finalize_signal_skips_a_stale_signal_with_no_matching_order_row(monkeypatch):
+    """Regression test for a real incident (2026-08-31, VPS): a Redis
+    consumer-group recreation replayed stream history predating a
+    signal's ResolvedOrder row's own existence (see
+    signal_resolution_consumer.py's _ensure_group docstring) - db.query(...)
+    .one() raised sqlalchemy.exc.NoResultFound, and since
+    _reclaim_stale_pending's except branch just logs and leaves the
+    message unacked, that one stale message retried (and failed) forever.
+    Must degrade to a no-op (log + return) instead of raising, so a
+    permanently-unprocessable stale message doesn't retry forever."""
+    db = _FakeDb(None)  # no matching ResolvedOrder row
+    monkeypatch.setattr(core, "resolve", lambda signal, fetch_strategy: (_ for _ in ()).throw(AssertionError("must not resolve() when the order row is missing")))
+    monkeypatch.setattr(core, "publish_resolved_order", lambda payload: (_ for _ in ()).throw(AssertionError("must not publish when the order row is missing")))
+
+    core.resolve_and_finalize_signal(db, "11111111-1111-1111-1111-111111111111", _signal())  # must not raise

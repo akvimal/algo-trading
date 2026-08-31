@@ -342,9 +342,24 @@ type ManualRow = {
   collapsed: boolean;
 };
 
+// crypto.randomUUID() only exists in a secure context (HTTPS, or
+// localhost's own explicit exception) - throws synchronously otherwise,
+// silently breaking whichever click handler called it (React drops an
+// event-handler exception without showing the ErrorBoundary screen, since
+// that only catches render-phase errors - "Add instrument"/order
+// placement looked like they were just doing nothing at all, reproduced
+// live on the VPS deploy, which has no TLS in front of it yet - see
+// docs/architecture.md's roadmap). These IDs are client-side-only row/
+// order-instance identity, never sent to a backend as a real UUID, so a
+// non-cryptographic fallback is fine.
+function generateId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function newRow(segment: Segment = "NSE", symbol = "", instrumentType: InstrumentType = "option"): ManualRow {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     segment,
     instrumentType,
     symbol,
@@ -1680,7 +1695,7 @@ export default function WorkspacePage() {
     });
 
     const instance: OrderInstance = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       state: "pending",
       action: row.action,
       instrumentType: row.instrumentType,

@@ -1,7 +1,9 @@
+import logging
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, get_args
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -9,7 +11,23 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db import processing_models
 from app.adapters.db.session import get_db
+from app.adapters.market_data.client import get_candle_history, resolve_underlying
 from app.auth import get_optional_user_id
+from app.domain.generation.backtest import expand_stop_loss_grid, max_drawdown, win_rate
+from app.domain.generation.external_backtest import (
+    build_exit_config,
+    expand_exit_grid,
+    grid_search_external_signals,
+    simulate_external_signals_by_symbol,
+)
+from app.domain.generation.external_backtest_models import (
+    ExternalBacktestRequest,
+    ExternalBacktestResponse,
+    ExternalBacktestSkippedSymbol,
+    ExternalBacktestTrade,
+    ExternalBacktestTradeRequest,
+    ExternalBacktestTradeResponse,
+)
 from app.domain.generation.models import (
     StopLossInterval,
     StrategyCreate,
@@ -24,6 +42,7 @@ from app.domain.generation.models import (
 from app.domain.generation.rule import BreakoutRuleConfig, CrossoverRuleConfig, RuleSummary, validate_rule_config
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _last_scan_at(db: Session, strategy_id: uuid.UUID) -> Optional[datetime]:
@@ -425,3 +444,264 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     db.commit()
     db.refresh(row)
     return _to_out(row, rule_row, _last_scan_at(db, row.id), _last_signal_at(db, row.id))
+
+
+def _skip_reason_for_candle_failure(exc: requests.RequestException, from_date: date, to: date) -> str:
+    """Turns a get_candle_history failure into a message that tells a
+    date-range problem apart from anything else - market-data's own
+    candles.py wraps a Dhan RuntimeError as a 502 whose JSON body's
+    `detail` carries Dhan's actual error text (see that route's own
+    `except RuntimeError` clause); requests.HTTPError exposes the failed
+    response via `exc.response`, so that detail is recovered here rather
+    than only the generic 'X Server Error' requests itself would format.
+    Dhan's own charts/intraday rejection reads "Data for Intraday Charts
+    can be fetched for 90 days at a time" (error code DH-905) - the most
+    common real-world cause of a skip, since this backtest's from_date is
+    a symbol's own earliest CSV signal and could be arbitrarily old."""
+    detail = None
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = response.text
+    detail = detail or str(exc)
+    if "days at a time" in detail or "DH-905" in detail:
+        span_days = (to - from_date).days
+        return f"date range too wide ({from_date} to {to}, {span_days} days) - {detail}"
+    return detail
+
+
+def _fetch_candles_for_backtest_signals(
+    strategy: db_models.Strategy,
+    signals_by_symbol: dict[str, list[str]],
+    interval: str,
+    stop_loss_method: Optional[str],
+    stop_loss_interval: Optional[str],
+    to: date,
+) -> tuple[dict[str, list], dict[str, list], list[ExternalBacktestSkippedSymbol]]:
+    """Shared by the grid endpoint below and its /trades drill-down
+    sibling - resolves + fetches candles once per symbol (main interval,
+    plus the SL interval too when stop_loss_method='previous_candle' uses
+    a different one), skipping (not raising for) a symbol that fails to
+    resolve or whose candle history call to market-data itself fails -
+    same per-symbol from_date and requests.RequestException handling as
+    _backtest_pooled_symbols in rules.py; see backtest_strategy_signals's
+    own docstring for why both matter here. Each skip carries a `reason`
+    (see _skip_reason_for_candle_failure) rather than just a bare symbol,
+    so a caller can tell a too-wide date range apart from a resolve
+    failure or an empty result."""
+    candles_by_symbol: dict[str, list] = {}
+    sl_candles_by_symbol: dict[str, list] = {}
+    skipped: list[ExternalBacktestSkippedSymbol] = []
+    for symbol, timestamps in signals_by_symbol.items():
+        resolved = resolve_underlying(strategy.segment, symbol)
+        if resolved is None:
+            skipped.append(ExternalBacktestSkippedSymbol(symbol=symbol, reason="could not resolve this symbol"))
+            continue
+        from_date = min(datetime.fromisoformat(ts) for ts in timestamps).date()
+        try:
+            candles = get_candle_history(resolved.chart_exchange, resolved.chart_symbol, interval, from_date, to)
+            if not candles:
+                skipped.append(
+                    ExternalBacktestSkippedSymbol(
+                        symbol=symbol,
+                        reason=f"no candle history returned for {from_date} to {to}",
+                    )
+                )
+                continue
+            sl_candles = None
+            if stop_loss_method == "previous_candle" and stop_loss_interval:
+                sl_candles = (
+                    candles
+                    if stop_loss_interval == interval
+                    else get_candle_history(resolved.chart_exchange, resolved.chart_symbol, stop_loss_interval, from_date, to)
+                )
+        except requests.RequestException as exc:
+            reason = _skip_reason_for_candle_failure(exc, from_date, to)
+            logger.warning("skipping symbol %s (strategy %s) - %s", symbol, strategy.id, reason)
+            skipped.append(ExternalBacktestSkippedSymbol(symbol=symbol, reason=reason))
+            continue
+        candles_by_symbol[symbol] = candles
+        if sl_candles is not None:
+            sl_candles_by_symbol[symbol] = sl_candles
+    return candles_by_symbol, sl_candles_by_symbol, skipped
+
+
+@router.post("/strategies/{strategy_id}/backtest-signals", response_model=ExternalBacktestResponse)
+def backtest_strategy_signals(
+    strategy_id: str,
+    payload: ExternalBacktestRequest,
+    to: date = date.today(),
+    db: Session = Depends(get_db),
+):
+    """Backtests an externally-supplied (symbol, timestamp) signal list -
+    e.g. a Chartink alert-history CSV export, which has no price/action
+    columns of its own - against a GRID of exit configurations, to find
+    which stop-loss/target/trailing setup would have worked best. The
+    opposite of every other backtest in this service (which derive entries
+    from a Rule's own indicator condition and hold exit config fixed) -
+    see app/domain/generation/external_backtest.py's own module docstring.
+    strategy_id is only used to resolve `segment` (which market-data
+    provider/exchange to fetch candles from) - the strategy's own
+    source_type/rule/exit-config fields are irrelevant here, since exit
+    config is exactly what's being swept, not read from the strategy.
+    Works for any strategy (in-house or external), but is really meant for
+    an external one - an in-house Strategy's own Rule already has its own
+    /rules/{id}/backtest for this.
+
+    Only one stop_loss_method's own grid is populated per request (same
+    "one fixed method" rule backtest_rule_grid already enforces) -
+    'percent' sweeps stop_loss_percent_grid, 'indicator' sweeps
+    stop_loss_indicator_param_grid (expand_stop_loss_grid, same shape Rule
+    grid search already uses), 'previous_candle'/None have nothing to
+    sweep on that axis (a single implicit None combo).
+
+    `to` (query param, defaults to today) is the ONLY end of the backtest
+    window a caller controls - the start is derived automatically, PER
+    SYMBOL, as that symbol's own earliest signal in `signals` (see
+    _fetch_candles_for_backtest_signals). There's no separate "lookback"
+    knob: candles are fetched from a symbol's first signal through `to`,
+    which is exactly the window every trade in the result was simulated
+    over."""
+    try:
+        parsed_id = uuid.UUID(strategy_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    strategy = db.get(db_models.Strategy, parsed_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    stop_loss_values: list = [None]
+    if payload.stop_loss_method == "percent":
+        if not payload.stop_loss_percent_grid:
+            raise HTTPException(status_code=422, detail="stop_loss_method='percent' requires stop_loss_percent_grid")
+        stop_loss_values = payload.stop_loss_percent_grid
+    elif payload.stop_loss_method == "indicator":
+        if not payload.stop_loss_indicator_type or not payload.stop_loss_indicator_param_grid:
+            raise HTTPException(
+                status_code=422,
+                detail="stop_loss_method='indicator' requires stop_loss_indicator_type and stop_loss_indicator_param_grid",
+            )
+        try:
+            stop_loss_values = expand_stop_loss_grid(payload.stop_loss_indicator_param_grid)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    elif payload.stop_loss_method == "previous_candle" and not payload.stop_loss_interval:
+        raise HTTPException(status_code=422, detail="stop_loss_method='previous_candle' requires stop_loss_interval")
+
+    try:
+        combos = expand_exit_grid(stop_loss_values, payload.target_percent_grid, payload.trailing_grid)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    signals_by_symbol: dict[str, list[str]] = {}
+    for s in payload.signals:
+        signals_by_symbol.setdefault(s.symbol.strip().upper(), []).append(s.timestamp.isoformat())
+
+    candles_by_symbol, sl_candles_by_symbol, skipped = _fetch_candles_for_backtest_signals(
+        strategy, signals_by_symbol, payload.interval, payload.stop_loss_method, payload.stop_loss_interval, to
+    )
+
+    results = grid_search_external_signals(
+        {symbol: timestamps for symbol, timestamps in signals_by_symbol.items() if symbol in candles_by_symbol},
+        payload.direction,
+        candles_by_symbol,
+        combos,
+        payload.stop_loss_method,
+        payload.stop_loss_indicator_type,
+        sl_candles_by_symbol or None,
+        payload.square_off_time,
+    )
+
+    return ExternalBacktestResponse(
+        signal_count=len(payload.signals),
+        symbols_tested=len(candles_by_symbol),
+        symbols_skipped=skipped,
+        results=results,
+    )
+
+
+@router.post("/strategies/{strategy_id}/backtest-signals/trades", response_model=ExternalBacktestTradeResponse)
+def backtest_strategy_signals_trades(
+    strategy_id: str,
+    payload: ExternalBacktestTradeRequest,
+    to: date = date.today(),
+    db: Session = Depends(get_db),
+):
+    """The individual-trade drill-down for ONE exit config, sibling of
+    /backtest-signals above (which sweeps a whole grid and only returns
+    each combo's aggregate stats - see that route's own docstring, same
+    `to` semantics apply here). Meant to be called with a single combo row
+    from that route's own response (stop_loss_value/target_percent/
+    trailing_stop_enabled), letting a caller see exactly which trades
+    produced a combo's hypothetical_pnl rather than only the aggregate."""
+    try:
+        parsed_id = uuid.UUID(strategy_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    strategy = db.get(db_models.Strategy, parsed_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    if payload.stop_loss_method == "percent" and payload.stop_loss_percent is None:
+        raise HTTPException(status_code=422, detail="stop_loss_method='percent' requires stop_loss_percent")
+    if payload.stop_loss_method == "indicator" and (
+        not payload.stop_loss_indicator_type or not payload.stop_loss_indicator_params
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="stop_loss_method='indicator' requires stop_loss_indicator_type and stop_loss_indicator_params",
+        )
+    if payload.stop_loss_method == "previous_candle" and not payload.stop_loss_interval:
+        raise HTTPException(status_code=422, detail="stop_loss_method='previous_candle' requires stop_loss_interval")
+
+    combo = {
+        "stop_loss_value": payload.stop_loss_percent if payload.stop_loss_method == "percent" else payload.stop_loss_indicator_params,
+        "target_percent": payload.target_percent,
+        "trailing_stop_enabled": payload.trailing_stop_enabled,
+    }
+    exit_config = build_exit_config(combo, payload.stop_loss_method, payload.stop_loss_indicator_type, payload.square_off_time)
+
+    signals_by_symbol: dict[str, list[str]] = {}
+    for s in payload.signals:
+        signals_by_symbol.setdefault(s.symbol.strip().upper(), []).append(s.timestamp.isoformat())
+
+    candles_by_symbol, sl_candles_by_symbol, skipped = _fetch_candles_for_backtest_signals(
+        strategy, signals_by_symbol, payload.interval, payload.stop_loss_method, payload.stop_loss_interval, to
+    )
+
+    trades_by_symbol = simulate_external_signals_by_symbol(
+        {symbol: timestamps for symbol, timestamps in signals_by_symbol.items() if symbol in candles_by_symbol},
+        payload.direction,
+        candles_by_symbol,
+        exit_config,
+        sl_candles_by_symbol or None,
+    )
+    trades = [
+        ExternalBacktestTrade(
+            symbol=symbol,
+            entry_time=t.entry_time,
+            direction=t.direction,
+            entry_price=t.entry_price,
+            exit_time=t.exit_time,
+            exit_price=t.exit_price,
+            exit_reason=t.exit_reason,
+            pnl=t.pnl,
+        )
+        for symbol, symbol_trades in trades_by_symbol.items()
+        for t in symbol_trades
+    ]
+    trades.sort(key=lambda t: t.entry_time)
+    all_trades = [t for symbol_trades in trades_by_symbol.values() for t in symbol_trades]
+
+    return ExternalBacktestTradeResponse(
+        signal_count=len(payload.signals),
+        symbols_tested=len(candles_by_symbol),
+        symbols_skipped=skipped,
+        trade_count=len(all_trades),
+        hypothetical_pnl=sum(t.pnl for t in all_trades),
+        win_rate=win_rate(all_trades),
+        max_drawdown=max_drawdown(all_trades),
+        trades=trades,
+    )

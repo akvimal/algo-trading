@@ -449,7 +449,7 @@ def simulate_trades(
     return trades
 
 
-def _win_rate(trades: list[SimulatedTrade]) -> float:
+def win_rate(trades: list[SimulatedTrade]) -> float:
     """% of trades with pnl > 0 - a trade with pnl == 0 (e.g. an
     end-of-data exit at the same price it entered) counts as neither a
     win nor a loss, so it still lowers the rate, same as a real loss
@@ -460,7 +460,7 @@ def _win_rate(trades: list[SimulatedTrade]) -> float:
     return wins / len(trades) * 100
 
 
-def _max_drawdown(trades: list[SimulatedTrade]) -> float:
+def max_drawdown(trades: list[SimulatedTrade]) -> float:
     """Largest peak-to-trough decline in CUMULATIVE hypothetical_pnl,
     walking trades in the order they actually closed (exit_time, not
     entry_time - pnl realizes at close) - not a real equity-curve
@@ -506,7 +506,7 @@ def _time_of_day_breakdown(trades: list[SimulatedTrade], bucket_minutes: int) ->
             "end": _fmt(bucket_start + bucket_minutes),
             "trade_count": len(bucket_trades),
             "hypothetical_pnl": sum(t.pnl for t in bucket_trades),
-            "win_rate": _win_rate(bucket_trades),
+            "win_rate": win_rate(bucket_trades),
         }
         for bucket_start, bucket_trades in sorted(buckets.items())
     ]
@@ -532,7 +532,7 @@ def _weekday_breakdown(trades: list[SimulatedTrade]) -> list[dict]:
             "weekday": _WEEKDAY_NAMES[i],
             "trade_count": len(day_trades),
             "hypothetical_pnl": sum(t.pnl for t in day_trades),
-            "win_rate": _win_rate(day_trades),
+            "win_rate": win_rate(day_trades),
         }
         for i, day_trades in buckets.items()
     ]
@@ -569,8 +569,8 @@ def replay(
     report = {
         "trade_count": len(trades),
         "hypothetical_pnl": sum(t.pnl for t in trades),
-        "win_rate": _win_rate(trades),
-        "max_drawdown": _max_drawdown(trades),
+        "win_rate": win_rate(trades),
+        "max_drawdown": max_drawdown(trades),
         "trades": [
             {
                 "entry_time": t.entry_time,

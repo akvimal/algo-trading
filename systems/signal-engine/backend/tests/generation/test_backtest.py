@@ -6,10 +6,10 @@ from app.domain.generation import backtest as backtest_module
 from app.domain.generation.backtest import (
     MAX_GRID_COMBINATIONS,
     ExitConfig,
-    _max_drawdown,
+    max_drawdown,
     _time_of_day_breakdown,
     _weekday_breakdown,
-    _win_rate,
+    win_rate,
     expand_grid,
     expand_stop_loss_grid,
     grid_search,
@@ -158,7 +158,7 @@ def test_replay_includes_weekday_breakdown_when_time_bucket_requested():
     assert sum(row["trade_count"] for row in result["weekday_breakdown"]) == result["trade_count"]
 
 
-# --- _win_rate / _max_drawdown / _time_of_day_breakdown --------------------------------------
+# --- win_rate / max_drawdown / _time_of_day_breakdown --------------------------------------
 
 
 def _trade(entry_time: str, exit_time: str, pnl: float) -> SimulatedTrade:
@@ -168,31 +168,31 @@ def _trade(entry_time: str, exit_time: str, pnl: float) -> SimulatedTrade:
     )
 
 
-def test_win_rate_no_trades_is_zero():
-    assert _win_rate([]) == 0.0
+def testwin_rate_no_trades_is_zero():
+    assert win_rate([]) == 0.0
 
 
-def test_win_rate_counts_strictly_positive_pnl_only():
+def testwin_rate_counts_strictly_positive_pnl_only():
     trades = [_trade(_ts(0), _ts(1), 5.0), _trade(_ts(1), _ts(2), -3.0), _trade(_ts(2), _ts(3), 0.0)]
-    assert _win_rate(trades) == pytest.approx(100 / 3)
+    assert win_rate(trades) == pytest.approx(100 / 3)
 
 
-def test_win_rate_all_winners():
+def testwin_rate_all_winners():
     trades = [_trade(_ts(0), _ts(1), 5.0), _trade(_ts(1), _ts(2), 2.0)]
-    assert _win_rate(trades) == 100.0
+    assert win_rate(trades) == 100.0
 
 
-def test_max_drawdown_no_trades_is_zero():
-    assert _max_drawdown([]) == 0.0
+def testmax_drawdown_no_trades_is_zero():
+    assert max_drawdown([]) == 0.0
 
 
-def test_max_drawdown_never_dips_below_peak_is_zero():
+def testmax_drawdown_never_dips_below_peak_is_zero():
     # Cumulative: 5, 8, 12 - monotonically rising, no drawdown at all.
     trades = [_trade(_ts(0), _ts(1), 5.0), _trade(_ts(1), _ts(2), 3.0), _trade(_ts(2), _ts(3), 4.0)]
-    assert _max_drawdown(trades) == 0.0
+    assert max_drawdown(trades) == 0.0
 
 
-def test_max_drawdown_finds_the_worst_peak_to_trough_decline():
+def testmax_drawdown_finds_the_worst_peak_to_trough_decline():
     # Cumulative sequence (by exit order): 10, 4, 6, -2, 5.
     # Peak hits 10 (after trade 1), troughs at -2 (after trade 4) -> drawdown 12.
     # A later peak of 6 recovers only to 5 (drawdown 1) - 12 is still the worst.
@@ -203,10 +203,10 @@ def test_max_drawdown_finds_the_worst_peak_to_trough_decline():
         _trade(_ts(3), _ts(4), -8.0),
         _trade(_ts(4), _ts(5), 7.0),
     ]
-    assert _max_drawdown(trades) == pytest.approx(12.0)
+    assert max_drawdown(trades) == pytest.approx(12.0)
 
 
-def test_max_drawdown_orders_by_exit_time_not_list_order():
+def testmax_drawdown_orders_by_exit_time_not_list_order():
     # Same trades as above but shuffled in the input list - exit_time
     # ordering must still produce the same result.
     trades = [
@@ -216,7 +216,7 @@ def test_max_drawdown_orders_by_exit_time_not_list_order():
         _trade(_ts(1), _ts(2), -6.0),
         _trade(_ts(2), _ts(3), 2.0),
     ]
-    assert _max_drawdown(trades) == pytest.approx(12.0)
+    assert max_drawdown(trades) == pytest.approx(12.0)
 
 
 def test_time_of_day_breakdown_groups_by_entry_clock_time():

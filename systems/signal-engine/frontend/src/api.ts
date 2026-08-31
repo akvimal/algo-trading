@@ -962,6 +962,133 @@ export async function deleteStrategy(id: string): Promise<void> {
   }
 }
 
+// POST /strategies/{id}/backtest-signals - backtests an externally-
+// supplied (symbol, timestamp) signal list (e.g. a Chartink alert-history
+// CSV export, which has no price/action columns of its own) against a
+// GRID of exit configurations, to find which stop-loss/target/trailing
+// setup would have worked best - the opposite of /rules/{id}/backtest
+// (which derives entries from a Rule's own condition and holds exit
+// config fixed). See systems/signal-engine/backend's
+// app/domain/generation/external_backtest.py.
+export type ExternalBacktestSignal = {
+  symbol: string;
+  timestamp: string; // ISO
+};
+
+export type ExternalBacktestRequest = {
+  signals: ExternalBacktestSignal[];
+  direction: "bullish" | "bearish";
+  interval: Interval;
+  // Only one of these three is ever populated per request - which one
+  // matches stop_loss_method. 'previous_candle' has no per-combo value to
+  // sweep at all (stop_loss_interval alone decides it).
+  stop_loss_method?: "previous_candle" | "percent" | "indicator";
+  stop_loss_interval?: StopLossInterval;
+  stop_loss_percent_grid?: number[];
+  stop_loss_indicator_type?: string;
+  stop_loss_indicator_param_grid?: Record<string, number[]>;
+  // null alongside real values means "also try no target at all" - a
+  // real grid point, not an omitted field.
+  target_percent_grid?: (number | null)[];
+  trailing_grid?: boolean[];
+  square_off_time?: string;
+};
+
+export type ExternalBacktestCombo = {
+  stop_loss_value: number | Record<string, number> | null;
+  target_percent: number | null;
+  trailing_stop_enabled: boolean;
+  trade_count: number;
+  hypothetical_pnl: number;
+  win_rate: number;
+  max_drawdown: number;
+};
+
+// One symbol market-data couldn't resolve or fetch candle history for -
+// `reason` distinguishes a too-wide date range (this symbol's own earliest
+// CSV signal is older than the data provider's intraday-history window)
+// from a resolve failure or an empty result, rather than every skip
+// looking the same.
+export type ExternalBacktestSkippedSymbol = {
+  symbol: string;
+  reason: string;
+};
+
+export type ExternalBacktestResponse = {
+  signal_count: number;
+  symbols_tested: number;
+  symbols_skipped: ExternalBacktestSkippedSymbol[];
+  results: ExternalBacktestCombo[];
+};
+
+export async function backtestStrategySignals(
+  strategyId: string,
+  payload: ExternalBacktestRequest,
+  to?: string,
+): Promise<ExternalBacktestResponse> {
+  const params = to ? `?${new URLSearchParams({ to })}` : "";
+  const res = await fetch(`${API_BASE_URL}/strategies/${strategyId}/backtest-signals${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "POST /strategies/{id}/backtest-signals");
+}
+
+// POST /strategies/{id}/backtest-signals/trades - the single-exit-config
+// drill-down sibling of backtestStrategySignals above: same signals/
+// direction/interval, but ONE exit config (not a grid), so the individual
+// simulated trades behind one ExternalBacktestCombo row can be inspected.
+export type ExternalBacktestTradeRequest = {
+  signals: ExternalBacktestSignal[];
+  direction: "bullish" | "bearish";
+  interval: Interval;
+  stop_loss_method?: "previous_candle" | "percent" | "indicator";
+  stop_loss_interval?: StopLossInterval;
+  stop_loss_percent?: number;
+  stop_loss_indicator_type?: string;
+  stop_loss_indicator_params?: Record<string, number>;
+  target_percent?: number | null;
+  trailing_stop_enabled?: boolean;
+  square_off_time?: string;
+};
+
+export type ExternalBacktestTrade = {
+  symbol: string;
+  entry_time: string;
+  direction: string;
+  entry_price: number;
+  exit_time: string;
+  exit_price: number;
+  exit_reason: string;
+  pnl: number;
+};
+
+export type ExternalBacktestTradeResponse = {
+  signal_count: number;
+  symbols_tested: number;
+  symbols_skipped: ExternalBacktestSkippedSymbol[];
+  trade_count: number;
+  hypothetical_pnl: number;
+  win_rate: number;
+  max_drawdown: number;
+  trades: ExternalBacktestTrade[];
+};
+
+export async function backtestStrategySignalsTrades(
+  strategyId: string,
+  payload: ExternalBacktestTradeRequest,
+  to?: string,
+): Promise<ExternalBacktestTradeResponse> {
+  const params = to ? `?${new URLSearchParams({ to })}` : "";
+  const res = await fetch(`${API_BASE_URL}/strategies/${strategyId}/backtest-signals/trades${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "POST /strategies/{id}/backtest-signals/trades");
+}
+
 export async function fetchSignalsForStrategy(strategyId: string, limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ strategy_id: strategyId, limit: String(limit) });
   const res = await fetch(`${API_BASE_URL}/signals?${params}`);

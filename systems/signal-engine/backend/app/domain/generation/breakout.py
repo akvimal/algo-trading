@@ -56,7 +56,7 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Optional
 
-from app.domain.generation.backtest import _max_drawdown, _win_rate
+from app.domain.generation.backtest import max_drawdown, win_rate
 from app.domain.generation.rule import BreakoutRuleConfig
 from app.domain.generation.regime import compute_ema
 from app.domain.generation.rules import Bias, CandleClose, SimulatedTrade
@@ -278,8 +278,8 @@ def replay_breakout(
     return {
         "trade_count": len(trades),
         "hypothetical_pnl": sum(t.pnl for t in trades),
-        "win_rate": _win_rate(trades),
-        "max_drawdown": _max_drawdown(trades),
+        "win_rate": win_rate(trades),
+        "max_drawdown": max_drawdown(trades),
         "trades": [
             {
                 "entry_time": t.entry_time,

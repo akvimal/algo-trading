@@ -406,6 +406,20 @@ tbody tr:last-child td {
   gap: 1rem;
 }
 
+/* ExternalBacktestPanel - the CSV-driven signal-history backtest, opened
+   from an external strategy's own row action. */
+.external-backtest-panel table {
+  margin-top: 0.5rem;
+}
+
+.external-backtest-panel .positive {
+  color: var(--buy);
+}
+
+.external-backtest-panel .negative {
+  color: var(--sell);
+}
+
 .hint {
   display: block;
   font-size: 0.82rem !important;

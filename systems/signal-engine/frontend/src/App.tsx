@@ -20,6 +20,13 @@ import {
   type CandleCacheStatus,
   type DataAvailability,
   type DuplicateSignalPolicy,
+  type ExternalBacktestCombo,
+  type ExternalBacktestRequest,
+  type ExternalBacktestResponse,
+  type ExternalBacktestSignal,
+  type ExternalBacktestSkippedSymbol,
+  type ExternalBacktestTrade,
+  type ExternalBacktestTradeRequest,
   type GridBacktestResult,
   type GridBacktestRow,
   type Horizon,
@@ -51,6 +58,8 @@ import {
   type Weekday,
   backtestRule,
   backtestRuleGrid,
+  backtestStrategySignals,
+  backtestStrategySignalsTrades,
   createIndicator,
   createRule,
   createWatchlist,
@@ -267,6 +276,17 @@ function SendIcon() {
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="22" y1="2" x2="11" y2="13" />
       <polygon points="22 2 15 22 11 13 2 9 22 2" />
+    </svg>
+  );
+}
+
+function ChartIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="4" y1="20" x2="20" y2="20" />
+      <rect x="6" y="12" width="3" height="8" />
+      <rect x="11" y="7" width="3" height="13" />
+      <rect x="16" y="3" width="3" height="17" />
     </svg>
   );
 }
@@ -2890,6 +2910,550 @@ function RulesTab() {
   );
 }
 
+// Splits one CSV line into cells, honoring double-quoted fields (which may
+// contain commas, e.g. Chartink's "Marketcapname" column never does, but
+// its "Sector" one can via names like "Metals & Mining" - harmless either
+// way, quoting just needs to not be treated as a literal character).
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      cells.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+// Finds the first header cell (case-insensitive) matching any of the given
+// candidate names, returning its column index or -1.
+function findColumnIndex(header: string[], candidates: string[]): number {
+  const lower = header.map((h) => h.toLowerCase());
+  for (const candidate of candidates) {
+    const idx = lower.indexOf(candidate);
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+// Parses one timestamp cell into a naive-local "YYYY-MM-DDTHH:MM:SS"
+// string, or null if unrecognized. Deliberately NOT parsed via
+// `new Date(...)`, which would silently reinterpret a naive local (IST)
+// timestamp as UTC and shift it by 5.5h - a Chartink alert-history
+// export's own timestamps are already IST wall-clock time, matching the
+// same naive-local convention market-data's own candle timestamps use
+// (see app/domain/generation/rules.py's CandleClose on the backend) - the
+// two need to compare equal as plain strings there, so no conversion
+// happens on either side. Supports:
+//   - ISO-ish: "YYYY-MM-DD HH:MM" or "YYYY-MM-DDTHH:MM(:SS)"
+//   - Chartink alert-history exports: "DD-MM-YYYY HH:MM am/pm" or 24h
+function parseSignalTimestamp(raw: string): string | null {
+  const s = raw.trim();
+
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (iso) {
+    const [, y, mo, d, h, mi, se] = iso;
+    return `${y}-${mo}-${d}T${h}:${mi}:${se ?? "00"}`;
+  }
+
+  const dmy = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{2})\s*(am|pm)?$/i);
+  if (dmy) {
+    const [, d, mo, y, hRaw, mi, ampm] = dmy;
+    let h = parseInt(hRaw, 10);
+    if (ampm) {
+      const isPm = ampm.toLowerCase() === "pm";
+      if (isPm && h !== 12) h += 12;
+      if (!isPm && h === 12) h = 0;
+    }
+    return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}T${String(h).padStart(2, "0")}:${mi}:00`;
+  }
+
+  return null;
+}
+
+// Parses a Chartink-style alert-history CSV export (symbol + timestamp
+// columns, plus whatever extra columns Chartink includes - e.g.
+// "Marketcapname"/"Sector" - which are simply ignored) into
+// POST /strategies/{id}/backtest-signals' own signal list shape. A real
+// header row is required so the symbol/timestamp columns can be found by
+// name (Chartink's own export column order/count isn't guaranteed, and a
+// real export carries more than just those two columns).
+function parseSignalsCsv(text: string): ExternalBacktestSignal[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) throw new Error("CSV must have a header row plus at least one data row");
+  const rows = lines.map(splitCsvLine);
+
+  const header = rows[0];
+  const tsIndex = findColumnIndex(header, ["date", "timestamp", "time", "alert time", "alert_time"]);
+  const symbolIndex = findColumnIndex(header, ["symbol", "stock name", "stock", "scrip", "stock code"]);
+  if (tsIndex === -1) throw new Error(`No header column found for the timestamp (expected e.g. "Date" or "Timestamp")`);
+  if (symbolIndex === -1) throw new Error(`No header column found for the symbol (expected e.g. "Symbol" or "Stock Name")`);
+
+  const signals: ExternalBacktestSignal[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const cells = rows[i];
+    if (cells.length <= Math.max(tsIndex, symbolIndex)) continue;
+    const symbol = cells[symbolIndex];
+    if (!symbol) continue;
+    const timestamp = parseSignalTimestamp(cells[tsIndex]);
+    if (!timestamp) throw new Error(`Row ${i + 1}: could not parse "${cells[tsIndex]}" as a timestamp`);
+    signals.push({ symbol: symbol.toUpperCase(), timestamp });
+  }
+  if (signals.length === 0) throw new Error("No valid (symbol, timestamp) rows found in this CSV");
+  return signals;
+}
+
+function formatStopLossValue(v: ExternalBacktestCombo["stop_loss_value"]): string {
+  if (v == null) return "-";
+  if (typeof v === "number") return `${v}%`;
+  return Object.entries(v).map(([k, val]) => `${k}=${val}`).join(", ");
+}
+
+function parseNumberGrid(raw: string): number[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number);
+}
+
+// Per-symbol reason a backtest skipped it - a too-wide date range (this
+// symbol's own earliest CSV signal is older than the data provider's
+// intraday-history window) is called out separately from every other
+// reason, since it's the one a caller can actually do something about
+// (narrow the CSV or move "Backtest until" earlier), unlike a resolve
+// failure or a transient market-data error.
+function SkippedSymbolsList({ skipped }: { skipped: ExternalBacktestSkippedSymbol[] }) {
+  const dateRangeIssues = skipped.filter((s) => s.reason.startsWith("date range too wide"));
+  const other = skipped.filter((s) => !s.reason.startsWith("date range too wide"));
+  return (
+    <div className="skipped-symbols">
+      {dateRangeIssues.length > 0 && (
+        <p className="hint">
+          <strong>{dateRangeIssues.length}</strong> symbol{dateRangeIssues.length === 1 ? "" : "s"} skipped - date range
+          too wide for this symbol's earliest signal (the data provider caps intraday history at 90 days): {" "}
+          {dateRangeIssues.map((s) => s.symbol).join(", ")}. Try a narrower CSV, or split this one by signal date.
+        </p>
+      )}
+      {other.length > 0 && (
+        <ul className="muted skipped-symbols-list">
+          {other.map((s) => (
+            <li key={s.symbol}>
+              <strong>{s.symbol}</strong>: {s.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Edit-mode-only row expansion for an external Strategy - the opposite
+// direction from every other backtest here (POST /rules/{id}/backtest):
+// entries come from an uploaded CSV, not a Rule's own condition, and it's
+// the EXIT config (stop-loss/target/trailing) that gets grid-searched -
+// see systems/signal-engine/backend's external_backtest.py.
+function ExternalBacktestPanel({ strategy }: { strategy: Strategy }) {
+  const [signals, setSignals] = useState<ExternalBacktestSignal[]>([]);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [direction, setDirection] = useState<"bullish" | "bearish">("bullish");
+  const [interval, setInterval_] = useState<Interval>("15min");
+  // Seeded from this strategy's own saved exit config where it maps onto
+  // this grid's fields - a strategy's stop_loss_method='breakeven' has no
+  // equivalent here (this backtest sweeps 'percent'/'previous_candle'/
+  // 'indicator'/no-SL only) and falls back to the plain 'percent' default
+  // instead. stop_loss_interval carries over regardless of method (it's
+  // an independent field, only ACTED on when the method ends up being
+  // 'previous_candle') - this is the literal "SL candle interval" a
+  // caller would otherwise have to go re-check on the strategy's own
+  // edit form.
+  const [slMethod, setSlMethod] = useState<"" | "previous_candle" | "percent" | "indicator">(() =>
+    strategy.stop_loss_method === "previous_candle" ||
+    strategy.stop_loss_method === "percent" ||
+    strategy.stop_loss_method === "indicator"
+      ? strategy.stop_loss_method
+      : "percent",
+  );
+  const [slPercentGrid, setSlPercentGrid] = useState(() =>
+    strategy.stop_loss_method === "percent" && strategy.stop_loss_percent != null
+      ? String(strategy.stop_loss_percent)
+      : "1,2,3",
+  );
+  const [slInterval, setSlInterval] = useState<StopLossInterval>(() => strategy.stop_loss_interval ?? "15min");
+  // stop_loss_method='indicator' only - same EMA/SuperTrend choice and
+  // period(/multiplier) shape the Strategy edit form and Rule grid search
+  // both already use (see buildStopLossIndicatorParams). The period/
+  // multiplier fields here are GRIDS (comma-separated candidates), same
+  // "sweep the exit config" spirit as the SL %/target grids above -
+  // seeded with the strategy's own single saved value as the sole
+  // starting candidate.
+  const [slIndicatorType, setSlIndicatorType] = useState<StopLossIndicatorType>(
+    () => strategy.stop_loss_indicator_type ?? "ema",
+  );
+  const [slIndicatorPeriodGrid, setSlIndicatorPeriodGrid] = useState(() =>
+    strategy.stop_loss_method === "indicator" && strategy.stop_loss_indicator_params?.period != null
+      ? String(strategy.stop_loss_indicator_params.period)
+      : "",
+  );
+  const [slIndicatorMultiplierGrid, setSlIndicatorMultiplierGrid] = useState(() =>
+    strategy.stop_loss_method === "indicator" && strategy.stop_loss_indicator_params?.multiplier != null
+      ? String(strategy.stop_loss_indicator_params.multiplier)
+      : "",
+  );
+  const [targetGrid, setTargetGrid] = useState(() =>
+    strategy.target_percent != null ? String(strategy.target_percent) : "3,5",
+  );
+  const [includeNoTarget, setIncludeNoTarget] = useState(true);
+  const [includeTrailing, setIncludeTrailing] = useState(() => strategy.trailing_stop_enabled);
+  // The end of the backtest window - the start is derived automatically,
+  // per symbol, as that symbol's own earliest signal in the uploaded CSV
+  // (see backend's _fetch_candles_for_backtest_signals). This is the ONE
+  // knob a caller has over the window at all; defaults to today, same as
+  // the backend's own default when `to` is omitted.
+  const [backtestTo, setBacktestTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [result, setResult] = useState<ExternalBacktestResponse | null>(null);
+  const [tradesForRow, setTradesForRow] = useState<number | null>(null);
+  const [tradesLoading, setTradesLoading] = useState(false);
+  const [tradesError, setTradesError] = useState<string | null>(null);
+  const [trades, setTrades] = useState<ExternalBacktestTrade[] | null>(null);
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setResult(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        setSignals(parseSignalsCsv(String(reader.result ?? "")));
+        setCsvError(null);
+      } catch (err) {
+        setSignals([]);
+        setCsvError(err instanceof Error ? err.message : "Failed to parse CSV");
+      }
+    };
+    reader.onerror = () => setCsvError("Failed to read the file");
+    reader.readAsText(file);
+  }
+
+  async function handleRun() {
+    if (signals.length === 0) return;
+    setRunning(true);
+    setRunError(null);
+    setResult(null);
+    try {
+      const targetValues: (number | null)[] = targetGrid
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map(Number);
+      if (includeNoTarget || targetValues.length === 0) targetValues.push(null);
+
+      const payload: ExternalBacktestRequest = {
+        signals,
+        direction,
+        interval,
+        target_percent_grid: targetValues,
+        trailing_grid: includeTrailing ? [false, true] : [false],
+      };
+      if (slMethod === "percent") {
+        payload.stop_loss_method = "percent";
+        payload.stop_loss_percent_grid = parseNumberGrid(slPercentGrid);
+      } else if (slMethod === "previous_candle") {
+        payload.stop_loss_method = "previous_candle";
+        payload.stop_loss_interval = slInterval;
+      } else if (slMethod === "indicator") {
+        payload.stop_loss_method = "indicator";
+        payload.stop_loss_indicator_type = slIndicatorType;
+        const periods = parseNumberGrid(slIndicatorPeriodGrid);
+        payload.stop_loss_indicator_param_grid =
+          slIndicatorType === "supertrend" ? { period: periods, multiplier: parseNumberGrid(slIndicatorMultiplierGrid) } : { period: periods };
+      }
+      setTradesForRow(null);
+      setTrades(null);
+      setResult(await backtestStrategySignals(strategy.id, payload, backtestTo));
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : "Backtest failed");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleViewTrades(row: ExternalBacktestCombo, index: number) {
+    setTradesForRow(index);
+    setTradesLoading(true);
+    setTradesError(null);
+    setTrades(null);
+    try {
+      const payload: ExternalBacktestTradeRequest = {
+        signals,
+        direction,
+        interval,
+        target_percent: row.target_percent,
+        trailing_stop_enabled: row.trailing_stop_enabled,
+      };
+      if (slMethod === "percent") {
+        payload.stop_loss_method = "percent";
+        payload.stop_loss_percent = row.stop_loss_value as number;
+      } else if (slMethod === "previous_candle") {
+        payload.stop_loss_method = "previous_candle";
+        payload.stop_loss_interval = slInterval;
+      } else if (slMethod === "indicator") {
+        payload.stop_loss_method = "indicator";
+        payload.stop_loss_indicator_type = slIndicatorType;
+        // This row's own combo already carries the exact period(/multiplier)
+        // that combo was run with - reuse it directly rather than the grid
+        // text fields above (which may hold several candidates).
+        payload.stop_loss_indicator_params = row.stop_loss_value as Record<string, number>;
+      }
+      const res = await backtestStrategySignalsTrades(strategy.id, payload, backtestTo);
+      setTrades(res.trades);
+    } catch (err) {
+      setTradesError(err instanceof Error ? err.message : "Failed to load trades");
+    } finally {
+      setTradesLoading(false);
+    }
+  }
+
+  return (
+    <div className="strategy-form external-backtest-panel">
+      <p className="hint">
+        Upload a signal-history CSV (symbol + timestamp columns, any order - e.g. a Chartink alert-history export) and
+        sweep exit configurations to see which stop-loss/target/trailing setup would have worked best across every
+        signal in it. All signals are treated as the same direction below - a Chartink scan is always one-directional.
+      </p>
+      {strategy.stop_loss_method != null && (
+        <p className="hint muted">
+          Stop-loss/target/trailing below start out matching this strategy's own saved exit config - adjust freely to
+          sweep a wider grid.
+        </p>
+      )}
+      <div className="form-row">
+        <label>
+          Signal CSV
+          <input type="file" accept=".csv,text/csv" onChange={handleFile} />
+        </label>
+        {fileName && !csvError && (
+          <span className="muted">
+            {fileName}: {signals.length} signal{signals.length === 1 ? "" : "s"}, {new Set(signals.map((s) => s.symbol)).size}{" "}
+            symbol{new Set(signals.map((s) => s.symbol)).size === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      {csvError && <p className="error">{csvError}</p>}
+
+      <div className="form-row">
+        <div className="radio-field">
+          <span className="field-label">Direction</span>
+          <div className="radio-row">
+            <label className="radio-label">
+              <input type="radio" checked={direction === "bullish"} onChange={() => setDirection("bullish")} /> Bullish
+            </label>
+            <label className="radio-label">
+              <input type="radio" checked={direction === "bearish"} onChange={() => setDirection("bearish")} /> Bearish
+            </label>
+          </div>
+        </div>
+        <label>
+          Candle interval
+          <select value={interval} onChange={(e) => setInterval_(e.target.value as Interval)}>
+            <option value="1min">1 min</option>
+            <option value="3min">3 min</option>
+            <option value="5min">5 min</option>
+            <option value="15min">15 min</option>
+            <option value="30min">30 min</option>
+            <option value="60min">60 min</option>
+            <option value="daily">Daily</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="form-row">
+        <label>
+          Stop-loss method
+          <select value={slMethod} onChange={(e) => setSlMethod(e.target.value as typeof slMethod)}>
+            <option value="percent">% from entry</option>
+            <option value="previous_candle">Previous candle</option>
+            <option value="indicator">Indicator (EMA/SuperTrend)</option>
+            <option value="">None (opposite-signal/end-of-data only)</option>
+          </select>
+        </label>
+        {slMethod === "percent" && (
+          <label>
+            SL % grid (comma-separated)
+            <input value={slPercentGrid} onChange={(e) => setSlPercentGrid(e.target.value)} placeholder="e.g. 1,2,3" />
+          </label>
+        )}
+        {slMethod === "previous_candle" && (
+          <label>
+            SL candle interval
+            {" "}
+            <select value={slInterval} onChange={(e) => setSlInterval(e.target.value as StopLossInterval)}>
+              {STOP_LOSS_INTERVALS.map((iv) => (
+                <option key={iv} value={iv}>
+                  {iv}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {slMethod === "indicator" && (
+          <>
+            <label>
+              Indicator
+              <select value={slIndicatorType} onChange={(e) => setSlIndicatorType(e.target.value as StopLossIndicatorType)}>
+                <option value="ema">EMA</option>
+                <option value="supertrend">SuperTrend</option>
+              </select>
+            </label>
+            <label>
+              Period grid (comma-separated)
+              <input
+                value={slIndicatorPeriodGrid}
+                onChange={(e) => setSlIndicatorPeriodGrid(e.target.value)}
+                placeholder="e.g. 10,20,50"
+              />
+            </label>
+            {slIndicatorType === "supertrend" && (
+              <label>
+                Multiplier grid (comma-separated)
+                <input
+                  value={slIndicatorMultiplierGrid}
+                  onChange={(e) => setSlIndicatorMultiplierGrid(e.target.value)}
+                  placeholder="e.g. 2,3"
+                />
+              </label>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="form-row">
+        <label>
+          Target % grid (comma-separated)
+          <input value={targetGrid} onChange={(e) => setTargetGrid(e.target.value)} placeholder="e.g. 3,5" />
+        </label>
+        <label className="radio-label">
+          <input type="checkbox" checked={includeNoTarget} onChange={(e) => setIncludeNoTarget(e.target.checked)} /> Also try no
+          target
+        </label>
+        <label className="radio-label">
+          <input type="checkbox" checked={includeTrailing} onChange={(e) => setIncludeTrailing(e.target.checked)} /> Also try
+          trailing SL
+        </label>
+        <label>
+          Backtest until
+          <input type="date" value={backtestTo} onChange={(e) => setBacktestTo(e.target.value)} />
+        </label>
+      </div>
+
+      <button type="button" disabled={signals.length === 0 || running} onClick={handleRun}>
+        {running ? "Running..." : `Run backtest (${signals.length} signal${signals.length === 1 ? "" : "s"})`}
+      </button>
+      {runError && <p className="error">{runError}</p>}
+
+      {result && (
+        <>
+          <p className="hint">
+            {result.symbols_tested} symbol{result.symbols_tested === 1 ? "" : "s"} tested - ranked best (highest
+            hypothetical P&amp;L) first. Each symbol's own candle history runs from its earliest signal in the CSV
+            through {backtestTo}.
+          </p>
+          {result.symbols_skipped.length > 0 && <SkippedSymbolsList skipped={result.symbols_skipped} />}
+          <table>
+            <thead>
+              <tr>
+                <th>Stop-loss</th>
+                <th>Target</th>
+                <th>Trailing</th>
+                <th>Trades</th>
+                <th>Win %</th>
+                <th>Max drawdown</th>
+                <th>Hypothetical P&amp;L</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.results.map((r, i) => (
+                <tr key={i} className={i === 0 ? "selected-row" : undefined}>
+                  <td>{formatStopLossValue(r.stop_loss_value)}</td>
+                  <td>{r.target_percent != null ? `${r.target_percent}%` : "-"}</td>
+                  <td>{r.trailing_stop_enabled ? "Yes" : "No"}</td>
+                  <td>{r.trade_count}</td>
+                  <td>{r.win_rate.toFixed(1)}%</td>
+                  <td>{r.max_drawdown.toFixed(2)}</td>
+                  <td className={r.hypothetical_pnl >= 0 ? "positive" : "negative"}>{r.hypothetical_pnl.toFixed(2)}</td>
+                  <td>
+                    <button type="button" disabled={r.trade_count === 0 || tradesLoading} onClick={() => handleViewTrades(r, i)}>
+                      {tradesLoading && tradesForRow === i ? "Loading..." : "View trades"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {tradesForRow !== null && (
+            <div className="external-backtest-trades">
+              {tradesError && <p className="error">{tradesError}</p>}
+              {trades && (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th>Entry time</th>
+                      <th>Entry price</th>
+                      <th>Exit time</th>
+                      <th>Exit price</th>
+                      <th>Exit reason</th>
+                      <th>P&amp;L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trades.map((t, i) => (
+                      <tr key={i}>
+                        <td>{t.symbol}</td>
+                        <td>{t.entry_time}</td>
+                        <td>{t.entry_price}</td>
+                        <td>{t.exit_time}</td>
+                        <td>{t.exit_price}</td>
+                        <td>{t.exit_reason}</td>
+                        <td className={t.pnl >= 0 ? "positive" : "negative"}>{t.pnl.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function StrategyManager() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
@@ -2991,6 +3555,10 @@ function StrategyManager() {
   const [signalAction, setSignalAction] = useState<"BUY" | "SELL">("BUY");
   const [signalPrice, setSignalPrice] = useState("");
   const [sendingSignal, setSendingSignal] = useState(false);
+
+  // Which external strategy's row has its "Backtest CSV signals" panel
+  // open (null = closed) - see ExternalBacktestPanel above.
+  const [backtestSignalsId, setBacktestSignalsId] = useState<string | null>(null);
   const [sendSignalError, setSendSignalError] = useState<string | null>(null);
   const [sendSignalNotice, setSendSignalNotice] = useState<string | null>(null);
 
@@ -3931,8 +4499,26 @@ function StrategyManager() {
                       <SendIcon />
                     </button>
                   )}
+                  {s.source_type !== "in_house" && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => setBacktestSignalsId((prev) => (prev === s.id ? null : s.id))}
+                      title={`Backtest a CSV of past signals for "${s.name}" against a grid of exit configs`}
+                      aria-label={`Backtest a CSV of past signals for "${s.name}" against a grid of exit configs`}
+                    >
+                      <ChartIcon />
+                    </button>
+                  )}
                 </td>
               </tr>
+            {backtestSignalsId === s.id && (
+              <tr className="editing-row" onClick={(e) => e.stopPropagation()}>
+                <td colSpan={colCount}>
+                  <ExternalBacktestPanel strategy={s} />
+                </td>
+              </tr>
+            )}
             {sendSignalId === s.id && s.status !== "live" && (
               <tr className="editing-row" onClick={(e) => e.stopPropagation()}>
                 <td colSpan={colCount}>

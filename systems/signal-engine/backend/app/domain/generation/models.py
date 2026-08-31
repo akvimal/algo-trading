@@ -447,6 +447,14 @@ class StrategyOut(BaseModel):
     # real column on this row - EngineRun is keyed by (strategy_id,
     # symbol), not something _to_out can read off `row` directly.
     last_scan_at: Optional[datetime] = None
+    # MAX(signal_processing.signals.received_at) for this strategy - the
+    # external-strategy counterpart to last_scan_at above: an external
+    # (webhook) strategy has no EngineRun at all (nothing here ever
+    # "scans"), so last_scan_at is always None for it - this is what the
+    # frontend's "Last scan" column shows instead for source_type !=
+    # 'in_house'. None if no signal has ever arrived for it yet. Populated
+    # by the route layer the same way as last_scan_at, not a real column.
+    last_signal_at: Optional[datetime] = None
     # Whoever was logged in (systems/accounts) when this Strategy was
     # created - None for one created with no bearer token at all (e.g.
     # `make test-signal`'s throwaway strategy, or any pre-existing

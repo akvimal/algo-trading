@@ -384,6 +384,43 @@ function formatTarget(s: Strategy): string {
   return s.target_percent != null ? `${s.target_percent}%` : "-";
 }
 
+// Compact "I·SPOT"/"P·FUT"/"I·OPT" prefix shown before a strategy's name
+// in the grid, replacing the old dedicated Horizon/Instrument columns -
+// full words still available via the row's Info tooltip (StrategyInfoCell).
+function horizonAcronym(h: Strategy["horizon"]): string {
+  return h === "intraday" ? "I" : "P";
+}
+function instrumentAcronym(t: Strategy["instrument_type"]): string {
+  if (t === "spot") return "SPOT";
+  if (t === "future") return "FUT";
+  return "OPT";
+}
+function strategyAcronym(s: Strategy): string {
+  return `${horizonAcronym(s.horizon)}·${instrumentAcronym(s.instrument_type)}`;
+}
+
+// The option/future-specific detail suffix that used to render inline in
+// the grid's own Instrument column (e.g. "(spread, OTM, 2 lots fixed)") -
+// moved into StrategyInfoCell's tooltip now that column is gone, same
+// content, same conditional logic.
+function formatInstrumentDetail(s: Strategy): string {
+  const parts: string[] = [];
+  if (s.instrument_type === "option") {
+    parts.push(s.option_position_style);
+    if (s.option_strike_moneyness !== "ATM") parts.push(s.option_strike_moneyness);
+    if (s.option_sl_scope !== "combined") parts.push(`${s.option_sl_scope} SL`);
+    if (s.fixed_lots != null) parts.push(`${s.fixed_lots} lots fixed`);
+    if (s.contract_day_filter !== "any") parts.push(`${s.contract_day_filter} day`);
+  } else if (s.instrument_type === "future") {
+    if (s.contract_day_filter !== "any") parts.push(`${s.contract_day_filter} day`);
+    if (s.fixed_lots != null) parts.push(`${s.fixed_lots} lots fixed`);
+  } else if (s.fixed_lots != null) {
+    parts.push(`${s.fixed_lots} qty fixed`);
+  }
+  const base = s.instrument_type;
+  return parts.length > 0 ? `${base} (${parts.join(", ")})` : base;
+}
+
 function formatActiveWindows(s: Strategy): string {
   if (s.active_windows.length === 0) return "-";
   return s.active_windows.map((w) => `${w.start.slice(0, 5)}–${w.end.slice(0, 5)}`).join(", ");
@@ -575,6 +612,8 @@ function StrategyInfoCell({ s }: { s: Strategy }) {
               <dd>{s.source_type === "in_house" ? "In-house" : s.source_type}</dd>
               <dt>Horizon</dt>
               <dd>{s.horizon}</dd>
+              <dt>Instrument</dt>
+              <dd>{formatInstrumentDetail(s)}</dd>
               <dt>Stop-loss</dt>
               <dd>{formatStopLoss(s)}</dd>
               <dt>Target</dt>
@@ -2928,6 +2967,10 @@ function StrategyManager() {
   const [dupPolicy, setDupPolicy] = useState<DuplicateSignalPolicy>("skip");
   const [counterPolicy, setCounterPolicy] = useState<CounterSignalPolicy>("close_and_flip");
   const [saving, setSaving] = useState(false);
+  // "Save as" (edit mode only) - separate busy flag from `saving` above so
+  // the two buttons never show each other's "Saving..."/"Saving copy..."
+  // label while only one of them is actually in flight.
+  const [savingAs, setSavingAs] = useState(false);
 
   // null = the panel is in "create" mode; a strategy id = it's editing
   // that strategy (pre-filled from it, PATCH instead of POST on submit) -
@@ -3130,13 +3173,13 @@ function StrategyManager() {
   // One shared panel for both create and edit (editingId null = create) -
   // builds the same payload shape either way and dispatches to POST or
   // PATCH. Editing no longer happens inline in the table.
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (createIsInHouse && !ruleId) return; // submit is disabled without a picked rule - defensive guard
-    if (!createIsInHouse && !externalSourceName.trim()) return; // submit is disabled without a source name - defensive guard
-    setSaving(true);
-    const payload = {
-      name,
+  // Shared by handleSubmit (create/update) and handleSaveAs (always
+  // create) below - a snapshot of every field currently in the form,
+  // `name` overridable so Save As can substitute the "Copy " prefix
+  // without touching the title field itself.
+  function buildStrategyPayload(nameOverride?: string) {
+    return {
+      name: nameOverride ?? name,
       source_rule_name: createIsInHouse ? undefined : externalRuleName.trim() || undefined,
       horizon,
       instrument_type: instrumentType,
@@ -3165,6 +3208,18 @@ function StrategyManager() {
         .map((w) => ({ start: `${w.start}:00`, end: `${w.end}:00` })),
       active_weekdays: activeWeekdays,
     };
+  }
+
+  // submit is disabled without a picked rule (in-house) or a source name
+  // (external) - shared by handleSubmit/handleSaveAs's own guards and the
+  // form-actions buttons' disabled conditions below.
+  const missingRequiredSource = (createIsInHouse && !ruleId) || (!createIsInHouse && !externalSourceName.trim());
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (missingRequiredSource) return; // defensive guard
+    setSaving(true);
+    const payload = buildStrategyPayload();
     try {
       if (editingId) {
         const updated = await updateStrategy(editingId, payload);
@@ -3180,6 +3235,28 @@ function StrategyManager() {
       setError(err instanceof Error ? err.message : editingId ? "Failed to update strategy" : "Failed to create strategy");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Edit-mode-only "Save as" - snapshots the form's CURRENT state
+  // (including any as-yet-unsaved edits) into a brand new strategy, named
+  // with a "Copy " prefix - the strategy being edited is left completely
+  // untouched (no PATCH sent at all), same as any other app's "Save As"
+  // creating a new file rather than overwriting the original.
+  async function handleSaveAs() {
+    if (missingRequiredSource || !name.trim()) return; // defensive guard
+    setSavingAs(true);
+    try {
+      const payload = buildStrategyPayload(`Copy ${name.trim()}`);
+      const created = await createStrategy({ ...payload, source_type: createIsInHouse ? "in_house" : externalSourceName.trim() });
+      setStrategies((prev) => [created, ...prev]);
+      setEditingId(null);
+      setPanelOpen(false);
+      resetForm();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save copy");
+    } finally {
+      setSavingAs(false);
     }
   }
 
@@ -3315,11 +3392,13 @@ function StrategyManager() {
   }
 
   const nonDefaultConfig = horizon !== "intraday" || instrumentType !== "spot";
-  // Name, Status, Source, Horizon, Instrument, Segment, Rule, Info, actions
-  // - matches the <thead> below exactly. Stop-loss/Target/Active window/
-  // Active weekdays/Webhooks moved into the single Info column's hover
-  // tooltip (StrategyInfoCell) rather than each getting their own column.
-  const colCount = 10;
+  // Status, Name, Segment, Rule, Created, Last scan, Info, actions - matches
+  // the <thead> below exactly. Stop-loss/Target/Active window/Active
+  // weekdays/Webhooks/Horizon/Instrument moved into the single Info
+  // column's hover tooltip (StrategyInfoCell) rather than each getting
+  // their own column - Horizon/Instrument are still shown compactly as an
+  // acronym prefix on the Name itself (see strategyAcronym).
+  const colCount = 8;
 
   return (
     <>
@@ -3693,12 +3772,20 @@ function StrategyManager() {
           </label>
 
           <div className="form-actions">
-            <button
-              type="submit"
-              disabled={saving || !name.trim() || (createIsInHouse && !ruleId) || (!createIsInHouse && !externalSourceName.trim())}
-            >
+            <button type="submit" disabled={saving || savingAs || !name.trim() || missingRequiredSource}>
               {saving ? "Saving..." : editingId ? "Save changes" : "Create strategy"}
             </button>
+            {editingId && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={handleSaveAs}
+                disabled={saving || savingAs || !name.trim() || missingRequiredSource}
+                title={`Create a new strategy from this form's current values, named "Copy ${name.trim() || "..."}" - leaves this strategy unchanged`}
+              >
+                {savingAs ? "Saving copy..." : "Save as"}
+              </button>
+            )}
             {editingId && (
               <button type="button" className="secondary" onClick={handleCancelEdit}>
                 Cancel
@@ -3761,10 +3848,8 @@ function StrategyManager() {
       <table>
         <thead>
           <tr>
+            <th className="status-col">Status</th>
             <th>Name</th>
-            <th>Status</th>
-            <th>Horizon</th>
-            <th>Instrument</th>
             <th>Segment</th>
             <th>Rule</th>
             <th>Created</th>
@@ -3784,53 +3869,35 @@ function StrategyManager() {
           {filteredStrategies.map((s) => (
             <Fragment key={s.id}>
               <tr className={s.id === selected ? "selected-row" : ""} onClick={() => setSelected(s.id)}>
-                <td className="symbol">{s.name}</td>
-                <td>
-                  <span className={`status-pill status-${s.status}`}>{s.status}</span>{" "}
+                <td className="status-col" onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
-                    className="tiny secondary"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleStatus(s);
-                    }}
+                    className="status-dot-btn"
+                    onClick={() => handleToggleStatus(s)}
+                    title={`${s.status} - click to ${s.status === "live" ? "pause" : "activate"}`}
+                    aria-label={`${s.name}: ${s.status} - click to ${s.status === "live" ? "pause" : "activate"}`}
                   >
-                    {s.status === "live" ? "Pause" : "Activate"}
+                    <span className={`status-dot status-dot-${s.status}`} />
                   </button>
                 </td>
-                <td>{s.horizon}</td>
-                <td>
-                  {s.instrument_type}
-                  {s.instrument_type === "option" && (
-                    <span className="muted">
-                      {" "}
-                      ({s.option_position_style}
-                      {s.option_strike_moneyness !== "ATM" ? `, ${s.option_strike_moneyness}` : ""}
-                      {s.option_sl_scope !== "combined" ? `, ${s.option_sl_scope} SL` : ""}
-                      {s.fixed_lots != null ? `, ${s.fixed_lots} lots fixed` : ""}
-                      {s.contract_day_filter !== "any" ? `, ${s.contract_day_filter} day` : ""})
-                    </span>
-                  )}
-                  {s.instrument_type === "future" && (s.contract_day_filter !== "any" || s.fixed_lots != null) && (
-                    <span className="muted">
-                      {" "}
-                      ({[
-                        s.contract_day_filter !== "any" ? `${s.contract_day_filter} day` : null,
-                        s.fixed_lots != null ? `${s.fixed_lots} lots fixed` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(", ")}
-                      )
-                    </span>
-                  )}
-                  {s.instrument_type === "spot" && s.fixed_lots != null && (
-                    <span className="muted"> ({s.fixed_lots} qty fixed)</span>
-                  )}
+                <td className="symbol">
+                  <span className="name-acronym" title={`${s.horizon} · ${s.instrument_type}`}>
+                    {strategyAcronym(s)}
+                  </span>{" "}
+                  {s.name}
                 </td>
                 <td>{s.segment}</td>
                 <td className="muted">{s.source_type === "in_house" ? s.rule?.name ?? "-" : s.source_rule_name ?? "-"}</td>
                 <td className="muted">{formatDateTimeNoSeconds(s.created_at)}</td>
-                <td className="muted">{s.last_scan_at ? formatDateTimeNoSeconds(s.last_scan_at) : "never"}</td>
+                <td className="muted">
+                  {s.source_type === "in_house"
+                    ? s.last_scan_at
+                      ? formatDateTimeNoSeconds(s.last_scan_at)
+                      : "never"
+                    : s.last_signal_at
+                      ? formatDateTimeNoSeconds(s.last_signal_at)
+                      : "never"}
+                </td>
                 <td onClick={(e) => e.stopPropagation()}>
                   <StrategyInfoCell s={s} />
                 </td>

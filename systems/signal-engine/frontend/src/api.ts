@@ -434,6 +434,10 @@ export type Strategy = {
   // scans - null if the engine has never ticked it yet (e.g. just
   // created, or paused since before it ever got its first poll).
   last_scan_at: string | null;
+  // MAX(signals.received_at) for this strategy - the external-strategy
+  // counterpart to last_scan_at above (which is always null for one,
+  // since it has no EngineRun at all). Null if no signal has arrived yet.
+  last_signal_at: string | null;
   created_at: string;
   updated_at: string;
 };

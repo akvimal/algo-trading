@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
+from app.adapters.db import processing_models
 from app.adapters.db.session import get_db
 from app.auth import get_optional_user_id
 from app.domain.generation.models import (
@@ -35,7 +36,25 @@ def _last_scan_at(db: Session, strategy_id: uuid.UUID) -> Optional[datetime]:
     ).scalar()
 
 
-def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule], last_scan_at: Optional[datetime] = None) -> StrategyOut:
+def _last_signal_at(db: Session, strategy_id: uuid.UUID) -> Optional[datetime]:
+    """MAX(signal_processing.signals.received_at) for one strategy - see
+    StrategyOut.last_signal_at's own docstring. Single-strategy lookup,
+    used by GET /strategies/{id} - list_strategies below does the batched
+    equivalent in one query instead of N of these. Cross-schema (signals
+    lives in signal_processing, Strategy in signal_generation) but both
+    are owned by this same signal-engine backend/DB since the 2026-08-28
+    merge - not a systems/* boundary crossing."""
+    return db.query(func.max(processing_models.Signal.received_at)).filter(
+        processing_models.Signal.strategy_id == strategy_id
+    ).scalar()
+
+
+def _to_out(
+    row: db_models.Strategy,
+    rule_row: Optional[db_models.Rule],
+    last_scan_at: Optional[datetime] = None,
+    last_signal_at: Optional[datetime] = None,
+) -> StrategyOut:
     return StrategyOut(
         id=str(row.id),
         name=row.name,
@@ -67,6 +86,7 @@ def _to_out(row: db_models.Strategy, rule_row: Optional[db_models.Rule], last_sc
         active_weekdays=row.active_weekdays,
         status=row.status,
         last_scan_at=last_scan_at,
+        last_signal_at=last_signal_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -246,7 +266,17 @@ def list_strategies(source_type: str | None = None, db: Session = Depends(get_db
     ).all()
     last_scan_by_strategy = dict(last_scan_rows)
 
-    return [_to_out(strategy_row, rule_row, last_scan_by_strategy.get(strategy_row.id)) for strategy_row, rule_row in rows]
+    # Same batched-GROUP-BY reasoning as last_scan_rows above, cross-schema
+    # (signal_processing.signals) - see _last_signal_at's own comment.
+    last_signal_rows = db.query(processing_models.Signal.strategy_id, func.max(processing_models.Signal.received_at)).group_by(
+        processing_models.Signal.strategy_id
+    ).all()
+    last_signal_by_strategy = dict(last_signal_rows)
+
+    return [
+        _to_out(strategy_row, rule_row, last_scan_by_strategy.get(strategy_row.id), last_signal_by_strategy.get(strategy_row.id))
+        for strategy_row, rule_row in rows
+    ]
 
 
 @router.get("/strategies/{strategy_id}", response_model=StrategyOut)
@@ -262,7 +292,7 @@ def get_strategy(strategy_id: str, db: Session = Depends(get_db)):
     if row is None:
         raise HTTPException(status_code=404, detail="strategy not found")
     rule_row = db.get(db_models.Rule, row.rule_id) if row.rule_id is not None else None
-    return _to_out(row, rule_row, _last_scan_at(db, parsed_id))
+    return _to_out(row, rule_row, _last_scan_at(db, parsed_id), _last_signal_at(db, parsed_id))
 
 
 @router.patch("/strategies/{strategy_id}", response_model=StrategyOut)
@@ -394,4 +424,4 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
 
     db.commit()
     db.refresh(row)
-    return _to_out(row, rule_row, _last_scan_at(db, row.id))
+    return _to_out(row, rule_row, _last_scan_at(db, row.id), _last_signal_at(db, row.id))

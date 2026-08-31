@@ -765,6 +765,62 @@ tbody tr.selected-row {
   color: var(--sell);
 }
 
+/* Strategies grid's leftmost Status column - a plain colored dot instead
+   of the status-pill text badge above, click to toggle live/paused (same
+   handleToggleStatus as before, just moved off a separate text button).
+   Same color mapping as status-pill, solid instead of translucent since
+   there's no text sitting on top of it here. */
+.status-col {
+  width: 1.6rem;
+}
+
+.status-dot-btn {
+  background: none;
+  border: none;
+  padding: 0.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.status-dot {
+  display: block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+}
+
+.status-dot-draft {
+  background: var(--text-dim);
+}
+
+.status-dot-backtesting {
+  background: var(--accent);
+}
+
+.status-dot-live {
+  background: var(--buy);
+}
+
+.status-dot-paused {
+  background: var(--sell);
+}
+
+/* Compact "I·SPOT"/"P·FUT"/"I·OPT" prefix before a strategy's name in the
+   grid - see App.tsx's strategyAcronym. */
+.name-acronym {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  background: rgba(139, 147, 161, 0.12);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  margin-right: 0.15rem;
+}
+
 /* StrategyInfoCell - a hover tooltip consolidating the strategy table's
    Stop-loss/Target/Active window/Active weekdays/Webhooks columns behind
    one info icon. Real floating panel (not a native `title` attribute) so

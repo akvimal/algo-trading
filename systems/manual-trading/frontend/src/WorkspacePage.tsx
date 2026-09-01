@@ -119,6 +119,20 @@ function ReviewIcon() {
   );
 }
 
+// Flags a card whose own closed trade is the one the platform-wide
+// review banner is currently pointing at (see pendingReviewRow below) -
+// distinct from ReviewIcon above, which lives per-trade in the history
+// list rather than on the card's own identity row.
+function WarningIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3.5 22 20.5H2Z" />
+      <path d="M12 10v4" />
+      <circle cx="12" cy="17.3" r="0.4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 // A closed trade's own "attach a screenshot" affordance - see
 // uploadImageForEntry/loadImagesForRow.
 function ImageIcon() {
@@ -2325,14 +2339,18 @@ export default function WorkspacePage() {
 
       {pendingReview && (
         <div className={`manual-review-banner ${pendingReviewRow ? "manual-review-banner-compact" : ""}`}>
-          {/* Just the count now, not this one trade's own symbol/action/
-              pnl - changed 2026-08-26 at the user's explicit request.
-              pendingReview itself is still the EARLIEST unreviewed trade
-              (that's what the review icon/inline form below actually
-              act on), just no longer named in the headline. */}
+          {/* Count still leads (changed 2026-08-26 at the user's explicit
+              request to drop this one trade's own action/pnl from the
+              headline), but segment+symbol are back as of 2026-09-01 (a
+              separate, later request) - naming WHICH one is actionable,
+              not just how many are outstanding. pendingReview itself is
+              still the EARLIEST unreviewed trade (what the review icon/
+              inline form below actually act on) - the matching card
+              (pendingReviewRow, when it still exists) also gets its own
+              review-pending-badge, see WarningIcon above. */}
           <span className="manual-review-banner-title">
             {pendingReview.pending_count} closed trade{pendingReview.pending_count === 1 ? "" : "s"} still need
-            {pendingReview.pending_count === 1 ? "s" : ""} review
+            {pendingReview.pending_count === 1 ? "s" : ""} review - starting with {pendingReview.segment} {pendingReview.symbol}
           </span>
           {pendingReviewRow ? (
             <span className="muted">
@@ -2510,6 +2528,11 @@ export default function WorkspacePage() {
                       EXP
                     </span>
                   )}
+                  {pendingReviewRow?.id === row.id && (
+                    <span className="review-pending-badge" title={`${pendingReview!.segment} ${pendingReview!.symbol} has a closed trade awaiting review`}>
+                      <WarningIcon />
+                    </span>
+                  )}
                 </span>
                 <span className="manual-card-actions">
                   {confirmRemoveId === row.id ? (
@@ -2591,6 +2614,11 @@ export default function WorkspacePage() {
                       EXP
                     </span>
                   )}
+                  {pendingReviewRow?.id === row.id && (
+                    <span className="review-pending-badge" title={`${pendingReview!.segment} ${pendingReview!.symbol} has a closed trade awaiting review`}>
+                      <WarningIcon />
+                    </span>
+                  )}
                   <span className="muted">{row.current ? (row.current.state === "pending" ? "Pending" : "Open") : "—"}</span>
                   {pnlSummary.unrealized != null ? (
                     <>
@@ -2618,6 +2646,11 @@ export default function WorkspacePage() {
                   {expiresToday[row.id] && (
                     <span className="expiry-today-badge" title="This instrument's nearest expiry is today">
                       EXP
+                    </span>
+                  )}
+                  {pendingReviewRow?.id === row.id && (
+                    <span className="review-pending-badge" title={`${pendingReview!.segment} ${pendingReview!.symbol} has a closed trade awaiting review`}>
+                      <WarningIcon />
                     </span>
                   )}
                   <button

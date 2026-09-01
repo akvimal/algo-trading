@@ -2257,6 +2257,18 @@ button.btn-exit {
   letter-spacing: 0.02em;
 }
 
+/* This card's own closed trade is the one the platform-wide review
+   banner is currently pointing at (see WorkspacePage.tsx's
+   pendingReviewRow) - same amber tone as .badge-live, distinct from
+   expiry-today-badge's red so the two don't read as the same kind of
+   urgency. */
+.review-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  color: #f5a623;
+}
+
 .oi-buildup-badge {
   display: inline-flex;
   align-items: center;

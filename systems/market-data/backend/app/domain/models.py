@@ -227,7 +227,11 @@ class OptionOiSummary(BaseModel):
     # one leg's premium (see app/domain/oi_summary.py's build_oi_summary
     # for the reasoning - OptionOiLeg.buildup below is the per-leg,
     # premium-based equivalent this is deliberately NOT reusing for a
-    # chain-wide sum). None until the spot-price history has warmed up.
+    # chain-wide sum). Uses the 5m window (not 15m, unlike the per-leg
+    # buildup) - this is shown next to total_call/put_oi_change_5m above,
+    # not the 15m figures, and classifying from a different window than
+    # the number it sits beside made the two look like they disagreed.
+    # None until the spot-price history has warmed up.
     total_call_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
     total_put_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
     atm_call_iv: Optional[float] = None

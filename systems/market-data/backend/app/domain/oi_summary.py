@@ -21,19 +21,27 @@ SpotPriceChangeLookup = Callable[[float], tuple[Optional[float], Optional[float]
 Buildup = Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]
 
 
-def _classify_buildup(oi_change_15m: Optional[int], price_change_15m: Optional[float]) -> Optional[Buildup]:
-    """Classic OI-vs-price 2x2 read, using the 15m window (steadier than
-    5m for a classification meant to hold for a while, not flicker every
-    poll tick): OI up + price up = long buildup (fresh longs), OI up +
-    price down = short buildup (fresh shorts), OI down + price up = short
-    covering (shorts exiting), OI down + price down = long unwinding
-    (longs exiting). None whenever either change is unknown or exactly
-    flat - nothing to classify yet."""
-    if not oi_change_15m or not price_change_15m:
+def _classify_buildup(oi_change: Optional[int], price_change: Optional[float]) -> Optional[Buildup]:
+    """Classic OI-vs-price 2x2 read: OI up + price up = long buildup
+    (fresh longs), OI up + price down = short buildup (fresh shorts), OI
+    down + price up = short covering (shorts exiting), OI down + price
+    down = long unwinding (longs exiting). None whenever either change is
+    unknown or exactly flat - nothing to classify yet.
+
+    Window-agnostic on purpose - callers pass whichever pair of changes
+    make sense for what's being classified, and that choice can differ:
+    OptionOiLeg.buildup (per-strike leg) uses the 15m window (steadier,
+    since a per-leg read is meant to hold for a while rather than flicker
+    every poll tick), while build_oi_summary's own chain-wide TOTAL call/
+    put buildup uses 5m - deliberately matching the 5m change figure the
+    frontend displays right next to that badge, so the two numbers can
+    never silently disagree in sign the way a 15m classification next to
+    a 5m figure once did (reproduced live 2026-09-01)."""
+    if not oi_change or not price_change:
         return None
-    if oi_change_15m > 0:
-        return "long_buildup" if price_change_15m > 0 else "short_buildup"
-    return "short_covering" if price_change_15m > 0 else "long_unwinding"
+    if oi_change > 0:
+        return "long_buildup" if price_change > 0 else "short_buildup"
+    return "short_covering" if price_change > 0 else "long_unwinding"
 
 
 def build_oi_summary(
@@ -118,6 +126,8 @@ def build_oi_summary(
 
         strikes.append(OptionOiSummaryStrike(strike=row.strike, call=call_leg, put=put_leg))
 
+    total_call_oi_change_5m = call_chg_5m_sum if call_chg_5m_complete else None
+    total_put_oi_change_5m = put_chg_5m_sum if put_chg_5m_complete else None
     total_call_oi_change_15m = call_chg_15m_sum if call_chg_15m_complete else None
     total_put_oi_change_15m = put_chg_15m_sum if put_chg_15m_complete else None
     # Chain-wide (TOTAL call/put OI) buildup, classified against the
@@ -125,12 +135,23 @@ def build_oi_summary(
     # which OptionOiLeg.buildup already uses (see _classify_buildup's own
     # docstring for the 2x2 read; this is the same classification, just a
     # different price reference for a figure that's a sum across many
-    # strikes' worth of OI rather than one strike's own reading). None
-    # whenever spot_price_changes isn't supplied at all (unit tests that
-    # don't care about this) or hasn't warmed up yet.
-    spot_change_15m = spot_price_changes(chain.underlying_last_price)[1] if spot_price_changes is not None else None
-    total_call_buildup = _classify_buildup(total_call_oi_change_15m, spot_change_15m)
-    total_put_buildup = _classify_buildup(total_put_oi_change_15m, spot_change_15m)
+    # strikes' worth of OI rather than one strike's own reading).
+    #
+    # Deliberately the 5m window here, NOT 15m (which OptionOiLeg.buildup
+    # itself uses, and which this used to use too) - the frontend shows
+    # this badge directly next to the TOTAL call/put OI card's own 5m
+    # change figure, and a reader comparing "+1,476,020 (5m)" against a
+    # badge secretly classified from the 15m window can see them disagree
+    # in sign (two genuinely different windows, both individually
+    # correct) - reproduced live 2026-09-01, read as "is this valid?"
+    # rather than "these are two different numbers." Matching the window
+    # the number is actually shown next to removes that whole class of
+    # apparent-mismatch confusion. None whenever spot_price_changes isn't
+    # supplied at all (unit tests that don't care about this) or hasn't
+    # warmed up yet.
+    spot_change_5m = spot_price_changes(chain.underlying_last_price)[0] if spot_price_changes is not None else None
+    total_call_buildup = _classify_buildup(total_call_oi_change_5m, spot_change_5m)
+    total_put_buildup = _classify_buildup(total_put_oi_change_5m, spot_change_5m)
 
     return OptionOiSummary(
         underlying_symbol=chain.underlying_symbol,

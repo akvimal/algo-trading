@@ -72,13 +72,28 @@ const EMPTY_TAB_STATE: TabState = {
   loadingSummary: false,
 };
 
+// Indian-numbering compact form (K/L/Cr, not the West's K/M/B) - a raw
+// comma-grouped OI figure (NIFTY's own total call/put OI routinely runs
+// into several crores) reads as a wall of digits at a glance; this is
+// how every Indian options/trading UI already presents the same figures.
+// Thresholds are lakh (1,00,000) and crore (1,00,00,000), not 10^5/10^7
+// spelled differently - deliberately not reusing toLocaleString("en-IN")'s
+// own grouping, which places the commas but doesn't abbreviate.
+function fmtCompactIndian(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1_00_00_000) return `${(n / 1_00_00_000).toFixed(2)}Cr`;
+  if (abs >= 1_00_000) return `${(n / 1_00_000).toFixed(2)}L`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 function fmtOi(n: number): string {
-  return n.toLocaleString();
+  return fmtCompactIndian(n);
 }
 
 function fmtChange(n: number | null): string {
   if (n == null) return "-";
-  return `${n > 0 ? "+" : ""}${n.toLocaleString()}`;
+  return `${n > 0 ? "+" : ""}${fmtCompactIndian(n)}`;
 }
 
 function changeClass(n: number | null): string {
@@ -439,6 +454,20 @@ export default function OiSummaryPage() {
                 <span className={changeClass(summary.total_call_oi_change_5m)}>
                   {fmtChange(summary.total_call_oi_change_5m)} (5m)
                 </span>
+                {/* Folded back into this card (2026-09-01) rather than a
+                    dedicated one (tried, then reverted the same day) -
+                    with the underlying's own spot direction shared by
+                    both totals, only 2 of the 4 possible buildup states
+                    are ever reachable at once (spot up -> long_buildup/
+                    short_covering only, spot down -> the other two), so
+                    a whole separate card for it was more than this one
+                    compact badge actually needs. Classified from the
+                    SAME 5m window as the change figure right above it
+                    (backend's own build_oi_summary - deliberately not
+                    15m, which used to sit next to this 5m number and
+                    could disagree with it in sign). "-" until the
+                    5m-ago spot-price sample warms up. */}
+                {buildupBadge(summary.total_call_buildup)}
               </div>
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">Total Put OI</span>
@@ -446,23 +475,7 @@ export default function OiSummaryPage() {
                 <span className={changeClass(summary.total_put_oi_change_5m)}>
                   {fmtChange(summary.total_put_oi_change_5m)} (5m)
                 </span>
-              </div>
-              {/* Separate cards, not appended onto Total Call/Put OI above
-                  (2026-09-01, at the user's explicit preference over
-                  growing those cards) - a raw signed OI-change % alone
-                  doesn't distinguish buildup from covering, only OI
-                  direction PLUS price direction together does (see
-                  build_oi_summary's own reasoning for using the
-                  underlying's spot price here, not any one leg's
-                  premium). "-" (buildupBadge's own empty state) until the
-                  15m-ago spot-price sample warms up. */}
-              <div className="manual-stats-card">
-                <span className="manual-stats-card-label">Call Buildup (15m)</span>
-                <span className="manual-stats-card-value">{buildupBadge(summary.total_call_buildup)}</span>
-              </div>
-              <div className="manual-stats-card">
-                <span className="manual-stats-card-label">Put Buildup (15m)</span>
-                <span className="manual-stats-card-value">{buildupBadge(summary.total_put_buildup)}</span>
+                {buildupBadge(summary.total_put_buildup)}
               </div>
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">ATM IV (Call / Put)</span>

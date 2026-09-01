@@ -111,10 +111,13 @@ def test_build_oi_summary_total_buildup_none_without_spot_price_changes_callback
 
 def test_build_oi_summary_total_call_buildup_classified_against_spot_not_any_legs_premium():
     # CE OI rises (flat_change) while spot also rises - long_buildup, using
-    # the underlying's own spot direction (24100.0 - 24000.0 = +100), NOT
-    # any one leg's own premium (every _leg() in CHAIN is flat at 100.0,
-    # which would read as "no price change" if this were reusing
-    # OptionOiLeg's per-leg classification instead).
+    # the underlying's own spot direction (24050.0 - 24000.0 = +50, the 5m
+    # figure - build_oi_summary deliberately classifies TOTAL buildup off
+    # the 5m window, not 15m, to match the 5m change figure it's shown
+    # next to - see _classify_buildup's own docstring), NOT any one leg's
+    # own premium (every _leg() in CHAIN is flat at 100.0, which would
+    # read as "no price change" if this were reusing OptionOiLeg's
+    # per-leg classification instead).
     def flat_change(strike: float, option_type: str, current_oi: int):
         return (10, 100)
 

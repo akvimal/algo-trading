@@ -177,7 +177,26 @@
     align-items: center;
     gap: 0.3rem;
     color: var(--text-dim);
-    cursor: default;
+    cursor: pointer;
+    /* Reset - this is a real <button> now (see renderSentimentBar), not
+       a <span>, so it needs its own browser button chrome stripped
+       rather than inheriting .sentiment-bar's plain text look for free. */
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+  }
+  .sentiment-badge:hover {
+    color: var(--text);
+  }
+  .sentiment-badge.bullish:hover {
+    color: var(--buy);
+    text-decoration: underline;
+  }
+  .sentiment-badge.bearish:hover {
+    color: var(--sell);
+    text-decoration: underline;
   }
   .sentiment-badge .symbol {
     color: var(--text);
@@ -547,10 +566,19 @@
         segment.appendChild(label);
 
         for (const u of entry.underlyings ?? []) {
-          const badge = document.createElement("span");
+          // A real <button>, not a <span> - every sentiment underlying
+          // (NIFTY/BANKNIFTY/GOLDM/CRUDEOILM) is also one of OiSummaryPage's
+          // own PRESETS keys, so every badge can jump straight to that
+          // asset's OI tab (see goToOiTab below) - no need to special-case
+          // which ones are clickable.
+          const badge = document.createElement("button");
+          badge.type = "button";
           const flashing = flashingSymbols.has(u.symbol);
           badge.className = `sentiment-badge ${u.error ? "neutral" : u.direction}${flashing ? " flash" : ""}`;
-          badge.title = u.error ? `${u.symbol}: no data (${u.error})` : `${u.symbol}: ${sentimentFullLabel(u.direction, u.strength)}`;
+          badge.title = u.error
+            ? `${u.symbol}: no data (${u.error})`
+            : `${u.symbol}: ${sentimentFullLabel(u.direction, u.strength)} - click to open in OI`;
+          badge.onclick = () => goToOiTab(u.symbol);
 
           const symbolSpan = document.createElement("span");
           symbolSpan.className = "symbol";
@@ -566,6 +594,24 @@
         }
         sentimentBarEl.appendChild(segment);
       }
+    }
+
+    // Jumps straight to manual-trading's own OI tab, pre-selected to this
+    // asset - same "reload the iframe at a deep-link URL" mechanism every
+    // other cross-frontend link in this codebase already uses (e.g.
+    // ?signal_id= between the other frontends' own src/links.ts), not a
+    // postMessage - manual-trading's App.tsx/OiSummaryPage.tsx both only
+    // ever read tab/symbol once at mount (see their own comments), so a
+    // real navigation (not a live message while already mounted) is what
+    // actually takes effect. Only ever reassigns .src, never
+    // dataset.origin - the session broker's own postMessage targetOrigin
+    // check needs that to stay a bare origin, not a full URL with a
+    // query string.
+    function goToOiTab(symbol) {
+      activate("manual-trading");
+      const iframe = document.getElementById("frame-manual-trading");
+      if (!iframe || !iframe.dataset.origin) return;
+      iframe.src = `${iframe.dataset.origin}/?tab=oi&symbol=${encodeURIComponent(symbol)}`;
     }
 
     async function pollSentimentDisplay() {

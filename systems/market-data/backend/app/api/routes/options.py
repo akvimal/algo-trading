@@ -88,6 +88,7 @@ def get_oi_summary(exchange: str, symbol: str, expiry: str, user_id: Optional[UU
     resolver = getattr(provider, "get_option_chain", None)
     changer = getattr(provider, "get_oi_changes", None)
     price_changer = getattr(provider, "get_price_changes", None)
+    spot_changer = getattr(provider, "get_spot_price_changes", None)
     if resolver is None or changer is None:
         raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
 
@@ -108,7 +109,13 @@ def get_oi_summary(exchange: str, symbol: str, expiry: str, user_id: Optional[UU
         def price_changes(strike: float, option_type: str, current_price: float):
             return price_changer(symbol, expiry, strike, option_type, current_price)
 
-    return build_oi_summary(chain, oi_changes, price_changes)
+    spot_price_changes = None
+    if spot_changer is not None:
+
+        def spot_price_changes(current_spot: float):
+            return spot_changer(symbol, current_spot)
+
+    return build_oi_summary(chain, oi_changes, price_changes, spot_price_changes)
 
 
 @router.get("/options/sentiment", response_model=MarketSentiment)

@@ -749,6 +749,19 @@ class DhanProvider(QuoteProvider):
         # (symbol, expiry, strike, option_type) -> [(unix ts, last_price), ...] oldest first
         self._price_history: dict[tuple[str, str, float, str], list[tuple[float, float]]] = {}
 
+        # Same shape/lifecycle again, but for the UNDERLYING's own spot
+        # price - backs the chain-wide (TOTAL call/put OI) buildup
+        # classification, which has no single per-leg premium to compare
+        # against the way OptionOiLeg.buildup does (summing OI across many
+        # strikes each with a different premium isn't meaningful) - spot
+        # direction is the standard chain-wide reference instead. Keyed by
+        # symbol ALONE, not (symbol, expiry) - the underlying's spot price
+        # is the same series regardless of which expiry's chain happened
+        # to be fetched, so every expiry of one symbol shares one history.
+        self._spot_price_history_lock = threading.Lock()
+        # symbol -> [(unix ts, spot_price), ...] oldest first
+        self._spot_price_history: dict[str, list[tuple[float, float]]] = {}
+
     def status(self) -> dict:
         return {
             "provider": self.name,
@@ -1524,6 +1537,43 @@ class DhanProvider(QuoteProvider):
         change_15m = current_price - anchor_15m if anchor_15m is not None else None
         return change_5m, change_15m
 
+    def _record_spot_price_history(self, symbol: str, spot: float) -> None:
+        """Spot-price sibling of _record_price_history above - same
+        real-fetch-only call site (inside get_option_chain, right after a
+        genuine cache miss), same retention/pruning, but keyed by symbol
+        alone (see _spot_price_history's own comment)."""
+        now = time.time()
+        cutoff = now - OI_HISTORY_RETENTION_SECONDS
+        with self._spot_price_history_lock:
+            samples = self._spot_price_history.setdefault(symbol, [])
+            samples.append((now, spot))
+            while samples and samples[0][0] < cutoff:
+                samples.pop(0)
+
+    def get_spot_price_changes(self, symbol: str, current_spot: float) -> tuple[Optional[float], Optional[float]]:
+        """(change_5m, change_15m) for the underlying's own spot price -
+        same anchor logic as get_price_changes/get_oi_changes above."""
+        with self._spot_price_history_lock:
+            samples = list(self._spot_price_history.get(symbol, []))
+
+        now = time.time()
+
+        def anchor(minutes: float) -> Optional[float]:
+            target = now - minutes * 60
+            found: Optional[float] = None
+            for ts, price in samples:
+                if ts <= target:
+                    found = price
+                else:
+                    break
+            return found
+
+        anchor_5m = anchor(5)
+        anchor_15m = anchor(15)
+        change_5m = current_spot - anchor_5m if anchor_5m is not None else None
+        change_15m = current_spot - anchor_15m if anchor_15m is not None else None
+        return change_5m, change_15m
+
     @staticmethod
     def _parse_option_leg(raw: Optional[dict], strike: float, spot: float, option_type: str, strike_step: float) -> Optional[OptionLegQuote]:
         if raw is None:
@@ -1634,6 +1684,7 @@ class DhanProvider(QuoteProvider):
         self._store_option_chain(symbol, expiry, chain)
         self._record_oi_history(symbol, expiry, chain)
         self._record_price_history(symbol, expiry, chain)
+        self._record_spot_price_history(symbol, spot)
         return chain
 
     def _rolling_option_instrument(self, underlying_symbol: str) -> Optional[str]:

@@ -96,6 +96,54 @@ def test_build_oi_summary_change_totals_sum_when_every_leg_has_a_sample():
     assert summary.total_put_oi_change_15m == 300  # 3 PE legs x 100
 
 
+def test_build_oi_summary_total_buildup_none_without_spot_price_changes_callback():
+    # No spot_price_changes callback passed at all - same "None until the
+    # caller actually supplies it" convention as price_changes/buildup on
+    # OptionOiLeg (test_build_oi_summary_buildup_none_without_price_changes_callback).
+    def flat_change(strike: float, option_type: str, current_oi: int):
+        return (10, 100)
+
+    summary = build_oi_summary(CHAIN, flat_change)
+
+    assert summary.total_call_buildup is None
+    assert summary.total_put_buildup is None
+
+
+def test_build_oi_summary_total_call_buildup_classified_against_spot_not_any_legs_premium():
+    # CE OI rises (flat_change) while spot also rises - long_buildup, using
+    # the underlying's own spot direction (24100.0 - 24000.0 = +100), NOT
+    # any one leg's own premium (every _leg() in CHAIN is flat at 100.0,
+    # which would read as "no price change" if this were reusing
+    # OptionOiLeg's per-leg classification instead).
+    def flat_change(strike: float, option_type: str, current_oi: int):
+        return (10, 100)
+
+    def rising_spot(current_spot: float):
+        return (50.0, 100.0)
+
+    summary = build_oi_summary(CHAIN, flat_change, spot_price_changes=rising_spot)
+
+    assert summary.total_call_buildup == "long_buildup"
+    assert summary.total_put_buildup == "long_buildup"
+
+
+def test_build_oi_summary_total_call_and_put_buildup_classified_independently():
+    # Calls gain OI, puts lose OI, spot falls - short_buildup for calls
+    # (OI up, price down) but long_unwinding for puts (OI down, price
+    # down) - the two totals must never be merged into one blended read
+    # (see OptionOiSummary.total_call_buildup's own comment).
+    def mixed_change(strike: float, option_type: str, current_oi: int):
+        return (10, 100) if option_type == "CE" else (-10, -100)
+
+    def falling_spot(current_spot: float):
+        return (-50.0, -100.0)
+
+    summary = build_oi_summary(CHAIN, mixed_change, spot_price_changes=falling_spot)
+
+    assert summary.total_call_buildup == "short_buildup"
+    assert summary.total_put_buildup == "long_unwinding"
+
+
 def test_build_oi_summary_per_strike_breakdown():
     summary = build_oi_summary(CHAIN, _no_change)
 

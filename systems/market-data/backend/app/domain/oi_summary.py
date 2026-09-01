@@ -14,6 +14,9 @@ from app.domain.models import OptionChain, OptionOiLeg, OptionOiSummary, OptionO
 OiChangeLookup = Callable[[float, str, int], tuple[Optional[int], Optional[int]]]
 # (strike, option_type, current_price) -> (change_5m, change_15m)
 PriceChangeLookup = Callable[[float, str, float], tuple[Optional[float], Optional[float]]]
+# (current_spot) -> (change_5m, change_15m) - one series per underlying,
+# not per-leg (see DhanProvider.get_spot_price_changes's own docstring).
+SpotPriceChangeLookup = Callable[[float], tuple[Optional[float], Optional[float]]]
 
 Buildup = Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]
 
@@ -34,7 +37,10 @@ def _classify_buildup(oi_change_15m: Optional[int], price_change_15m: Optional[f
 
 
 def build_oi_summary(
-    chain: OptionChain, oi_changes: OiChangeLookup, price_changes: Optional[PriceChangeLookup] = None
+    chain: OptionChain,
+    oi_changes: OiChangeLookup,
+    price_changes: Optional[PriceChangeLookup] = None,
+    spot_price_changes: Optional[SpotPriceChangeLookup] = None,
 ) -> OptionOiSummary:
     total_call_oi = 0
     total_put_oi = 0
@@ -112,6 +118,20 @@ def build_oi_summary(
 
         strikes.append(OptionOiSummaryStrike(strike=row.strike, call=call_leg, put=put_leg))
 
+    total_call_oi_change_15m = call_chg_15m_sum if call_chg_15m_complete else None
+    total_put_oi_change_15m = put_chg_15m_sum if put_chg_15m_complete else None
+    # Chain-wide (TOTAL call/put OI) buildup, classified against the
+    # UNDERLYING's own spot-price direction - not any one leg's premium,
+    # which OptionOiLeg.buildup already uses (see _classify_buildup's own
+    # docstring for the 2x2 read; this is the same classification, just a
+    # different price reference for a figure that's a sum across many
+    # strikes' worth of OI rather than one strike's own reading). None
+    # whenever spot_price_changes isn't supplied at all (unit tests that
+    # don't care about this) or hasn't warmed up yet.
+    spot_change_15m = spot_price_changes(chain.underlying_last_price)[1] if spot_price_changes is not None else None
+    total_call_buildup = _classify_buildup(total_call_oi_change_15m, spot_change_15m)
+    total_put_buildup = _classify_buildup(total_put_oi_change_15m, spot_change_15m)
+
     return OptionOiSummary(
         underlying_symbol=chain.underlying_symbol,
         underlying_exchange=chain.underlying_exchange,
@@ -122,8 +142,10 @@ def build_oi_summary(
         pcr=(total_put_oi / total_call_oi) if total_call_oi > 0 else None,
         total_call_oi_change_5m=call_chg_5m_sum if call_chg_5m_complete else None,
         total_put_oi_change_5m=put_chg_5m_sum if put_chg_5m_complete else None,
-        total_call_oi_change_15m=call_chg_15m_sum if call_chg_15m_complete else None,
-        total_put_oi_change_15m=put_chg_15m_sum if put_chg_15m_complete else None,
+        total_call_oi_change_15m=total_call_oi_change_15m,
+        total_put_oi_change_15m=total_put_oi_change_15m,
+        total_call_buildup=total_call_buildup,
+        total_put_buildup=total_put_buildup,
         atm_call_iv=atm_call_iv,
         atm_put_iv=atm_put_iv,
         strikes=strikes,

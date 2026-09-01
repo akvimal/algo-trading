@@ -972,6 +972,13 @@ export type OiSummary = {
   total_put_oi_change_5m: number | null;
   total_call_oi_change_15m: number | null;
   total_put_oi_change_15m: number | null;
+  // Chain-wide buildup for the TOTAL figures above, against the
+  // underlying's own spot-price direction - see OiSummaryLeg's own
+  // buildup field for the per-leg, premium-based equivalent this is
+  // deliberately not reusing for a chain-wide sum (market-data's
+  // build_oi_summary has the full reasoning).
+  total_call_buildup: OiBuildup | null;
+  total_put_buildup: OiBuildup | null;
   atm_call_iv: number | null;
   atm_put_iv: number | null;
   strikes: OiSummaryStrike[];

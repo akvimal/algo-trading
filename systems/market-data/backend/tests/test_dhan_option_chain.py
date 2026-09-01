@@ -308,3 +308,30 @@ def test_get_price_changes_diffs_against_closest_sample_at_or_before_target(monk
 
     assert change_5m == 150.0 - 140.0
     assert change_15m == 150.0 - 120.0
+
+
+def test_get_spot_price_changes_no_history_returns_none():
+    provider = _provider_with_nifty()
+    change_5m, change_15m = provider.get_spot_price_changes("NIFTY", current_spot=24000.0)
+    assert change_5m is None
+    assert change_15m is None
+
+
+def test_get_spot_price_changes_diffs_against_closest_sample_at_or_before_target(monkeypatch):
+    # Keyed by symbol alone (no expiry/strike/option_type) - the
+    # underlying's own spot price is one series shared across every
+    # expiry of that symbol, see _spot_price_history's own comment.
+    provider = _provider_with_nifty()
+    now = time.time()
+    provider._spot_price_history["NIFTY"] = [
+        (now - 20 * 60, 23800.0),  # anchor for the 15m window
+        (now - 14 * 60, 23900.0),  # too recent for the 15m window
+        (now - 6 * 60, 23950.0),  # anchor for the 5m window
+        (now - 4 * 60, 23980.0),  # too recent for the 5m window
+    ]
+    monkeypatch.setattr(time, "time", lambda: now)
+
+    change_5m, change_15m = provider.get_spot_price_changes("NIFTY", current_spot=24000.0)
+
+    assert change_5m == 24000.0 - 23950.0
+    assert change_15m == 24000.0 - 23800.0

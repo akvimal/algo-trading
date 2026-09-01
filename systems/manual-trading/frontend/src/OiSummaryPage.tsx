@@ -174,8 +174,19 @@ function loadVisibleColumns(): Record<ColumnKey, boolean> {
   }
 }
 
+// Deep-link support (?tab=oi&symbol=NIFTY) - same convention App.tsx's
+// own ?tab= already uses (see its own comment), lets the shell's header
+// sentiment badges jump straight to a specific asset's tab here instead
+// of always landing on PRESETS[0]. Falls back silently to the default
+// for an unrecognized/missing symbol rather than erroring - this page is
+// still fully usable without the param.
+function initialActiveKey(): string {
+  const requested = new URLSearchParams(window.location.search).get("symbol");
+  return PRESETS.some((p) => p.key === requested) ? (requested as string) : PRESETS[0].key;
+}
+
 export default function OiSummaryPage() {
-  const [activeKey, setActiveKey] = useState(PRESETS[0].key);
+  const [activeKey, setActiveKey] = useState(initialActiveKey);
   const [tabStates, setTabStates] = useState<Record<string, TabState>>({});
   // Which OI-change window the chart's increase/decrease caps are drawn
   // against - shared across tabs (not per-tab state) since it's a display
@@ -435,6 +446,23 @@ export default function OiSummaryPage() {
                 <span className={changeClass(summary.total_put_oi_change_5m)}>
                   {fmtChange(summary.total_put_oi_change_5m)} (5m)
                 </span>
+              </div>
+              {/* Separate cards, not appended onto Total Call/Put OI above
+                  (2026-09-01, at the user's explicit preference over
+                  growing those cards) - a raw signed OI-change % alone
+                  doesn't distinguish buildup from covering, only OI
+                  direction PLUS price direction together does (see
+                  build_oi_summary's own reasoning for using the
+                  underlying's spot price here, not any one leg's
+                  premium). "-" (buildupBadge's own empty state) until the
+                  15m-ago spot-price sample warms up. */}
+              <div className="manual-stats-card">
+                <span className="manual-stats-card-label">Call Buildup (15m)</span>
+                <span className="manual-stats-card-value">{buildupBadge(summary.total_call_buildup)}</span>
+              </div>
+              <div className="manual-stats-card">
+                <span className="manual-stats-card-label">Put Buildup (15m)</span>
+                <span className="manual-stats-card-value">{buildupBadge(summary.total_put_buildup)}</span>
               </div>
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">ATM IV (Call / Put)</span>

@@ -222,6 +222,14 @@ class OptionOiSummary(BaseModel):
     total_put_oi_change_5m: Optional[int] = None
     total_call_oi_change_15m: Optional[int] = None
     total_put_oi_change_15m: Optional[int] = None
+    # Chain-wide buildup classification for the TOTAL figures above,
+    # against the underlying's own spot-price direction rather than any
+    # one leg's premium (see app/domain/oi_summary.py's build_oi_summary
+    # for the reasoning - OptionOiLeg.buildup below is the per-leg,
+    # premium-based equivalent this is deliberately NOT reusing for a
+    # chain-wide sum). None until the spot-price history has warmed up.
+    total_call_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
+    total_put_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
     atm_call_iv: Optional[float] = None
     atm_put_iv: Optional[float] = None
     strikes: list[OptionOiSummaryStrike]  # sorted ascending by strike

@@ -149,9 +149,22 @@ def build_exit_config(
     stop_loss_interval choice) - that's threaded through as a separately-
     fetched `sl_candles` series at the simulate_trades call site instead
     of anything on ExitConfig, which has no stop_loss_interval field of
-    its own (see that dataclass's own field list)."""
+    its own (see that dataclass's own field list).
+
+    For stop_loss_method='indicator', combo["stop_loss_value"] may come
+    from expand_stop_loss_grid (period already coerced to int there) OR
+    directly from a single-run request's own stop_loss_indicator_params
+    (the /backtest-signals/trades route, which never touches
+    expand_stop_loss_grid at all) - 'period' is coerced back to int
+    here too so compute_ema/compute_supertrend's list slicing never sees
+    a float regardless of which path a given call came from."""
     stop_loss_percent = combo["stop_loss_value"] if stop_loss_method == "percent" else None
     stop_loss_indicator_params = combo["stop_loss_value"] if stop_loss_method == "indicator" else None
+    if stop_loss_indicator_params is not None and "period" in stop_loss_indicator_params:
+        stop_loss_indicator_params = {
+            **stop_loss_indicator_params,
+            "period": int(stop_loss_indicator_params["period"]),
+        }
     return ExitConfig(
         stop_loss_method=stop_loss_method,
         stop_loss_percent=stop_loss_percent,

@@ -10,8 +10,20 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from app.domain.generation.models import StopLossInterval
 from app.domain.generation.rule import Interval
+
+# StopLossInterval (models.py) deliberately excludes 'daily' - it's
+# shared with LIVE stop-loss checking, which polls Dhan's intraday-only
+# candle endpoint and genuinely can never fetch a daily bar there. This
+# backtest reads historical candles via get_candle_history instead
+# (which serves 'daily' fine, same as the `interval` field above already
+# uses it for entries) - excluding it here would make backtesting a
+# swing/positional CSV against a DAILY-chart indicator impossible, even
+# though nothing about replaying history requires the live-only
+# restriction. Reproduced live: a SuperTrend crossing a user could see
+# on their own daily chart never showed up as a stop-loss exit, because
+# the SL interval dropdown had no 'daily' option to match it with.
+BacktestStopLossInterval = Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min", "daily"]
 
 
 class ExternalBacktestSignal(BaseModel):
@@ -46,12 +58,16 @@ class ExternalBacktestRequest(BaseModel):
     # 'previous_candle' only - which candle series to check against,
     # fetched separately from `interval` above (same as every other
     # backtest's sl_candles - see ExitConfig's own docstring).
-    stop_loss_interval: Optional[StopLossInterval] = None
+    stop_loss_interval: Optional[BacktestStopLossInterval] = None
     # 'percent' only.
     stop_loss_percent_grid: Optional[list[float]] = Field(default=None, min_length=1)
-    # 'indicator' only.
+    # 'indicator' only. list[float] not list[int] - 'multiplier'
+    # (SuperTrend) is genuinely fractional (e.g. 2.5); 'period' is coerced
+    # back to a real int in build_exit_config before use (a container
+    # can't type its value list differently per dict key) - see that
+    # function's own comment.
     stop_loss_indicator_type: Optional[str] = None
-    stop_loss_indicator_param_grid: Optional[dict[str, list[int]]] = None
+    stop_loss_indicator_param_grid: Optional[dict[str, list[float]]] = None
     # None alongside real values means "also try no target at all" (SL/
     # opposite-signal/end-of-data exit only) - a legitimate grid point,
     # not omitted-vs-set ambiguity the way a single-run request would have.
@@ -118,10 +134,13 @@ class ExternalBacktestTradeRequest(BaseModel):
     direction: Literal["bullish", "bearish"]
     interval: Interval
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator"]] = None
-    stop_loss_interval: Optional[StopLossInterval] = None
+    stop_loss_interval: Optional[BacktestStopLossInterval] = None
     stop_loss_percent: Optional[float] = None
     stop_loss_indicator_type: Optional[str] = None
-    stop_loss_indicator_params: Optional[dict[str, int]] = None
+    # dict[str, float] not dict[str, int] - same 'multiplier' can be
+    # fractional reasoning as ExternalBacktestRequest's own
+    # stop_loss_indicator_param_grid above.
+    stop_loss_indicator_params: Optional[dict[str, float]] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
     square_off_time: Optional[time] = None

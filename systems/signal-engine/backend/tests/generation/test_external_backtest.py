@@ -176,6 +176,24 @@ def test_build_exit_config_indicator_method_maps_stop_loss_value_to_indicator_pa
     assert cfg.stop_loss_indicator_type == "ema"
 
 
+def test_build_exit_config_coerces_indicator_period_to_int_even_when_sent_as_float():
+    """Reproduces the /backtest-signals/trades route's own path (never
+    touches expand_stop_loss_grid) - a fractional SuperTrend multiplier
+    forces the request schema to accept float for the whole dict, so
+    'period' can arrive as e.g. 20.0 and must be coerced back to int here
+    or compute_ema/compute_supertrend's list slicing crashes on it."""
+    combo = {
+        "stop_loss_value": {"period": 20.0, "multiplier": 2.5},
+        "target_percent": None,
+        "trailing_stop_enabled": False,
+    }
+    cfg = build_exit_config(combo, "indicator", "supertrend")
+
+    assert cfg.stop_loss_indicator_params == {"period": 20, "multiplier": 2.5}
+    assert isinstance(cfg.stop_loss_indicator_params["period"], int)
+    assert cfg.stop_loss_indicator_params["multiplier"] == 2.5
+
+
 # --- grid_search_external_signals: ranked report ------------------------------------------------
 
 

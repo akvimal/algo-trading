@@ -14,6 +14,7 @@ import {
   REGIME_INDICATOR_TYPES,
   type ActiveWindow,
   type BacktestResult,
+  type BacktestStopLossInterval,
   type Condition,
   type ContractDayFilter,
   type CounterSignalPolicy,
@@ -973,6 +974,12 @@ function ruleSummary(r: Rule, indicators: Indicator[]): string {
 // deliberately excludes (see api.ts) - this guards the auto-default
 // below from ever proposing a value the SL-interval field can't accept.
 const STOP_LOSS_INTERVALS: string[] = ["1min", "3min", "5min", "15min", "25min", "30min", "60min"];
+
+// ExternalBacktestPanel's own SL-interval list - this backtest reads
+// HISTORICAL candles (not the live intraday-only feed STOP_LOSS_INTERVALS
+// above is constrained by), so 'daily' is a real, valid choice here - see
+// api.ts's BacktestStopLossInterval.
+const BACKTEST_STOP_LOSS_INTERVALS: string[] = [...STOP_LOSS_INTERVALS, "daily"];
 
 function RuleManager() {
   const [rules, setRules] = useState<Rule[]>([]);
@@ -3099,7 +3106,7 @@ function ExternalBacktestPanel({ strategy }: { strategy: Strategy }) {
       ? String(strategy.stop_loss_percent)
       : "1,2,3",
   );
-  const [slInterval, setSlInterval] = useState<StopLossInterval>(() => strategy.stop_loss_interval ?? "15min");
+  const [slInterval, setSlInterval] = useState<BacktestStopLossInterval>(() => strategy.stop_loss_interval ?? "15min");
   // stop_loss_method='indicator' only - same EMA/SuperTrend choice and
   // period(/multiplier) shape the Strategy edit form and Rule grid search
   // both already use (see buildStopLossIndicatorParams). The period/
@@ -3186,6 +3193,12 @@ function ExternalBacktestPanel({ strategy }: { strategy: Strategy }) {
         payload.stop_loss_interval = slInterval;
       } else if (slMethod === "indicator") {
         payload.stop_loss_method = "indicator";
+        // Which candle series the EMA/SuperTrend itself gets computed on -
+        // without this the backend has no interval to fetch that series
+        // at, so the indicator stop-loss silently never fires (reproduced
+        // live: SL never closed a bullish position on a close below its
+        // own EMA/SuperTrend line).
+        payload.stop_loss_interval = slInterval;
         payload.stop_loss_indicator_type = slIndicatorType;
         const periods = parseNumberGrid(slIndicatorPeriodGrid);
         payload.stop_loss_indicator_param_grid =
@@ -3222,6 +3235,7 @@ function ExternalBacktestPanel({ strategy }: { strategy: Strategy }) {
         payload.stop_loss_interval = slInterval;
       } else if (slMethod === "indicator") {
         payload.stop_loss_method = "indicator";
+        payload.stop_loss_interval = slInterval;
         payload.stop_loss_indicator_type = slIndicatorType;
         // This row's own combo already carries the exact period(/multiplier)
         // that combo was run with - reuse it directly rather than the grid
@@ -3310,8 +3324,8 @@ function ExternalBacktestPanel({ strategy }: { strategy: Strategy }) {
           <label>
             SL candle interval
             {" "}
-            <select value={slInterval} onChange={(e) => setSlInterval(e.target.value as StopLossInterval)}>
-              {STOP_LOSS_INTERVALS.map((iv) => (
+            <select value={slInterval} onChange={(e) => setSlInterval(e.target.value as BacktestStopLossInterval)}>
+              {BACKTEST_STOP_LOSS_INTERVALS.map((iv) => (
                 <option key={iv} value={iv}>
                   {iv}
                 </option>
@@ -3326,6 +3340,17 @@ function ExternalBacktestPanel({ strategy }: { strategy: Strategy }) {
               <select value={slIndicatorType} onChange={(e) => setSlIndicatorType(e.target.value as StopLossIndicatorType)}>
                 <option value="ema">EMA</option>
                 <option value="supertrend">SuperTrend</option>
+              </select>
+            </label>
+            <label>
+              SL candle interval
+              {" "}
+              <select value={slInterval} onChange={(e) => setSlInterval(e.target.value as BacktestStopLossInterval)}>
+                {BACKTEST_STOP_LOSS_INTERVALS.map((iv) => (
+                  <option key={iv} value={iv}>
+                    {iv}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -3435,9 +3460,9 @@ function ExternalBacktestPanel({ strategy }: { strategy: Strategy }) {
                     {trades.map((t, i) => (
                       <tr key={i}>
                         <td>{t.symbol}</td>
-                        <td>{t.entry_time}</td>
+                        <td>{formatDateTimeNoSeconds(t.entry_time)}</td>
                         <td>{t.entry_price}</td>
-                        <td>{t.exit_time}</td>
+                        <td>{formatDateTimeNoSeconds(t.exit_time)}</td>
                         <td>{t.exit_price}</td>
                         <td>{t.exit_reason}</td>
                         <td className={t.pnl >= 0 ? "positive" : "negative"}>{t.pnl.toFixed(2)}</td>

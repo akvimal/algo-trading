@@ -14,6 +14,7 @@ from app.adapters.db.session import get_db
 from app.adapters.market_data.client import get_candle_history, resolve_underlying
 from app.auth import get_optional_user_id
 from app.domain.generation.backtest import expand_stop_loss_grid, max_drawdown, win_rate
+from app.domain.generation.engine import history_window
 from app.domain.generation.external_backtest import (
     build_exit_config,
     expand_exit_grid,
@@ -479,18 +480,32 @@ def _fetch_candles_for_backtest_signals(
     stop_loss_method: Optional[str],
     stop_loss_interval: Optional[str],
     to: date,
+    stop_loss_indicator_period: Optional[int] = None,
 ) -> tuple[dict[str, list], dict[str, list], list[ExternalBacktestSkippedSymbol]]:
     """Shared by the grid endpoint below and its /trades drill-down
     sibling - resolves + fetches candles once per symbol (main interval,
-    plus the SL interval too when stop_loss_method='previous_candle' uses
-    a different one), skipping (not raising for) a symbol that fails to
+    plus a second SL-interval series for stop_loss_method='previous_candle'
+    or 'indicator'), skipping (not raising for) a symbol that fails to
     resolve or whose candle history call to market-data itself fails -
     same per-symbol from_date and requests.RequestException handling as
     _backtest_pooled_symbols in rules.py; see backtest_strategy_signals's
     own docstring for why both matter here. Each skip carries a `reason`
     (see _skip_reason_for_candle_failure) rather than just a bare symbol,
     so a caller can tell a too-wide date range apart from a resolve
-    failure or an empty result."""
+    failure or an empty result.
+
+    stop_loss_indicator_period is the widest 'period' across whatever the
+    caller is about to run (a single value for the /trades drill-down, or
+    the max across the whole grid for backtest_strategy_signals - see that
+    route's own call site) - same "one wide-enough fetch, not one per
+    combo" reasoning as rules.py's own backtest_rule_grid. Without this,
+    stop_loss_method='indicator' silently got NO sl_candles at all (this
+    function used to only special-case 'previous_candle'), so
+    _indicator_stop_price/_initial_stop_loss_price always fell through to
+    None - the indicator-based stop-loss never actually fired despite
+    every OTHER exit path (target/opposite-signal/end-of-data) working
+    fine, exactly the "SL doesn't close on a close below EMA/SuperTrend"
+    symptom reported live."""
     candles_by_symbol: dict[str, list] = {}
     sl_candles_by_symbol: dict[str, list] = {}
     skipped: list[ExternalBacktestSkippedSymbol] = []
@@ -516,6 +531,17 @@ def _fetch_candles_for_backtest_signals(
                     candles
                     if stop_loss_interval == interval
                     else get_candle_history(resolved.chart_exchange, resolved.chart_symbol, stop_loss_interval, from_date, to)
+                )
+            elif stop_loss_method == "indicator" and stop_loss_interval and stop_loss_indicator_period:
+                # Always fetched fresh (never opportunistically reused
+                # like previous_candle above, even when the intervals
+                # match) - the indicator's own warm-up window is
+                # typically wider than the main series' own range, same
+                # as rules.py's _sl_candles_for does for the exact same
+                # reason.
+                warmup_from, _ = history_window(stop_loss_indicator_period, stop_loss_interval)
+                sl_candles = get_candle_history(
+                    resolved.chart_exchange, resolved.chart_symbol, stop_loss_interval, min(from_date, warmup_from), to
                 )
         except requests.RequestException as exc:
             reason = _skip_reason_for_candle_failure(exc, from_date, to)
@@ -583,6 +609,13 @@ def backtest_strategy_signals(
                 status_code=422,
                 detail="stop_loss_method='indicator' requires stop_loss_indicator_type and stop_loss_indicator_param_grid",
             )
+        # Which candle series the indicator gets computed on - without it
+        # _fetch_candles_for_backtest_signals has no interval to fetch
+        # sl_candles at, so the indicator stop-loss would silently never
+        # fire (same field the Strategy edit form already requires for
+        # this method - see StrategyUpdate's own validation).
+        if not payload.stop_loss_interval:
+            raise HTTPException(status_code=422, detail="stop_loss_method='indicator' requires stop_loss_interval")
         try:
             stop_loss_values = expand_stop_loss_grid(payload.stop_loss_indicator_param_grid)
         except ValueError as exc:
@@ -599,8 +632,24 @@ def backtest_strategy_signals(
     for s in payload.signals:
         signals_by_symbol.setdefault(s.symbol.strip().upper(), []).append(s.timestamp.isoformat())
 
+    # sl_candles must cover the WIDEST stop-loss indicator period across
+    # the whole sweep - same "one wide-enough fetch, not one per combo"
+    # reasoning as rules.py's own backtest_rule_grid (a wider-than-needed
+    # series computes a smaller-period EMA/SuperTrend correctly too).
+    stop_loss_indicator_period = None
+    if payload.stop_loss_method == "indicator":
+        periods = [int(v["period"]) for v in stop_loss_values if isinstance(v, dict) and "period" in v]
+        if periods:
+            stop_loss_indicator_period = max(periods)
+
     candles_by_symbol, sl_candles_by_symbol, skipped = _fetch_candles_for_backtest_signals(
-        strategy, signals_by_symbol, payload.interval, payload.stop_loss_method, payload.stop_loss_interval, to
+        strategy,
+        signals_by_symbol,
+        payload.interval,
+        payload.stop_loss_method,
+        payload.stop_loss_interval,
+        to,
+        stop_loss_indicator_period,
     )
 
     results = grid_search_external_signals(
@@ -653,6 +702,8 @@ def backtest_strategy_signals_trades(
             status_code=422,
             detail="stop_loss_method='indicator' requires stop_loss_indicator_type and stop_loss_indicator_params",
         )
+    if payload.stop_loss_method == "indicator" and not payload.stop_loss_interval:
+        raise HTTPException(status_code=422, detail="stop_loss_method='indicator' requires stop_loss_interval")
     if payload.stop_loss_method == "previous_candle" and not payload.stop_loss_interval:
         raise HTTPException(status_code=422, detail="stop_loss_method='previous_candle' requires stop_loss_interval")
 
@@ -667,8 +718,19 @@ def backtest_strategy_signals_trades(
     for s in payload.signals:
         signals_by_symbol.setdefault(s.symbol.strip().upper(), []).append(s.timestamp.isoformat())
 
+    stop_loss_indicator_period = (
+        int(payload.stop_loss_indicator_params["period"])
+        if payload.stop_loss_method == "indicator" and payload.stop_loss_indicator_params and "period" in payload.stop_loss_indicator_params
+        else None
+    )
     candles_by_symbol, sl_candles_by_symbol, skipped = _fetch_candles_for_backtest_signals(
-        strategy, signals_by_symbol, payload.interval, payload.stop_loss_method, payload.stop_loss_interval, to
+        strategy,
+        signals_by_symbol,
+        payload.interval,
+        payload.stop_loss_method,
+        payload.stop_loss_interval,
+        to,
+        stop_loss_indicator_period,
     )
 
     trades_by_symbol = simulate_external_signals_by_symbol(

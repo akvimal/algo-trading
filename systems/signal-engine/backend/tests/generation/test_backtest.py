@@ -602,6 +602,51 @@ def test_simulate_trades_indicator_ema_trailing_stop_ratchets_and_never_loosens(
     assert trade.pnl == pytest.approx(15.0 - 17.0)
 
 
+def test_simulate_trades_trailing_establishes_indicator_stop_that_was_missing_at_entry():
+    """Reproduces a real live case: a bullish entry firing while its own
+    SuperTrend/EMA hasn't itself flipped bullish yet (still sitting ABOVE
+    the entry price) - _initial_stop_loss_price's own guard correctly
+    rejects setting a phantom same-bar stop there, so stop_loss_price
+    starts as None. Before the fix, the trailing block was gated on
+    "stop_loss_price is not None", so a trade that started with no stop
+    NEVER got one for its entire remaining life, even once the indicator
+    became valid a few bars later and the position ran unprotected all
+    the way to end_of_data - reproduced live with a real TITAN
+    SuperTrend(10, 1) backtest. Trailing must be able to ESTABLISH a
+    stop for the first time on a later bar, not just ratchet one that
+    already exists."""
+    bias_fn = lambda window: "bullish" if len(window) == 6 else None  # noqa: E731
+
+    candles = _entry_fixture()  # entry@15, ts(5)
+    candles.append(_bar(6, 16.0, high=16.5, low=15.5))  # EMA now valid (below this bar's own close) - established here
+    candles.append(_bar(7, 17.5, high=18.0, low=14.5))  # dips through the just-established stop
+
+    # As of entry (ts(5), strictly-before filter -> offsets 1-4, flat 25s):
+    # period=2 EMA = 25.0, ABOVE the entry price (15) - the initial-stop
+    # guard rejects it (a bullish stop above entry is nonsensical), so
+    # simulate_trades starts this trade with stop_loss_price=None.
+    # Offset 5 (close=10) only enters the window once the trailing loop
+    # evaluates bar(6) (ts(6) > ts(5)), pulling the EMA down to 15.0 -
+    # below bar(6)'s own close (16.0), now a valid protective level.
+    sl_candles = [_bar(1, 25.0), _bar(2, 25.0), _bar(3, 25.0), _bar(4, 25.0), _bar(5, 10.0)]
+
+    trades = simulate_trades(
+        bias_fn,
+        6,
+        candles,
+        ExitConfig(
+            stop_loss_method="indicator", stop_loss_indicator_type="ema", stop_loss_indicator_params={"period": 2},
+            trailing_stop_enabled=True,
+        ),
+        sl_candles=sl_candles,
+    )
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_price == pytest.approx(15.0)
+
+
 def test_simulate_trades_indicator_ema_stop_rejects_wrong_side_of_entry():
     # A slow EMA that's still above the entry price for a fresh BULLISH
     # position (plausible after a downtrend) isn't a protective stop at
@@ -924,6 +969,24 @@ def test_expand_stop_loss_grid_too_many_combinations_raises():
     too_many = {"period": list(range(1, MAX_GRID_COMBINATIONS + 2))}
     with pytest.raises(ValueError, match="max is"):
         expand_stop_loss_grid(too_many)
+
+
+def test_expand_stop_loss_grid_coerces_period_to_int_but_leaves_multiplier_a_float():
+    """The request schema types this whole grid as list[float] (not
+    list[int]) since SuperTrend's multiplier is genuinely fractional (e.g.
+    2.5) - 'period' still needs to come out a real int, since it's used
+    for list slicing (compute_ema/compute_supertrend), which raises
+    TypeError on a float index."""
+    combos = expand_stop_loss_grid({"period": [10.0, 20.0], "multiplier": [2.5, 3.0]})
+
+    assert combos == [
+        {"period": 10, "multiplier": 2.5},
+        {"period": 10, "multiplier": 3.0},
+        {"period": 20, "multiplier": 2.5},
+        {"period": 20, "multiplier": 3.0},
+    ]
+    assert all(isinstance(c["period"], int) for c in combos)
+    assert all(isinstance(c["multiplier"], float) for c in combos)
 
 
 # --- grid_search: stop_loss_indicator_combos second sweep dimension ------------------------

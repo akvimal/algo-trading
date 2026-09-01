@@ -305,7 +305,7 @@ def _simulate_one_trade(
             reason = "stop_loss" if sl_hit else "target"
             return _close(entry_candle, direction, entry_price, bar, exit_price, reason), j
 
-        if exit_config.trailing_stop_enabled and stop_loss_price is not None:
+        if exit_config.trailing_stop_enabled:
             candidate: Optional[float] = None
             if exit_config.stop_loss_method == "percent":
                 candidate = _stop_loss_percent_price(direction, bar.close, exit_config.stop_loss_percent)
@@ -321,9 +321,28 @@ def _simulate_one_trade(
                     bar.close,
                 )
             if candidate is not None:
-                more_favorable = candidate > stop_loss_price if direction == "bullish" else candidate < stop_loss_price
-                if more_favorable:
+                # stop_loss_price can still be None here even with
+                # trailing on - _initial_stop_loss_price's own guard
+                # rejects a phantom same-bar stop when the indicator sits
+                # on the wrong side of price AT ENTRY (e.g. a bullish
+                # entry firing just before its SuperTrend/EMA has itself
+                # flipped bullish - a real, reproduced case: TITAN's own
+                # Chartink signal fired 2 trading days ahead of its
+                # SuperTrend(10,1) flip). Gating this whole block on
+                # "already have a stop" (the old code) meant a trade that
+                # started with no stop NEVER got one for its entire
+                # remaining life, even once the indicator became valid a
+                # few bars later - defeating the entire point of a
+                # trailing indicator stop. First valid candidate is
+                # simply adopted outright (nothing to compare it against
+                # yet); once stop_loss_price is set, ratcheting proceeds
+                # as before.
+                if stop_loss_price is None:
                     stop_loss_price = candidate
+                else:
+                    more_favorable = candidate > stop_loss_price if direction == "bullish" else candidate < stop_loss_price
+                    if more_favorable:
+                        stop_loss_price = candidate
 
         opposite = bias_fn(candles[: j + 1])
         if opposite is not None and opposite != direction:
@@ -627,7 +646,15 @@ def expand_stop_loss_grid(param_grid: dict[str, list]) -> list[dict]:
     value" to fall back to the way a real Indicator row provides one for
     expand_grid. Raises ValueError for an empty grid or one too large to
     run (same MAX_GRID_COMBINATIONS cap, applied to THIS dimension alone -
-    the route layer caps the combined total against the indicator grid)."""
+    the route layer caps the combined total against the indicator grid).
+
+    The request-level grid is typed dict[str, list[float]] (not
+    list[int]) since 'multiplier' is genuinely fractional (e.g. 2.5) and
+    a single dict value-type can't vary per key - but 'period' is a
+    candle COUNT, used for list slicing downstream (compute_ema/
+    compute_supertrend), which raises TypeError on a float index. Coerced
+    back to int here, the one place both the Rule and external-signals
+    grid paths build their combos, rather than in each caller."""
     keys = list(param_grid)
     combos = list(itertools.product(*(param_grid[k] for k in keys)))
     if not combos:
@@ -636,7 +663,10 @@ def expand_stop_loss_grid(param_grid: dict[str, list]) -> list[dict]:
         raise ValueError(
             f"stop-loss grid search would run {len(combos)} combinations - max is {MAX_GRID_COMBINATIONS}, narrow it"
         )
-    return [dict(zip(keys, combo)) for combo in combos]
+    return [
+        {k: (int(v) if k == "period" else v) for k, v in zip(keys, combo)}
+        for combo in combos
+    ]
 
 
 def grid_search(

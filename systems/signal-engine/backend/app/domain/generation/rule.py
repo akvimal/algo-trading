@@ -729,8 +729,12 @@ class RuleBacktestGridRequest(BaseModel):
     # means stop_loss_indicator_params above applies as one fixed value to
     # every combo, same as before this field existed. Not merged onto
     # stop_loss_indicator_params - every key the sweep needs must be named
-    # here (see expand_stop_loss_grid's own docstring on why).
-    stop_loss_indicator_param_grid: Optional[dict[str, list[int]]] = None
+    # here (see expand_stop_loss_grid's own docstring on why). list[float]
+    # not list[int] - 'multiplier' (SuperTrend) is genuinely fractional
+    # (e.g. 2.5); 'period' is coerced back to a real int inside
+    # expand_stop_loss_grid before use (a container can't type its value
+    # list differently per dict key).
+    stop_loss_indicator_param_grid: Optional[dict[str, list[float]]] = None
     # A second sweep dimension for stop_loss_method='percent' instead -
     # candidate stop-loss percent values, e.g. [1, 1.5, 2, 2.5] to try 4
     # different SL percentages against every combination in param_grid

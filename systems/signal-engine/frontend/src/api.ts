@@ -763,11 +763,26 @@ const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
 // reference it") is far more useful to show than the bare status code
 // alone, which is all callers saw before this existed. Falls back to the
 // status code if the body isn't JSON or has no `detail` (a non-FastAPI
-// failure, e.g. a proxy/network-level error page).
+// failure, e.g. a proxy/network-level error page). A 422 from FastAPI's
+// own request-body/query validation (as opposed to one raised explicitly
+// via HTTPException elsewhere in a route) shapes `detail` as a LIST of
+// {loc, msg} objects instead of a string - e.g. an out-of-range enum
+// value or a field that failed a Pydantic type check - so that shape is
+// handled here too, rather than silently falling through to the
+// uninformative "HTTP 422" every caller used to see for it.
 async function extractErrorDetail(res: Response): Promise<string> {
   try {
     const body = await res.json();
     if (body && typeof body.detail === "string") return body.detail;
+    if (body && Array.isArray(body.detail)) {
+      const messages = body.detail
+        .map((e: { loc?: unknown[]; msg?: string }) => {
+          const field = Array.isArray(e.loc) ? e.loc.filter((p) => p !== "body").join(".") : null;
+          return field && e.msg ? `${field}: ${e.msg}` : e.msg;
+        })
+        .filter(Boolean);
+      if (messages.length > 0) return messages.join("; ");
+    }
   } catch {
     // not JSON - fall through to the status code below
   }
@@ -975,6 +990,14 @@ export type ExternalBacktestSignal = {
   timestamp: string; // ISO
 };
 
+// StopLossInterval (above) deliberately excludes 'daily' - it's shared
+// with LIVE stop-loss checking, which polls an intraday-only candle feed
+// that can never serve a daily bar. This backtest reads HISTORICAL
+// candles instead (same as `interval` already does for entries), so
+// 'daily' works fine here - excluding it would make backtesting a swing/
+// positional CSV against a daily-chart indicator impossible.
+export type BacktestStopLossInterval = StopLossInterval | "daily";
+
 export type ExternalBacktestRequest = {
   signals: ExternalBacktestSignal[];
   direction: "bullish" | "bearish";
@@ -983,7 +1006,7 @@ export type ExternalBacktestRequest = {
   // matches stop_loss_method. 'previous_candle' has no per-combo value to
   // sweep at all (stop_loss_interval alone decides it).
   stop_loss_method?: "previous_candle" | "percent" | "indicator";
-  stop_loss_interval?: StopLossInterval;
+  stop_loss_interval?: BacktestStopLossInterval;
   stop_loss_percent_grid?: number[];
   stop_loss_indicator_type?: string;
   stop_loss_indicator_param_grid?: Record<string, number[]>;
@@ -1044,7 +1067,7 @@ export type ExternalBacktestTradeRequest = {
   direction: "bullish" | "bearish";
   interval: Interval;
   stop_loss_method?: "previous_candle" | "percent" | "indicator";
-  stop_loss_interval?: StopLossInterval;
+  stop_loss_interval?: BacktestStopLossInterval;
   stop_loss_percent?: number;
   stop_loss_indicator_type?: string;
   stop_loss_indicator_params?: Record<string, number>;

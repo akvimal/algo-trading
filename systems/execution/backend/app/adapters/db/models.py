@@ -332,7 +332,12 @@ class Position(Base):
     # brand-new position is always False) - default=False client-side is
     # enough, see position_manager.py's _evaluate_exits.
     breakeven_triggered = Column(Boolean, nullable=False, default=False)
-    # 'square_off' | 'stop_loss' | 'target' | 'manual' | 'counter_signal', set when status becomes CLOSED
+    # Copied from ResolvedOrder.exit_condition at open time (or NULL) -
+    # independent of the stop-loss/target columns above, see
+    # app.domain.exit_condition and _evaluate_exits' own exit_condition
+    # branch. none_as_null=True, same reasoning as stop_loss_indicator_params.
+    exit_condition = Column(JSONB(none_as_null=True))
+    # 'square_off' | 'stop_loss' | 'target' | 'exit_condition' | 'manual' | 'counter_signal' | 'liquidation', set when status becomes CLOSED
     exit_reason = Column(Text)
     # The square-off time this position's Strategy set (required there) -
     # copied at open time, never changed afterward. NULL only for

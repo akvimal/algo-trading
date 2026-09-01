@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.config import settings as app_settings
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
+from app.domain.exit_condition import evaluate_exit_condition, exit_condition_warmup
 from app.domain.live_broker import (
     cancel_resting_order_scheduled,
     is_live_enabled,
@@ -752,7 +753,7 @@ def _today_realized_pnl(db: Session, user_id: uuid.UUID, segment: str, timezone:
     exited today (server-side "today", same _today_in_tz reference point
     everything else here uses) - live-broker-adapter P2's max_daily_loss
     cap (see open_manual_position's own live-gate comment). Includes
-    every exit_reason (stop_loss/target/square_off/manual/counter_signal),
+    every exit_reason (stop_loss/target/exit_condition/square_off/manual/counter_signal),
     not just real-broker ones - a bad paper day and a bad live day both
     count against the same cap once live trading is what's actually at
     risk that day. 0.0 (not None) if nothing closed today, so callers
@@ -1572,6 +1573,7 @@ def open_position(
         stop_loss_percent=order.stop_loss_percent,
         stop_loss_indicator_type=order.stop_loss_indicator_type,
         stop_loss_indicator_params=order.stop_loss_indicator_params,
+        exit_condition=order.exit_condition,
         # NULL for a positional position - never force-closed by the
         # square-off scheduler (same "NULL means never force-closed"
         # convention CRYPTO's own square_off_time=None already relies on),
@@ -2470,14 +2472,16 @@ def _evaluate_exits(
     compute_unrealized_pnl takes a plain `positions: list` instead of a
     Session.
 
-    Only positions with a stop_loss_price, target_price, or liquidation_price
-    set should be passed in - plain capital-sized positions (none set)
-    aren't monitored at all, no added overhead for them (check_exits filters
-    before calling this). Liquidation takes priority over SL/target if
-    multiple would fire in the same tick (a real exchange force-closes a
-    liquidated position regardless of what stop-loss the strategy itself
-    configured); SL takes priority over target if both would fire (gappy
-    price).
+    Only positions with a stop_loss_price, target_price, liquidation_price,
+    or exit_condition set should be passed in - plain capital-sized
+    positions (none set) aren't monitored at all, no added overhead for
+    them (check_exits filters before calling this). Liquidation takes
+    priority over SL/target if multiple would fire in the same tick (a
+    real exchange force-closes a liquidated position regardless of what
+    stop-loss the strategy itself configured); SL takes priority over
+    target if both would fire (gappy price); exit_condition (a Strategy's
+    own independent close trigger, see app.domain.exit_condition) is
+    checked last of the four and only when none of the others fired.
 
     Trailing (only trailing_stop_enabled positions, stop-loss only, never
     the target - see docs/architecture.md) ratchets stop_loss_price using
@@ -2496,11 +2500,12 @@ def _evaluate_exits(
     stop_loss_method='indicator' but no get_candle_history supplied is
     simply skipped for trailing, same as a candle fetch failure below."""
     if not positions:
-        return {"closed_stop_loss": 0, "closed_target": 0, "trailed": 0, "checked": 0, "live_exits_needed": []}
+        return {"closed_stop_loss": 0, "closed_target": 0, "closed_exit_condition": 0, "trailed": 0, "checked": 0, "live_exits_needed": []}
 
     quotes = _quotes_by_exchange(positions, get_ltp_batch)
     closed_stop_loss = 0
     closed_target = 0
+    closed_exit_condition = 0
     trailed = 0
     # Live-broker-adapter P2 - (pos, reason) pairs a live position's own
     # sl_hit/target_hit flagged, for check_exits (the DB-committing
@@ -2584,6 +2589,53 @@ def _evaluate_exits(
                 closed_target += 1
             continue
 
+        # Strategy.exit_condition (added 2026-09-01) - an independent live
+        # close trigger, checked only AFTER stop-loss/target/liquidation
+        # (all of which pre-empt it, same first-match-wins priority the
+        # liquidation branch's own docstring establishes). A single
+        # Condition evaluated against fresh candle history at its own
+        # interval; closes the position outright the first tick it's true.
+        # get_candle_history is Optional - a position with an
+        # exit_condition but no history fn supplied (older callers/tests)
+        # is simply skipped here, same as the 'indicator' trailing branch.
+        exit_condition = getattr(pos, "exit_condition", None)
+        if exit_condition is not None and get_candle_history is not None:
+            interval = exit_condition["interval"]
+            # Own cache key (distinct from the trailing-'indicator' branch's
+            # (exchange, symbol, interval) even at the same interval) - the
+            # two size their fetch window off different warm-up counts, so
+            # sharing an entry could hand one a series sized for the other.
+            key = (pos.exchange, pos.symbol, interval, "exit_condition")
+            if key not in candle_history_cache:
+                try:
+                    warmup_bars = exit_condition_warmup(exit_condition)
+                    warmup_from, warmup_to = _indicator_history_window(warmup_bars, interval)
+                    candle_history_cache[key] = get_candle_history(pos.exchange, pos.symbol, interval, warmup_from, warmup_to)
+                except Exception:
+                    logger.exception("failed to fetch exit_condition candle history for %s:%s", pos.exchange, pos.symbol)
+                    candle_history_cache[key] = []
+            condition_hit = False
+            if candle_history_cache[key]:
+                try:
+                    condition_hit = bool(evaluate_exit_condition(exit_condition, candle_history_cache[key]))
+                except Exception:
+                    logger.exception("failed to evaluate exit_condition for position %s", pos.id)
+            if condition_hit:
+                if getattr(pos, "is_live_broker_order", False):
+                    live_exits_needed.append((pos, "exit_condition"))
+                    continue
+                pos.exit_price = cmp_price
+                pos.exit_time = datetime.now(dt_timezone.utc)
+                raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, float(pos.quantity))
+                _apply_realized_pnl(
+                    pos, _resolve_capital_account(pos, accounts_by_segment, strategy_accounts), _net_pnl_with_costs(pos, cmp_price, raw_pnl),
+                    rates.get(pos.user_id),
+                )
+                pos.status = "CLOSED"
+                pos.exit_reason = "exit_condition"
+                closed_exit_condition += 1
+                continue
+
         if pos.trailing_stop_enabled and pos.stop_loss_method is not None:
             candidate_stop: Optional[float] = None
             if pos.stop_loss_method == "percent":
@@ -2651,6 +2703,7 @@ def _evaluate_exits(
     return {
         "closed_stop_loss": closed_stop_loss,
         "closed_target": closed_target,
+        "closed_exit_condition": closed_exit_condition,
         "trailed": trailed,
         "checked": len(positions),
         "live_exits_needed": live_exits_needed,
@@ -2691,9 +2744,9 @@ def _active_resting_stop_loss(db: Session, position_id: uuid.UUID) -> Optional[d
 
 
 def _settle_live_exit(db: Session, pos: db_models.Position, reason: str) -> None:
-    """Closes a live position for real - reason is 'stop_loss'/'target'
-    (from check_exits' own CMP-based detection) or 'square_off' (from
-    square_off_due_positions). If a resting stop-loss order is still
+    """Closes a live position for real - reason is 'stop_loss'/'target'/
+    'exit_condition' (from check_exits' own CMP-based detection) or
+    'square_off' (from square_off_due_positions). If a resting stop-loss order is still
     resting on the exchange for this position, it's CANCELLED first - a
     real position must never have two independent real closing orders in
     flight at once (the resting SL and a fresh reactive market order could
@@ -2727,7 +2780,8 @@ def _settle_live_exit(db: Session, pos: db_models.Position, reason: str) -> None
     elif reason == "target":
         exit_price = float(pos.target_price)
     else:
-        # square_off - no stop/target price to fall back to; the exit
+        # square_off / exit_condition - no stop/target price to fall back
+        # to; the exit
         # order confirmed TRADED (submit_exit_order_scheduled only returns
         # error=None once it has), so raw_response should carry SOME price
         # even if average_fill_price's exact field name is still
@@ -2784,6 +2838,10 @@ def check_exits(
             # Strategy stop-loss method set) - still must be checked every
             # tick, see _evaluate_exits' liquidation branch.
             | (db_models.Position.liquidation_price.isnot(None))
+            # A Strategy.exit_condition position may carry NO stop-loss/
+            # target at all (its exit is the condition, plus square-off) -
+            # still monitored every tick, see _evaluate_exits' own branch.
+            | (db_models.Position.exit_condition.isnot(None))
         )
         .all()
     )

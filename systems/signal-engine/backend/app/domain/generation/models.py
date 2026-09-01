@@ -23,7 +23,13 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
-from app.domain.generation.rule import RuleSummary, Segment, validate_stop_loss_indicator_params
+from app.domain.generation.rule import (
+    Condition,
+    RuleSummary,
+    Segment,
+    validate_exit_condition,
+    validate_stop_loss_indicator_params,
+)
 
 # 'in_house' is the one reserved value every other backend check compares
 # against (app/domain/engine.py, app/api/routes/strategies.py) - anything
@@ -106,6 +112,13 @@ StopLossInterval = Literal["1min", "3min", "5min", "15min", "25min", "30min", "6
 # it (ahead of its own stop-loss/target/square-off) before the new one opens.
 DuplicateSignalPolicy = Literal["skip", "add_position"]
 CounterSignalPolicy = Literal["skip", "close_and_flip"]
+
+# validate_exit_condition lives in app/domain/generation/rule.py (imported
+# above) so RuleBacktestRequest there can reuse it without a circular
+# import back to this module. Unlike an ENTRY condition, a Strategy's
+# exit_condition needs no offset_bars "cross" trick - a plain level check
+# is enough, since the position stops being monitored the moment it fires.
+
 
 def validate_strategy_rule_requirement(source_type: str, rule_id: Optional[str]) -> None:
     """Rule is in-house-only now (external/webhook strategies carry no
@@ -272,6 +285,15 @@ class StrategyCreate(BaseModel):
     stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: bool = False
+    # Optional, every source_type/instrument_type - an independent live
+    # exit trigger alongside stop_loss_method/target_percent/square-off,
+    # for a close condition that isn't a fixed distance from entry (e.g.
+    # "close the BUY when CCI(200) crosses back below +200", which isn't
+    # the mirror of any bearish entry threshold). See
+    # validate_exit_condition above and docs/architecture.md's Rules
+    # module section. None (default) means unused - existing strategies
+    # are unaffected.
+    exit_condition: Optional[Condition] = None
     # instrument_type='option' only - see OptionPositionStyle above.
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
@@ -344,6 +366,11 @@ class StrategyCreate(BaseModel):
         validate_segment_instrument_type(self.segment, self.instrument_type)
         return self
 
+    @model_validator(mode="after")
+    def _check_exit_condition(self) -> "StrategyCreate":
+        validate_exit_condition(self.exit_condition)
+        return self
+
 
 class StrategyUpdate(BaseModel):
     """PATCH /strategies/{id} - all fields optional, only what's provided
@@ -385,6 +412,9 @@ class StrategyUpdate(BaseModel):
     stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = Field(default=None, gt=0, lt=100)
     trailing_stop_enabled: Optional[bool] = None
+    # Explicit-null-clears, same as fixed_lots below - the route handler
+    # checks model_fields_set to tell "omitted" from "explicitly cleared".
+    exit_condition: Optional[Condition] = None
     option_position_style: Optional[OptionPositionStyle] = None
     option_strike_moneyness: Optional[OptionStrikeMoneyness] = None
     option_sl_scope: Optional[OptionSlScope] = None
@@ -427,6 +457,7 @@ class StrategyOut(BaseModel):
     stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
+    exit_condition: Optional[Condition] = None
     option_position_style: OptionPositionStyle = "spread"
     option_strike_moneyness: OptionStrikeMoneyness = "ATM"
     option_sl_scope: OptionSlScope = "combined"

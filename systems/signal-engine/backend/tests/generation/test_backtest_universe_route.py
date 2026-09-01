@@ -211,3 +211,41 @@ def test_backtest_rule_dispatches_symbol_list_to_backtest_symbol_list(monkeypatc
 
     assert result is sentinel
     assert sentinel["called_with"] == "GOLDM,CRUDEOIL"
+
+
+# --- exit_condition per-run override (app/api/routes/rules.py's _exit_condition_hit_for) --------
+
+def test_backtest_one_symbol_applies_exit_condition_override(monkeypatch):
+    monkeypatch.setattr(
+        rules_route, "resolve_underlying", lambda segment, symbol: ResolvedUnderlying(symbol, "NSE", symbol, "NSE", 1)
+    )
+    candles = [_bar(i, c) for i, c in enumerate([10, 10, 10, 10, 15, 14, 12])]  # bullish entry@15, then drifts down
+    monkeypatch.setattr(
+        rules_route, "get_candle_history", lambda exchange, symbol, interval, from_date, to_date: list(candles)
+    )
+    payload = RuleBacktestRequest(
+        exit_condition={
+            "interval": "5min",
+            "left": {"kind": "price", "field": "close"},
+            "operator": "<",
+            "right": {"kind": "constant", "value": 13},
+        }
+    )
+    result = rules_route._backtest_one_symbol(
+        None, FakeRule(underlying="RELIANCE", underlying_type="symbol"), RULE, payload, "RELIANCE", BASE.date(), BASE.date(), []
+    )
+    assert result["trade_count"] == 1
+    assert result["trades"][0]["exit_reason"] == "exit_condition"
+    assert result["trades"][0]["exit_price"] == 12.0  # the bar close where close < 13 first held
+
+
+def test_rule_backtest_request_rejects_daily_exit_condition():
+    with pytest.raises(Exception):
+        RuleBacktestRequest(
+            exit_condition={
+                "interval": "daily",
+                "left": {"kind": "rsi", "period": 14},
+                "operator": ">",
+                "right": {"kind": "constant", "value": 40},
+            }
+        )

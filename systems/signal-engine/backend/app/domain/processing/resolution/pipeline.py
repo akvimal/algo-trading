@@ -123,6 +123,7 @@ def resolve(signal: SignalIngest, fetch_strategy: Callable[[str], dict]) -> Reso
         stop_loss_indicator_params=strategy.get("stop_loss_indicator_params"),
         target_percent=strategy.get("target_percent"),
         trailing_stop_enabled=strategy.get("trailing_stop_enabled", False),
+        exit_condition=strategy.get("exit_condition"),
         duplicate_signal_policy=strategy.get("duplicate_signal_policy", "skip"),
         counter_signal_policy=strategy.get("counter_signal_policy", "close_and_flip"),
         # instrument_type='option' only - None for spot/future, mirrors how

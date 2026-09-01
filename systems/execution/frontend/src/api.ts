@@ -31,7 +31,7 @@ export type Position = {
   // closed ahead of its own SL/target/square-off because an
   // opposite-direction signal arrived and its Strategy's
   // counter_signal_policy='close_and_flip'.
-  exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | "liquidation" | null;
+  exit_reason: "square_off" | "stop_loss" | "target" | "exit_condition" | "manual" | "counter_signal" | "liquidation" | null;
   // This position's segment's own square-off time (Account.square_off_time
   // below), copied at open time - null means never force-closed (e.g.
   // CRYPTO), same as null for REJECTED rows that never got this far.

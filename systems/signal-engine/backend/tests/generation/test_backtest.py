@@ -1144,3 +1144,56 @@ def test_simulate_trades_range_breakout_bearish_breakdown():
     assert len(trades) == 1
     assert trades[0].direction == "bearish"
     assert trades[0].entry_price == 5.0
+
+
+# --- simulate_trades / replay: Strategy.exit_condition per-run override ---------
+
+def _once_fixture() -> list[CandleClose]:
+    """_bias_fn_always_bearish_once fires bearish at the 3rd bar -> entry at
+    index 2, price 15.0. No further signals, so nothing re-enters or exits
+    on an opposite signal mid-scan."""
+    return [_bar(0, 10.0), _bar(1, 12.0), _bar(2, 15.0)]
+
+
+def test_simulate_trades_exit_condition_closes_at_bar_close():
+    candles = _once_fixture()
+    candles.append(_bar(3, 16.0))
+    candles.append(_bar(4, 14.0))
+    candles.append(_bar(5, 13.0))
+
+    trades = simulate_trades(
+        _bias_fn_always_bearish_once, 3, candles, ExitConfig(), exit_condition_hit=lambda j: j == 4
+    )
+
+    assert len(trades) == 1
+    assert trades[0].exit_reason == "exit_condition"
+    assert trades[0].exit_price == 14.0  # the bar's close, not a fixed level
+    assert trades[0].pnl == pytest.approx(15.0 - 14.0)  # bearish: entry - exit
+
+
+def test_simulate_trades_stop_loss_beats_exit_condition_on_same_bar():
+    candles = _once_fixture()
+    candles.append(_bar(3, 18.0, high=20.0, low=17.0))  # spikes past the 10% stop (16.5)
+
+    trades = simulate_trades(
+        _bias_fn_always_bearish_once,
+        3,
+        candles,
+        ExitConfig(stop_loss_method="percent", stop_loss_percent=10.0),
+        exit_condition_hit=lambda j: True,
+    )
+
+    assert trades[0].exit_reason == "stop_loss"
+
+
+def test_simulate_trades_none_exit_condition_is_unchanged_behaviour():
+    candles = _once_fixture() + [_bar(3, 14.0), _bar(4, 13.5)]
+    baseline = simulate_trades(_bias_fn_always_bearish_once, 3, candles, ExitConfig())
+    with_none = simulate_trades(_bias_fn_always_bearish_once, 3, candles, ExitConfig(), exit_condition_hit=None)
+    assert [t.exit_reason for t in baseline] == [t.exit_reason for t in with_none] == ["end_of_data"]
+
+
+def test_replay_threads_exit_condition_hit_through():
+    candles = _once_fixture() + [_bar(3, 14.0)]
+    result = replay(_bias_fn_always_bearish_once, 3, candles, ExitConfig(), exit_condition_hit=lambda j: j == 3)
+    assert result["trades"][0]["exit_reason"] == "exit_condition"

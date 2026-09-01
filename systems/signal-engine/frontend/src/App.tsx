@@ -92,7 +92,7 @@ import { chartinkWebhookUrls, executionUrl } from "./links";
 
 const POLL_INTERVAL_MS = 5000;
 
-type TabId = "strategies" | "rules" | "watchlists" | "signals";
+type TabId = "strategies" | "rules" | "indicators" | "watchlists" | "signals";
 
 // A performance advisory (not a real data-availability limit) for the
 // Backtest tab's From/To range - finer intervals mean far more bars to
@@ -1069,6 +1069,13 @@ function RuleManager() {
   const [backtestSlIndicatorMultiplier, setBacktestSlIndicatorMultiplier] = useState("");
   const [backtestTargetPercent, setBacktestTargetPercent] = useState("");
   const [backtestTrailingEnabled, setBacktestTrailingEnabled] = useState(false);
+  // Optional per-run override, same shape as Strategy.exit_condition - one
+  // condition line (multi_condition text syntax). When set, the backtest
+  // also closes a trade the first bar this condition is true
+  // (exit_reason='exit_condition'), after stop-loss/target. Backend applies
+  // it only to spot/future crossover/range_breakout/multi_condition
+  // backtests (the ones that go through backtest.replay).
+  const [backtestExitConditionText, setBacktestExitConditionText] = useState("");
   // "touch" (default, matches live) vs "close" - a backtest-only what-if,
   // see StopLossConfirmation's own comment in api.ts.
   const [backtestSlConfirmation, setBacktestSlConfirmation] = useState<StopLossConfirmation>("touch");
@@ -1250,6 +1257,7 @@ function RuleManager() {
     setBacktestResult(null);
     setBacktestResultTab("trades");
     setBacktestError(null);
+    setBacktestExitConditionText("");
     setGridResult(null);
     setGridError(null);
     setSaveBacktestName("");
@@ -1396,6 +1404,7 @@ function RuleManager() {
       setBacktestEntryWindowStart(req.entry_window_start ? req.entry_window_start.slice(0, 5) : "");
       setBacktestEntryWindowEnd(req.entry_window_end ? req.entry_window_end.slice(0, 5) : "");
       setBacktestEntryWeekdays(req.entry_weekdays ?? []);
+      setBacktestExitConditionText(req.exit_condition ? stringifyConditions([req.exit_condition]) : "");
       setBacktestTimeBucketMinutes(req.time_bucket_minutes != null ? String(req.time_bucket_minutes) : "");
       setBacktestResult(null);
       setBacktestResultTab("trades");
@@ -1528,6 +1537,24 @@ function RuleManager() {
     setConditionsParseErrors(errors);
     if (errors.length === 0) setConditions(parsed);
   }
+
+  // Backtest exit_condition override: one non-'daily' condition line, or
+  // empty (feature unused). Mirrors the Strategy form's own parse.
+  const backtestExitConditionTrimmed = backtestExitConditionText.trim();
+  const backtestExitConditionRaw = backtestExitConditionTrimmed
+    ? parseConditionsText(backtestExitConditionTrimmed)
+    : { conditions: [] as Condition[], errors: [] as ParseError[] };
+  const backtestExitConditionErrors: ParseError[] = !backtestExitConditionTrimmed
+    ? []
+    : backtestExitConditionRaw.errors.length
+      ? backtestExitConditionRaw.errors
+      : backtestExitConditionRaw.conditions.length !== 1
+        ? [{ line: 1, message: "enter exactly one condition line" }]
+        : backtestExitConditionRaw.conditions[0].interval === "daily"
+          ? [{ line: 1, message: "daily interval isn't supported for an exit condition" }]
+          : [];
+  const backtestExitCondition =
+    backtestExitConditionTrimmed && backtestExitConditionErrors.length === 0 ? backtestExitConditionRaw.conditions[0] : undefined;
 
   function buildRuleConfig(): RuleConfig {
     if (isBreakout) {
@@ -1704,6 +1731,7 @@ function RuleManager() {
       entry_window_start: backtestEntryWindowStart ? `${backtestEntryWindowStart}:00` : undefined,
       entry_window_end: backtestEntryWindowEnd ? `${backtestEntryWindowEnd}:00` : undefined,
       entry_weekdays: backtestEntryWeekdays.length > 0 ? backtestEntryWeekdays : undefined,
+      exit_condition: backtestExitCondition,
     };
   }
 
@@ -2146,7 +2174,17 @@ function RuleManager() {
 
       {selected && (
         <section className="panel">
-          <h2>Backtest &amp; grid search</h2>
+          <h2>
+            Backtest &amp; grid search
+            {selectedRule && <span className="panel-title-subject"> — {selectedRule.name}</span>}
+          </h2>
+          {selectedRule && (
+            <p className="muted backtest-rule-meta">
+              {selectedRule.segment} · {selectedRule.underlying}
+              {selectedRule.underlying_type !== "symbol" ? ` (${selectedRule.underlying_type})` : ""} · {selectedRule.interval}
+              {ruleSummary(selectedRule, indicators)}
+            </p>
+          )}
           <nav className="tabs">
             <button type="button" className={backtestSubTab === "backtest" ? "active" : ""} onClick={() => setBacktestSubTab("backtest")}>
               Backtest
@@ -2446,6 +2484,20 @@ function RuleManager() {
               <span className="muted">Entry weekdays (optional)</span>
               <WeekdaysEditor selected={backtestEntryWeekdays} onChange={setBacktestEntryWeekdays} />
             </div>
+            <label className="exit-condition-field">
+              Exit condition <span className="optional">(optional)</span>
+              <span className="muted">
+                Also close a trade the first bar this condition is true (after SL / target), e.g.{" "}
+                <code>5min: cci(200) &lt; 200</code>. Ignored for breakout-rule and option backtests.
+              </span>
+              <ConditionsTextEditor
+                value={backtestExitConditionText}
+                onChange={setBacktestExitConditionText}
+                rows={1}
+                placeholder="e.g. 5min: cci(200) < 200"
+                parseErrors={backtestExitConditionErrors}
+              />
+            </label>
             <label>
               Time-of-day bucket (min) <span className="optional">(optional)</span>
               <input
@@ -2458,7 +2510,11 @@ function RuleManager() {
                 onChange={(e) => setBacktestTimeBucketMinutes(e.target.value)}
               />
             </label>
-            <button type="button" onClick={handleBacktest} disabled={backtesting || backtestRangeExceedsCap || backtestEntryWindowIncomplete}>
+            <button
+              type="button"
+              onClick={handleBacktest}
+              disabled={backtesting || backtestRangeExceedsCap || backtestEntryWindowIncomplete || backtestExitConditionErrors.length > 0}
+            >
               {backtesting ? "Running..." : "Run backtest"}
             </button>
           </div>
@@ -2912,7 +2968,6 @@ function RulesTab() {
         </p>
       </InfoDisclosure>
       <RuleManager />
-      <IndicatorsTab />
     </>
   );
 }
@@ -3526,6 +3581,11 @@ function StrategyManager() {
   const [slIndicatorMultiplier, setSlIndicatorMultiplier] = useState("");
   const [targetPercent, setTargetPercent] = useState("");
   const [trailingEnabled, setTrailingEnabled] = useState(false);
+  // Optional independent live exit trigger - one condition line, same
+  // text syntax as a multi_condition Rule (see conditionsExpression.ts),
+  // e.g. "5min: cci(200) < 200". Stored as Strategy.exit_condition (a
+  // single Condition). See backend's validate_exit_condition.
+  const [exitConditionText, setExitConditionText] = useState("");
   // instrument_type='option' only - see OptionPositionStyle in api.ts.
   const [optionPositionStyle, setOptionPositionStyle] = useState<OptionPositionStyle>("spread");
   const [optionStrikeMoneyness, setOptionStrikeMoneyness] = useState<OptionStrikeMoneyness>("ATM");
@@ -3750,6 +3810,7 @@ function StrategyManager() {
     setSlIndicatorMultiplier("");
     setTargetPercent("");
     setTrailingEnabled(false);
+    setExitConditionText("");
     setOptionPositionStyle("spread");
     setOptionStrikeMoneyness("ATM");
     setOptionSlScope("combined");
@@ -3786,6 +3847,10 @@ function StrategyManager() {
         slMethod === "indicator" ? buildStopLossIndicatorParams(slIndicatorType, slIndicatorPeriod, slIndicatorMultiplier) : undefined,
       target_percent: targetPercent ? Number(targetPercent) : undefined,
       trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
+      // Valid single condition -> the Condition; empty while editing ->
+      // null (clear it); empty while creating, or mid-edit parse error ->
+      // omit (the submit button is disabled on a parse error anyway).
+      exit_condition: exitCondition ?? (editingId && !exitConditionText.trim() ? null : undefined),
       option_position_style: instrumentType === "option" ? optionPositionStyle : undefined,
       option_strike_moneyness: instrumentType === "option" ? optionStrikeMoneyness : undefined,
       option_sl_scope: instrumentType === "option" ? optionSlScope : undefined,
@@ -3808,9 +3873,29 @@ function StrategyManager() {
   // form-actions buttons' disabled conditions below.
   const missingRequiredSource = (createIsInHouse && !ruleId) || (!createIsInHouse && !externalSourceName.trim());
 
+  // Exit condition: one condition line (the multi_condition text syntax,
+  // reused). Empty is fine (feature unused). Non-empty must parse to
+  // exactly one non-'daily' Condition - anything else is a blocking error.
+  const exitConditionTrimmed = exitConditionText.trim();
+  const exitConditionParse = exitConditionTrimmed
+    ? parseConditionsText(exitConditionTrimmed)
+    : { conditions: [], errors: [] as ParseError[] };
+  const exitConditionErrors: ParseError[] = !exitConditionTrimmed
+    ? []
+    : exitConditionParse.errors.length
+      ? exitConditionParse.errors
+      : exitConditionParse.conditions.length !== 1
+        ? [{ line: 1, message: "enter exactly one condition line" }]
+        : exitConditionParse.conditions[0].interval === "daily"
+          ? [{ line: 1, message: "daily interval isn't supported for an exit condition" }]
+          : [];
+  const exitCondition =
+    exitConditionTrimmed && exitConditionErrors.length === 0 ? exitConditionParse.conditions[0] : null;
+  const formHasBlockingError = missingRequiredSource || exitConditionErrors.length > 0;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (missingRequiredSource) return; // defensive guard
+    if (formHasBlockingError) return; // defensive guard
     setSaving(true);
     const payload = buildStrategyPayload();
     try {
@@ -3837,7 +3922,7 @@ function StrategyManager() {
   // untouched (no PATCH sent at all), same as any other app's "Save As"
   // creating a new file rather than overwriting the original.
   async function handleSaveAs() {
-    if (missingRequiredSource || !name.trim()) return; // defensive guard
+    if (formHasBlockingError || !name.trim()) return; // defensive guard
     setSavingAs(true);
     try {
       const payload = buildStrategyPayload(`Copy ${name.trim()}`);
@@ -3885,6 +3970,7 @@ function StrategyManager() {
     );
     setTargetPercent(s.target_percent != null ? String(s.target_percent) : "");
     setTrailingEnabled(s.trailing_stop_enabled);
+    setExitConditionText(s.exit_condition ? stringifyConditions([s.exit_condition]) : "");
     setOptionPositionStyle(s.option_position_style);
     setOptionStrikeMoneyness(s.option_strike_moneyness);
     setOptionSlScope(s.option_sl_scope);
@@ -4344,6 +4430,21 @@ function StrategyManager() {
                     )}
                   </div>
                 )}
+                <label className="exit-condition-field">
+                  Exit condition <span className="optional">(optional)</span>
+                  <span className="muted">
+                    Closes the position the first exit-monitor tick it&rsquo;s true &mdash; independent of SL / target /
+                    square-off. One line, same syntax as a rule condition, e.g. <code>5min: cci(200) &lt; 200</code> or{" "}
+                    <code>15min: rsi(14) &gt; 40</code>.
+                  </span>
+                  <ConditionsTextEditor
+                    value={exitConditionText}
+                    onChange={setExitConditionText}
+                    rows={1}
+                    placeholder="e.g. 5min: cci(200) < 200"
+                    parseErrors={exitConditionErrors}
+                  />
+                </label>
               </section>
 
               <section className="form-section">
@@ -4365,7 +4466,7 @@ function StrategyManager() {
           </label>
 
           <div className="form-actions">
-            <button type="submit" disabled={saving || savingAs || !name.trim() || missingRequiredSource}>
+            <button type="submit" disabled={saving || savingAs || !name.trim() || formHasBlockingError}>
               {saving ? "Saving..." : editingId ? "Save changes" : "Create strategy"}
             </button>
             {editingId && (
@@ -4373,7 +4474,7 @@ function StrategyManager() {
                 type="button"
                 className="secondary"
                 onClick={handleSaveAs}
-                disabled={saving || savingAs || !name.trim() || missingRequiredSource}
+                disabled={saving || savingAs || !name.trim() || formHasBlockingError}
                 title={`Create a new strategy from this form's current values, named "Copy ${name.trim() || "..."}" - leaves this strategy unchanged`}
               >
                 {savingAs ? "Saving copy..." : "Save as"}
@@ -4701,7 +4802,7 @@ function StrategiesTab() {
   );
 }
 
-const VALID_TABS: TabId[] = ["strategies", "rules", "watchlists", "signals"];
+const VALID_TABS: TabId[] = ["strategies", "rules", "indicators", "watchlists", "signals"];
 
 export default function App() {
   // Deep-link support (?tab=rules) - falls back to the Signals default
@@ -4731,6 +4832,9 @@ export default function App() {
             <button className={tab === "rules" ? "active" : ""} onClick={() => setTab("rules")}>
               Rules
             </button>
+            <button className={tab === "indicators" ? "active" : ""} onClick={() => setTab("indicators")}>
+              Indicators
+            </button>
             <button className={tab === "watchlists" ? "active" : ""} onClick={() => setTab("watchlists")}>
               Watchlists
             </button>
@@ -4743,6 +4847,7 @@ export default function App() {
         {tab === "signals" && <SignalsPage />}
         {tab === "strategies" && <StrategiesTab />}
         {tab === "rules" && <RulesTab />}
+        {tab === "indicators" && <IndicatorsTab />}
         {tab === "watchlists" && <WatchlistManager />}
       </main>
     </AuthGate>

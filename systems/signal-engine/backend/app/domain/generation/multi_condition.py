@@ -177,6 +177,59 @@ def _term_warmup(term: Term) -> int:
     return base + term.offset_bars
 
 
+def exit_condition_warmup(condition: Condition) -> int:
+    """Bars needed to evaluate a Strategy.exit_condition (a single
+    Condition) once - max of both sides' _term_warmup. Used by the
+    backtest route to size the exit-condition-interval candle fetch (see
+    app/api/routes/rules.py), mirroring multi_condition_warmup's role for
+    a whole rule."""
+    return max(_term_warmup(condition.left), _term_warmup(condition.right))
+
+
+def build_exit_condition_hit_fn(
+    condition: Condition,
+    main_candles: list[CandleClose],
+    main_interval: str,
+    condition_candles: list[CandleClose],
+) -> Callable[[int], bool]:
+    """A closure `hit(j) -> bool` for backtest.simulate_trades: True iff
+    `condition` evaluates true as of the CLOSE of main_candles[j] (the
+    bar the exit engine is currently scanning). `condition.interval` may
+    differ from `main_interval` - the two term series are computed once on
+    `condition_candles` up front (same precompute-not-per-bar approach as
+    build_multi_condition_bias_fn), and each main bar is mapped to the
+    last condition bar that had FULLY completed by that main bar's own
+    close (no lookahead - a condition bar counts only once its own period
+    has elapsed). Identity map when the intervals match. A main bar with
+    no completed condition bar yet, or either term still warming up,
+    yields False (not decidable -> don't close), same "insufficient data
+    means no exit, not a crash" convention evaluate_condition uses."""
+    left_series = compute_term_series(condition.left, condition_candles)
+    right_series = compute_term_series(condition.right, condition_candles)
+
+    if condition.interval == main_interval:
+        index_map = list(range(len(main_candles)))
+    else:
+        cond_delta = _INTERVAL_TIMEDELTA[condition.interval]
+        main_delta = _INTERVAL_TIMEDELTA[main_interval]
+        cond_end_times = [datetime.fromisoformat(c.timestamp) + cond_delta for c in condition_candles]
+        index_map = [
+            bisect.bisect_right(cond_end_times, datetime.fromisoformat(mc.timestamp) + main_delta) - 1
+            for mc in main_candles
+        ]
+
+    def hit(j: int) -> bool:
+        idx = index_map[j]
+        if idx < 0 or idx >= len(left_series):
+            return False
+        left_value, right_value = left_series[idx], right_series[idx]
+        if left_value is None or right_value is None:
+            return False
+        return _compare(left_value, right_value, condition.operator)
+
+    return hit
+
+
 def align_fine_to_coarse_indices(fine_candles: list[CandleClose], coarse_candles: list[CandleClose], coarse_interval: str) -> list[int]:
     """For each fine bar i, the index into coarse_candles of the last
     coarse candle whose own period had FULLY elapsed as of

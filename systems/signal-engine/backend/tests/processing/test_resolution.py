@@ -805,3 +805,35 @@ def test_resolve_option_rejects_unresolvable_expiries():
 
     with pytest.raises(ResolutionError, match="could not resolve option expiries"):
         resolve(_signal(symbol="NIFTY"), _fetch(_option_strategy_json()))
+
+
+def test_resolve_passes_through_exit_condition():
+    exit_condition = {
+        "interval": "5min",
+        "left": {"kind": "cci", "period": 200, "offset_bars": 0, "scale": 1.0, "value": None, "field": None},
+        "operator": "<",
+        "right": {"kind": "constant", "period": None, "offset_bars": 0, "scale": 1.0, "value": 200.0, "field": None},
+    }
+    strategy = {
+        "id": STRATEGY_ID,
+        "status": "live",
+        "horizon": "intraday",
+        "instrument_type": "future",
+        "segment": "MCX",
+        "exit_condition": exit_condition,
+    }
+
+    resolved = resolve(_signal(), _fetch(strategy))
+
+    assert resolved.exit_condition == exit_condition
+
+
+def test_resolve_exit_condition_defaults_to_none_when_absent():
+    strategy = {
+        "id": STRATEGY_ID,
+        "status": "live",
+        "horizon": "intraday",
+        "instrument_type": "spot",
+        "segment": "NSE",
+    }
+    assert resolve(_signal(), _fetch(strategy)).exit_condition is None

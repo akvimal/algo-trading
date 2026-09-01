@@ -115,6 +115,13 @@ class ResolvedOrder(BaseModel):
     stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
+    # Independent of stop_loss_method/target_percent - a single Condition
+    # (signal-engine's Term/Condition shape, untyped dict here since
+    # signal-engine already validated it before publishing - same
+    # reasoning stop_loss_indicator_params gives) evaluated on every
+    # exit-monitor tick, see position_manager.py's app.domain.exit_condition
+    # and docs/contracts/resolved-order.schema.json.
+    exit_condition: Optional[dict] = None
     # Per-strategy signal-conflict policy, also passed through unchanged
     # from the resolved Strategy - see _resolve_signal_conflicts in
     # position_manager.py.

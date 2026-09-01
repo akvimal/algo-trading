@@ -160,6 +160,7 @@ def resolve_and_finalize_signal(db: Session, signal_id: str, signal: SignalInges
             "stop_loss_indicator_params": resolved.stop_loss_indicator_params,
             "target_percent": resolved.target_percent,
             "trailing_stop_enabled": resolved.trailing_stop_enabled,
+            "exit_condition": resolved.exit_condition,
             "duplicate_signal_policy": resolved.duplicate_signal_policy,
             "counter_signal_policy": resolved.counter_signal_policy,
             "option_sl_scope": resolved.option_sl_scope,

@@ -32,6 +32,7 @@ from app.domain.generation.rule import (
     CROSSOVER_INDICATOR_TYPES,
     REGIME_INDICATOR_TYPES,
     BreakoutRuleConfig,
+    Condition,
     CrossoverRuleConfig,
     MultiConditionRuleConfig,
     RangeBreakoutRuleConfig,
@@ -344,6 +345,29 @@ def _sl_candles_for(payload, rule_row: db_models.Rule, resolved, candles: list, 
     return None
 
 
+def _exit_condition_hit_for(payload, rule_row: db_models.Rule, resolved, candles: list, fetch_from: date, to: date):
+    """Builds backtest.replay's `exit_condition_hit` closure from
+    payload.exit_condition (a per-run override, same shape as
+    Strategy.exit_condition). None when unset. Reuses the already-fetched
+    `candles` when the condition's own interval matches the rule's;
+    otherwise fetches that interval fresh over a warm-up-widened window
+    (sized off the condition's own max period + offset, via
+    exit_condition_warmup). Only relevant to the spot/future crossover/
+    range_breakout/multi_condition paths - the callers that go through
+    backtest.replay."""
+    if getattr(payload, "exit_condition", None) is None:
+        return None
+    condition = Condition.model_validate(payload.exit_condition)
+    if condition.interval == rule_row.interval:
+        condition_candles = candles
+    else:
+        warmup_from, _ = history_window(multi_condition.exit_condition_warmup(condition), condition.interval)
+        condition_candles = get_candle_history(
+            resolved.chart_exchange, resolved.chart_symbol, condition.interval, min(fetch_from, warmup_from), to
+        )
+    return multi_condition.build_exit_condition_hit_fn(condition, candles, rule_row.interval, condition_candles)
+
+
 def _backtest_one_symbol(
     db: Session,
     rule_row: db_models.Rule,
@@ -400,6 +424,7 @@ def _backtest_one_symbol(
             sl_candles,
             regime_indicators,
             payload.time_bucket_minutes,
+            _exit_condition_hit_for(payload, rule_row, resolved, candles, fetch_from, to),
         )
 
     if isinstance(rule, MultiConditionRuleConfig):
@@ -430,6 +455,7 @@ def _backtest_one_symbol(
             sl_candles,
             regime_indicators,
             payload.time_bucket_minutes,
+            _exit_condition_hit_for(payload, rule_row, resolved, fine_candles, finest_fetch_from, to),
         )
 
     if not isinstance(rule, CrossoverRuleConfig):
@@ -457,6 +483,7 @@ def _backtest_one_symbol(
         sl_candles,
         regime_indicators,
         payload.time_bucket_minutes,
+        _exit_condition_hit_for(payload, rule_row, resolved, candles, fetch_from, to),
     )
 
 

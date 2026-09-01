@@ -95,6 +95,10 @@
       "type": "boolean",
       "description": "Only meaningful when stop_loss_method is set. No trailing variant for target."
     },
+    "exit_condition": {
+      "type": ["object", "null"],
+      "description": "From the resolved Strategy - independent of stop_loss_method/target_percent/square-off. A single Condition (signal-engine's app/domain/generation/rule.py Term/Condition shape, the same one MultiConditionRuleConfig's own `conditions` list uses): {\"interval\": string, \"left\": Term, \"operator\": \">\"|\"<\"|\">=\"|\"<=\", \"right\": Term}, each Term {\"kind\": string, \"field\"?: string, \"period\"?: int, \"offset_bars\": int, \"scale\": number, \"value\"?: number}. Evaluated on every execution exit-monitor tick against fresh candle history at its own interval; closes the position outright (exit_reason='exit_condition') the first tick it evaluates true - e.g. 'close the BUY when 5min CCI(200) crosses back below +200', not expressible as a fixed distance from entry. null means unused. interval='daily' is rejected at Strategy save time (signal-engine's validate_exit_condition) - execution has no live per-tick way to evaluate a still-forming daily bar."
+    },
     "duplicate_signal_policy": {
       "type": "string",
       "enum": ["skip", "add_position"],

@@ -6,11 +6,13 @@ import pytest
 
 from app.domain.generation.multi_condition import (
     align_fine_to_coarse_indices,
+    build_exit_condition_hit_fn,
     build_multi_condition_bias_fn,
     compute_term_series,
     evaluate_condition,
     evaluate_multi_condition,
     evaluate_multi_condition_live,
+    exit_condition_warmup,
     multi_condition_warmup,
 )
 from app.domain.generation.rule import Condition, MultiConditionRuleConfig, Term
@@ -263,3 +265,45 @@ def test_build_multi_condition_bias_fn_returns_none_before_coarse_interval_known
     )
     bias_fn = build_multi_condition_bias_fn(rule, {"daily": daily, "15min": fine})
     assert bias_fn(fine[:1]) is None
+
+
+# --- build_exit_condition_hit_fn / exit_condition_warmup (Strategy.exit_condition backtest) -----
+
+
+def test_exit_condition_warmup_is_max_period_plus_offset():
+    condition = Condition(
+        interval="5min",
+        left=Term(kind="cci", period=200, offset_bars=1),
+        operator="<",
+        right=Term(kind="constant", value=200),
+    )
+    assert exit_condition_warmup(condition) == 201
+
+
+def test_build_exit_condition_hit_fn_same_interval_identity():
+    candles = [
+        _candle("2026-01-01T09:15:00", 10, 10, 10, 10),
+        _candle("2026-01-01T09:20:00", 13, 13, 13, 13),
+        _candle("2026-01-01T09:25:00", 9, 9, 9, 9),
+    ]
+    condition = Condition(
+        interval="5min", left=Term(kind="price", field="close"), operator="<", right=Term(kind="constant", value=12)
+    )
+    hit = build_exit_condition_hit_fn(condition, candles, "5min", candles)
+    assert [hit(j) for j in range(3)] == [True, False, True]
+
+
+def test_build_exit_condition_hit_fn_cross_interval_no_lookahead():
+    # main = 15min, condition = daily. A daily bar counts only once its own
+    # day has fully elapsed relative to the main bar's close.
+    daily = [_daily(1, 10, 10, 10, 8), _daily(2, 10, 10, 10, 20)]  # day1 close 8 (<10), day2 close 20 (>10)
+    fine = [
+        _min15(1, 10, 1, 1, 1, 1),  # during day1 -> no daily bar known yet -> False
+        _min15(2, 10, 1, 1, 1, 1),  # day1 known: close 8 < 10 -> True
+        _min15(3, 10, 1, 1, 1, 1),  # day2 known: close 20 < 10 -> False
+    ]
+    condition = Condition(
+        interval="daily", left=Term(kind="price", field="close"), operator="<", right=Term(kind="constant", value=10)
+    )
+    hit = build_exit_condition_hit_fn(condition, fine, "15min", daily)
+    assert [hit(j) for j in range(3)] == [False, True, False]

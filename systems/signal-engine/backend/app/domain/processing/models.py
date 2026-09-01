@@ -46,6 +46,9 @@ class ResolvedOrderDraft(BaseModel):
     stop_loss_indicator_params: Optional[dict] = None
     target_percent: Optional[float] = None
     trailing_stop_enabled: bool = False
+    # Independent of stop_loss_method/target_percent - see
+    # docs/contracts/resolved-order.schema.json's own exit_condition entry.
+    exit_condition: Optional[dict] = None
     duplicate_signal_policy: Literal["skip", "add_position"] = "skip"
     counter_signal_policy: Literal["skip", "close_and_flip"] = "close_and_flip"
     # instrument_type='option' only - see docs/contracts/resolved-order.schema.json.

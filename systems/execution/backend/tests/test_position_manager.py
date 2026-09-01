@@ -52,6 +52,7 @@ class FakePosition:
     stop_loss_percent: Optional[float] = None
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
+    exit_condition: Optional[dict] = None
     breakeven_triggered: bool = False
     entry_time: Optional[object] = None
     exit_price: Optional[float] = None
@@ -1577,3 +1578,96 @@ def test_compute_strategy_performance_no_closed_trades_yet():
     assert result["s2"]["win_rate"] is None
     assert result["s2"]["max_drawdown"] == 0.0
     assert result["s2"]["total_realized_pnl"] == 0.0
+
+
+# --- Strategy.exit_condition (independent live close trigger) ---------------
+
+def _cci_exit_below(level: float, period: int = 3):
+    """A one-Condition exit_condition dict (Term/Condition wire shape) -
+    'CCI(period) < level', 5min."""
+    return {
+        "interval": "5min",
+        "left": {"kind": "cci", "period": period, "offset_bars": 0, "scale": 1.0, "value": None, "field": None},
+        "operator": "<",
+        "right": {"kind": "constant", "period": None, "offset_bars": 0, "scale": 1.0, "value": level, "field": None},
+    }
+
+
+def _candles(*closes: float):
+    return [{"open": c, "high": c, "low": c, "close": c, "volume": 0.0} for c in closes]
+
+
+def test_evaluate_exits_closes_position_when_exit_condition_true():
+    # typical price = close here; CCI of a series that has fallen hard is
+    # strongly negative -> "CCI(3) < -100" is true -> position closes.
+    pos = FakePosition(id="p1", status="OPEN", exchange="MCX", symbol="GOLDM", action="BUY",
+                       entry_price=100.0, quantity=2, segment="MCX",
+                       exit_condition=_cci_exit_below(-90.0))
+    result = _evaluate_exits(
+        [pos], get_ltp_batch=lambda ex, syms: {"GOLDM": 96.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="MCX"),
+        get_candle_history=lambda *a: _candles(110, 110, 110, 110, 110, 110, 95),
+    )
+    assert result["closed_exit_condition"] == 1
+    assert pos.status == "CLOSED"
+    assert pos.exit_reason == "exit_condition"
+    assert pos.exit_price == 96.0  # CMP at the tick, not a fixed threshold
+
+
+def test_evaluate_exits_leaves_position_open_when_exit_condition_false():
+    pos = FakePosition(id="p1", status="OPEN", exchange="MCX", symbol="GOLDM", action="BUY",
+                       entry_price=100.0, quantity=2, segment="MCX",
+                       exit_condition=_cci_exit_below(-90.0))
+    result = _evaluate_exits(
+        [pos], get_ltp_batch=lambda ex, syms: {"GOLDM": 112.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="MCX"),
+        get_candle_history=lambda *a: _candles(90, 92, 95, 100, 105, 110, 112),  # rising -> CCI positive
+    )
+    assert result["closed_exit_condition"] == 0
+    assert pos.status == "OPEN"
+
+
+def test_evaluate_exits_stop_loss_takes_priority_over_exit_condition():
+    # Both would fire this tick - SL is checked first, so exit_reason is
+    # 'stop_loss' and the candle history is never even fetched.
+    fetched = []
+    pos = FakePosition(id="p1", status="OPEN", exchange="MCX", symbol="GOLDM", action="BUY",
+                       entry_price=100.0, quantity=2, segment="MCX", stop_loss_price=97.0,
+                       exit_condition=_cci_exit_below(-90.0))
+
+    def fake_hist(*a):
+        fetched.append(a)
+        return _candles(110, 108, 104, 98, 95)
+
+    result = _evaluate_exits(
+        [pos], get_ltp_batch=lambda ex, syms: {"GOLDM": 96.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="MCX"), get_candle_history=fake_hist,
+    )
+    assert pos.exit_reason == "stop_loss"
+    assert result["closed_exit_condition"] == 0
+    assert fetched == []
+
+
+def test_evaluate_exits_exit_condition_skipped_when_no_get_candle_history():
+    pos = FakePosition(id="p1", status="OPEN", exchange="MCX", symbol="GOLDM", action="BUY",
+                       entry_price=100.0, quantity=2, segment="MCX",
+                       exit_condition=_cci_exit_below(-90.0))
+    result = _evaluate_exits(
+        [pos], get_ltp_batch=lambda ex, syms: {"GOLDM": 96.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="MCX"),
+    )
+    assert result["closed_exit_condition"] == 0
+    assert pos.status == "OPEN"
+
+
+def test_evaluate_exits_exit_condition_flags_live_position_for_real_exit():
+    pos = FakePosition(id="p1", status="OPEN", exchange="MCX", symbol="GOLDM", action="BUY",
+                       entry_price=100.0, quantity=2, segment="MCX", is_live_broker_order=True,
+                       exit_condition=_cci_exit_below(-90.0))
+    result = _evaluate_exits(
+        [pos], get_ltp_batch=lambda ex, syms: {"GOLDM": 96.0}, get_previous_candle=lambda *a: None,
+        accounts_by_segment=_accounts(segment="MCX"),
+        get_candle_history=lambda *a: _candles(110, 110, 110, 110, 110, 110, 95),
+    )
+    assert (pos, "exit_condition") in result["live_exits_needed"]
+    assert pos.status == "OPEN"  # pure fn never closes a live position itself

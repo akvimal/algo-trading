@@ -296,7 +296,14 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- method (never read or written for them) - see position_manager.py's
     -- _evaluate_exits, added 2026-08-29.
     breakeven_triggered     BOOLEAN NOT NULL DEFAULT false,
-    exit_reason             TEXT CHECK (exit_reason IN ('square_off', 'stop_loss', 'target', 'manual', 'counter_signal', 'liquidation')),
+    -- Copied from ResolvedOrder.exit_condition at open time - independent
+    -- of the stop-loss/target columns above (a single Condition, see
+    -- docs/contracts/resolved-order.schema.json's own exit_condition
+    -- entry and app.domain.exit_condition). NULL means unused. No SQL
+    -- CHECK on its interior shape - signal-engine already validated it
+    -- before publishing, same as stop_loss_indicator_params above.
+    exit_condition           JSONB,
+    exit_reason             TEXT CHECK (exit_reason IN ('square_off', 'stop_loss', 'target', 'exit_condition', 'manual', 'counter_signal', 'liquidation')),
     -- This position's segment's own square-off time (execution.accounts.
     -- square_off_time) - copied at open time, never changed afterward.
     -- NULL means never force-closed (e.g. CRYPTO) - not a "not yet

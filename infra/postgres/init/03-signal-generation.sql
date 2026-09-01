@@ -198,6 +198,17 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- of the stop-loss method. No trailing variant for target.
     target_percent      NUMERIC CHECK (target_percent > 0 AND target_percent < 100),
     trailing_stop_enabled BOOLEAN NOT NULL DEFAULT false,
+    -- Optional, independent of the stop-loss/target group above - a
+    -- single Condition (app/domain/generation/rule.py's Term/Condition
+    -- shape, reused from MultiConditionRuleConfig) evaluated on every
+    -- execution exit-monitor tick; closes the position outright the first
+    -- tick it's true. E.g. "close the BUY when 5min CCI(200) crosses back
+    -- below +200" - not expressible as a fixed stop_loss/target distance
+    -- from entry. See validate_exit_condition (app/domain/generation/
+    -- models.py) for shape validation (done at the Pydantic layer, same
+    -- as rule_config's own JSONB - no SQL-level CHECK on its interior
+    -- shape). NULL means unused.
+    exit_condition       JSONB,
     CONSTRAINT stop_loss_fields_consistent CHECK (
         (stop_loss_method IS NULL AND stop_loss_interval IS NULL AND stop_loss_percent IS NULL
             AND stop_loss_indicator_type IS NULL AND stop_loss_indicator_params IS NULL

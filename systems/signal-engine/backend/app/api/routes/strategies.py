@@ -37,10 +37,11 @@ from app.domain.generation.models import (
     validate_active_weekdays,
     validate_active_windows,
     validate_contract_day_filter_fields,
+    validate_exit_condition,
     validate_segment_instrument_type,
     validate_stop_loss_fields,
 )
-from app.domain.generation.rule import BreakoutRuleConfig, CrossoverRuleConfig, RuleSummary, validate_rule_config
+from app.domain.generation.rule import BreakoutRuleConfig, Condition, CrossoverRuleConfig, RuleSummary, validate_rule_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ def _to_out(
         stop_loss_indicator_params=row.stop_loss_indicator_params,
         target_percent=float(row.target_percent) if row.target_percent is not None else None,
         trailing_stop_enabled=row.trailing_stop_enabled,
+        exit_condition=row.exit_condition,
         option_position_style=row.option_position_style,
         option_strike_moneyness=row.option_strike_moneyness,
         option_sl_scope=row.option_sl_scope,
@@ -230,6 +232,7 @@ def create_strategy(
         stop_loss_indicator_params=stop_loss_indicator_params,
         target_percent=payload.target_percent,
         trailing_stop_enabled=trailing_stop_enabled,
+        exit_condition=payload.exit_condition.model_dump(mode="json") if payload.exit_condition is not None else None,
         option_position_style=payload.option_position_style,
         option_strike_moneyness=payload.option_strike_moneyness,
         option_sl_scope=payload.option_sl_scope,
@@ -367,6 +370,11 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.target_percent = payload.target_percent
     if payload.trailing_stop_enabled is not None:
         row.trailing_stop_enabled = payload.trailing_stop_enabled
+    # Explicit-null-clears - same model_fields_set distinction fixed_lots
+    # already uses, so a PATCH can remove an already-configured
+    # exit_condition (not just add/replace one).
+    if "exit_condition" in payload.model_fields_set:
+        row.exit_condition = payload.exit_condition.model_dump(mode="json") if payload.exit_condition is not None else None
     if payload.option_position_style is not None:
         row.option_position_style = payload.option_position_style
     if payload.option_strike_moneyness is not None:
@@ -415,6 +423,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         validate_segment_instrument_type(row.segment, row.instrument_type)
         validate_active_windows(row.active_windows)
         validate_active_weekdays(row.active_weekdays)
+        validate_exit_condition(Condition(**row.exit_condition) if row.exit_condition is not None else None)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

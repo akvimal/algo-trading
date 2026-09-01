@@ -62,7 +62,7 @@ def run_check_exits() -> dict:
         # record_position_pnl_snapshots' own docstring.
         record_position_pnl_snapshots(db, get_ltp_batch)
         record_option_group_pnl_snapshots(db, get_ltp_batch)
-    if result["closed_stop_loss"] or result["closed_target"] or result["trailed"]:
+    if result["closed_stop_loss"] or result["closed_target"] or result.get("closed_exit_condition") or result["trailed"]:
         logger.info("exit-monitor run: %s", result)
     if option_result["closed_stop_loss"] or option_result["closed_target"] or option_result["trailed"]:
         logger.info("option-group exit-monitor run: %s", option_result)

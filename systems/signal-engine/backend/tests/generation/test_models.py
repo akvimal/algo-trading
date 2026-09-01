@@ -540,3 +540,83 @@ def test_strategy_update_accepts_active_weekdays():
 def test_strategy_update_accepts_empty_active_weekdays_list_explicitly():
     u = StrategyUpdate(active_weekdays=[])
     assert u.active_weekdays == []
+
+
+# --- Strategy.exit_condition (independent live close trigger) ---------------
+
+def _cci_cross_back(level: float):
+    return {
+        "interval": "5min",
+        "left": {"kind": "cci", "period": 200},
+        "operator": "<",
+        "right": {"kind": "constant", "value": level},
+    }
+
+
+def test_strategy_create_accepts_exit_condition():
+    s = StrategyCreate(
+        name="GOLDM CCI extreme",
+        source_type="in_house",
+        horizon="intraday",
+        instrument_type="future",
+        segment="MCX",
+        rule_id=RULE_ID,
+        exit_condition=_cci_cross_back(200.0),
+    )
+    assert s.exit_condition is not None
+    assert s.exit_condition.left.kind == "cci"
+    assert s.exit_condition.right.value == 200.0
+
+
+def test_strategy_create_defaults_exit_condition_to_none():
+    s = StrategyCreate(
+        name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+    )
+    assert s.exit_condition is None
+
+
+def test_strategy_create_rejects_daily_exit_condition():
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            exit_condition={
+                "interval": "daily",
+                "left": {"kind": "rsi", "period": 14},
+                "operator": ">",
+                "right": {"kind": "constant", "value": 40},
+            },
+        )
+
+
+def test_strategy_create_rejects_malformed_exit_condition_term():
+    # cci needs a period; omitting it is a Term-shape error surfaced as a 422.
+    with pytest.raises(ValidationError):
+        StrategyCreate(
+            name="x", source_type="in_house", horizon="intraday", instrument_type="spot", rule_id=RULE_ID,
+            exit_condition={
+                "interval": "5min",
+                "left": {"kind": "cci"},
+                "operator": "<",
+                "right": {"kind": "constant", "value": 200},
+            },
+        )
+
+
+def test_strategy_create_accepts_rsi_exit_condition():
+    # The exit_condition is generic across every Term kind the evaluator
+    # supports - RSI level check ("exit the short once RSI climbs back
+    # above 40") works exactly like the CCI one.
+    s = StrategyCreate(
+        name="RSI mean-revert short",
+        source_type="in_house",
+        horizon="intraday",
+        instrument_type="spot",
+        rule_id=RULE_ID,
+        exit_condition={
+            "interval": "15min",
+            "left": {"kind": "rsi", "period": 14},
+            "operator": ">",
+            "right": {"kind": "constant", "value": 40},
+        },
+    )
+    assert s.exit_condition.left.kind == "rsi"

@@ -82,6 +82,12 @@ class Strategy(Base):
     stop_loss_indicator_params = Column(JSONB(none_as_null=True))
     target_percent = Column(Numeric)
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
+    # Optional independent exit trigger (a single Condition, reused from
+    # MultiConditionRuleConfig's own Term/Condition shape) - see
+    # validate_exit_condition in app/domain/generation/models.py and
+    # infra/postgres/init/03-signal-generation.sql. none_as_null=True, same
+    # reasoning as stop_loss_indicator_params above.
+    exit_condition = Column(JSONB(none_as_null=True))
     # instrument_type='option' only - 'spread' or 'naked', see OptionPositionStyle in app/domain/models.py.
     option_position_style = Column(Text, nullable=False, default="spread")
     # instrument_type='option' only - primary leg's strike, see OptionStrikeMoneyness in app/domain/models.py.

@@ -161,6 +161,18 @@ main {
   font-size: 1rem;
 }
 
+/* The rule/strategy a panel is scoped to, appended to its title - makes
+   "which rule am I backtesting" unmistakable when switching selection. */
+.panel-title-subject {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.backtest-rule-meta {
+  margin: -0.35rem 0 0.7rem;
+  font-size: 0.8rem;
+}
+
 .panel h3 {
   margin: 1.1rem 0 0.4rem;
   font-size: 0.88rem;

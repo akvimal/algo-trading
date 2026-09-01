@@ -396,6 +396,11 @@ export type Strategy = {
   stop_loss_indicator_params: StopLossIndicatorParams | null;
   target_percent: number | null;
   trailing_stop_enabled: boolean;
+  // Optional independent live exit trigger (a single Condition, reused
+  // from MultiConditionRuleConfig above) - closes the position the first
+  // exit-monitor tick it's true, independent of stop_loss/target/
+  // square-off. null = unused. See backend's validate_exit_condition.
+  exit_condition: Condition | null;
   // instrument_type='option' only - see OptionPositionStyle above.
   option_position_style: OptionPositionStyle;
   option_strike_moneyness: OptionStrikeMoneyness;
@@ -458,6 +463,7 @@ export type StrategyCreate = {
   stop_loss_indicator_params?: StopLossIndicatorParams;
   target_percent?: number;
   trailing_stop_enabled?: boolean;
+  exit_condition?: Condition | null;
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
@@ -493,6 +499,10 @@ export type StrategyEdit = {
   stop_loss_indicator_params?: StopLossIndicatorParams;
   target_percent?: number;
   trailing_stop_enabled?: boolean;
+  // Condition | null (not just optional) - like fixed_lots below, an
+  // explicit {exit_condition: null} clears it; omitting leaves it
+  // unchanged. See the backend's update_strategy.
+  exit_condition?: Condition | null;
   option_position_style?: OptionPositionStyle;
   option_strike_moneyness?: OptionStrikeMoneyness;
   option_sl_scope?: OptionSlScope;
@@ -656,6 +666,12 @@ export type RuleBacktestRequest = {
   // "gates acceptance only" scope as entry_window_start/end, mirroring
   // Strategy's own active_weekdays. Omitted/empty means unrestricted.
   entry_weekdays?: Weekday[];
+  // Per-run override, same shape as Strategy.exit_condition - closes a
+  // trade the first bar this single Condition is true (exit_reason=
+  // 'exit_condition'), after stop-loss/target. Applied only to spot/
+  // future crossover/range_breakout/multi_condition backtests. interval
+  // 'daily' is rejected (422), same as on a Strategy.
+  exit_condition?: Condition;
 };
 
 export type RuleBacktestGridRequest = {
@@ -1415,7 +1431,7 @@ export type ManualPosition = {
   stop_loss_percent: number | null;
   stop_loss_indicator_type: StopLossIndicatorType | null;
   stop_loss_indicator_params: StopLossIndicatorParams | null;
-  exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | null;
+  exit_reason: "square_off" | "stop_loss" | "target" | "exit_condition" | "manual" | "counter_signal" | null;
   square_off_time: string | null;
   option_group_id: string | null;
   // Trade discipline checklist (Manual tab only) - null for every

@@ -434,6 +434,26 @@ def validate_rule_config(raw: dict) -> RuleConfig:
     return _rule_config_adapter.validate_python(raw)
 
 
+def validate_exit_condition(condition: Optional[Condition]) -> None:
+    """A Strategy's optional exit_condition (added 2026-09-01) is a single
+    Condition (the Term/Condition shape reused verbatim from
+    MultiConditionRuleConfig) evaluated on every execution exit-monitor
+    tick, closing the position outright the first tick it's true -
+    independent of stop_loss_method/target_percent/square_off_time. Also
+    accepted as an optional per-run override on RuleBacktestRequest so a
+    backtest can preview the same exit. Lives here (not app/domain/
+    generation/models.py) so RuleBacktestRequest below can call it without
+    a circular import back to Strategy's module.
+
+    'daily' is rejected the same way StopLossInterval already excludes it -
+    execution has no live per-tick way to evaluate a still-forming daily
+    bar, so a daily exit_condition could never fire live; rejecting it in
+    the backtest too keeps the two consistent. Term shape (kind/field/
+    period) is already fully checked by Condition/Term's own validators."""
+    if condition is not None and condition.interval == "daily":
+        raise ValueError("exit_condition.interval='daily' isn't supported - no live per-tick way to evaluate a still-forming daily bar")
+
+
 def validate_rule_in_house_fields(
     underlying: Optional[str],
     rule_config: Optional[dict],
@@ -685,10 +705,29 @@ class RuleBacktestRequest(BaseModel):
     # mirroring Strategy's own active_weekdays. Empty (default) means no
     # restriction, same convention active_weekdays itself uses.
     entry_weekdays: list[Weekday] = Field(default_factory=list)
+    # Optional per-run override, same shape as Strategy.exit_condition (a
+    # single Condition - see validate_exit_condition). When set, the
+    # backtest also closes an open trade the first bar this condition
+    # evaluates true, exit_reason='exit_condition' - checked after
+    # stop-loss/target, before the opposite-signal fallback, mirroring
+    # execution's live _evaluate_exits priority. Only applied to spot/
+    # future crossover/range_breakout/multi_condition backtests (the ones
+    # that go through backtest.replay); a breakout-rule or option backtest
+    # ignores it, same as they already ignore the regime filter. Its own
+    # `interval` may differ from the rule's - the candle series for it is
+    # fetched and time-aligned separately (see
+    # multi_condition.build_exit_condition_hit_fn).
+    exit_condition: Optional[dict] = None
 
     @model_validator(mode="after")
     def _check_entry_window(self) -> "RuleBacktestRequest":
         validate_entry_window(self.entry_window_start, self.entry_window_end)
+        return self
+
+    @model_validator(mode="after")
+    def _check_exit_condition(self) -> "RuleBacktestRequest":
+        if self.exit_condition is not None:
+            validate_exit_condition(Condition.model_validate(self.exit_condition))
         return self
 
 

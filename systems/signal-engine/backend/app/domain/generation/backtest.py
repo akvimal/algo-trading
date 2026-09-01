@@ -249,6 +249,7 @@ def _simulate_one_trade(
     bias_fn: BiasFn,
     exit_config: ExitConfig,
     sl_candles: Optional[list[CandleClose]],
+    exit_condition_hit: Optional[Callable[[int], bool]] = None,
 ) -> tuple[SimulatedTrade, int]:
     """Scans forward from entry_index+1 for the first bar the position
     would close on. Priority per bar: square_off_time (a bar that starts
@@ -305,6 +306,14 @@ def _simulate_one_trade(
             reason = "stop_loss" if sl_hit else "target"
             return _close(entry_candle, direction, entry_price, bar, exit_price, reason), j
 
+        # Strategy.exit_condition (a per-run backtest override) - checked
+        # after stop-loss/target (both pre-empt it), before the trailing
+        # ratchet and the opposite-signal fallback, mirroring execution's
+        # live _evaluate_exits priority. Fills at the bar's close (no fixed
+        # level to assume, same as an opposite-signal exit).
+        if exit_condition_hit is not None and exit_condition_hit(j):
+            return _close(entry_candle, direction, entry_price, bar, bar.close, "exit_condition"), j
+
         if exit_config.trailing_stop_enabled:
             candidate: Optional[float] = None
             if exit_config.stop_loss_method == "percent":
@@ -360,6 +369,7 @@ def simulate_trades(
     sl_candles: Optional[list[CandleClose]] = None,
     regime_indicators: RegimeIndicators = (),
     matched_signals: Optional[list[dict]] = None,
+    exit_condition_hit: Optional[Callable[[int], bool]] = None,
 ) -> list[SimulatedTrade]:
     """The generic exit engine (SL/target/trailing/square-off/
     opposite-signal/end-of-data) - `bias_fn` is however a specific rule
@@ -459,7 +469,9 @@ def simulate_trades(
         if signal_entry is not None:
             signal_entry["traded"] = True
 
-        trade, exit_index = _simulate_one_trade(candles, entry_index, direction, bias_fn, exit_config, sl_candles)
+        trade, exit_index = _simulate_one_trade(
+            candles, entry_index, direction, bias_fn, exit_config, sl_candles, exit_condition_hit
+        )
         trades.append(trade)
         if exit_index >= n - 1:
             break  # consumed through the last available candle - nothing left to scan
@@ -565,6 +577,7 @@ def replay(
     sl_candles: Optional[list[CandleClose]] = None,
     regime_indicators: RegimeIndicators = (),
     time_bucket_minutes: Optional[int] = None,
+    exit_condition_hit: Optional[Callable[[int], bool]] = None,
 ) -> dict:
     """The route-facing report: runs simulate_trades and totals the
     result. See simulate_trades' own docstring for what "hypothetical_pnl"
@@ -584,7 +597,9 @@ def replay(
     surprisingly few/zero trades be told apart from one whose condition
     never actually fired at all."""
     matched_signals: list[dict] = []
-    trades = simulate_trades(bias_fn, min_bars, candles, exit_config, sl_candles, regime_indicators, matched_signals)
+    trades = simulate_trades(
+        bias_fn, min_bars, candles, exit_config, sl_candles, regime_indicators, matched_signals, exit_condition_hit
+    )
     report = {
         "trade_count": len(trades),
         "hypothetical_pnl": sum(t.pnl for t in trades),

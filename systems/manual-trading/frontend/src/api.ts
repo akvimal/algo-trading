@@ -1203,7 +1203,7 @@ export type ManualPosition = {
   stop_loss_percent: number | null;
   stop_loss_indicator_type: StopLossIndicatorType | null;
   stop_loss_indicator_params: StopLossIndicatorParams | null;
-  exit_reason: "square_off" | "stop_loss" | "target" | "manual" | "counter_signal" | null;
+  exit_reason: "square_off" | "stop_loss" | "target" | "exit_condition" | "manual" | "counter_signal" | null;
   square_off_time: string | null;
   option_group_id: string | null;
   // Trade discipline checklist (Manual tab only) - null for every

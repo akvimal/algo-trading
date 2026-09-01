@@ -970,6 +970,33 @@ function ruleSummary(r: Rule, indicators: Indicator[]): string {
   return ` - ${indicator.name} crosses its own SMA(${smaPeriod})`;
 }
 
+const FLIP_OPERATOR: Record<Condition["operator"], Condition["operator"]> = { ">": "<", "<": ">", ">=": "<=", "<=": ">=" };
+
+// A sensible default Strategy.exit_condition for an in-house rule the user
+// just picked - only for a multi_condition rule whose entry is an
+// indicator/price term crossing a fixed threshold: the natural exit is
+// that same term crossing BACK through the threshold, i.e. the same
+// term/interval/constant with the operator flipped and any offset_bars
+// "cross-detection" helper dropped (an exit is a plain level check - see
+// the exit_condition design notes). Returns null for any rule shape
+// without an obvious threshold to mirror (crossover/breakout, or a
+// multi_condition comparing two live terms like close > sma(close,20)) -
+// the user just leaves the field blank or fills it in themselves.
+function deriveExitConditionFromRule(rule: Rule): Condition | null {
+  const cfg = rule.rule_config;
+  if (!cfg || cfg.type !== "multi_condition") return null;
+  const primary = cfg.conditions.find(
+    (c) => !(c.left.offset_bars && c.left.offset_bars > 0) && c.right.kind === "constant" && c.left.kind !== "constant",
+  );
+  if (!primary) return null;
+  return {
+    interval: primary.interval,
+    left: { ...primary.left, offset_bars: 0 },
+    operator: FLIP_OPERATOR[primary.operator],
+    right: primary.right,
+  };
+}
+
 // Rule.interval (Interval) allows "daily" too, which StopLossInterval
 // deliberately excludes (see api.ts) - this guards the auto-default
 // below from ever proposing a value the SL-interval field can't accept.
@@ -3781,18 +3808,24 @@ function StrategyManager() {
   const displayIndicatorType: StopLossIndicatorType = showSupertrendDefaultPreview ? "supertrend" : slIndicatorType;
   const slFieldsReadOnly = selectedRuleIsBreakout || showSupertrendDefaultPreview;
 
-  // Picking a Rule pre-fills whatever Strategy fields it directly implies
-  // - today just Segment (Rule.segment - "which market this rule's
-  // condition/universe is evaluated against", see app/domain/rule.py).
-  // Still a plain pre-fill, not a lock: the user can change Segment
-  // afterward same as any other field, since Rule.segment and a linked
-  // Strategy's own segment are deliberately allowed to differ (see that
-  // field's own comment) - this just saves re-picking the common case
-  // where they match.
+  // Picking a Rule pre-fills whatever Strategy fields it directly implies:
+  //  - Segment (Rule.segment - "which market this rule's condition/
+  //    universe is evaluated against", see app/domain/rule.py). A plain
+  //    pre-fill, not a lock - Rule.segment and a linked Strategy's own
+  //    segment are deliberately allowed to differ.
+  //  - Exit condition, for a multi_condition threshold rule: the mirror
+  //    "cross back through the threshold" (deriveExitConditionFromRule).
+  //    Only filled when the field is still empty, so it never clobbers a
+  //    condition the user typed or an existing strategy's saved one.
   function handleRuleChange(newRuleId: string) {
     setRuleId(newRuleId);
     const picked = rules.find((r) => r.id === newRuleId);
-    if (picked) setSegment(picked.segment);
+    if (!picked) return;
+    setSegment(picked.segment);
+    if (!exitConditionText.trim()) {
+      const derived = deriveExitConditionFromRule(picked);
+      if (derived) setExitConditionText(stringifyConditions([derived]));
+    }
   }
 
   // Shared by both fresh-create and cancel-edit - returns the form to its
@@ -4435,7 +4468,8 @@ function StrategyManager() {
                   <span className="muted">
                     Closes the position the first exit-monitor tick it&rsquo;s true &mdash; independent of SL / target /
                     square-off. One line, same syntax as a rule condition, e.g. <code>5min: cci(200) &lt; 200</code> or{" "}
-                    <code>15min: rsi(14) &gt; 40</code>.
+                    <code>15min: rsi(14) &gt; 40</code>. Prefilled with the &ldquo;cross back through the threshold&rdquo;
+                    mirror when you pick a threshold-style in-house rule &mdash; edit or clear as needed.
                   </span>
                   <ConditionsTextEditor
                     value={exitConditionText}

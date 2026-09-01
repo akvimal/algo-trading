@@ -3,7 +3,6 @@ import { useCallback, useRef, useState } from "react";
 import AuthGate from "./AuthGate";
 import IntradayPage from "./IntradayPage";
 import OiSummaryPage from "./OiSummaryPage";
-import { SentimentBadges } from "./SentimentBadges";
 
 // Split out of signal-generation's frontend (see docs/architecture.md §
 // "Manual Trading module split") - Manual Trading and Options OI never
@@ -13,7 +12,10 @@ import { SentimentBadges } from "./SentimentBadges";
 // SignalNotifier) moved to the shell's own top bar instead - one global
 // bell instead of one per tab, see shell/index.html. Username/Logout
 // moved there too, same reasoning - one shared display instead of a
-// duplicated email+button per module.
+// duplicated email+button per module. The sentiment badges that used to
+// sit alongside the tabs here moved there too (2026-09-01, same
+// reasoning) - see shell/index.html's own "Global sentiment indicator"
+// section, ported from this module's SentimentBadges.tsx (now deleted).
 // "Intraday"/"OI" here match the domain's own Horizon concept
 // (intraday/positional, "swing" merged into positional) - "Swing Trading"
 // and "Positional" are planned future top-level pages, not added yet (see
@@ -34,8 +36,8 @@ export default function App() {
   // Tracks this row's real rendered height into a CSS var so IntradayPage's
   // sub-tab nav (its own sticky header, see index.css's nav.tabs.subtabs)
   // can stick directly below it instead of overlapping - the row's height
-  // isn't a fixed number of rem (sentiment badges/notification state can
-  // wrap it to different heights), so it's measured rather than guessed.
+  // isn't a fixed number of rem (the tab labels themselves can wrap at
+  // narrow widths), so it's measured rather than guessed.
   // A callback ref rather than useRef+useEffect: this div only actually
   // mounts once AuthGate's own async auth check resolves and it renders
   // {children} for the first time, a commit that happens well after App's
@@ -68,9 +70,6 @@ export default function App() {
               OI
             </button>
           </nav>
-          <div className="top-row-actions">
-            <SentimentBadges />
-          </div>
         </div>
 
         {tab === "intraday" && <IntradayPage />}

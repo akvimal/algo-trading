@@ -13,6 +13,8 @@
     --text: #e6e9ee;
     --text-dim: #8b93a1;
     --accent: #4c8bf5;
+    --buy: #3ecf8e;
+    --sell: #e8586a;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -144,6 +146,66 @@
   #notif-blocked.active {
     display: block;
   }
+  /* Ported from manual-trading's own SentimentBadges.tsx (moved here
+     2026-09-01, same "one shared display instead of a per-module copy"
+     reasoning as user-area/notif-area above - visible regardless of
+     which tab is active, not just while viewing Manual Trading's OI
+     page). Font sizes are a notch larger than that component's own
+     (0.78/0.68/0.7rem there) - more prominent up here in the shared
+     header than it was as a secondary readout on one tab's own page. */
+  .sentiment-bar {
+    display: flex;
+    gap: 0.9rem;
+    font-size: 0.9rem;
+    padding-bottom: 0.6rem;
+    flex-shrink: 0;
+  }
+  .sentiment-segment {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .segment-label {
+    font-size: 0.76rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-dim);
+  }
+  .sentiment-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--text-dim);
+    cursor: default;
+  }
+  .sentiment-badge .symbol {
+    color: var(--text);
+  }
+  .sentiment-badge.bullish {
+    color: var(--buy);
+  }
+  .sentiment-badge.bearish {
+    color: var(--sell);
+  }
+  .sentiment-badge .glyph {
+    font-size: 0.8rem;
+    letter-spacing: -0.05em;
+  }
+  /* Briefly pulses a badge whose direction/strength just changed - same
+     4s window as SentimentBadges.tsx's own FLASH_DURATION_MS. */
+  .sentiment-badge.flash {
+    animation: sentiment-flash 0.8s ease-in-out 5;
+    border-radius: 4px;
+  }
+  @keyframes sentiment-flash {
+    0%, 100% {
+      background: transparent;
+    }
+    50% {
+      background: rgba(76, 139, 245, 0.35);
+    }
+  }
   .frame-wrap {
     flex: 1;
     position: relative;
@@ -191,6 +253,7 @@
   <div class="top-bar">
     <nav id="tabs"></nav>
     <div class="top-bar-right">
+      <div class="sentiment-bar" id="sentiment-bar"></div>
       <div class="user-area" id="user-area"></div>
       <div class="notif-area">
         <span id="notif-blocked"></span>
@@ -441,6 +504,105 @@
 
     checkDhanTokenExpiry();
     setInterval(checkDhanTokenExpiry, DHAN_POLL_INTERVAL_MS);
+
+    // --- Global sentiment indicator (visual) --------------------------------
+    // Ported from manual-trading's own SentimentBadges.tsx into plain JS
+    // here (moved 2026-09-01) - same "one shared display instead of a
+    // per-module copy" reasoning as user-area/notif-area above, visible
+    // regardless of which tab is active rather than only while viewing
+    // Manual Trading's own OI page. Runs unconditionally - independent of
+    // Notification support/permission, unlike the notification-bell
+    // section below's OWN pollSentiment(), which only drives the desktop-
+    // notification side of this same underlying data (that one stays
+    // gated on notifEnabled; this one always renders).
+    const sentimentBarEl = document.getElementById("sentiment-bar");
+    const SENTIMENT_STRENGTH_LABEL_DISPLAY = { mild: "Mild", strong: "Strong", very_strong: "Very Strong" };
+
+    // Mirrors SentimentBadges.tsx's own fullLabel()/levelGlyph().
+    function sentimentFullLabel(direction, strength) {
+      if (direction === "neutral" || !strength) return "Neutral";
+      return `${direction === "bullish" ? "Bullish" : "Bearish"} (${SENTIMENT_STRENGTH_LABEL_DISPLAY[strength]})`;
+    }
+    function sentimentLevelGlyph(direction, strength) {
+      if (direction === "neutral" || !strength) return "•";
+      const count = strength === "very_strong" ? 3 : strength === "strong" ? 2 : 1;
+      return (direction === "bullish" ? "▲" : "▼").repeat(count);
+    }
+
+    // symbol -> "direction:strength" as of the last poll - null until
+    // seeded, same "don't flash everything just because the bar just
+    // mounted" convention as SentimentBadges.tsx's own prevRef.
+    let prevSentimentDisplay = null;
+    const sentimentFlashTimers = new Map();
+
+    function renderSentimentBar(data, flashingSymbols) {
+      sentimentBarEl.innerHTML = "";
+      for (const [exchange, entry] of Object.entries(data.exchanges ?? {})) {
+        const segment = document.createElement("span");
+        segment.className = "sentiment-segment";
+
+        const label = document.createElement("span");
+        label.className = "segment-label";
+        label.textContent = exchange;
+        segment.appendChild(label);
+
+        for (const u of entry.underlyings ?? []) {
+          const badge = document.createElement("span");
+          const flashing = flashingSymbols.has(u.symbol);
+          badge.className = `sentiment-badge ${u.error ? "neutral" : u.direction}${flashing ? " flash" : ""}`;
+          badge.title = u.error ? `${u.symbol}: no data (${u.error})` : `${u.symbol}: ${sentimentFullLabel(u.direction, u.strength)}`;
+
+          const symbolSpan = document.createElement("span");
+          symbolSpan.className = "symbol";
+          symbolSpan.textContent = u.symbol;
+          badge.appendChild(symbolSpan);
+
+          const glyphSpan = document.createElement("span");
+          glyphSpan.className = "glyph";
+          glyphSpan.textContent = u.error ? "?" : sentimentLevelGlyph(u.direction, u.strength);
+          badge.appendChild(glyphSpan);
+
+          segment.appendChild(badge);
+        }
+        sentimentBarEl.appendChild(segment);
+      }
+    }
+
+    async function pollSentimentDisplay() {
+      const base = `http://${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
+      try {
+        const res = await fetch(`${base}/options/sentiment`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const next = new Map();
+        for (const [, entry] of Object.entries(data.exchanges ?? {})) {
+          for (const u of entry.underlyings ?? []) next.set(u.symbol, `${u.direction}:${u.strength ?? ""}`);
+        }
+        if (prevSentimentDisplay) {
+          for (const [symbol, key] of next) {
+            if (prevSentimentDisplay.get(symbol) !== key) {
+              clearTimeout(sentimentFlashTimers.get(symbol));
+              sentimentFlashTimers.set(
+                symbol,
+                setTimeout(() => {
+                  sentimentFlashTimers.delete(symbol);
+                  renderSentimentBar(data, new Set(sentimentFlashTimers.keys()));
+                }, 4000),
+              );
+            }
+          }
+        }
+        prevSentimentDisplay = next;
+        renderSentimentBar(data, new Set(sentimentFlashTimers.keys()));
+      } catch {
+        // market-data unreachable or a transient error - leave whatever
+        // was last shown rather than clearing the bar on one missed poll.
+      }
+    }
+
+    pollSentimentDisplay();
+    setInterval(pollSentimentDisplay, DHAN_POLL_INTERVAL_MS);
 
     // --- Global signal-notification bell ------------------------------------
     // Ported from signal-engine's/manual-trading's own (duplicated)

@@ -2032,6 +2032,10 @@ export function LiveChartPanel({
     // don't align to epoch-hour boundaries.
     let lastCompletedTs = 0;
     let liveBar: KLineData | null = null;
+    // Most recent tick - so a freshly re-armed forming bar (after a
+    // history refetch or a bar rollover) opens at the live price, not at
+    // the last completed candle's stale close.
+    let lastLtp: number | null = null;
     // Standalone LTP line - only mounted while `liveBar` is null.
     let ltpLineId: string | null = null;
     function clearLtpLine() {
@@ -2090,12 +2094,17 @@ export function LiveChartPanel({
       // unless that anchor is already stale (market closed, or a data
       // gap like the lunch break), in which case show no phantom bar.
       if (Date.now() - lastCompletedTs < 2 * intervalMs) {
+        const open = newestClose;
+        // Snap the forming bar to the live price straight away if we have
+        // one - otherwise it briefly shows the completed candle's close
+        // until the next LTP tick.
+        const px = lastLtp ?? newestClose;
         liveBar = {
           timestamp: lastCompletedTs + intervalMs,
-          open: newestClose,
-          high: newestClose,
-          low: newestClose,
-          close: newestClose,
+          open,
+          high: Math.max(open, px),
+          low: Math.min(open, px),
+          close: px,
           volume: 0,
         };
         chart!.updateData(liveBar);
@@ -2114,6 +2123,7 @@ export function LiveChartPanel({
         return; // transient - retry next tick
       }
       if (cancelled) return;
+      lastLtp = ltp;
       // The page LTP readout updates every tick regardless of whether
       // there's a live candle to roll it into.
       setLastPrice(ltp);
@@ -2153,7 +2163,12 @@ export function LiveChartPanel({
       chart!.updateData(liveBar);
     }
 
-    void loadHistory(true);
+    // Kick an LTP tick as soon as history is on the chart, so the last
+    // candle syncs to the ticker within a moment of load rather than
+    // after a full poll interval.
+    void loadHistory(true).then(() => {
+      if (!cancelled) void tickLtp();
+    });
     const ltpTimer = window.setInterval(tickLtp, LTP_POLL_MS);
     // Floor at 60s so a 1m chart doesn't hammer the provider on every
     // tick (the server cache's TTL for a today-touching range is the

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type Account,
@@ -256,6 +256,13 @@ export default function ChartTradePanel({
   // squares off on cross. Lives only while the panel is mounted; there's
   // no backend target field on a manual order.
   const [targetPx, setTargetPx] = useState<number | null>(null);
+  // Latch so the target watch squares off exactly once - the 5s poll's
+  // closure is stale after squareOff nulls openGroup/targetPx, so without
+  // this it re-fires squareOff against an already-CLOSED group every tick.
+  const exitFiredRef = useRef(false);
+  // Re-entrancy guard for squareOff (state alone can't stop the stale
+  // poll closure from calling it again mid-flight).
+  const squaringOffRef = useRef(false);
 
   const [history, setHistory] = useState<ClosedTrade[]>([]);
 
@@ -345,8 +352,11 @@ export default function ChartTradePanel({
         if (wasOpen && !nowOpen) void refreshHistory();
         wasOpen = nowOpen;
       }
-      if (!cancelled && nowOpen && price != null && targetPx != null && openAction) {
-        if (checkExitTrigger({ action: openAction, targetPrice: targetPx }, price) === "target") void squareOff();
+      if (!cancelled && nowOpen && price != null && targetPx != null && openAction && !exitFiredRef.current) {
+        if (checkExitTrigger({ action: openAction, targetPrice: targetPx }, price) === "target") {
+          exitFiredRef.current = true;
+          void squareOff();
+        }
       }
     };
     void tick();
@@ -360,6 +370,7 @@ export default function ChartTradePanel({
 
   // Seed the edit fields once per open position.
   useEffect(() => {
+    exitFiredRef.current = false;
     if (!openId) {
       setEdit({ sl: "", target: "", closeBy: "" });
       setTargetPx(null);
@@ -496,6 +507,21 @@ export default function ChartTradePanel({
   // target watch (local), whatever's set.
   async function saveAll() {
     if (!openId) return;
+    // Validate the target watch up front - it's a spot-price level, and
+    // if it's already on the exit side of the current price it would fire
+    // the instant it's armed (this is what "square-off: group is CLOSED"
+    // came from). Bail before touching the backend.
+    const rawT = edit.target.trim() ? Number(edit.target) : null;
+    const tValid = rawT != null && Number.isFinite(rawT) && rawT > 0;
+    if (tValid && ltp != null && openAction) {
+      const alreadyPast = openAction === "BUY" ? ltp >= rawT : ltp <= rawT;
+      if (alreadyPast) {
+        setError(
+          `Target ${fmt(rawT)} is already past the spot price (${fmt(ltp)}) — set it ${openAction === "BUY" ? "above" : "below"} spot.`,
+        );
+        return;
+      }
+    }
     setSavingAll(true);
     setSavedAll(false);
     setError(null);
@@ -522,8 +548,8 @@ export default function ChartTradePanel({
       if (openGroup) await updateOptionGroupSquareOffTime(openGroup.id, closeVal);
       else if (openPos) await updatePositionSquareOffTime(openPos.id, closeVal);
       // Target - a local watch, no backend call.
-      const t = edit.target.trim() ? Number(edit.target) : null;
-      setTargetPx(t != null && Number.isFinite(t) && t > 0 ? t : null);
+      setTargetPx(tValid ? rawT : null);
+      exitFiredRef.current = false;
 
       setSavedAll(true);
       window.setTimeout(() => setSavedAll(false), 1600);
@@ -536,18 +562,24 @@ export default function ChartTradePanel({
   }
 
   async function squareOff() {
+    if (squaringOffRef.current) return;
+    squaringOffRef.current = true;
     setSquaringOff(true);
     setError(null);
     try {
       if (openGroup) await squareOffOptionGroup(openGroup.id);
       else if (openPos) await squareOffManualPosition(openPos.id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "failed to square off";
+      // Already gone (backend SL/target/square-off beat us, or a double
+      // fire) - reconcile silently rather than showing an error.
+      if (!/not OPEN|is CLOSED/i.test(msg)) setError(msg);
+    } finally {
       setOpenGroup(null);
       setOpenPos(null);
       setTargetPx(null);
       await refreshHistory();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "failed to square off");
-    } finally {
+      squaringOffRef.current = false;
       setSquaringOff(false);
     }
   }
@@ -755,12 +787,18 @@ export default function ChartTradePanel({
                 </label>
               )}
 
-              <label className="ctp-mf">
-                <span>Target{targetPx != null ? " ●" : ""}</span>
+              <label
+                className="ctp-mf"
+                title="A browser-side watch on the underlying SPOT price - squares this position off when spot reaches the level (set it above spot for a long/call, below for a short/put)."
+              >
+                <span>
+                  {openGroup ? "Spot target" : "Target"}
+                  {targetPx != null ? " ●" : ""}
+                </span>
                 <input
                   inputMode="decimal"
                   value={edit.target}
-                  placeholder="price"
+                  placeholder="spot price"
                   onChange={(e) => setEdit((s) => ({ ...s, target: e.target.value }))}
                 />
               </label>

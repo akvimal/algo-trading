@@ -14,7 +14,6 @@ from app.domain.position_manager import (
     check_exits,
     compute_strategy_performance,
     compute_unrealized_pnl,
-    find_missing_daily_checklist,
     load_settings,
     open_manual_position,
     square_off_all_open,
@@ -23,7 +22,6 @@ from app.domain.position_manager import (
     submit_position_review,
     update_square_off_time,
     update_stop_loss,
-    validate_plan_checklist,
 )
 
 router = APIRouter()
@@ -267,26 +265,19 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
     the existing pipeline's own convention - a rejection is a legitimate
     persisted outcome, not an HTTP error.
 
-    Two discipline-checklist gates run BEFORE any of that, and are real
-    HTTP errors (not a persisted REJECTED row) since they're not a trade
-    attempt at all: 409 if today's 'day'-phase checklist hasn't been
-    submitted yet for this segment (find_missing_daily_checklist), 422 if
-    the submitted plan_checklist doesn't fully cover the currently-active
-    'plan'-phase items scoped to this segment (validate_plan_checklist).
-    See docs/architecture.md § 'Trade discipline checklist'. A THIRD gate
-    - 409 while any manual position/group sat CLOSED but unreviewed -
-    used to block here too; removed 2026-08-26 at the user's explicit
-    request ("don't need to restrict to complete review") - GET
-    /manual-trades/pending-review (find_pending_manual_review) still
-    surfaces the same trade as a reminder banner in the frontend, it just
-    no longer blocks placing a new one."""
+    The discipline-checklist system is now record-only, NOT a placement
+    gate: `plan_checklist` (whatever the frontend sends, `[]` included) is
+    still snapshotted onto the row, the daily checklist page still works,
+    and the Workspace tab still renders the checkboxes and gates itself
+    client-side - but this endpoint no longer 409s on a missing daily
+    checklist or 422s on an incomplete plan checklist. Removed 2026-09-03
+    at the user's request (the Live Chart trade card places orders
+    directly with no checklist step), following the same precedent as the
+    post-trade review gate (removed here 2026-08-26, kept as a reminder
+    banner). `find_missing_daily_checklist` / `validate_plan_checklist`
+    still exist for any caller that wants to check first.
+    See docs/architecture.md § 'Trade discipline checklist'."""
     settings = load_settings(db, user.id)
-    daily_error = find_missing_daily_checklist(db, user.id, settings, payload.segment)
-    if daily_error is not None:
-        raise HTTPException(status_code=409, detail=daily_error)
-    checklist_error = validate_plan_checklist(db, user.id, payload.plan_checklist, payload.segment)
-    if checklist_error is not None:
-        raise HTTPException(status_code=422, detail=checklist_error)
 
     row = open_manual_position(
         user.id,

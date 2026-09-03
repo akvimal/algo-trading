@@ -36,11 +36,7 @@ from app.domain.option_position_manager import (
     update_group_square_off_time,
     update_group_stop_loss,
 )
-from app.domain.position_manager import (
-    find_missing_daily_checklist,
-    load_settings,
-    validate_plan_checklist,
-)
+from app.domain.position_manager import load_settings
 
 router = APIRouter()
 
@@ -273,16 +269,10 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
     matching POST /positions/manual's own convention - a rejection is a
     legitimate persisted outcome, not an HTTP error.
 
-    Same two discipline-checklist gates as POST /positions/manual, run
-    BEFORE any of that - see that route's own docstring (including why
-    the pending-review gate that used to also run here was removed)."""
+    The discipline-checklist system is record-only here too - no daily-
+    checklist 409 or plan-checklist 422 gate (removed 2026-09-03, same as
+    POST /positions/manual - see that route's docstring)."""
     settings = load_settings(db, user.id)
-    daily_error = find_missing_daily_checklist(db, user.id, settings, payload.segment)
-    if daily_error is not None:
-        raise HTTPException(status_code=409, detail=daily_error)
-    checklist_error = validate_plan_checklist(db, user.id, payload.plan_checklist, payload.segment)
-    if checklist_error is not None:
-        raise HTTPException(status_code=422, detail=checklist_error)
 
     row = open_manual_option_group(
         user.id,

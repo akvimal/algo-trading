@@ -509,8 +509,10 @@ class ManualPositionCreate(BaseModel):
     # and whether it was checked. validate_plan_checklist (position_
     # manager.py) rejects with a 422 unless every one is checked and the
     # count matches what's currently active - enforced at the route layer,
-    # not here, since it needs a DB query.
-    plan_checklist: list[ChecklistAnswer] = Field(min_length=1)
+    # not here, since it needs a DB query. An empty list is valid input
+    # (some users delete every 'plan' item) - validate_plan_checklist
+    # passes it when there are no active 'plan' items either.
+    plan_checklist: list[ChecklistAnswer] = []
 
     @model_validator(mode="after")
     def _check_stop_loss_config(self) -> "ManualPositionCreate":
@@ -568,8 +570,8 @@ class ManualOptionPositionCreate(BaseModel):
     # as Strategy.fixed_lots in open_option_group.
     option_fixed_lots: Optional[float] = Field(default=None, gt=0)
     # Trade discipline checklist - see ManualPositionCreate.plan_checklist's
-    # own comment, identical meaning here.
-    plan_checklist: list[ChecklistAnswer] = Field(min_length=1)
+    # own comment, identical meaning here (empty list valid, same reasoning).
+    plan_checklist: list[ChecklistAnswer] = []
     # Which of ManualTab.tsx's two entry modes placed this trade - see
     # ManualPositionCreate.order_type's own comment. Means the same thing
     # here despite there being no caller-supplied `price` field above:

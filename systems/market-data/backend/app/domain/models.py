@@ -105,6 +105,57 @@ class CandleCacheStatus(BaseModel):
     fetched_at: Optional[str] = None  # ISO 8601 UTC timestamp
 
 
+class OrderBlock(BaseModel):
+    """One supply/demand zone detected on a single candle series - part of
+    GET /order-blocks' ChartStructure, backing the Live Chart's
+    multi-timeframe overlays (see app/domain/order_blocks.py and
+    docs/architecture.md § "Live chart - multi-timeframe order blocks").
+
+    `role`: "orderblock" (a fresh/tested zone) or "breaker" (an order
+    block price closed through, kept with polarity flipped - a broken
+    demand OB becomes a supply breaker, acting as resistance on retest).
+    `kind` is what the zone acts as *now* (so a breaker's kind is the
+    opposite of the order block it came from). `proximal`/`distal` are the
+    price edges: proximal is the one nearer to price (a demand zone's top,
+    a supply zone's bottom), distal the far one. `origin_timestamp` is the
+    ISO-8601 start time of the candle it formed from - its left edge on a
+    chart; the right edge auto-extends. `mitigated` = price has since
+    traded back to the proximal edge at least once (still valid, just
+    tested)."""
+
+    kind: Literal["demand", "supply"]
+    role: Literal["orderblock", "breaker"] = "orderblock"
+    proximal: float
+    distal: float
+    origin_timestamp: str
+    mitigated: bool
+
+
+class Fvg(BaseModel):
+    """A 3-candle fair value gap (imbalance) - part of GET /order-blocks'
+    ChartStructure. `kind` is the direction of the displacement that
+    opened it. `top`/`bottom` are the gap's price edges; `origin_timestamp`
+    is the middle (displacement) candle's start - the gap's left edge, it
+    extends right until filled. `filled` = a later candle's wick (or
+    close) has entered the gap from the outside without yet closing clean
+    through; gaps a candle has closed through are dropped, never returned."""
+
+    kind: Literal["bullish", "bearish"]
+    top: float
+    bottom: float
+    origin_timestamp: str
+    filled: bool
+
+
+class ChartStructure(BaseModel):
+    """GET /order-blocks - the SMC structure primitives (order blocks +
+    breakers, and fair value gaps) for one (exchange, symbol, interval).
+    See app/domain/order_blocks.py."""
+
+    order_blocks: list[OrderBlock]
+    fvgs: list[Fvg]
+
+
 class OptionGreeks(BaseModel):
     """Dhan's option-chain response doesn't include rho - only the first
     four. Delta Exchange's does (Phase 2 of the crypto module, see

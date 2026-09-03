@@ -2381,6 +2381,36 @@ button.btn-exit {
   margin: 0 0 0.15rem;
 }
 
+/* Prominent "where OI positioning stands right now" readout above the
+   chart - the raw shift % used to live only in the hover tooltip's dim
+   one-liner. */
+.sentiment-history-latest {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.7rem;
+  margin-bottom: 0.45rem;
+}
+
+.sentiment-history-latest-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.sentiment-history-latest-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.sentiment-history-latest-dir {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
 .sentiment-history-slider {
   width: 100%;
   margin: 0 0 0.5rem;
@@ -2419,6 +2449,19 @@ button.btn-exit {
   align-items: center;
 }
 
+.sentiment-history-tooltip-scores {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sentiment-history-tooltip-flip {
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
 .sentiment-history-legend {
   display: flex;
   flex-wrap: wrap;
@@ -2439,6 +2482,12 @@ button.btn-exit {
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 50%;
+}
+
+.sentiment-history-flip-glyph {
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--text);
 }
 
 .oi-bar-chart-swatch.put.increase {
@@ -2519,4 +2568,231 @@ button.btn-exit {
 .oi-summary-window-toggle button.active {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* Live Chart sub-tab (LiveChartPage / LiveChartPanel) - the one place
+   this frontend renders a canvas chart (klinecharts) rather than
+   hand-rolled SVG. */
+.live-chart-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.live-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.live-chart-controls select,
+.live-chart-controls input {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.live-chart-controls input {
+  min-width: 12rem;
+}
+
+.live-chart-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.live-chart-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.live-chart-toolbar-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.live-chart-intervals {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* "Indicators ▾" dropdown - a checklist of klinecharts' built-in
+   indicators, toggled live onto/off the chart. */
+.live-chart-indicators {
+  position: relative;
+}
+
+.live-chart-indicators > button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.live-chart-indicators > button.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.live-chart-indicators-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  margin-top: 0.3rem;
+  min-width: 15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  padding: 0.35rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.live-chart-indicators-menu label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 5px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.live-chart-indicators-menu label:hover {
+  background: var(--surface);
+}
+
+.live-chart-indicators-group {
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  padding: 0.45rem 0.4rem 0.2rem;
+}
+
+.live-chart-indicators-hint {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+  padding: 0.4rem 0.4rem 0.2rem;
+  max-width: 15rem;
+}
+
+.live-chart-intervals button {
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  border: none;
+  border-radius: 0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.live-chart-intervals button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.live-chart-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-chart-symbol {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.live-chart-ltp {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* klinecharts fills its container, so the container needs an explicit
+   height - a viewport-relative band that stays usable on a laptop and
+   doesn't run off a tall monitor. */
+.live-chart-canvas-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.live-chart-canvas {
+  width: 100%;
+  height: clamp(360px, 62vh, 640px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.live-chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border-radius: 8px;
+  text-align: center;
+  padding: 1rem;
+}
+
+/* klinecharts overlay-drawing toolbar - trend lines, levels, zones, fib
+   (see LiveChartPanel.tsx's DRAW_TOOLS). */
+.live-chart-drawtools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.live-chart-drawtools button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 5px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.live-chart-drawtools button:disabled {
+  opacity: 0.45;
+}
+
+.live-chart-drawtools button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.live-chart-drawtools-clear {
+  margin-left: 0.35rem;
+}
+
+.live-chart-drawtools-hint {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-left: auto;
 }

@@ -20,7 +20,9 @@ const WINDOW_MS = 3 * 60 * 60 * 1000;
 const WIDTH = 900;
 const PAD_LEFT = 64;
 const PAD_RIGHT = 12;
-const PAD_TOP = 16;
+// Also the vertical strip the direction-flip triangles are drawn in
+// (flipMarkerPoints below) - keep >= 14.
+const PAD_TOP = 20;
 // Two stacked plots sharing one x (time) axis - price on top (the thing
 // you're checking for alignment), the raw OI-shift score underneath (the
 // thing sentiment.py's direction/strength bucketing is actually derived
@@ -28,8 +30,14 @@ const PAD_TOP = 16;
 // *before* a strength bucket flips, not just the bucketed label a point's
 // color/size already shows on the price plot above.
 const PRICE_PLOT_HEIGHT = 130;
-const SUBPLOT_GAP = 10;
-const SCORE_PLOT_HEIGHT = 56;
+// Was 10 - widened to seat a proper bold subplot title row ("OI shift %")
+// instead of a 9px axis-corner label that was near-illegible.
+const SUBPLOT_GAP = 26;
+// The raw OI-shift score is the number sentiment.py's whole
+// direction/strength bucketing is derived from, so give it real vertical
+// room (was 56) and its own ± scale labels (see the axis text below) -
+// a bar's height meant nothing in absolute terms before.
+const SCORE_PLOT_HEIGHT = 92;
 const XAXIS_LABEL_HEIGHT = 20;
 const HEIGHT = PAD_TOP + PRICE_PLOT_HEIGHT + SUBPLOT_GAP + SCORE_PLOT_HEIGHT + XAXIS_LABEL_HEIGHT;
 const PLOT_WIDTH = WIDTH - PAD_LEFT - PAD_RIGHT;
@@ -67,6 +75,35 @@ function directionLabel(p: SentimentHistoryPoint): string {
 function scoreColor(score: number | null): string {
   if (score == null || Math.abs(score) < 0.01) return "var(--text-dim)";
   return score > 0 ? "var(--buy)" : "var(--sell)";
+}
+
+// A run of same-direction reads breaking to the other side is the single
+// most actionable thing in this history (OI positioning reversing), so
+// mark every change of `direction` - brightest for a true
+// bullish<->bearish reversal, dimmed when neutral sits on either side.
+type DirectionFlip = { t: number; from: SentimentDirection; to: SentimentDirection };
+
+function computeFlips(pts: SentimentHistoryPoint[]): DirectionFlip[] {
+  const flips: DirectionFlip[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].direction !== pts[i - 1].direction) {
+      flips.push({
+        t: new Date(pts[i].recorded_at).getTime(),
+        from: pts[i - 1].direction,
+        to: pts[i].direction,
+      });
+    }
+  }
+  return flips;
+}
+
+// Small triangle drawn in the PAD_TOP strip above the price plot, pointing
+// the way the new read leans (up = bullish, down = bearish, diamond =
+// neutral).
+function flipMarkerPoints(cx: number, dir: SentimentDirection): string {
+  if (dir === "bullish") return `${cx - 4},13 ${cx + 4},13 ${cx},4`;
+  if (dir === "bearish") return `${cx - 4},4 ${cx + 4},4 ${cx},13`;
+  return `${cx - 3.5},9 ${cx},3.5 ${cx + 3.5},9 ${cx},14.5`;
 }
 
 function formatClock(iso: string): string {
@@ -111,7 +148,11 @@ function formatDayHeading(dateStr: string): string {
 // viewing today, else up to session_end). A second, synced subplot
 // underneath plots the raw score_15m (bars) and score_5m (dots) that
 // direction/strength above is actually bucketed from - the building/fading momentum shows up here
-// before it ever flips a bucket. Hand-rolled SVG, same approach as
+// before it ever flips a bucket; that subplot carries its own bold title
+// and ± scale labels. The latest read's raw 15m shift % is also surfaced
+// as a big number above the chart, and every point where `direction`
+// changes gets a flip marker (vertical guide + a triangle pointing the new
+// way) - see computeFlips. Hand-rolled SVG, same approach as
 // execution/frontend's PnlChart.tsx and this app's own OiBarChart.tsx - no
 // charting library in this codebase.
 export function SentimentHistoryChart({ symbol }: { symbol: string }) {
@@ -277,6 +318,12 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
   const allScores = withPrice.flatMap((p) => [p.score_5m, p.score_15m]).filter((s): s is number => s != null);
   const maxAbsScore = Math.max(1, ...allScores.map((s) => Math.abs(s)));
 
+  // Flips are computed over the whole day (so one at the window's left
+  // edge is still detected against the point just outside it), then
+  // filtered to what's visible.
+  const flips = computeFlips(points).filter((f) => f.t >= minTime && f.t <= maxTime);
+  const flipTimes = new Set(flips.map((f) => f.t));
+
   const x = (t: number) => PAD_LEFT + ((t - minTime) / timeSpan) * PLOT_WIDTH;
   const yPrice = (v: number) => PRICE_TOP + PRICE_PLOT_HEIGHT - ((v - yMin) / (yMax - yMin)) * PRICE_PLOT_HEIGHT;
   const yScore = (v: number) => SCORE_TOP + SCORE_PLOT_HEIGHT / 2 - (v / maxAbsScore) * (SCORE_PLOT_HEIGHT / 2);
@@ -325,9 +372,28 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
   const hoveredPriceY = hovered ? yPrice(hovered.spot_price as number) : 0;
   const tooltipOnLeft = hoveredX > WIDTH - 170;
 
+  // The most recent read that has a 15m score, surfaced as a big number
+  // above the chart - this % used to appear only in the hover tooltip's
+  // dim one-liner. Scanned over the full day, not just the visible window.
+  const latestScored = [...points].reverse().find((p) => p.score_15m != null) ?? null;
+  const latestScoreVal = latestScored ? (latestScored.score_15m as number) : 0;
+
   return (
     <div className="sentiment-history-chart">
       {dayNav}
+      {latestScored && (
+        <div className="sentiment-history-latest">
+          <span className="sentiment-history-latest-label">{isToday ? "Latest OI shift" : "Last OI shift"}</span>
+          <span className="sentiment-history-latest-value" style={{ color: scoreColor(latestScoreVal) }}>
+            {latestScoreVal > 0 ? "▲ " : latestScoreVal < 0 ? "▼ " : ""}
+            {latestScoreVal.toFixed(2)}%
+          </span>
+          <span className="sentiment-history-latest-dir" style={{ color: DIRECTION_COLOR[latestScored.direction] }}>
+            {directionLabel(latestScored)}
+          </span>
+          <span className="muted">{formatClock(latestScored.recorded_at)}</span>
+        </div>
+      )}
       <p className="sentiment-history-window-label">
         {formatAxisTime(minTime)} – {formatAxisTime(maxTime)}
       </p>
@@ -350,8 +416,20 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
         {/* OI-shift score subplot - score_15m (the bucketing's own primary
             input) as bars, score_5m (the agree/disagree sharpener) as a
             small dot on top of each bar. */}
-        <text x={PAD_LEFT - 8} y={SCORE_TOP + 8} textAnchor="end" fontSize={9} fill="var(--text-dim)">
+        <text x={PAD_LEFT} y={SCORE_TOP - 9} fontSize={11} fontWeight={700} fill="var(--text)">
           OI shift %
+        </text>
+        <text x={PAD_LEFT + 62} y={SCORE_TOP - 9} fontSize={9} fill="var(--text-dim)">
+          15m bars · 5m dots
+        </text>
+        <text x={PAD_LEFT - 8} y={SCORE_TOP + 4} textAnchor="end" fontSize={9} fill="var(--text-dim)">
+          +{maxAbsScore.toFixed(1)}
+        </text>
+        <text x={PAD_LEFT - 8} y={scoreZeroY + 3} textAnchor="end" fontSize={9} fill="var(--text-dim)">
+          0
+        </text>
+        <text x={PAD_LEFT - 8} y={SCORE_BOTTOM} textAnchor="end" fontSize={9} fill="var(--text-dim)">
+          −{maxAbsScore.toFixed(1)}
         </text>
         <line x1={PAD_LEFT} y1={scoreZeroY} x2={WIDTH - PAD_RIGHT} y2={scoreZeroY} stroke="var(--text-dim)" strokeWidth={1.25} strokeDasharray="3 3" />
 
@@ -364,7 +442,7 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
               width={barWidth}
               height={Math.max(1, Math.abs(yScore(p.score_15m) - scoreZeroY))}
               fill={scoreColor(p.score_15m)}
-              fillOpacity={0.75}
+              fillOpacity={0.9}
             />
           ) : null,
         )}
@@ -381,6 +459,29 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
             {formatAxisTime(t)}
           </text>
         ))}
+
+        {/* Direction-flip markers - vertical guide across both plots + a
+            triangle above the price plot pointing the new way (see
+            computeFlips / flipMarkerPoints). Brighter for a true
+            bullish<->bearish reversal, dim when neutral is on either side. */}
+        {flips.map((f) => {
+          const reversal = f.from !== "neutral" && f.to !== "neutral";
+          return (
+            <g key={`flip-${f.t}`}>
+              <line
+                x1={x(f.t)}
+                y1={PAD_TOP}
+                x2={x(f.t)}
+                y2={SCORE_BOTTOM}
+                stroke={DIRECTION_COLOR[f.to]}
+                strokeWidth={1}
+                strokeDasharray="2 3"
+                strokeOpacity={reversal ? 0.7 : 0.35}
+              />
+              <polygon points={flipMarkerPoints(x(f.t), f.to)} fill={DIRECTION_COLOR[f.to]} fillOpacity={reversal ? 1 : 0.55} />
+            </g>
+          );
+        })}
 
         {hovered && (
           <>
@@ -410,10 +511,17 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
           <div>{formatClock(hovered.recorded_at)}</div>
           <div>{hovered.spot_price?.toFixed(2)}</div>
           <div style={{ color: DIRECTION_COLOR[hovered.direction] }}>{directionLabel(hovered)}</div>
-          <div className="muted">
-            5m {hovered.score_5m != null ? `${hovered.score_5m.toFixed(2)}%` : "-"} · 15m{" "}
-            {hovered.score_15m != null ? `${hovered.score_15m.toFixed(2)}%` : "-"}
+          <div className="sentiment-history-tooltip-scores">
+            <span style={{ color: scoreColor(hovered.score_15m) }}>
+              15m {hovered.score_15m != null ? `${hovered.score_15m.toFixed(2)}%` : "-"}
+            </span>
+            <span className="muted">5m {hovered.score_5m != null ? `${hovered.score_5m.toFixed(2)}%` : "-"}</span>
           </div>
+          {flipTimes.has(new Date(hovered.recorded_at).getTime()) && (
+            <div className="sentiment-history-tooltip-flip" style={{ color: DIRECTION_COLOR[hovered.direction] }}>
+              ⇅ Flipped {directionLabel(hovered)}
+            </div>
+          )}
           {(hovered.atm_call_buildup || hovered.atm_put_buildup) && (
             <div className="sentiment-history-tooltip-buildup">
               <span>Call {buildupBadge(hovered.atm_call_buildup)}</span>
@@ -431,6 +539,9 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
         </span>
         <span className="sentiment-history-legend-item">
           <span className="sentiment-history-swatch" style={{ background: "var(--text-dim)" }} /> Neutral
+        </span>
+        <span className="sentiment-history-legend-item">
+          <span className="sentiment-history-flip-glyph" aria-hidden="true">⇅</span> Direction flip
         </span>
         <span className="sentiment-history-legend-item">
           <span className="sentiment-history-swatch" style={{ background: "var(--text)", borderRadius: "50%" }} /> 5m read (dot, lower panel)

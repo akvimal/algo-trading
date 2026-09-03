@@ -1,15 +1,21 @@
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 
 import ManualStatsPage from "./ManualStatsPage";
 import TradeChecklistPage from "./TradeChecklistPage";
 import WorkspacePage from "./WorkspacePage";
 
-type SubTab = "workspace" | "checklist" | "performance";
+// Lazy so klinecharts (this repo's only charting dependency, ~40KB gzip)
+// lands in its own chunk instead of the main bundle - a trader who never
+// opens the Live Chart tab never downloads it. See LiveChartPanel.tsx.
+const LiveChartPage = lazy(() => import("./LiveChartPage"));
+
+type SubTab = "workspace" | "checklist" | "performance" | "chart";
 
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: "workspace", label: "Workspace" },
   { id: "checklist", label: "Trade Checklist" },
   { id: "performance", label: "Performance" },
+  { id: "chart", label: "Live Chart" },
 ];
 
 // Intraday - the top-level page for intraday spot/future/option paper
@@ -42,6 +48,11 @@ export default function IntradayPage() {
       {subTab === "workspace" && <WorkspacePage />}
       {subTab === "checklist" && <TradeChecklistPage />}
       {subTab === "performance" && <ManualStatsPage />}
+      {subTab === "chart" && (
+        <Suspense fallback={<p className="muted">Loading chart...</p>}>
+          <LiveChartPage />
+        </Suspense>
+      )}
     </div>
   );
 }

@@ -109,6 +109,23 @@ def get_candle_history(
     to_date = to or date.today()
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
+    try:
+        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        return fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials=None) -> list[Candle]:
+    """The cached (exchange, symbol, interval, from, to) fetch behind GET
+    /candles/history - also reused by GET /order-blocks, which needs the
+    same series (usually at a coarser interval than the chart is showing)
+    and benefits from the same cache. Takes an already-resolved `provider`
+    (the caller owns the unknown-exchange 404); raises ValueError (bad
+    interval) / RuntimeError (provider error) for the caller to map. The
+    cache isn't credential-aware - see GET /candles/history's docstring."""
     cache_key = (exchange, symbol, interval, from_date, to_date)
     ttl = _history_cache_ttl_seconds(interval, to_date)
     with _history_cache_lock:
@@ -118,14 +135,7 @@ def get_candle_history(
         if (time.monotonic() - fetched_at) < ttl:
             return candles
 
-    try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
-        candles = provider.get_candle_history(symbol, interval, from_date, to_date, credentials=credentials)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
+    candles = provider.get_candle_history(symbol, interval, from_date, to_date, credentials=credentials)
     with _history_cache_lock:
         _history_cache[cache_key] = (candles, time.monotonic(), datetime.now(timezone.utc))
     return candles

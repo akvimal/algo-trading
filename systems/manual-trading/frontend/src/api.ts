@@ -1073,6 +1073,93 @@ export async function fetchSentimentHistory(symbol: string, date?: string): Prom
   return asJson(res, "GET /options/sentiment-history");
 }
 
+// One completed OHLCV bar, mirrors market-data's app/domain/models.py
+// Candle. `timestamp` is a timezone-aware ISO-8601 string (the bar's
+// START time) - both providers emit it via datetime.fromtimestamp(..,
+// tz=IST).isoformat(), so Date.parse() gives a correct absolute epoch.
+export type Candle = {
+  exchange: string;
+  symbol: string;
+  interval: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timestamp: string;
+  provider: string;
+};
+
+// A [from, to] range of completed bars (oldest-first) - market-data
+// caches this server-side per exact (exchange, symbol, interval, from,
+// to) tuple, so the Live Chart panel's periodic refetch of a
+// today-touching range is cheap between bar closes (TTL there = the
+// interval's own minutes). `from`/`to` are plain "YYYY-MM-DD". authFetch
+// (not plain fetch) so a BYO-Dhan-credentials user pulls on their own
+// token/rate budget, same as fetchLtp.
+export async function fetchCandleHistory(
+  exchange: string,
+  symbol: string,
+  interval: string,
+  from: string,
+  to: string,
+): Promise<Candle[]> {
+  const res = await authFetch(
+    `${MARKET_DATA_BASE_URL}/candles/history?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
+  );
+  return asJson<Candle[]>(res, `GET /candles/history (${exchange}/${symbol}/${interval})`);
+}
+
+// SMC structure primitives for one candle series - mirrors market-data's
+// app/domain/models.py. `role`: "orderblock" (fresh/tested zone) or
+// "breaker" (an order block price closed through, kept with polarity
+// flipped). `kind` is what the zone acts as NOW. proximal/distal are the
+// price edges (proximal = nearer to price); origin_timestamp is the
+// ISO-8601 start of the candle it formed from (its left edge on a chart).
+export type OrderBlock = {
+  kind: "demand" | "supply";
+  role: "orderblock" | "breaker";
+  proximal: number;
+  distal: number;
+  origin_timestamp: string;
+  mitigated: boolean;
+};
+
+// A 3-candle fair value gap. top/bottom are the gap's price edges;
+// origin_timestamp is the middle (displacement) candle. `filled` = a
+// later wick has entered it without closing clean through.
+export type Fvg = {
+  kind: "bullish" | "bearish";
+  top: number;
+  bottom: number;
+  origin_timestamp: string;
+  filled: boolean;
+};
+
+export type ChartStructure = { order_blocks: OrderBlock[]; fvgs: Fvg[] };
+
+// SMC structure for one (exchange, symbol, interval) - the Live Chart
+// draws these at a DETECTION interval chosen independently of what the
+// chart is displaying (e.g. 15min zones while viewing the 5min chart), so
+// it calls this once per enabled detection timeframe. `breakers`/`fvg`
+// gate the two heavier layers (server only computes/returns them when
+// asked). Same server-side candle cache as fetchCandleHistory, so a few
+// enabled timeframes mostly serve from cache between bar closes.
+export async function fetchChartStructure(
+  exchange: string,
+  symbol: string,
+  interval: string,
+  from: string,
+  to: string,
+  opts: { breakers?: boolean; fvg?: boolean } = {},
+): Promise<ChartStructure> {
+  const params = new URLSearchParams({ exchange, symbol, interval, from, to });
+  if (opts.breakers) params.set("breakers", "true");
+  if (opts.fvg) params.set("fvg", "true");
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/order-blocks?${params}`);
+  return asJson<ChartStructure>(res, `GET /order-blocks (${exchange}/${symbol}/${interval})`);
+}
+
 // Backs the Rules page's backtest form - what date range is actually
 // usable, per market-data's GET /candles/availability. NSE/MCX (Dhan)
 // report a fixed `max_days_per_request` (a hard per-call cap - real

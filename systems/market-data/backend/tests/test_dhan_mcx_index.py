@@ -248,6 +248,38 @@ def test_resolve_active_contract_returns_none_for_unknown_underlying():
     assert provider.resolve_active_contract("SILVERM") is None
 
 
+def test_list_future_contracts_returns_unexpired_nearest_first():
+    from app.providers.dhan import ContractInfo
+
+    provider = DhanProvider([MCX_FUTCOM], name="dhan-mcx")
+    yesterday = date.today() - timedelta(days=1)
+    near = date.today() + timedelta(days=10)
+    far = date.today() + timedelta(days=40)
+    provider._underlying_to_contracts = {
+        "GOLDM": [
+            ContractInfo(trading_symbol="GOLDM-FAR-FUT", expiry_date=far),
+            ContractInfo(trading_symbol="GOLDM-EXPIRED-FUT", expiry_date=yesterday),
+            ContractInfo(trading_symbol="GOLDM-NEAR-FUT", expiry_date=near),
+        ]
+    }
+    provider._symbol_to_config = {
+        "GOLDM-NEAR-FUT": MCX_FUTCOM,
+        "GOLDM-FAR-FUT": MCX_FUTCOM,
+    }
+
+    result = provider.list_future_contracts("GOLDM")
+
+    assert [c["trading_symbol"] for c in result] == ["GOLDM-NEAR-FUT", "GOLDM-FAR-FUT"]
+    assert result[0]["expiry_date"] == near.isoformat()
+    assert result[0]["exchange"] == MCX_FUTCOM.exchange
+
+
+def test_list_future_contracts_empty_for_unknown_underlying():
+    provider = DhanProvider([MCX_FUTCOM], name="dhan-mcx")
+    provider._underlying_to_contracts = {}
+    assert provider.list_future_contracts("SILVERM") == []
+
+
 # --- resolve_underlying: commodity (chart==trade) vs index (chart!=trade) ------------------
 
 

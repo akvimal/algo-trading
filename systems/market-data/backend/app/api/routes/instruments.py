@@ -40,6 +40,22 @@ def resolve_underlying(segment: str, underlying: str):
     return resolved
 
 
+@router.get("/instruments/futures")
+def list_future_contracts(segment: str, underlying: str):
+    """Every not-yet-expired future contract for a logical underlying,
+    nearest expiry first - `[{trading_symbol, expiry_date, exchange}]`.
+    Backs the Live Chart's contract picker. Empty list (not 404) for a
+    provider/underlying with no futures (e.g. CRYPTO perpetuals) so the
+    frontend just doesn't render the picker - duck-typed the same way
+    resolve-by-security-id above is."""
+    try:
+        provider = get_provider(segment)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    lister = getattr(provider, "list_future_contracts", None)
+    return lister(underlying) if lister is not None else []
+
+
 @router.get("/instruments/resolve-by-security-id")
 def resolve_symbol_by_security_id(exchange: str, security_id: str):
     """Given a leg's own provider-assigned security_id (Dhan's security ID

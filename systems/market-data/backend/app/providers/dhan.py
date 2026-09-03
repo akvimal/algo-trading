@@ -907,6 +907,28 @@ class DhanProvider(QuoteProvider):
         unexpired = [c for c in contracts if c.expiry_date >= today]
         return min(unexpired, key=lambda c: c.expiry_date) if unexpired else None
 
+    def list_future_contracts(self, underlying: str) -> list[dict]:
+        """Every not-yet-expired future contract for `underlying`, nearest
+        expiry first - resolve_active_contract returns just the first of
+        these. Backs the Live Chart's contract picker (GET
+        /instruments/futures). `exchange` per contract so the frontend can
+        quote/chart it directly. Empty list for an unknown underlying or
+        one with no futures at all (never raises). Reads whatever the most
+        recent instrument sync produced, same as resolve_active_contract -
+        the frontend always calls this alongside resolve_underlying, which
+        forces a sync if one hasn't happened."""
+        contracts = self._underlying_to_contracts.get(underlying) or []
+        today = datetime.now(ZoneInfo(settings.timezone)).date()
+        active = sorted((c for c in contracts if c.expiry_date >= today), key=lambda c: c.expiry_date)
+        return [
+            {
+                "trading_symbol": c.trading_symbol,
+                "expiry_date": c.expiry_date.isoformat(),
+                "exchange": self._config_for(c.trading_symbol).exchange,
+            }
+            for c in active
+        ]
+
     def resolve_underlying(self, underlying: str) -> Optional[ResolvedUnderlying]:
         """chart_symbol/chart_exchange = what to fetch candles for and
         compute indicators on; trade_symbol/trade_exchange = what an

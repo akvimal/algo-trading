@@ -1149,6 +1149,7 @@ export function LiveChartPanel({
   segment,
   symbol,
   onTrendChange,
+  onLtpChange,
 }: {
   segment: string;
   symbol: string;
@@ -1156,9 +1157,16 @@ export function LiveChartPanel({
   // interval* (null when structure detection isn't running on that
   // timeframe) - the trade panel uses it to optionally lock direction.
   onTrendChange?: (info: IntervalTrend) => void;
+  // Fired every LTP tick so the trade panel can show the exact same live
+  // price as the chart rather than running its own separate poll.
+  onLtpChange?: (ltp: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
+  // Kept current every render so the candle effect's LTP tick can call it
+  // without listing it as a dep (which would re-run the whole effect).
+  const onLtpChangeRef = useRef(onLtpChange);
+  onLtpChangeRef.current = onLtpChange;
 
   const [resolved, setResolved] = useState<ResolvedUnderlying | null>(null);
   // Future-contract picker (MCX commodities, NSE index futures). `futures`
@@ -2127,6 +2135,7 @@ export function LiveChartPanel({
       // The page LTP readout updates every tick regardless of whether
       // there's a live candle to roll it into.
       setLastPrice(ltp);
+      onLtpChangeRef.current?.(ltp);
 
       if (!liveBar) {
         // No live forming bar (stale candle history / market closed / a

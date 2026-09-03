@@ -59,11 +59,15 @@ export default function LiveChartPage() {
   // trade panel can lock direction to it.
   const [trendInfo, setTrendInfo] = useState<IntervalTrend>({ trend: null, interval: "5min" });
   const [forceTrend, setForceTrend] = useState<boolean>(storedForceTrend);
+  // The chart's own live price, so the trade panel shows exactly what the
+  // chart shows instead of running a second, out-of-step LTP poll.
+  const [chartLtp, setChartLtp] = useState<number | null>(null);
 
   function pick(entry: (typeof SYMBOLS)[number]) {
     localStorage.setItem(SYMBOL_STORAGE_KEY, entry.symbol);
     setActive(entry);
     setTrendInfo({ trend: null, interval: "5min" });
+    setChartLtp(null);
   }
 
   function toggleForceTrend() {
@@ -96,6 +100,7 @@ export default function LiveChartPage() {
           segment={active.segment}
           symbol={active.symbol}
           onTrendChange={setTrendInfo}
+          onLtpChange={setChartLtp}
         />
 
         <div className="chart-trade-col">
@@ -125,6 +130,7 @@ export default function LiveChartPage() {
             intervalTrend={trend}
             chartInterval={interval}
             forceTrend={forceTrend}
+            chartLtp={chartLtp}
           />
         </div>
       </div>

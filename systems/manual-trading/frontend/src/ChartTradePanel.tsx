@@ -202,6 +202,7 @@ export default function ChartTradePanel({
   intervalTrend,
   chartInterval,
   forceTrend,
+  chartLtp,
 }: {
   segment: Segment;
   symbol: string;
@@ -213,6 +214,10 @@ export default function ChartTradePanel({
   // The "trade with the interval trend only" lock - its checkbox lives up
   // in LiveChartPage (aligned with the chart's interval strip), not here.
   forceTrend: boolean;
+  // The chart's own live price - used as THE ltp (display + target watch)
+  // so the panel never drifts from the chart. null until the chart has a
+  // tick; the panel's own fetch is only a fallback for that gap.
+  chartLtp: number | null;
 }) {
   const sym = symbol.trim().toUpperCase();
   const optionEligible = segment !== "CRYPTO" || CRYPTO_OPTION_SYMBOLS.includes(sym);
@@ -334,18 +339,31 @@ export default function ChartTradePanel({
     }
   }, [sym, segment, isStandaloneFuture, isThisGroup]);
 
+  // The chart is the source of truth for the live price - mirror it into
+  // `ltp` (used by the header, the target watch and saveAll's checks) so
+  // the panel is never a step behind what's on the chart.
+  const chartLtpRef = useRef<number | null>(null);
+  useEffect(() => {
+    chartLtpRef.current = chartLtp;
+    if (chartLtp != null) setLtp(chartLtp);
+  }, [chartLtp]);
+
   useEffect(() => {
     let cancelled = false;
     let wasOpen = false;
     void refreshHistory();
     const tick = async () => {
       if (cancelled) return;
-      let price: number | null = null;
-      try {
-        price = await fetchUnderlyingLtp(segment, sym);
-        if (!cancelled) setLtp(price);
-      } catch {
-        // keep last
+      // Prefer the chart's live price; only fetch our own while the chart
+      // hasn't produced a tick yet (first second or two after a switch).
+      let price: number | null = chartLtpRef.current;
+      if (price == null) {
+        try {
+          price = await fetchUnderlyingLtp(segment, sym);
+          if (!cancelled && price != null) setLtp(price);
+        } catch {
+          // keep last
+        }
       }
       const nowOpen = await refreshOpen();
       if (nowOpen !== null) {

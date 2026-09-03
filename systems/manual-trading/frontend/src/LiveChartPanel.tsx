@@ -337,9 +337,11 @@ registerOverlay({
 });
 
 // OI-derived support / resistance - a full-width horizontal line at the
-// strike, redrawn each OI poll. Resistance red, support green. The rank-1
-// wall on each side is drawn bold (3px + a translucent glow band); rank-2
-// is a thinner line. A `forming` level is dashed.
+// strike, redrawn each OI poll, with a filled colour pill (dark bold
+// text) at the right edge. Resistance red, support green - brighter than
+// the candle colours so they read across the whole chart. The rank-1
+// wall on each side is drawn heavy (3px + a glow band) with a larger
+// label; rank-2 is 2px; a `forming` level is dashed with a faint band.
 registerOverlay({
   name: "htfOiLevel",
   totalStep: 2,
@@ -351,17 +353,20 @@ registerOverlay({
     const d = overlay.extendData as OiLevelExtendData | undefined;
     if (!d) return [];
     const y = yAxis.convertToPixel(d.price);
-    const rgb = d.kind === "resistance" ? "232, 88, 106" : "62, 207, 142";
+    // Brighter, higher-contrast red/green than the candle colours - these
+    // sit on a dark pill and need to read at a glance across the chart.
+    const rgb = d.kind === "resistance" ? "255, 107, 129" : "77, 227, 158";
     const primary = d.rank === 1 && !d.forming;
-    const lineAlpha = d.forming ? 0.55 : d.rank === 1 ? 1 : 0.7;
+    const bandAlpha = primary ? 0.16 : d.forming ? 0.1 : 0;
+    const textSize = primary ? 14 : 12;
     return [
-      // A soft glow band behind the rank-1 wall so it reads at a glance.
-      ...(primary
+      // A soft glow band behind the wall / fastest-building strike.
+      ...(bandAlpha > 0
         ? [
             {
               type: "rect",
               attrs: { x: 0, y: y - 3, width: bounding.width, height: 6 },
-              styles: { style: "fill", color: `rgba(${rgb}, 0.14)` },
+              styles: { style: "fill", color: `rgba(${rgb}, ${bandAlpha})` },
               ignoreEvent: true,
             },
           ]
@@ -375,26 +380,29 @@ registerOverlay({
           ],
         },
         styles: {
-          color: `rgba(${rgb}, ${lineAlpha})`,
-          size: d.forming ? 1 : d.rank === 1 ? 3 : 1.5,
+          color: `rgba(${rgb}, ${d.forming ? 0.9 : 1})`,
+          size: d.rank === 1 && !d.forming ? 3 : 2,
           style: d.forming ? "dashed" : "solid",
+          dashedValue: [5, 4],
         },
         ignoreEvent: true,
       },
       {
         type: "text",
-        attrs: { x: bounding.width - 4, y: y - (primary ? 16 : 13), text: d.label, baseline: "top", align: "right" },
+        attrs: { x: bounding.width - 4, y: y - (textSize + 6), text: d.label, baseline: "top", align: "right" },
         styles: {
-          color: `rgba(${rgb}, 1)`,
-          size: primary ? 12 : 10,
-          weight: primary ? "bold" : "normal",
-          backgroundColor: "rgba(15, 18, 22, 0.82)",
-          borderColor: `rgba(${rgb}, ${primary ? 0.9 : 0})`,
-          borderSize: primary ? 1 : 0,
-          paddingLeft: 4,
-          paddingRight: 4,
-          paddingTop: 1,
-          paddingBottom: 1,
+          color: "#0f1216",
+          size: textSize,
+          weight: "bold",
+          // A filled pill in the level's own colour with dark text - far
+          // more legible than coloured text on a translucent dark box.
+          backgroundColor: `rgba(${rgb}, 0.95)`,
+          borderColor: `rgba(${rgb}, 1)`,
+          borderSize: 1,
+          paddingLeft: 5,
+          paddingRight: 5,
+          paddingTop: 2,
+          paddingBottom: 2,
           borderRadius: 3,
         },
         ignoreEvent: true,

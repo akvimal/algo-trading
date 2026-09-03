@@ -73,6 +73,15 @@ type ObExtendData = {
 };
 type FvgExtendData = { kind: "bullish" | "bearish"; top: number; bottom: number; filled: boolean };
 type BreakExtendData = { tf: string; kind: "bos" | "choch"; direction: "up" | "down"; price: number };
+type SetupExtendData = {
+  tf: string;
+  direction: "long" | "short";
+  status: "confirmed" | "triggered" | "hit_target" | "hit_sl" | "invalidated";
+  entry: number;
+  stop: number;
+  target: number;
+  rr: number;
+};
 
 registerOverlay({
   name: "htfOrderBlock",
@@ -152,6 +161,64 @@ registerOverlay({
         type: "text",
         attrs: { x: leftX + 4, y: y - 12, text: `${d.tf} ${d.kind.toUpperCase()} ${d.direction === "up" ? "▲" : "▼"}`, baseline: "top" },
         styles: { color, size: 10 },
+        ignoreEvent: true,
+      },
+    ];
+  },
+});
+
+// Rejection-confirmed trade setups (Phase 3c) - entry / stop / target
+// lines + a translucent red risk box (entry↔stop) and green reward box
+// (entry↔target), from the confirmation candle to where the setup
+// resolved (or the right edge while live). Resolved setups are drawn
+// faded. A 2-point overlay: point 0 = confirmation candle, point 1 = the
+// resolution bar (or now).
+registerOverlay({
+  name: "htfSetup",
+  totalStep: 3,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, yAxis }) => {
+    if (coordinates.length < 2 || !yAxis) return [];
+    const d = overlay.extendData as SetupExtendData | undefined;
+    if (!d) return [];
+    const x0 = coordinates[0].x;
+    const x1 = Math.max(coordinates[1].x, x0 + 2);
+    const yE = yAxis.convertToPixel(d.entry);
+    const yS = yAxis.convertToPixel(d.stop);
+    const yT = yAxis.convertToPixel(d.target);
+    const live = d.status === "confirmed" || d.status === "triggered";
+    const a = live ? 1 : 0.34;
+    const red = `rgba(232, 88, 106, ${0.7 * a})`;
+    const green = `rgba(62, 207, 142, ${0.7 * a})`;
+    const neutral = `rgba(230, 233, 238, ${(d.status === "triggered" ? 0.85 : 0.6) * a})`;
+    const label = `${d.tf} ${d.direction} · ${d.status} · ${d.rr.toFixed(1)}R`;
+    return [
+      {
+        type: "rect",
+        attrs: { x: x0, y: Math.min(yE, yS), width: x1 - x0, height: Math.max(1, Math.abs(yE - yS)) },
+        styles: { style: "fill", color: `rgba(232, 88, 106, ${0.1 * a})` },
+        ignoreEvent: true,
+      },
+      {
+        type: "rect",
+        attrs: { x: x0, y: Math.min(yE, yT), width: x1 - x0, height: Math.max(1, Math.abs(yE - yT)) },
+        styles: { style: "fill", color: `rgba(62, 207, 142, ${0.1 * a})` },
+        ignoreEvent: true,
+      },
+      {
+        type: "line",
+        attrs: { coordinates: [{ x: x0, y: yE }, { x: x1, y: yE }] },
+        styles: { color: neutral, size: 1, style: d.status === "triggered" ? "solid" : "dashed" },
+        ignoreEvent: true,
+      },
+      { type: "line", attrs: { coordinates: [{ x: x0, y: yS }, { x: x1, y: yS }] }, styles: { color: red, size: 1 }, ignoreEvent: true },
+      { type: "line", attrs: { coordinates: [{ x: x0, y: yT }, { x: x1, y: yT }] }, styles: { color: green, size: 1 }, ignoreEvent: true },
+      {
+        type: "text",
+        attrs: { x: x0 + 4, y: Math.min(yE, yS, yT) - 12, text: label, baseline: "top" },
+        styles: { color: neutral, size: 10 },
         ignoreEvent: true,
       },
     ];
@@ -272,6 +339,7 @@ const ORDER_BLOCKS_STORAGE_KEY = "manualLiveChartOrderBlocks";
 // coarse timeframe has enough bars to find structure, regardless of how
 // little history the displayed chart pulled.
 const OB_TIMEFRAMES: { label: string; value: string; lookbackDays: number }[] = [
+  { label: "1m", value: "1min", lookbackDays: 4 },
   { label: "3m", value: "3min", lookbackDays: 8 },
   { label: "5m", value: "5min", lookbackDays: 12 },
   { label: "15m", value: "15min", lookbackDays: 30 },
@@ -291,8 +359,8 @@ const OB_REFRESH_MS = 2 * 60_000;
 // timeframes; `breakers`/`fvg`/`breaks` are global modifiers over every
 // enabled timeframe. Off by default - it's an opt-in analytical layer
 // that costs one extra fetch per timeframe.
-type StructureConfig = { tfs: string[]; breakers: boolean; fvg: boolean; breaks: boolean };
-const EMPTY_STRUCTURE_CONFIG: StructureConfig = { tfs: [], breakers: false, fvg: false, breaks: false };
+type StructureConfig = { tfs: string[]; breakers: boolean; fvg: boolean; breaks: boolean; setups: boolean };
+const EMPTY_STRUCTURE_CONFIG: StructureConfig = { tfs: [], breakers: false, fvg: false, breaks: false, setups: false };
 
 function loadStructureConfig(): StructureConfig {
   try {
@@ -302,7 +370,13 @@ function loadStructureConfig(): StructureConfig {
     const tfs = Array.isArray(tfsSource)
       ? tfsSource.filter((v): v is string => typeof v === "string" && OB_TF_VALUES.has(v))
       : [];
-    return { tfs, breakers: raw?.breakers === true, fvg: raw?.fvg === true, breaks: raw?.breaks === true };
+    return {
+      tfs,
+      breakers: raw?.breakers === true,
+      fvg: raw?.fvg === true,
+      breaks: raw?.breaks === true,
+      setups: raw?.setups === true,
+    };
   } catch {
     return EMPTY_STRUCTURE_CONFIG;
   }
@@ -709,7 +783,7 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
     let cancelled = false;
     const ex = resolved.chart_exchange;
     const sym = resolved.chart_symbol;
-    const { tfs, breakers, fvg, breaks } = structure;
+    const { tfs, breakers, fvg, breaks, setups } = structure;
 
     if (tfs.length === 0) {
       chart.removeOverlay({ groupId: OB_GROUP_ID });
@@ -725,7 +799,7 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
         const to = new Date();
         const from = new Date(to.getTime() - def.lookbackDays * 86_400_000);
         try {
-          const data = await fetchChartStructure(ex, sym, tf, ymd(from), ymd(to), { breakers, fvg });
+          const data = await fetchChartStructure(ex, sym, tf, ymd(from), ymd(to), { breakers, fvg, setups });
           if (cancelled) return;
           batches.push({ label: def.label, tf, data });
         } catch {
@@ -775,6 +849,28 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
               extendData: { tf: label, kind: e.kind, direction: e.direction, price: e.price },
             });
           }
+        }
+        for (const s of data.setups) {
+          const left = Date.parse(s.confirmed_timestamp);
+          if (!Number.isFinite(left)) continue;
+          const right = s.resolved_timestamp ? Date.parse(s.resolved_timestamp) : Date.now();
+          chart!.createOverlay({
+            name: "htfSetup",
+            groupId: OB_GROUP_ID,
+            points: [
+              { timestamp: left, value: s.entry },
+              { timestamp: Number.isFinite(right) ? right : Date.now(), value: s.entry },
+            ],
+            extendData: {
+              tf: label,
+              direction: s.direction,
+              status: s.status,
+              entry: s.entry,
+              stop: s.stop_loss,
+              target: s.target,
+              rr: s.risk_reward,
+            },
+          });
         }
       }
     }
@@ -1024,9 +1120,17 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
                   />
                   Structure breaks (BOS / CHoCH)
                 </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={structure.setups}
+                    onChange={() => updateStructure({ setups: !structure.setups })}
+                  />
+                  Trade setups (entry / SL / target)
+                </label>
                 <div className="live-chart-indicators-hint">
                   Auto-detected structure — drawn at the chosen timeframe regardless of the chart's interval. Dashed
-                  border = tested; thick border = breaker; amber band = FVG; faded = counter-trend.
+                  border = tested; thick border = breaker; amber band = FVG; faded = counter-trend or a resolved setup.
                 </div>
               </div>
             )}

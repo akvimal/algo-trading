@@ -11,16 +11,18 @@ order block kept + polarity-flipped, `role="breaker"`), fair value gaps
 (`detect_fvgs`). Phase 3b: market-structure state (`structure_state` -
 confirmed swing pivots -> BOS/CHoCH events -> a running up/down/range
 trend flag), which `detect_order_blocks` uses to tag counter-trend zones.
-Deliberately simple - the same simplifications the scoped SMC order-block
-Rule (docs "Open questions") locks in; if that ships in signal-engine it
-*copies* from here, never a shared import (same precedent as
-option_templates.py / compute_ema).
+Phase 3c: rejection-confirmed trade setups (`detect_setups` - a
+trend-aligned zone, a retest, a confirmation candle -> entry/SL/target,
+R:R-gated, with a walk-forward status). Deliberately simple - the same
+simplifications the scoped SMC order-block Rule (docs "Open questions")
+locks in; if that ships in signal-engine it *copies* from here, never a
+shared import (same precedent as option_templates.py / compute_ema).
 """
 
 from collections import defaultdict
 from typing import Literal
 
-from app.domain.models import Candle, Fvg, OrderBlock, StructureEvent
+from app.domain.models import Candle, Fvg, OrderBlock, Setup, StructureEvent
 
 ZoneMode = Literal["wick", "body"]
 Mitigation = Literal["wick", "close"]
@@ -291,6 +293,170 @@ def detect_order_blocks(
         )
         for kind, role, proximal, distal, ob, _rec, mitigated in kept
     ]
+
+
+def _is_confirmation(
+    want: str, o: list[float], h: list[float], lo: list[float], cl: list[float], k: int, proximal: float, min_wick_ratio: float
+) -> bool:
+    """Is candle k a valid rejection confirmation at the zone? **Mandatory**
+    it closes back beyond the zone's proximal edge (out of the zone, on
+    the trade side), **plus at least one of**: a rejection wick on the
+    zone's side >= `min_wick_ratio` x body, or an engulf of the prior
+    candle's body in the trade direction. The SMC Rule's settled def."""
+    if (want == "demand" and cl[k] <= proximal) or (want == "supply" and cl[k] >= proximal):
+        return False
+    body = abs(cl[k] - o[k])
+    if body <= 0:
+        return False
+    if want == "demand":
+        wick = min(o[k], cl[k]) - lo[k]
+        engulf = k > 0 and cl[k] > o[k] and o[k] <= min(o[k - 1], cl[k - 1]) and cl[k] >= max(o[k - 1], cl[k - 1])
+    else:
+        wick = h[k] - max(o[k], cl[k])
+        engulf = k > 0 and cl[k] < o[k] and o[k] >= max(o[k - 1], cl[k - 1]) and cl[k] <= min(o[k - 1], cl[k - 1])
+    return wick >= min_wick_ratio * body or engulf
+
+
+def detect_setups(
+    candles: list[Candle],
+    *,
+    trend: Trend,
+    lookback: int = 20,
+    min_wick_ratio: float = 1.0,
+    sl_atr_mult: float = 0.5,
+    min_risk_reward: float = 1.5,
+    retest_expiry_bars: int = 25,
+    recent_bars: int = 200,
+    max_setups: int = 6,
+) -> list[Setup]:
+    """Rejection-confirmed trade setups, **only with the current trend**
+    (`range` -> none). For each `lookback`-Donchian structure break that
+    forms a trend-aligned order block: wait for price to retest the zone,
+    then for a confirmation candle (`_is_confirmation`) within
+    `retest_expiry_bars`; compute entry (a stop at the confirmation
+    candle's own extreme), stop (ATR-buffered beyond the zone's far edge),
+    target (the post-impulse swing extreme); gate on `min_risk_reward`;
+    then walk the rest of the series for the status. Overlapping zones are
+    de-duplicated. Returns every still-live setup plus recent resolved
+    ones, up to `max_setups`, oldest-first."""
+    if trend not in ("up", "down"):
+        return []
+    lookback = max(_MIN_LOOKBACK, min(_MAX_LOOKBACK, lookback))
+    recent_bars = max(50, min(2000, recent_bars))
+    max_setups = max(1, min(_MAX_ZONES, max_setups))
+    want = "demand" if trend == "up" else "supply"
+    direction = "long" if trend == "up" else "short"
+    n = len(candles)
+    if n < lookback + 4:
+        return []
+
+    o = [c.open for c in candles]
+    h = [c.high for c in candles]
+    lo = [c.low for c in candles]
+    cl = [c.close for c in candles]
+    ts = [c.timestamp for c in candles]
+    atr = _atr(h, lo, cl)
+
+    setups: list[Setup] = []
+    used_bands: list[tuple[float, float]] = []
+
+    for i in range(max(lookback, n - recent_bars), n):
+        broke = cl[i] > max(h[i - lookback : i]) if want == "demand" else cl[i] < min(lo[i - lookback : i])
+        if not broke:
+            continue
+
+        ob = None
+        for j in range(i - 1, max(-1, i - lookback - 1), -1):
+            if (want == "demand" and cl[j] < o[j]) or (want == "supply" and cl[j] > o[j]):
+                ob = j
+                break
+        if ob is None:
+            continue
+
+        z_lo, z_hi = lo[ob], h[ob]
+        if z_hi <= z_lo:
+            continue
+        proximal, distal = (z_hi, z_lo) if want == "demand" else (z_lo, z_hi)
+        if any(_overlaps(z_lo, z_hi, b_lo, b_hi) for b_lo, b_hi in used_bands):
+            continue
+
+        # Retest: first bar after the break whose wick re-enters the zone,
+        # bailing if a close first goes clean through the far edge.
+        retest = None
+        for k in range(i + 1, n):
+            if (cl[k] < distal if want == "demand" else cl[k] > distal):
+                break
+            if (lo[k] <= proximal if want == "demand" else h[k] >= proximal):
+                retest = k
+                break
+        if retest is None:
+            continue
+
+        confirm = None
+        for k in range(retest, min(n, retest + retest_expiry_bars)):
+            if (cl[k] < distal if want == "demand" else cl[k] > distal):
+                break
+            if _is_confirmation(want, o, h, lo, cl, k, proximal, min_wick_ratio):
+                confirm = k
+                break
+        if confirm is None:
+            continue
+
+        swing_extreme = max(h[i:retest]) if want == "demand" else min(lo[i:retest])
+        if want == "demand":
+            entry, stop, target = h[confirm], distal - sl_atr_mult * atr, swing_extreme
+            risk, reward = entry - stop, target - entry
+        else:
+            entry, stop, target = lo[confirm], distal + sl_atr_mult * atr, swing_extreme
+            risk, reward = stop - entry, entry - target
+        if risk <= 0 or reward <= 0:
+            continue
+        rr = reward / risk
+        if rr < min_risk_reward:
+            continue
+
+        status = "confirmed"
+        resolved_ts: str | None = None
+        triggered = False
+        for k in range(confirm + 1, n):
+            through_distal = cl[k] < distal if want == "demand" else cl[k] > distal
+            if not triggered:
+                stop_closed = cl[k] < stop if want == "demand" else cl[k] > stop
+                if through_distal or stop_closed:
+                    status, resolved_ts = "invalidated", ts[k]
+                    break
+                if (h[k] >= entry if want == "demand" else lo[k] <= entry):
+                    triggered, status = True, "triggered"
+            if triggered:
+                hit_sl = lo[k] <= stop if want == "demand" else h[k] >= stop
+                hit_tgt = h[k] >= target if want == "demand" else lo[k] <= target
+                if hit_sl:  # if a bar spans both, assume the stop went first
+                    status, resolved_ts = "hit_sl", ts[k]
+                    break
+                if hit_tgt:
+                    status, resolved_ts = "hit_target", ts[k]
+                    break
+
+        used_bands.append((z_lo, z_hi))
+        setups.append(
+            Setup(
+                direction=direction,
+                status=status,
+                entry=entry,
+                stop_loss=stop,
+                target=target,
+                risk_reward=round(rr, 2),
+                zone_proximal=proximal,
+                zone_distal=distal,
+                confirmed_timestamp=ts[confirm],
+                resolved_timestamp=resolved_ts,
+            )
+        )
+
+    live = [s for s in setups if s.status in ("confirmed", "triggered")][-max_setups:]
+    slots = max(0, max_setups - len(live))
+    resolved = [s for s in setups if s.status not in ("confirmed", "triggered")][-slots:] if slots else []
+    return sorted(live + resolved, key=lambda s: s.confirmed_timestamp)
 
 
 def detect_fvgs(

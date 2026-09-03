@@ -165,16 +165,41 @@ class StructureEvent(BaseModel):
     timestamp: str
 
 
+class Setup(BaseModel):
+    """One rejection-confirmed trade setup - part of GET /order-blocks'
+    ChartStructure (when `setups=true`). Only ever *with* the current
+    trend (long at a demand zone in an uptrend / short at supply in a
+    downtrend). `entry` is a stop at the confirmation candle's own
+    extreme, `stop_loss` sits ATR-buffered beyond the zone's far edge,
+    `target` is the post-impulse swing extreme. `status` walks
+    confirmed -> triggered -> hit_target / hit_sl, or -> invalidated (the
+    zone broke, or the stop was closed through before entry). See
+    detect_setups in app/domain/order_blocks.py."""
+
+    direction: Literal["long", "short"]
+    status: Literal["confirmed", "triggered", "hit_target", "hit_sl", "invalidated"]
+    entry: float
+    stop_loss: float
+    target: float
+    risk_reward: float
+    zone_proximal: float
+    zone_distal: float
+    confirmed_timestamp: str  # the confirmation candle - the setup's left edge on a chart
+    resolved_timestamp: Optional[str] = None  # when it hit target / SL / invalidated; None while live
+
+
 class ChartStructure(BaseModel):
     """GET /order-blocks - the SMC structure for one (exchange, symbol,
     interval): order blocks (+ breakers), fair value gaps, the running
-    up/down/range trend, and the recent BOS/CHoCH breaks. See
+    up/down/range trend, the recent BOS/CHoCH breaks, and (when
+    `setups=true`) rejection-confirmed trade setups. See
     app/domain/order_blocks.py."""
 
     order_blocks: list[OrderBlock]
     fvgs: list[Fvg]
     trend: Literal["up", "down", "range"] = "range"
     events: list[StructureEvent] = []
+    setups: list[Setup] = []
 
 
 class OptionGreeks(BaseModel):

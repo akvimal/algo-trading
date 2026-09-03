@@ -5,7 +5,7 @@ provider/network (same "plain fakes" convention the rest of this
 backend's tests use)."""
 
 from app.domain.models import Candle
-from app.domain.order_blocks import detect_fvgs, detect_order_blocks, structure_state
+from app.domain.order_blocks import detect_fvgs, detect_order_blocks, detect_setups, structure_state
 
 
 def _c(i: int, o: float, h: float, lo: float, cl: float) -> Candle:
@@ -246,6 +246,68 @@ def test_counter_trend_tags_zones_opposing_the_trend():
 
 def test_returns_empty_for_a_series_shorter_than_the_window():
     assert detect_order_blocks(_flat(10), lookback=20) == []
+
+
+def _long_setup_base() -> list[Candle]:
+    """flat window -> down OB candle -> up impulse (Donchian break) ->
+    pullback that retests the zone -> a pin-bar confirmation. Ends right
+    after the confirmation candle (bar 9)."""
+    c = _flat(5)  # bars 0-4 @ 100
+    c.append(_c(5, 100.0, 100.2, 99.5, 99.6))     # OB: down candle, zone [99.5, 100.2]
+    c.append(_c(6, 99.6, 111.0, 99.6, 110.0))     # impulse: close 110 > window high 100.4
+    c.append(_c(7, 110.0, 110.0, 105.0, 105.0))
+    c.append(_c(8, 105.0, 105.0, 100.0, 101.0))   # low 100 <= proximal 100.2 -> retest
+    c.append(_c(9, 101.0, 101.5, 99.6, 101.3))    # pin bar: close > proximal, lower wick 1.4 >> body 0.3
+    return c
+
+
+def test_detect_setups_confirms_a_long_and_computes_entry_sl_target():
+    setups = detect_setups(_long_setup_base(), trend="up", lookback=5)
+
+    assert len(setups) == 1
+    s = setups[0]
+    assert s.direction == "long"
+    assert s.status == "confirmed"  # nothing after the confirmation candle yet
+    assert s.entry == 101.5  # the confirmation candle's high
+    assert s.target == 111.0  # the post-impulse swing high
+    assert s.stop_loss < 99.5  # ATR-buffered below the zone's distal edge
+    assert s.risk_reward >= 1.5
+    assert s.confirmed_timestamp == "bar-009"
+    assert s.resolved_timestamp is None
+
+
+def test_detect_setups_walks_the_status_to_hit_target():
+    c = _long_setup_base()
+    c.append(_c(10, 101.3, 102.0, 101.0, 101.8))   # high 102 >= entry 101.5 -> triggered
+    c.append(_c(11, 101.8, 112.0, 101.8, 111.5))   # high 112 >= target 111 -> hit_target
+
+    s = detect_setups(c, trend="up", lookback=5)[0]
+    assert s.status == "hit_target"
+    assert s.resolved_timestamp == "bar-011"
+
+
+def test_detect_setups_invalidates_when_the_zone_breaks_before_entry():
+    c = _long_setup_base()
+    c.append(_c(10, 101.0, 101.2, 98.0, 98.2))  # close 98.2 < distal 99.5 -> zone broke, never triggered
+    c += _flat(3, start=11, base=98.0)
+
+    s = detect_setups(c, trend="up", lookback=5)[0]
+    assert s.status == "invalidated"
+    assert s.resolved_timestamp == "bar-010"
+
+
+def test_detect_setups_is_empty_in_a_range_and_direction_matches_trend():
+    c = _long_setup_base()
+    assert detect_setups(c, trend="range", lookback=5) == []
+    # a demand-zone setup is a long only - a downtrend wants supply zones,
+    # which this bullish-break series doesn't produce
+    assert detect_setups(c, trend="down", lookback=5) == []
+
+
+def test_detect_setups_respects_the_risk_reward_gate():
+    c = _long_setup_base()
+    # target (106) is ~4.5 above entry; a gate above that RR rejects it
+    assert detect_setups(c, trend="up", lookback=5, min_risk_reward=99.0) == []
 
 
 def test_max_zones_caps_and_keeps_most_recent():

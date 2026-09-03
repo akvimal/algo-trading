@@ -1148,11 +1148,30 @@ export type StructureEvent = {
   timestamp: string;
 };
 
+// A rejection-confirmed trade setup (only ever with the current trend).
+// entry = a stop at the confirmation candle's extreme; stop_loss sits
+// ATR-buffered beyond the zone's far edge; target is the post-impulse
+// swing extreme. status walks confirmed -> triggered -> hit_target /
+// hit_sl, or -> invalidated. See detect_setups in market-data.
+export type Setup = {
+  direction: "long" | "short";
+  status: "confirmed" | "triggered" | "hit_target" | "hit_sl" | "invalidated";
+  entry: number;
+  stop_loss: number;
+  target: number;
+  risk_reward: number;
+  zone_proximal: number;
+  zone_distal: number;
+  confirmed_timestamp: string;
+  resolved_timestamp: string | null;
+};
+
 export type ChartStructure = {
   order_blocks: OrderBlock[];
   fvgs: Fvg[];
   trend: "up" | "down" | "range";
   events: StructureEvent[];
+  setups: Setup[];
 };
 
 // SMC structure for one (exchange, symbol, interval) - the Live Chart
@@ -1168,11 +1187,12 @@ export async function fetchChartStructure(
   interval: string,
   from: string,
   to: string,
-  opts: { breakers?: boolean; fvg?: boolean } = {},
+  opts: { breakers?: boolean; fvg?: boolean; setups?: boolean } = {},
 ): Promise<ChartStructure> {
   const params = new URLSearchParams({ exchange, symbol, interval, from, to });
   if (opts.breakers) params.set("breakers", "true");
   if (opts.fvg) params.set("fvg", "true");
+  if (opts.setups) params.set("setups", "true");
   const res = await authFetch(`${MARKET_DATA_BASE_URL}/order-blocks?${params}`);
   return asJson<ChartStructure>(res, `GET /order-blocks (${exchange}/${symbol}/${interval})`);
 }

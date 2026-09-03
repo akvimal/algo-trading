@@ -456,12 +456,14 @@ export type StrategyCreate = {
   instrument_type: InstrumentType;
   // Required iff source_type === 'in_house'; omit/null for external.
   rule_id?: string | null;
-  stop_loss_method?: StopLossMethod;
-  stop_loss_interval?: StopLossInterval;
-  stop_loss_percent?: number;
-  stop_loss_indicator_type?: StopLossIndicatorType;
-  stop_loss_indicator_params?: StopLossIndicatorParams;
-  target_percent?: number;
+  // null accepted (treated as omitted) - the create/edit form builds one
+  // payload shape for both and sends explicit null on cleared fields.
+  stop_loss_method?: StopLossMethod | null;
+  stop_loss_interval?: StopLossInterval | null;
+  stop_loss_percent?: number | null;
+  stop_loss_indicator_type?: StopLossIndicatorType | null;
+  stop_loss_indicator_params?: StopLossIndicatorParams | null;
+  target_percent?: number | null;
   trailing_stop_enabled?: boolean;
   exit_condition?: Condition | null;
   option_position_style?: OptionPositionStyle;
@@ -479,10 +481,11 @@ export type StrategyCreate = {
 };
 
 // source_type/exchange aren't here - not editable after creation, see
-// the backend's StrategyUpdate docstring. Same for stop_loss_method: it
-// can be set/switched via PATCH but never cleared back to null (see
-// backend docstring) - same limitation `rule_id` (switching from in-house
-// to external) already has.
+// the backend's StrategyUpdate docstring. The stop-loss group accepts an
+// explicit null now: sending {stop_loss_method: null} (which the form
+// does when you clear the method while editing) DISABLES the stop-loss -
+// the route treats stop_loss_method being present-in-body as "replace the
+// whole group". Omitting a key still leaves it unchanged.
 export type StrategyEdit = {
   name?: string;
   status?: StrategyStatus;
@@ -492,12 +495,12 @@ export type StrategyEdit = {
   horizon?: Horizon;
   instrument_type?: InstrumentType;
   rule_id?: string;
-  stop_loss_method?: StopLossMethod;
-  stop_loss_interval?: StopLossInterval;
-  stop_loss_percent?: number;
-  stop_loss_indicator_type?: StopLossIndicatorType;
-  stop_loss_indicator_params?: StopLossIndicatorParams;
-  target_percent?: number;
+  stop_loss_method?: StopLossMethod | null;
+  stop_loss_interval?: StopLossInterval | null;
+  stop_loss_percent?: number | null;
+  stop_loss_indicator_type?: StopLossIndicatorType | null;
+  stop_loss_indicator_params?: StopLossIndicatorParams | null;
+  target_percent?: number | null;
   trailing_stop_enabled?: boolean;
   // Condition | null (not just optional) - like fixed_lots below, an
   // explicit {exit_condition: null} clears it; omitting leaves it

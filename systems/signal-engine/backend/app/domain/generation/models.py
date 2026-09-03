@@ -387,15 +387,19 @@ class StrategyUpdate(BaseModel):
     The stop-loss field group (stop_loss_method/_interval/_percent,
     trailing_stop_enabled) is NOT cross-field-validated at this model
     level, since a PATCH may legitimately touch only one of them (e.g.
-    just flipping trailing_stop_enabled). If stop_loss_method IS provided,
-    the route handler treats stop_loss_interval/stop_loss_percent as the
-    complete replacement pair for it (explicitly clearing whichever one
-    the new method doesn't use), so switching methods in one PATCH call
-    never leaves a stale value from the old method behind. There's no way
-    to PATCH stop_loss_method back to NULL (disable SL) - same limitation
-    the pre-existing `rule_id` field already has for switching a strategy
-    from in-house to external; delete+recreate the strategy if that's
-    needed."""
+    just flipping trailing_stop_enabled). If `stop_loss_method` is present
+    in the request body at all - a real value OR an explicit null - the
+    route handler treats the whole group as a replacement: it sets method
+    + interval + percent + indicator_type + indicator_params from the
+    payload (so switching methods never leaves a stale sibling behind),
+    and an explicit `{"stop_loss_method": null}` DISABLES the stop-loss
+    entirely (also clearing trailing). Uses model_fields_set for that,
+    same explicit-null-clear distinction as fixed_lots/exit_condition
+    below; omitting the key leaves the whole group untouched. (The
+    SuperTrend soft-default in _stop_loss_fields_for_rule is create-time
+    only - it does NOT re-apply on PATCH, or a clear could never stick.
+    Breakout's forced `previous_candle` scheme still re-applies on every
+    PATCH - that's an invariant, not a default.)"""
 
     name: Optional[str] = Field(default=None, min_length=1)
     status: Optional[Status] = None

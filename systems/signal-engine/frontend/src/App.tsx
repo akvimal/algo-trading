@@ -3871,15 +3871,33 @@ function StrategyManager() {
       horizon,
       instrument_type: instrumentType,
       rule_id: createIsInHouse ? ruleId : undefined,
-      stop_loss_method: slMethod || undefined,
+      // When editing, an emptied SL/target field is sent as explicit null
+      // (not omitted) so the PATCH actually clears it - the route handler
+      // needs `stop_loss_method` present-in-body to treat the group as a
+      // replacement (see StrategyUpdate's docstring). On create, undefined
+      // (omitted) is right - StrategyCreate defaults these to null anyway.
+      stop_loss_method: slMethod || (editingId ? null : undefined),
       stop_loss_interval:
-        slMethod === "previous_candle" || slMethod === "indicator" ? slInterval || undefined : undefined,
-      stop_loss_percent: (slMethod === "percent" || slMethod === "breakeven") && slPercent ? Number(slPercent) : undefined,
-      stop_loss_indicator_type: slMethod === "indicator" ? slIndicatorType : undefined,
+        slMethod === "previous_candle" || slMethod === "indicator"
+          ? slInterval || undefined
+          : editingId
+            ? null
+            : undefined,
+      stop_loss_percent:
+        (slMethod === "percent" || slMethod === "breakeven") && slPercent
+          ? Number(slPercent)
+          : editingId
+            ? null
+            : undefined,
+      stop_loss_indicator_type: slMethod === "indicator" ? slIndicatorType : editingId ? null : undefined,
       stop_loss_indicator_params:
-        slMethod === "indicator" ? buildStopLossIndicatorParams(slIndicatorType, slIndicatorPeriod, slIndicatorMultiplier) : undefined,
-      target_percent: targetPercent ? Number(targetPercent) : undefined,
-      trailing_stop_enabled: slMethod ? trailingEnabled : undefined,
+        slMethod === "indicator"
+          ? buildStopLossIndicatorParams(slIndicatorType, slIndicatorPeriod, slIndicatorMultiplier)
+          : editingId
+            ? null
+            : undefined,
+      target_percent: targetPercent ? Number(targetPercent) : editingId ? null : undefined,
+      trailing_stop_enabled: slMethod ? trailingEnabled : editingId ? false : undefined,
       // Valid single condition -> the Condition; empty while editing ->
       // null (clear it); empty while creating, or mid-edit parse error ->
       // omit (the submit button is disabled on a parse error anyway).

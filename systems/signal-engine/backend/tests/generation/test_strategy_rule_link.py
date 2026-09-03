@@ -142,6 +142,29 @@ def test_stop_loss_fields_for_rule_skips_default_for_non_supertrend_crossover_in
     assert result == (None, None, None, False, None, None)
 
 
+def test_stop_loss_fields_for_rule_supertrend_default_off_lets_a_patch_clear_it():
+    # update_strategy passes apply_supertrend_default=False so a PATCH that
+    # clears stop_loss_method genuinely disables the SL - the soft default
+    # only fires at create time (with it True), otherwise a clear could
+    # never stick. db.get() must never be called (FakeDb() raises).
+    rule_row = FakeRule(rule_config=CROSSOVER_RULE_CONFIG, interval="5min")
+    result = _stop_loss_fields_for_rule(
+        FakeDb(), rule_row, None, None, None, False, apply_supertrend_default=False
+    )
+    assert result == (None, None, None, False, None, None)
+
+
+def test_stop_loss_fields_for_rule_breakout_still_forced_even_with_supertrend_default_off():
+    # Breakout's forced previous_candle scheme is an invariant, not a
+    # convenience default - it still re-applies on PATCH.
+    rule_row = FakeRule(rule_config=BREAKOUT_RULE_CONFIG)
+    method, interval, *_ = _stop_loss_fields_for_rule(
+        FakeDb(), rule_row, "percent", None, 5.0, True, apply_supertrend_default=False
+    )
+    assert method == "previous_candle"
+    assert interval == "3min"  # the rule's own ltf_interval
+
+
 def test_stop_loss_fields_for_rule_skips_default_when_rule_interval_is_daily():
     # 'daily' isn't a valid stop_loss_interval (same restriction breakout's
     # own ltf_interval check enforces) - unlike breakout, this is a soft

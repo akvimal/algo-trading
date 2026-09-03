@@ -135,6 +135,8 @@ def _stop_loss_fields_for_rule(
     trailing_stop_enabled: bool,
     stop_loss_indicator_type: Optional[str] = None,
     stop_loss_indicator_params: Optional[dict] = None,
+    *,
+    apply_supertrend_default: bool = True,
 ) -> tuple[Optional[str], Optional[str], Optional[float], bool, Optional[str], Optional[dict]]:
     """A strategy linked to a breakout rule owns its own stop-loss scheme
     rather than accepting whatever stop_loss_method/interval was
@@ -153,7 +155,10 @@ def _stop_loss_fields_for_rule(
     A strategy linked to a SuperTrend-backed crossover rule instead gets a
     soft default (added 2026-08-21, see docs/architecture.md): if the
     caller left stop_loss_method unset entirely, default to trailing off
-    the SAME SuperTrend line the crossover itself watches (period/
+    the SAME SuperTrend line the crossover itself watches - but only when
+    `apply_supertrend_default` is True (the default; update_strategy passes
+    False so a PATCH clearing stop_loss_method genuinely disables the SL
+    instead of the default re-applying it every time). (period/
     multiplier copied from the rule's own referenced Indicator row) -
     "enter on the ST flip, protect with the ST line" is the standard way
     this indicator is used, so a strategy shouldn't have to spell out
@@ -183,7 +188,8 @@ def _stop_loss_fields_for_rule(
                 )
             return "previous_candle", rule.ltf_interval, None, False, None, None
         if (
-            isinstance(rule, CrossoverRuleConfig)
+            apply_supertrend_default
+            and isinstance(rule, CrossoverRuleConfig)
             and stop_loss_method is None
             and rule_row.interval in get_args(StopLossInterval)
         ):
@@ -347,16 +353,28 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         new_rule_row = _load_rule_or_404(db, payload.rule_id)
         row.rule_id = new_rule_row.id
 
-    if payload.stop_loss_method is not None:
+    if "stop_loss_method" in payload.model_fields_set:
         # Method is the complete replacement group for interval/percent/
-        # indicator_type/indicator_params - explicitly clears whichever
-        # ones the new method doesn't use, so switching methods in one
-        # PATCH never leaves a stale value from the old method behind.
+        # indicator_type/indicator_params - set them all from the payload
+        # (null included), so switching OR REMOVING the method in one PATCH
+        # never leaves a stale value behind. model_fields_set (not
+        # "is not None") so an explicit {"stop_loss_method": null} disables
+        # the stop-loss entirely - same explicit-null-clear distinction
+        # fixed_lots/exit_condition already use; omitting the key leaves
+        # the whole group untouched.
         row.stop_loss_method = payload.stop_loss_method
         row.stop_loss_interval = payload.stop_loss_interval
         row.stop_loss_percent = payload.stop_loss_percent
         row.stop_loss_indicator_type = payload.stop_loss_indicator_type
         row.stop_loss_indicator_params = payload.stop_loss_indicator_params
+        if payload.stop_loss_method is None:
+            # trailing is invalid without a method (validate_stop_loss_fields)
+            # - clear it too unless this same PATCH explicitly set it.
+            row.trailing_stop_enabled = bool(
+                payload.trailing_stop_enabled
+                if "trailing_stop_enabled" in payload.model_fields_set and payload.trailing_stop_enabled is not None
+                else False
+            )
     else:
         if payload.stop_loss_interval is not None:
             row.stop_loss_interval = payload.stop_loss_interval
@@ -366,7 +384,9 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
             row.stop_loss_indicator_type = payload.stop_loss_indicator_type
         if payload.stop_loss_indicator_params is not None:
             row.stop_loss_indicator_params = payload.stop_loss_indicator_params
-    if payload.target_percent is not None:
+    # Explicit-null-clears (model_fields_set), same as stop_loss_method
+    # above - a PATCH can remove an already-set target %, not just change it.
+    if "target_percent" in payload.model_fields_set:
         row.target_percent = payload.target_percent
     if payload.trailing_stop_enabled is not None:
         row.trailing_stop_enabled = payload.trailing_stop_enabled
@@ -449,6 +469,11 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.trailing_stop_enabled,
         row.stop_loss_indicator_type,
         row.stop_loss_indicator_params,
+        # A PATCH that clears stop_loss_method means "disable the SL" - the
+        # SuperTrend soft-default only applies at create time, not here, or
+        # it'd be impossible to turn off. Breakout's forced scheme still
+        # re-applies (that's an invariant, not a convenience default).
+        apply_supertrend_default=False,
     )
 
     db.commit()

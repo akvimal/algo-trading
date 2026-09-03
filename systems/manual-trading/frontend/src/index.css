@@ -37,35 +37,15 @@ main {
      48rem - a deliberate readability choice for a form, not this outer
      shell. */
   /* No page-level header in this app (see App.tsx's own comment - the
-     shell's nav one row above already labels this "Manual Trading"), so
+     shell's nav one row above already labels this "Intraday"/"OI"), so
      top padding stays tight rather than the fuller 2.5rem a page with
-     its own h1/subtitle would want. */
+     its own h1/subtitle would want. This app has no top bar of its own
+     anymore either - the Intraday/OI switch became two shell menu
+     entries - so IntradayPage's subtabs stick straight to the top. */
   padding: 1.25rem 1.5rem 2.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-}
-
-/* Tabs + notification toggle share one row/border instead of the toggle
-   getting its own header row above them. Sticky (not just at scroll-top)
-   so the top-level tabs/sentiment/notifications stay reachable while a
-   long page (e.g. Workspace's instrument list) scrolls underneath -
-   background must be opaque or scrolled content shows through. */
-.app-top-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  background: var(--bg);
-}
-
-.app-top-row .tabs {
-  flex: 1;
-  border-bottom: none;
 }
 
 .login-page {
@@ -142,16 +122,16 @@ main {
   border-bottom-color: var(--accent);
 }
 
-/* Second-level nav (e.g. IntradayPage's Dashboard/Workspace/... sub-tabs
-   under App.tsx's own top-level Intraday/OI tabs) - same look, just
-   tighter, so two stacked .tabs bars read as two levels, not duplicates.
-   Sticky right below .app-top-row (its own height, tracked into
-   --top-row-height by App.tsx, since it isn't a fixed number of rem) so
-   both headers stay frozen together while the page scrolls. */
+/* IntradayPage's Workspace / Trade Checklist / Performance / Live Chart
+   sub-tabs - the top nav level inside this frontend now that its own
+   Intraday/OI top bar is gone (both became shell menu entries). Same
+   look as .tabs, just tighter. Sticky to the very top - there's no app
+   top bar to sit under anymore (--top-row-height is no longer set; the
+   0px fallback is the real value). */
 nav.tabs.subtabs {
   margin-top: -0.15rem;
   position: sticky;
-  top: var(--top-row-height, 52px);
+  top: var(--top-row-height, 0px);
   z-index: 20;
   background: var(--bg);
 }
@@ -159,6 +139,16 @@ nav.tabs.subtabs {
 nav.tabs.subtabs button {
   padding: 0.3rem 0.7rem;
   font-size: 0.78rem;
+}
+
+/* LiveChartPage's per-symbol tab bar (NIFTY / BANKNIFTY / GOLDM /
+   CRUDEOILM / BTCUSD / ETHUSD / SOLUSD) - the fixed intraday watchlist,
+   one tab per instrument. Compact like .subtabs but deliberately NOT
+   sticky: it's a third nav level living inside the Live Chart sub-page,
+   and a second stacked sticky bar would just overlap the subtabs. */
+.live-chart-symbols button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
 }
 
 /* IntradayPage's own wrapper (subtabs nav + whichever sub-page is active) -
@@ -2151,6 +2141,24 @@ button.btn-exit {
   padding-bottom: 0.5rem;
 }
 
+/* Jump to the shell's "Intraday" tab charting this asset - reverse of
+   the Live Chart header's "OI Analysis" link. Pushed to the right edge
+   alongside the expiry picker (tabs stay left). */
+.oi-summary-intraday-link {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0 0 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent, #4c8dff);
+  cursor: pointer;
+}
+
+.oi-summary-intraday-link:hover {
+  text-decoration: underline;
+}
+
 /* Wider than the default .manual-stats-table columns (whitespace: nowrap
    already handles horizontal scroll via .manual-stats-table-wrap) - the
    strike column reads best centered between the Call/Put column groups. */
@@ -2579,32 +2587,493 @@ button.btn-exit {
   gap: 0.75rem;
 }
 
-.live-chart-controls {
+/* Chart + inline trade panel side by side. The chart takes the slack
+   (min-width:0 so its canvas can shrink); the trade panel is a fixed
+   column. Wraps to stacked below a narrow breakpoint rather than
+   crushing the canvas. */
+.live-chart-layout {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.live-chart-layout > .live-chart-panel {
+  flex: 1 1 28rem;
+  min-width: 0;
+}
+
+/* Right column: the trend-lock checkbox row (aligned with the chart's
+   interval strip) stacked above the trade panel. */
+.live-chart-layout > .chart-trade-col {
+  flex: 0 0 24rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.chart-trend-lock {
+  display: flex;
   align-items: center;
-  gap: 0.5rem;
-}
-
-.live-chart-controls select,
-.live-chart-controls input {
-  background: var(--surface-raised);
+  gap: 0.4rem;
+  min-height: 2.15rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--surface);
   border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 0.45rem 0.6rem;
-  font-size: 0.9rem;
-  font-family: inherit;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  cursor: pointer;
 }
 
-.live-chart-controls input {
-  min-width: 12rem;
+.chart-trend-lock input {
+  margin: 0;
+}
+
+.chart-trend-lock-text {
+  flex: 1;
+}
+
+.chart-trend-lock-chip {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.chart-trend-lock-chip.is-up {
+  color: var(--buy);
+  background: color-mix(in srgb, var(--buy) 16%, transparent);
+}
+
+.chart-trend-lock-chip.is-down {
+  color: var(--sell);
+  background: color-mix(in srgb, var(--sell) 16%, transparent);
+}
+
+.chart-trend-lock-chip.is-range,
+.chart-trend-lock-chip.is-unknown {
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text-dim) 16%, transparent);
 }
 
 .live-chart-panel {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* --- Inline trade panel (ChartTradePanel.tsx) --- */
+.chart-trade-panel {
+  /* Width comes from the wrapping .chart-trade-col; this just fills it. */
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+/* Bias tint - the whole panel picks up a faint green/red wash so the
+   direction you're set up for is unmistakable at a glance. */
+.chart-trade-panel.ctp-bull {
+  background: color-mix(in srgb, var(--buy) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--buy) 30%, var(--border));
+}
+
+.chart-trade-panel.ctp-bear {
+  background: color-mix(in srgb, var(--sell) 9%, var(--surface));
+  border-color: color-mix(in srgb, var(--sell) 30%, var(--border));
+}
+
+.ctp-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+}
+
+/* Two fields side by side (Strategy+Strike, Lots+SL) - each stacks its
+   own label above the control so they fit a ~8rem column. */
+.ctp-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.ctp-row .ctp-field {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
+}
+
+.ctp-row .ctp-field > span {
+  font-size: 0.72rem;
+}
+
+.ctp-row .ctp-field input,
+.ctp-row .ctp-field select {
+  max-width: none;
+  width: 100%;
+}
+
+.ctp-field-grow {
+  flex: 2;
+}
+
+.ctp-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.ctp-ltp {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent-warn, #e0a058);
+}
+
+/* Risk-per-trade (left) + today's realized/unrealized P&L (right), one
+   line right under the header. */
+.ctp-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.73rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: -0.15rem;
+}
+
+.ctp-topline b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ctp-seg {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.ctp-seg button {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ctp-seg button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ctp-seg button.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.ctp-seg button.active.buy {
+  border-color: var(--buy);
+  background: color-mix(in srgb, var(--buy) 26%, var(--surface));
+  color: var(--buy);
+}
+
+.ctp-seg button.active.sell {
+  border-color: var(--sell);
+  background: color-mix(in srgb, var(--sell) 26%, var(--surface));
+  color: var(--sell);
+}
+
+.ctp-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ctp-field > span {
+  color: var(--text-dim);
+}
+
+.ctp-field input,
+.ctp-field select {
+  flex: 1;
+  max-width: 9rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+}
+
+.ctp-proceed {
+  padding: 0.5rem;
+  background: var(--buy);
+  border: none;
+  border-radius: 6px;
+  color: #0b1a12;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ctp-proceed:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ctp-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.76rem;
+}
+
+.ctp-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.ctp-open {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.55rem;
+}
+
+.ctp-open-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+}
+
+.ctp-open-head b {
+  font-size: 0.88rem;
+}
+
+/* Open-position grid: a full-width "contract (Ln)" line per leg, then its
+   values under a shared column header (Time | Entry | Qty | LTP | P&L). */
+.ctp-legs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.25rem 0.35rem;
+  align-items: center;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ctp-legs-h {
+  color: var(--text-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.15rem;
+}
+
+.ctp-legs-leg {
+  grid-column: 1 / -1;
+  text-align: left;
+  padding-top: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.ctp-legs-leg em {
+  font-style: normal;
+  color: var(--text-dim);
+  font-weight: 400;
+  font-size: 0.68rem;
+}
+
+/* Manage bar under the grid - accent-tinted. Trail-SL checkbox +
+   (Spot SL) OR (Interval / Indicator / Params), then Target + Close by,
+   then one Save + Square off row. */
+.ctp-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ctp-manage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.4rem 0.5rem;
+  padding: 0.5rem;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 6px;
+}
+
+.ctp-trail-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  font-weight: 600;
+  white-space: nowrap;
+  align-self: center;
+}
+
+/* One labelled mini-field (label stacked over its control). */
+.ctp-mf {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.ctp-mf > span {
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ctp-mf input,
+.ctp-mf select {
+  min-width: 0;
+  max-width: 5.5rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 0.2rem 0.3rem;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctp-mf input[type="time"] {
+  max-width: 6rem;
+}
+
+.ctp-mf-row {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.ctp-mf-row input.ctp-num {
+  flex: 0 0 2.2rem;
+  text-align: right;
+}
+
+.ctp-manage-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ctp-manage-actions-spacer {
+  flex: 1;
+}
+
+.ctp-save-all {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 5px;
+  padding: 0.35rem 1.2rem;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ctp-save-all:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ctp-squareoff {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.8rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--sell);
+  color: var(--sell);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ctp-squareoff:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ctp-error {
+  margin: 0;
+  color: var(--sell);
+  font-size: 0.78rem;
+}
+
+.ctp-history {
+  border-top: 1px solid var(--border);
+  padding-top: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ctp-history-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+  font-weight: 600;
+  font-size: 0.76rem;
+}
+
+.ctp-history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  padding: 0.3rem 0.4rem;
+  background: var(--surface-raised);
+  border-radius: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctp-history-line1 {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ctp-history-label {
+  font-weight: 600;
+}
+
+.ctp-history-line2 {
+  font-size: 0.72rem;
+}
+
+.ctp-history p.muted {
+  margin: 0;
+  font-size: 0.76rem;
 }
 
 .live-chart-toolbar {
@@ -2681,6 +3150,32 @@ button.btn-exit {
   background: var(--surface);
 }
 
+/* One indicator row = its checkbox label + (when enabled and it has a
+   period list) a small comma-list input for the lengths. */
+.live-chart-indicator-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.live-chart-indicator-row label {
+  flex: 1;
+}
+
+.live-chart-indicator-params {
+  width: 5.5rem;
+  flex-shrink: 0;
+  margin-right: 0.4rem;
+  padding: 0.15rem 0.35rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .live-chart-indicators-group {
   font-size: 0.66rem;
   text-transform: uppercase;
@@ -2695,6 +3190,13 @@ button.btn-exit {
   color: var(--text-dim);
   padding: 0.4rem 0.4rem 0.2rem;
   max-width: 15rem;
+}
+
+/* The "sound + desktop alert" sub-toggle nested under "Trade setups". */
+.live-chart-indicators-menu label.live-chart-indicators-suboption {
+  margin-left: 1.1rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
 }
 
 /* Per-timeframe structure-trend chip in the Structure menu. */
@@ -2733,6 +3235,175 @@ button.btn-exit {
   color: var(--text-dim);
 }
 
+/* Strip directly above the chart listing every planned (confirmed) /
+   live (triggered) setup the structure engine currently sees. Its rows
+   are the on-screen half of the setup alert - the sound + desktop
+   notification are the other half, gated by the sub-toggle. */
+.live-chart-setup-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.45rem 0.1rem 0.15rem;
+}
+
+.live-chart-setup-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-chart-setup-alert b {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.live-chart-setup-alert-long {
+  color: var(--buy);
+}
+
+.live-chart-setup-alert-short {
+  color: var(--sell);
+}
+
+.live-chart-setup-alert.is-planned {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.live-chart-setup-alert.is-live {
+  border-color: var(--accent);
+  animation: live-chart-setup-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-chart-setup-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent) inset;
+  }
+  50% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 65%, transparent) inset;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-chart-setup-alert.is-live {
+    animation: none;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) inset;
+  }
+}
+
+/* OI strip under the chart - the 4 OI underlyings only, hidden otherwise.
+   One wrapping row of compact readouts (PCR, chain OI + 5m/15m delta,
+   the call/put walls, chain buildup). */
+.live-chart-oi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.9rem;
+  padding: 0.4rem 0.2rem 0.1rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-chart-oi-strip b {
+  color: var(--text);
+}
+
+.live-chart-oi-pcr b {
+  font-size: 0.92rem;
+}
+
+.live-chart-oi-delta {
+  color: color-mix(in srgb, var(--text-dim) 80%, transparent);
+}
+
+.live-chart-oi-buildup-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* .oi-buildup-badge (shared with OiSummaryPage) already carries the
+   icon+colour; just make sure it sits inline cleanly in the strip. */
+.live-chart-oi-strip .oi-buildup-badge {
+  font-size: 0.72rem;
+}
+
+.live-chart-oi-sr b {
+  font-variant-numeric: tabular-nums;
+}
+
+.live-chart-oi-sr-r b {
+  color: var(--sell);
+}
+
+.live-chart-oi-sr-s b {
+  color: var(--buy);
+}
+
+.live-chart-oi-at {
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+
+.live-chart-oi-at.is-stale {
+  color: var(--sell);
+  opacity: 1;
+}
+
+.live-chart-oi-levels-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+/* Mini-trend of the last ~10 OI-shift (15m) readings + the latest value
+   + a ⚡ flag when the newest step is a major move / side flip. */
+.live-chart-oi-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.live-chart-oi-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+  padding: 0 0.15rem;
+}
+
+.live-chart-oi-spark-bar {
+  width: 4px;
+  min-height: 2px;
+  border-radius: 1px;
+  opacity: 0.85;
+}
+
+.live-chart-oi-spark-bar.is-major {
+  outline: 1px solid var(--text);
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+.live-chart-oi-sent-flag {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--border));
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  font-weight: 600;
+}
+
 .live-chart-intervals button {
   background: var(--surface-raised);
   color: var(--text-dim);
@@ -2760,10 +3431,51 @@ button.btn-exit {
   color: var(--text-dim);
 }
 
+/* Future-contract picker in the same slot as .live-chart-symbol. */
+.live-chart-contract {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 5px;
+  padding: 0.15rem 0.35rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.live-chart-contract:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
 .live-chart-ltp {
   font-size: 1.05rem;
   font-weight: 700;
   color: var(--text);
+}
+
+/* Jump to the shell's "OI" tab for this asset (NIFTY/BANKNIFTY/GOLDM/
+   CRUDEOILM only - see OI_SYMBOLS). */
+.live-chart-oi-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent, #4c8dff);
+  cursor: pointer;
+}
+
+.live-chart-oi-link:hover {
+  text-decoration: underline;
+}
+
+/* Chart body: the vertical drawing-tool palette pinned to the left edge,
+   then the canvas taking the rest of the width. */
+.live-chart-body {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
 }
 
 /* klinecharts fills its container, so the container needs an explicit
@@ -2771,7 +3483,8 @@ button.btn-exit {
    doesn't run off a tall monitor. */
 .live-chart-canvas-wrap {
   position: relative;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
 }
 
 .live-chart-canvas {
@@ -2794,27 +3507,48 @@ button.btn-exit {
   padding: 1rem;
 }
 
-/* klinecharts overlay-drawing toolbar - trend lines, levels, zones, fib
-   (see LiveChartPanel.tsx's DRAW_TOOLS). */
+/* klinecharts overlay-drawing palette (see LiveChartPanel.tsx's
+   DRAW_TOOLS) - a narrow vertical strip of icon buttons down the left
+   edge of the chart, trend lines / levels / zones / fib. */
 .live-chart-drawtools {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  padding: 0.3rem 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 .live-chart-drawtools button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
   background: var(--surface-raised);
   border: 1px solid var(--border);
-  color: var(--text-dim);
-  border-radius: 5px;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.78rem;
-  font-weight: 600;
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.live-chart-drawtools button svg {
+  display: block;
+}
+
+.live-chart-drawtools button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .live-chart-drawtools button:disabled {
-  opacity: 0.45;
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .live-chart-drawtools button.active {
@@ -2823,12 +3557,32 @@ button.btn-exit {
   color: #fff;
 }
 
-.live-chart-drawtools-clear {
-  margin-left: 0.35rem;
+.live-chart-drawtools-sep {
+  width: 1.2rem;
+  height: 1px;
+  background: var(--border);
+  margin: 0.15rem 0;
 }
 
-.live-chart-drawtools-hint {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  margin-left: auto;
+.live-chart-drawtools-clear {
+  color: var(--sell) !important;
+  border-color: color-mix(in srgb, var(--sell) 45%, var(--border)) !important;
+}
+
+/* Palette visibility toggles when OFF (layer hidden) - dim the glyph and
+   strike it through, so the shown/hidden state reads at a glance. */
+.live-chart-drawtools button.is-hidden {
+  opacity: 0.55;
+}
+
+.live-chart-drawtools button.is-hidden::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 50%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text-dim);
+  transform: rotate(-45deg);
 }

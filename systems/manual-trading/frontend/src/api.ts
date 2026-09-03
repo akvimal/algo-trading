@@ -907,6 +907,15 @@ export async function resolveUnderlying(segment: string, underlying: string): Pr
   return asJson<ResolvedUnderlying>(res, `GET /instruments/resolve (${segment}/${underlying})`);
 }
 
+// Every not-yet-expired future contract for a logical underlying, nearest
+// first - the Live Chart's contract picker. Empty for a provider/symbol
+// with no futures (CRYPTO perpetuals) - just don't render the picker.
+export type FutureContract = { trading_symbol: string; expiry_date: string; exchange: string };
+export async function fetchFutureContracts(segment: string, underlying: string): Promise<FutureContract[]> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/futures?${new URLSearchParams({ segment, underlying })}`);
+  return asJson<FutureContract[]>(res, `GET /instruments/futures (${segment}/${underlying})`);
+}
+
 // Real per-symbol lot multiplier (1 for instruments with no lot concept;
 // a real fraction for Delta Exchange India CRYPTO perpetuals, e.g.
 // BTCUSD=0.001) - used by the Manual tab's order-value preview and
@@ -1174,6 +1183,25 @@ export type ChartStructure = {
   setups: Setup[];
 };
 
+// One-shot handoff from the Live Chart's inline trade ticket to the
+// Workspace tab: the ticket stashes this under CHART_TRADE_PREFILL_KEY in
+// sessionStorage and asks IntradayPage to switch tabs; WorkspacePage
+// consumes it once on mount (adds/reuses the instrument row, fills its
+// entry/SL/target drafts) then deletes the key. Deliberately not lifted
+// into IntradayPage state - it stays "no shared state between sub-pages"
+// (see IntradayPage's own comment), the storage key is the seam.
+export const CHART_TRADE_PREFILL_KEY = "manualChartTradePrefill";
+
+export type ChartTradePrefill = {
+  segment: Segment;
+  symbol: string;
+  instrument_type: "spot" | "future";
+  action: "BUY" | "SELL";
+  entry: number | null;
+  stop_loss: number | null;
+  target: number | null;
+};
+
 // SMC structure for one (exchange, symbol, interval) - the Live Chart
 // draws these at a DETECTION interval chosen independently of what the
 // chart is displaying (e.g. 15min zones while viewing the 5min chart), so
@@ -1382,9 +1410,18 @@ export type ManualOptionGroup = {
   sl_scope: OptionSlScope;
   live_combined_price: number | null;
   unrealized_pnl: number | null;
+  // A stop on the UNDERLYING's own spot price (PUT /option-groups/{id}/
+  // spot-stop-loss) - independent of combined_stop_loss_price (premium).
+  // For a manual group this is only ever a flat price; the trailing/
+  // indicator variants below are non-null only for a Strategy-driven,
+  // auto-computed one.
+  spot_stop_loss_price: number | null;
   status: "OPEN" | "CLOSED" | "REJECTED";
   rejection_reason: string | null;
   exit_reason: string | null;
+  // Named entry_time (not created_at) to match ManualPosition - the group
+  // has no per-leg entry time, all legs open together.
+  entry_time: string | null;
   exit_time: string | null;
   pnl: number | null;
   square_off_time: string | null;

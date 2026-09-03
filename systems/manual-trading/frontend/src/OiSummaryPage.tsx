@@ -29,6 +29,14 @@ const PRESETS: { key: string; exchange: OptionExchange; symbol: string }[] = [
   { key: "CRUDEOILM", exchange: "MCX", symbol: "CRUDEOILM" },
 ];
 
+// Ask the shell to switch to its "Intraday" tab, charting this asset -
+// the reverse of the Live Chart header's "OI Analysis" link. No-op when
+// not embedded in the shell.
+function openIntradayChart(symbol: string) {
+  if (window.parent === window) return;
+  window.parent.postMessage({ source: "algo-trading-app", type: "navigate-intraday", symbol }, "*");
+}
+
 // Only strikes within this many steps of ATM either side are rendered -
 // the full chain (e.g. NIFTY often has 100+ strikes) is mostly deep
 // ITM/OTM noise nobody reads; a 21-row window centered on ATM is what
@@ -389,6 +397,15 @@ export default function OiSummaryPage() {
             </button>
           ))}
         </nav>
+
+        <button
+          type="button"
+          className="oi-summary-intraday-link"
+          title={`Open the ${activeKey} intraday chart`}
+          onClick={() => openIntradayChart(activeKey)}
+        >
+          Intraday Chart ↗
+        </button>
 
         {activeState.expiries && activeState.expiries.length > 0 && (
           <label className="oi-summary-expiry-picker">

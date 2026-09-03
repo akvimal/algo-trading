@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 
 import TradeImageThumb from "./TradeImageThumb";
 import {
+  CHART_TRADE_PREFILL_KEY,
   type Account,
+  type ChartTradePrefill,
   type ChecklistAnswer,
   type ChecklistItem,
   type DailyChecklist,
@@ -977,6 +979,46 @@ export default function WorkspacePage() {
     fetchPendingReview()
       .then(setPendingReview)
       .catch(() => {});
+  }, []);
+
+  // One-shot handoff from the Live Chart's inline trade ticket (see
+  // api.ts CHART_TRADE_PREFILL_KEY). Consume it once: reuse an idle
+  // matching card if there is one, else add one, and fill its
+  // entry/SL/target drafts + action so the trader just runs the checklist
+  // and hits Place. Everything else (check-in, plan checklist, sizing,
+  // the live-broker adapter) is untouched - this only pre-populates.
+  useEffect(() => {
+    let p: ChartTradePrefill | null = null;
+    try {
+      const raw = sessionStorage.getItem(CHART_TRADE_PREFILL_KEY);
+      if (!raw) return;
+      sessionStorage.removeItem(CHART_TRADE_PREFILL_KEY);
+      p = JSON.parse(raw) as ChartTradePrefill;
+    } catch {
+      return;
+    }
+    if (!p || !p.symbol.trim()) return;
+    const draft: Partial<ManualRow> = {
+      action: p.action,
+      priceMode: p.entry != null ? "limit" : "market",
+      draftLimitPrice: p.entry != null ? String(p.entry) : "",
+      draftTarget: p.target != null ? String(p.target) : "",
+      draftStopLossPrice: p.stop_loss != null ? String(p.stop_loss) : "",
+      trailSlEnabled: false,
+      collapsed: false,
+    };
+    const existing = rowsRef.current.find(
+      (r) => r.segment === p.segment && r.symbol === p.symbol && r.instrumentType === p.instrument_type && !r.current,
+    );
+    if (existing) {
+      updateRow(existing.id, draft);
+      void refreshLtp(existing.id, existing.segment, existing.symbol);
+      return;
+    }
+    const row = { ...newRow(p.segment, p.symbol, p.instrument_type), ...draft };
+    setRows((prev) => [...prev, row]);
+    void refreshLtp(row.id, row.segment, row.symbol);
+    void refreshRowHistory(row);
   }, []);
 
   // Resets the top banner's own review form fields whenever pendingReview

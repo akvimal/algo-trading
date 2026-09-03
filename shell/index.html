@@ -306,9 +306,16 @@
     // UI otherwise) can't be confused for each other again.
     document.title = `algo-trading [${PORT_OFFSET === 0 ? "DEV" : "TEST"}]`;
 
+    // `path` (optional) is appended to the iframe src only - dataset.origin
+    // below stays the bare origin (the session broker's postMessage
+    // targetOrigin check needs that). manual-trading is embedded twice:
+    // once as "Intraday" (its default page) and once as "OI" (its Options
+    // OI page, ?tab=oi) - two top-level menu entries for what used to be
+    // that frontend's own in-app tab switch, now that its top bar is gone.
     const TABS = [
       { id: "signal-engine", label: "Algo Trading", port: 8085, built: true },
-      { id: "manual-trading", label: "Manual Trading", port: 8084, built: true },
+      { id: "manual-trading", label: "Intraday", port: 8084, built: true },
+      { id: "manual-trading-oi", label: "OI", port: 8084, built: true, path: "/?tab=oi" },
       { id: "execution", label: "Money", port: 8081, built: true },
       { id: "market-data", label: "Market Data", port: 8083, built: true },
     ];
@@ -327,13 +334,17 @@
       if (tab.built) {
         const iframe = document.createElement("iframe");
         const origin = `http://${location.hostname}:${tab.port + PORT_OFFSET}`;
-        iframe.src = origin;
+        iframe.src = origin + (tab.path ?? "");
         iframe.dataset.origin = origin; // read back by the session broker below
         iframe.id = `frame-${tab.id}`;
         iframe.className = i === 0 ? "active" : "";
-        // Without this, navigator.clipboard.writeText() in the iframed
-        // frontend fails silently (e.g. the "copy webhook URL" buttons).
-        iframe.allow = "clipboard-write";
+        // clipboard-write: navigator.clipboard.writeText() in the iframed
+        // frontend fails silently without it (e.g. "copy webhook URL").
+        // notifications: lets a frontend fire a desktop Notification of its
+        // own (manual-trading's Live Chart does, for a new trade setup) -
+        // Chrome otherwise blocks the constructor in a cross-origin frame,
+        // even though this top-level origin already holds the permission.
+        iframe.allow = "clipboard-write; notifications";
         frameWrap.appendChild(iframe);
       } else {
         const placeholder = document.createElement("div");
@@ -392,6 +403,14 @@
         setSharedToken(data.token);
         broadcastToken(data.token, event.source);
         refreshUserArea();
+      } else if (data.type === "navigate-oi" && typeof data.symbol === "string") {
+        // Live Chart's "OI Analysis" link - same jump the sentiment
+        // badges already do (goToOiTab), but requested from inside the
+        // Intraday iframe rather than clicked here in the shell header.
+        goToOiTab(data.symbol);
+      } else if (data.type === "navigate-intraday" && typeof data.symbol === "string") {
+        // The OI page's "Intraday Chart" link - the reverse jump.
+        goToIntradayTab(data.symbol);
       }
     });
 
@@ -596,7 +615,8 @@
       }
     }
 
-    // Jumps straight to manual-trading's own OI tab, pre-selected to this
+    // Jumps straight to the OI menu tab (its own iframe of the
+    // manual-trading frontend, loaded at ?tab=oi), pre-selected to this
     // asset - same "reload the iframe at a deep-link URL" mechanism every
     // other cross-frontend link in this codebase already uses (e.g.
     // ?signal_id= between the other frontends' own src/links.ts), not a
@@ -608,10 +628,20 @@
     // check needs that to stay a bare origin, not a full URL with a
     // query string.
     function goToOiTab(symbol) {
+      activate("manual-trading-oi");
+      const iframe = document.getElementById("frame-manual-trading-oi");
+      if (!iframe || !iframe.dataset.origin) return;
+      iframe.src = `${iframe.dataset.origin}/?tab=oi&symbol=${encodeURIComponent(symbol)}`;
+    }
+
+    // Mirror of goToOiTab in the other direction - the "Intraday Chart"
+    // link on the OI page. Same iframe-reload-at-a-deep-link mechanism
+    // (LiveChartPage reads ?symbol= once at mount).
+    function goToIntradayTab(symbol) {
       activate("manual-trading");
       const iframe = document.getElementById("frame-manual-trading");
       if (!iframe || !iframe.dataset.origin) return;
-      iframe.src = `${iframe.dataset.origin}/?tab=oi&symbol=${encodeURIComponent(symbol)}`;
+      iframe.src = `${iframe.dataset.origin}/?symbol=${encodeURIComponent(symbol)}`;
     }
 
     async function pollSentimentDisplay() {

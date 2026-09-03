@@ -2704,6 +2704,23 @@ button.btn-exit {
   font-weight: 600;
 }
 
+/* Same chips, shown inline next to the Structure button (visible without
+   opening the menu) - one per enabled detection timeframe. */
+.live-chart-structure-trends {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.live-chart-structure-trends .live-chart-trend {
+  margin-left: 0;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  white-space: nowrap;
+}
+
 .live-chart-trend-up {
   color: var(--buy);
 }

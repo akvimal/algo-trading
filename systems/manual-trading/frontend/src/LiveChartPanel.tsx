@@ -101,12 +101,12 @@ registerOverlay({
     const top = Math.min(yA, yB);
     const height = Math.max(1, Math.abs(yA - yB));
     const breaker = d.role === "breaker";
-    // Counter-trend zones (opposing the structure trend) are dimmed to
-    // ~40% so the with-trend zones you'd actually trade from stand out.
-    const dim = d.counterTrend ? 0.4 : 1;
+    // Counter-trend zones (opposing the structure trend) are dimmed so
+    // the with-trend zones you'd actually trade from stand out.
+    const dim = d.counterTrend ? 0.45 : 1;
     const rgb = d.kind === "demand" ? "62, 207, 142" : "232, 88, 106";
-    const stroke = `rgba(${rgb}, ${0.6 * dim})`;
-    const fill = `rgba(${rgb}, ${(breaker ? 0.17 : 0.13) * dim})`;
+    const stroke = `rgba(${rgb}, ${0.85 * dim})`;
+    const fill = `rgba(${rgb}, ${(breaker ? 0.22 : 0.16) * dim})`;
     const label =
       `${d.tf} ${breaker ? "breaker" : d.kind}` + (d.mitigated ? " · tested" : "") + (d.counterTrend ? " · counter" : "");
     return [
@@ -124,8 +124,17 @@ registerOverlay({
       },
       {
         type: "text",
-        attrs: { x: leftX + 4, y: top + 2, text: label, baseline: "top" },
-        styles: { color: stroke, size: 10 },
+        attrs: { x: leftX + 3, y: top + 2, text: label, baseline: "top" },
+        styles: {
+          color: `rgba(${rgb}, 1)`,
+          size: 10,
+          backgroundColor: "rgba(15, 18, 22, 0.78)",
+          paddingLeft: 3,
+          paddingRight: 3,
+          paddingTop: 1,
+          paddingBottom: 1,
+          borderRadius: 2,
+        },
         ignoreEvent: true,
       },
     ];
@@ -159,8 +168,17 @@ registerOverlay({
       },
       {
         type: "text",
-        attrs: { x: leftX + 4, y: y - 12, text: `${d.tf} ${d.kind.toUpperCase()} ${d.direction === "up" ? "▲" : "▼"}`, baseline: "top" },
-        styles: { color, size: 10 },
+        attrs: { x: leftX + 3, y: y - 13, text: `${d.tf} ${d.kind.toUpperCase()} ${d.direction === "up" ? "▲" : "▼"}`, baseline: "top" },
+        styles: {
+          color,
+          size: 10,
+          backgroundColor: "rgba(15, 18, 22, 0.78)",
+          paddingLeft: 3,
+          paddingRight: 3,
+          paddingTop: 1,
+          paddingBottom: 1,
+          borderRadius: 2,
+        },
         ignoreEvent: true,
       },
     ];
@@ -189,36 +207,48 @@ registerOverlay({
     const yS = yAxis.convertToPixel(d.stop);
     const yT = yAxis.convertToPixel(d.target);
     const live = d.status === "confirmed" || d.status === "triggered";
-    const a = live ? 1 : 0.34;
-    const red = `rgba(232, 88, 106, ${0.7 * a})`;
-    const green = `rgba(62, 207, 142, ${0.7 * a})`;
-    const neutral = `rgba(230, 233, 238, ${(d.status === "triggered" ? 0.85 : 0.6) * a})`;
+    const a = live ? 1 : 0.55;
+    const red = `rgba(232, 88, 106, ${0.9 * a})`;
+    const green = `rgba(62, 207, 142, ${0.9 * a})`;
+    const neutral = `rgba(230, 233, 238, ${a})`;
     const label = `${d.tf} ${d.direction} · ${d.status} · ${d.rr.toFixed(1)}R`;
     return [
       {
         type: "rect",
         attrs: { x: x0, y: Math.min(yE, yS), width: x1 - x0, height: Math.max(1, Math.abs(yE - yS)) },
-        styles: { style: "fill", color: `rgba(232, 88, 106, ${0.1 * a})` },
+        styles: { style: "fill", color: `rgba(232, 88, 106, ${0.16 * a})` },
         ignoreEvent: true,
       },
       {
         type: "rect",
         attrs: { x: x0, y: Math.min(yE, yT), width: x1 - x0, height: Math.max(1, Math.abs(yE - yT)) },
-        styles: { style: "fill", color: `rgba(62, 207, 142, ${0.1 * a})` },
+        styles: { style: "fill", color: `rgba(62, 207, 142, ${0.16 * a})` },
         ignoreEvent: true,
       },
       {
         type: "line",
         attrs: { coordinates: [{ x: x0, y: yE }, { x: x1, y: yE }] },
-        styles: { color: neutral, size: 1, style: d.status === "triggered" ? "solid" : "dashed" },
+        styles: { color: neutral, size: 1.5, style: d.status === "triggered" ? "solid" : "dashed" },
         ignoreEvent: true,
       },
-      { type: "line", attrs: { coordinates: [{ x: x0, y: yS }, { x: x1, y: yS }] }, styles: { color: red, size: 1 }, ignoreEvent: true },
-      { type: "line", attrs: { coordinates: [{ x: x0, y: yT }, { x: x1, y: yT }] }, styles: { color: green, size: 1 }, ignoreEvent: true },
+      { type: "line", attrs: { coordinates: [{ x: x0, y: yS }, { x: x1, y: yS }] }, styles: { color: red, size: 1.5 }, ignoreEvent: true },
+      { type: "line", attrs: { coordinates: [{ x: x0, y: yT }, { x: x1, y: yT }] }, styles: { color: green, size: 1.5 }, ignoreEvent: true },
       {
         type: "text",
-        attrs: { x: x0 + 4, y: Math.min(yE, yS, yT) - 12, text: label, baseline: "top" },
-        styles: { color: neutral, size: 10 },
+        attrs: { x: x0 + 3, y: Math.min(yE, yS, yT) - 15, text: label, baseline: "top" },
+        styles: {
+          color: neutral,
+          size: 11,
+          weight: "bold",
+          backgroundColor: "rgba(15, 18, 22, 0.82)",
+          paddingLeft: 4,
+          paddingRight: 4,
+          paddingTop: 1,
+          paddingBottom: 1,
+          borderRadius: 3,
+          borderColor: neutral,
+          borderSize: 1,
+        },
         ignoreEvent: true,
       },
     ];
@@ -1135,6 +1165,21 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
               </div>
             )}
           </div>
+
+          {structure.tfs.length > 0 && (
+            <div className="live-chart-structure-trends" title="Structure trend per enabled detection timeframe">
+              {structure.tfs.map((tf) => {
+                const def = OB_TIMEFRAMES.find((t) => t.value === tf);
+                if (!def) return null;
+                const tr = trendByTf[tf] ?? "range";
+                return (
+                  <span key={tf} className={`live-chart-trend live-chart-trend-${tr}`}>
+                    {def.label} {tr === "up" ? "▲" : tr === "down" ? "▼" : "–"}
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="live-chart-meta">

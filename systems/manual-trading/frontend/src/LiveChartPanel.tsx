@@ -100,6 +100,11 @@ type SetupExtendData = {
 // `forming` = the strike where OI is *building fastest* right now (largest
 // positive 15m OI change), drawn dashed as an in-progress level.
 const OI_GROUP_ID = "oi-levels";
+// A standalone dashed line at the current LTP, drawn only when there's no
+// live forming candle to carry the price (stale candle history, market
+// closed, a data gap) - so the chart's price level keeps tracking even
+// then. Removed the moment a real forming bar is back.
+const LTP_LINE_GROUP_ID = "ltp-line";
 type OiLevelExtendData = {
   kind: "resistance" | "support";
   rank: 1 | 2;
@@ -404,6 +409,53 @@ registerOverlay({
           paddingTop: 2,
           paddingBottom: 2,
           borderRadius: 3,
+        },
+        ignoreEvent: true,
+      },
+    ];
+  },
+});
+
+// Fallback current-price line - only mounted (in LTP_LINE_GROUP_ID) when
+// there's no live forming candle to carry the price. One point: value =
+// the LTP.
+registerOverlay({
+  name: "ltpLine",
+  totalStep: 2,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, bounding, yAxis }) => {
+    if (!yAxis) return [];
+    const v = overlay.points[0]?.value;
+    if (v == null || !Number.isFinite(v)) return [];
+    const y = yAxis.convertToPixel(v);
+    if (!Number.isFinite(y)) return [];
+    return [
+      {
+        type: "line",
+        attrs: {
+          coordinates: [
+            { x: 0, y },
+            { x: bounding.width, y },
+          ],
+        },
+        styles: { color: ACCENT, size: 1, style: "dashed", dashedValue: [4, 3] },
+        ignoreEvent: true,
+      },
+      {
+        type: "text",
+        attrs: { x: bounding.width - 4, y, text: `LTP ${v.toFixed(pricePrecision(v))}`, align: "right", baseline: "middle" },
+        styles: {
+          color: "#fff",
+          size: 11,
+          weight: "bold",
+          backgroundColor: ACCENT,
+          paddingLeft: 4,
+          paddingRight: 4,
+          paddingTop: 1,
+          paddingBottom: 1,
+          borderRadius: 2,
         },
         ignoreEvent: true,
       },
@@ -746,12 +798,20 @@ function fmtCompactIndian(n: number): string {
   return String(Math.round(n));
 }
 
-// A signed OI delta as a rough % of the current total, e.g. "▲0.8%".
-function fmtOiDeltaPct(change: number | null, total: number): string {
-  if (change == null || total <= 0) return "–";
+// A signed OI delta as a rough % of the current total, e.g. "▲0.8%" -
+// green when OI is rising, red when falling (the arrow's direction, not a
+// bull/bear reading).
+function OiDelta({ change, total }: { change: number | null; total: number }) {
+  if (change == null || total <= 0) return <span className="live-chart-oi-d-flat">–</span>;
   const pct = (change / total) * 100;
+  const cls = pct > 0 ? "live-chart-oi-d-up" : pct < 0 ? "live-chart-oi-d-down" : "live-chart-oi-d-flat";
   const arrow = pct > 0 ? "▲" : pct < 0 ? "▼" : "·";
-  return `${arrow}${Math.abs(pct).toFixed(1)}%`;
+  return (
+    <span className={cls}>
+      {arrow}
+      {Math.abs(pct).toFixed(1)}%
+    </span>
+  );
 }
 
 // OI-derived support / resistance. Resistance = the biggest call-OI
@@ -1972,6 +2032,17 @@ export function LiveChartPanel({
     // don't align to epoch-hour boundaries.
     let lastCompletedTs = 0;
     let liveBar: KLineData | null = null;
+    // Standalone LTP line - only mounted while `liveBar` is null.
+    let ltpLineId: string | null = null;
+    function clearLtpLine() {
+      if (!ltpLineId) return;
+      try {
+        chartRef.current?.removeOverlay({ groupId: LTP_LINE_GROUP_ID });
+      } catch {
+        // chart already disposed on teardown - nothing to clean
+      }
+      ltpLineId = null;
+    }
 
     async function loadHistory(initial: boolean) {
       const to = new Date();
@@ -2028,21 +2099,44 @@ export function LiveChartPanel({
           volume: 0,
         };
         chart!.updateData(liveBar);
+        clearLtpLine();
       } else {
         liveBar = null;
       }
     }
 
     async function tickLtp() {
-      if (cancelled || !liveBar) return;
+      if (cancelled) return;
       let ltp: number;
       try {
         ltp = await fetchLtp(ex, sym);
       } catch {
         return; // transient - retry next tick
       }
-      if (cancelled || !liveBar) return;
+      if (cancelled) return;
+      // The page LTP readout updates every tick regardless of whether
+      // there's a live candle to roll it into.
       setLastPrice(ltp);
+
+      if (!liveBar) {
+        // No live forming bar (stale candle history / market closed / a
+        // data gap): carry the price on a standalone dashed line so the
+        // chart's level keeps tracking instead of freezing on the last
+        // completed candle.
+        try {
+          chart!.removeOverlay({ groupId: LTP_LINE_GROUP_ID });
+          const id = chart!.createOverlay({
+            name: "ltpLine",
+            groupId: LTP_LINE_GROUP_ID,
+            points: [{ timestamp: Date.now(), value: ltp }],
+          });
+          ltpLineId = typeof id === "string" ? id : null;
+        } catch {
+          // chart disposed mid-tick
+        }
+        return;
+      }
+      clearLtpLine();
 
       if (Date.now() >= liveBar.timestamp + intervalMs) {
         // This synthetic bar's window has elapsed - pull the real one
@@ -2070,6 +2164,7 @@ export function LiveChartPanel({
       cancelled = true;
       window.clearInterval(ltpTimer);
       window.clearInterval(histTimer);
+      clearLtpLine();
     };
   }, [chartExchange, chartSymbol, interval]);
 
@@ -2349,8 +2444,9 @@ export function LiveChartPanel({
             {(oi.total_call_oi_change_5m != null || oi.total_call_oi_change_15m != null) && (
               <span className="live-chart-oi-delta">
                 {" "}
-                {fmtOiDeltaPct(oi.total_call_oi_change_5m, oi.total_call_oi)}/5m{" "}
-                {fmtOiDeltaPct(oi.total_call_oi_change_15m, oi.total_call_oi)}/15m
+                <OiDelta change={oi.total_call_oi_change_5m} total={oi.total_call_oi} />
+                /5m <OiDelta change={oi.total_call_oi_change_15m} total={oi.total_call_oi} />
+                /15m
               </span>
             )}
           </span>
@@ -2359,8 +2455,9 @@ export function LiveChartPanel({
             {(oi.total_put_oi_change_5m != null || oi.total_put_oi_change_15m != null) && (
               <span className="live-chart-oi-delta">
                 {" "}
-                {fmtOiDeltaPct(oi.total_put_oi_change_5m, oi.total_put_oi)}/5m{" "}
-                {fmtOiDeltaPct(oi.total_put_oi_change_15m, oi.total_put_oi)}/15m
+                <OiDelta change={oi.total_put_oi_change_5m} total={oi.total_put_oi} />
+                /5m <OiDelta change={oi.total_put_oi_change_15m} total={oi.total_put_oi} />
+                /15m
               </span>
             )}
           </span>

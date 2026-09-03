@@ -3324,6 +3324,22 @@ button.btn-exit {
   color: color-mix(in srgb, var(--text-dim) 80%, transparent);
 }
 
+/* Signed OI-change deltas - coloured by the arrow direction (OI rising
+   vs falling), not a bull/bear reading. */
+.live-chart-oi-d-up {
+  color: var(--buy);
+  font-weight: 600;
+}
+
+.live-chart-oi-d-down {
+  color: var(--sell);
+  font-weight: 600;
+}
+
+.live-chart-oi-d-flat {
+  color: var(--text-dim);
+}
+
 .live-chart-oi-buildup-group {
   display: inline-flex;
   align-items: center;

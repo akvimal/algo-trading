@@ -7,7 +7,7 @@
 // inline trade panel + shared order engine" for the phased extraction
 // plan. This module is Phase A's low-risk slice: no React, no state.
 
-import { type ChecklistItem, type Segment, fetchLtp, resolveUnderlying } from "./api";
+import { type ChecklistItem, type ResolvedUnderlying, type Segment, fetchLtp, resolveUnderlying } from "./api";
 
 export type InstrumentType = "spot" | "future" | "option";
 export type ExitReason = "manual" | "target" | "stop_loss";
@@ -85,8 +85,27 @@ export function formatCompact(iso: string | null): string {
 // resolve_underlying is a local instrument-master lookup on market-data
 // (no broker API call), so pairing it with every LTP fetch is free
 // against Dhan's rate limit.
+// resolveUnderlying is a near-static mapping (symbol -> quotable chart
+// symbol) but the poll loops that call fetchUnderlyingLtp run every few
+// seconds - cache it for the session so each LTP tick is a single
+// request, not two. A failed resolve isn't cached.
+const _resolveCache = new Map<string, Promise<ResolvedUnderlying>>();
+
+export function resolveUnderlyingCached(segment: Segment, symbol: string): Promise<ResolvedUnderlying> {
+  const key = `${segment}:${symbol.trim().toUpperCase()}`;
+  let p = _resolveCache.get(key);
+  if (!p) {
+    p = resolveUnderlying(segment, symbol).catch((e) => {
+      _resolveCache.delete(key);
+      throw e;
+    });
+    _resolveCache.set(key, p);
+  }
+  return p;
+}
+
 export async function fetchUnderlyingLtp(segment: Segment, symbol: string): Promise<number> {
-  const resolved = await resolveUnderlying(segment, symbol);
+  const resolved = await resolveUnderlyingCached(segment, symbol);
   return fetchLtp(resolved.chart_exchange, resolved.chart_symbol);
 }
 

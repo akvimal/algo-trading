@@ -129,6 +129,10 @@ class OrderBlock(BaseModel):
     distal: float
     origin_timestamp: str
     mitigated: bool
+    # True when the zone opposes the current market-structure trend (a
+    # demand zone in a downtrend, or supply in an uptrend) - the frontend
+    # dims these. False when there's no clear trend. See structure_state.
+    counter_trend: bool = False
 
 
 class Fvg(BaseModel):
@@ -147,13 +151,30 @@ class Fvg(BaseModel):
     filled: bool
 
 
+class StructureEvent(BaseModel):
+    """One market-structure break - part of GET /order-blocks'
+    ChartStructure. `kind`: "bos" (break of structure, trend continuation)
+    or "choch" (change of character, the break that flipped the trend).
+    `direction` is which way the break went; `price` is the swing level
+    that broke; `timestamp` is the ISO-8601 start of the candle that
+    closed through it. See structure_state in app/domain/order_blocks.py."""
+
+    kind: Literal["bos", "choch"]
+    direction: Literal["up", "down"]
+    price: float
+    timestamp: str
+
+
 class ChartStructure(BaseModel):
-    """GET /order-blocks - the SMC structure primitives (order blocks +
-    breakers, and fair value gaps) for one (exchange, symbol, interval).
-    See app/domain/order_blocks.py."""
+    """GET /order-blocks - the SMC structure for one (exchange, symbol,
+    interval): order blocks (+ breakers), fair value gaps, the running
+    up/down/range trend, and the recent BOS/CHoCH breaks. See
+    app/domain/order_blocks.py."""
 
     order_blocks: list[OrderBlock]
     fvgs: list[Fvg]
+    trend: Literal["up", "down", "range"] = "range"
+    events: list[StructureEvent] = []
 
 
 class OptionGreeks(BaseModel):

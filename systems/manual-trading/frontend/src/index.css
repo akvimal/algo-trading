@@ -2697,6 +2697,25 @@ button.btn-exit {
   max-width: 15rem;
 }
 
+/* Per-timeframe structure-trend chip in the Structure menu. */
+.live-chart-trend {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.live-chart-trend-up {
+  color: var(--buy);
+}
+
+.live-chart-trend-down {
+  color: var(--sell);
+}
+
+.live-chart-trend-range {
+  color: var(--text-dim);
+}
+
 .live-chart-intervals button {
   background: var(--surface-raised);
   color: var(--text-dim);

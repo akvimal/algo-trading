@@ -1,10 +1,11 @@
 """Tests for app/domain/order_blocks.py - the pure OHLC SMC structure
 detectors behind GET /order-blocks (order blocks, breakers, fair value
-gaps). Plain synthetic candle series, no provider/network (same "plain
-fakes" convention the rest of this backend's tests use)."""
+gaps, BOS/CHoCH trend state). Plain synthetic candle series, no
+provider/network (same "plain fakes" convention the rest of this
+backend's tests use)."""
 
 from app.domain.models import Candle
-from app.domain.order_blocks import detect_fvgs, detect_order_blocks
+from app.domain.order_blocks import detect_fvgs, detect_order_blocks, structure_state
 
 
 def _c(i: int, o: float, h: float, lo: float, cl: float) -> Candle:
@@ -169,6 +170,78 @@ def test_detect_fvgs_marks_filled_and_drops_a_gap_closed_through():
 
     closed = base + [_c(8, 101.0, 101.0, 99.0, 99.5)] + [_doji(i, 99.5) for i in range(9, 12)]
     assert not any(f.kind == "bullish" for f in detect_fvgs(closed, min_gap_atr=0.0))  # close 99.5 < bottom 100.0
+
+
+def _spike(i: int, base: float, kind: str, extreme: float) -> Candle:
+    """A doji at `base` with one long wick reaching `extreme` - a swing
+    high ('h') or low ('l')."""
+    if kind == "h":
+        return _c(i, base, extreme, base, base)
+    return _c(i, base, base, extreme, base)
+
+
+def test_structure_state_choch_up_bos_up_choch_down_bos_down():
+    c: list[Candle] = [_doji(i, 100.0) for i in range(3)]
+    c.append(_spike(3, 100.0, "h", 104.0))                # swing high H1 = 104 (confirmed at bar 5)
+    c += [_doji(4, 101.0), _spike(5, 101.0, "l", 98.0)]   # swing low L1 = 98
+    c += [_doji(6, 100.0), _doji(7, 100.0)]
+    c.append(_c(8, 103.0, 106.0, 103.0, 106.0))           # close 106 > H1 -> first break: CHoCH up
+    c += [_doji(9, 104.0), _spike(10, 104.0, "l", 101.0)] # swing low L2 = 101 (confirmed at bar 12)
+    c += [_doji(11, 103.0), _doji(12, 103.0)]
+    c.append(_spike(13, 103.0, "h", 108.0))               # swing high H2 = 108 (confirmed at bar 15)
+    c += [_doji(14, 106.0), _doji(15, 106.0)]
+    c.append(_c(16, 106.0, 112.0, 106.0, 112.0))          # close 112 > H2, last break up -> BOS up (trend up)
+    c += [_doji(17, 110.0), _doji(18, 110.0)]
+    c.append(_c(19, 110.0, 110.0, 95.0, 95.0))            # close 95 < L2 (101), last break up -> CHoCH down
+    c += [_doji(20, 96.0), _doji(21, 96.0)]
+    c.append(_spike(22, 96.0, "l", 93.0))                 # swing low L3 = 93 (confirmed at bar 24)
+    c += [_doji(23, 95.0), _doji(24, 95.0)]
+    c.append(_c(25, 95.0, 95.0, 90.0, 90.0))              # close 90 < L3, last break down -> BOS down
+
+    trend, events = structure_state(c, swing_lookback=2)
+
+    assert [(e.kind, e.direction) for e in events] == [
+        ("choch", "up"),
+        ("bos", "up"),
+        ("choch", "down"),
+        ("bos", "down"),
+    ]
+    assert events[1].price == 108.0  # the BOS-up broke H2
+    assert trend == "down"  # confirmed by the BOS-down
+
+
+def test_structure_state_reports_range_after_a_choch_with_no_confirming_bos():
+    c: list[Candle] = [_doji(i, 100.0) for i in range(3)]
+    c.append(_spike(3, 100.0, "h", 104.0))
+    c += [_doji(4, 101.0), _spike(5, 101.0, "l", 98.0)]
+    c += [_doji(6, 100.0), _doji(7, 100.0)]
+    c.append(_c(8, 103.0, 106.0, 103.0, 106.0))           # CHoCH up
+    c += [_doji(9, 104.0), _spike(10, 104.0, "l", 101.0)]
+    c += [_doji(11, 103.0), _doji(12, 103.0)]
+    c.append(_spike(13, 103.0, "h", 108.0))
+    c += [_doji(14, 106.0), _doji(15, 106.0)]
+    c.append(_c(16, 106.0, 112.0, 106.0, 112.0))          # BOS up -> trend up
+    c += [_doji(17, 110.0), _doji(18, 110.0)]
+    c.append(_c(19, 110.0, 110.0, 95.0, 95.0))            # CHoCH down -> clears the uptrend, no BOS down yet
+
+    trend, _events = structure_state(c, swing_lookback=2)
+    assert trend == "range"
+
+
+def test_structure_state_is_range_for_a_flat_or_tiny_series():
+    assert structure_state([_doji(i, 100.0) for i in range(40)], swing_lookback=2) == ("range", [])
+    assert structure_state([_doji(i, 100.0) for i in range(4)], swing_lookback=5) == ("range", [])
+
+
+def test_counter_trend_tags_zones_opposing_the_trend():
+    candles = _flat(22)
+    candles.append(_c(22, 100.0, 101.1, 99.9, 101.0))  # up candle -> supply OB after the bearish break
+    candles.append(_c(23, 101.0, 101.0, 97.5, 97.7))
+    candles += _flat(5, start=24, base=98.0)
+
+    assert detect_order_blocks(candles, lookback=20)[0].counter_trend is False  # trend defaults to "range"
+    assert detect_order_blocks(candles, lookback=20, trend="up")[0].counter_trend is True  # supply vs uptrend
+    assert detect_order_blocks(candles, lookback=20, trend="down")[0].counter_trend is False
 
 
 def test_returns_empty_for_a_series_shorter_than_the_window():

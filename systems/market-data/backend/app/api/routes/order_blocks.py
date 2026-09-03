@@ -8,7 +8,7 @@ from app.adapters.accounts_client import get_user_dhan_credentials
 from app.api.routes.candles import fetch_candle_history_cached
 from app.auth import get_optional_user_id
 from app.domain.models import ChartStructure
-from app.domain.order_blocks import detect_fvgs, detect_order_blocks
+from app.domain.order_blocks import detect_fvgs, detect_order_blocks, structure_state
 from app.providers.router import get_provider
 
 router = APIRouter()
@@ -27,15 +27,17 @@ def get_order_blocks(
     require_fvg: bool = False,
     breakers: bool = False,
     fvg: bool = False,
+    swing_lookback: int = 5,
     max_zones: int = 8,
     user_id: Optional[UUID] = Depends(get_optional_user_id),
 ):
-    """SMC structure primitives - order blocks (+ breakers, when
-    `breakers=true`) and fair value gaps (when `fvg=true`) - detected on
-    one (exchange, symbol, interval) candle series. Backs the Live Chart's
-    multi-timeframe overlays, where the *detection* interval is chosen
-    independently of what the chart is displaying (e.g. draw 15min zones
-    while viewing the 5min chart). One call per detection timeframe.
+    """SMC structure for one (exchange, symbol, interval) candle series:
+    order blocks (+ breakers, when `breakers=true`), fair value gaps (when
+    `fvg=true`), the running BOS/CHoCH trend, and recent structure breaks.
+    Backs the Live Chart's multi-timeframe overlays, where the *detection*
+    interval is chosen independently of what the chart is displaying (e.g.
+    draw 15min zones while viewing the 5min chart). One call per detection
+    timeframe.
 
     Candles come from the same cached fetch behind GET /candles/history
     (same defaulting: `from` 7 days back, `to` today) - so enabling a few
@@ -61,6 +63,7 @@ def get_order_blocks(
 
     mode = zone_mode if zone_mode in ("wick", "body") else "wick"
     mit = mitigation if mitigation in ("wick", "close") else "wick"
+    trend, events = structure_state(candles, swing_lookback=swing_lookback)
     return ChartStructure(
         order_blocks=detect_order_blocks(
             candles,
@@ -69,7 +72,10 @@ def get_order_blocks(
             mitigation=mit,
             require_fvg=require_fvg,
             keep_breakers=breakers,
+            trend=trend,
             max_zones=max_zones,
         ),
         fvgs=detect_fvgs(candles, mitigation=mit) if fvg else [],
+        trend=trend,
+        events=events,
     )

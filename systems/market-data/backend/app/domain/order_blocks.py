@@ -6,32 +6,114 @@ series per selected detection timeframe and renders each returned zone /
 gap as a horizontal price band. See docs/architecture.md § "Live chart -
 multi-timeframe order blocks" and its "Next: SMC setup engine" subsection.
 
-Phase 3a scope: order blocks (`detect_order_blocks`), breaker blocks (a
-broken order block kept + polarity-flipped, `role="breaker"`), and fair
-value gaps (`detect_fvgs`). Deliberately simple, stateless - a Donchian
-structure break plus "last opposite-colour candle before the impulse"
-for a zone; no trend/BOS-CHoCH state yet (Phase 3b). Same zone-math
-*family* as the scoped SMC order-block Rule (docs "Open questions"); if
-that ships in signal-engine it *copies* from here, never a shared import
-(same precedent as option_templates.py / compute_ema).
+Phase 3a: order blocks (`detect_order_blocks`), breaker blocks (a broken
+order block kept + polarity-flipped, `role="breaker"`), fair value gaps
+(`detect_fvgs`). Phase 3b: market-structure state (`structure_state` -
+confirmed swing pivots -> BOS/CHoCH events -> a running up/down/range
+trend flag), which `detect_order_blocks` uses to tag counter-trend zones.
+Deliberately simple - the same simplifications the scoped SMC order-block
+Rule (docs "Open questions") locks in; if that ships in signal-engine it
+*copies* from here, never a shared import (same precedent as
+option_templates.py / compute_ema).
 """
 
+from collections import defaultdict
 from typing import Literal
 
-from app.domain.models import Candle, Fvg, OrderBlock
+from app.domain.models import Candle, Fvg, OrderBlock, StructureEvent
 
 ZoneMode = Literal["wick", "body"]
 Mitigation = Literal["wick", "close"]
+Trend = Literal["up", "down", "range"]
 
 # Guard rails for the tunables (a caller/query param can't push a detector
 # into a degenerate or pathologically expensive shape).
 _MIN_LOOKBACK, _MAX_LOOKBACK = 3, 200
 _MIN_ZONES, _MAX_ZONES = 1, 30
+_MIN_SWING, _MAX_SWING = 2, 50
 _MAX_FVGS_CAP = 40
+_MAX_EVENTS = 8
 
 
 def _overlaps(a_lo: float, a_hi: float, b_lo: float, b_hi: float) -> bool:
     return not (a_hi < b_lo or a_lo > b_hi)
+
+
+def _confirmed_pivots(h: list[float], lo: list[float], swing: int) -> list[tuple[int, int, float, str]]:
+    """Confirmed swing highs/lows: index i is a swing high when h[i] is
+    strictly above the prior `swing` bars and at least as high as the next
+    `swing`; mirror for lows. A pivot is only *known* `swing` bars later
+    (the lookahead) - the returned tuple carries both the pivot index and
+    its confirmation index (`i + swing`) so the state machine can apply it
+    at the right bar. Sorted by confirmation index."""
+    n = len(h)
+    out: list[tuple[int, int, float, str]] = []
+    for i in range(swing, n - swing):
+        if h[i] > max(h[i - swing : i]) and h[i] >= max(h[i + 1 : i + swing + 1]):
+            out.append((i + swing, i, h[i], "high"))
+        if lo[i] < min(lo[i - swing : i]) and lo[i] <= min(lo[i + 1 : i + swing + 1]):
+            out.append((i + swing, i, lo[i], "low"))
+    out.sort()
+    return out
+
+
+def structure_state(candles: list[Candle], *, swing_lookback: int = 5) -> tuple[Trend, list[StructureEvent]]:
+    """Walks the series maintaining the most recent *unbroken* confirmed
+    swing high / low. A close beyond one is a structure break, labelled
+    against the last break's direction: same direction = **BOS**
+    (continuation), opposite = **CHoCH** (change of character).
+
+    The returned `trend` is the *confirmed* trend: it's set only by a BOS,
+    and reset to `range` by the first CHoCH against it - so a choppy
+    market that keeps flip-flopping between CHoCHs reads `range`, not a
+    whipsawing up/down. Returns the last `_MAX_EVENTS` breaks (oldest-
+    first). A deliberate simplification of textbook SMC - the same one
+    the scoped SMC Rule locks in."""
+    swing_lookback = max(_MIN_SWING, min(_MAX_SWING, swing_lookback))
+    n = len(candles)
+    if n < 2 * swing_lookback + 2:
+        return "range", []
+
+    h = [c.high for c in candles]
+    lo = [c.low for c in candles]
+    cl = [c.close for c in candles]
+    ts = [c.timestamp for c in candles]
+
+    by_confirm: dict[int, list[tuple[float, str]]] = defaultdict(list)
+    for confirm_idx, _pivot_idx, price, kind in _confirmed_pivots(h, lo, swing_lookback):
+        by_confirm[confirm_idx].append((price, kind))
+
+    last_break: str = "range"  # direction of the previous break - drives BOS vs CHoCH
+    confirmed: Trend = "range"  # what we report - only a BOS sets it, an opposing CHoCH clears it
+    ref_high: float | None = None
+    ref_low: float | None = None
+    events: list[StructureEvent] = []
+
+    for i in range(n):
+        for price, kind in by_confirm.get(i, []):
+            if kind == "high":
+                ref_high = price
+            else:
+                ref_low = price
+
+        direction: str | None = None
+        level = 0.0
+        if ref_high is not None and cl[i] > ref_high:
+            direction, level, ref_high = "up", ref_high, None
+        elif ref_low is not None and cl[i] < ref_low:
+            direction, level, ref_low = "down", ref_low, None
+        if direction is None:
+            continue
+
+        kind = "bos" if direction == last_break else "choch"
+        events.append(StructureEvent(kind=kind, direction=direction, price=level, timestamp=ts[i]))
+        last_break = direction
+        if kind == "bos":
+            confirmed = direction
+        elif confirmed not in ("range", direction):
+            confirmed = "range"
+
+    return confirmed, events[-_MAX_EVENTS:]
 
 
 def _atr(h: list[float], lo: list[float], cl: list[float], period: int = 14) -> float:
@@ -64,12 +146,16 @@ def detect_order_blocks(
     mitigation: Mitigation = "wick",
     require_fvg: bool = False,
     keep_breakers: bool = False,
+    trend: Trend = "range",
     max_zones: int = 8,
 ) -> list[OrderBlock]:
     """`candles` oldest-first (the Candle convention). Returns the
     surviving zones oldest-first too, at most `max_zones` (most-recent
     kept when trimming).
 
+    - `trend`: the current market-structure trend (from `structure_state`);
+      a zone opposing it is tagged `counter_trend` (a demand zone in a
+      downtrend, or supply in an uptrend). `"range"` tags nothing.
     - `lookback`: Donchian window - a candle closing above the prior
       `lookback` bars' high is a bullish structure break (mirror for
       bearish). The order block is the last opposite-colour candle before
@@ -201,6 +287,7 @@ def detect_order_blocks(
             distal=distal,
             origin_timestamp=ts[ob],
             mitigated=mitigated,
+            counter_trend=(trend == "up" and kind == "supply") or (trend == "down" and kind == "demand"),
         )
         for kind, role, proximal, distal, ob, _rec, mitigated in kept
     ]

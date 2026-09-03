@@ -69,8 +69,10 @@ type ObExtendData = {
   proximal: number;
   distal: number;
   mitigated: boolean;
+  counterTrend: boolean;
 };
 type FvgExtendData = { kind: "bullish" | "bearish"; top: number; bottom: number; filled: boolean };
+type BreakExtendData = { tf: string; kind: "bos" | "choch"; direction: "up" | "down"; price: number };
 
 registerOverlay({
   name: "htfOrderBlock",
@@ -90,12 +92,14 @@ registerOverlay({
     const top = Math.min(yA, yB);
     const height = Math.max(1, Math.abs(yA - yB));
     const breaker = d.role === "breaker";
-    const stroke = d.kind === "demand" ? "rgba(62, 207, 142, 0.6)" : "rgba(232, 88, 106, 0.6)";
-    const fill =
-      d.kind === "demand"
-        ? `rgba(62, 207, 142, ${breaker ? 0.17 : 0.13})`
-        : `rgba(232, 88, 106, ${breaker ? 0.17 : 0.13})`;
-    const label = `${d.tf} ${breaker ? "breaker" : d.kind}${d.mitigated ? " · tested" : ""}`;
+    // Counter-trend zones (opposing the structure trend) are dimmed to
+    // ~40% so the with-trend zones you'd actually trade from stand out.
+    const dim = d.counterTrend ? 0.4 : 1;
+    const rgb = d.kind === "demand" ? "62, 207, 142" : "232, 88, 106";
+    const stroke = `rgba(${rgb}, ${0.6 * dim})`;
+    const fill = `rgba(${rgb}, ${(breaker ? 0.17 : 0.13) * dim})`;
+    const label =
+      `${d.tf} ${breaker ? "breaker" : d.kind}` + (d.mitigated ? " · tested" : "") + (d.counterTrend ? " · counter" : "");
     return [
       {
         type: "rect",
@@ -113,6 +117,41 @@ registerOverlay({
         type: "text",
         attrs: { x: leftX + 4, y: top + 2, text: label, baseline: "top" },
         styles: { color: stroke, size: 10 },
+        ignoreEvent: true,
+      },
+    ];
+  },
+});
+
+// BOS / CHoCH structure breaks - a thin horizontal line at the swing
+// level that broke, from the break candle to the right edge. Green up /
+// red down; CHoCH dashed (it flipped the trend), BOS solid.
+registerOverlay({
+  name: "htfStructureBreak",
+  totalStep: 2,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+    if (coordinates.length < 1 || !yAxis) return [];
+    const d = overlay.extendData as BreakExtendData | undefined;
+    if (!d) return [];
+    const leftX = coordinates[0].x;
+    const rightX = bounding.width;
+    if (rightX <= leftX) return [];
+    const y = yAxis.convertToPixel(d.price);
+    const color = d.direction === "up" ? "rgba(62, 207, 142, 0.75)" : "rgba(232, 88, 106, 0.75)";
+    return [
+      {
+        type: "line",
+        attrs: { coordinates: [{ x: leftX, y }, { x: rightX, y }] },
+        styles: { color, size: 1, style: d.kind === "choch" ? "dashed" : "solid" },
+        ignoreEvent: true,
+      },
+      {
+        type: "text",
+        attrs: { x: leftX + 4, y: y - 12, text: `${d.tf} ${d.kind.toUpperCase()} ${d.direction === "up" ? "▲" : "▼"}`, baseline: "top" },
+        styles: { color, size: 10 },
         ignoreEvent: true,
       },
     ];
@@ -249,11 +288,11 @@ const OB_TF_VALUES = new Set(OB_TIMEFRAMES.map((t) => t.value));
 const OB_REFRESH_MS = 2 * 60_000;
 
 // Persisted config for the structure overlays. `tfs` are the detection
-// timeframes; `breakers`/`fvg` are global modifiers that apply to every
+// timeframes; `breakers`/`fvg`/`breaks` are global modifiers over every
 // enabled timeframe. Off by default - it's an opt-in analytical layer
 // that costs one extra fetch per timeframe.
-type StructureConfig = { tfs: string[]; breakers: boolean; fvg: boolean };
-const EMPTY_STRUCTURE_CONFIG: StructureConfig = { tfs: [], breakers: false, fvg: false };
+type StructureConfig = { tfs: string[]; breakers: boolean; fvg: boolean; breaks: boolean };
+const EMPTY_STRUCTURE_CONFIG: StructureConfig = { tfs: [], breakers: false, fvg: false, breaks: false };
 
 function loadStructureConfig(): StructureConfig {
   try {
@@ -263,7 +302,7 @@ function loadStructureConfig(): StructureConfig {
     const tfs = Array.isArray(tfsSource)
       ? tfsSource.filter((v): v is string => typeof v === "string" && OB_TF_VALUES.has(v))
       : [];
-    return { tfs, breakers: raw?.breakers === true, fvg: raw?.fvg === true };
+    return { tfs, breakers: raw?.breakers === true, fvg: raw?.fvg === true, breaks: raw?.breaks === true };
   } catch {
     return EMPTY_STRUCTURE_CONFIG;
   }
@@ -421,6 +460,7 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
   const indicatorPanesRef = useRef<Map<string, string>>(new Map());
 
   const [structure, setStructure] = useState<StructureConfig>(loadStructureConfig);
+  const [trendByTf, setTrendByTf] = useState<Record<string, "up" | "down" | "range">>({});
   const [obMenuOpen, setObMenuOpen] = useState(false);
   const obMenuRef = useRef<HTMLDivElement | null>(null);
   // Bumped after every applyNewData (initial load + each interval switch)
@@ -669,15 +709,16 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
     let cancelled = false;
     const ex = resolved.chart_exchange;
     const sym = resolved.chart_symbol;
-    const { tfs, breakers, fvg } = structure;
+    const { tfs, breakers, fvg, breaks } = structure;
 
     if (tfs.length === 0) {
       chart.removeOverlay({ groupId: OB_GROUP_ID });
+      setTrendByTf({});
       return;
     }
 
     async function refresh() {
-      const batches: { label: string; data: ChartStructure }[] = [];
+      const batches: { label: string; tf: string; data: ChartStructure }[] = [];
       for (const tf of tfs) {
         const def = OB_TIMEFRAMES.find((t) => t.value === tf);
         if (!def) continue;
@@ -686,12 +727,13 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
         try {
           const data = await fetchChartStructure(ex, sym, tf, ymd(from), ymd(to), { breakers, fvg });
           if (cancelled) return;
-          batches.push({ label: def.label, data });
+          batches.push({ label: def.label, tf, data });
         } catch {
           // this timeframe failed this round - keep the others, retry next refresh
         }
       }
       if (cancelled) return;
+      setTrendByTf(Object.fromEntries(batches.map((b) => [b.tf, b.data.trend])));
       chart!.removeOverlay({ groupId: OB_GROUP_ID });
       for (const { label, data } of batches) {
         for (const f of data.fvgs) {
@@ -718,8 +760,21 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
               proximal: z.proximal,
               distal: z.distal,
               mitigated: z.mitigated,
+              counterTrend: z.counter_trend,
             },
           });
+        }
+        if (breaks) {
+          for (const e of data.events) {
+            const anchor = Date.parse(e.timestamp);
+            if (!Number.isFinite(anchor)) continue;
+            chart!.createOverlay({
+              name: "htfStructureBreak",
+              groupId: OB_GROUP_ID,
+              points: [{ timestamp: anchor, value: e.price }],
+              extendData: { tf: label, kind: e.kind, direction: e.direction, price: e.price },
+            });
+          }
         }
       }
     }
@@ -929,16 +984,21 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
             {obMenuOpen && (
               <div className="live-chart-indicators-menu">
                 <div className="live-chart-indicators-group">Detection timeframe</div>
-                {OB_TIMEFRAMES.map((t) => (
-                  <label key={t.value}>
-                    <input
-                      type="checkbox"
-                      checked={structure.tfs.includes(t.value)}
-                      onChange={() => toggleStructureTf(t.value)}
-                    />
-                    {t.label} order blocks
-                  </label>
-                ))}
+                {OB_TIMEFRAMES.map((t) => {
+                  const on = structure.tfs.includes(t.value);
+                  const tr = on ? trendByTf[t.value] : undefined;
+                  return (
+                    <label key={t.value}>
+                      <input type="checkbox" checked={on} onChange={() => toggleStructureTf(t.value)} />
+                      {t.label} order blocks
+                      {tr && (
+                        <span className={`live-chart-trend live-chart-trend-${tr}`}>
+                          {tr === "up" ? "▲ up" : tr === "down" ? "▼ down" : "– range"}
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
                 <div className="live-chart-indicators-group">Also show</div>
                 <label>
                   <input
@@ -956,9 +1016,17 @@ export function LiveChartPanel({ segment, symbol }: { segment: string; symbol: s
                   />
                   Fair value gaps
                 </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={structure.breaks}
+                    onChange={() => updateStructure({ breaks: !structure.breaks })}
+                  />
+                  Structure breaks (BOS / CHoCH)
+                </label>
                 <div className="live-chart-indicators-hint">
-                  Auto-detected zones — drawn at the chosen timeframe regardless of the chart's interval. Dashed border =
-                  already tested; thick border = breaker; amber band = FVG.
+                  Auto-detected structure — drawn at the chosen timeframe regardless of the chart's interval. Dashed
+                  border = tested; thick border = breaker; amber band = FVG; faded = counter-trend.
                 </div>
               </div>
             )}

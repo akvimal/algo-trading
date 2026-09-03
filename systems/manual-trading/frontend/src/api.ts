@@ -1123,6 +1123,9 @@ export type OrderBlock = {
   distal: number;
   origin_timestamp: string;
   mitigated: boolean;
+  // True when the zone opposes the current structure trend (demand in a
+  // downtrend / supply in an uptrend) - the chart dims these.
+  counter_trend: boolean;
 };
 
 // A 3-candle fair value gap. top/bottom are the gap's price edges;
@@ -1136,7 +1139,21 @@ export type Fvg = {
   filled: boolean;
 };
 
-export type ChartStructure = { order_blocks: OrderBlock[]; fvgs: Fvg[] };
+// One market-structure break. "bos" = break of structure (continuation),
+// "choch" = change of character (the break that flipped the trend).
+export type StructureEvent = {
+  kind: "bos" | "choch";
+  direction: "up" | "down";
+  price: number;
+  timestamp: string;
+};
+
+export type ChartStructure = {
+  order_blocks: OrderBlock[];
+  fvgs: Fvg[];
+  trend: "up" | "down" | "range";
+  events: StructureEvent[];
+};
 
 // SMC structure for one (exchange, symbol, interval) - the Live Chart
 // draws these at a DETECTION interval chosen independently of what the

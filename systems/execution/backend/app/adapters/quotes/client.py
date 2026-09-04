@@ -1,12 +1,15 @@
 """Thin HTTP client to the market-data system. execution never embeds a
 broker SDK or credentials directly - see docs/architecture.md."""
 
+import logging
 from datetime import date
 from typing import Optional
 
 import requests
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_ltp(exchange: str, symbol: str) -> float:
@@ -35,17 +38,29 @@ def _auth_headers(token: Optional[str]) -> Optional[dict]:
 def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None) -> dict[str, float]:
     """All symbols for one exchange in a single market-data call - see
     position_manager.compute_unrealized_pnl/square_off_all_open, which
-    call this once per exchange instead of once per position."""
+    call this once per exchange instead of once per position.
+
+    A network/timeout failure (market-data or its upstream Dhan being slow
+    or rate-limited) returns `{}`, NOT an exception: every consumer already
+    treats a missing quote as "degrade gracefully" (P&L shows blank, an
+    exit-monitor tick skips the position and retries, a manual square-off
+    returns `quote_unavailable` for the UI to surface and retry). Letting
+    the raw `requests` exception propagate instead turned a transient Dhan
+    slowdown into a 500 / "Failed to fetch" on the user's square-off."""
     if not symbols:
         return {}
-    resp = requests.post(
-        f"{settings.market_data_base_url}/quotes/ltp/batch",
-        json={"exchange": exchange, "symbols": symbols},
-        headers=_auth_headers(token),
-        timeout=settings.market_data_timeout_seconds,
-    )
-    resp.raise_for_status()
-    return resp.json()["prices"]
+    try:
+        resp = requests.post(
+            f"{settings.market_data_base_url}/quotes/ltp/batch",
+            json={"exchange": exchange, "symbols": symbols},
+            headers=_auth_headers(token),
+            timeout=settings.market_data_timeout_seconds,
+        )
+        resp.raise_for_status()
+        return resp.json()["prices"]
+    except requests.exceptions.RequestException as exc:
+        logger.warning("get_ltp_batch failed for %s (%d symbols): %s", exchange, len(symbols), exc)
+        return {}
 
 
 def get_previous_candle(exchange: str, symbol: str, interval: str, token: Optional[str] = None) -> Optional[dict]:

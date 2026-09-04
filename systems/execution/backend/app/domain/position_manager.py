@@ -1088,6 +1088,46 @@ def submit_position_review(
     return row, None
 
 
+def update_position_notes(
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, notes: str
+) -> Optional[db_models.Position]:
+    """PUT /positions/{id}/notes - sets the free-text journal note (an
+    empty string clears it). Unlike submit_position_review this has no
+    gate: it works on an OPEN or CLOSED row and can be called any number
+    of times. Returns None if the row is missing or not the caller's."""
+    row = db.get(db_models.Position, position_id)
+    if row is None or row.user_id != user_id:
+        return None
+    row.notes = notes or None
+    db.commit()
+    return row
+
+
+def update_position_tags(
+    db: Session,
+    user_id: Optional[uuid.UUID],
+    position_id: uuid.UUID,
+    *,
+    setup_tag: Optional[str] = None,
+    set_setup_tag: bool = False,
+    confidence: Optional[int] = None,
+    set_confidence: bool = False,
+) -> Optional[db_models.Position]:
+    """PUT /positions/{id}/tags - partial edit of the structured trade
+    journal. `set_*` flags say which fields the request actually carried
+    (a missing field is left untouched); `setup_tag=""` clears the tag.
+    Same "no gate, OPEN or CLOSED" contract as update_position_notes."""
+    row = db.get(db_models.Position, position_id)
+    if row is None or row.user_id != user_id:
+        return None
+    if set_setup_tag:
+        row.setup_tag = setup_tag or None
+    if set_confidence:
+        row.confidence = confidence
+    db.commit()
+    return row
+
+
 def _resolve_stop_loss(
     method: Optional[str],
     action: str,
@@ -1632,6 +1672,11 @@ def open_manual_position(
     order_type: Optional[str] = None,
     square_off_time: Optional[time] = None,
     token: Optional[str] = None,
+    target_price: Optional[float] = None,
+    trend_followed: Optional[bool] = None,
+    risk_managed: Optional[bool] = None,
+    setup_tag: Optional[str] = None,
+    confidence: Optional[int] = None,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -1928,6 +1973,7 @@ def open_manual_position(
         live_trading_user_id=user_id if broker_order is not None else None,
         stop_loss_price=stop_loss_price,
         initial_stop_loss_price=stop_loss_price,
+        target_price=target_price,
         trailing_stop_enabled=trailing_stop_enabled,
         stop_loss_method=stop_loss_method,
         stop_loss_interval=stop_loss_interval,
@@ -1940,6 +1986,10 @@ def open_manual_position(
         liquidation_price=liquidation_price,
         plan_checklist=plan_checklist,
         order_type=order_type,
+        trend_followed=trend_followed,
+        risk_managed=risk_managed,
+        setup_tag=setup_tag or None,
+        confidence=confidence,
     )
     db.add(row)
     db.commit()

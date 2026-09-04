@@ -606,6 +606,10 @@ def open_manual_option_group(
     plan_checklist: Optional[list[dict]] = None,
     order_type: Optional[str] = None,
     square_off_time: Optional[time] = None,
+    trend_followed: Optional[bool] = None,
+    risk_managed: Optional[bool] = None,
+    setup_tag: Optional[str] = None,
+    confidence: Optional[int] = None,
 ) -> db_models.OptionPositionGroup:
     """Manual tab (signal-generation's frontend) - option orders, bypassing
     signal-generation/signal-processing entirely (no auto-provisioned
@@ -845,6 +849,10 @@ def open_manual_option_group(
         open_fee=open_fee,
         plan_checklist=plan_checklist,
         order_type=order_type,
+        trend_followed=trend_followed,
+        risk_managed=risk_managed,
+        setup_tag=setup_tag or None,
+        confidence=confidence,
     )
     db.add(group)
 
@@ -1117,6 +1125,60 @@ def update_group_spot_stop_loss(
     return row
 
 
+def update_group_spot_target(
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+) -> Optional[db_models.OptionPositionGroup]:
+    """Sets the underlying-spot-price take-profit - the sibling of
+    update_group_spot_stop_loss above. _evaluate_option_group_exits checks
+    it against the same spot quote (whichever of spot stop / spot target /
+    premium stop / premium target trips first closes the group). No
+    trailing concept - a target never moves."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None or row.user_id != user_id:
+        return None
+    row.spot_target_price = new_price
+    db.commit()
+    return row
+
+
+def update_group_notes(
+    db: Session, user_id: Optional[uuid.UUID], group_id: uuid.UUID, notes: str
+) -> Optional[db_models.OptionPositionGroup]:
+    """PUT /option-groups/{id}/notes - the option-group sibling of
+    position_manager.update_position_notes. Free-text journal note, empty
+    string clears it, no gate, OPEN or CLOSED. Not review_notes."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None or row.user_id != user_id:
+        return None
+    row.notes = notes or None
+    db.commit()
+    return row
+
+
+def update_group_tags(
+    db: Session,
+    user_id: Optional[uuid.UUID],
+    group_id: uuid.UUID,
+    *,
+    setup_tag: Optional[str] = None,
+    set_setup_tag: bool = False,
+    confidence: Optional[int] = None,
+    set_confidence: bool = False,
+) -> Optional[db_models.OptionPositionGroup]:
+    """PUT /option-groups/{id}/tags - option-group sibling of
+    position_manager.update_position_tags. Partial: `set_*` say which
+    fields the request carried; `setup_tag=""` clears the tag."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None or row.user_id != user_id:
+        return None
+    if set_setup_tag:
+        row.setup_tag = setup_tag or None
+    if set_confidence:
+        row.confidence = confidence
+    db.commit()
+    return row
+
+
 def update_group_square_off_time(
     db: Session, user_id: uuid.UUID, group_id: uuid.UUID, square_off_time: Optional[time]
 ) -> Optional[db_models.OptionPositionGroup]:
@@ -1311,7 +1373,15 @@ def _evaluate_option_group_exits(
             (group.action == "BUY" and spot_cmp <= float(group.spot_stop_loss_price))
             or (group.action == "SELL" and spot_cmp >= float(group.spot_stop_loss_price))
         )
-        if not (sl_hit or target_hit or spot_sl_hit):
+        # Sibling of spot_sl_hit - a take-profit on the underlying's own
+        # price (the Live Chart panel's Target field for an option order),
+        # checked against the same spot_cmp. Whichever of the four stop/
+        # target mechanisms trips first closes the whole group.
+        spot_target_hit = group.spot_target_price is not None and spot_cmp is not None and (
+            (group.action == "BUY" and spot_cmp >= float(group.spot_target_price))
+            or (group.action == "SELL" and spot_cmp <= float(group.spot_target_price))
+        )
+        if not (sl_hit or target_hit or spot_sl_hit or spot_target_hit):
             if (
                 group.spot_stop_loss_trailing_enabled
                 and group.spot_stop_loss_price is not None
@@ -1364,13 +1434,16 @@ def _evaluate_option_group_exits(
             group_reason_prefix = "individual" if group.sl_scope == "individual" else "combined"
             group_reason = f"{group_reason_prefix}_target"
             leg_reason = "target"
-        else:
+        elif spot_sl_hit:
             group_reason = "spot_stop_loss"
             # Leg-level exit_reason is the plain 'stop_loss'/'target' every
             # other position already uses (positions.exit_reason's own
             # CHECK constraint has no 'spot_'/'combined_'/'individual_'
             # variants at all - only the group's own exit_reason does).
             leg_reason = "stop_loss"
+        else:
+            group_reason = "spot_target"
+            leg_reason = "target"
 
         legs_to_close = [(long_leg, long_cmp)] + ([(short_leg, short_cmp)] if short_leg else [])
         for pos, cmp_price in legs_to_close:
@@ -1411,11 +1484,12 @@ def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch, get_candle
             # combined_target_price at all (see open_option_group) - would
             # otherwise never be selected as a candidate here.
             | (db_models.OptionPositionGroup.sl_scope == "individual")
-            # A spot-based stop can be the ONLY thing armed on a group
-            # (combined_stop_loss_price/target both NULL, sl_scope stays
-            # 'combined') - same reasoning as the sl_scope='individual'
-            # clause above.
+            # A spot-based stop OR target can be the ONLY thing armed on a
+            # group (combined_stop_loss_price/target both NULL, sl_scope
+            # stays 'combined') - same reasoning as the sl_scope=
+            # 'individual' clause above.
             | (db_models.OptionPositionGroup.spot_stop_loss_price.isnot(None))
+            | (db_models.OptionPositionGroup.spot_target_price.isnot(None))
         )
         .all()
     )

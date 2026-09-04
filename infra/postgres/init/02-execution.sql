@@ -442,7 +442,7 @@ CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     close_fee NUMERIC,
     status                   TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'REJECTED')),
     rejection_reason         TEXT,
-    exit_reason              TEXT CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'individual_stop_loss', 'individual_target', 'spot_stop_loss', 'manual', 'counter_signal')),
+    exit_reason              TEXT CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'individual_stop_loss', 'individual_target', 'spot_stop_loss', 'spot_target', 'manual', 'counter_signal')),
     exit_time                TIMESTAMPTZ,
     pnl                      NUMERIC,
     square_off_time          TIME,
@@ -886,3 +886,45 @@ ALTER TABLE execution.strategy_accounts ADD CONSTRAINT strategy_accounts_live_re
 
 -- Leverage buffer (2026-08-30) - see accounts.leverage_buffer_pct's own comment.
 ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS leverage_buffer_pct NUMERIC NOT NULL DEFAULT 10 CHECK (leverage_buffer_pct >= 0 AND leverage_buffer_pct < 100);
+
+-- Live Chart trade panel: configurable order types + risk-managed placement
+-- (2026-09-04, see docs/architecture.md § "Live chart - inline trade panel").
+-- trend_followed / risk_managed record which of the panel's two discipline
+-- modes ("Trend only" direction lock, "Risk managed" reward:risk gate) were
+-- active when a panel order was placed - NULL for every Strategy-driven row,
+-- every pre-migration row, and every individual option leg Position (the
+-- flags live on the option GROUP, same placement as order_type/plan_checklist).
+-- spot_target_price is a server-enforced take-profit expressed on the
+-- UNDERLYING's price (sibling of spot_stop_loss_price), checked in
+-- _evaluate_option_group_exits - the panel's Target field for an option order.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS trend_followed BOOLEAN;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS risk_managed BOOLEAN;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS trend_followed BOOLEAN;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS risk_managed BOOLEAN;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS spot_target_price NUMERIC;
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_exit_reason_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_exit_reason_check
+    CHECK (exit_reason IN ('square_off', 'combined_stop_loss', 'combined_target', 'individual_stop_loss', 'individual_target', 'spot_stop_loss', 'spot_target', 'manual', 'counter_signal'));
+
+-- Free-text journal note on a manual trade (2026-09-04) - the Live Chart
+-- panel's History rows let a user add / edit one to review the trade
+-- later. Distinct from review_notes (the one-time gated review writeup):
+-- notes has no gate and is editable any number of times, OPEN or CLOSED.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS notes TEXT;
+
+-- setup_tag (the reason a manual trade was taken, from a fixed list in
+-- manualOrder.ts) + confidence (1-5 self-rating at entry) - 2026-09-04.
+-- Set from the Live Chart trade panel, editable from the History list
+-- (PUT .../tags), so Trading Performance can break win-rate / expectancy
+-- down by setup type and discipline. NULL for Strategy-driven rows.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS setup_tag TEXT;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS confidence SMALLINT;
+ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_confidence_check;
+ALTER TABLE execution.positions ADD CONSTRAINT positions_confidence_check
+    CHECK (confidence IS NULL OR confidence BETWEEN 1 AND 5);
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS setup_tag TEXT;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS confidence SMALLINT;
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_confidence_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_confidence_check
+    CHECK (confidence IS NULL OR confidence BETWEEN 1 AND 5);

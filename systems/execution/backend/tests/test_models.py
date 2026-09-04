@@ -4,10 +4,43 @@ from pydantic import ValidationError
 from app.domain.models import (
     EmaStopParams,
     ManualPositionCreate,
+    NotesUpdate,
     StopLossUpdate,
     SupertrendStopParams,
+    TradeTagsUpdate,
     validate_stop_loss_indicator_params,
 )
+
+
+def test_notes_update_defaults_to_empty_and_accepts_text():
+    assert NotesUpdate().notes == ""
+    assert NotesUpdate(notes="chased the entry, missed the retest").notes.startswith("chased")
+
+
+def test_notes_update_rejects_an_overlong_note():
+    with pytest.raises(ValidationError):
+        NotesUpdate(notes="x" * 2001)
+
+
+def test_manual_position_create_accepts_setup_tag_and_confidence():
+    p = ManualPositionCreate(**_base(setup_tag="OB retest", confidence=4))
+    assert p.setup_tag == "OB retest"
+    assert p.confidence == 4
+
+
+def test_manual_position_create_rejects_confidence_out_of_range():
+    with pytest.raises(ValidationError):
+        ManualPositionCreate(**_base(confidence=6))
+    with pytest.raises(ValidationError):
+        ManualPositionCreate(**_base(confidence=0))
+
+
+def test_trade_tags_update_is_partial_and_bounded():
+    assert TradeTagsUpdate(setup_tag="Breakout").model_dump(exclude_unset=True) == {"setup_tag": "Breakout"}
+    assert TradeTagsUpdate(confidence=3).model_dump(exclude_unset=True) == {"confidence": 3}
+    assert TradeTagsUpdate().model_dump(exclude_unset=True) == {}
+    with pytest.raises(ValidationError):
+        TradeTagsUpdate(confidence=9)
 
 
 def _base(**overrides) -> dict:
@@ -42,6 +75,27 @@ def test_manual_position_create_rejects_both_fixed_price_and_method():
 def test_manual_position_create_trailing_without_method_is_rejected():
     with pytest.raises(ValidationError, match="trailing_stop_enabled requires a stop_loss_method"):
         ManualPositionCreate(**_base(trailing_stop_enabled=True))
+
+
+def test_manual_position_create_flat_target_valid_and_flags_pass_through():
+    m = ManualPositionCreate(**_base(stop_loss_price=95.0, target_price=110.0, trend_followed=True, risk_managed=True))
+    assert m.target_price == 110.0
+    assert m.trend_followed is True
+    assert m.risk_managed is True
+
+
+def test_manual_position_create_rejects_target_on_wrong_side_of_entry():
+    with pytest.raises(ValidationError, match="target_price .* must be above entry"):
+        ManualPositionCreate(**_base(target_price=95.0))  # BUY, entry 100 -> target must be > 100
+    with pytest.raises(ValidationError, match="target_price .* must be below entry"):
+        ManualPositionCreate(**_base(action="SELL", target_price=110.0))
+
+
+def test_manual_position_create_rejects_flat_stop_loss_on_wrong_side_of_entry():
+    with pytest.raises(ValidationError, match="stop_loss_price .* must be below entry"):
+        ManualPositionCreate(**_base(stop_loss_price=105.0))  # BUY
+    with pytest.raises(ValidationError, match="stop_loss_price .* must be above entry"):
+        ManualPositionCreate(**_base(action="SELL", stop_loss_price=95.0))
 
 
 def test_manual_position_create_percent_method_valid():

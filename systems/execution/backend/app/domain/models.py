@@ -485,8 +485,28 @@ class ManualPositionCreate(BaseModel):
     # not raw underlying units - a no-op distinction for spot (lot_size is
     # always 1 there) but real for future (e.g. CRYPTO BTCUSD lot_size=
     # 0.001) - see open_manual_position's own comment at the multiply.
+    # Omitted + stop_loss_price set -> open_manual_position risk-sizes it
+    # (compute_risk_based_quantity), which is what the Live Chart panel's
+    # "Risk managed" mode relies on.
     quantity: Optional[float] = Field(default=None, gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    # Independent flat take-profit on the underlying's own price - written
+    # straight to positions.target_price and honoured by the SAME
+    # exit-monitor (_evaluate_exits / square_off_due_positions) every
+    # Strategy-driven position's target already uses. The Live Chart
+    # panel's Target field for a spot/future order. Its side is validated
+    # against `action`/`price` below.
+    target_price: Optional[float] = Field(default=None, gt=0)
+    # Live Chart trade panel discipline flags (see execution.positions'
+    # own columns) - which of the panel's two modes was active. None from
+    # any other caller.
+    trend_followed: Optional[bool] = None
+    risk_managed: Optional[bool] = None
+    # Structured trade journal set at order time - setup_tag from
+    # manualOrder.ts's SETUP_TAGS, confidence a 1-5 self-rating. Both
+    # editable later via PUT /positions/{id}/tags. Feed Trading Performance.
+    setup_tag: Optional[str] = Field(default=None, max_length=40)
+    confidence: Optional[int] = Field(default=None, ge=1, le=5)
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator", "breakeven"]] = None
     stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0)
@@ -525,6 +545,25 @@ class ManualPositionCreate(BaseModel):
             self.stop_loss_indicator_params,
             self.trailing_stop_enabled,
         )
+        return self
+
+    @model_validator(mode="after")
+    def _check_protective_prices_side(self) -> "ManualPositionCreate":
+        # A flat stop-loss / target on the wrong side of entry would fire
+        # (or size) nonsensically - reject at the edge rather than open a
+        # doomed position. Only checks a flat stop_loss_price; a
+        # method-based stop is resolved later against live candles and
+        # can't be side-checked here.
+        if self.action == "BUY":
+            if self.stop_loss_price is not None and self.stop_loss_price >= self.price:
+                raise ValueError(f"stop_loss_price ({self.stop_loss_price}) must be below entry ({self.price}) for a BUY")
+            if self.target_price is not None and self.target_price <= self.price:
+                raise ValueError(f"target_price ({self.target_price}) must be above entry ({self.price}) for a BUY")
+        else:
+            if self.stop_loss_price is not None and self.stop_loss_price <= self.price:
+                raise ValueError(f"stop_loss_price ({self.stop_loss_price}) must be above entry ({self.price}) for a SELL")
+            if self.target_price is not None and self.target_price >= self.price:
+                raise ValueError(f"target_price ({self.target_price}) must be below entry ({self.price}) for a SELL")
         return self
 
     @model_validator(mode="after")
@@ -583,6 +622,16 @@ class ManualOptionPositionCreate(BaseModel):
     # ManualPositionCreate.square_off_time's own comment, identical
     # meaning here (applied to the group and every one of its legs).
     square_off_time: Optional[time] = None
+    # Live Chart trade panel discipline flags (see execution.option_
+    # position_groups' own columns) - which of the panel's two modes was
+    # active. None from any other caller. The panel's Target/SL for an
+    # option order are set via PUT /option-groups/{id}/spot-target and
+    # /spot-stop-loss after create, not on this payload.
+    trend_followed: Optional[bool] = None
+    risk_managed: Optional[bool] = None
+    # Structured trade journal set at order time - see ManualPositionCreate.
+    setup_tag: Optional[str] = Field(default=None, max_length=40)
+    confidence: Optional[int] = Field(default=None, ge=1, le=5)
 
 
 class StopLossUpdate(BaseModel):
@@ -648,3 +697,36 @@ class SpotStopLossUpdate(BaseModel):
     flat-price-only scope StopLossUpdate has for options."""
 
     spot_stop_loss_price: float = Field(gt=0)
+
+
+class SpotTargetUpdate(BaseModel):
+    """PUT /option-groups/{id}/spot-target - a take-profit expressed on the
+    underlying's own price, the sibling of SpotStopLossUpdate above and
+    checked the same way in _evaluate_option_group_exits (whichever of
+    spot stop / spot target / premium stop / premium target trips first
+    closes the group). The Live Chart trade panel's Target field for an
+    option order."""
+
+    spot_target_price: float = Field(gt=0)
+
+
+class NotesUpdate(BaseModel):
+    """PUT /positions/{id}/notes and PUT /option-groups/{id}/notes - a
+    free-text journal comment on a manual trade, shown and edited from the
+    Live Chart panel's History list so a trade can be reviewed later.
+    Editable any number of times, on an OPEN or CLOSED row. Distinct from
+    ReviewSubmit's review_notes (the one-time gated review writeup). An
+    empty string clears the note."""
+
+    notes: str = Field(default="", max_length=2000)
+
+
+class TradeTagsUpdate(BaseModel):
+    """PUT /positions/{id}/tags and PUT /option-groups/{id}/tags - edit the
+    structured trade journal (setup_tag / confidence) after the fact, from
+    the Live Chart panel's History list. A partial update: only the fields
+    present in the request body are changed. `setup_tag: ""` clears the
+    tag; confidence stays 1-5 (no clear)."""
+
+    setup_tag: Optional[str] = Field(default=None, max_length=40)
+    confidence: Optional[int] = Field(default=None, ge=1, le=5)

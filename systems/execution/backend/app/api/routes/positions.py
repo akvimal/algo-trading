@@ -9,7 +9,14 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
 from app.auth import User, get_current_user, require_admin
-from app.domain.models import ManualPositionCreate, ReviewSubmit, SquareOffTimeUpdate, StopLossUpdate
+from app.domain.models import (
+    ManualPositionCreate,
+    NotesUpdate,
+    ReviewSubmit,
+    SquareOffTimeUpdate,
+    StopLossUpdate,
+    TradeTagsUpdate,
+)
 from app.domain.position_manager import (
     check_exits,
     compute_strategy_performance,
@@ -20,6 +27,8 @@ from app.domain.position_manager import (
     square_off_due_positions,
     square_off_position,
     submit_position_review,
+    update_position_notes,
+    update_position_tags,
     update_square_off_time,
     update_stop_loss,
 )
@@ -108,8 +117,20 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         "review_violation": row.review_violation,
         "review_notes": row.review_notes,
         "review_checklist": row.review_checklist,
+        # Free-text journal note (PUT /positions/{id}/notes) - editable any
+        # time from the Live Chart panel's History list. Not review_notes.
+        "notes": row.notes,
+        # Structured trade journal (PUT /positions/{id}/tags) - the setup
+        # type + 1-5 confidence, for Trading Performance's by-setup slice.
+        "setup_tag": row.setup_tag,
+        "confidence": row.confidence,
         # 'market' | 'limit' | null - see execution.positions.order_type's own comment.
         "order_type": row.order_type,
+        # Live Chart trade panel discipline flags - null for every
+        # Strategy-driven position and every option leg. See
+        # infra/postgres/init/02-execution.sql.
+        "trend_followed": row.trend_followed,
+        "risk_managed": row.risk_managed,
     }
 
 
@@ -303,6 +324,11 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         payload.order_type,
         payload.square_off_time,
         token=user.token,
+        target_price=payload.target_price,
+        trend_followed=payload.trend_followed,
+        risk_managed=payload.risk_managed,
+        setup_tag=payload.setup_tag,
+        confidence=payload.confidence,
     )
     return _position_to_out(row)
 
@@ -399,6 +425,64 @@ def edit_square_off_time(
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
     row = update_square_off_time(db, owner_id, parsed_id, payload.square_off_time)
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/notes")
+def edit_position_notes(
+    position_id: str, payload: NotesUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """A free-text journal note on a trade, shown/edited from the Live
+    Chart panel's History list to review it later. No gate (unlike PUT
+    .../review): works on an OPEN or CLOSED row and can be called any
+    number of times; an empty string clears it. 404 if missing or owned
+    by another user."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+
+    row = update_position_notes(db, owner_id, parsed_id, payload.notes)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/tags")
+def edit_position_tags(
+    position_id: str, payload: TradeTagsUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Edit the structured trade journal (setup_tag / confidence) after the
+    fact - same no-gate, OPEN-or-CLOSED contract as .../notes. Only the
+    fields present in the body are changed; `setup_tag: ""` clears the
+    tag. 404 if missing or owned by another user."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+
+    sent = payload.model_dump(exclude_unset=True)
+    row = update_position_tags(
+        db,
+        owner_id,
+        parsed_id,
+        setup_tag=payload.setup_tag,
+        set_setup_tag="setup_tag" in sent,
+        confidence=payload.confidence,
+        set_confidence="confidence" in sent,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
     return _position_to_out(row)
 
 

@@ -57,6 +57,7 @@ class FakeGroup:
     sl_scope: str = "combined"
     entry_spot_price: Optional[float] = None
     spot_stop_loss_price: Optional[float] = None
+    spot_target_price: Optional[float] = None
     spot_stop_loss_trailing_enabled: bool = False
     spot_stop_loss_indicator_type: Optional[str] = None
     spot_stop_loss_indicator_params: Optional[dict] = None
@@ -270,6 +271,52 @@ def test_evaluate_option_group_exits_closes_on_spot_stop_loss_sell():
     )
 
     assert result == {"closed_stop_loss": 1, "closed_target": 0, "trailed": 0, "checked": 1}
+    assert group.exit_reason == "spot_stop_loss"
+
+
+def test_evaluate_option_group_exits_closes_on_spot_target_buy():
+    # No premium SL/target - only a take-profit on the underlying's own
+    # price (the Live Chart panel's Target field for an option order).
+    group = _group(net_debit=20.0, spot_target_price=25200.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 25300.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 0, "closed_target": 1, "trailed": 0, "checked": 1}
+    assert group.status == "CLOSED"
+    assert group.exit_reason == "spot_target"
+    assert long_leg.exit_reason == "target"
+
+
+def test_evaluate_option_group_exits_closes_on_spot_target_sell():
+    # SELL combo - the spot target trips when the underlying FALLS through it.
+    group = _group(net_debit=20.0, action="SELL", spot_target_price=24800.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24700.0}, _accounts()
+    )
+
+    assert result == {"closed_stop_loss": 0, "closed_target": 1, "trailed": 0, "checked": 1}
+    assert group.exit_reason == "spot_target"
+
+
+def test_evaluate_option_group_exits_spot_stop_loss_wins_over_spot_target():
+    # Both spot levels trip in the same tick (nonsensical prices, but the
+    # branch order must be deterministic) - the protective stop wins,
+    # matching sl-before-target priority everywhere else here.
+    group = _group(net_debit=20.0, spot_stop_loss_price=25000.0, spot_target_price=24000.0)
+    long_leg, short_leg = _legs()
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    result = _evaluate_option_group_exits(
+        [group], legs, lambda ex, syms: {"NIFTY-CE": 25.0, "NIFTY-CE-OTM": 10.0, "NIFTY": 24500.0}, _accounts()
+    )
+
     assert group.exit_reason == "spot_stop_loss"
 
 

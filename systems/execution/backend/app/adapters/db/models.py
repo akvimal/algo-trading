@@ -6,7 +6,7 @@ update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, Text, Time, func
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -271,6 +271,19 @@ class OptionPositionGroup(Base):
     # 'market' | 'limit' - see infra/postgres/init/02-execution.sql's own
     # comment on this column. NULL for every Strategy-driven group.
     order_type = Column(Text)
+    # Live Chart trade panel discipline flags + server-enforced spot
+    # take-profit - see infra/postgres/init/02-execution.sql's own comment.
+    # spot_target_price is the option-group sibling of spot_stop_loss_price,
+    # checked against the underlying's own price in _evaluate_option_group_exits.
+    trend_followed = Column(Boolean)
+    risk_managed = Column(Boolean)
+    spot_target_price = Column(Numeric)
+    # Free-text journal note (PUT /option-groups/{id}/notes) - editable any
+    # time, OPEN or CLOSED. Not review_notes (the gated review writeup).
+    notes = Column(Text)
+    # Structured trade journal - see the Position mirror above.
+    setup_tag = Column(Text)
+    confidence = Column(SmallInteger)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -370,6 +383,19 @@ class Position(Base):
     # comment on this column. NULL for every Strategy-driven position and
     # every individual option leg, same scoping as plan_checklist above.
     order_type = Column(Text)
+    # Live Chart trade panel discipline flags - see infra/postgres/init/
+    # 02-execution.sql. NULL for every Strategy-driven position and every
+    # individual option leg (the flags live on the option GROUP row).
+    trend_followed = Column(Boolean)
+    risk_managed = Column(Boolean)
+    # Free-text journal note (PUT /positions/{id}/notes) - editable any
+    # time, OPEN or CLOSED. Not review_notes (the gated review writeup).
+    notes = Column(Text)
+    # Structured trade journal: setup_tag (from manualOrder.ts's fixed
+    # list) + confidence (1-5 at entry). Set at order time, editable via
+    # PUT /positions/{id}/tags. Feed Trading Performance's by-setup slice.
+    setup_tag = Column(Text)
+    confidence = Column(SmallInteger)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     # Which option_position_groups row this leg belongs to - NULL for
     # every ordinary spot/future position. See docs/architecture.md

@@ -22,7 +22,16 @@ from app.adapters.quotes.client import (
     resolve_underlying,
 )
 from app.auth import User, get_current_user, require_admin
-from app.domain.models import ManualOptionPositionCreate, ReviewSubmit, SpotStopLossUpdate, SquareOffTimeUpdate, StopLossUpdate
+from app.domain.models import (
+    ManualOptionPositionCreate,
+    NotesUpdate,
+    ReviewSubmit,
+    SpotStopLossUpdate,
+    SpotTargetUpdate,
+    SquareOffTimeUpdate,
+    StopLossUpdate,
+    TradeTagsUpdate,
+)
 from app.domain.option_position_manager import (
     check_option_group_exits,
     compute_group_unrealized_pnl,
@@ -32,7 +41,10 @@ from app.domain.option_position_manager import (
     square_off_due_option_groups,
     square_off_option_group,
     submit_option_group_review,
+    update_group_notes,
+    update_group_tags,
     update_group_spot_stop_loss,
+    update_group_spot_target,
     update_group_square_off_time,
     update_group_stop_loss,
 )
@@ -77,6 +89,10 @@ def _group_to_out(
         "sl_scope": row.sl_scope,
         "entry_spot_price": float(row.entry_spot_price) if row.entry_spot_price is not None else None,
         "spot_stop_loss_price": float(row.spot_stop_loss_price) if row.spot_stop_loss_price is not None else None,
+        # Server-enforced take-profit on the underlying's own price (the
+        # Live Chart panel's Target field for an option order) - sibling of
+        # spot_stop_loss_price, see _evaluate_option_group_exits.
+        "spot_target_price": float(row.spot_target_price) if row.spot_target_price is not None else None,
         # Non-null only for an auto-computed (stop_loss_method='indicator')
         # spot_stop_loss_price - see open_option_group/
         # _evaluate_option_group_exits. A user-set one (PUT
@@ -113,8 +129,18 @@ def _group_to_out(
         "review_violation": row.review_violation,
         "review_notes": row.review_notes,
         "review_checklist": row.review_checklist,
+        # Free-text journal note (PUT /option-groups/{id}/notes) - editable
+        # any time from the Live Chart panel's History list. Not review_notes.
+        "notes": row.notes,
+        # Structured trade journal (PUT /option-groups/{id}/tags).
+        "setup_tag": row.setup_tag,
+        "confidence": row.confidence,
         # 'market' | 'limit' | null - see execution.option_position_groups.order_type's own comment.
         "order_type": row.order_type,
+        # Live Chart trade panel discipline flags - null for every
+        # Strategy-driven group. See infra/postgres/init/02-execution.sql.
+        "trend_followed": row.trend_followed,
+        "risk_managed": row.risk_managed,
         "legs": legs,
     }
 
@@ -295,6 +321,10 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         [a.model_dump() for a in payload.plan_checklist],
         payload.order_type,
         payload.square_off_time,
+        payload.trend_followed,
+        payload.risk_managed,
+        payload.setup_tag,
+        payload.confidence,
     )
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
@@ -373,6 +403,88 @@ def edit_group_spot_stop_loss(
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
 
     row = update_group_spot_stop_loss(db, owner_id, parsed_id, payload.spot_stop_loss_price)
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/spot-target")
+def edit_group_spot_target(
+    group_id: str, payload: SpotTargetUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """A take-profit on the UNDERLYING's own price - the sibling of
+    edit_group_spot_stop_loss above, same 404/409 conventions and same
+    (lack of) sl_scope restriction. See update_group_spot_target."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
+
+    row = update_group_spot_target(db, owner_id, parsed_id, payload.spot_target_price)
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/notes")
+def edit_group_notes(
+    group_id: str, payload: NotesUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Option-group counterpart to PUT /positions/{id}/notes - a free-text
+    journal note shown/edited from the Live Chart panel's History list. No
+    gate: OPEN or CLOSED, any number of edits, empty string clears it. 404
+    if missing or owned by another user."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+
+    row = update_group_notes(db, owner_id, parsed_id, payload.notes)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/tags")
+def edit_group_tags(
+    group_id: str, payload: TradeTagsUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """Option-group counterpart to PUT /positions/{id}/tags - partial edit
+    of setup_tag / confidence, no gate, OPEN or CLOSED. `setup_tag: ""`
+    clears the tag. 404 if missing or owned by another user."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+
+    sent = payload.model_dump(exclude_unset=True)
+    row = update_group_tags(
+        db,
+        owner_id,
+        parsed_id,
+        setup_tag=payload.setup_tag,
+        set_setup_tag="setup_tag" in sent,
+        confidence=payload.confidence,
+        set_confidence="confidence" in sent,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 

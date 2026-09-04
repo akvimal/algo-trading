@@ -141,6 +141,11 @@ services:
       # market-data holds no order state of its own.
       DHAN_POSTBACK_SECRET: ${DHAN_POSTBACK_SECRET}
       EXECUTION_BASE_URL: http://execution-backend:8000
+      # Standalone price alerts (app/domain/price_alerts.py + scheduler) -
+      # one bot + chat receives every fired alert. Both blank = alerts
+      # still evaluate/persist, nothing gets pushed (see app/domain/notify.py).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       # PUT /dhan/credentials persists here (app/providers/dhan.py) so a
       # UI-submitted Dhan token survives a container restart instead of

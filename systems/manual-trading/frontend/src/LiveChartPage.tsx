@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Account, type ManualOptionGroup, type ManualPosition, type Segment, fetchAccounts } from "./api";
 import ChartTradePanel from "./ChartTradePanel";
-import { type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
+import { type ChartContext, type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
 import { type PendingOrder, fetchUnderlyingLtp, fmt, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
 
 // Standalone Intraday sub-tab wrapping the candlestick panel (see
@@ -95,6 +95,7 @@ export default function LiveChartPage() {
   // The chart's own live price, so the trade panel shows exactly what the
   // chart shows instead of running a second, out-of-step LTP poll.
   const [chartLtp, setChartLtp] = useState<number | null>(null);
+  const [chartContext, setChartContext] = useState<ChartContext>({ regime: null, oiBias: null });
 
   // The segment account (capital / risk% / min R:R) - fetched here rather
   // than in ChartTradePanel so the "Risk/Trade" figure can sit in the
@@ -140,6 +141,7 @@ export default function LiveChartPage() {
     setActive(entry);
     setTrendInfo({ trend: null, interval: "5min" });
     setChartLtp(null);
+    setChartContext({ regime: null, oiBias: null });
     // A price picked / armed for one symbol must not leak into another.
     setPickField(null);
     setPickedPrice(null);
@@ -270,6 +272,7 @@ export default function LiveChartPage() {
           segment={active.segment}
           symbol={active.symbol}
           onTrendChange={setTrendInfo}
+          onContextChange={setChartContext}
           onLtpChange={setChartLtp}
           pricePick={pickField}
           onPricePick={(price) => {
@@ -331,6 +334,8 @@ export default function LiveChartPage() {
             symbol={active.symbol}
             account={account}
             intervalTrend={trend}
+            regime={chartContext.regime}
+            oiBias={chartContext.oiBias}
             chartInterval={interval}
             forceTrend={forceTrend}
             riskManaged={riskManaged}

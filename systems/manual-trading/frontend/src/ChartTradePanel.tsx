@@ -6,6 +6,7 @@ import {
   type ManualOptionLeg,
   type ManualPosition,
   type ManualStopLossConfig,
+  type MarketRegime,
   type OptionPositionStyle,
   type OptionStrikeMoneyness,
   type Segment,
@@ -245,6 +246,8 @@ export default function ChartTradePanel({
   symbol,
   account,
   intervalTrend,
+  regime,
+  oiBias,
   chartInterval,
   forceTrend,
   riskManaged,
@@ -268,6 +271,10 @@ export default function ChartTradePanel({
   // structure detection isn't running on that timeframe), + the interval
   // itself for the label. Lifted from LiveChartPanel by LiveChartPage.
   intervalTrend: "up" | "down" | "range" | null;
+  // Market regime + OI lean for the chart's interval, lifted from
+  // LiveChartPanel - the pre-trade confluence readout below Proceed.
+  regime: MarketRegime | null;
+  oiBias: "bullish" | "bearish" | "neutral" | null;
   chartInterval: string;
   // The "trade with the interval trend only" lock - its checkbox lives up
   // in LiveChartPage (aligned with the chart's interval strip), not here.
@@ -919,6 +926,66 @@ export default function ChartTradePanel({
   const tintAction = openAction ?? action;
   const rows = legRows(openPos, openGroup, sym);
 
+  // --- Pre-trade confluence: aggregate what the chart already knows into
+  // one factor list beside Proceed, so "is this a good spot" is explicit
+  // rather than a gut call. Info-only - it never blocks (that's the Trend
+  // only / Risk managed gates' job). ---
+  const wantUp = action === "BUY";
+  const confluence: { label: string; state: "ok" | "warn" | "bad" | "info"; detail: string }[] = [];
+  if (regime) {
+    const withReg =
+      (regime.regime === "trending_up" && wantUp) || (regime.regime === "trending_down" && !wantUp);
+    confluence.push({
+      label: "Regime",
+      state:
+        regime.regime === "ranging"
+          ? "warn"
+          : regime.regime === "transitional"
+            ? "info"
+            : withReg
+              ? "ok"
+              : "bad",
+      detail:
+        regime.regime === "ranging"
+          ? `ranging (ADX ${regime.adx}) — breakouts tend to fail`
+          : regime.regime === "transitional"
+            ? `transitional (ADX ${regime.adx})`
+            : `${regime.regime === "trending_up" ? "up" : "down"}-trend (ADX ${regime.adx})${withReg ? "" : " — against your bias"}`,
+    });
+  }
+  if (intervalTrend === "up" || intervalTrend === "down") {
+    const withTrend = (intervalTrend === "up") === wantUp;
+    confluence.push({
+      label: `${chartInterval} trend`,
+      state: withTrend ? "ok" : "bad",
+      detail: `${intervalTrend}${withTrend ? " — with your bias" : " — against your bias"}`,
+    });
+  }
+  if (oiBias && oiBias !== "neutral") {
+    const withOi = (oiBias === "bullish") === wantUp;
+    confluence.push({
+      label: "OI lean",
+      state: withOi ? "ok" : "warn",
+      detail: `${oiBias}${withOi ? " — agrees" : " — disagrees"}`,
+    });
+  }
+  if (stopPrice != null && targetPrice != null && rr != null) {
+    confluence.push({
+      label: "R:R",
+      state: minRR != null ? (rr >= minRR ? "ok" : "bad") : rr >= 2 ? "ok" : "warn",
+      detail: `${rr.toFixed(2)}${minRR != null ? ` vs min ${minRR.toFixed(1)}` : ""}`,
+    });
+  }
+  const lossBudget = account?.max_daily_loss ?? null;
+  if (lossBudget != null && lossBudget > 0) {
+    const usedPct = realized < 0 ? Math.round((-realized / lossBudget) * 100) : 0;
+    confluence.push({
+      label: "Loss budget",
+      state: usedPct >= 80 ? "bad" : usedPct >= 50 ? "warn" : "ok",
+      detail: `${usedPct}% used today (${fmt(realized)} / ${fmt(-lossBudget)})`,
+    });
+  }
+
   return (
     <div className={`chart-trade-panel ${tintAction === "BUY" ? "ctp-bull" : "ctp-bear"}`}>
       <div className="ctp-head">
@@ -1088,6 +1155,20 @@ export default function ChartTradePanel({
             <div className={`ctp-rr ${riskManaged ? (rrClears ? "ok" : "bad") : ""}`}>
               <span>R:R {rr != null ? rr.toFixed(2) : "—"}</span>
               {minRR != null && <span className="muted">min {minRR.toFixed(2)}</span>}
+            </div>
+          )}
+
+          {confluence.length > 0 && (
+            <div className="ctp-confluence" title="What the chart already knows — info only, doesn't block">
+              {confluence.map((f) => (
+                <div key={f.label} className={`ctp-confl-row is-${f.state}`}>
+                  <span className="ctp-confl-mark">
+                    {f.state === "ok" ? "✓" : f.state === "bad" ? "✕" : f.state === "warn" ? "!" : "·"}
+                  </span>
+                  <span className="ctp-confl-label">{f.label}</span>
+                  <span className="ctp-confl-detail">{f.detail}</span>
+                </div>
+              ))}
             </div>
           )}
 

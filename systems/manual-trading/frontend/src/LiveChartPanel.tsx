@@ -29,6 +29,7 @@ import {
   type FutureContract,
   type ManualOptionGroup,
   type ManualPosition,
+  type MarketRegime,
   type OiBuildup,
   type OiSummary,
   type ResolvedUnderlying,
@@ -42,6 +43,7 @@ import {
   fetchOiSummary,
   fetchOptionExpiries,
   fetchOptionGroups,
+  fetchRegime,
   fetchSentimentHistory,
   resolveUnderlying,
 } from "./api";
@@ -1618,10 +1620,16 @@ export type IntervalTrend = { trend: "up" | "down" | "range" | null; interval: s
 
 export type PricePickField = "limit" | "stop" | "target";
 
+// Decision-support context lifted out of the chart for the trade panel's
+// pre-trade confluence readout. `regime` from GET /regime; `oiBias` a
+// coarse PCR read (null for a non-OI symbol / before the first poll).
+export type ChartContext = { regime: MarketRegime | null; oiBias: "bullish" | "bearish" | "neutral" | null };
+
 export function LiveChartPanel({
   segment,
   symbol,
   onTrendChange,
+  onContextChange,
   onLtpChange,
   pricePick,
   onPricePick,
@@ -1633,6 +1641,9 @@ export function LiveChartPanel({
   // interval* (null when structure detection isn't running on that
   // timeframe) - the trade panel uses it to optionally lock direction.
   onTrendChange?: (info: IntervalTrend) => void;
+  // Fired with the market regime + OI lean for the trade panel's
+  // pre-trade confluence readout.
+  onContextChange?: (ctx: ChartContext) => void;
   // Fired every LTP tick so the trade panel can show the exact same live
   // price as the chart rather than running its own separate poll.
   onLtpChange?: (ltp: number) => void;
@@ -1736,6 +1747,11 @@ export function LiveChartPanel({
   const [sentHist, setSentHist] = useState<SentimentHistoryPoint[]>([]);
   // Draw the OI support/resistance levels on the price pane (opt-in).
   const [oiLevelsOn, setOiLevelsOn] = useState<boolean>(() => localStorage.getItem(OI_LEVELS_STORAGE_KEY) === "true");
+  // Trend-vs-chop read for the chart's own interval (GET /regime) - the
+  // toolbar badge + (lifted up) the trade panel's confluence readout.
+  const [regime, setRegime] = useState<MarketRegime | null>(null);
+  const onContextChangeRef = useRef(onContextChange);
+  onContextChangeRef.current = onContextChange;
 
   // Planned/live setups currently on the chart, for the strip above it.
   const [activeSetups, setActiveSetups] = useState<LiveSetup[]>([]);
@@ -2461,6 +2477,37 @@ export function LiveChartPanel({
   useEffect(() => {
     onTrendChange?.({ trend: trendByTf[interval] ?? null, interval });
   }, [trendByTf, interval, onTrendChange]);
+
+  // --- Market regime (GET /regime) for the chart's own interval - a slow
+  // poll (it moves on the scale of bars, not ticks). ---
+  useEffect(() => {
+    if (!chartExchange || !chartSymbol || dataEpoch === 0) return;
+    let cancelled = false;
+    const ex = chartExchange;
+    const sym = chartSymbol;
+    async function pull() {
+      try {
+        const r = await fetchRegime(ex, sym, interval);
+        if (!cancelled) setRegime(r);
+      } catch {
+        if (!cancelled) setRegime(null); // symbol unsupported / not enough history
+      }
+    }
+    void pull();
+    const t = window.setInterval(pull, 90_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [chartExchange, chartSymbol, interval, dataEpoch]);
+
+  // --- Lift regime + a coarse PCR-based OI lean up for the trade panel's
+  // pre-trade confluence readout. ---
+  useEffect(() => {
+    const oiBias: ChartContext["oiBias"] =
+      oi?.pcr == null ? null : oi.pcr >= 1.15 ? "bullish" : oi.pcr <= 0.85 ? "bearish" : "neutral";
+    onContextChangeRef.current?.({ regime, oiBias });
+  }, [regime, oi]);
 
   // Close whichever dropdown menu is open on an outside click / Escape.
   useEffect(() => {
@@ -3259,6 +3306,21 @@ export function LiveChartPanel({
               </span>
             ))}
           {lastPrice != null && <span className="live-chart-ltp">{lastPrice.toFixed(pricePrecision(lastPrice))}</span>}
+          {regime && (
+            <span
+              className={`live-chart-regime is-${regime.regime}`}
+              title={`${regime.advice}  ·  ADX ${regime.adx} · volatility ${regime.atr_percentile}%ile`}
+            >
+              {regime.regime === "trending_up"
+                ? "▲ Trending"
+                : regime.regime === "trending_down"
+                  ? "▼ Trending"
+                  : regime.regime === "ranging"
+                    ? "≈ Ranging"
+                    : "· Transitional"}
+              <em>ADX {regime.adx}</em>
+            </span>
+          )}
           {OI_SYMBOLS.has(symbol.trim().toUpperCase()) && (
             <button
               type="button"

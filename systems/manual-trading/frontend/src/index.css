@@ -2974,6 +2974,45 @@ button.btn-exit {
   font-weight: 600;
 }
 
+/* Pre-trade confluence readout - a compact factor list above Proceed. */
+.ctp-confluence {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: 5px;
+  background: var(--surface-raised);
+  font-size: 0.72rem;
+}
+.ctp-confl-row {
+  display: grid;
+  grid-template-columns: 1rem 5.5rem 1fr;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.ctp-confl-mark {
+  text-align: center;
+  font-weight: 700;
+}
+.ctp-confl-label {
+  color: var(--text-dim);
+}
+.ctp-confl-detail {
+  color: var(--text);
+}
+.ctp-confl-row.is-ok .ctp-confl-mark {
+  color: var(--buy);
+}
+.ctp-confl-row.is-bad .ctp-confl-mark {
+  color: var(--sell);
+}
+.ctp-confl-row.is-warn .ctp-confl-mark {
+  color: #e0b058;
+}
+.ctp-confl-row.is-info .ctp-confl-mark {
+  color: var(--text-dim);
+}
+
 /* The two discipline checkboxes above the trade panel. */
 .chart-discipline-row {
   display: flex;
@@ -3899,6 +3938,43 @@ button.btn-exit {
   color: var(--text);
 }
 
+/* Trend-vs-chop regime badge (GET /regime) - toolbar, next to the LTP. */
+.live-chart-regime {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  cursor: help;
+}
+.live-chart-regime em {
+  font-style: normal;
+  font-weight: 500;
+  font-size: 0.66rem;
+  opacity: 0.8;
+}
+.live-chart-regime.is-trending_up {
+  color: #3ecf8e;
+  border-color: color-mix(in srgb, #3ecf8e 45%, var(--border));
+  background: color-mix(in srgb, #3ecf8e 12%, transparent);
+}
+.live-chart-regime.is-trending_down {
+  color: #e8586a;
+  border-color: color-mix(in srgb, #e8586a 45%, var(--border));
+  background: color-mix(in srgb, #e8586a 12%, transparent);
+}
+.live-chart-regime.is-ranging {
+  color: #e0b058;
+  border-color: color-mix(in srgb, #e0b058 45%, var(--border));
+  background: color-mix(in srgb, #e0b058 12%, transparent);
+}
+.live-chart-regime.is-transitional {
+  color: var(--text-dim);
+}
+
 /* Jump to the shell's "OI" tab for this asset (NIFTY/BANKNIFTY/GOLDM/
    CRUDEOILM only - see OI_SYMBOLS). */
 .live-chart-oi-link {
@@ -4030,4 +4106,96 @@ button.btn-exit {
   border-radius: 2px;
   background: var(--text-dim);
   transform: rotate(-45deg);
+}
+
+/* Price Alerts page (PriceAlertsPage.tsx). */
+.pa-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pa-form select,
+.pa-form input {
+  height: 2rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.pa-symbol {
+  width: 9rem;
+}
+.pa-price {
+  width: 6rem;
+}
+.pa-note {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+}
+.pa-repeat {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.pa-add {
+  height: 2rem;
+  padding: 0 0.9rem;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pa-add:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.pa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.pa-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  font-size: 0.82rem;
+}
+.pa-row.is-past {
+  opacity: 0.65;
+}
+.pa-symbol-badge {
+  font-weight: 700;
+}
+.pa-tag {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.pa-note-text {
+  font-style: italic;
+}
+.pa-del {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--sell);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0 0.2rem;
 }

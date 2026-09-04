@@ -1239,6 +1239,23 @@ export async function fetchChartStructure(
   return asJson<ChartStructure>(res, `GET /order-blocks (${exchange}/${symbol}/${interval})`);
 }
 
+// GET /regime - the Live Chart's trend-vs-chop badge + the pre-trade
+// confluence panel's regime factor. See market-data's app/domain/regime.py.
+export type MarketRegime = {
+  regime: "trending_up" | "trending_down" | "ranging" | "transitional";
+  adx: number;
+  atr_percentile: number;
+  trend: "up" | "down" | "range";
+  advice: string;
+};
+
+export async function fetchRegime(exchange: string, symbol: string, interval: string): Promise<MarketRegime> {
+  const res = await authFetch(
+    `${MARKET_DATA_BASE_URL}/regime?${new URLSearchParams({ exchange, symbol, interval })}`,
+  );
+  return asJson<MarketRegime>(res, `GET /regime (${exchange}/${symbol}/${interval})`);
+}
+
 // Backs the Rules page's backtest form - what date range is actually
 // usable, per market-data's GET /candles/availability. NSE/MCX (Dhan)
 // report a fixed `max_days_per_request` (a hard per-call cap - real
@@ -2076,3 +2093,57 @@ export async function deleteTradeImage(imageId: string): Promise<void> {
 // BYO broker credentials (systems/accounts) - moved to execution/frontend's
 // own "Your account" > Credentials section (see docs/architecture.md) -
 // no manual-trading-specific dependency on this ever existed.
+
+// Standalone price alerts (market-data's price_alerts table + scheduler) -
+// independent of the Live Chart's browser-only drawing-line alerts, these
+// fire to a configured Telegram chat even with every tab closed.
+export type PriceAlert = {
+  id: string;
+  exchange: string;
+  symbol: string;
+  target_price: number;
+  direction: "above" | "below" | "cross";
+  note: string | null;
+  repeat: boolean;
+  active: boolean;
+  last_side: "above" | "below" | null;
+  created_at: string;
+  last_triggered_at: string | null;
+  trigger_count: number;
+};
+
+export async function fetchPriceAlerts(): Promise<PriceAlert[]> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/price-alerts`);
+  return asJson<PriceAlert[]>(res, "GET /price-alerts");
+}
+
+export async function createPriceAlert(payload: {
+  exchange: string;
+  symbol: string;
+  target_price: number;
+  direction: "above" | "below" | "cross";
+  note?: string;
+  repeat?: boolean;
+}): Promise<PriceAlert> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/price-alerts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson<PriceAlert>(res, "POST /price-alerts");
+}
+
+export async function deletePriceAlert(id: string): Promise<void> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/price-alerts/${id}`, { method: "DELETE" });
+  if (!res.ok) await asJson(res, "DELETE /price-alerts/{id}");
+}
+
+export async function fetchTelegramStatus(): Promise<{ configured: boolean }> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/price-alerts/telegram-status`);
+  return asJson(res, "GET /price-alerts/telegram-status");
+}
+
+export async function testTelegramAlert(): Promise<void> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/price-alerts/test-telegram`, { method: "POST" });
+  if (!res.ok) await asJson(res, "POST /price-alerts/test-telegram");
+}

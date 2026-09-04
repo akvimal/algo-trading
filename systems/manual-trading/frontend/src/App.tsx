@@ -7,6 +7,9 @@ import OiSummaryPage from "./OiSummaryPage";
 // Trading Performance - lazy so its trade-list fetch + tables don't weigh
 // on the default Intraday page's bundle.
 const ManualStatsPage = lazy(() => import("./ManualStatsPage"));
+// Standalone price alerts (market-data's price_alerts + Telegram) - same
+// lazy-load reasoning.
+const PriceAlertsPage = lazy(() => import("./PriceAlertsPage"));
 
 // Split out of signal-generation's frontend (see docs/architecture.md §
 // "Manual Trading module split") - Manual Trading and Options OI never
@@ -41,6 +44,10 @@ export default function App() {
         ) : tab === "performance" ? (
           <Suspense fallback={<p className="muted">Loading…</p>}>
             <ManualStatsPage />
+          </Suspense>
+        ) : tab === "alerts" ? (
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            <PriceAlertsPage />
           </Suspense>
         ) : (
           <IntradayPage />

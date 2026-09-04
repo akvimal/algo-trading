@@ -301,10 +301,15 @@
     const SHELL_DEV_PORT = 8090;
     const PORT_OFFSET = (Number(location.port) || SHELL_DEV_PORT) - SHELL_DEV_PORT;
 
-    // Same offset that fixed the iframe ports above also tells us which
-    // stack this is - visible in the browser tab so dev/test (identical
-    // UI otherwise) can't be confused for each other again.
-    document.title = `algo-trading [${PORT_OFFSET === 0 ? "DEV" : "TEST"}]`;
+    // Environment tag in the browser tab. On localhost this is one of the
+    // two local stacks (dev / .env.test, identical UI) - tell them apart
+    // by the same PORT_OFFSET used for iframe routing above. Any other
+    // host is the single deployed stack -> [LIVE]. (The deploy reuses the
+    // dev port numbers, so PORT_OFFSET is 0 there and the old check
+    // mislabelled the VPS as [DEV].)
+    const _host = location.hostname;
+    const _isLocal = _host === "localhost" || _host === "127.0.0.1" || _host === "::1" || _host === "[::1]";
+    document.title = `algo-trading [${!_isLocal ? "LIVE" : PORT_OFFSET === 0 ? "DEV" : "TEST"}]`;
 
     // `path` (optional) is appended to the iframe src only - dataset.origin
     // below stays the bare origin (the session broker's postMessage
@@ -316,6 +321,7 @@
       { id: "signal-engine", label: "Algo Trading", port: 8085, built: true },
       { id: "manual-trading", label: "Intraday", port: 8084, built: true },
       { id: "manual-trading-oi", label: "OI", port: 8084, built: true, path: "/?tab=oi" },
+      { id: "manual-trading-performance", label: "Performance", port: 8084, built: true, path: "/?tab=performance" },
       { id: "execution", label: "Money", port: 8081, built: true },
       { id: "market-data", label: "Market Data", port: 8083, built: true },
     ];

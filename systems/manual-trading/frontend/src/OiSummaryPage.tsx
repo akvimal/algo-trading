@@ -4,10 +4,12 @@ import { type OiBuildup, type OiSummary, type OiSummaryLeg, fetchOiSummary, fetc
 import { OiBarChart } from "./OiBarChart";
 import { SentimentHistoryChart } from "./SentimentHistoryChart";
 
-// Options only exist on NSE/MCX in this codebase (CRYPTO option chain/
-// execution are still planned - see CLAUDE.md) - a narrower type than
-// the shared Segment, deliberately excluding CRYPTO.
-type OptionExchange = "NSE" | "MCX";
+// NSE/MCX via Dhan, CRYPTO via Delta Exchange India (its options carry
+// full Greeks + a native mark IV; OI-change figures come from
+// market-data's own self-accumulated history since Delta's ticker has no
+// previous-OI field - see DeltaProvider.get_oi_changes). A narrower type
+// than the shared Segment only because BSE isn't wired up yet.
+type OptionExchange = "NSE" | "MCX" | "CRYPTO";
 
 // Local calendar date ("YYYY-MM-DD", same shape GET /options/expiries
 // returns) - same convention execution/frontend's own format.ts uses for
@@ -18,15 +20,19 @@ function todayLocalDate(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-// Fixed watchlist rather than a free-text symbol picker - the 4
-// underlyings actually traded via this codebase's option flows (2 NSE
-// index, 2 MCX commodity). A typed-symbol picker existed in an earlier
-// version of this page; narrowed to tabs per explicit request.
+// Fixed watchlist rather than a free-text symbol picker - the underlyings
+// actually traded via this codebase's option flows (2 NSE index, 2 MCX
+// commodity, and BTC/ETH on Delta Exchange India - the only two crypto
+// symbols with a live option chain; SOL et al. have none). A typed-symbol
+// picker existed in an earlier version of this page; narrowed to tabs per
+// explicit request.
 const PRESETS: { key: string; exchange: OptionExchange; symbol: string }[] = [
   { key: "NIFTY", exchange: "NSE", symbol: "NIFTY" },
   { key: "BANKNIFTY", exchange: "NSE", symbol: "BANKNIFTY" },
   { key: "GOLDM", exchange: "MCX", symbol: "GOLDM" },
   { key: "CRUDEOILM", exchange: "MCX", symbol: "CRUDEOILM" },
+  { key: "BTCUSD", exchange: "CRYPTO", symbol: "BTCUSD" },
+  { key: "ETHUSD", exchange: "CRYPTO", symbol: "ETHUSD" },
 ];
 
 // Ask the shell to switch to its "Intraday" tab, charting this asset -
@@ -95,13 +101,18 @@ function fmtCompactIndian(n: number): string {
   return String(n);
 }
 
-function fmtOi(n: number): string {
-  return fmtCompactIndian(n);
+// CRYPTO (Delta Exchange India) option OI is a raw contract count that
+// tops out in the tens of thousands per chain - the Indian lakh/crore
+// abbreviation above would read absurdly ("1.50L" for 150k contracts).
+// Western comma grouping is what Delta's own UI and every crypto options
+// venue uses.
+function fmtOi(n: number, isCrypto = false): string {
+  return isCrypto ? Math.round(n).toLocaleString("en-US") : fmtCompactIndian(n);
 }
 
-function fmtChange(n: number | null): string {
+function fmtChange(n: number | null, isCrypto = false): string {
   if (n == null) return "-";
-  return `${n > 0 ? "+" : ""}${fmtCompactIndian(n)}`;
+  return `${n > 0 ? "+" : ""}${fmtOi(n, isCrypto)}`;
 }
 
 function changeClass(n: number | null): string {
@@ -109,8 +120,11 @@ function changeClass(n: number | null): string {
   return n > 0 ? "pnl-positive" : n < 0 ? "pnl-negative" : "";
 }
 
-function fmtIv(n: number | null): string {
-  return n == null ? "-" : `${n.toFixed(2)}%`;
+// Dhan sends IV already as a percentage (e.g. 12.34); Delta's `mark_iv`
+// is a ratio (0.5162 = 51.62%), so CRYPTO needs a x100 to read on the
+// same scale as the NSE/MCX tabs.
+function fmtIv(n: number | null, isCrypto = false): string {
+  return n == null ? "-" : `${(isCrypto ? n * 100 : n).toFixed(2)}%`;
 }
 
 function fmtPcr(n: number | null): string {
@@ -265,7 +279,7 @@ export default function OiSummaryPage() {
   // you hadn't visited yet always paid a full "resolve underlying then
   // fetch expiries then fetch summary" round trip before showing
   // anything, the "why is this fetching every time I switch tabs"
-  // complaint). All 4 start loading immediately instead.
+  // complaint). Every preset starts loading immediately instead.
   useEffect(() => {
     for (const preset of PRESETS) void loadExpiriesForTab(preset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -277,6 +291,12 @@ export default function OiSummaryPage() {
   tabStatesRef.current = tabStates;
 
   const activeState = tabStates[activeKey] ?? EMPTY_TAB_STATE;
+  // Drives OI number formatting (contract count vs. lakh/crore) and IV
+  // scaling (ratio vs. percent) - see fmtOi/fmtIv. Falls back to the
+  // preset's own exchange before the tab has resolved, so the very first
+  // render of a CRYPTO tab already formats right.
+  const isCrypto =
+    (activeState.loaded?.exchange ?? PRESETS.find((p) => p.key === activeKey)?.exchange) === "CRYPTO";
 
   // Fires each tab's very first summary fetch as soon as ITS OWN expiries
   // land (staggered naturally, not synchronized) - guarded on summary
@@ -297,10 +317,11 @@ export default function OiSummaryPage() {
   // (see the mount effect above for why). The active tab still refreshes
   // every tick (POLL_INTERVAL_MS); background tabs refresh at 1/
   // BACKGROUND_TICK_DIVISOR that rate instead of the same cadence, since
-  // polling all 4 at full speed would roughly quadruple this page's own
-  // Dhan-call volume - 2 of the 4 presets are MCX, sharing the same
-  // tight per-account rate budget the Manual tab's own LTP polling
-  // already contends with (see the 429s traced there this session).
+  // polling every preset at full speed would multiply this page's own
+  // provider-call volume - the NSE/MCX presets share one tight per-Dhan-
+  // account rate budget the Manual tab's own LTP polling already contends
+  // with (see the 429s traced there), and the CRYPTO presets each cost a
+  // real Delta /v2/tickers call.
   useEffect(() => {
     let tick = 0;
     const id = setInterval(() => {
@@ -318,25 +339,25 @@ export default function OiSummaryPage() {
   }, []);
 
   function renderLegCells(leg: OiSummaryLeg | null, itmClass: string, keyPrefix: string) {
-    const cells = [<td key={`${keyPrefix}-oi`} className={itmClass}>{leg ? fmtOi(leg.oi) : "-"}</td>];
+    const cells = [<td key={`${keyPrefix}-oi`} className={itmClass}>{leg ? fmtOi(leg.oi, isCrypto) : "-"}</td>];
     if (visibleColumns.oiChange5m) {
       cells.push(
         <td key={`${keyPrefix}-d5`} className={(leg ? changeClass(leg.oi_change_5m) : "") + itmClass}>
-          {leg ? fmtChange(leg.oi_change_5m) : "-"}
+          {leg ? fmtChange(leg.oi_change_5m, isCrypto) : "-"}
         </td>,
       );
     }
     if (visibleColumns.oiChange15m) {
       cells.push(
         <td key={`${keyPrefix}-d15`} className={(leg ? changeClass(leg.oi_change_15m) : "") + itmClass}>
-          {leg ? fmtChange(leg.oi_change_15m) : "-"}
+          {leg ? fmtChange(leg.oi_change_15m, isCrypto) : "-"}
         </td>,
       );
     }
     if (visibleColumns.iv) {
       cells.push(
         <td key={`${keyPrefix}-iv`} className={itmClass}>
-          {leg ? fmtIv(leg.implied_volatility) : "-"}
+          {leg ? fmtIv(leg.implied_volatility, isCrypto) : "-"}
         </td>,
       );
     }
@@ -467,9 +488,9 @@ export default function OiSummaryPage() {
               </div>
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">Total Call OI</span>
-                <span className="manual-stats-card-value">{fmtOi(summary.total_call_oi)}</span>
+                <span className="manual-stats-card-value">{fmtOi(summary.total_call_oi, isCrypto)}</span>
                 <span className={changeClass(summary.total_call_oi_change_5m)}>
-                  {fmtChange(summary.total_call_oi_change_5m)} (5m)
+                  {fmtChange(summary.total_call_oi_change_5m, isCrypto)} (5m)
                 </span>
                 {/* Folded back into this card (2026-09-01) rather than a
                     dedicated one (tried, then reverted the same day) -
@@ -488,16 +509,16 @@ export default function OiSummaryPage() {
               </div>
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">Total Put OI</span>
-                <span className="manual-stats-card-value">{fmtOi(summary.total_put_oi)}</span>
+                <span className="manual-stats-card-value">{fmtOi(summary.total_put_oi, isCrypto)}</span>
                 <span className={changeClass(summary.total_put_oi_change_5m)}>
-                  {fmtChange(summary.total_put_oi_change_5m)} (5m)
+                  {fmtChange(summary.total_put_oi_change_5m, isCrypto)} (5m)
                 </span>
                 {buildupBadge(summary.total_put_buildup)}
               </div>
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">ATM IV (Call / Put)</span>
                 <span className="manual-stats-card-value">
-                  {fmtIv(summary.atm_call_iv)} / {fmtIv(summary.atm_put_iv)}
+                  {fmtIv(summary.atm_call_iv, isCrypto)} / {fmtIv(summary.atm_put_iv, isCrypto)}
                 </span>
               </div>
             </div>

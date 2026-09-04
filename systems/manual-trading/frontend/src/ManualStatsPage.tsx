@@ -45,6 +45,14 @@ type ClosedTrade = {
   // stat - the data's captured now so that slice can be added later
   // without a backfill.
   order_type: "market" | "limit" | null;
+  // ISO entry time - for the by-hour breakdown.
+  entry_time: string | null;
+  // Live Chart trade panel discipline flags + trade journal - the axes
+  // the breakdown tables below slice win-rate / expectancy on.
+  trend_followed: boolean | null;
+  risk_managed: boolean | null;
+  setup_tag: string | null;
+  confidence: number | null;
 };
 
 type DayStats = {
@@ -119,6 +127,70 @@ function formatSessionHistory(sessions: TradingSession[]): string {
     .join(", ");
 }
 
+// One row of a breakdown table - the same win/PnL/R aggregate as DayStats
+// but keyed by an arbitrary dimension (setup tag, discipline flag, symbol...).
+type Bucket = { key: string; trades: number; wins: number; losses: number; pnl: number; rSum: number; rCount: number };
+
+function breakdown(trades: ClosedTrade[], keyFn: (t: ClosedTrade) => string | null): Bucket[] {
+  const m = new Map<string, Bucket>();
+  for (const t of trades) {
+    if (t.pnl == null) continue;
+    const k = keyFn(t);
+    if (k == null) continue;
+    const b = m.get(k) ?? { key: k, trades: 0, wins: 0, losses: 0, pnl: 0, rSum: 0, rCount: 0 };
+    b.trades += 1;
+    b.pnl += t.pnl;
+    if (t.pnl > 0) b.wins += 1;
+    else if (t.pnl < 0) b.losses += 1;
+    if (t.entry_price != null && t.stop_loss_price != null && t.quantity != null && t.entry_price !== t.stop_loss_price) {
+      const risk = Math.abs(t.entry_price - t.stop_loss_price) * t.quantity;
+      if (risk > 0) {
+        b.rSum += t.pnl / risk;
+        b.rCount += 1;
+      }
+    }
+    m.set(k, b);
+  }
+  return [...m.values()];
+}
+
+function BreakdownTable({ title, header, rows }: { title: string; header: string; rows: Bucket[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <section className="manual-settings-section">
+      <h4>{title}</h4>
+      <div className="manual-stats-table-wrap">
+        <table className="manual-stats-table">
+          <thead>
+            <tr>
+              <th>{header}</th>
+              <th>Trades</th>
+              <th>Win rate</th>
+              <th>PnL</th>
+              <th>Avg PnL</th>
+              <th>Avg R</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((b) => (
+              <tr key={b.key}>
+                <td>{b.key}</td>
+                <td>{b.trades}</td>
+                <td>{fmt((b.wins / b.trades) * 100, 0)}%</td>
+                <td className={pnlClass(b.pnl)}>{fmt(b.pnl)}</td>
+                <td className={pnlClass(b.pnl / b.trades)}>{fmt(b.pnl / b.trades)}</td>
+                <td className={b.rCount > 0 ? pnlClass(b.rSum / b.rCount) : ""}>
+                  {b.rCount > 0 ? `${b.rSum / b.rCount >= 0 ? "+" : ""}${fmt(b.rSum / b.rCount)}R` : "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function ManualStatsPage() {
   const [trades, setTrades] = useState<ClosedTrade[] | null>(null);
   const [error, setError] = useState<string | undefined>();
@@ -166,6 +238,11 @@ export default function ManualStatsPage() {
           review_notes: p.review_notes,
           review_checklist: p.review_checklist,
           order_type: p.order_type,
+          entry_time: p.entry_time,
+          trend_followed: p.trend_followed,
+          risk_managed: p.risk_managed,
+          setup_tag: p.setup_tag,
+          confidence: p.confidence,
         }));
       const fromGroups: ClosedTrade[] = groups
         .filter((g) => g.exit_time != null)
@@ -187,6 +264,11 @@ export default function ManualStatsPage() {
           review_notes: g.review_notes,
           review_checklist: g.review_checklist,
           order_type: g.order_type,
+          entry_time: g.entry_time,
+          trend_followed: g.trend_followed,
+          risk_managed: g.risk_managed,
+          setup_tag: g.setup_tag,
+          confidence: g.confidence,
         }));
       setTrades([...fromPositions, ...fromGroups]);
       setError(undefined);
@@ -353,6 +435,45 @@ export default function ManualStatsPage() {
             </div>
           </section>
 
+          <BreakdownTable
+            title="By setup"
+            header="Setup"
+            rows={breakdown(trades, (t) => t.setup_tag ?? "— untagged —").sort((a, b) => b.pnl - a.pnl)}
+          />
+          <BreakdownTable
+            title="Discipline — trend"
+            header="Direction"
+            rows={breakdown(trades, (t) =>
+              t.trend_followed == null ? null : t.trend_followed ? "With the trend" : "Against the trend",
+            ).sort((a, b) => b.pnl - a.pnl)}
+          />
+          <BreakdownTable
+            title="Discipline — sizing"
+            header="Sizing"
+            rows={breakdown(trades, (t) =>
+              t.risk_managed == null ? null : t.risk_managed ? "Risk-managed" : "Discretionary size",
+            ).sort((a, b) => b.pnl - a.pnl)}
+          />
+          <BreakdownTable
+            title="By confidence"
+            header="Rated"
+            rows={breakdown(trades, (t) => (t.confidence == null ? null : `${t.confidence} / 5`)).sort((a, b) =>
+              a.key < b.key ? -1 : 1,
+            )}
+          />
+          <BreakdownTable
+            title="By symbol"
+            header="Symbol"
+            rows={breakdown(trades, (t) => t.symbol).sort((a, b) => b.pnl - a.pnl)}
+          />
+          <BreakdownTable
+            title="By entry hour"
+            header="Hour"
+            rows={breakdown(trades, (t) =>
+              t.entry_time ? `${String(new Date(t.entry_time).getHours()).padStart(2, "0")}:00` : null,
+            ).sort((a, b) => (a.key < b.key ? -1 : 1))}
+          />
+
           <section className="manual-settings-section">
             <h4>Trades on {selectedDate}</h4>
             {selectedSessions.length > 0 && <p className="muted">Session: {formatSessionHistory(selectedSessions)}</p>}
@@ -401,6 +522,27 @@ function ManualStatsTradeCard({
         {trade.order_type && (
           <span className="manual-order-type-badge" title={trade.order_type === "market" ? "Market order" : "Limit order"}>
             {trade.order_type === "market" ? "MKT" : "LMT"}
+          </span>
+        )}
+        {trade.trend_followed && (
+          <span className="manual-order-type-badge" title="Placed with the trend (Trend-only lock)">
+            TR
+          </span>
+        )}
+        {trade.risk_managed && (
+          <span className="manual-order-type-badge" title="Risk-managed placement">
+            RM
+          </span>
+        )}
+        {trade.setup_tag && (
+          <span className="manual-order-type-badge" title="Setup">
+            {trade.setup_tag}
+          </span>
+        )}
+        {trade.confidence != null && (
+          <span className="muted" title={`Confidence ${trade.confidence}/5`}>
+            {"●".repeat(trade.confidence)}
+            {"○".repeat(5 - trade.confidence)}
           </span>
         )}
         <span className={pnlClass(trade.pnl ?? 0)}>{trade.pnl != null ? fmt(trade.pnl) : "-"}</span>

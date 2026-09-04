@@ -2727,30 +2727,43 @@ button.btn-exit {
   flex: 2;
 }
 
-.ctp-title {
+/* Header left: the underlying symbol + its live price. */
+.ctp-sym {
   font-weight: 700;
   font-size: 0.95rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
 }
 
 .ctp-ltp {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  font-size: 0.85rem;
   color: var(--accent-warn, #e0a058);
 }
 
-/* Risk-per-trade (left) + today's realized/unrealized P&L (right), one
-   line right under the header. */
-.ctp-topline {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  color: var(--text-dim);
-  font-size: 0.73rem;
+/* Header right: today's realized / unrealized P&L (moved here from the
+   old topline). */
+.ctp-pnl-head {
+  font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
-  margin-top: -0.15rem;
+  color: var(--text-dim);
 }
 
-.ctp-topline b {
+.ctp-pnl-head b {
+  font-weight: 700;
+}
+
+/* Risk/Trade figure at the end of the "Risk managed" discipline row. */
+.chart-risk-per-trade {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.chart-risk-per-trade b {
   color: var(--text);
   font-weight: 600;
 }
@@ -2838,6 +2851,322 @@ button.btn-exit {
   margin: 0;
   color: var(--text-dim);
   font-size: 0.76rem;
+}
+
+/* Smaller segmented control for the Market/Limit entry-type toggle. */
+.ctp-seg-sm button {
+  padding: 0.28rem 0.5rem;
+  font-size: 0.78rem;
+}
+
+/* Reward:risk readout under the SL/Target fields. */
+.ctp-rr {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+}
+
+.ctp-rr.ok {
+  color: var(--buy);
+  background: color-mix(in srgb, var(--buy) 14%, transparent);
+}
+
+.ctp-rr.bad {
+  color: var(--sell);
+  background: color-mix(in srgb, var(--sell) 14%, transparent);
+}
+
+/* Pending (armed limit) state - replaces the entry form. */
+.ctp-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.ctp-pending-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ctp-pending-body {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+/* TR / RM tags on a history row's label. */
+.ctp-tag {
+  margin-left: 0.35rem;
+  padding: 0.02rem 0.28rem;
+  border-radius: 4px;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.ctp-tag-tr {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.ctp-tag-rm {
+  color: var(--buy);
+  background: color-mix(in srgb, var(--buy) 18%, transparent);
+}
+
+.ctp-tag-setup {
+  color: var(--text);
+  background: var(--surface);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ctp-tag-conf {
+  color: var(--text-dim);
+  background: none;
+  padding: 0;
+  letter-spacing: 0.05em;
+}
+
+/* Setup + confidence row in the order form and the History journal editor. */
+.ctp-journal-row select {
+  width: 100%;
+  box-sizing: border-box;
+  height: 1.7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.74rem;
+}
+
+.ctp-conf {
+  display: flex;
+  gap: 0.15rem;
+}
+.ctp-conf button {
+  width: 1.4rem;
+  height: 1.7rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.ctp-conf button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* The two discipline checkboxes above the trade panel. */
+.chart-discipline-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* ⏳ marker on a symbol tab that has a limit armed. */
+.live-chart-symbol-pending {
+  margin-left: 0.3rem;
+  font-size: 0.8rem;
+}
+
+/* Price field + its "pick from chart" (⌖) button. */
+.ctp-input-pick {
+  display: flex;
+  align-items: stretch;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.ctp-field .ctp-input-pick input,
+.ctp-mf .ctp-input-pick input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+}
+
+.ctp-pick {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ctp-pick:hover {
+  color: var(--text);
+}
+
+.ctp-pick.armed {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* Banner over the chart while a price pick is armed. */
+.live-chart-pick-banner {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #0f1216;
+  background: var(--accent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.live-chart-pick-banner.is-stop {
+  background: #e8586a;
+  color: #fff;
+}
+
+.live-chart-pick-banner.is-target {
+  background: #3ecf8e;
+}
+
+/* Transient banner when a drawing's cross/close alert fires. */
+.live-chart-alert-flash {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #0f1216;
+  background: #e0b058;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Style bar - shown at the chart's top-left while a drawing is selected. */
+.live-chart-style-bar {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.live-chart-style-bar .lcsb-swatches {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.live-chart-style-bar .lcsb-swatch {
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.live-chart-style-bar .lcsb-swatch.active {
+  border-color: var(--text);
+}
+
+.live-chart-style-bar .lcsb-custom {
+  position: relative;
+  overflow: hidden;
+  background: conic-gradient(from 0deg, #e8586a, #e0b058, #3ecf8e, #4c8bf5, #b07cff, #e8586a);
+}
+.live-chart-style-bar .lcsb-custom input {
+  position: absolute;
+  inset: -4px;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.live-chart-style-bar .lcsb-group {
+  display: flex;
+  gap: 0.15rem;
+  padding-left: 0.4rem;
+  border-left: 1px solid var(--border);
+}
+
+.live-chart-style-bar .lcsb-group button {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.25rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.live-chart-style-bar .lcsb-group button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.live-chart-style-bar .lcsb-alert select {
+  height: 1.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.7rem;
+}
+
+.live-chart-style-bar .lcsb-del {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--sell) 45%, var(--border));
+  background: var(--surface);
+  color: var(--sell);
+  cursor: pointer;
+}
+.live-chart-style-bar .lcsb-del svg {
+  width: 14px;
+  height: 14px;
 }
 
 .ctp-link {
@@ -3074,6 +3403,91 @@ button.btn-exit {
 .ctp-history p.muted {
   margin: 0;
   font-size: 0.76rem;
+}
+
+/* --- Per-trade journal note in the history list --- */
+.ctp-note-add,
+.ctp-note-toggle {
+  align-self: flex-start;
+  margin-top: 0.15rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.ctp-note-add:hover,
+.ctp-note-toggle:hover {
+  color: var(--accent);
+}
+.ctp-note-toggle.open {
+  color: var(--text);
+}
+
+.ctp-note {
+  margin-top: 0.2rem;
+  padding: 0.25rem 0.35rem;
+  border-left: 2px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  border-radius: 3px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+.ctp-note:hover {
+  border-left-color: var(--accent);
+}
+
+.ctp-note-edit {
+  margin-top: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ctp-note-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 2.4rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+.ctp-note-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ctp-note-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+.ctp-note-actions button {
+  padding: 0.15rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.ctp-note-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.ctp-note-save {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
 }
 
 .live-chart-toolbar {
@@ -3380,6 +3794,21 @@ button.btn-exit {
   gap: 0.3rem;
   cursor: pointer;
   color: var(--text-dim);
+}
+
+/* "Trades" checkbox in the chart toolbar - draw your own entries/exits. */
+.live-chart-trades-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.live-chart-trades-toggle input {
+  margin: 0;
 }
 
 /* Mini-trend of the last ~10 OI-shift (15m) readings + the latest value

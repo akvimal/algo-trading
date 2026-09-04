@@ -1155,6 +1155,19 @@ export type StructureEvent = {
   direction: "up" | "down";
   price: number;
   timestamp: string;
+  // start of the candle that formed the swing high/low that broke - the
+  // left anchor for drawing the level as a pivot->break line.
+  from_timestamp: string;
+};
+
+// A point at which structure_state's confirmed trend flipped value:
+// range -> up/down (a trend established out of neutral), up/down -> range
+// (trend lost to a CHoCH), or a direct up <-> down. See TrendChange in
+// market-data's models.py.
+export type TrendChange = {
+  timestamp: string;
+  price: number;
+  trend: "up" | "down" | "range";
 };
 
 // A rejection-confirmed trade setup (only ever with the current trend).
@@ -1180,6 +1193,7 @@ export type ChartStructure = {
   fvgs: Fvg[];
   trend: "up" | "down" | "range";
   events: StructureEvent[];
+  trend_changes: TrendChange[];
   setups: Setup[];
 };
 
@@ -1370,6 +1384,20 @@ export type ManualPosition = {
   // every Strategy-driven position (added 2026-08-26, for future
   // performance review - see execution.positions.order_type's own comment).
   order_type: "market" | "limit" | null;
+  // Live Chart trade panel discipline flags - which of the panel's two
+  // modes ("Trend only" direction lock, "Risk managed" R:R gate) was
+  // active. null for every Strategy-driven position and every option leg.
+  trend_followed: boolean | null;
+  risk_managed: boolean | null;
+  // Free-text journal note (PUT /positions/{id}/notes) - editable any time
+  // from the Live Chart panel's History list, to review the trade later.
+  // Distinct from review_notes (the one-time gated review writeup).
+  notes: string | null;
+  // Structured trade journal (PUT /positions/{id}/tags): the setup type
+  // (SETUP_TAGS in manualOrder.ts) + a 1-5 confidence rating at entry.
+  // Feed Trading Performance's "By setup" / discipline breakdowns.
+  setup_tag: string | null;
+  confidence: number | null;
 };
 
 export type ManualOptionLeg = {
@@ -1410,12 +1438,21 @@ export type ManualOptionGroup = {
   sl_scope: OptionSlScope;
   live_combined_price: number | null;
   unrealized_pnl: number | null;
+  // The underlying's own LTP at open (best-effort, may be null) - the
+  // anchor for drawing this option trade on the price chart, since its
+  // premium entry isn't a point on the underlying's candles.
+  entry_spot_price: number | null;
   // A stop on the UNDERLYING's own spot price (PUT /option-groups/{id}/
   // spot-stop-loss) - independent of combined_stop_loss_price (premium).
   // For a manual group this is only ever a flat price; the trailing/
   // indicator variants below are non-null only for a Strategy-driven,
   // auto-computed one.
   spot_stop_loss_price: number | null;
+  // A take-profit on the UNDERLYING's own spot price (PUT /option-groups/
+  // {id}/spot-target) - the sibling of spot_stop_loss_price, also
+  // server-enforced by execution's exit-monitor. The Live Chart panel's
+  // Target field for an option order.
+  spot_target_price: number | null;
   status: "OPEN" | "CLOSED" | "REJECTED";
   rejection_reason: string | null;
   exit_reason: string | null;
@@ -1436,6 +1473,15 @@ export type ManualOptionGroup = {
   // every Strategy-driven group, same meaning as ManualPosition's own
   // copy above.
   order_type: "market" | "limit" | null;
+  // Live Chart trade panel discipline flags - same meaning as
+  // ManualPosition's own copies above.
+  trend_followed: boolean | null;
+  risk_managed: boolean | null;
+  // Free-text journal note - same meaning as ManualPosition.notes above.
+  notes: string | null;
+  // Structured trade journal - same meaning as ManualPosition's copies.
+  setup_tag: string | null;
+  confidence: number | null;
   legs: ManualOptionLeg[];
 };
 
@@ -1701,9 +1747,25 @@ export async function createManualPosition(
     action: "BUY" | "SELL";
     instrument_type: "spot" | "future";
     price: number;
+    // Omitted + a stop_loss_price set -> execution risk-sizes it
+    // (compute_risk_based_quantity), which the panel's "Risk managed"
+    // mode relies on.
     quantity?: number;
     plan_checklist: ChecklistAnswer[];
     order_type?: "market" | "limit";
+    // Independent flat take-profit on the underlying's own price -
+    // written straight to positions.target_price, honoured by the same
+    // exit-monitor every Strategy-driven position's target already uses.
+    // The Live Chart panel's Target field. Its side is validated
+    // server-side against action/price.
+    target_price?: number;
+    // Live Chart trade panel discipline flags (see ManualPosition's own
+    // fields) - which of the panel's two modes was active.
+    trend_followed?: boolean;
+    risk_managed?: boolean;
+    // Structured trade journal set at order time (SETUP_TAGS + 1-5).
+    setup_tag?: string;
+    confidence?: number;
     // Per-position override of the segment's own square_off_time -
     // "HH:MM" or "HH:MM:SS", omitted means inherit the segment default
     // (unchanged behavior). See execution's ManualPositionCreate.
@@ -1757,6 +1819,62 @@ export async function updateOptionGroupSpotStopLoss(groupId: string, spotStopLos
     body: JSON.stringify({ spot_stop_loss_price: spotStopLossPrice }),
   });
   return asJson(res, "PUT /option-groups/{id}/spot-stop-loss");
+}
+
+// A take-profit on the UNDERLYING's own spot price - the sibling of
+// updateOptionGroupSpotStopLoss above (execution's update_group_spot_target
+// / _evaluate_option_group_exits), also server-enforced. The Live Chart
+// panel's Target field for an option order.
+export async function updateOptionGroupSpotTarget(groupId: string, spotTargetPrice: number): Promise<ManualOptionGroup> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/spot-target`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spot_target_price: spotTargetPrice }),
+  });
+  return asJson(res, "PUT /option-groups/{id}/spot-target");
+}
+
+// Free-text journal note on a trade - shown/edited from the Live Chart
+// panel's History list to review the trade later. No gate (unlike PUT
+// .../review): OPEN or CLOSED, any number of edits; "" clears it.
+export async function updatePositionNotes(positionId: string, notes: string): Promise<ManualPosition> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/notes`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes }),
+  });
+  return asJson(res, "PUT /positions/{id}/notes");
+}
+
+export async function updateOptionGroupNotes(groupId: string, notes: string): Promise<ManualOptionGroup> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/notes`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ notes }),
+  });
+  return asJson(res, "PUT /option-groups/{id}/notes");
+}
+
+// Structured trade journal (setup type + 1-5 confidence). Partial: pass
+// only the fields you're changing; setup_tag "" clears the tag. Same
+// no-gate / OPEN-or-CLOSED contract as the notes endpoint.
+type TradeTags = { setup_tag?: string; confidence?: number };
+export async function updatePositionTags(positionId: string, tags: TradeTags): Promise<ManualPosition> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(tags),
+  });
+  return asJson(res, "PUT /positions/{id}/tags");
+}
+
+export async function updateOptionGroupTags(groupId: string, tags: TradeTags): Promise<ManualOptionGroup> {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(tags),
+  });
+  return asJson(res, "PUT /option-groups/{id}/tags");
 }
 
 // Edits an already-open position's own square_off_time - lets it be
@@ -1878,6 +1996,14 @@ export async function createManualOptionGroup(payload: {
   option_fixed_lots?: number;
   plan_checklist: ChecklistAnswer[];
   order_type?: "market" | "limit";
+  // Live Chart trade panel discipline flags - see createManualPosition's
+  // own comment. The panel's Target/SL for an option order go via the
+  // separate spot-stop-loss / spot-target PUT calls after create.
+  trend_followed?: boolean;
+  risk_managed?: boolean;
+  // Structured trade journal set at order time (SETUP_TAGS + 1-5).
+  setup_tag?: string;
+  confidence?: number;
   // See createManualPosition's own comment - identical meaning here.
   square_off_time?: string;
 }): Promise<ManualOptionGroup> {

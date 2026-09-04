@@ -1,6 +1,12 @@
+import { Suspense, lazy } from "react";
+
 import AuthGate from "./AuthGate";
 import IntradayPage from "./IntradayPage";
 import OiSummaryPage from "./OiSummaryPage";
+
+// Trading Performance - lazy so its trade-list fetch + tables don't weigh
+// on the default Intraday page's bundle.
+const ManualStatsPage = lazy(() => import("./ManualStatsPage"));
 
 // Split out of signal-generation's frontend (see docs/architecture.md §
 // "Manual Trading module split") - Manual Trading and Options OI never
@@ -25,11 +31,21 @@ import OiSummaryPage from "./OiSummaryPage";
 // and "Positional" are planned future top-level pages, not added yet (see
 // docs/architecture.md § "Manual Trading SaaS" Phase 6).
 export default function App() {
-  const isOi = new URLSearchParams(window.location.search).get("tab") === "oi";
+  const tab = new URLSearchParams(window.location.search).get("tab");
 
   return (
     <AuthGate>
-      <main>{isOi ? <OiSummaryPage /> : <IntradayPage />}</main>
+      <main>
+        {tab === "oi" ? (
+          <OiSummaryPage />
+        ) : tab === "performance" ? (
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            <ManualStatsPage />
+          </Suspense>
+        ) : (
+          <IntradayPage />
+        )}
+      </main>
     </AuthGate>
   );
 }

@@ -1,35 +1,47 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  ActionType,
   IndicatorSeries,
+  LineType,
+  OverlayMode,
   dispose,
   init,
   registerIndicator,
   registerOverlay,
   type Chart,
+  type Crosshair,
   type DeepPartial,
   type KLineData,
   type Overlay,
   type OverlayEvent,
+  type OverlayFigure,
+  type OverlayStyle,
   type Styles,
 } from "klinecharts";
 
 import { TrashIcon } from "./Icons";
+import { fmtQty } from "./manualOrder";
 import { BUILDUP_META } from "./OiSummaryPage";
 import {
   type Candle,
   type ChartStructure,
   type FutureContract,
+  type ManualOptionGroup,
+  type ManualPosition,
   type OiBuildup,
   type OiSummary,
   type ResolvedUnderlying,
+  type Segment,
   type SentimentHistoryPoint,
   fetchCandleHistory,
   fetchChartStructure,
+  fetchExecPositions,
   fetchFutureContracts,
   fetchLtp,
   fetchOiSummary,
   fetchOptionExpiries,
+  fetchOptionGroups,
   fetchSentimentHistory,
   resolveUnderlying,
 } from "./api";
@@ -45,7 +57,7 @@ registerOverlay({
   needDefaultPointFigure: true,
   needDefaultXAxisFigure: true,
   needDefaultYAxisFigure: true,
-  createPointFigures: ({ coordinates }) => {
+  createPointFigures: ({ coordinates, overlay }) => {
     if (coordinates.length < 2) return [];
     const [a, b] = coordinates;
     return [
@@ -59,7 +71,10 @@ registerOverlay({
             { x: a.x, y: b.y },
           ],
         },
-        styles: { style: "stroke_fill" },
+        // Honour a per-overlay colour set from the style bar
+        // (overrideOverlay); fall through to DARK_STYLES.overlay.polygon
+        // otherwise. style stays stroke_fill so the zone reads translucent.
+        styles: { ...(overlay.styles?.polygon ?? {}), style: "stroke_fill" },
       },
     ];
   },
@@ -85,6 +100,7 @@ type ObExtendData = {
 };
 type FvgExtendData = { kind: "bullish" | "bearish"; top: number; bottom: number; filled: boolean };
 type BreakExtendData = { tf: string; kind: "bos" | "choch"; direction: "up" | "down"; price: number };
+type TrendMarkExtendData = { tf: string; trend: "up" | "down" | "range"; price: number };
 type SetupExtendData = {
   tf: string;
   direction: "long" | "short";
@@ -177,24 +193,25 @@ registerOverlay({
 });
 
 // BOS / CHoCH structure breaks - a thin horizontal line at the swing
-// level that broke, from the break candle to the right edge. Green up /
-// red down; CHoCH dashed (it flipped the trend), BOS solid.
+// level that broke, spanning from the pivot candle that formed it to the
+// candle that closed through it. Green up / red down; CHoCH dashed (it
+// flipped the trend), BOS solid. 2-point overlay: point 0 = the swing
+// pivot, point 1 = the break candle.
 registerOverlay({
   name: "htfStructureBreak",
   totalStep: 2,
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
-  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
-    if (coordinates.length < 1 || !coordinates[0] || !yAxis) return [];
+  createPointFigures: ({ overlay, coordinates, yAxis }) => {
+    if (coordinates.length < 2 || !coordinates[0] || !coordinates[1] || !yAxis) return [];
     const d = overlay.extendData as BreakExtendData | undefined;
     if (!d) return [];
     const leftX = coordinates[0].x;
-    if (!Number.isFinite(leftX)) return [];
-    const rightX = bounding.width;
-    if (rightX <= leftX) return [];
+    const rightX = coordinates[1].x;
+    if (!Number.isFinite(leftX) || !Number.isFinite(rightX) || rightX <= leftX) return [];
     const y = yAxis.convertToPixel(d.price);
-    const color = d.direction === "up" ? "rgba(62, 207, 142, 0.75)" : "rgba(232, 88, 106, 0.75)";
+    const color = d.direction === "up" ? "rgba(62, 207, 142, 0.85)" : "rgba(232, 88, 106, 0.85)";
     return [
       {
         type: "line",
@@ -203,8 +220,15 @@ registerOverlay({
         ignoreEvent: true,
       },
       {
+        // a small tick at the break end so the line reads as "broke here"
+        type: "circle",
+        attrs: { x: rightX, y, r: 2.5 },
+        styles: { color, style: "fill" },
+        ignoreEvent: true,
+      },
+      {
         type: "text",
-        attrs: { x: rightX - 4, y: y - 13, text: `${d.tf} ${d.kind.toUpperCase()} ${d.direction === "up" ? "▲" : "▼"}`, baseline: "top", align: "right" },
+        attrs: { x: rightX + 3, y: y - 13, text: `${d.tf} ${d.kind.toUpperCase()} ${d.direction === "up" ? "▲" : "▼"}`, baseline: "top", align: "left" },
         styles: {
           color,
           size: 10,
@@ -218,6 +242,72 @@ registerOverlay({
         ignoreEvent: true,
       },
     ];
+  },
+});
+
+// Trend-change marks - a dashed full-height vertical line at the break
+// candle where the confirmed structure trend flipped value, with a small
+// flag near the top. range -> up/down = "a new trend began out of
+// neutral" (green ▲ / red ▼); up/down -> range = "trend lost" (grey —).
+// From market-data's ChartStructure.trend_changes. One anchor point at
+// the break candle + swing level.
+registerOverlay({
+  name: "htfTrendMark",
+  totalStep: 2,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+    if (coordinates.length < 1 || !coordinates[0]) return [];
+    const d = overlay.extendData as TrendMarkExtendData | undefined;
+    if (!d) return [];
+    const x = coordinates[0].x;
+    if (!Number.isFinite(x)) return [];
+    const color =
+      d.trend === "up"
+        ? "rgba(62, 207, 142, 0.95)"
+        : d.trend === "down"
+          ? "rgba(232, 88, 106, 0.95)"
+          : "rgba(176, 180, 190, 0.85)";
+    const glyph = d.trend === "up" ? "▲" : d.trend === "down" ? "▼" : "◆";
+    const label = d.trend === "range" ? "TREND LOST" : d.trend === "up" ? "TREND UP" : "TREND DOWN";
+    const figs: OverlayFigure[] = [
+      {
+        type: "line",
+        attrs: { coordinates: [{ x, y: 0 }, { x, y: bounding.height }] },
+        styles: { color, size: 1.5, style: "dashed" },
+        ignoreEvent: true,
+      },
+      {
+        type: "text",
+        attrs: { x: x + 3, y: 4, text: `${d.tf} ${glyph} ${label}`, baseline: "top", align: "left" },
+        styles: {
+          color: "rgba(15, 18, 22, 0.95)",
+          size: 10,
+          backgroundColor: color,
+          paddingLeft: 3,
+          paddingRight: 3,
+          paddingTop: 1,
+          paddingBottom: 1,
+          borderRadius: 2,
+        },
+        ignoreEvent: true,
+      },
+    ];
+    // A glyph right at the swing level too, so the mark reads inside the
+    // candle area and not only at the very top of the pane.
+    if (yAxis) {
+      const y = yAxis.convertToPixel(d.price);
+      if (Number.isFinite(y)) {
+        figs.push({
+          type: "text",
+          attrs: { x, y, text: glyph, align: "center", baseline: "middle" },
+          styles: { color, size: 13 },
+          ignoreEvent: true,
+        });
+      }
+    }
+    return figs;
   },
 });
 
@@ -463,6 +553,151 @@ registerOverlay({
   },
 });
 
+// --- Your own trades on the chart (opt-in "Trades" toggle) ---
+// A spot/future trade: entry arrow at (entry_time, entry_price); OPEN adds
+// a dashed entry line to the right edge + a live-P&L pill; CLOSED adds an
+// exit ✕ at (exit_time, exit_price), a connector tinted by outcome, and a
+// realized-P&L pill. An option trade is anchored at the underlying's LTP
+// at open (entry_spot_price) with a ◆ glyph - its premium P&L isn't a
+// price on this chart, so no exit marker, just the pill.
+const TRADES_GROUP_ID = "chart-trades";
+const TRADES_ON_STORAGE_KEY = "manualLiveChartTrades";
+const TRADES_POLL_MS = 15000;
+
+const EMPTY_CHART_TRADES: ChartTrade[] = [];
+
+type TradeMarkerExtendData = {
+  kind: "future" | "option";
+  side: "long" | "short";
+  state: "open" | "closed";
+  entryPrice: number;
+  exitPrice: number | null;
+  pnl: number | null; // unrealized for OPEN, realized for CLOSED
+  label: string; // e.g. "Long 37" / "Naked Call"
+  reason: string | null; // exit_reason for CLOSED
+};
+
+function tradePnlRgb(pnl: number | null): string {
+  if (pnl == null) return "150, 150, 150";
+  return pnl >= 0 ? "62, 207, 142" : "232, 88, 106";
+}
+
+function fmtTradePnl(n: number | null): string {
+  if (n == null) return "—";
+  const s = Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(1)}k` : Math.round(n).toString();
+  return `${n >= 0 ? "+" : "−"}${s.replace("-", "")}`;
+}
+
+registerOverlay({
+  name: "tradeMarker",
+  totalStep: 2,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+    if (coordinates.length < 1 || !coordinates[0] || !yAxis) return [];
+    const d = overlay.extendData as TradeMarkerExtendData | undefined;
+    if (!d) return [];
+    const x0 = coordinates[0].x;
+    const yE = yAxis.convertToPixel(d.entryPrice);
+    if (!Number.isFinite(x0) || !Number.isFinite(yE)) return [];
+
+    const long = d.side === "long";
+    const dirRgb = long ? "62, 207, 142" : "232, 88, 106";
+    const pnlRgb = tradePnlRgb(d.pnl);
+    const glyph = d.kind === "option" ? "◆" : long ? "▲" : "▼";
+    const figs: OverlayFigure[] = [
+      {
+        type: "text",
+        attrs: { x: x0, y: yE, text: glyph, align: "center", baseline: "middle" },
+        styles: { color: `rgba(${dirRgb}, 1)`, size: 13, weight: "bold" },
+        ignoreEvent: true,
+      },
+    ];
+
+    if (d.state === "open") {
+      const xr = bounding.width;
+      figs.push({
+        type: "line",
+        attrs: {
+          coordinates: [
+            { x: x0, y: yE },
+            { x: xr, y: yE },
+          ],
+        },
+        styles: { color: `rgba(${dirRgb}, 0.6)`, size: 1, style: "dashed", dashedValue: [4, 3] },
+        ignoreEvent: true,
+      });
+      figs.push({
+        type: "text",
+        attrs: { x: xr - 4, y: yE - 9, text: `${d.label} · ${fmtTradePnl(d.pnl)}`, align: "right", baseline: "bottom" },
+        styles: {
+          color: "#0f1216",
+          size: 11,
+          weight: "bold",
+          backgroundColor: `rgba(${pnlRgb}, 0.95)`,
+          borderRadius: 3,
+          paddingLeft: 4,
+          paddingRight: 4,
+          paddingTop: 1,
+          paddingBottom: 1,
+        },
+        ignoreEvent: true,
+      });
+      return figs;
+    }
+
+    // CLOSED
+    const c1 = coordinates[1];
+    const hasExit = d.exitPrice != null && c1 && Number.isFinite(c1.x);
+    const x1 = hasExit ? c1!.x : bounding.width;
+    const yX = hasExit ? yAxis.convertToPixel(d.exitPrice as number) : yE;
+    if (!Number.isFinite(yX)) return figs;
+    if (hasExit) {
+      figs.push({
+        type: "line",
+        attrs: {
+          coordinates: [
+            { x: x0, y: yE },
+            { x: x1, y: yX },
+          ],
+        },
+        styles: { color: `rgba(${pnlRgb}, 0.8)`, size: 1.5 },
+        ignoreEvent: true,
+      });
+      figs.push({
+        type: "text",
+        attrs: { x: x1, y: yX, text: "✕", align: "center", baseline: "middle" },
+        styles: { color: `rgba(${pnlRgb}, 1)`, size: 11, weight: "bold" },
+        ignoreEvent: true,
+      });
+    }
+    figs.push({
+      type: "text",
+      attrs: {
+        x: hasExit ? x1 + 5 : x0 + 5,
+        y: yX - 9,
+        text: `${fmtTradePnl(d.pnl)}${d.reason ? ` · ${d.reason}` : ""}`,
+        align: "left",
+        baseline: "bottom",
+      },
+      styles: {
+        color: "#0f1216",
+        size: 10,
+        weight: "bold",
+        backgroundColor: `rgba(${pnlRgb}, 0.9)`,
+        borderRadius: 3,
+        paddingLeft: 3,
+        paddingRight: 3,
+        paddingTop: 1,
+        paddingBottom: 1,
+      },
+      ignoreEvent: true,
+    });
+    return figs;
+  },
+});
+
 // Supertrend - not a klinecharts built-in, registered here. calcParams
 // are [ATR period, multiplier]; both editable via the Indicators menu's
 // params box. Drawn as two lines on the candle pane - a green one while
@@ -669,10 +904,11 @@ function effectiveParams(name: string, overrides: Record<string, number[]>): num
 const ORDER_BLOCKS_STORAGE_KEY = "manualLiveChartOrderBlocks";
 
 // The assets OiSummaryPage (the shell's "OI" tab) actually has a preset
-// for - only these four get an "OI Analysis" jump link in the chart
-// header (crypto has no option-chain / OI feed). Keep in sync with
-// OiSummaryPage's PRESETS.
-const OI_SYMBOLS = new Set(["NIFTY", "BANKNIFTY", "GOLDM", "CRUDEOILM"]);
+// for - only these get an "OI Analysis" jump link in the chart header.
+// BTC/ETH (Delta Exchange India) carry an option chain / OI since the
+// 2026-09-04 OI-analysis extension; other crypto symbols (SOL etc.) have
+// none. Keep in sync with OiSummaryPage's PRESETS.
+const OI_SYMBOLS = new Set(["NIFTY", "BANKNIFTY", "GOLDM", "CRUDEOILM", "BTCUSD", "ETHUSD"]);
 
 // Ask the shell to switch to its "OI" tab, pre-selected to this asset -
 // same jump the header sentiment badges do (shell's goToOiTab), just
@@ -710,8 +946,22 @@ const OB_REFRESH_MS = 2 * 60_000;
 // timeframes; `breakers`/`fvg`/`breaks` are global modifiers over every
 // enabled timeframe. Off by default - it's an opt-in analytical layer
 // that costs one extra fetch per timeframe.
-type StructureConfig = { tfs: string[]; breakers: boolean; fvg: boolean; breaks: boolean; setups: boolean };
-const EMPTY_STRUCTURE_CONFIG: StructureConfig = { tfs: [], breakers: false, fvg: false, breaks: false, setups: false };
+type StructureConfig = {
+  tfs: string[];
+  breakers: boolean;
+  fvg: boolean;
+  breaks: boolean;
+  trendMarks: boolean;
+  setups: boolean;
+};
+const EMPTY_STRUCTURE_CONFIG: StructureConfig = {
+  tfs: [],
+  breakers: false,
+  fvg: false,
+  breaks: false,
+  trendMarks: false,
+  setups: false,
+};
 
 function loadStructureConfig(): StructureConfig {
   try {
@@ -726,6 +976,7 @@ function loadStructureConfig(): StructureConfig {
       breakers: raw?.breakers === true,
       fvg: raw?.fvg === true,
       breaks: raw?.breaks === true,
+      trendMarks: raw?.trendMarks === true,
       setups: raw?.setups === true,
     };
   } catch {
@@ -768,15 +1019,16 @@ function loadAlertsOn(): boolean {
   return localStorage.getItem(ALERTS_STORAGE_KEY) !== "false";
 }
 
-// --- OI strip. Only the 4 SENTIMENT_UNDERLYINGS carry an option chain on
-// this platform's providers (same 4 OiSummaryPage hardcodes); for every
-// other symbol - all of CRYPTO included - the strip just doesn't render.
-// Reuses the panel's existing `resolved` (chart_symbol/chart_exchange is
-// exactly what GET /options/expiries + /oi-summary want - an index
-// resolves to itself, an MCX commodity to its active-month future, same
-// as OiSummaryPage). No 1h history - PCR + the 5m/15m deltas market-data
-// already tracks in memory, polled on the OI cadence. ---
-const OI_UNDERLYINGS = new Set(["NIFTY", "BANKNIFTY", "GOLDM", "CRUDEOILM"]);
+// --- OI strip. Only the SENTIMENT_UNDERLYINGS carry an option chain on
+// this platform's providers (same list OiSummaryPage hardcodes - NSE/MCX
+// via Dhan, plus CRYPTO via Delta Exchange India since 2026-09-04); for
+// every other symbol the strip just doesn't render. Reuses the panel's
+// existing `resolved` (chart_symbol/chart_exchange is exactly what GET
+// /options/expiries + /oi-summary want - an index resolves to itself, an
+// MCX commodity to its active-month future, a crypto perpetual to itself,
+// same as OiSummaryPage). No 1h history - PCR + the 5m/15m deltas
+// market-data already tracks in memory, polled on the OI cadence. ---
+const OI_UNDERLYINGS = new Set(["NIFTY", "BANKNIFTY", "GOLDM", "CRUDEOILM", "BTCUSD", "ETHUSD"]);
 const OI_POLL_MS = 60_000;
 
 const OI_BUILDUP_LABEL: Record<OiBuildup, string> = {
@@ -796,6 +1048,13 @@ function fmtCompactIndian(n: number): string {
   if (abs >= 1_00_000) return `${(n / 1_00_000).toFixed(2)}L`;
   if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(Math.round(n));
+}
+
+// CRYPTO (Delta Exchange India) OI is a raw contract count, not an
+// index-option figure in the crores - Western grouping, same reasoning as
+// OiSummaryPage's own fmtOi split.
+function fmtOiCount(n: number, isCrypto: boolean): string {
+  return isCrypto ? Math.round(n).toLocaleString("en-US") : fmtCompactIndian(n);
 }
 
 // A signed OI delta as a rough % of the current total, e.g. "▲0.8%" -
@@ -1088,6 +1347,17 @@ function PlotLineIcon() {
 // is a longer list than a trading chart's toolbar wants. Rendered as an
 // icon-only vertical palette down the left edge of the chart; each tool
 // toggles (click again to cancel).
+function MagnetIcon() {
+  return (
+    <svg {...ICON_PROPS}>
+      <path d="M6 3v9a6 6 0 0 0 12 0V3" />
+      <path d="M6 3h4v9M14 3h4v9" />
+      <line x1="6" y1="7" x2="10" y2="7" />
+      <line x1="14" y1="7" x2="18" y2="7" />
+    </svg>
+  );
+}
+
 const DRAW_TOOLS: { overlay: string; title: string; Icon: () => JSX.Element }[] = [
   { overlay: "segment", title: "Trend line - click two points", Icon: TrendLineIcon },
   { overlay: "rayLine", title: "Ray - anchor, then direction", Icon: RayIcon },
@@ -1097,10 +1367,128 @@ const DRAW_TOOLS: { overlay: string; title: string; Icon: () => JSX.Element }[] 
   { overlay: "fibonacciLine", title: "Fibonacci retracement", Icon: FibIcon },
 ];
 
-// What we persist per drawn overlay - just the template name and its
-// time/price anchor points (dataIndex is re-derived by klinecharts from
-// the timestamp when we recreate it, so it's not stored).
-type StoredOverlay = { name: string; points: Array<{ timestamp?: number; value?: number }> };
+// --- Drawing appearance + magnet + line-cross alerts ------------------
+const MAGNET_STORAGE_KEY = "manualLiveChartMagnet";
+const DRAW_STYLE_STORAGE_KEY = "manualLiveChartDrawStyle";
+
+// Per-drawing appearance the user sets from the style bar (shown when a
+// drawing is selected). The last value used also becomes the default new
+// drawings inherit - the TradingView convention.
+type DrawStyle = { color: string; lineStyle: "solid" | "dashed"; lineWidth: number };
+const DEFAULT_DRAW_STYLE: DrawStyle = { color: "#4c8bf5", lineStyle: "solid", lineWidth: 2 };
+const DRAW_COLORS = ["#4c8bf5", "#3ecf8e", "#e8586a", "#e0b058", "#b07cff", "#e6e9ee"];
+
+// Drawings a price alert can watch: a horizontal level, a diagonal
+// trend line / ray (its price at "now" is a linear projection of the two
+// anchors), or a rectangle zone (a price band - "entered / left zone").
+const ALERTABLE_OVERLAYS = new Set(["horizontalStraightLine", "priceLine", "segment", "rayLine", "rect"]);
+type AlertSide = "above" | "inside" | "below";
+type DrawAlert = { trigger: "cross" | "close"; lastSide: AlertSide | null };
+
+// The price band a given drawing occupies right now - a zero-width band
+// (lo === hi) for a line, a real band for a rectangle. null when it can't
+// be evaluated (missing anchors, a vertical trend line).
+function alertZone(ov: StoredOverlay): { lo: number; hi: number } | null {
+  const pts = ov.points;
+  if (ov.name === "horizontalStraightLine" || ov.name === "priceLine") {
+    const v = pts[0]?.value;
+    return typeof v === "number" ? { lo: v, hi: v } : null;
+  }
+  if (ov.name === "rect") {
+    const a = pts[0]?.value;
+    const b = pts[1]?.value;
+    if (typeof a !== "number" || typeof b !== "number") return null;
+    return { lo: Math.min(a, b), hi: Math.max(a, b) };
+  }
+  if (ov.name === "segment" || ov.name === "rayLine") {
+    const p0 = pts[0];
+    const p1 = pts[1];
+    if (
+      !p0 ||
+      !p1 ||
+      typeof p0.value !== "number" ||
+      typeof p1.value !== "number" ||
+      typeof p0.timestamp !== "number" ||
+      typeof p1.timestamp !== "number" ||
+      p1.timestamp === p0.timestamp
+    ) {
+      return null;
+    }
+    const v = p0.value + ((p1.value - p0.value) * (Date.now() - p0.timestamp)) / (p1.timestamp - p0.timestamp);
+    return Number.isFinite(v) ? { lo: v, hi: v } : null;
+  }
+  return null;
+}
+
+function alertSideOf(price: number, z: { lo: number; hi: number }): AlertSide {
+  if (price > z.hi) return "above";
+  if (price < z.lo) return "below";
+  return "inside";
+}
+
+function alertMessage(
+  sym: string,
+  z: { lo: number; hi: number },
+  next: AlertSide,
+  prev: AlertSide | null,
+  trigger: "cross" | "close",
+): string {
+  const arrow = next === "above" ? "▲" : "▼";
+  if (z.lo === z.hi) {
+    return `${sym} ${arrow} ${trigger === "close" ? "closed" : "crossed"} ${next} ${fmtPrice(z.hi)}`;
+  }
+  const band = `${fmtPrice(z.lo)}–${fmtPrice(z.hi)}`;
+  if (next === "inside") return `${sym} entered zone ${band}`;
+  if (prev === "inside") return `${sym} left zone ${arrow} ${band}`;
+  return `${sym} ${arrow} crossed zone ${band}`;
+}
+
+function loadDrawStyle(): DrawStyle {
+  try {
+    const s = JSON.parse(localStorage.getItem(DRAW_STYLE_STORAGE_KEY) ?? "null");
+    if (s && typeof s.color === "string") {
+      return {
+        color: s.color,
+        lineStyle: s.lineStyle === "dashed" ? "dashed" : "solid",
+        lineWidth: [1, 2, 3].includes(s.lineWidth) ? s.lineWidth : 2,
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_DRAW_STYLE;
+}
+
+const magnetModeFor = (on: boolean): OverlayMode => (on ? OverlayMode.WeakMagnet : OverlayMode.Normal);
+
+// #rrggbb -> #rrggbb + alpha, for a translucent zone fill.
+function fillOf(hex: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(hex) ? `${hex}26` : "rgba(76,139,245,0.15)";
+}
+
+// A klinecharts overlay style patch covering every drawing type we offer
+// (klinecharts ignores keys a given type doesn't read).
+function styleToPatch(s: DrawStyle): DeepPartial<OverlayStyle> {
+  const lt = s.lineStyle === "dashed" ? LineType.Dashed : LineType.Solid;
+  return {
+    line: { color: s.color, size: s.lineWidth, style: lt },
+    polygon: { color: fillOf(s.color), borderColor: s.color, borderSize: s.lineWidth, borderStyle: lt },
+    rect: { color: fillOf(s.color), borderColor: s.color, borderSize: s.lineWidth, borderStyle: lt },
+    text: { color: s.color },
+  };
+}
+
+// What we persist per drawn overlay - the template name, its time/price
+// anchor points (dataIndex is re-derived from the timestamp on recreate),
+// and (optional) its custom style + armed cross/close alert. Alert state
+// rides on the overlay itself so it survives save/restore even though
+// klinecharts assigns fresh ids on reload.
+type StoredOverlay = {
+  name: string;
+  points: Array<{ timestamp?: number; value?: number }>;
+  style?: DrawStyle;
+  alert?: DrawAlert;
+};
 
 // Drawings are price/time anchored, so they belong to the instrument, not
 // the timeframe - one key per resolved chart symbol, shared across every
@@ -1109,8 +1497,16 @@ function overlayStorageKey(exchange: string, symbol: string): string {
   return `manualLiveChartDrawings:${exchange}:${symbol}`;
 }
 
-function serializeOverlay(o: Overlay): StoredOverlay {
-  return { name: o.name, points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value })) };
+// Rebuild the persisted form from a live overlay, preserving the style +
+// alert we track alongside it (and re-seeding the alert's side, since a
+// drag may have moved the level).
+function serializeOverlay(o: Overlay, prev?: StoredOverlay): StoredOverlay {
+  return {
+    name: o.name,
+    points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value })),
+    style: prev?.style,
+    alert: prev?.alert ? { ...prev.alert, lastSide: null } : undefined,
+  };
 }
 
 function ymd(d: Date): string {
@@ -1141,15 +1537,95 @@ function fmtPrice(p: number): string {
   return p.toFixed(pricePrecision(p));
 }
 
+// --- Trades-on-chart: normalise a manual Position / OptionGroup into the
+// minimal shape the tradeMarker overlay needs. `entryTs`/`exitTs` are ms.
+type ChartTrade = {
+  id: string;
+  kind: "future" | "option";
+  side: "long" | "short";
+  state: "open" | "closed";
+  entryTs: number;
+  entryPrice: number;
+  exitTs: number | null;
+  exitPrice: number | null;
+  pnl: number | null;
+  label: string;
+  reason: string | null;
+};
+
+// A manual FUTURE persists its RESOLVED contract symbol (e.g.
+// "NIFTY-Sep2026-FUT"), an option group its bare underlying - so match on
+// prefix, and (for positions) exclude option legs, which also carry a
+// prefixed symbol but belong to their group's row. Same rule as
+// ChartTradePanel.isStandaloneFuture.
+function toChartTrades(
+  base: string,
+  positions: ManualPosition[],
+  groups: ManualOptionGroup[],
+  firstBarTs: number,
+): ChartTrade[] {
+  const out: ChartTrade[] = [];
+  for (const p of positions) {
+    if (p.option_group_id != null || !p.symbol.toUpperCase().startsWith(base)) continue;
+    const entryTs = Date.parse(p.entry_time);
+    if (!Number.isFinite(entryTs) || entryTs < firstBarTs || p.entry_price == null) continue;
+    out.push({
+      id: p.id,
+      kind: "future",
+      side: p.action === "BUY" ? "long" : "short",
+      state: p.status === "OPEN" ? "open" : "closed",
+      entryTs,
+      entryPrice: p.entry_price,
+      exitTs: p.exit_time ? Date.parse(p.exit_time) : null,
+      exitPrice: p.exit_price,
+      pnl: p.status === "OPEN" ? (p.unrealized_pnl ?? null) : p.pnl,
+      label: `${p.action === "BUY" ? "Long" : "Short"} ${p.quantity != null ? fmtQty(p.quantity) : ""}`.trim(),
+      reason: p.exit_reason,
+    });
+  }
+  for (const g of groups) {
+    if (g.underlying_symbol.toUpperCase() !== base) continue;
+    if (g.entry_time == null || g.entry_spot_price == null) continue;
+    const entryTs = Date.parse(g.entry_time);
+    if (!Number.isFinite(entryTs) || entryTs < firstBarTs) continue;
+    const naked = g.strategy_type.startsWith("naked");
+    out.push({
+      id: g.id,
+      kind: "option",
+      side: g.action === "BUY" ? "long" : "short",
+      state: g.status === "OPEN" ? "open" : "closed",
+      entryTs,
+      entryPrice: g.entry_spot_price,
+      exitTs: g.exit_time ? Date.parse(g.exit_time) : null,
+      exitPrice: null, // no exit-spot is stored for an option group
+      pnl: g.status === "OPEN" ? (g.unrealized_pnl ?? null) : g.pnl,
+      label: naked
+        ? g.action === "BUY"
+          ? "Naked Call"
+          : "Naked Put"
+        : g.action === "BUY"
+          ? "Bull Call"
+          : "Bear Put",
+      reason: g.exit_reason,
+    });
+  }
+  return out;
+}
+
 type Status = "loading" | "ready" | "error";
 
 export type IntervalTrend = { trend: "up" | "down" | "range" | null; interval: string };
+
+export type PricePickField = "limit" | "stop" | "target";
 
 export function LiveChartPanel({
   segment,
   symbol,
   onTrendChange,
   onLtpChange,
+  pricePick,
+  onPricePick,
+  openTrade,
 }: {
   segment: string;
   symbol: string;
@@ -1160,6 +1636,15 @@ export function LiveChartPanel({
   // Fired every LTP tick so the trade panel can show the exact same live
   // price as the chart rather than running its own separate poll.
   onLtpChange?: (ltp: number) => void;
+  // Non-null while the trade panel is waiting for the user to click a
+  // price on the chart to fill one of its Limit / Stop-loss / Target
+  // fields. Arms a crosshair-pick mode; a click emits onPricePick.
+  pricePick?: PricePickField | null;
+  onPricePick?: (price: number) => void;
+  // The panel's single open manual trade for this symbol (with live P&L,
+  // already fetched by ChartTradePanel) - fed in so the chart's trade
+  // markers don't re-run that Dhan-quote-heavy live-P&L poll.
+  openTrade?: { pos: ManualPosition | null; group: ManualOptionGroup | null } | null;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -1167,6 +1652,10 @@ export function LiveChartPanel({
   // without listing it as a dep (which would re-run the whole effect).
   const onLtpChangeRef = useRef(onLtpChange);
   onLtpChangeRef.current = onLtpChange;
+  const onPricePickRef = useRef(onPricePick);
+  onPricePickRef.current = onPricePick;
+  // The price under the crosshair while a pick is armed - read on click.
+  const hoveredPriceRef = useRef<number | null>(null);
 
   const [resolved, setResolved] = useState<ResolvedUnderlying | null>(null);
   // Future-contract picker (MCX commodities, NSE index futures). `futures`
@@ -1185,7 +1674,29 @@ export function LiveChartPanel({
   const [status, setStatus] = useState<Status>("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastPrice, setLastPrice] = useState<number | null>(null);
+  // Live mirror for the candle effect's alert check (which isn't keyed on it).
+  const lastPriceRef = useRef<number | null>(null);
+  lastPriceRef.current = lastPrice;
   const [activeTool, setActiveTool] = useState<string | null>(null);
+  // Magnet: snap drawing points to the nearest candle O/H/L/C while placing
+  // or dragging (klinecharts overlay `mode: weak_magnet`). Global toggle.
+  const [magnet, setMagnet] = useState<boolean>(() => localStorage.getItem(MAGNET_STORAGE_KEY) === "true");
+  const magnetRef = useRef(magnet);
+  magnetRef.current = magnet;
+  // Default appearance for a new drawing - updated to whatever was last
+  // set on a selected drawing.
+  const [drawStyle, setDrawStyle] = useState<DrawStyle>(loadDrawStyle);
+  const drawStyleRef = useRef(drawStyle);
+  drawStyleRef.current = drawStyle;
+  // The currently-selected drawing (single-clicked) - drives the style bar.
+  // `style`/`alert` are copies of its StoredOverlay fields, mirrored to
+  // state so the bar re-renders on a change (overlaysRef is a ref).
+  const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
+  const [selStyle, setSelStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
+  const [selAlert, setSelAlert] = useState<DrawAlert | null>(null);
+  // A transient "NIFTY ▲ crossed 23,900" banner when a line alert fires.
+  const [alertFlash, setAlertFlash] = useState<string | null>(null);
+  const alertFlashTimerRef = useRef<number | null>(null);
   // Palette eye-toggles - hide the drawings / indicators without clearing
   // them (see the two buttons at the foot of the drawing palette).
   const [drawingsHidden, setDrawingsHidden] = useState<boolean>(
@@ -1252,6 +1763,34 @@ export function LiveChartPanel({
   // only once the new series is actually on the chart, never racing
   // applyNewData. 0 = no data loaded yet.
   const [dataEpoch, setDataEpoch] = useState(0);
+  // Timestamp (ms) of the earliest loaded candle - trades whose entry
+  // predates the visible history are skipped rather than drawn as an
+  // origin-less full-width line. A ref (not state) because the trades
+  // poll reads it without wanting to restart on every candle refetch.
+  const firstBarTsRef = useRef(0);
+  // The [fromTs, toTs] visible window captured by pickInterval, consumed
+  // once by the next loadHistory so an interval switch keeps the same span.
+  const preservedWindowRef = useRef<{ fromTs: number; toTs: number } | null>(null);
+
+  // Your own trades drawn on the chart (opt-in). Default ON - it's your
+  // own activity, a handful of markers, and the main reason to look at
+  // your own chart while a position is live.
+  const [tradesOn, setTradesOn] = useState<boolean>(() => localStorage.getItem(TRADES_ON_STORAGE_KEY) !== "false");
+  const [closedTrades, setClosedTrades] = useState<{ positions: ManualPosition[]; groups: ManualOptionGroup[] }>({
+    positions: [],
+    groups: [],
+  });
+  function toggleTrades() {
+    setTradesOn((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(TRADES_ON_STORAGE_KEY, String(next));
+      } catch {
+        // storage disabled - the toggle still applies this session
+      }
+      return next;
+    });
+  }
 
   // Drawn-overlay bookkeeping: id -> its serialized form, the storage key
   // for the current instrument, and a flag that silences the onRemoved
@@ -1268,6 +1807,26 @@ export function LiveChartPanel({
   const pendingOverlayRef = useRef<string | null>(null);
 
   function pickInterval(value: string) {
+    // Remember the time window currently in view so the new interval opens
+    // on the same span instead of snapping to the latest bars - otherwise
+    // a drawing over older bars ends up scrolled off-screen (TradingView
+    // keeps your window across a timeframe switch). The candle effect tears
+    // down on the interval change, so this rides a ref across it.
+    const chart = chartRef.current;
+    if (chart && value !== interval) {
+      try {
+        const r = chart.getVisibleRange();
+        const list = chart.getDataList();
+        const clamp = (i: number) => Math.max(0, Math.min(list.length - 1, i));
+        const fromTs = list[clamp(r.from)]?.timestamp;
+        const toTs = list[clamp(r.to - 1)]?.timestamp;
+        if (fromTs != null && toTs != null && toTs > fromTs) {
+          preservedWindowRef.current = { fromTs, toTs };
+        }
+      } catch {
+        /* no chart data yet - fall through to the default latest-bars view */
+      }
+    }
     localStorage.setItem(INTERVAL_STORAGE_KEY, value);
     setInterval_(value);
     // Keep order-block detection pointed at the chart's own interval:
@@ -1381,22 +1940,9 @@ export function LiveChartPanel({
       } catch {
         // storage disabled - the toggle still applies this session
       }
-      if (next) {
-        // This click is the user gesture that unlocks audio + lets us ask
-        // for notification permission (the poll loop later has neither).
-        try {
-          const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-          if (Ctor) {
-            audioCtxRef.current ??= new Ctor();
-            void audioCtxRef.current.resume();
-          }
-        } catch {
-          // audio unavailable - notifications/strip still work
-        }
-        if (typeof Notification !== "undefined" && Notification.permission === "default") {
-          void Notification.requestPermission();
-        }
-      }
+      // This click is a user gesture - unlock audio + notification permission
+      // (the poll loop that later fires alerts has neither).
+      if (next) ensureAlertChannel();
       return next;
     });
   }
@@ -1483,27 +2029,38 @@ export function LiveChartPanel({
     }
   }
 
+  // Refresh the style bar's mirrored state from a stored overlay.
+  function syncSelectedFrom(id: string) {
+    const entry = overlaysRef.current.get(id);
+    setSelStyle(entry?.style ?? drawStyleRef.current);
+    setSelAlert(entry?.alert ?? null);
+  }
+
   // The same callback set is attached to every overlay, whether freshly
   // drawn or restored from storage: keep our id->points map in sync on
   // draw-end and drag-end, drop it on removal, track selection for the
-  // Delete-key handler, and let a right-click delete outright (klinecharts
-  // ships no delete affordance of its own).
+  // Delete-key handler + style bar, and let a right-click delete outright
+  // (klinecharts ships no delete affordance of its own).
   function overlayHandlers() {
     return {
       onDrawEnd: (e: OverlayEvent) => {
-        overlaysRef.current.set(e.overlay.id, serializeOverlay(e.overlay));
+        overlaysRef.current.set(e.overlay.id, serializeOverlay(e.overlay, overlaysRef.current.get(e.overlay.id)));
         persistOverlays();
         pendingOverlayRef.current = null;
         setActiveTool(null);
         return false;
       },
       onPressedMoveEnd: (e: OverlayEvent) => {
-        overlaysRef.current.set(e.overlay.id, serializeOverlay(e.overlay));
+        overlaysRef.current.set(e.overlay.id, serializeOverlay(e.overlay, overlaysRef.current.get(e.overlay.id)));
         persistOverlays();
+        if (selectedOverlayRef.current === e.overlay.id) syncSelectedFrom(e.overlay.id);
         return false;
       },
       onRemoved: (e: OverlayEvent) => {
-        if (selectedOverlayRef.current === e.overlay.id) selectedOverlayRef.current = null;
+        if (selectedOverlayRef.current === e.overlay.id) {
+          selectedOverlayRef.current = null;
+          setSelected(null);
+        }
         if (pendingOverlayRef.current === e.overlay.id) pendingOverlayRef.current = null;
         if (restoringRef.current) return false;
         overlaysRef.current.delete(e.overlay.id);
@@ -1512,10 +2069,15 @@ export function LiveChartPanel({
       },
       onSelected: (e: OverlayEvent) => {
         selectedOverlayRef.current = e.overlay.id;
+        setSelected({ id: e.overlay.id, name: e.overlay.name });
+        syncSelectedFrom(e.overlay.id);
         return false;
       },
       onDeselected: (e: OverlayEvent) => {
-        if (selectedOverlayRef.current === e.overlay.id) selectedOverlayRef.current = null;
+        if (selectedOverlayRef.current === e.overlay.id) {
+          selectedOverlayRef.current = null;
+          setSelected(null);
+        }
         return false;
       },
       onRightClick: (e: OverlayEvent) => {
@@ -1540,8 +2102,147 @@ export function LiveChartPanel({
       return;
     }
     setActiveTool(name);
-    const id = chart.createOverlay({ name, ...overlayHandlers() });
-    pendingOverlayRef.current = typeof id === "string" ? id : null;
+    const id = chart.createOverlay({
+      name,
+      mode: magnetModeFor(magnetRef.current),
+      styles: styleToPatch(drawStyleRef.current),
+      ...overlayHandlers(),
+    });
+    if (typeof id === "string") {
+      pendingOverlayRef.current = id;
+      // Seed the store with the current default style so onDrawEnd's
+      // serialize preserves it.
+      overlaysRef.current.set(id, { name, points: [], style: drawStyleRef.current });
+    } else {
+      pendingOverlayRef.current = null;
+    }
+  }
+
+  function toggleMagnet() {
+    setMagnet((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(MAGNET_STORAGE_KEY, String(next));
+      } catch {
+        /* storage disabled - still applies this session */
+      }
+      const chart = chartRef.current;
+      if (chart) {
+        const mode = magnetModeFor(next);
+        for (const id of overlaysRef.current.keys()) chart.overrideOverlay({ id, mode });
+      }
+      return next;
+    });
+  }
+
+  // Unlock WebAudio + ask for notification permission - must run from a
+  // user gesture (the poll loop that later fires alerts has neither).
+  function ensureAlertChannel() {
+    try {
+      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (Ctor) {
+        audioCtxRef.current ??= new Ctor();
+        void audioCtxRef.current.resume();
+      }
+    } catch {
+      /* audio unavailable - notifications / the banner still work */
+    }
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      void Notification.requestPermission();
+    }
+  }
+
+  // --- Style bar actions (operate on the selected drawing) ---
+  function applyDrawStyle(patch: Partial<DrawStyle>) {
+    const sel = selectedOverlayRef.current;
+    if (!sel) return;
+    const entry = overlaysRef.current.get(sel);
+    const next: DrawStyle = { ...(entry?.style ?? drawStyleRef.current), ...patch };
+    chartRef.current?.overrideOverlay({ id: sel, styles: styleToPatch(next) });
+    if (entry) {
+      overlaysRef.current.set(sel, { ...entry, style: next });
+      persistOverlays();
+    }
+    setSelStyle(next);
+    // Last style used becomes the default for the next new drawing.
+    setDrawStyle(next);
+    try {
+      localStorage.setItem(DRAW_STYLE_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleSelectedAlert() {
+    const sel = selectedOverlayRef.current;
+    if (!sel) return;
+    const entry = overlaysRef.current.get(sel);
+    if (!entry) return;
+    if (entry.alert) {
+      overlaysRef.current.set(sel, { ...entry, alert: undefined });
+      setSelAlert(null);
+    } else {
+      ensureAlertChannel();
+      const z = alertZone(entry);
+      const lastSide: DrawAlert["lastSide"] =
+        z && lastPriceRef.current != null ? alertSideOf(lastPriceRef.current, z) : null;
+      const alert: DrawAlert = { trigger: "cross", lastSide };
+      overlaysRef.current.set(sel, { ...entry, alert });
+      setSelAlert(alert);
+    }
+    persistOverlays();
+  }
+
+  function setSelectedAlertTrigger(trigger: DrawAlert["trigger"]) {
+    const sel = selectedOverlayRef.current;
+    if (!sel) return;
+    const entry = overlaysRef.current.get(sel);
+    if (!entry?.alert) return;
+    const alert: DrawAlert = { trigger, lastSide: null }; // re-seed on next check
+    overlaysRef.current.set(sel, { ...entry, alert });
+    setSelAlert(alert);
+    persistOverlays();
+  }
+
+  // Sound + desktop notification + a transient on-chart banner when a
+  // drawing's alert trips. Reuses the setup-alert channel.
+  function fireDrawAlert(msg: string) {
+    playSetupTune();
+    setAlertFlash(msg);
+    if (alertFlashTimerRef.current) window.clearTimeout(alertFlashTimerRef.current);
+    alertFlashTimerRef.current = window.setTimeout(() => setAlertFlash(null), 7000);
+    try {
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        const n = new Notification("Price alert", { body: msg, tag: `draw-alert-${msg}` });
+        n.onclick = () => window.focus();
+      }
+    } catch {
+      /* notifications unavailable here */
+    }
+  }
+
+  // Walk the armed drawing alerts against a price - `phase` "tick" runs
+  // every LTP poll, "close" once per completed bar, each keeping its own
+  // side memory. A horizontal line / trend line fires on an above<->below
+  // flip; a rectangle also fires on entering / leaving the band ("inside").
+  // Called from the candle effect.
+  function runLineAlerts(sym: string, price: number, phase: "tick" | "close") {
+    let changed = false;
+    for (const [id, ov] of overlaysRef.current) {
+      if (!ov.alert || !ALERTABLE_OVERLAYS.has(ov.name)) continue;
+      if ((ov.alert.trigger === "close") !== (phase === "close")) continue;
+      const z = alertZone(ov);
+      if (!z) continue;
+      const nextSide = alertSideOf(price, z);
+      if (ov.alert.lastSide && ov.alert.lastSide !== nextSide) {
+        fireDrawAlert(alertMessage(sym, z, nextSide, ov.alert.lastSide, ov.alert.trigger));
+      }
+      if (ov.alert.lastSide !== nextSide) {
+        overlaysRef.current.set(id, { ...ov, alert: { ...ov.alert, lastSide: nextSide } });
+        changed = true;
+      }
+    }
+    if (changed) persistOverlays();
   }
 
   function toggleDrawingsHidden() {
@@ -1587,6 +2288,37 @@ export function LiveChartPanel({
     overlaysRef.current.clear();
     persistOverlays();
     setActiveTool(null);
+    selectedOverlayRef.current = null;
+    setSelected(null);
+  }
+
+  // After an interval switch reloaded the series, put the same time window
+  // back in view (pickInterval stashed it) instead of klinecharts' default
+  // "latest N bars" - so a drawing over older bars stays where it was.
+  // Approximates the old window by fitting [fromTs..toTs] to the pane width
+  // and scrolling the right edge to toTs.
+  function restorePreservedWindow(bars: KLineData[]) {
+    const w = preservedWindowRef.current;
+    preservedWindowRef.current = null;
+    const chart = chartRef.current;
+    if (!w || !chart || bars.length === 0) return;
+    const fromIdx = bars.findIndex((b) => b.timestamp >= w.fromTs);
+    let toIdx = -1;
+    for (let i = bars.length - 1; i >= 0; i--) {
+      if (bars[i].timestamp <= w.toTs) {
+        toIdx = i;
+        break;
+      }
+    }
+    if (fromIdx < 0 || toIdx <= fromIdx) return;
+    const barsToShow = toIdx - fromIdx + 1;
+    const paneW = Math.max(200, (containerRef.current?.clientWidth ?? 900) - 64); // minus the y-axis
+    try {
+      chart.setBarSpace(Math.max(0.5, Math.min(40, paneW / barsToShow)));
+      chart.scrollToTimestamp(bars[toIdx].timestamp, 0);
+    } catch {
+      /* klinecharts clamps out-of-range zoom itself; ignore any failure */
+    }
   }
 
   // Re-sync the drawn overlays from storage for the current instrument -
@@ -1609,8 +2341,17 @@ export function LiveChartPanel({
     if (Array.isArray(stored)) {
       for (const s of stored as StoredOverlay[]) {
         if (!s || typeof s.name !== "string" || !Array.isArray(s.points)) continue;
-        const id = chart.createOverlay({ name: s.name, points: s.points, ...overlayHandlers() });
-        if (typeof id === "string") overlaysRef.current.set(id, s);
+        const id = chart.createOverlay({
+          name: s.name,
+          points: s.points,
+          mode: magnetModeFor(magnetRef.current),
+          styles: s.style ? styleToPatch(s.style) : undefined,
+          ...overlayHandlers(),
+        });
+        // A restored alert re-seeds its side on the next check.
+        if (typeof id === "string") {
+          overlaysRef.current.set(id, s.alert ? { ...s, alert: { ...s.alert, lastSide: null } } : s);
+        }
       }
     }
     restoringRef.current = false;
@@ -1755,7 +2496,7 @@ export function LiveChartPanel({
     let cancelled = false;
     const ex = chartExchange;
     const sym = chartSymbol;
-    const { tfs, breakers, fvg, breaks, setups } = structure;
+    const { tfs, breakers, fvg, breaks, trendMarks, setups } = structure;
 
     if (tfs.length === 0) {
       chart.removeOverlay({ groupId: OB_GROUP_ID });
@@ -1814,13 +2555,29 @@ export function LiveChartPanel({
         }
         if (breaks) {
           for (const e of data.events) {
-            const anchor = Date.parse(e.timestamp);
-            if (!Number.isFinite(anchor)) continue;
+            const breakAnchor = Date.parse(e.timestamp);
+            const fromAnchor = Date.parse(e.from_timestamp);
+            if (!Number.isFinite(breakAnchor) || !Number.isFinite(fromAnchor)) continue;
             chart!.createOverlay({
               name: "htfStructureBreak",
               groupId: OB_GROUP_ID,
-              points: [{ timestamp: anchor, value: e.price }],
+              points: [
+                { timestamp: fromAnchor, value: e.price },
+                { timestamp: breakAnchor, value: e.price },
+              ],
               extendData: { tf: label, kind: e.kind, direction: e.direction, price: e.price },
+            });
+          }
+        }
+        if (trendMarks) {
+          for (const tc of data.trend_changes) {
+            const anchor = Date.parse(tc.timestamp);
+            if (!Number.isFinite(anchor)) continue;
+            chart!.createOverlay({
+              name: "htfTrendMark",
+              groupId: OB_GROUP_ID,
+              points: [{ timestamp: anchor, value: tc.price }],
+              extendData: { tf: label, trend: tc.trend, price: tc.price },
             });
           }
         }
@@ -1955,11 +2712,12 @@ export function LiveChartPanel({
     if (!chart) return;
     chart.removeOverlay({ groupId: OI_GROUP_ID });
     if (!oiLevelsOn || !oi || dataEpoch === 0) return;
+    const oiIsCrypto = oi.underlying_exchange === "CRYPTO";
     for (const lvl of computeOiLevels(oi)) {
       const tag = lvl.kind === "resistance" ? "R" : "S";
       const label = lvl.forming
-        ? `${tag} forming ${lvl.strike}${lvl.oiChange != null ? ` · +${fmtCompactIndian(lvl.oiChange)}/15m` : ""}`
-        : `${tag}${lvl.rank} ${lvl.strike}${lvl.oi ? ` · ${fmtCompactIndian(lvl.oi)} OI` : ""}`;
+        ? `${tag} forming ${lvl.strike}${lvl.oiChange != null ? ` · +${fmtOiCount(lvl.oiChange, oiIsCrypto)}/15m` : ""}`
+        : `${tag}${lvl.rank} ${lvl.strike}${lvl.oi ? ` · ${fmtOiCount(lvl.oi, oiIsCrypto)} OI` : ""}`;
       const extendData: OiLevelExtendData = {
         kind: lvl.kind,
         rank: lvl.rank,
@@ -1975,6 +2733,136 @@ export function LiveChartPanel({
       });
     }
   }, [oi, oiLevelsOn, dataEpoch]);
+
+  // --- Trades on chart: poll this symbol's manual positions + option
+  // groups while the layer is on. Only CLOSED is fetched here (realized
+  // P&L is on the row, no quote needed) - the single OPEN slot with its
+  // live P&L comes in from ChartTradePanel via `openTrade`, so we never
+  // duplicate that (Dhan-quote-heavy) live-P&L fetch. Poll is deliberately
+  // slow. ---
+  useEffect(() => {
+    if (!tradesOn) {
+      setClosedTrades({ positions: [], groups: [] });
+      return;
+    }
+    const seg = segment as Segment;
+    let cancelled = false;
+    async function load() {
+      try {
+        const [closedPos, closedGrp] = await Promise.all([
+          fetchExecPositions({ segment: seg, status: "CLOSED", manualOnly: true, limit: 50 }),
+          fetchOptionGroups({ segment: seg, status: "CLOSED", manualOnly: true, limit: 50 }),
+        ]);
+        if (cancelled) return;
+        setClosedTrades({ positions: closedPos, groups: closedGrp });
+      } catch {
+        // keep the last set
+      }
+    }
+    void load();
+    const t = window.setInterval(() => void load(), TRADES_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [tradesOn, segment]);
+
+  const chartTrades = useMemo(
+    () =>
+      tradesOn
+        ? toChartTrades(
+            symbol.trim().toUpperCase(),
+            [...(openTrade?.pos ? [openTrade.pos] : []), ...closedTrades.positions],
+            [...(openTrade?.group ? [openTrade.group] : []), ...closedTrades.groups],
+            firstBarTsRef.current || 0,
+          )
+        : EMPTY_CHART_TRADES,
+    // firstBarTsRef isn't reactive, but dataEpoch bumps whenever it's set.
+    [tradesOn, symbol, openTrade, closedTrades, dataEpoch],
+  );
+
+  // --- Draw the trade markers. Redrawn on each poll, on a series change
+  // (dataEpoch), or the layer toggling - one group id, remove-then-add. ---
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.removeOverlay({ groupId: TRADES_GROUP_ID });
+    if (!tradesOn || dataEpoch === 0) return;
+    for (const tr of chartTrades) {
+      // Re-check here too - the poll can land before the candle history
+      // sets firstBarTs; this effect also re-runs on dataEpoch.
+      if (tr.entryTs < firstBarTsRef.current) continue;
+      const points =
+        tr.state === "closed" && tr.exitTs != null && tr.exitPrice != null
+          ? [
+              { timestamp: tr.entryTs, value: tr.entryPrice },
+              { timestamp: tr.exitTs, value: tr.exitPrice },
+            ]
+          : [{ timestamp: tr.entryTs, value: tr.entryPrice }];
+      const extendData: TradeMarkerExtendData = {
+        kind: tr.kind,
+        side: tr.side,
+        state: tr.state,
+        entryPrice: tr.entryPrice,
+        exitPrice: tr.exitPrice,
+        pnl: tr.pnl,
+        label: tr.label,
+        reason: tr.reason,
+      };
+      chart.createOverlay({ name: "tradeMarker", groupId: TRADES_GROUP_ID, points, extendData });
+    }
+  }, [chartTrades, tradesOn, dataEpoch]);
+
+  // --- Price pick: while the trade panel has a field armed (`pricePick`),
+  // tint the crosshair to that field's colour and let a click on the
+  // candle pane read the price under it. A pick and a drawing tool are
+  // mutually exclusive - arming one cancels the other. ---
+  useEffect(() => {
+    const chart = chartRef.current;
+    const el = containerRef.current;
+    if (!chart || !el || !pricePick) return;
+
+    if (pendingOverlayRef.current) {
+      chart.removeOverlay(pendingOverlayRef.current);
+      pendingOverlayRef.current = null;
+    }
+    setActiveTool(null);
+
+    const color = pricePick === "stop" ? "#e8586a" : pricePick === "target" ? "#3ecf8e" : ACCENT;
+    chart.setStyles({
+      crosshair: { horizontal: { line: { color }, text: { backgroundColor: color, borderColor: color, color: BG } } },
+    });
+    el.style.cursor = "crosshair";
+
+    const onCross: (data?: unknown) => void = (data) => {
+      const c = data as Crosshair | undefined;
+      if (!c || typeof c.paneId !== "string" || typeof c.y !== "number" || !c.paneId.startsWith("candle")) {
+        hoveredPriceRef.current = null;
+        return;
+      }
+      const pts = chart.convertFromPixel([{ y: c.y }], { paneId: c.paneId });
+      const v = Array.isArray(pts) ? pts[0]?.value : (pts as { value?: number } | undefined)?.value;
+      hoveredPriceRef.current = typeof v === "number" && Number.isFinite(v) ? v : null;
+    };
+    chart.subscribeAction(ActionType.OnCrosshairChange, onCross);
+
+    const onClick = () => {
+      const p = hoveredPriceRef.current;
+      if (p == null) return;
+      onPricePickRef.current?.(Number(p.toFixed(pricePrecision(p))));
+    };
+    el.addEventListener("click", onClick);
+
+    return () => {
+      chart.unsubscribeAction(ActionType.OnCrosshairChange, onCross);
+      el.removeEventListener("click", onClick);
+      el.style.cursor = "";
+      hoveredPriceRef.current = null;
+      chart.setStyles({
+        crosshair: { horizontal: { line: { color: DIM }, text: { backgroundColor: RAISED, borderColor: BORDER, color: TEXT } } },
+      });
+    };
+  }, [pricePick]);
 
   // --- Resolve the typed underlying to a quotable chart symbol/exchange
   // (an MCX commodity or NSE index future doesn't quote under its bare
@@ -2084,9 +2972,11 @@ export function LiveChartPanel({
       if (initial) {
         chart!.setPriceVolumePrecision(pricePrecision(newestClose), 0);
         chart!.applyNewData(bars);
+        restorePreservedWindow(bars);
         loadDrawings(ex, sym);
         setStatus("ready");
         setErrorMsg(null);
+        firstBarTsRef.current = bars[0].timestamp;
         setDataEpoch((e) => e + 1);
       } else {
         // updateData appends when the timestamp is newer than the last
@@ -2136,6 +3026,7 @@ export function LiveChartPanel({
       // there's a live candle to roll it into.
       setLastPrice(ltp);
       onLtpChangeRef.current?.(ltp);
+      runLineAlerts(sym, ltp, "tick");
 
       if (!liveBar) {
         // No live forming bar (stale candle history / market closed / a
@@ -2158,8 +3049,10 @@ export function LiveChartPanel({
       clearLtpLine();
 
       if (Date.now() >= liveBar.timestamp + intervalMs) {
-        // This synthetic bar's window has elapsed - pull the real one
-        // (and re-arm the next synthetic bar) instead of stretching it.
+        // This synthetic bar's window has elapsed - check "on close"
+        // alerts against its final close, then pull the real bar (and
+        // re-arm the next synthetic one) instead of stretching it.
+        runLineAlerts(sym, liveBar.close, "close");
         void loadHistory(false);
         return;
       }
@@ -2281,6 +3174,14 @@ export function LiveChartPanel({
                 <label>
                   <input
                     type="checkbox"
+                    checked={structure.trendMarks}
+                    onChange={() => updateStructure({ trendMarks: !structure.trendMarks })}
+                  />
+                  Trend changes (neutral → up / down)
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
                     checked={structure.setups}
                     onChange={() => updateStructure({ setups: !structure.setups })}
                   />
@@ -2292,11 +3193,6 @@ export function LiveChartPanel({
                     🔔 Sound + desktop alert on a new setup
                   </label>
                 )}
-                <div className="live-chart-indicators-hint">
-                  Auto-detected structure. Detection follows the chart's interval — changing the interval resets it to
-                  that timeframe; tick extra timeframes here to overlay them as well. Dashed border = tested; thick
-                  border = breaker; amber band = FVG; faded = counter-trend or a resolved setup.
-                </div>
               </div>
             )}
           </div>
@@ -2315,6 +3211,14 @@ export function LiveChartPanel({
               })}
             </div>
           )}
+
+          <label
+            className="live-chart-trades-toggle"
+            title="Mark your own trades on this chart — entry / exit, and live or realized P&L."
+          >
+            <input type="checkbox" checked={tradesOn} onChange={toggleTrades} />
+            Trades
+          </label>
         </div>
 
         <div className="live-chart-meta">
@@ -2409,6 +3313,24 @@ export function LiveChartPanel({
 
           <button
             type="button"
+            className={magnet ? "active" : ""}
+            title={
+              magnet
+                ? "Magnet on - drawings snap to candle highs/lows (click to turn off)"
+                : "Magnet - snap drawings to candle highs/lows"
+            }
+            aria-label="Magnet snap"
+            aria-pressed={magnet}
+            disabled={status !== "ready" || drawingsHidden}
+            onClick={toggleMagnet}
+          >
+            <MagnetIcon />
+          </button>
+
+          <span className="live-chart-drawtools-sep" />
+
+          <button
+            type="button"
             className={drawingsHidden ? "is-hidden" : ""}
             title={drawingsHidden ? "Show drawings" : "Hide drawings"}
             aria-label={drawingsHidden ? "Show drawings" : "Hide drawings"}
@@ -2446,6 +3368,104 @@ export function LiveChartPanel({
 
         <div className="live-chart-canvas-wrap">
           <div ref={containerRef} className="live-chart-canvas" />
+          {pricePick && (
+            <div className={`live-chart-pick-banner is-${pricePick}`}>
+              Click the chart to set the {pricePick === "stop" ? "stop-loss" : pricePick} · Esc to cancel
+            </div>
+          )}
+          {alertFlash && <div className="live-chart-alert-flash">🔔 {alertFlash}</div>}
+          {selected && !drawingsHidden && (
+            <div className="live-chart-style-bar" role="toolbar" aria-label="Drawing style">
+              <div className="lcsb-swatches">
+                {DRAW_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`lcsb-swatch${selStyle.color.toLowerCase() === c ? " active" : ""}`}
+                    style={{ background: c }}
+                    title={c}
+                    aria-label={`Colour ${c}`}
+                    onClick={() => applyDrawStyle({ color: c })}
+                  />
+                ))}
+                <label className="lcsb-swatch lcsb-custom" title="Custom colour">
+                  <input
+                    type="color"
+                    value={/^#[0-9a-f]{6}$/i.test(selStyle.color) ? selStyle.color : "#4c8bf5"}
+                    onChange={(e) => applyDrawStyle({ color: e.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="lcsb-group">
+                <button
+                  type="button"
+                  className={selStyle.lineStyle === "solid" ? "active" : ""}
+                  title="Solid line"
+                  onClick={() => applyDrawStyle({ lineStyle: "solid" })}
+                >
+                  ──
+                </button>
+                <button
+                  type="button"
+                  className={selStyle.lineStyle === "dashed" ? "active" : ""}
+                  title="Dashed line"
+                  onClick={() => applyDrawStyle({ lineStyle: "dashed" })}
+                >
+                  ╌╌
+                </button>
+              </div>
+              <div className="lcsb-group">
+                {[1, 2, 3].map((w) => (
+                  <button
+                    key={w}
+                    type="button"
+                    className={selStyle.lineWidth === w ? "active" : ""}
+                    title={`${w}px`}
+                    onClick={() => applyDrawStyle({ lineWidth: w })}
+                  >
+                    {w}
+                  </button>
+                ))}
+              </div>
+              {ALERTABLE_OVERLAYS.has(selected.name) && (
+                <div className="lcsb-group lcsb-alert">
+                  <button
+                    type="button"
+                    className={selAlert ? "active" : ""}
+                    title={
+                      selAlert
+                        ? "Alert armed - click to remove"
+                        : selected.name === "rect"
+                          ? "Alert when price enters or leaves this zone"
+                          : "Alert when price crosses this line"
+                    }
+                    onClick={toggleSelectedAlert}
+                  >
+                    🔔
+                  </button>
+                  {selAlert && (
+                    <select
+                      value={selAlert.trigger}
+                      onChange={(e) => setSelectedAlertTrigger(e.target.value as DrawAlert["trigger"])}
+                      title="When to check"
+                    >
+                      <option value="cross">live</option>
+                      <option value="close">on bar close</option>
+                    </select>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                className="lcsb-del"
+                title="Delete this drawing (Del)"
+                aria-label="Delete drawing"
+                onClick={() => selected && chartRef.current?.removeOverlay(selected.id)}
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          )}
           {status !== "ready" && (
             <div className="live-chart-overlay">
               {status === "error" ? (
@@ -2464,7 +3484,7 @@ export function LiveChartPanel({
             PCR <b>{oi.pcr != null ? oi.pcr.toFixed(2) : "–"}</b>
           </span>
           <span>
-            CE OI {fmtCompactIndian(oi.total_call_oi)}
+            CE OI {fmtOiCount(oi.total_call_oi, oi.underlying_exchange === "CRYPTO")}
             {(oi.total_call_oi_change_5m != null || oi.total_call_oi_change_15m != null) && (
               <span className="live-chart-oi-delta">
                 {" "}
@@ -2475,7 +3495,7 @@ export function LiveChartPanel({
             )}
           </span>
           <span>
-            PE OI {fmtCompactIndian(oi.total_put_oi)}
+            PE OI {fmtOiCount(oi.total_put_oi, oi.underlying_exchange === "CRYPTO")}
             {(oi.total_put_oi_change_5m != null || oi.total_put_oi_change_15m != null) && (
               <span className="live-chart-oi-delta">
                 {" "}
@@ -2489,12 +3509,13 @@ export function LiveChartPanel({
             const levels = computeOiLevels(oi).filter((l) => !l.forming);
             const res = levels.filter((l) => l.kind === "resistance").sort((a, b) => a.rank - b.rank);
             const sup = levels.filter((l) => l.kind === "support").sort((a, b) => a.rank - b.rank);
+            const oiIsCrypto = oi.underlying_exchange === "CRYPTO";
             return (
               <>
                 {res.length > 0 && (
                   <span
                     className="live-chart-oi-sr live-chart-oi-sr-r"
-                    title={res.map((l) => `R${l.rank} ${l.strike} · ${fmtCompactIndian(l.oi)} call OI`).join("  ")}
+                    title={res.map((l) => `R${l.rank} ${l.strike} · ${fmtOiCount(l.oi, oiIsCrypto)} call OI`).join("  ")}
                   >
                     R <b>{res.map((l) => l.strike).join(" · ")}</b>
                   </span>
@@ -2502,7 +3523,7 @@ export function LiveChartPanel({
                 {sup.length > 0 && (
                   <span
                     className="live-chart-oi-sr live-chart-oi-sr-s"
-                    title={sup.map((l) => `S${l.rank} ${l.strike} · ${fmtCompactIndian(l.oi)} put OI`).join("  ")}
+                    title={sup.map((l) => `S${l.rank} ${l.strike} · ${fmtOiCount(l.oi, oiIsCrypto)} put OI`).join("  ")}
                   >
                     S <b>{sup.map((l) => l.strike).join(" · ")}</b>
                   </span>

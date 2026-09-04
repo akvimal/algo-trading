@@ -11,27 +11,38 @@ import {
   type Segment,
   type StopLossIndicatorType,
   type StopLossInterval,
-  createManualOptionGroup,
-  createManualPosition,
-  fetchAccounts,
   fetchExecPositions,
   fetchOptionGroups,
   squareOffManualPosition,
   squareOffOptionGroup,
+  updateOptionGroupNotes,
   updateOptionGroupSpotStopLoss,
+  updateOptionGroupSpotTarget,
   updateOptionGroupSquareOffTime,
+  updateOptionGroupTags,
+  updatePositionNotes,
   updatePositionSquareOffTime,
+  updatePositionTags,
   updateStopLoss,
 } from "./api";
+import type { PricePickField } from "./LiveChartPanel";
 import {
   CRYPTO_OPTION_SYMBOLS,
+  type PanelStrategy,
+  type PendingOrder,
+  SETUP_TAGS,
   checkExitTrigger,
+  computeRR,
   dayKey,
   fetchUnderlyingLtp,
   fmt,
   fmtQty,
   formatCompact,
   pnlClass,
+  placeManualOrder,
+  previewRiskLots,
+  resolveUnderlyingCached,
+  rrDirectionValid,
   todayKey,
 } from "./manualOrder";
 
@@ -83,6 +94,7 @@ function chartSlInterval(): StopLossInterval {
 // Normalized closed-trade row for the history list.
 type ClosedTrade = {
   id: string;
+  kind: "future" | "option"; // which /notes endpoint a comment edit hits
   label: string;
   entry: number | null;
   exit: number | null;
@@ -91,6 +103,11 @@ type ClosedTrade = {
   pnlPct: number | null;
   exitReason: string | null;
   exitTime: string | null;
+  trendFollowed: boolean;
+  riskManaged: boolean;
+  notes: string;
+  setupTag: string;
+  confidence: number | null;
 };
 
 // One row of the open-position grid - a future position is a single row;
@@ -111,6 +128,21 @@ function optionLabel(action: "BUY" | "SELL", style: OptionPositionStyle): string
   return action === "BUY" ? "Bull Call Spread" : "Bear Put Spread";
 }
 
+// The little ⌖ button beside a price field - click to arm a chart pick
+// for that field (click again, or Esc, to cancel).
+function PickBtn({ armed, onToggle }: { armed: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`ctp-pick${armed ? " armed" : ""}`}
+      title={armed ? "Click a price on the chart (Esc to cancel)" : "Set from the chart"}
+      onClick={onToggle}
+    >
+      ⌖
+    </button>
+  );
+}
+
 function pnlPct(pnl: number | null, entry: number | null, qty: number | null): number | null {
   if (pnl == null || entry == null || qty == null) return null;
   const base = Math.abs(entry * qty);
@@ -120,6 +152,7 @@ function pnlPct(pnl: number | null, entry: number | null, qty: number | null): n
 function positionToClosed(p: ManualPosition): ClosedTrade {
   return {
     id: p.id,
+    kind: "future",
     label: `${p.action} ${p.instrument_type}`,
     entry: p.entry_price,
     exit: p.exit_price,
@@ -128,12 +161,18 @@ function positionToClosed(p: ManualPosition): ClosedTrade {
     pnlPct: pnlPct(p.pnl, p.entry_price, p.quantity),
     exitReason: p.exit_reason,
     exitTime: p.exit_time,
+    trendFollowed: p.trend_followed === true,
+    riskManaged: p.risk_managed === true,
+    notes: p.notes ?? "",
+    setupTag: p.setup_tag ?? "",
+    confidence: p.confidence ?? null,
   };
 }
 
 function groupToClosed(g: ManualOptionGroup): ClosedTrade {
   return {
     id: g.id,
+    kind: "option",
     label: optionLabel(g.action, g.strategy_type.startsWith("naked") ? "naked" : "spread"),
     entry: g.net_debit,
     exit: null,
@@ -142,6 +181,11 @@ function groupToClosed(g: ManualOptionGroup): ClosedTrade {
     pnlPct: pnlPct(g.pnl, g.net_debit, g.quantity),
     exitReason: g.exit_reason,
     exitTime: g.exit_time,
+    trendFollowed: g.trend_followed === true,
+    riskManaged: g.risk_managed === true,
+    notes: g.notes ?? "",
+    setupTag: g.setup_tag ?? "",
+    confidence: g.confidence ?? null,
   };
 }
 
@@ -199,13 +243,27 @@ function hhmm(t: string | null | undefined): string {
 export default function ChartTradePanel({
   segment,
   symbol,
+  account,
   intervalTrend,
   chartInterval,
   forceTrend,
+  riskManaged,
   chartLtp,
+  pendingOrder,
+  pendingNote,
+  onArmPending,
+  onCancelPending,
+  pickField,
+  onPickField,
+  pickedPrice,
+  onOpenTradeChange,
 }: {
   segment: Segment;
   symbol: string;
+  // The segment account (capital / risk% / min R:R) - fetched by
+  // LiveChartPage (once per segment), passed in so "Risk/Trade" can live
+  // in the discipline strip.
+  account: Account | null;
   // Confirmed structure trend for the chart's current interval (null when
   // structure detection isn't running on that timeframe), + the interval
   // itself for the label. Lifted from LiveChartPanel by LiveChartPage.
@@ -214,25 +272,66 @@ export default function ChartTradePanel({
   // The "trade with the interval trend only" lock - its checkbox lives up
   // in LiveChartPage (aligned with the chart's interval strip), not here.
   forceTrend: boolean;
+  // The "Risk managed" gate - its checkbox also lives in LiveChartPage.
+  // When on: Limit/SL/Target required, lots omitted (execution risk-sizes
+  // them), and Proceed blocked until reward:risk clears the segment's
+  // min_reward_risk_ratio.
+  riskManaged: boolean;
   // The chart's own live price - used as THE ltp (display + target watch)
   // so the panel never drifts from the chart. null until the chart has a
   // tick; the panel's own fetch is only a fallback for that gap.
   chartLtp: number | null;
+  // A limit order armed for THIS symbol, watched by LiveChartPage's own
+  // loop (which outlives this panel's per-symbol remount). null = none.
+  pendingOrder: PendingOrder | null;
+  // A post-fire message for this symbol (rejection reason / soft warning).
+  pendingNote: string | null;
+  onArmPending: (order: PendingOrder) => void;
+  onCancelPending: (symbol: string) => void;
+  // Chart price-pick: which of this panel's price fields is armed for a
+  // chart click, a setter to arm/cancel, and the last price picked from
+  // the chart (applied to whichever field is armed / open).
+  pickField: PricePickField | null;
+  onPickField: (f: PricePickField | null) => void;
+  pickedPrice: { field: PricePickField; price: number; nonce: number } | null;
+  // Emits this panel's single open trade (with its live P&L) so the chart
+  // can mark it without a second live-P&L poll.
+  onOpenTradeChange?: (t: { pos: ManualPosition | null; group: ManualOptionGroup | null }) => void;
 }) {
   const sym = symbol.trim().toUpperCase();
   const optionEligible = segment !== "CRYPTO" || CRYPTO_OPTION_SYMBOLS.includes(sym);
   const unit = segment === "CRYPTO" ? "USD" : "INR";
 
   const [ltp, setLtp] = useState<number | null>(null);
-  const [account, setAccount] = useState<Account | null>(null);
+  // The future contract's lot size for THIS underlying (65 for NIFTY, 10
+  // for GOLDM, 0.001 for BTCUSD...) - resolveUnderlying returns it; used
+  // only for the risk-managed lot-count preview.
+  const [lotSize, setLotSize] = useState<number | null>(null);
 
   // --- Entry form ---
   const [action, setAction] = useState<"BUY" | "SELL">("BUY");
-  const [strategy, setStrategy] = useState<"future" | "naked" | "spread">("naked");
+  // Market fires immediately at the live price; Limit arms a pending order
+  // (LiveChartPage watches the spot and fires it on a crossing).
+  const [entryType, setEntryType] = useState<"market" | "limit">("market");
+  const [limitInput, setLimitInput] = useState("");
+  const [targetInput, setTargetInput] = useState("");
+  // Default the strategy by segment: CRYPTO trades the perpetual future
+  // (its options are thin and only exist for a couple of symbols), NSE/MCX
+  // default to a naked option (the usual manual play there). The panel
+  // remounts on every segment/symbol switch (LiveChartPage keys it on
+  // `ctp:<segment>:<symbol>`), so this initializer re-runs and re-picks
+  // the right default each time - no effect needed. Still fully
+  // overridable in the dropdown (and the `optionEligible` effect below
+  // still forces `future` for a CRYPTO symbol with no option chain).
+  const [strategy, setStrategy] = useState<PanelStrategy>(segment === "CRYPTO" ? "future" : "naked");
   const isOption = strategy !== "future";
   const [moneyness, setMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [qtyInput, setQtyInput] = useState("1");
   const [slInput, setSlInput] = useState("");
+  // Trade journal, set at order time - the setup reason + a 1-5 confidence.
+  // Optional; feeds Trading Performance's by-setup / confidence slices.
+  const [setupTag, setSetupTag] = useState("");
+  const [confidence, setConfidence] = useState<number | null>(null);
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -270,19 +369,36 @@ export default function ChartTradePanel({
   const squaringOffRef = useRef(false);
 
   const [history, setHistory] = useState<ClosedTrade[]>([]);
+  // Which history row's journal is being edited + its draft (note text +
+  // setup tag + confidence). Saving diffs against the row and only calls
+  // the endpoints whose value changed.
+  const [noteEdit, setNoteEdit] = useState<{ id: string; text: string; tag: string; confidence: number | null } | null>(
+    null,
+  );
+  const [noteBusy, setNoteBusy] = useState(false);
+  // History rows whose (existing) note is expanded - collapsed by default.
+  const [noteOpen, setNoteOpen] = useState<Set<string>>(() => new Set());
+  const toggleNote = useCallback((id: string) => {
+    setNoteOpen((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
 
-  // --- Account (risk-per-trade readout) ---
+  // --- Lot size for the risk-managed preview (resolveUnderlyingCached is
+  // a session-cached instrument-master lookup, no broker call). ---
   useEffect(() => {
     let cancelled = false;
-    fetchAccounts()
-      .then((accts) => {
-        if (!cancelled) setAccount(accts.find((a) => a.segment === segment) ?? null);
+    resolveUnderlyingCached(segment, sym)
+      .then((r) => {
+        if (!cancelled) setLotSize(r.lot_size);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [segment]);
+  }, [segment, sym]);
 
   // A manual FUTURE persists its RESOLVED contract symbol (e.g.
   // "NIFTY-25Sep2026-FUT", or an MCX active-month contract), not the bare
@@ -403,9 +519,15 @@ export default function ChartTradePanel({
       : openPos?.stop_loss_method == null
         ? openPos?.stop_loss_price
         : null;
+    // Target field: seed from the server-enforced value set at entry
+    // (positions.target_price / option_position_groups.spot_target_price),
+    // so a risk-managed order shows its real target. For a future, saveAll
+    // then also arms the browser watch off it; for a group it's persisted
+    // via updateOptionGroupSpotTarget.
+    const seededTarget = openGroup ? openGroup.spot_target_price : openPos?.target_price;
     setEdit({
       sl: seededSl != null ? String(seededSl) : "",
-      target: "",
+      target: seededTarget != null ? String(seededTarget) : "",
       closeBy: hhmm(openGroup?.square_off_time ?? openPos?.square_off_time),
     });
     setSavedAll(false);
@@ -430,72 +552,191 @@ export default function ChartTradePanel({
     if (!optionEligible && strategy !== "future") setStrategy("future");
   }, [optionEligible, strategy]);
 
+  // Feed the open trade (with its live P&L, from this panel's own poll) up
+  // to the chart so the trade marker doesn't re-poll it.
+  useEffect(() => {
+    onOpenTradeChange?.({ pos: openPos, group: openGroup });
+  }, [openPos, openGroup, onOpenTradeChange]);
+
+  // --- Apply a price picked off the chart to the armed field. For an
+  // open position "stop"/"target" fill the manage-bar edit fields; in the
+  // entry form they fill the entry inputs. ---
+  const pickNonceRef = useRef(0);
+  useEffect(() => {
+    if (!pickedPrice || pickedPrice.nonce === pickNonceRef.current) return;
+    pickNonceRef.current = pickedPrice.nonce;
+    const v = String(pickedPrice.price);
+    if (hasOpen) {
+      if (pickedPrice.field === "stop") setEdit((s) => ({ ...s, sl: v }));
+      else if (pickedPrice.field === "target") setEdit((s) => ({ ...s, target: v }));
+    } else if (pickedPrice.field === "limit") setLimitInput(v);
+    else if (pickedPrice.field === "stop") setSlInput(v);
+    else setTargetInput(v);
+  }, [pickedPrice, hasOpen]);
+
   // --- Direction lock (see `forceTrend`) ---
-  // Only enforce when the lock is on AND we actually know the trend.
-  const trendLock = forceTrend && intervalTrend != null;
+  // "Trend only" means exactly that: a directional trade is allowed ONLY
+  // when the chart interval has a CONFIRMED up/down trend and the bias
+  // matches it. No confirmed trend at all - ranging, OR structure
+  // detection not running so the trend is unknown - blocks both
+  // directions, same as ranging (an unknown trend is not a licence to
+  // trade either way).
+  const trendLock = forceTrend;
   const trendAllows: "BUY" | "SELL" | null =
     !trendLock ? null : intervalTrend === "up" ? "BUY" : intervalTrend === "down" ? "SELL" : null;
-  // Lock on + trend known + it's ranging -> no directional trade at all.
-  const trendRanging = trendLock && trendAllows == null;
-  const trendBlocked = trendLock && (trendRanging || action !== trendAllows);
+  // Lock on but no confirmed direction (ranging or unknown) -> no trade.
+  const trendUndirected = trendLock && trendAllows == null;
+  const trendUnknown = trendLock && intervalTrend == null;
+  const trendBlocked = trendLock && (trendUndirected || action !== trendAllows);
 
   // Snap the bias to the permitted side when the lock is (or becomes) active.
   useEffect(() => {
     if (trendAllows && action !== trendAllows) setAction(trendAllows);
   }, [trendAllows, action]);
 
+  // Risk-managed = limit orders only (a market order can't be pre-sized
+  // against a known entry, and the whole point is a planned entry). Snap
+  // to Limit whenever the mode is (or becomes) on.
+  useEffect(() => {
+    if (riskManaged && entryType !== "limit") setEntryType("limit");
+  }, [riskManaged, entryType]);
+
+  // --- Entry / risk inputs ---
+  const numOrNull = (s: string) => (s.trim() && Number.isFinite(Number(s)) ? Number(s) : null);
+  const effEntryType: "market" | "limit" = riskManaged ? "limit" : entryType;
+  const limitPrice = numOrNull(limitInput);
+  const stopPrice = numOrNull(slInput);
+  const targetPrice = numOrNull(targetInput);
+  // The entry price reward:risk (and risk-managed sizing) is measured from
+  // - the typed Limit, or (a plain market order) the live price.
+  const entryRef = effEntryType === "limit" ? limitPrice : ltp;
+  const rr = computeRR({ entry: entryRef, stop: stopPrice, target: targetPrice });
+  const dirValid = rrDirectionValid({ action, entry: entryRef, stop: stopPrice, target: targetPrice });
+  const minRR = account?.min_reward_risk_ratio ?? null;
+
+  // Risk-managed: Limit + SL + Target all required, RR must clear the
+  // segment minimum, and the lot count is sized from the risk budget.
+  const riskFieldsComplete = stopPrice != null && targetPrice != null && limitPrice != null;
+  const rrClears = rr != null && minRR != null && rr >= minRR;
+  const riskGateOk = !riskManaged || (riskFieldsComplete && dirValid && rrClears);
+
+  // Risk-managed lot-count preview (NSE/MCX only - CRYPTO's INR-vs-USD
+  // capital conversion is server-side, so the client can't size it). null
+  // -> the Lots field shows "auto" and execution sizes it at fill.
+  const previewLots =
+    riskManaged && segment !== "CRYPTO" && lotSize != null
+      ? previewRiskLots({
+          capitalPerTrade: account?.capital_per_trade ?? 0,
+          riskPerTradePct: account?.risk_per_trade_pct ?? 0,
+          entry: limitPrice,
+          stop: stopPrice,
+          lotSize,
+        })
+      : null;
+  const autoQty = riskManaged && stopPrice != null;
+
   const qty = qtyInput.trim() ? Number(qtyInput) : undefined;
-  const qtyValid = qty != null && Number.isFinite(qty) && qty > 0;
-  const canProceed = !placing && !hasOpen && !!sym && qtyValid && !trendBlocked;
+  const qtyValid = autoQty || (qty != null && Number.isFinite(qty) && qty > 0);
+  const limitReady = effEntryType === "market" || limitPrice != null;
+  const canProceed =
+    !placing && !hasOpen && !pendingOrder && !!sym && qtyValid && limitReady && dirValid && riskGateOk && !trendBlocked;
+
+  // Why Proceed is blocked (first applicable), for the hint under the button.
+  const blockReason = !qtyValid
+    ? "Enter a valid lot quantity."
+    : !limitReady
+      ? "Enter a limit price."
+      : !dirValid
+        ? action === "BUY"
+          ? "For a Bullish trade, the target must be above and the stop below your entry."
+          : "For a Bearish trade, the target must be below and the stop above your entry."
+        : riskManaged && !riskFieldsComplete
+          ? "Risk managed: set a limit price, a stop-loss and a target."
+          : riskManaged && !rrClears
+            ? rr == null
+              ? "Risk managed: reward:risk can't be computed yet."
+              : `Reward:risk ${rr.toFixed(2)} is below the ${minRR?.toFixed(2)} segment minimum.`
+            : trendBlocked
+              ? trendUnknown
+                ? `No confirmed ${chartInterval} trend (enable Structure on this interval) — "Trend only" allows a trade only with the trend.`
+                : trendUndirected
+                  ? `${chartInterval} trend is ranging — no directional trade while "Trend only" is on.`
+                  : `Locked to ${trendAllows === "BUY" ? "Bullish" : "Bearish"} by the ${chartInterval} trend.`
+              : null;
 
   async function proceed() {
     if (!canProceed) return;
     setPlacing(true);
     setError(null);
     try {
-      if (isOption) {
-        const created = await createManualOptionGroup({
+      const trendFollowed = trendLock && trendAllows === action;
+      const placeQty = autoQty ? null : (qty ?? null);
+
+      if (effEntryType === "limit") {
+        if (limitPrice == null) {
+          setError("Enter a limit price.");
+          return;
+        }
+        let startedAbove = true;
+        try {
+          startedAbove = (await fetchUnderlyingLtp(segment, sym)) >= limitPrice;
+        } catch {
+          // default true - LiveChartPage's loop corrects it on its first tick
+        }
+        onArmPending({
           segment,
           symbol: sym,
           action,
-          option_position_style: strategy === "spread" ? "spread" : "naked",
-          option_strike_moneyness: moneyness,
-          option_fixed_lots: qty,
-          plan_checklist: [],
-          order_type: "market",
+          strategy,
+          moneyness,
+          triggerPrice: limitPrice,
+          startedAbove,
+          stop: stopPrice,
+          target: targetPrice,
+          quantity: placeQty,
+          trendFollowed,
+          riskManaged,
+          setupTag: setupTag || null,
+          confidence,
+          armedAt: Date.now(),
         });
-        if (created.status === "REJECTED") {
-          setError(created.rejection_reason ?? "order rejected");
-          return;
-        }
-        setOpenGroup(created);
-        if (slInput.trim() && Number.isFinite(Number(slInput))) {
-          try {
-            await updateOptionGroupSpotStopLoss(created.id, Number(slInput));
-          } catch {
-            setError("opened — but the stop-loss didn't save, set it below");
-          }
-        }
-      } else {
-        const price = await fetchUnderlyingLtp(segment, sym);
-        const created = await createManualPosition({
-          segment,
-          symbol: sym,
-          action,
-          instrument_type: "future",
-          price,
-          quantity: qty,
-          plan_checklist: [],
-          order_type: "market",
-          ...(slInput.trim() && Number.isFinite(Number(slInput)) ? { stop_loss_price: Number(slInput) } : {}),
-        });
-        if (created.status === "REJECTED") {
-          setError(created.rejection_reason ?? "order rejected");
-          return;
-        }
-        setOpenPos(created);
+        setLimitInput("");
+        setSlInput("");
+        setTargetInput("");
+        return;
       }
+
+      // Market - fire now. A future needs a concrete entry price (used for
+      // sizing); an option group prices its own legs off a live quote
+      // server-side, so the chart's own LTP is enough there (and skipping
+      // the extra fetch removes a failure point on the option path).
+      const price =
+        strategy === "future" ? await fetchUnderlyingLtp(segment, sym) : (ltp ?? (await fetchUnderlyingLtp(segment, sym)));
+      const result = await placeManualOrder({
+        segment,
+        symbol: sym,
+        action,
+        strategy,
+        moneyness,
+        orderType: "market",
+        entryPrice: price,
+        quantity: placeQty,
+        stop: stopPrice,
+        target: targetPrice,
+        trendFollowed,
+        riskManaged,
+        setupTag: setupTag || null,
+        confidence,
+      });
+      if (result.rejected) {
+        setError(result.reason ?? "order rejected");
+        return;
+      }
+      if (result.position) setOpenPos(result.position);
+      if (result.group) setOpenGroup(result.group);
+      if (result.warning) setError(result.warning);
       setSlInput("");
+      setTargetInput("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to place order");
     } finally {
@@ -565,8 +806,16 @@ export default function ChartTradePanel({
       const closeVal = edit.closeBy.trim() ? `${edit.closeBy}:00` : null;
       if (openGroup) await updateOptionGroupSquareOffTime(openGroup.id, closeVal);
       else if (openPos) await updatePositionSquareOffTime(openPos.id, closeVal);
-      // Target - a local watch, no backend call.
-      setTargetPx(tValid ? rawT : null);
+      // Target - an option group persists it server-side (spot_target_price,
+      // exit-monitor enforced); a future has no target-update route, so it
+      // stays a browser-side watch. Either way, drop the local watch for a
+      // group so it isn't double-armed.
+      if (openGroup && tValid) {
+        await updateOptionGroupSpotTarget(openGroup.id, rawT);
+        setTargetPx(null);
+      } else {
+        setTargetPx(tValid ? rawT : null);
+      }
       exitFiredRef.current = false;
 
       setSavedAll(true);
@@ -584,21 +833,77 @@ export default function ChartTradePanel({
     squaringOffRef.current = true;
     setSquaringOff(true);
     setError(null);
+    let closed = false;
     try {
       if (openGroup) await squareOffOptionGroup(openGroup.id);
       else if (openPos) await squareOffManualPosition(openPos.id);
+      closed = true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "failed to square off";
       // Already gone (backend SL/target/square-off beat us, or a double
-      // fire) - reconcile silently rather than showing an error.
-      if (!/not OPEN|is CLOSED/i.test(msg)) setError(msg);
+      // fire) - reconcile silently. A quote-unavailable 502 means it's
+      // still OPEN - show the error and DON'T clear the panel.
+      if (/not OPEN|is CLOSED/i.test(msg)) closed = true;
+      else setError(msg);
     } finally {
-      setOpenGroup(null);
-      setOpenPos(null);
-      setTargetPx(null);
+      if (closed) {
+        setOpenGroup(null);
+        setOpenPos(null);
+        setTargetPx(null);
+      }
       await refreshHistory();
+      void refreshOpen();
       squaringOffRef.current = false;
       setSquaringOff(false);
+    }
+  }
+
+  async function saveNote() {
+    if (!noteEdit || noteBusy) return;
+    const row = history.find((h) => h.id === noteEdit.id);
+    if (!row) {
+      setNoteEdit(null);
+      return;
+    }
+    const text = noteEdit.text.trim().slice(0, 2000);
+    const tag = noteEdit.tag;
+    const conf = noteEdit.confidence;
+    const noteChanged = text !== row.notes;
+    const tagsChanged = tag !== row.setupTag || conf !== row.confidence;
+    if (!noteChanged && !tagsChanged) {
+      setNoteEdit(null);
+      return;
+    }
+    setNoteBusy(true);
+    setError(null);
+    try {
+      if (noteChanged) {
+        if (row.kind === "option") await updateOptionGroupNotes(row.id, text);
+        else await updatePositionNotes(row.id, text);
+      }
+      if (tagsChanged) {
+        const patch: { setup_tag?: string; confidence?: number } = {};
+        if (tag !== row.setupTag) patch.setup_tag = tag; // "" clears
+        if (conf !== row.confidence && conf != null) patch.confidence = conf;
+        if (Object.keys(patch).length) {
+          if (row.kind === "option") await updateOptionGroupTags(row.id, patch);
+          else await updatePositionTags(row.id, patch);
+        }
+      }
+      setHistory((prev) =>
+        prev.map((h) => (h.id === row.id ? { ...h, notes: text, setupTag: tag, confidence: conf } : h)),
+      );
+      setNoteEdit(null);
+      // Back to collapsed once saved - keeps the list tidy.
+      setNoteOpen((prev) => {
+        const next = new Set(prev);
+        next.delete(row.id);
+        return next;
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to save note");
+    } finally {
+      setNoteBusy(false);
     }
   }
 
@@ -614,32 +919,44 @@ export default function ChartTradePanel({
   const tintAction = openAction ?? action;
   const rows = legRows(openPos, openGroup, sym);
 
-  // Max loss budgeted per trade, from the segment account.
-  const riskAmount = account ? (account.capital_per_trade * account.risk_per_trade_pct) / 100 : null;
-
   return (
     <div className={`chart-trade-panel ${tintAction === "BUY" ? "ctp-bull" : "ctp-bear"}`}>
       <div className="ctp-head">
-        <span className="ctp-title">Trade</span>
-        <span className="ctp-ltp" title="Live underlying price">
-          {ltp != null ? ltp.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
+        <span className="ctp-sym">
+          {sym}
+          <span className="ctp-ltp" title="Live underlying price">
+            {ltp != null ? ltp.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
+          </span>
         </span>
-      </div>
-      <div className="ctp-topline">
-        <span title="Max loss budgeted per trade (segment account)">
-          Risk/Trade{" "}
-          <b>
-            {riskAmount != null ? fmt(riskAmount) : "—"}
-            {account ? ` · ${account.risk_per_trade_pct}%` : ""}
-          </b>
-        </span>
-        <span title={`Today's realized / unrealized P&L on ${sym} · ${unit}`}>
-          <b className={pnlClass(realized)}>{fmt(realized)}</b> /{" "}
+        <span className="ctp-pnl-head" title={`Today's realized / unrealized P&L on ${sym} · ${unit}`}>
+          <b className={pnlClass(realized)}>{fmt(realized)}</b>
+          {" / "}
           <b className={pnlClass(unrealized)}>{fmt(unrealized)}</b>
         </span>
       </div>
 
-      {!hasOpen && (
+      {pendingOrder && (
+        <div className="ctp-pending">
+          <div className="ctp-pending-head">
+            <span className="ctp-pending-dot">⏳</span>
+            <b>Limit armed</b>
+          </div>
+          <p className="ctp-pending-body">
+            {pendingOrder.action === "BUY" ? "Bullish" : "Bearish"}{" "}
+            {pendingOrder.strategy === "future" ? "future" : pendingOrder.strategy}
+            {" · waiting for price to "}
+            {pendingOrder.startedAbove ? "fall to" : "rise to"} <b>{fmt(pendingOrder.triggerPrice)}</b>
+            {pendingOrder.stop != null && ` · SL ${fmt(pendingOrder.stop)}`}
+            {pendingOrder.target != null && ` · T ${fmt(pendingOrder.target)}`}
+          </p>
+          <button type="button" className="ctp-squareoff" onClick={() => onCancelPending(sym)}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {pendingNote && !pendingOrder && <p className="ctp-error">{pendingNote}</p>}
+
+      {!hasOpen && !pendingOrder && (
         <>
           <div className="ctp-seg" role="group" aria-label="Direction">
             <button
@@ -663,7 +980,7 @@ export default function ChartTradePanel({
           <div className="ctp-row">
             <label className="ctp-field ctp-field-grow">
               <span>Strategy</span>
-              <select value={strategy} onChange={(e) => setStrategy(e.target.value as typeof strategy)}>
+              <select value={strategy} onChange={(e) => setStrategy(e.target.value as PanelStrategy)}>
                 <option value="future">{action === "BUY" ? "Future · long" : "Future · short"}</option>
                 <option value="naked" disabled={!optionEligible}>
                   {action === "BUY" ? "Naked Call" : "Naked Put"}
@@ -687,28 +1004,127 @@ export default function ChartTradePanel({
             )}
           </div>
 
+          <div className="ctp-seg ctp-seg-sm" role="group" aria-label="Entry type">
+            <button
+              type="button"
+              className={effEntryType === "market" ? "active" : ""}
+              disabled={riskManaged}
+              title={riskManaged ? "Risk managed uses limit orders only" : undefined}
+              onClick={() => setEntryType("market")}
+            >
+              Market
+            </button>
+            <button
+              type="button"
+              className={effEntryType === "limit" ? "active" : ""}
+              onClick={() => setEntryType("limit")}
+            >
+              Limit
+            </button>
+          </div>
+
           <div className="ctp-row">
+            {effEntryType === "limit" && (
+              <label className="ctp-field">
+                <span>Limit</span>
+                <span className="ctp-input-pick">
+                  <input
+                    inputMode="decimal"
+                    value={limitInput}
+                    onChange={(e) => setLimitInput(e.target.value)}
+                    placeholder="entry price"
+                  />
+                  <PickBtn armed={pickField === "limit"} onToggle={() => onPickField(pickField === "limit" ? null : "limit")} />
+                </span>
+              </label>
+            )}
             <label className="ctp-field">
               <span>Lots</span>
-              <input inputMode="numeric" value={qtyInput} onChange={(e) => setQtyInput(e.target.value)} placeholder="1" />
+              <input
+                inputMode="numeric"
+                value={autoQty ? (previewLots != null ? String(previewLots) : "") : qtyInput}
+                onChange={(e) => setQtyInput(e.target.value)}
+                placeholder={autoQty ? "auto" : "1"}
+                disabled={autoQty}
+                title={
+                  autoQty
+                    ? previewLots != null
+                      ? `Sized from your risk budget: ${riskManaged && account ? fmt((account.capital_per_trade * account.risk_per_trade_pct) / 100) : "risk"} ÷ (limit − stop-loss). Execution confirms the exact count at fill.`
+                      : "Sized from your risk budget at fill (execution.compute_risk_based_quantity)"
+                    : undefined
+                }
+              />
+            </label>
+          </div>
+
+          <div className="ctp-row">
+            <label className="ctp-field">
+              <span>Stop-loss</span>
+              <span className="ctp-input-pick">
+                <input
+                  inputMode="decimal"
+                  value={slInput}
+                  onChange={(e) => setSlInput(e.target.value)}
+                  placeholder={riskManaged ? "required" : "optional"}
+                />
+                <PickBtn armed={pickField === "stop"} onToggle={() => onPickField(pickField === "stop" ? null : "stop")} />
+              </span>
             </label>
             <label className="ctp-field">
-              <span>SL</span>
-              <input inputMode="decimal" value={slInput} onChange={(e) => setSlInput(e.target.value)} placeholder="optional" />
+              <span>Target</span>
+              <span className="ctp-input-pick">
+                <input
+                  inputMode="decimal"
+                  value={targetInput}
+                  onChange={(e) => setTargetInput(e.target.value)}
+                  placeholder={riskManaged ? "required" : "optional"}
+                />
+                <PickBtn armed={pickField === "target"} onToggle={() => onPickField(pickField === "target" ? null : "target")} />
+              </span>
+            </label>
+          </div>
+
+          {(stopPrice != null || targetPrice != null || riskManaged) && (
+            <div className={`ctp-rr ${riskManaged ? (rrClears ? "ok" : "bad") : ""}`}>
+              <span>R:R {rr != null ? rr.toFixed(2) : "—"}</span>
+              {minRR != null && <span className="muted">min {minRR.toFixed(2)}</span>}
+            </div>
+          )}
+
+          <div className="ctp-row ctp-journal-row">
+            <label className="ctp-field ctp-field-grow">
+              <span>Setup</span>
+              <select value={setupTag} onChange={(e) => setSetupTag(e.target.value)}>
+                <option value="">— reason —</option>
+                {SETUP_TAGS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="ctp-field">
+              <span>Confidence</span>
+              <span className="ctp-conf">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    type="button"
+                    key={n}
+                    className={confidence === n ? "active" : ""}
+                    onClick={() => setConfidence(confidence === n ? null : n)}
+                    title={`${n} / 5`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </span>
             </label>
           </div>
 
           <button type="button" className="ctp-proceed" disabled={!canProceed} onClick={() => void proceed()}>
-            {placing ? "Placing…" : "Proceed"}
+            {placing ? (effEntryType === "limit" ? "Arming…" : "Placing…") : effEntryType === "limit" ? "Arm limit" : "Proceed"}
           </button>
-          {!qtyValid && !placing && <p className="ctp-hint">Enter a valid lot quantity.</p>}
-          {qtyValid && trendBlocked && !placing && (
-            <p className="ctp-hint">
-              {trendRanging
-                ? `${chartInterval} trend is ranging — no directional trade while the lock is on.`
-                : `Locked to ${trendAllows === "BUY" ? "Bullish" : "Bearish"} by the ${chartInterval} trend.`}
-            </p>
-          )}
+          {blockReason && !placing && <p className="ctp-hint">{blockReason}</p>}
         </>
       )}
 
@@ -796,29 +1212,35 @@ export default function ChartTradePanel({
               ) : (
                 <label className="ctp-mf">
                   <span>Spot SL</span>
-                  <input
-                    inputMode="decimal"
-                    value={edit.sl}
-                    placeholder="price"
-                    onChange={(e) => setEdit((s) => ({ ...s, sl: e.target.value }))}
-                  />
+                  <span className="ctp-input-pick">
+                    <input
+                      inputMode="decimal"
+                      value={edit.sl}
+                      placeholder="price"
+                      onChange={(e) => setEdit((s) => ({ ...s, sl: e.target.value }))}
+                    />
+                    <PickBtn armed={pickField === "stop"} onToggle={() => onPickField(pickField === "stop" ? null : "stop")} />
+                  </span>
                 </label>
               )}
 
               <label
                 className="ctp-mf"
-                title="A browser-side watch on the underlying SPOT price - squares this position off when spot reaches the level (set it above spot for a long/call, below for a short/put)."
+                title="A watch on the underlying SPOT price - squares this position off when spot reaches the level (set it above spot for a long/call, below for a short/put)."
               >
                 <span>
                   {openGroup ? "Spot target" : "Target"}
                   {targetPx != null ? " ●" : ""}
                 </span>
-                <input
-                  inputMode="decimal"
-                  value={edit.target}
-                  placeholder="spot price"
-                  onChange={(e) => setEdit((s) => ({ ...s, target: e.target.value }))}
-                />
+                <span className="ctp-input-pick">
+                  <input
+                    inputMode="decimal"
+                    value={edit.target}
+                    placeholder="spot price"
+                    onChange={(e) => setEdit((s) => ({ ...s, target: e.target.value }))}
+                  />
+                  <PickBtn armed={pickField === "target"} onToggle={() => onPickField(pickField === "target" ? null : "target")} />
+                </span>
               </label>
 
               <label className="ctp-mf">
@@ -855,7 +1277,30 @@ export default function ChartTradePanel({
         {history.slice(0, 6).map((h) => (
           <div key={h.id} className="ctp-history-row">
             <div className="ctp-history-line1">
-              <span className="ctp-history-label">{h.label}</span>
+              <span className="ctp-history-label">
+                {h.label}
+                {h.trendFollowed && (
+                  <span className="ctp-tag ctp-tag-tr" title="Placed under the Trend-only lock">
+                    TR
+                  </span>
+                )}
+                {h.riskManaged && (
+                  <span className="ctp-tag ctp-tag-rm" title="Placed in Risk-managed mode (R:R cleared the segment minimum)">
+                    RM
+                  </span>
+                )}
+                {h.setupTag && (
+                  <span className="ctp-tag ctp-tag-setup" title="Setup tag">
+                    {h.setupTag}
+                  </span>
+                )}
+                {h.confidence != null && (
+                  <span className="ctp-tag ctp-tag-conf" title={`Confidence ${h.confidence}/5`}>
+                    {"●".repeat(h.confidence)}
+                    {"○".repeat(5 - h.confidence)}
+                  </span>
+                )}
+              </span>
               <span className={pnlClass(h.pnl)}>
                 {h.pnl != null && h.pnl >= 0 ? "+" : ""}
                 {fmt(h.pnl)}
@@ -869,6 +1314,97 @@ export default function ChartTradePanel({
               {h.exitReason && ` · ${h.exitReason}`}
               {h.exitTime && ` · ${formatCompact(h.exitTime).split("  ")[1] ?? formatCompact(h.exitTime)}`}
             </div>
+            {noteEdit?.id === h.id ? (
+              <div className="ctp-note-edit">
+                <div className="ctp-row ctp-journal-row">
+                  <label className="ctp-field ctp-field-grow">
+                    <span>Setup</span>
+                    <select
+                      value={noteEdit.tag}
+                      onChange={(e) => setNoteEdit((s) => (s ? { ...s, tag: e.target.value } : s))}
+                    >
+                      <option value="">— reason —</option>
+                      {SETUP_TAGS.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="ctp-field">
+                    <span>Confidence</span>
+                    <span className="ctp-conf">
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <button
+                          type="button"
+                          key={n}
+                          className={noteEdit.confidence === n ? "active" : ""}
+                          onClick={() =>
+                            setNoteEdit((s) => (s ? { ...s, confidence: s.confidence === n ? null : n } : s))
+                          }
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </span>
+                  </label>
+                </div>
+                <textarea
+                  className="ctp-note-input"
+                  rows={2}
+                  maxLength={2000}
+                  placeholder="Why this trade? What worked / what to fix?"
+                  value={noteEdit.text}
+                  onChange={(e) => setNoteEdit((s) => (s ? { ...s, text: e.target.value } : s))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setNoteEdit(null);
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void saveNote();
+                  }}
+                />
+                <div className="ctp-note-actions">
+                  <button type="button" className="ctp-note-save" disabled={noteBusy} onClick={() => void saveNote()}>
+                    {noteBusy ? "Saving…" : "Save"}
+                  </button>
+                  <button type="button" className="ctp-note-cancel" disabled={noteBusy} onClick={() => setNoteEdit(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : h.notes || h.setupTag || h.confidence != null ? (
+              <>
+                <button
+                  type="button"
+                  className={`ctp-note-toggle${noteOpen.has(h.id) ? " open" : ""}`}
+                  onClick={() => toggleNote(h.id)}
+                  title={noteOpen.has(h.id) ? "Hide journal" : "Show journal"}
+                >
+                  {noteOpen.has(h.id) ? "▾" : "▸"} journal
+                </button>
+                {noteOpen.has(h.id) && (
+                  <div
+                    className="ctp-note"
+                    role="button"
+                    tabIndex={0}
+                    title="Click to edit"
+                    onClick={() => setNoteEdit({ id: h.id, text: h.notes, tag: h.setupTag, confidence: h.confidence })}
+                    onKeyDown={(e) =>
+                      e.key === "Enter" &&
+                      setNoteEdit({ id: h.id, text: h.notes, tag: h.setupTag, confidence: h.confidence })
+                    }
+                  >
+                    {h.notes || <span className="muted">no note — click to add</span>}
+                  </div>
+                )}
+              </>
+            ) : (
+              <button
+                type="button"
+                className="ctp-note-add"
+                onClick={() => setNoteEdit({ id: h.id, text: "", tag: "", confidence: null })}
+              >
+                + journal
+              </button>
+            )}
           </div>
         ))}
       </div>

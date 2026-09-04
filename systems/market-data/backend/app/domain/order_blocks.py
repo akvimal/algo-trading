@@ -22,7 +22,7 @@ shared import (same precedent as option_templates.py / compute_ema).
 from collections import defaultdict
 from typing import Literal
 
-from app.domain.models import Candle, Fvg, OrderBlock, Setup, StructureEvent
+from app.domain.models import Candle, Fvg, OrderBlock, Setup, StructureEvent, TrendChange
 
 ZoneMode = Literal["wick", "body"]
 Mitigation = Literal["wick", "close"]
@@ -59,7 +59,9 @@ def _confirmed_pivots(h: list[float], lo: list[float], swing: int) -> list[tuple
     return out
 
 
-def structure_state(candles: list[Candle], *, swing_lookback: int = 5) -> tuple[Trend, list[StructureEvent]]:
+def structure_state(
+    candles: list[Candle], *, swing_lookback: int = 5
+) -> tuple[Trend, list[StructureEvent], list[TrendChange]]:
     """Walks the series maintaining the most recent *unbroken* confirmed
     swing high / low. A close beyond one is a structure break, labelled
     against the last break's direction: same direction = **BOS**
@@ -69,53 +71,73 @@ def structure_state(candles: list[Candle], *, swing_lookback: int = 5) -> tuple[
     and reset to `range` by the first CHoCH against it - so a choppy
     market that keeps flip-flopping between CHoCHs reads `range`, not a
     whipsawing up/down. Returns the last `_MAX_EVENTS` breaks (oldest-
-    first). A deliberate simplification of textbook SMC - the same one
-    the scoped SMC Rule locks in."""
+    first) plus `trend_changes` - the subset of those break points at
+    which the confirmed trend actually flipped value (range->up/down,
+    up/down->range, or a direct up<->down), for marking the chart. A
+    deliberate simplification of textbook SMC - the same one the scoped
+    SMC Rule locks in."""
     swing_lookback = max(_MIN_SWING, min(_MAX_SWING, swing_lookback))
     n = len(candles)
     if n < 2 * swing_lookback + 2:
-        return "range", []
+        return "range", [], []
 
     h = [c.high for c in candles]
     lo = [c.low for c in candles]
     cl = [c.close for c in candles]
     ts = [c.timestamp for c in candles]
 
-    by_confirm: dict[int, list[tuple[float, str]]] = defaultdict(list)
-    for confirm_idx, _pivot_idx, price, kind in _confirmed_pivots(h, lo, swing_lookback):
-        by_confirm[confirm_idx].append((price, kind))
+    by_confirm: dict[int, list[tuple[float, str, int]]] = defaultdict(list)
+    for confirm_idx, pivot_idx, price, kind in _confirmed_pivots(h, lo, swing_lookback):
+        by_confirm[confirm_idx].append((price, kind, pivot_idx))
 
     last_break: str = "range"  # direction of the previous break - drives BOS vs CHoCH
     confirmed: Trend = "range"  # what we report - only a BOS sets it, an opposing CHoCH clears it
     ref_high: float | None = None
+    ref_high_at: int | None = None  # the bar the swing high formed on - the break line's left anchor
     ref_low: float | None = None
+    ref_low_at: int | None = None
     events: list[StructureEvent] = []
+    trend_changes: list[TrendChange] = []
 
     for i in range(n):
-        for price, kind in by_confirm.get(i, []):
+        for price, kind, pivot_idx in by_confirm.get(i, []):
             if kind == "high":
-                ref_high = price
+                ref_high, ref_high_at = price, pivot_idx
             else:
-                ref_low = price
+                ref_low, ref_low_at = price, pivot_idx
 
         direction: str | None = None
         level = 0.0
+        from_idx: int | None = None
         if ref_high is not None and cl[i] > ref_high:
-            direction, level, ref_high = "up", ref_high, None
+            direction, level, from_idx = "up", ref_high, ref_high_at
+            ref_high, ref_high_at = None, None
         elif ref_low is not None and cl[i] < ref_low:
-            direction, level, ref_low = "down", ref_low, None
+            direction, level, from_idx = "down", ref_low, ref_low_at
+            ref_low, ref_low_at = None, None
         if direction is None:
             continue
 
         kind = "bos" if direction == last_break else "choch"
-        events.append(StructureEvent(kind=kind, direction=direction, price=level, timestamp=ts[i]))
+        events.append(
+            StructureEvent(
+                kind=kind,
+                direction=direction,
+                price=level,
+                timestamp=ts[i],
+                from_timestamp=ts[from_idx] if from_idx is not None else ts[i],
+            )
+        )
         last_break = direction
+        prev_confirmed = confirmed
         if kind == "bos":
             confirmed = direction
         elif confirmed not in ("range", direction):
             confirmed = "range"
+        if confirmed != prev_confirmed:
+            trend_changes.append(TrendChange(timestamp=ts[i], price=level, trend=confirmed))
 
-    return confirmed, events[-_MAX_EVENTS:]
+    return confirmed, events[-_MAX_EVENTS:], trend_changes[-_MAX_EVENTS:]
 
 
 def _atr(h: list[float], lo: list[float], cl: list[float], period: int = 14) -> float:

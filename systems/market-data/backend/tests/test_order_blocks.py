@@ -198,7 +198,7 @@ def test_structure_state_choch_up_bos_up_choch_down_bos_down():
     c += [_doji(23, 95.0), _doji(24, 95.0)]
     c.append(_c(25, 95.0, 95.0, 90.0, 90.0))              # close 90 < L3, last break down -> BOS down
 
-    trend, events = structure_state(c, swing_lookback=2)
+    trend, events, changes = structure_state(c, swing_lookback=2)
 
     assert [(e.kind, e.direction) for e in events] == [
         ("choch", "up"),
@@ -208,6 +208,14 @@ def test_structure_state_choch_up_bos_up_choch_down_bos_down():
     ]
     assert events[1].price == 108.0  # the BOS-up broke H2
     assert trend == "down"  # confirmed by the BOS-down
+    # the first break (CHoCH up, bar 8) broke swing high H1, which formed
+    # on bar 3 - so the level line spans bar-003 -> bar-008, not full width.
+    assert events[0].from_timestamp == "bar-003"
+    assert events[0].timestamp == "bar-008"
+    # the confirmed trend flipped value 3 times: range->up (BOS up),
+    # up->range (CHoCH down), range->down (BOS down). The opening CHoCH-up
+    # left it at range, so it's not a change.
+    assert [(tc.trend, tc.price) for tc in changes] == [("up", 108.0), ("range", 101.0), ("down", 93.0)]
 
 
 def test_structure_state_reports_range_after_a_choch_with_no_confirming_bos():
@@ -224,13 +232,15 @@ def test_structure_state_reports_range_after_a_choch_with_no_confirming_bos():
     c += [_doji(17, 110.0), _doji(18, 110.0)]
     c.append(_c(19, 110.0, 110.0, 95.0, 95.0))            # CHoCH down -> clears the uptrend, no BOS down yet
 
-    trend, _events = structure_state(c, swing_lookback=2)
+    trend, _events, changes = structure_state(c, swing_lookback=2)
     assert trend == "range"
+    # range->up on the BOS, then up->range on the CHoCH-down
+    assert [tc.trend for tc in changes] == ["up", "range"]
 
 
 def test_structure_state_is_range_for_a_flat_or_tiny_series():
-    assert structure_state([_doji(i, 100.0) for i in range(40)], swing_lookback=2) == ("range", [])
-    assert structure_state([_doji(i, 100.0) for i in range(4)], swing_lookback=5) == ("range", [])
+    assert structure_state([_doji(i, 100.0) for i in range(40)], swing_lookback=2) == ("range", [], [])
+    assert structure_state([_doji(i, 100.0) for i in range(4)], swing_lookback=5) == ("range", [], [])
 
 
 def test_counter_trend_tags_zones_opposing_the_trend():

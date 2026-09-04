@@ -65,7 +65,7 @@ def get_order_blocks(
 
     mode = zone_mode if zone_mode in ("wick", "body") else "wick"
     mit = mitigation if mitigation in ("wick", "close") else "wick"
-    trend, events = structure_state(candles, swing_lookback=swing_lookback)
+    trend, events, trend_changes = structure_state(candles, swing_lookback=swing_lookback)
     return ChartStructure(
         order_blocks=detect_order_blocks(
             candles,
@@ -80,5 +80,6 @@ def get_order_blocks(
         fvgs=detect_fvgs(candles, mitigation=mit) if fvg else [],
         trend=trend,
         events=events,
+        trend_changes=trend_changes,
         setups=detect_setups(candles, trend=trend, lookback=lookback, min_risk_reward=min_risk_reward) if setups else [],
     )

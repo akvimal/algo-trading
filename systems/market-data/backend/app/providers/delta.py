@@ -37,6 +37,7 @@ from app.domain.models import (
     ResolvedUnderlying,
 )
 from app.domain.moneyness import classify_moneyness, infer_strike_step
+from app.domain.oi_history import OiHistoryTracker
 from app.providers.base import QuoteProvider
 # Only for the unused `credentials` param's type on get_ltp/get_ltp_batch/
 # get_previous_candle/get_candle_history below - a plain intra-system
@@ -175,6 +176,15 @@ class DeltaProvider(QuoteProvider):
         self._last_option_call_at: float = 0.0
         self._option_chain_cache: dict[str, tuple[list[dict], float]] = {}
         self._option_chain_cache_lock = threading.Lock()
+
+        # Rolling OI / premium / spot history backing GET
+        # /options/oi-summary (PCR + 5m/15m OI-change totals + buildup) and
+        # GET /options/sentiment for CRYPTO - see get_oi_changes below and
+        # app/domain/oi_history.py. Delta's own ticker carries no
+        # previous-OI figure at all (see OptionLegQuote.previous_oi /
+        # _parse_option_leg), so this self-accumulated series is the only
+        # source of an OI delta for CRYPTO.
+        self._oi_tracker = OiHistoryTracker()
 
     def status(self) -> dict:
         return {
@@ -767,13 +777,28 @@ class DeltaProvider(QuoteProvider):
             for strike in sorted(by_strike)
         ]
 
-        return OptionChain(
+        chain = OptionChain(
             underlying_symbol=symbol,
             underlying_exchange="CRYPTO",
             expiry=expiry,
             underlying_last_price=spot,
             strikes=strikes,
         )
+        # Record on every call, not just a real _fetch_option_rows miss the
+        # way DhanProvider guards its own recording: unlike Dhan there's no
+        # chain-level cache here (only the 30s _fetch_option_rows row
+        # cache), and get_expiry_list shares that same row cache - so a
+        # "was it a real fetch" guard keyed off it would let the expiry
+        # lookup that always precedes a chain fetch (see
+        # sentiment_fetch.py / OiSummaryPage.tsx) warm the cache first and
+        # starve this of samples entirely. Over-sampling within the 30s
+        # window is harmless: oi_changes/spot_price_changes diff against a
+        # sample at-or-before the 5m/15m target, which extra intermediate
+        # samples only make more precise, and RETENTION_SECONDS bounds the
+        # buffer regardless of cadence.
+        self._oi_tracker.record_chain(symbol, expiry, chain)
+        self._oi_tracker.record_spot(symbol, spot)
+        return chain
 
     @staticmethod
     def _parse_option_leg(row: dict, strike: float, spot: float, option_type: str, strike_step: float) -> OptionLegQuote:
@@ -798,3 +823,23 @@ class DeltaProvider(QuoteProvider):
             ),
             moneyness=classify_moneyness(strike, spot, option_type, strike_step),
         )
+
+    # --- OI-summary history (duck-typed by app/api/routes/options.py's GET
+    # /options/oi-summary and app/domain/sentiment_fetch.py, exactly as
+    # DhanProvider's identically-named methods are) - all three just
+    # delegate to the shared OiHistoryTracker fed by get_option_chain
+    # above. Signatures match DhanProvider's so the route/sentiment code
+    # needs no per-provider branching.
+
+    def get_oi_changes(
+        self, symbol: str, expiry: str, strike: float, option_type: str, current_oi: int
+    ) -> tuple[Optional[int], Optional[int]]:
+        return self._oi_tracker.oi_changes(symbol, expiry, strike, option_type, current_oi)
+
+    def get_price_changes(
+        self, symbol: str, expiry: str, strike: float, option_type: str, current_price: float
+    ) -> tuple[Optional[float], Optional[float]]:
+        return self._oi_tracker.price_changes(symbol, expiry, strike, option_type, current_price)
+
+    def get_spot_price_changes(self, symbol: str, current_spot: float) -> tuple[Optional[float], Optional[float]]:
+        return self._oi_tracker.spot_price_changes(symbol, current_spot)

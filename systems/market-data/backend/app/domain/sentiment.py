@@ -1,13 +1,14 @@
-"""Bullish/bearish sentiment for NSE and MCX, aggregated from options
-OI-change totals (see app/domain/oi_summary.py) across a fixed watchlist of
-underlyings - the same 4 symbols the OI Summary page already tracks (see
-manual-trading's OiSummaryPage.tsx: NIFTY/BANKNIFTY for NSE, GOLDM/CRUDEOILM
-for MCX), not a literal scan of every F&O symbol. Feeds the shell header's
-sentiment badges (shell/index.html), which poll GET /options/sentiment every
-5 minutes - a deliberately slow cadence, same Dhan rate-limit caution as
+"""Bullish/bearish sentiment per segment (NSE / MCX / CRYPTO), aggregated
+from options OI-change totals (see app/domain/oi_summary.py) across a fixed
+watchlist of underlyings - the same symbols the OI Summary page tracks
+(see manual-trading's OiSummaryPage.tsx: NIFTY/BANKNIFTY for NSE,
+GOLDM/CRUDEOILM for MCX, BTCUSD/ETHUSD for CRYPTO), not a literal scan of
+every F&O symbol. Feeds the shell header's sentiment badges
+(shell/index.html), which poll GET /options/sentiment every 5 minutes - a
+deliberately slow cadence, same Dhan rate-limit caution as
 app/scheduler.py's token renewal (see docs/architecture.md / CLAUDE.md's
 Dhan rate-limit notes) since every poll is a real option-chain call per
-watchlist symbol.
+watchlist symbol (a Delta /v2/tickers call for the CRYPTO ones).
 
 Pure functions only (no Dhan/network dependency) - the caller
 (app/api/routes/options.py) does the actual chain fetches and passes in
@@ -22,6 +23,13 @@ from app.domain.models import ExchangeSentiment, OptionOiSummary, SentimentDirec
 SENTIMENT_UNDERLYINGS: dict[str, list[str]] = {
     "NSE": ["NIFTY", "BANKNIFTY"],
     "MCX": ["GOLDM", "CRUDEOILM"],
+    # CRYPTO via Delta Exchange India - its options carry full Greeks + a
+    # native mark IV, but no previous-OI figure, so the 5m/15m OI-change
+    # totals the sentiment score is built from come from DeltaProvider's
+    # own self-accumulated OI history (app/domain/oi_history.py), same as
+    # every other segment. Kept to 2 symbols like NSE/MCX - each poll is a
+    # real Delta /v2/tickers call per symbol.
+    "CRYPTO": ["BTCUSD", "ETHUSD"],
 }
 
 # Approximate real trading-session bounds per exchange, local time

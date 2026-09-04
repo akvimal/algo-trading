@@ -763,6 +763,45 @@ def test_get_option_chain_fails_fast_when_throttle_queue_too_deep():
         assert "backed up" in str(exc)
 
 
+# --- OI-summary history wiring (get_oi_changes / get_price_changes /
+# get_spot_price_changes, duck-typed by GET /options/oi-summary and GET
+# /options/sentiment exactly like DhanProvider's) -------------------------
+
+
+@responses.activate
+def test_get_option_chain_feeds_the_oi_history_tracker(monkeypatch):
+    responses.add(responses.GET, _tickers_url(), json={"success": True, "result": _fake_chain_tickers()}, status=200)
+    provider = _provider_with_btcusd()
+
+    # First fetch, "15 minutes ago" - lays down the anchor sample.
+    t0 = time.time()
+    monkeypatch.setattr(time, "time", lambda: t0 - 15 * 60)
+    provider.get_option_chain("BTCUSD", "2026-08-15")
+
+    # A later chain with the ATM call OI grown 5000 -> 6500, spot 24000 -> 24200.
+    grown = _fake_chain_tickers()
+    grown[2]["oi_contracts"] = "6500"
+    for row in grown:
+        row["spot_price"] = 24200.0
+    responses.replace(responses.GET, _tickers_url(), json={"success": True, "result": grown}, status=200)
+    provider._option_chain_cache.clear()  # force a real re-fetch past the 30s row cache
+    monkeypatch.setattr(time, "time", lambda: t0)
+    chain = provider.get_option_chain("BTCUSD", "2026-08-15")
+
+    atm = chain.strikes[1]
+    oi_5m, oi_15m = provider.get_oi_changes("BTCUSD", "2026-08-15", 24000.0, "CE", atm.ce.oi)
+    assert oi_15m == 6500 - 5000
+    spot_5m, spot_15m = provider.get_spot_price_changes("BTCUSD", chain.underlying_last_price)
+    assert spot_15m == 24200.0 - 24000.0
+
+
+def test_oi_history_methods_return_none_before_any_fetch():
+    provider = _provider_with_btcusd()
+    assert provider.get_oi_changes("BTCUSD", "2026-08-15", 24000.0, "CE", 5000) == (None, None)
+    assert provider.get_price_changes("BTCUSD", "2026-08-15", 24000.0, "CE", 90.0) == (None, None)
+    assert provider.get_spot_price_changes("BTCUSD", 24000.0) == (None, None)
+
+
 # --- get_data_availability / _probe_earliest_available_date ---------------------------------
 
 

@@ -157,12 +157,30 @@ class StructureEvent(BaseModel):
     or "choch" (change of character, the break that flipped the trend).
     `direction` is which way the break went; `price` is the swing level
     that broke; `timestamp` is the ISO-8601 start of the candle that
-    closed through it. See structure_state in app/domain/order_blocks.py."""
+    closed through it; `from_timestamp` is the start of the earlier candle
+    that *formed* that swing high/low - so a chart can draw the level as a
+    line spanning only from the pivot to the break, not full-width. See
+    structure_state in app/domain/order_blocks.py."""
 
     kind: Literal["bos", "choch"]
     direction: Literal["up", "down"]
     price: float
     timestamp: str
+    from_timestamp: str
+
+
+class TrendChange(BaseModel):
+    """One confirmed-trend flip - part of GET /order-blocks' ChartStructure.
+    Emitted at a BOS/CHoCH break where `structure_state`'s confirmed trend
+    changed value: `range` -> `up`/`down` (a new trend established out of
+    neutral), `up`/`down` -> `range` (trend lost to a CHoCH), or a direct
+    `up` <-> `down`. `trend` is the value it became; `timestamp` is the
+    ISO-8601 start of the candle that closed through, `price` the swing
+    level that broke. See structure_state in app/domain/order_blocks.py."""
+
+    timestamp: str
+    price: float
+    trend: Literal["up", "down", "range"]
 
 
 class Setup(BaseModel):
@@ -191,14 +209,15 @@ class Setup(BaseModel):
 class ChartStructure(BaseModel):
     """GET /order-blocks - the SMC structure for one (exchange, symbol,
     interval): order blocks (+ breakers), fair value gaps, the running
-    up/down/range trend, the recent BOS/CHoCH breaks, and (when
-    `setups=true`) rejection-confirmed trade setups. See
-    app/domain/order_blocks.py."""
+    up/down/range trend, the recent BOS/CHoCH breaks, the points at which
+    that trend flipped value (`trend_changes`), and (when `setups=true`)
+    rejection-confirmed trade setups. See app/domain/order_blocks.py."""
 
     order_blocks: list[OrderBlock]
     fvgs: list[Fvg]
     trend: Literal["up", "down", "range"] = "range"
     events: list[StructureEvent] = []
+    trend_changes: list[TrendChange] = []
     setups: list[Setup] = []
 
 

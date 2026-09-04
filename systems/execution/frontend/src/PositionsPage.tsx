@@ -267,6 +267,8 @@ export default function PositionsPage() {
   }
 
   async function handleSquareOffNow() {
+    const confirmed = window.confirm("Square off every open position and option group right now, regardless of its own square-off time?");
+    if (!confirmed) return;
     setSquaringOff(true);
     setActionMessage(null);
     try {
@@ -618,25 +620,27 @@ export default function PositionsPage() {
             ))}
           </select>
         </label>
-        <button onClick={handleSquareOffNow} disabled={squaringOff} className="secondary tiny">
-          {squaringOff ? "Squaring off..." : "Square off now"}
-        </button>
-        <button onClick={handleCheckExitsNow} disabled={checkingExits} className="secondary tiny">
-          {checkingExits ? "Checking..." : "Check exits now"}
-        </button>
-        <button onClick={handleClearPositions} disabled={clearing} className="danger tiny">
-          {clearing ? "Clearing..." : "Clear positions"}
-        </button>
-        {isAdmin && (
-          <button
-            onClick={handleClearPlatformPositions}
-            disabled={clearingPlatform}
-            className="danger tiny"
-            title="Clears the automated Strategy-driven flow's own positions (webhook/in-house signals) - Clear positions above can't touch these, see Accounts > Platform account (admin)."
-          >
-            {clearingPlatform ? "Clearing..." : "Clear platform positions"}
+        <div className="settings-actions">
+          <button onClick={handleSquareOffNow} disabled={squaringOff} className="secondary tiny">
+            {squaringOff ? "Squaring off..." : "Square off now"}
           </button>
-        )}
+          <button onClick={handleCheckExitsNow} disabled={checkingExits} className="secondary tiny">
+            {checkingExits ? "Checking..." : "Check exits now"}
+          </button>
+          <button onClick={handleClearPositions} disabled={clearing} className="danger tiny">
+            {clearing ? "Clearing..." : "Clear positions"}
+          </button>
+          {isAdmin && (
+            <button
+              onClick={handleClearPlatformPositions}
+              disabled={clearingPlatform}
+              className="danger tiny"
+              title="Clears the automated Strategy-driven flow's own positions (webhook/in-house signals) - Clear positions above can't touch these, see Accounts > Platform account (admin)."
+            >
+              {clearingPlatform ? "Clearing..." : "Clear platform positions"}
+            </button>
+          )}
+        </div>
       </div>
 
       {error && <p className="error">Could not reach the backend: {error}</p>}

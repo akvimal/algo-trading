@@ -106,7 +106,12 @@ main {
 
 .summary {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* Fluid instead of a fixed 5-column grid - fits every card on one row
+     on a normal-width window (5 always, 7 with crypto activity) and
+     reflows down as the window narrows, rather than wrapping a fixed
+     5-up grid onto a second row or squeezing columns too narrow. Same
+     auto-fit pattern as .account-summary below. */
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
   gap: 0.75rem;
 }
 
@@ -138,6 +143,17 @@ main {
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 1rem;
+}
+
+/* Square off / Check exits / Clear (platform) positions - pushed to the
+   right edge of the same row as the Date/Account filters, wrapping onto
+   its own line first (before the filters do) on a narrow window. */
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
 }
 
 .settings-row label {

@@ -249,7 +249,6 @@ export default function ChartTradePanel({
   regime,
   oiBias,
   chartInterval,
-  forceTrend,
   riskManaged,
   chartLtp,
   pendingOrder,
@@ -276,9 +275,6 @@ export default function ChartTradePanel({
   regime: MarketRegime | null;
   oiBias: "bullish" | "bearish" | "neutral" | null;
   chartInterval: string;
-  // The "trade with the interval trend only" lock - its checkbox lives up
-  // in LiveChartPage (aligned with the chart's interval strip), not here.
-  forceTrend: boolean;
   // The "Risk managed" gate - its checkbox also lives in LiveChartPage.
   // When on: Limit/SL/Target required, lots omitted (execution risk-sizes
   // them), and Proceed blocked until reward:risk clears the segment's
@@ -581,25 +577,13 @@ export default function ChartTradePanel({
     else setTargetInput(v);
   }, [pickedPrice, hasOpen]);
 
-  // --- Direction lock (see `forceTrend`) ---
-  // "Trend only" means exactly that: a directional trade is allowed ONLY
-  // when the chart interval has a CONFIRMED up/down trend and the bias
-  // matches it. No confirmed trend at all - ranging, OR structure
-  // detection not running so the trend is unknown - blocks both
-  // directions, same as ranging (an unknown trend is not a licence to
-  // trade either way).
-  const trendLock = forceTrend;
-  const trendAllows: "BUY" | "SELL" | null =
-    !trendLock ? null : intervalTrend === "up" ? "BUY" : intervalTrend === "down" ? "SELL" : null;
-  // Lock on but no confirmed direction (ranging or unknown) -> no trade.
-  const trendUndirected = trendLock && trendAllows == null;
-  const trendUnknown = trendLock && intervalTrend == null;
-  const trendBlocked = trendLock && (trendUndirected || action !== trendAllows);
-
-  // Snap the bias to the permitted side when the lock is (or becomes) active.
-  useEffect(() => {
-    if (trendAllows && action !== trendAllows) setAction(trendAllows);
-  }, [trendAllows, action]);
+  // The "Trend only" hard direction lock was removed 2026-09-04 -
+  // structure_state's confirmed trend only sets on a BOS, so it often
+  // turned well after a move was already tradeable; the confluence
+  // readout below (regime + chart trend, both informational) replaces it.
+  // trendFollowed is still recorded for the journal/Trading Performance
+  // breakdown - just no longer gates placement or the bias buttons.
+  const trendFollowed = intervalTrend === "up" ? action === "BUY" : intervalTrend === "down" ? action === "SELL" : false;
 
   // Risk-managed = limit orders only (a market order can't be pre-sized
   // against a known entry, and the whole point is a planned entry). Snap
@@ -645,8 +629,7 @@ export default function ChartTradePanel({
   const qty = qtyInput.trim() ? Number(qtyInput) : undefined;
   const qtyValid = autoQty || (qty != null && Number.isFinite(qty) && qty > 0);
   const limitReady = effEntryType === "market" || limitPrice != null;
-  const canProceed =
-    !placing && !hasOpen && !pendingOrder && !!sym && qtyValid && limitReady && dirValid && riskGateOk && !trendBlocked;
+  const canProceed = !placing && !hasOpen && !pendingOrder && !!sym && qtyValid && limitReady && dirValid && riskGateOk;
 
   // Why Proceed is blocked (first applicable), for the hint under the button.
   const blockReason = !qtyValid
@@ -663,20 +646,13 @@ export default function ChartTradePanel({
             ? rr == null
               ? "Risk managed: reward:risk can't be computed yet."
               : `Reward:risk ${rr.toFixed(2)} is below the ${minRR?.toFixed(2)} segment minimum.`
-            : trendBlocked
-              ? trendUnknown
-                ? `No confirmed ${chartInterval} trend (enable Structure on this interval) — "Trend only" allows a trade only with the trend.`
-                : trendUndirected
-                  ? `${chartInterval} trend is ranging — no directional trade while "Trend only" is on.`
-                  : `Locked to ${trendAllows === "BUY" ? "Bullish" : "Bearish"} by the ${chartInterval} trend.`
-              : null;
+            : null;
 
   async function proceed() {
     if (!canProceed) return;
     setPlacing(true);
     setError(null);
     try {
-      const trendFollowed = trendLock && trendAllows === action;
       const placeQty = autoQty ? null : (qty ?? null);
 
       if (effEntryType === "limit") {
@@ -1026,20 +1002,10 @@ export default function ChartTradePanel({
       {!hasOpen && !pendingOrder && (
         <>
           <div className="ctp-seg" role="group" aria-label="Direction">
-            <button
-              type="button"
-              className={action === "BUY" ? "active buy" : ""}
-              disabled={trendLock && trendAllows !== "BUY"}
-              onClick={() => setAction("BUY")}
-            >
+            <button type="button" className={action === "BUY" ? "active buy" : ""} onClick={() => setAction("BUY")}>
               Bullish
             </button>
-            <button
-              type="button"
-              className={action === "SELL" ? "active sell" : ""}
-              disabled={trendLock && trendAllows !== "SELL"}
-              onClick={() => setAction("SELL")}
-            >
+            <button type="button" className={action === "SELL" ? "active sell" : ""} onClick={() => setAction("SELL")}>
               Bearish
             </button>
           </div>

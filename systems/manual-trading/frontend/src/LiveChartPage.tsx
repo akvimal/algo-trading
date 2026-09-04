@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type Account, type ManualOptionGroup, type ManualPosition, type Segment, fetchAccounts } from "./api";
+import {
+  type Account,
+  type ManualOptionGroup,
+  type ManualPosition,
+  type Segment,
+  fetchAccounts,
+  fetchExecPositions,
+  fetchOptionGroups,
+} from "./api";
 import ChartTradePanel from "./ChartTradePanel";
 import { type ChartContext, type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
 import { type PendingOrder, fetchUnderlyingLtp, fmt, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
@@ -16,10 +24,13 @@ import { type PendingOrder, fetchUnderlyingLtp, fmt, placeManualOrder, pendingTr
 
 const SYMBOL_STORAGE_KEY = "manualLiveChartSymbol";
 
-// "Trend only" direction lock - its checkbox sits above the trade panel
-// (aligned with the chart's interval strip), its enforcement is in
-// ChartTradePanel. Persisted globally, default ON.
-const FORCE_TREND_STORAGE_KEY = "manualChartForceTrendDirection";
+// "Trend only" (the SMC-structure-trend direction lock, manualChartForceTrendDirection)
+// was removed 2026-09-04 - structure_state's confirmed trend only sets on a
+// BOS, so it often turned well after the move was already tradeable, and a
+// hard gate on a laggy signal blocked good trades more than it prevented bad
+// ones. The chart-interval trend is still surfaced, now informationally, in
+// ChartTradePanel's confluence readout alongside the (more responsive) ADX
+// regime badge (see GET /regime) - nothing here blocks placement on it.
 
 // "Risk managed" gate - requires Limit(or LTP)/SL/Target and blocks
 // placement when reward:risk is below the segment's configured minimum
@@ -38,6 +49,12 @@ const PENDING_STORAGE_KEY = "manualChartPendingOrders";
 // How often the pending-order loop re-checks each armed limit against a
 // fresh underlying LTP.
 const PENDING_POLL_MS = 4000;
+
+// How often the symbol tab bar re-checks which OTHER (non-active) symbols
+// have an open trade - a slow poll, since it's just a tab dot, not a
+// live-P&L readout (no with_live_pnl - a plain existence check for every
+// segment in one pair of calls, cheap and quote-free).
+const ACTIVE_TRADE_POLL_MS = 15_000;
 
 const SYMBOLS: { symbol: string; segment: Segment }[] = [
   { symbol: "NIFTY", segment: "NSE" },
@@ -79,18 +96,11 @@ function loadPending(): Record<string, PendingOrder> {
   }
 }
 
-const TREND_CHIP: Record<"up" | "down" | "range", string> = {
-  up: "▲ bullish",
-  down: "▼ bearish",
-  range: "– ranging",
-};
-
 export default function LiveChartPage() {
   const [active, setActive] = useState<(typeof SYMBOLS)[number]>(storedSymbol);
   // The chart-interval structure trend, lifted from LiveChartPanel so the
   // trade panel can lock direction to it.
   const [trendInfo, setTrendInfo] = useState<IntervalTrend>({ trend: null, interval: "5min" });
-  const [forceTrend, setForceTrend] = useState<boolean>(() => storedFlag(FORCE_TREND_STORAGE_KEY));
   const [riskManaged, setRiskManaged] = useState<boolean>(() => storedFlag(RISK_MANAGED_STORAGE_KEY));
   // The chart's own live price, so the trade panel shows exactly what the
   // chart shows instead of running a second, out-of-step LTP poll.
@@ -127,6 +137,47 @@ export default function LiveChartPage() {
   // The panel's single open trade, lifted so the chart's trade markers can
   // reuse its already-fetched live P&L instead of polling for it again.
   const [openTrade, setOpenTrade] = useState<{ pos: ManualPosition | null; group: ManualOptionGroup | null } | null>(null);
+
+  // Which of the tab bar's symbols (any of them, not just the active one -
+  // ChartTradePanel only ever knows about its own) currently has an open
+  // manual position or option group - a small dot on that tab. HERE, not
+  // in ChartTradePanel, for the same "outlives a symbol-tab switch" reason
+  // the pending-order state is - a background poll across every segment,
+  // independent of which chart you're looking at.
+  const [activeTradeSymbols, setActiveTradeSymbols] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      try {
+        // No withLivePnl / segment filter - a cheap existence check across
+        // every segment in one pair of calls, not a quote-heavy P&L poll.
+        const [positions, groups] = await Promise.all([
+          fetchExecPositions({ status: "OPEN", manualOnly: true }),
+          fetchOptionGroups({ status: "OPEN", manualOnly: true }),
+        ]);
+        if (cancelled) return;
+        const next = new Set<string>();
+        for (const { symbol } of SYMBOLS) {
+          // Same matching convention as ChartTradePanel's own isStandaloneFuture/
+          // isThisGroup: a future/spot position persists its resolved contract
+          // symbol (not the bare underlying), so prefix-match; an option group
+          // is keyed by underlying_symbol directly.
+          const hasFuture = positions.some((p) => p.option_group_id == null && p.symbol.toUpperCase().startsWith(symbol));
+          const hasGroup = groups.some((g) => g.underlying_symbol.toUpperCase() === symbol);
+          if (hasFuture || hasGroup) next.add(symbol);
+        }
+        setActiveTradeSymbols(next);
+      } catch {
+        // transient - keep the last known state, retried next tick
+      }
+    }
+    void refresh();
+    const id = window.setInterval(() => void refresh(), ACTIVE_TRADE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
   useEffect(() => {
     if (!pickField) return;
     const onKey = (e: KeyboardEvent) => {
@@ -257,6 +308,11 @@ export default function LiveChartPage() {
         {SYMBOLS.map((s) => (
           <button key={s.symbol} className={active.symbol === s.symbol ? "active" : ""} onClick={() => pick(s)}>
             {s.symbol}
+            {activeTradeSymbols.has(s.symbol) && (
+              <span className="live-chart-symbol-active-trade" title="An open trade is running on this symbol">
+                ●
+              </span>
+            )}
             {pending[s.symbol] && (
               <span className="live-chart-symbol-pending" title={`Limit armed at ${fmt(pending[s.symbol].triggerPrice)}`}>
                 ⏳
@@ -284,29 +340,6 @@ export default function LiveChartPage() {
 
         <div className="chart-trade-col">
           <div className="chart-discipline-row">
-            <label
-              className="chart-trend-lock"
-              title="When on, a new trade must go WITH a confirmed chart-interval trend: up → Bullish only, down → Bearish only. Ranging, or no confirmed trend (Structure detection off), blocks both directions. Uncheck to trade either way."
-            >
-              <input
-                type="checkbox"
-                checked={forceTrend}
-                onChange={() => toggleFlag(FORCE_TREND_STORAGE_KEY, setForceTrend)}
-              />
-              <span className="chart-trend-lock-text">Trend only</span>
-              {forceTrend &&
-                (trend == null ? (
-                  <span
-                    className="chart-trend-lock-chip is-unknown"
-                    title="No confirmed trend on this interval — new trades are blocked. Enable the Structure layer on this interval to get one."
-                  >
-                    trend n/a
-                  </span>
-                ) : (
-                  <span className={`chart-trend-lock-chip is-${trend}`}>{TREND_CHIP[trend]}</span>
-                ))}
-            </label>
-
             <label
               className="chart-trend-lock"
               title="When on: limit orders only, Limit/Stop-loss/Target all required, the lot count is sized from your risk budget (limit price → stop-loss distance), and Proceed stays disabled until reward:risk clears the segment minimum (Money → account settings)."
@@ -337,7 +370,6 @@ export default function LiveChartPage() {
             regime={chartContext.regime}
             oiBias={chartContext.oiBias}
             chartInterval={interval}
-            forceTrend={forceTrend}
             riskManaged={riskManaged}
             chartLtp={chartLtp}
             pendingOrder={activePending}

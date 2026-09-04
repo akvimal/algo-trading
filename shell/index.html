@@ -137,6 +137,65 @@
   .notif-sound-label.active {
     display: flex;
   }
+  /* OI ticker settings (Show / Hide neutral) - a single gear button
+     instead of checkboxes sitting directly in the header (an earlier
+     "Hide neutral" checkbox took up header space on its own; this is the
+     same two settings behind one icon, so the header cost stays constant
+     regardless of how many ticker settings there end up being). */
+  .oi-settings {
+    position: relative;
+    padding-bottom: 0.6rem;
+    flex-shrink: 0;
+  }
+  .oi-settings-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0.3rem 0.5rem;
+    cursor: pointer;
+  }
+  .oi-settings-toggle:hover,
+  .oi-settings-toggle.active {
+    color: var(--text);
+    border-color: var(--text-dim);
+  }
+  .oi-settings-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 0.4rem;
+    padding: 0.55rem 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+    z-index: 20;
+  }
+  /* Wins the display tie over .oi-settings-menu above by appearing later
+     in the sheet - an attribute selector alone won't beat a class rule of
+     equal specificity that comes first, and native <button hidden> vs. an
+     author display:flex rule would otherwise leave it visible. */
+  .oi-settings-menu[hidden] {
+    display: none;
+  }
+  .oi-settings-menu label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+  }
+  .oi-settings-menu input {
+    margin: 0;
+  }
   #notif-blocked {
     display: none;
     font-size: 0.72rem;
@@ -273,6 +332,21 @@
     <nav id="tabs"></nav>
     <div class="top-bar-right">
       <div class="sentiment-bar" id="sentiment-bar"></div>
+      <div class="oi-settings" id="oi-settings">
+        <button type="button" class="oi-settings-toggle" id="oi-settings-toggle" title="OI ticker settings" aria-haspopup="true">
+          ⚙
+        </button>
+        <div class="oi-settings-menu" id="oi-settings-menu" hidden>
+          <label>
+            <input type="checkbox" id="oi-settings-show" />
+            Show
+          </label>
+          <label>
+            <input type="checkbox" id="oi-settings-hide-neutral" />
+            Hide neutral
+          </label>
+        </div>
+      </div>
       <div class="user-area" id="user-area"></div>
       <div class="notif-area">
         <span id="notif-blocked"></span>
@@ -563,6 +637,68 @@
     const sentimentBarEl = document.getElementById("sentiment-bar");
     const SENTIMENT_STRENGTH_LABEL_DISPLAY = { mild: "Mild", strong: "Strong", very_strong: "Very Strong" };
 
+    // OI ticker settings - "Show" (the whole bar) and "Hide neutral" (only
+    // the underlyings with an actual bullish/bearish read; an errored
+    // badge stays visible either way - that's a data problem, not
+    // "nothing going on"), behind one gear button rather than checkboxes
+    // sitting directly in the header (an earlier version put "Hide
+    // neutral" straight in the header - it cost header space on its own,
+    // and every setting added after it would have too). Both persisted;
+    // "Show" defaults on, "Hide neutral" defaults off - both unchanged
+    // behavior from before this menu existed.
+    const SHOW_SENTIMENT_KEY = "shellShowSentimentBar";
+    const HIDE_NEUTRAL_KEY = "shellHideNeutralSentiment";
+    const oiSettingsEl = document.getElementById("oi-settings");
+    const oiSettingsToggleEl = document.getElementById("oi-settings-toggle");
+    const oiSettingsMenuEl = document.getElementById("oi-settings-menu");
+    const showSentimentEl = document.getElementById("oi-settings-show");
+    const hideNeutralEl = document.getElementById("oi-settings-hide-neutral");
+
+    let showSentimentBar = localStorage.getItem(SHOW_SENTIMENT_KEY) !== "false";
+    let hideNeutralSentiment = localStorage.getItem(HIDE_NEUTRAL_KEY) === "true";
+    showSentimentEl.checked = showSentimentBar;
+    hideNeutralEl.checked = hideNeutralSentiment;
+    // The last poll's payload, so toggling "Hide neutral" re-renders
+    // immediately instead of waiting for the next DHAN_POLL_INTERVAL_MS tick.
+    let lastSentimentData = null;
+
+    function applySentimentBarVisibility() {
+      // Not the `hidden` attribute - .sentiment-bar's own `display: flex`
+      // class rule is equal specificity and declared first, so it would
+      // win the cascade over a bare `[hidden]` selector and leave the bar
+      // showing. A direct inline style always wins.
+      sentimentBarEl.style.display = showSentimentBar ? "" : "none";
+    }
+    applySentimentBarVisibility();
+
+    function closeOiSettingsMenu() {
+      oiSettingsMenuEl.hidden = true;
+      oiSettingsToggleEl.classList.remove("active");
+    }
+    oiSettingsToggleEl.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const willOpen = oiSettingsMenuEl.hidden;
+      oiSettingsMenuEl.hidden = !willOpen;
+      oiSettingsToggleEl.classList.toggle("active", willOpen);
+    });
+    document.addEventListener("click", (ev) => {
+      if (!oiSettingsMenuEl.hidden && !oiSettingsEl.contains(ev.target)) closeOiSettingsMenu();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && !oiSettingsMenuEl.hidden) closeOiSettingsMenu();
+    });
+
+    showSentimentEl.addEventListener("change", () => {
+      showSentimentBar = showSentimentEl.checked;
+      localStorage.setItem(SHOW_SENTIMENT_KEY, String(showSentimentBar));
+      applySentimentBarVisibility();
+    });
+    hideNeutralEl.addEventListener("change", () => {
+      hideNeutralSentiment = hideNeutralEl.checked;
+      localStorage.setItem(HIDE_NEUTRAL_KEY, String(hideNeutralSentiment));
+      if (lastSentimentData) renderSentimentBar(lastSentimentData, new Set(sentimentFlashTimers.keys()));
+    });
+
     // Mirrors SentimentBadges.tsx's own fullLabel()/levelGlyph().
     function sentimentFullLabel(direction, strength) {
       if (direction === "neutral" || !strength) return "Neutral";
@@ -583,6 +719,13 @@
     function renderSentimentBar(data, flashingSymbols) {
       sentimentBarEl.innerHTML = "";
       for (const [exchange, entry] of Object.entries(data.exchanges ?? {})) {
+        // An errored read stays visible even with "Hide neutral" on - that's
+        // a data problem, not "nothing going on", worth surfacing regardless.
+        const underlyings = (entry.underlyings ?? []).filter(
+          (u) => u.error || !hideNeutralSentiment || u.direction !== "neutral",
+        );
+        if (underlyings.length === 0) continue; // nothing left to show for this exchange - skip its label too
+
         const segment = document.createElement("span");
         segment.className = "sentiment-segment";
 
@@ -591,7 +734,7 @@
         label.textContent = exchange;
         segment.appendChild(label);
 
-        for (const u of entry.underlyings ?? []) {
+        for (const u of underlyings) {
           // A real <button>, not a <span> - every sentiment underlying
           // (NIFTY/BANKNIFTY/GOLDM/CRUDEOILM) is also one of OiSummaryPage's
           // own PRESETS keys, so every badge can jump straight to that
@@ -657,6 +800,7 @@
         const res = await fetch(`${base}/options/sentiment`);
         if (!res.ok) return;
         const data = await res.json();
+        lastSentimentData = data;
 
         const next = new Map();
         for (const [, entry] of Object.entries(data.exchanges ?? {})) {

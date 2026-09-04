@@ -12,6 +12,7 @@ import {
   type Chart,
   type Crosshair,
   type DeepPartial,
+  type IndicatorFigureStyle,
   type KLineData,
   type Overlay,
   type OverlayEvent,
@@ -46,6 +47,8 @@ import {
   fetchRegime,
   fetchSentimentHistory,
   resolveUnderlying,
+  createPriceAlert,
+  deletePriceAlert,
 } from "./api";
 
 // klinecharts 9.x ships only line-family overlays - no rectangle - so
@@ -77,6 +80,43 @@ registerOverlay({
         // (overrideOverlay); fall through to DARK_STYLES.overlay.polygon
         // otherwise. style stays stroke_fill so the zone reads translucent.
         styles: { ...(overlay.styles?.polygon ?? {}), style: "stroke_fill" },
+      },
+    ];
+  },
+});
+
+// An optional user-typed label on a drawing (trend line/ray/h-line/zone/
+// fib) - a small pill anchored at the drawing's own first point, in its
+// colour. Purely cosmetic/read-only: created/moved/removed alongside its
+// parent drawing (see labelOverlaysRef below), never itself draggable or
+// selectable (`lock: true` at creation, no handlers registered).
+type DrawLabelExtendData = { text: string; color: string };
+registerOverlay({
+  name: "drawLabel",
+  totalStep: 1,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates }) => {
+    if (coordinates.length < 1 || !coordinates[0]) return [];
+    const d = overlay.extendData as DrawLabelExtendData | undefined;
+    if (!d?.text) return [];
+    return [
+      {
+        type: "text",
+        attrs: { x: coordinates[0].x, y: coordinates[0].y, text: d.text, align: "left", baseline: "bottom" },
+        styles: {
+          color: "#0f1216",
+          size: 11,
+          weight: "bold",
+          backgroundColor: d.color,
+          borderRadius: 3,
+          paddingLeft: 4,
+          paddingRight: 4,
+          paddingTop: 1,
+          paddingBottom: 1,
+        },
+        ignoreEvent: true,
       },
     ];
   },
@@ -772,6 +812,77 @@ registerIndicator<SupertrendPoint>({
   },
 });
 
+// RSI - overrides klinecharts' own built-in "RSI" (registerIndicator keys
+// on name, so this replaces rather than adds one) because the stock
+// version's calcParams are 3 independent periods (RSI-6/12/24, no
+// overbought/oversold concept at all) and offers no way to configure the
+// classic 70/30 reference bands. calcParams here are instead
+// [period, overbought, oversold] - one RSI line (period, default 14) plus
+// two flat dashed lines at the configured levels, both editable via the
+// same Indicators-menu params box every other indicator here uses. The
+// calc is the same rolling-sum method klinecharts' own RSI uses (not a
+// Wilder-smoothed textbook RSI), just for a single period instead of up
+// to three, so an existing chart's RSI reading doesn't visibly jump.
+type RsiPoint = { rsi?: number; overbought?: number; oversold?: number };
+registerIndicator<RsiPoint>({
+  name: "RSI",
+  shortName: "RSI",
+  series: IndicatorSeries.Normal,
+  calcParams: [14, 70, 30],
+  precision: 2,
+  figures: [
+    { key: "rsi", title: "RSI: ", type: "line" },
+    // Cast: IndicatorFigureStyle's `style` key is ambiguous by construction
+    // (it intersects both the line-dash and the text-style meanings of
+    // "style"), so a concrete LineType.Dashed value doesn't structurally
+    // satisfy it - this is the correct shape for a "line" figure at runtime.
+    {
+      key: "overbought",
+      title: "OB: ",
+      type: "line",
+      styles: () => ({ color: SELL, style: LineType.Dashed, size: 1 }) as unknown as IndicatorFigureStyle,
+    },
+    {
+      key: "oversold",
+      title: "OS: ",
+      type: "line",
+      styles: () => ({ color: BUY, style: LineType.Dashed, size: 1 }) as unknown as IndicatorFigureStyle,
+    },
+  ],
+  regenerateFigures: null,
+  calc: (dataList, indicator) => {
+    const [rawPeriod, rawOverbought, rawOversold] = indicator.calcParams as number[];
+    const period = Math.max(1, Math.round(rawPeriod || 14));
+    const overbought = rawOverbought ?? 70;
+    const oversold = rawOversold ?? 30;
+    const n = dataList.length;
+    const out: RsiPoint[] = new Array(n);
+    let sumUp = 0;
+    let sumDown = 0;
+    for (let i = 0; i < n; i++) {
+      const k = dataList[i];
+      const prevClose = i > 0 ? dataList[i - 1].close : k.close;
+      const diff = k.close - prevClose;
+      if (diff > 0) sumUp += diff;
+      else sumDown += Math.abs(diff);
+
+      let rsi: number | undefined;
+      if (i >= period - 1) {
+        rsi = sumDown !== 0 ? 100 - 100 / (1 + sumUp / sumDown) : 100;
+        // Roll the window: drop the bar falling out of it, same "ago"
+        // bookkeeping klinecharts' own multi-period RSI uses.
+        const agoData = dataList[i - (period - 1)];
+        const agoPrev = dataList[i - period] ?? agoData;
+        const agoDiff = agoData.close - agoPrev.close;
+        if (agoDiff > 0) sumUp -= agoDiff;
+        else sumDown -= Math.abs(agoDiff);
+      }
+      out[i] = { rsi, overbought, oversold };
+    }
+    return out;
+  },
+});
+
 // The live chart (see docs/architecture.md § "Why the live chart uses a
 // library"). A candlestick view of one underlying's own spot/chart price,
 // from market-data's GET /candles/history, kept current by polling GET
@@ -829,9 +940,11 @@ const INDICATORS_HIDDEN_STORAGE_KEY = "manualLiveChartIndicatorsHidden";
 // clearing it to empty drops those lines (VOL then shows bare bars).
 // BOLL/SAR are left out - their params aren't a period list (period +
 // multiplier / accel factors), editing them raw would just confuse.
-// SUPERTREND is our own (registerIndicator below), not a klinecharts
+// SUPERTREND is our own (registerIndicator above), not a klinecharts
 // built-in - its params are [ATR period, multiplier], the multiplier is
-// commonly fractional (2.5 / 3).
+// commonly fractional (2.5 / 3). RSI is also our own (overriding the
+// built-in one) - its params are [period, overbought, oversold], not a
+// period list either, so the classic 70/30 bands are configurable.
 const INDICATORS: { name: string; label: string; overlay: boolean; params?: number[] }[] = [
   { name: "MA", label: "MA · moving average", overlay: true, params: [5, 10, 30, 60] },
   { name: "EMA", label: "EMA · exp. moving average", overlay: true, params: [6, 12, 20] },
@@ -841,7 +954,7 @@ const INDICATORS: { name: string; label: string; overlay: boolean; params?: numb
   { name: "BBI", label: "BBI", overlay: true, params: [3, 6, 12, 24] },
   { name: "VOL", label: "Volume", overlay: false, params: [5, 10, 20] },
   { name: "MACD", label: "MACD", overlay: false, params: [12, 26, 9] },
-  { name: "RSI", label: "RSI", overlay: false, params: [6, 12, 24] },
+  { name: "RSI", label: "RSI · period, overbought, oversold", overlay: false, params: [14, 70, 30] },
   { name: "KDJ", label: "KDJ · stochastic", overlay: false, params: [9, 3, 3] },
   { name: "CCI", label: "CCI", overlay: false, params: [13] },
   { name: "DMI", label: "DMI / ADX", overlay: false, params: [14, 6] },
@@ -1384,6 +1497,15 @@ const DRAW_COLORS = ["#4c8bf5", "#3ecf8e", "#e8586a", "#e0b058", "#b07cff", "#e6
 // trend line / ray (its price at "now" is a linear projection of the two
 // anchors), or a rectangle zone (a price band - "entered / left zone").
 const ALERTABLE_OVERLAYS = new Set(["horizontalStraightLine", "priceLine", "segment", "rayLine", "rect"]);
+// A drawing type the server-side price_alerts model can represent: a flat
+// level (horizontalStraightLine/priceLine), a projected trend-line level
+// (segment/rayLine - captured at its CURRENT value only, doesn't keep
+// tracking the slope server-side), or a zone (rect - synced as its two
+// edges). Same set as ALERTABLE_OVERLAYS today; kept as its own alias so
+// "can this be labeled" (any type) vs "can this be synced" (these only)
+// read as distinct concerns at each call site, even though they currently
+// coincide.
+const SERVER_SYNCABLE_OVERLAYS = ALERTABLE_OVERLAYS;
 type AlertSide = "above" | "inside" | "below";
 type DrawAlert = { trigger: "cross" | "close"; lastSide: AlertSide | null };
 
@@ -1482,14 +1604,24 @@ function styleToPatch(s: DrawStyle): DeepPartial<OverlayStyle> {
 
 // What we persist per drawn overlay - the template name, its time/price
 // anchor points (dataIndex is re-derived from the timestamp on recreate),
-// and (optional) its custom style + armed cross/close alert. Alert state
-// rides on the overlay itself so it survives save/restore even though
+// and (optional) its custom style + armed cross/close alert + a free-text
+// label + linked standalone-alert row ids. Alert/label/sync state all ride
+// on the overlay itself so they survive save/restore even though
 // klinecharts assigns fresh ids on reload.
 type StoredOverlay = {
   name: string;
   points: Array<{ timestamp?: number; value?: number }>;
   style?: DrawStyle;
   alert?: DrawAlert;
+  label?: string;
+  // market_data.price_alerts row ids created by "sync to Alerts page" -
+  // present only while this drawing's level is also being watched
+  // server-side (Telegram, works with the tab closed). A rect (zone)
+  // creates 2 (one per edge); a line creates 1. Cleared (rows deleted
+  // best-effort) when the drawing moves or is removed, since neither this
+  // client nor the server keeps them in sync afterwards - a stale server
+  // alert at the wrong price is worse than none.
+  serverAlertIds?: string[];
 };
 
 // Drawings are price/time anchored, so they belong to the instrument, not
@@ -1500,14 +1632,18 @@ function overlayStorageKey(exchange: string, symbol: string): string {
 }
 
 // Rebuild the persisted form from a live overlay, preserving the style +
-// alert we track alongside it (and re-seeding the alert's side, since a
-// drag may have moved the level).
+// alert + label we track alongside it (and re-seeding the alert's side,
+// since a drag may have moved the level). `serverAlertIds` is deliberately
+// NOT carried over here - a moved/redrawn overlay's caller is responsible
+// for unsyncing any linked standalone alert first (see onPressedMoveEnd),
+// since the server row would otherwise silently point at a stale price.
 function serializeOverlay(o: Overlay, prev?: StoredOverlay): StoredOverlay {
   return {
     name: o.name,
     points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value })),
     style: prev?.style,
     alert: prev?.alert ? { ...prev.alert, lastSide: null } : undefined,
+    label: prev?.label,
   };
 }
 
@@ -1705,6 +1841,9 @@ export function LiveChartPanel({
   const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
   const [selStyle, setSelStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
   const [selAlert, setSelAlert] = useState<DrawAlert | null>(null);
+  const [selLabel, setSelLabel] = useState<string>("");
+  const [selServerAlertIds, setSelServerAlertIds] = useState<string[] | null>(null);
+  const [syncingAlert, setSyncingAlert] = useState(false);
   // A transient "NIFTY ▲ crossed 23,900" banner when a line alert fires.
   const [alertFlash, setAlertFlash] = useState<string | null>(null);
   const alertFlashTimerRef = useRef<number | null>(null);
@@ -1713,6 +1852,8 @@ export function LiveChartPanel({
   const [drawingsHidden, setDrawingsHidden] = useState<boolean>(
     () => localStorage.getItem(DRAWINGS_HIDDEN_STORAGE_KEY) === "true",
   );
+  const drawingsHiddenRef = useRef(drawingsHidden);
+  drawingsHiddenRef.current = drawingsHidden;
   const [indicatorsHidden, setIndicatorsHidden] = useState<boolean>(
     () => localStorage.getItem(INDICATORS_HIDDEN_STORAGE_KEY) === "true",
   );
@@ -1812,6 +1953,12 @@ export function LiveChartPanel({
   // for the current instrument, and a flag that silences the onRemoved
   // handler while WE are the ones clearing overlays (see loadDrawings).
   const overlaysRef = useRef<Map<string, StoredOverlay>>(new Map());
+  // Companion label-pill overlays: parent drawing id -> its "drawLabel"
+  // overlay id. Kept separate from overlaysRef so persistOverlays (which
+  // just serializes overlaysRef.values()) never writes these internal
+  // overlays to storage - the label TEXT lives on the parent StoredOverlay
+  // instead, and this map is rebuilt from it on every load/redraw.
+  const labelOverlaysRef = useRef<Map<string, string>>(new Map());
   const storageKeyRef = useRef<string | null>(null);
   const restoringRef = useRef(false);
   // The overlay klinecharts currently has selected (single-clicked) - the
@@ -1842,6 +1989,11 @@ export function LiveChartPanel({
       } catch {
         /* no chart data yet - fall through to the default latest-bars view */
       }
+      // The candle fetch for the new interval takes a moment - without
+      // this, the OLD timeframe's candles stay on screen with no
+      // indication they're stale until the new series lands. The
+      // candle effect's own loadHistory sets this back to "ready".
+      setStatus("loading");
     }
     localStorage.setItem(INTERVAL_STORAGE_KEY, value);
     setInterval_(value);
@@ -2050,6 +2202,109 @@ export function LiveChartPanel({
     const entry = overlaysRef.current.get(id);
     setSelStyle(entry?.style ?? drawStyleRef.current);
     setSelAlert(entry?.alert ?? null);
+    setSelLabel(entry?.label ?? "");
+    setSelServerAlertIds(entry?.serverAlertIds ?? null);
+  }
+
+  // --- Drawing labels: a small text pill anchored at the drawing's own
+  // first point (see the "drawLabel" overlay registered at module scope).
+  // Kept in sync with the parent drawing's lifecycle (draw-end, drag-end,
+  // removal, restore) - never created/selected/dragged independently. ---
+  function removeLabelOverlay(parentId: string) {
+    const id = labelOverlaysRef.current.get(parentId);
+    if (!id) return;
+    chartRef.current?.removeOverlay(id);
+    labelOverlaysRef.current.delete(parentId);
+  }
+
+  function syncLabelOverlay(parentId: string, entry: StoredOverlay) {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (!entry.label) {
+      removeLabelOverlay(parentId);
+      return;
+    }
+    const anchor = entry.points[0];
+    if (!anchor || typeof anchor.timestamp !== "number" || typeof anchor.value !== "number") return;
+    const extendData: DrawLabelExtendData = { text: entry.label, color: entry.style?.color ?? drawStyleRef.current.color };
+    const existing = labelOverlaysRef.current.get(parentId);
+    if (existing) {
+      chart.overrideOverlay({ id: existing, points: [anchor], extendData });
+      return;
+    }
+    const id = chart.createOverlay({
+      name: "drawLabel",
+      points: [anchor],
+      lock: true,
+      visible: !drawingsHiddenRef.current,
+      extendData,
+    });
+    if (typeof id === "string") labelOverlaysRef.current.set(parentId, id);
+  }
+
+  function applyDrawLabel(text: string) {
+    const sel = selectedOverlayRef.current;
+    if (!sel) return;
+    const entry = overlaysRef.current.get(sel);
+    if (!entry) return;
+    const trimmed = text.trim();
+    const next: StoredOverlay = { ...entry, label: trimmed || undefined };
+    overlaysRef.current.set(sel, next);
+    persistOverlays();
+    syncLabelOverlay(sel, next);
+  }
+
+  // Best-effort delete of any standalone alerts synced from this drawing -
+  // called when it moves or is removed, since neither side keeps a moved
+  // level in sync afterwards. Never blocks/alerts on failure - a leftover
+  // server-side alert row is a minor annoyance, not worth surfacing here.
+  function unsyncServerAlert(ids: string[] | undefined) {
+    if (!ids?.length) return;
+    for (const id of ids) void deletePriceAlert(id).catch(() => {});
+  }
+
+  async function toggleServerAlertSync() {
+    const sel = selectedOverlayRef.current;
+    if (!sel || !selected) return;
+    const entry = overlaysRef.current.get(sel);
+    if (!entry) return;
+    if (entry.serverAlertIds?.length) {
+      setSyncingAlert(true);
+      unsyncServerAlert(entry.serverAlertIds);
+      const next: StoredOverlay = { ...entry, serverAlertIds: undefined };
+      overlaysRef.current.set(sel, next);
+      persistOverlays();
+      setSelServerAlertIds(null);
+      setSyncingAlert(false);
+      showBanner("Removed from the Alerts page");
+      return;
+    }
+    if (!chartExchange || !chartSymbol) return;
+    const z = alertZone(entry);
+    if (!z) return;
+    setSyncingAlert(true);
+    try {
+      const note = entry.label?.trim() || "Live Chart drawing";
+      // Round to the same precision the chart itself displays (fmtPrice) -
+      // a hand-drawn point's raw value is whatever pixel-to-price the
+      // click landed on (e.g. 23977.2658128811), which reads as noise
+      // once it's sitting on the Alerts page next to hand-typed levels.
+      const levels = [...new Set((z.lo === z.hi ? [z.hi] : [z.lo, z.hi]).map((p) => Number(fmtPrice(p))))];
+      const created = await Promise.all(
+        levels.map((price) =>
+          createPriceAlert({ exchange: chartExchange, symbol: chartSymbol, target_price: price, direction: "cross", note, repeat: true }),
+        ),
+      );
+      const next: StoredOverlay = { ...entry, serverAlertIds: created.map((a) => a.id) };
+      overlaysRef.current.set(sel, next);
+      persistOverlays();
+      setSelServerAlertIds(next.serverAlertIds ?? null);
+      showBanner("Synced to the Alerts page - fires via Telegram even with this tab closed");
+    } catch (err) {
+      showBanner(err instanceof Error ? err.message : "Failed to sync to the Alerts page");
+    } finally {
+      setSyncingAlert(false);
+    }
   }
 
   // The same callback set is attached to every overlay, whether freshly
@@ -2067,8 +2322,18 @@ export function LiveChartPanel({
         return false;
       },
       onPressedMoveEnd: (e: OverlayEvent) => {
-        overlaysRef.current.set(e.overlay.id, serializeOverlay(e.overlay, overlaysRef.current.get(e.overlay.id)));
+        const prev = overlaysRef.current.get(e.overlay.id);
+        const next = serializeOverlay(e.overlay, prev);
+        overlaysRef.current.set(e.overlay.id, next);
         persistOverlays();
+        syncLabelOverlay(e.overlay.id, next);
+        // A moved drawing invalidates any standalone alert synced from its
+        // old level - drop it rather than leave a stale server-side row.
+        if (prev?.serverAlertIds?.length) {
+          unsyncServerAlert(prev.serverAlertIds);
+          if (selectedOverlayRef.current === e.overlay.id) setSelServerAlertIds(null);
+          showBanner("Alert sync removed - the level moved");
+        }
         if (selectedOverlayRef.current === e.overlay.id) syncSelectedFrom(e.overlay.id);
         return false;
       },
@@ -2079,6 +2344,8 @@ export function LiveChartPanel({
         }
         if (pendingOverlayRef.current === e.overlay.id) pendingOverlayRef.current = null;
         if (restoringRef.current) return false;
+        removeLabelOverlay(e.overlay.id);
+        unsyncServerAlert(overlaysRef.current.get(e.overlay.id)?.serverAlertIds);
         overlaysRef.current.delete(e.overlay.id);
         persistOverlays();
         return false;
@@ -2222,11 +2489,17 @@ export function LiveChartPanel({
 
   // Sound + desktop notification + a transient on-chart banner when a
   // drawing's alert trips. Reuses the setup-alert channel.
-  function fireDrawAlert(msg: string) {
-    playSetupTune();
+  // The transient on-chart banner alone, no sound/desktop-notification -
+  // for UI-action feedback (sync/unsync, etc) rather than a price alert.
+  function showBanner(msg: string, ms = 5000) {
     setAlertFlash(msg);
     if (alertFlashTimerRef.current) window.clearTimeout(alertFlashTimerRef.current);
-    alertFlashTimerRef.current = window.setTimeout(() => setAlertFlash(null), 7000);
+    alertFlashTimerRef.current = window.setTimeout(() => setAlertFlash(null), ms);
+  }
+
+  function fireDrawAlert(msg: string) {
+    playSetupTune();
+    showBanner(msg, 7000);
     try {
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {
         const n = new Notification("Price alert", { body: msg, tag: `draw-alert-${msg}` });
@@ -2348,6 +2621,10 @@ export function LiveChartPanel({
     restoringRef.current = true;
     chart.removeOverlay();
     overlaysRef.current.clear();
+    // The chart-wide removeOverlay() above already wiped every companion
+    // "drawLabel" overlay too (they carry no handlers, so onRemoved never
+    // ran for them) - the id map is now stale, drop it.
+    labelOverlaysRef.current.clear();
     let stored: unknown;
     try {
       stored = JSON.parse(localStorage.getItem(storageKeyRef.current) ?? "[]");
@@ -2366,7 +2643,9 @@ export function LiveChartPanel({
         });
         // A restored alert re-seeds its side on the next check.
         if (typeof id === "string") {
-          overlaysRef.current.set(id, s.alert ? { ...s, alert: { ...s.alert, lastSide: null } } : s);
+          const entry: StoredOverlay = s.alert ? { ...s, alert: { ...s.alert, lastSide: null } } : s;
+          overlaysRef.current.set(id, entry);
+          syncLabelOverlay(id, entry);
         }
       }
     }
@@ -2467,6 +2746,9 @@ export function LiveChartPanel({
     const chart = chartRef.current;
     if (!chart) return;
     for (const id of overlaysRef.current.keys()) {
+      chart.overrideOverlay({ id, visible: !drawingsHidden });
+    }
+    for (const id of labelOverlaysRef.current.values()) {
       chart.overrideOverlay({ id, visible: !drawingsHidden });
     }
   }, [drawingsHidden, dataEpoch]);
@@ -3489,6 +3771,25 @@ export function LiveChartPanel({
                   </button>
                 ))}
               </div>
+              <div className="lcsb-group lcsb-label-group">
+                <input
+                  type="text"
+                  className="lcsb-label"
+                  placeholder="Label…"
+                  value={selLabel}
+                  maxLength={40}
+                  onChange={(e) => setSelLabel(e.target.value)}
+                  onBlur={() => applyDrawLabel(selLabel)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                    if (e.key === "Escape") {
+                      setSelLabel(overlaysRef.current.get(selected.id)?.label ?? "");
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                  title="Name this drawing (shown as a small tag on the chart)"
+                />
+              </div>
               {ALERTABLE_OVERLAYS.has(selected.name) && (
                 <div className="lcsb-group lcsb-alert">
                   <button
@@ -3514,6 +3815,23 @@ export function LiveChartPanel({
                       <option value="cross">live</option>
                       <option value="close">on bar close</option>
                     </select>
+                  )}
+                  {SERVER_SYNCABLE_OVERLAYS.has(selected.name) && (
+                    <button
+                      type="button"
+                      className={selServerAlertIds ? "active" : ""}
+                      disabled={syncingAlert || !chartExchange || !chartSymbol}
+                      title={
+                        selServerAlertIds
+                          ? "Synced to the Alerts page + Telegram - click to remove"
+                          : selected.name === "segment" || selected.name === "rayLine"
+                            ? "Send this line's CURRENT level to the Alerts page (Telegram, works with this tab closed) - won't keep tracking the line's slope"
+                            : "Also send this level to the Alerts page (Telegram, works with this tab closed)"
+                      }
+                      onClick={toggleServerAlertSync}
+                    >
+                      {syncingAlert ? "…" : "📡"}
+                    </button>
                   )}
                 </div>
               )}

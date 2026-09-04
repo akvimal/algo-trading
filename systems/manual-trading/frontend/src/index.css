@@ -2635,30 +2635,6 @@ button.btn-exit {
   flex: 1;
 }
 
-.chart-trend-lock-chip {
-  padding: 0.05rem 0.4rem;
-  border-radius: 999px;
-  font-weight: 600;
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-
-.chart-trend-lock-chip.is-up {
-  color: var(--buy);
-  background: color-mix(in srgb, var(--buy) 16%, transparent);
-}
-
-.chart-trend-lock-chip.is-down {
-  color: var(--sell);
-  background: color-mix(in srgb, var(--sell) 16%, transparent);
-}
-
-.chart-trend-lock-chip.is-range,
-.chart-trend-lock-chip.is-unknown {
-  color: var(--text-dim);
-  background: color-mix(in srgb, var(--text-dim) 16%, transparent);
-}
-
 .live-chart-panel {
   display: flex;
   flex-direction: column;
@@ -3026,6 +3002,16 @@ button.btn-exit {
   font-size: 0.8rem;
 }
 
+/* ● marker on a symbol tab with an open manual trade running - distinct
+   from the pending-limit ⏳ above (both can show at once: an open trade
+   plus a separate armed add-on order). */
+.live-chart-symbol-active-trade {
+  margin-left: 0.3rem;
+  font-size: 0.6rem;
+  color: var(--buy);
+  vertical-align: middle;
+}
+
 /* Price field + its "pick from chart" (⌖) button. */
 .ctp-input-pick {
   display: flex;
@@ -3179,6 +3165,17 @@ button.btn-exit {
 .live-chart-style-bar .lcsb-group button.active {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.live-chart-style-bar .lcsb-label {
+  width: 6rem;
+  height: 1.5rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.72rem;
 }
 
 .live-chart-style-bar .lcsb-alert select {

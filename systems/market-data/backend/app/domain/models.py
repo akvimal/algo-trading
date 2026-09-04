@@ -169,6 +169,21 @@ class StructureEvent(BaseModel):
     from_timestamp: str
 
 
+class MarketRegime(BaseModel):
+    """GET /regime - a coarse "is this trending or chopping right now"
+    read for one (exchange, symbol, interval), for the Live Chart's regime
+    badge. `regime` buckets ADX strength + the structure trend;
+    `atr_percentile` is where current volatility sits in its own recent
+    range (0-100); `advice` is one line of plain guidance. See
+    app/domain/regime.py."""
+
+    regime: Literal["trending_up", "trending_down", "ranging", "transitional"]
+    adx: float
+    atr_percentile: int
+    trend: Literal["up", "down", "range"]
+    advice: str
+
+
 class TrendChange(BaseModel):
     """One confirmed-trend flip - part of GET /order-blocks' ChartStructure.
     Emitted at a BOS/CHoCH break where `structure_state`'s confirmed trend
@@ -566,3 +581,34 @@ class SentimentHistoryDay(BaseModel):
     session_start: datetime
     session_end: datetime
     points: list[SentimentHistoryPoint]
+
+
+class PriceAlertCreate(BaseModel):
+    """POST /price-alerts - a standalone price level to watch. `direction`
+    'above'/'below' fire once the LTP is on that side of `target_price`;
+    'cross' fires on either crossing. `repeat` re-arms after firing (else
+    one-shot). See app/domain/price_alerts.py."""
+
+    exchange: str = Field(min_length=1, max_length=16)
+    symbol: str = Field(min_length=1, max_length=40)
+    target_price: float = Field(gt=0)
+    direction: Literal["above", "below", "cross"]
+    note: Optional[str] = Field(default=None, max_length=280)
+    repeat: bool = False
+
+
+class PriceAlertOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    exchange: str
+    symbol: str
+    target_price: float
+    direction: Literal["above", "below", "cross"]
+    note: Optional[str] = None
+    repeat: bool
+    active: bool
+    last_side: Optional[str] = None
+    created_at: datetime
+    last_triggered_at: Optional[datetime] = None
+    trigger_count: int

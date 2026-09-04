@@ -87,6 +87,22 @@ def _record_sentiment_history() -> None:
         db.close()
 
 
+def _check_price_alerts() -> None:
+    """Evaluate every active market_data.price_alerts row against a fresh
+    LTP and push the ones that just crossed to Telegram - see
+    app/domain/price_alerts.py."""
+    from app.domain.price_alerts import dispatch_due
+
+    db = SessionLocal()
+    try:
+        dispatch_due(db)
+    except Exception:
+        logger.exception("scheduled price-alert check failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def start_scheduler() -> None:
     _scheduler.add_job(
         _sync_all,
@@ -112,6 +128,14 @@ def start_scheduler() -> None:
         IntervalTrigger(minutes=settings.sentiment_history_interval_minutes),
         id="sentiment-history-record",
         replace_existing=True,
+    )
+    _scheduler.add_job(
+        _check_price_alerts,
+        IntervalTrigger(seconds=settings.price_alert_check_interval_seconds),
+        id="price-alert-check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     _scheduler.start()
     # Run once immediately in the background so quotes work without

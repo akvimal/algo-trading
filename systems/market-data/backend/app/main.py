@@ -1,7 +1,18 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import candles, delta, dhan, health, instruments, options, order_blocks, quotes
+from app.api.routes import (
+    candles,
+    delta,
+    dhan,
+    health,
+    instruments,
+    options,
+    order_blocks,
+    price_alerts,
+    quotes,
+    regime,
+)
 from app.providers.delta_feed import start_feed as start_delta_feed
 from app.providers.dhan import load_persisted_credentials
 from app.scheduler import start_scheduler
@@ -20,6 +31,8 @@ app.include_router(quotes.router)
 app.include_router(instruments.router)
 app.include_router(candles.router)
 app.include_router(order_blocks.router)
+app.include_router(regime.router)
+app.include_router(price_alerts.router)
 app.include_router(dhan.router)
 app.include_router(delta.router)
 app.include_router(options.router)

@@ -40,3 +40,34 @@ CREATE TABLE IF NOT EXISTS market_data.sentiment_history (
 -- covers that access path directly instead of a full-table scan.
 CREATE INDEX IF NOT EXISTS idx_sentiment_history_symbol_time
     ON market_data.sentiment_history (symbol, recorded_at DESC);
+
+-- Standalone price alerts (2026-09-04) - a user adds a level + a
+-- direction on any tradeable symbol; app/scheduler.py's
+-- _check_price_alerts polls the LTP every minute and, on a crossing,
+-- pushes a Telegram message (app/domain/notify.py) then either
+-- deactivates the alert (one-shot) or re-arms it (repeat=true). Independent
+-- of the Live Chart's browser-only drawing-line alerts. user_id is
+-- nullable (an alert added without a logged-in caller belongs to nobody
+-- in particular - it still fires, to the one configured Telegram chat).
+CREATE TABLE IF NOT EXISTS market_data.price_alerts (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID,
+    exchange          TEXT NOT NULL,
+    symbol            TEXT NOT NULL,
+    target_price      NUMERIC NOT NULL CHECK (target_price > 0),
+    -- 'above' / 'below' fire once the LTP is on that side of target_price;
+    -- 'cross' fires on either crossing (needs last_side to know which way).
+    direction         TEXT NOT NULL CHECK (direction IN ('above', 'below', 'cross')),
+    note              TEXT,
+    repeat            BOOLEAN NOT NULL DEFAULT false,
+    active            BOOLEAN NOT NULL DEFAULT true,
+    -- 'above' / 'below' / NULL - which side the LTP was on at the last
+    -- check, so a crossing (not just "currently past") is what fires.
+    last_side         TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_triggered_at TIMESTAMPTZ,
+    trigger_count     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_alerts_active
+    ON market_data.price_alerts (active) WHERE active;

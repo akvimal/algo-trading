@@ -107,5 +107,16 @@ class Settings(BaseSettings):
     dhan_postback_secret: str = "change-me-in-production"
     execution_base_url: str = "http://execution-backend:8000"
 
+    # Standalone price alerts (see app/domain/price_alerts.py + scheduler).
+    # A single Telegram bot + chat receives every fired alert. Create a bot
+    # via @BotFather for the token; get your chat id from
+    # https://api.telegram.org/bot<token>/getUpdates after messaging it.
+    # Both blank -> alerts still evaluate and get marked triggered, but
+    # nothing is sent (app/domain/notify.py logs a warning once).
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    # How often the scheduler polls the LTP for every active alert.
+    price_alert_check_interval_seconds: int = 60
+
 
 settings = Settings()

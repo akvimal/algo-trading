@@ -44,11 +44,26 @@ export function breakdown<T extends BreakdownTrade>(trades: T[], keyFn: (t: T) =
   return [...m.values()];
 }
 
-export function BreakdownTable({ title, header, rows }: { title: string; header: string; rows: Bucket[] }) {
+export function BreakdownTable({
+  title,
+  header,
+  rows,
+  titleExtra,
+}: {
+  title: string;
+  header: string;
+  rows: Bucket[];
+  // Optional link/badge appended after the title - used by "By setup" to
+  // point at the Setup Field Guide without every other breakdown needing it.
+  titleExtra?: import("react").ReactNode;
+}) {
   if (rows.length === 0) return null;
   return (
     <section className="manual-settings-section">
-      <h4>{title}</h4>
+      <h4>
+        {title}
+        {titleExtra}
+      </h4>
       <div className="manual-stats-table-wrap">
         <table className="manual-stats-table">
           <thead>

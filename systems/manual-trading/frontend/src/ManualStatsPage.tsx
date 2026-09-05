@@ -392,6 +392,12 @@ export default function ManualStatsPage() {
               title="By setup"
               header="Setup"
               rows={breakdown(trades, (t) => t.setup_tag ?? "— untagged —").sort((a, b) => b.pnl - a.pnl)}
+              titleExtra={
+                <a className="ctp-link" href="?tab=setup-guide" target="_blank" rel="noopener" title="What each Setup tag actually looks like">
+                  {" "}
+                  · guide ↗
+                </a>
+              }
             />
             <BreakdownTable
               title="By confidence"

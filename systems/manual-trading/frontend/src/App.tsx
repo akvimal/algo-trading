@@ -13,6 +13,11 @@ const PriceAlertsPage = lazy(() => import("./PriceAlertsPage"));
 // Discipline score + the trend/sizing breakdowns split out of Performance
 // 2026-09-05 - same lazy-load reasoning.
 const DisciplinePage = lazy(() => import("./DisciplinePage"));
+// Setup Field Guide - a static reference page for the Setup dropdown's 11
+// tags, opened in a new tab from wherever that dropdown appears (never a
+// shell nav entry - it's reference material, not a page you'd navigate to
+// daily). Same lazy-load reasoning.
+const SetupGuidePage = lazy(() => import("./SetupGuidePage"));
 
 // Split out of signal-generation's frontend (see docs/architecture.md §
 // "Manual Trading module split") - Manual Trading and Options OI never
@@ -55,6 +60,10 @@ export default function App() {
         ) : tab === "discipline" ? (
           <Suspense fallback={<p className="muted">Loading…</p>}>
             <DisciplinePage />
+          </Suspense>
+        ) : tab === "setup-guide" ? (
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            <SetupGuidePage />
           </Suspense>
         ) : (
           <IntradayPage />

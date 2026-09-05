@@ -145,6 +145,23 @@ function PickBtn({ armed, onToggle }: { armed: boolean; onToggle: () => void }) 
   );
 }
 
+// Opens the Setup Field Guide (a static reference page, ?tab=setup-guide)
+// in a new tab - a relative href, same origin as this app, so it works
+// whether this panel is loaded standalone or embedded in the shell iframe.
+function SetupGuideLink() {
+  return (
+    <a
+      className="ctp-help-link"
+      href="?tab=setup-guide"
+      target="_blank"
+      rel="noopener"
+      title="What each Setup tag actually looks like"
+    >
+      ?
+    </a>
+  );
+}
+
 function pnlPct(pnl: number | null, entry: number | null, qty: number | null): number | null {
   if (pnl == null || entry == null || qty == null) return null;
   const base = Math.abs(entry * qty);
@@ -1189,7 +1206,9 @@ export default function ChartTradePanel({
 
           <div className="ctp-row ctp-journal-row">
             <label className="ctp-field ctp-field-grow">
-              <span>Setup</span>
+              <span>
+                Setup <SetupGuideLink />
+              </span>
               <select value={setupTag} onChange={(e) => setSetupTag(e.target.value)}>
                 <option value="">— reason —</option>
                 {SETUP_TAGS.map((t) => (
@@ -1414,7 +1433,9 @@ export default function ChartTradePanel({
               <div className="ctp-note-edit">
                 <div className="ctp-row ctp-journal-row">
                   <label className="ctp-field ctp-field-grow">
-                    <span>Setup</span>
+                    <span>
+                Setup <SetupGuideLink />
+              </span>
                     <select
                       value={noteEdit.tag}
                       onChange={(e) => setNoteEdit((s) => (s ? { ...s, tag: e.target.value } : s))}

@@ -1695,6 +1695,162 @@ button.btn-exit {
   font-variant-numeric: tabular-nums;
 }
 
+/* Discipline page - score gauge + component bars (see DisciplinePage.tsx,
+   discipline.ts). is-good/is-warn/is-bad/is-dim mirror disciplineColor(). */
+.discipline-window-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-left: auto;
+}
+.discipline-window-picker select {
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
+}
+
+.discipline-intro {
+  max-width: 62rem;
+}
+
+/* The hero row: gauge + a 2-col (wraps to 1 on narrow) grid of compact
+   stat cards, side by side using the page's full width - the original
+   version nested this inside .manual-settings-section (flex-direction:
+   column, unset by this rule) and centered/stacked everything into a
+   narrow column with huge empty margins either side (user-reported: "this
+   page takes too much space"). A plain div avoids that class entirely. */
+.discipline-hero {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  background: var(--surface-raised);
+  border-radius: 8px;
+}
+
+.discipline-cards {
+  flex: 1;
+  min-width: 20rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.6rem;
+}
+
+.discipline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background: var(--surface);
+  border-left: 3px solid var(--border);
+}
+.discipline-card.is-good {
+  border-left-color: var(--buy);
+}
+.discipline-card.is-warn {
+  border-left-color: #e0b058;
+}
+.discipline-card.is-bad {
+  border-left-color: var(--sell);
+}
+.discipline-card-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.discipline-card-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.discipline-card-detail {
+  font-size: 0.68rem;
+}
+
+/* Shared by Discipline and Performance: several BreakdownTables/small
+   tables pack by actual height instead of stacking full-width one under
+   another. CSS multi-column (not Grid) on purpose: a Grid row's height is
+   always the tallest item IN that row even with align-items:start (that
+   only stops a short item stretching to fill it, not the row shrinking
+   around it) - a 1-row "By confidence" table next to a 10-row "By entry
+   hour" one left a large dead block under the short one. `columns` flows
+   items by their real height instead, like a newspaper layout, so a
+   short table doesn't reserve a tall table's height (user-reported after
+   the Grid version shipped: "still i see the white spaces a lot").
+   column-width 30rem (not 22rem) - these tables carry 5-6 real data
+   columns (Trades/Win rate/PnL/Avg PnL/Avg R plus the row label), and
+   22rem forced every one of them into its OWN inner horizontal scrollbar
+   (user-reported next: "it is congested now") - 30rem is wide enough to
+   fit that content directly in the common case. `columns` is inherently
+   fluid - the browser computes however many 30rem-ish columns actually
+   fit the available width (1 on a narrow viewport, more on a wide one),
+   nothing hardcoded per breakpoint. */
+.stats-grid {
+  columns: 30rem;
+  column-gap: 1.25rem;
+}
+.stats-grid > * {
+  break-inside: avoid;
+  margin-bottom: 1.25rem;
+}
+
+.discipline-bar-track {
+  height: 0.35rem;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  margin: 0.15rem 0;
+}
+.discipline-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.discipline-card.is-good .discipline-bar-fill {
+  background: var(--buy);
+}
+.discipline-card.is-warn .discipline-bar-fill {
+  background: #e0b058;
+}
+.discipline-card.is-bad .discipline-bar-fill {
+  background: var(--sell);
+}
+.discipline-card.is-dim .discipline-bar-fill {
+  background: var(--text-dim);
+}
+
+.discipline-gauge-track {
+  stroke: var(--border);
+}
+.discipline-gauge.is-good .discipline-gauge-fill {
+  stroke: var(--buy);
+}
+.discipline-gauge.is-warn .discipline-gauge-fill {
+  stroke: #e0b058;
+}
+.discipline-gauge.is-bad .discipline-gauge-fill {
+  stroke: var(--sell);
+}
+.discipline-gauge.is-dim .discipline-gauge-fill {
+  stroke: var(--border);
+}
+.discipline-gauge-number {
+  fill: var(--text);
+  font-size: 26px;
+  font-weight: 700;
+}
+.discipline-gauge-label {
+  fill: var(--text-dim);
+  font-size: 9px;
+}
+
 .manual-stats-table-wrap {
   overflow-x: auto;
 }
@@ -2742,6 +2898,18 @@ button.btn-exit {
 .chart-risk-per-trade b {
   color: var(--text);
   font-weight: 600;
+}
+
+/* Timeframe-off-default nudge, below the discipline checkboxes -
+   informational only, never a gate (see the "Trend only" removal). */
+.chart-tf-off-default {
+  align-self: flex-start;
+  font-size: 0.68rem;
+  color: #e0b058;
+  background: rgba(224, 176, 88, 0.12);
+  border: 1px solid rgba(224, 176, 88, 0.3);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
 }
 
 .ctp-seg {

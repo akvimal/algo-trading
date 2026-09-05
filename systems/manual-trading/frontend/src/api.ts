@@ -76,6 +76,23 @@ export type ContractDayFilter = "any" | "start" | "expiry";
 // downstream trades them yet.
 export type Segment = "NSE" | "MCX" | "CRYPTO";
 
+// The same interval vocabulary the Live Chart's own interval switcher
+// offers (LiveChartPanel.tsx's INTERVAL_DEFS, kept as bare strings there
+// for that component's own reasons) - mirrors execution's own
+// ChartInterval Pydantic type exactly. Used for a user's declared
+// default execution timeframe (Account) and a trade's own journaled
+// entry_interval (ManualPosition/ManualOptionGroup) - see docs/
+// architecture.md § "Timeframe consistency".
+export type ChartInterval = "1min" | "3min" | "5min" | "15min" | "30min" | "60min";
+const CHART_INTERVALS: readonly ChartInterval[] = ["1min", "3min", "5min", "15min", "30min", "60min"];
+// LiveChartPanel's own interval state is a bare string (its INTERVAL_DEFS
+// isn't typed this narrowly) - a runtime guard at the boundary where it's
+// sent to execution, rather than an unchecked cast, so a future new
+// interval added there doesn't silently mismatch the two.
+export function asChartInterval(value: string): ChartInterval | null {
+  return (CHART_INTERVALS as readonly string[]).includes(value) ? (value as ChartInterval) : null;
+}
+
 // Signal-conflict policy, per-strategy - passed through unchanged on
 // resolved-order to execution. duplicate_signal_policy: what happens when
 // this symbol already has an OPEN position in the SAME direction as an
@@ -1415,6 +1432,11 @@ export type ManualPosition = {
   // Feed Trading Performance's "By setup" / discipline breakdowns.
   setup_tag: string | null;
   confidence: number | null;
+  // The Live Chart's own chart interval at the moment this was placed -
+  // null for Strategy-driven positions and every pre-migration trade.
+  // Feeds the Discipline score's "Timeframe consistency" component
+  // against the account's own default_interval/default_higher_interval.
+  entry_interval: ChartInterval | null;
 };
 
 export type ManualOptionLeg = {
@@ -1499,6 +1521,8 @@ export type ManualOptionGroup = {
   // Structured trade journal - same meaning as ManualPosition's copies.
   setup_tag: string | null;
   confidence: number | null;
+  // Same meaning as ManualPosition.entry_interval above.
+  entry_interval: ChartInterval | null;
   legs: ManualOptionLeg[];
 };
 
@@ -1631,6 +1655,13 @@ export type Account = {
   live_trading_enabled: boolean;
   max_order_value: number | null;
   max_daily_loss: number | null;
+  // A user's own declared execution timeframe for this segment + its
+  // auto-suggested-but-editable higher-TF pairing - edited on the Money
+  // tab's own "Your account" section, read here only (for the Discipline
+  // score's "Timeframe consistency" component and the Live Chart's
+  // off-default nudge). NULL until the user opts in.
+  default_interval: ChartInterval | null;
+  default_higher_interval: ChartInterval | null;
   updated_at: string;
 };
 
@@ -1783,6 +1814,9 @@ export async function createManualPosition(
     // Structured trade journal set at order time (SETUP_TAGS + 1-5).
     setup_tag?: string;
     confidence?: number;
+    // The Live Chart's own chart interval at the moment of placing -
+    // feeds the Discipline score's "Timeframe consistency" component.
+    entry_interval?: ChartInterval;
     // Per-position override of the segment's own square_off_time -
     // "HH:MM" or "HH:MM:SS", omitted means inherit the segment default
     // (unchanged behavior). See execution's ManualPositionCreate.
@@ -2022,6 +2056,7 @@ export async function createManualOptionGroup(payload: {
   setup_tag?: string;
   confidence?: number;
   // See createManualPosition's own comment - identical meaning here.
+  entry_interval?: ChartInterval;
   square_off_time?: string;
 }): Promise<ManualOptionGroup> {
   const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {

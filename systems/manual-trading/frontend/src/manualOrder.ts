@@ -8,6 +8,7 @@
 // plan. This module is Phase A's low-risk slice: no React, no state.
 
 import {
+  type ChartInterval,
   type ChecklistItem,
   type ManualOptionGroup,
   type ManualPosition,
@@ -95,6 +96,39 @@ export function generateId(): string {
 
 export function fmt(n: number | null | undefined, digits = 2): string {
   return n == null ? "-" : n.toFixed(digits);
+}
+
+// Same rounding as fmt, but drops the decimals entirely when the value is
+// a whole number (the common case for a configured/computed capital
+// figure) - "500" instead of "500.00", 2dp only for a genuinely
+// fractional amount. Ported from execution frontend's own fmtMoney
+// (AccountsPage.tsx), no locale grouping - this file's numbers are
+// already bare (no thousands separators) everywhere else.
+export function fmtMoney(n: number | null | undefined): string {
+  if (n == null) return "-";
+  const hasFraction = Math.round(n * 100) % 100 !== 0;
+  return hasFraction ? n.toFixed(2) : n.toFixed(0);
+}
+
+// A sensible higher-timeframe pairing for a chosen lower one - roughly a
+// 3-5x multiplier, the common multi-timeframe-confirmation convention
+// (also how signal-engine's own multi-timeframe Donchian breakout rule
+// and the Live Chart's Structure-detection timeframe already relate a
+// lower/higher pair). A SUGGESTION only, prefilled once when the user
+// sets/changes their declared default_interval (execution's AccountsPage)
+// - always editable after, never enforced. See docs/architecture.md §
+// "Timeframe consistency".
+const SUGGESTED_HIGHER_INTERVAL: Record<ChartInterval, ChartInterval | null> = {
+  "1min": "5min",
+  "3min": "15min",
+  "5min": "15min",
+  "15min": "60min",
+  "30min": "60min",
+  "60min": null, // already the highest interval this app charts
+};
+
+export function suggestHigherInterval(lower: ChartInterval): ChartInterval | null {
+  return SUGGESTED_HIGHER_INTERVAL[lower];
 }
 
 // Quantity display - up to 4dp (fractional CRYPTO lots, e.g. BTCUSD=0.001)
@@ -244,6 +278,7 @@ export type PendingOrder = {
   riskManaged: boolean;
   setupTag: string | null;
   confidence: number | null;
+  entryInterval: ChartInterval | null;
   armedAt: number; // Date.now() - for display only
 };
 
@@ -269,6 +304,7 @@ export type PlaceManualOrderParams = {
   riskManaged: boolean;
   setupTag: string | null;
   confidence: number | null;
+  entryInterval: ChartInterval | null;
 };
 
 export type PlaceManualOrderResult = {
@@ -302,6 +338,7 @@ export async function placeManualOrder(p: PlaceManualOrderParams): Promise<Place
       risk_managed: p.riskManaged,
       ...(p.setupTag ? { setup_tag: p.setupTag } : {}),
       ...(p.confidence != null ? { confidence: p.confidence } : {}),
+      ...(p.entryInterval ? { entry_interval: p.entryInterval } : {}),
     });
     return {
       position,
@@ -323,6 +360,7 @@ export async function placeManualOrder(p: PlaceManualOrderParams): Promise<Place
     risk_managed: p.riskManaged,
     ...(p.setupTag ? { setup_tag: p.setupTag } : {}),
     ...(p.confidence != null ? { confidence: p.confidence } : {}),
+    ...(p.entryInterval ? { entry_interval: p.entryInterval } : {}),
   });
   if (group.status === "REJECTED") {
     return { group, rejected: true, reason: group.rejection_reason };

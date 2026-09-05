@@ -92,6 +92,39 @@
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
+  /* Discipline score badge, next to the username - see
+     refreshDisciplineBadge()/computeDisciplineScoreJs() below. Colour
+     mirrors discipline.ts's disciplineColor() (good/warn/bad/dim). */
+  .discipline-badge {
+    align-self: center;
+    margin-bottom: 0.6rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .discipline-badge.is-good {
+    background: rgba(62, 207, 142, 0.15);
+    color: var(--buy);
+    border-color: rgba(62, 207, 142, 0.35);
+  }
+  .discipline-badge.is-warn {
+    background: rgba(224, 176, 88, 0.15);
+    color: #e0b058;
+    border-color: rgba(224, 176, 88, 0.35);
+  }
+  .discipline-badge.is-bad {
+    background: rgba(232, 88, 106, 0.15);
+    color: var(--sell);
+    border-color: rgba(232, 88, 106, 0.35);
+  }
+  .discipline-badge.is-dim {
+    background: var(--surface-raised, #1a1f27);
+    color: var(--text-dim);
+    border-color: var(--border);
+  }
   .user-logout-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -347,6 +380,7 @@
           </label>
         </div>
       </div>
+      <div class="discipline-badge" id="discipline-badge" title="Discipline score - click to see the full breakdown" hidden></div>
       <div class="user-area" id="user-area"></div>
       <div class="notif-area">
         <span id="notif-blocked"></span>
@@ -397,6 +431,7 @@
       { id: "manual-trading-oi", label: "OI", port: 8084, built: true, path: "/?tab=oi" },
       { id: "manual-trading-performance", label: "Performance", port: 8084, built: true, path: "/?tab=performance" },
       { id: "manual-trading-alerts", label: "Alerts", port: 8084, built: true, path: "/?tab=alerts" },
+      { id: "manual-trading-discipline", label: "Discipline", port: 8084, built: true, path: "/?tab=discipline" },
       { id: "execution", label: "Money", port: 8081, built: true },
       { id: "market-data", label: "Market Data", port: 8083, built: true },
     ];
@@ -484,6 +519,7 @@
         setSharedToken(data.token);
         broadcastToken(data.token, event.source);
         refreshUserArea();
+        refreshDisciplineBadge();
       } else if (data.type === "navigate-oi" && typeof data.symbol === "string") {
         // Live Chart's "OI Analysis" link - same jump the sentiment
         // badges already do (goToOiTab), but requested from inside the
@@ -492,6 +528,10 @@
       } else if (data.type === "navigate-intraday" && typeof data.symbol === "string") {
         // The OI page's "Intraday Chart" link - the reverse jump.
         goToIntradayTab(data.symbol);
+      } else if (data.type === "navigate-discipline") {
+        // Performance page's "Discipline score" link, and the header
+        // badge's own click handler below - same tab, two entry points.
+        activate("manual-trading-discipline");
       }
     });
 
@@ -543,6 +583,7 @@
         setSharedToken(null);
         broadcastToken(null);
         renderUserArea(null);
+        disciplineBadgeEl.hidden = true;
       };
       userAreaEl.appendChild(logoutBtn);
     }
@@ -565,6 +606,7 @@
     }
 
     refreshUserArea();
+    refreshDisciplineBadge();
 
     function activate(id) {
       document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === id));
@@ -572,6 +614,166 @@
         .querySelectorAll(".frame-wrap > *")
         .forEach((el) => el.classList.toggle("active", el.id === `frame-${id}`));
     }
+
+    // --- Discipline score badge, next to the username -------------------
+    // A single 0-100 read on trading HABITS (not just outcomes) - see
+    // systems/manual-trading/frontend/src/discipline.ts for the full
+    // design/reasoning and docs/architecture.md's own writeup. Deliberately
+    // DUPLICATED here in vanilla JS rather than shared - shell is a
+    // separate static app with no build step, same "small enough that
+    // copying beats adding a cross-system frontend dependency" precedent
+    // as SignalNotifier. Keep the two in sync if the formula changes.
+    const EXECUTION_BACKEND_PORT = 8002;
+    const DISCIPLINE_WINDOW_DAYS = 30;
+    const DISCIPLINE_MIN_TRADES = 5;
+    const disciplineBadgeEl = document.getElementById("discipline-badge");
+    disciplineBadgeEl.onclick = () => activate("manual-trading-discipline");
+
+    function dayKeyOf(iso) {
+      return new Date(iso).toLocaleDateString("en-CA");
+    }
+
+    function disciplineWindowTrades(trades, days) {
+      if (trades.length === 0) return { trades: [], windowStart: null };
+      const sorted = [...trades].sort((a, b) => b.exit_time.localeCompare(a.exit_time));
+      const activeDays = [];
+      const seen = new Set();
+      for (const t of sorted) {
+        const k = dayKeyOf(t.exit_time);
+        if (!seen.has(k)) {
+          seen.add(k);
+          activeDays.push(k);
+          if (activeDays.length >= days) break;
+        }
+      }
+      const cutoff = new Set(activeDays);
+      return { trades: sorted.filter((t) => cutoff.has(dayKeyOf(t.exit_time))), windowStart: activeDays[activeDays.length - 1] ?? null };
+    }
+
+    function disciplineRateOf(flags) {
+      const known = flags.filter((f) => f != null);
+      if (known.length === 0) return null;
+      return known.filter(Boolean).length / known.length;
+    }
+
+    function computeDisciplineScoreJs(trades, accounts, days) {
+      const { trades: windowed } = disciplineWindowTrades(trades, days);
+      const trendRate = disciplineRateOf(windowed.map((t) => t.trend_followed));
+      const riskRate = disciplineRateOf(windowed.map((t) => t.risk_managed));
+
+      const capBySegment = new Map(accounts.filter((a) => a.max_daily_loss != null).map((a) => [a.segment, a.max_daily_loss]));
+      const dailyPnl = new Map();
+      for (const t of windowed) {
+        if (t.pnl == null || !capBySegment.has(t.segment)) continue;
+        const key = `${t.segment}|${dayKeyOf(t.exit_time)}`;
+        dailyPnl.set(key, (dailyPnl.get(key) ?? 0) + t.pnl);
+      }
+      let daysWithin = 0;
+      for (const [key, pnl] of dailyPnl) {
+        const cap = capBySegment.get(key.split("|")[0]);
+        if (pnl >= -cap) daysWithin += 1;
+      }
+      const lossRate = dailyPnl.size > 0 ? daysWithin / dailyPnl.size : null;
+
+      const withPnl = windowed.filter((t) => t.pnl != null);
+      const winRate = withPnl.length > 0 ? withPnl.filter((t) => t.pnl > 0).length / withPnl.length : null;
+      const rValues = windowed
+        .map((t) => {
+          if (t.pnl == null || t.entry_price == null || t.stop_loss_price == null || t.quantity == null) return null;
+          if (t.entry_price === t.stop_loss_price) return null;
+          const risk = Math.abs(t.entry_price - t.stop_loss_price) * t.quantity;
+          return risk > 0 ? t.pnl / risk : null;
+        })
+        .filter((r) => r != null);
+      const avgR = rValues.length > 0 ? rValues.reduce((s, r) => s + r, 0) / rValues.length : null;
+      let outcomeRate = null;
+      if (winRate != null && avgR != null) outcomeRate = 0.5 * winRate + 0.5 * Math.max(0, Math.min(1, avgR / 2));
+      else if (winRate != null) outcomeRate = winRate;
+
+      // Timeframe consistency - see discipline.ts's identical comment
+      // (manual-trading frontend) for the full reasoning. Trading either
+      // leg of a segment's declared default_interval/default_higher_interval
+      // pair counts as "on plan"; a segment with no default configured
+      // contributes nothing either way.
+      const defaultsBySegment = new Map(accounts.filter((a) => a.default_interval != null).map((a) => [a.segment, a]));
+      const tfFlags = windowed
+        .filter((t) => t.entry_interval != null && defaultsBySegment.has(t.segment))
+        .map((t) => {
+          const acct = defaultsBySegment.get(t.segment);
+          return t.entry_interval === acct.default_interval || t.entry_interval === acct.default_higher_interval;
+        });
+      const timeframeRate = disciplineRateOf(tfFlags);
+
+      const components = [trendRate, riskRate, lossRate, outcomeRate, timeframeRate].filter((r) => r != null);
+      if (windowed.length < DISCIPLINE_MIN_TRADES || components.length === 0) return null;
+      return Math.round((components.reduce((s, r) => s + r, 0) / components.length) * 100);
+    }
+
+    function disciplineColorOf(score) {
+      if (score == null) return "dim";
+      if (score >= 75) return "good";
+      if (score >= 50) return "warn";
+      return "bad";
+    }
+
+    async function refreshDisciplineBadge() {
+      const token = getSharedToken();
+      if (!token) {
+        disciplineBadgeEl.hidden = true;
+        return;
+      }
+      try {
+        const base = `http://${location.hostname}:${EXECUTION_BACKEND_PORT + PORT_OFFSET}`;
+        const headers = { Authorization: `Bearer ${token}` };
+        const [posRes, groupRes, accRes] = await Promise.all([
+          fetch(`${base}/positions?status=CLOSED&manual_only=true&limit=1000`, { headers }),
+          fetch(`${base}/option-groups?status=CLOSED&manual_only=true&limit=1000`, { headers }),
+          fetch(`${base}/accounts`, { headers }),
+        ]);
+        if (!posRes.ok || !groupRes.ok || !accRes.ok) throw new Error("discipline fetch failed");
+        const [positions, groups, accounts] = await Promise.all([posRes.json(), groupRes.json(), accRes.json()]);
+        const trades = positions
+          .filter((p) => p.option_group_id == null && p.exit_time != null)
+          .map((p) => ({
+            segment: p.segment,
+            pnl: p.pnl,
+            entry_price: p.entry_price,
+            stop_loss_price: p.stop_loss_price,
+            quantity: p.quantity,
+            exit_time: p.exit_time,
+            trend_followed: p.trend_followed,
+            risk_managed: p.risk_managed,
+            entry_interval: p.entry_interval,
+          }))
+          .concat(
+            groups
+              .filter((g) => g.exit_time != null)
+              .map((g) => ({
+                segment: g.segment,
+                pnl: g.pnl,
+                entry_price: null,
+                stop_loss_price: null,
+                quantity: g.quantity,
+                exit_time: g.exit_time,
+                trend_followed: g.trend_followed,
+                risk_managed: g.risk_managed,
+                entry_interval: g.entry_interval,
+              })),
+          );
+        const score = computeDisciplineScoreJs(trades, accounts, DISCIPLINE_WINDOW_DAYS);
+        disciplineBadgeEl.textContent = `Discipline ${score ?? "—"}`;
+        disciplineBadgeEl.className = `discipline-badge is-${disciplineColorOf(score)}`;
+        disciplineBadgeEl.hidden = false;
+      } catch {
+        // market-data/execution unreachable, or not logged in yet - leave
+        // whatever was last shown (same "don't flap the UI on a transient
+        // error" convention the sentiment bar poll uses) rather than
+        // hiding a badge the user was just looking at.
+      }
+    }
+
+    refreshDisciplineBadge();
+    setInterval(refreshDisciplineBadge, 60000);
 
     // Dhan access-token expiry banner - the NSE/MCX in-house engine (and
     // any Dhan quote call) 401s the instant this token expires, but

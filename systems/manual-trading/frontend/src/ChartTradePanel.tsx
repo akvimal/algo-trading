@@ -12,6 +12,7 @@ import {
   type Segment,
   type StopLossIndicatorType,
   type StopLossInterval,
+  asChartInterval,
   fetchExecPositions,
   fetchOptionGroups,
   squareOffManualPosition,
@@ -626,6 +627,36 @@ export default function ChartTradePanel({
       : null;
   const autoQty = riskManaged && stopPrice != null;
 
+  // The lot count actually going on the wire - typed for a manual order,
+  // or the client-side risk-based preview when risk-managed (server-sized
+  // for CRYPTO, so this stays null there - see previewLots above).
+  const effectiveQty = autoQty ? previewLots : numOrNull(qtyInput);
+  // Capital required, spot/future only - mirrors the exact server check
+  // (position_manager.py: required_cost = price * lot_size * quantity) so
+  // an "insufficient account balance" rejection is visible before Proceed
+  // rather than after. Not shown for options - the panel doesn't know the
+  // leg premium(s) until execution resolves them live at fill, and a
+  // spread's combined net debit isn't a simple price*lots either. Native
+  // currency for the segment (USD for CRYPTO) - this is a notional-cost
+  // figure compared against the segment's own converted buying power, not
+  // one of the rupee-denominated account-ledger fields (see execution's
+  // AccountsPage fix, 2026-09-05). Divided by leverage for CRYPTO - the
+  // notional (price*lotSize*qty) isn't what actually gets drawn from
+  // capital_per_trade, the MARGIN is (position_manager.py's CRYPTO branch
+  // multiplies effective_capital BY leverage before comparing it against
+  // this same notional, so the capital actually required is
+  // notional/leverage - matching Delta Exchange India's own "Funds req."
+  // figure). This panel always sends instrument_type="future" (see
+  // manualOrder.ts), so NSE/MCX never read account.leverage here at all
+  // (that path is intraday-MIS-spot-only, not reachable from this panel) -
+  // leverage only ever matters for CRYPTO, hence the segment gate.
+  const leverage = segment === "CRYPTO" ? (account?.leverage ?? 1) : 1;
+  const capitalRequired =
+    !isOption && entryRef != null && lotSize != null && effectiveQty != null
+      ? (entryRef * lotSize * effectiveQty) / leverage
+      : null;
+  const capCurrency = segment === "CRYPTO" ? "$" : "₹";
+
   const qty = qtyInput.trim() ? Number(qtyInput) : undefined;
   const qtyValid = autoQty || (qty != null && Number.isFinite(qty) && qty > 0);
   const limitReady = effEntryType === "market" || limitPrice != null;
@@ -681,6 +712,7 @@ export default function ChartTradePanel({
           riskManaged,
           setupTag: setupTag || null,
           confidence,
+          entryInterval: asChartInterval(chartInterval),
           armedAt: Date.now(),
         });
         setLimitInput("");
@@ -710,6 +742,7 @@ export default function ChartTradePanel({
         riskManaged,
         setupTag: setupTag || null,
         confidence,
+        entryInterval: asChartInterval(chartInterval),
       });
       if (result.rejected) {
         setError(result.reason ?? "order rejected");
@@ -972,9 +1005,15 @@ export default function ChartTradePanel({
           </span>
         </span>
         <span className="ctp-pnl-head" title={`Today's realized / unrealized P&L on ${sym} · ${unit}`}>
-          <b className={pnlClass(realized)}>{fmt(realized)}</b>
+          <b className={pnlClass(realized)}>
+            {capCurrency}
+            {fmt(realized)}
+          </b>
           {" / "}
-          <b className={pnlClass(unrealized)}>{fmt(unrealized)}</b>
+          <b className={pnlClass(unrealized)}>
+            {capCurrency}
+            {fmt(unrealized)}
+          </b>
         </span>
       </div>
 
@@ -1089,6 +1128,16 @@ export default function ChartTradePanel({
               />
             </label>
           </div>
+
+          {capitalRequired != null && (
+            <div className="ctp-rr" title={leverage > 1 ? `Notional ${capCurrency}${fmt(entryRef! * lotSize! * effectiveQty!)} ÷ ${leverage}x leverage` : undefined}>
+              <span>Capital required{leverage > 1 ? ` (${leverage}x)` : ""}</span>
+              <span>
+                {capCurrency}
+                {fmt(capitalRequired)}
+              </span>
+            </div>
+          )}
 
           <div className="ctp-row">
             <label className="ctp-field">

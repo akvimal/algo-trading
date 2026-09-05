@@ -648,11 +648,35 @@ registerOverlay({
     const dirRgb = long ? "62, 207, 142" : "232, 88, 106";
     const pnlRgb = tradePnlRgb(d.pnl);
     const glyph = d.kind === "option" ? "◆" : long ? "▲" : "▼";
+    // A solid filled badge behind the glyph, not a bare coloured character
+    // - a thin ▲/▼ was getting lost against candle bodies in the same
+    // green/red, especially with MAs/Supertrend/structure overlays all
+    // sharing the chart (user-reported: "trade flags ... not prominent").
+    // A round `text` figure with a filled backgroundColor + border - the
+    // exact mechanism the P&L pill labels below already use successfully
+    // - not a separate `circle` figure: a first attempt using `type:
+    // "circle"` rendered solid black instead of the intended colour
+    // (2026-09-05, user-reported regression) and was reverted rather than
+    // chased further blind (browser extension was disconnected all
+    // session, so it couldn't be visually debugged) - `text`+background is
+    // proven to render correctly in this exact chart.
     const figs: OverlayFigure[] = [
       {
         type: "text",
         attrs: { x: x0, y: yE, text: glyph, align: "center", baseline: "middle" },
-        styles: { color: `rgba(${dirRgb}, 1)`, size: 13, weight: "bold" },
+        styles: {
+          color: "#0f1216",
+          size: 12,
+          weight: "bold",
+          backgroundColor: `rgba(${dirRgb}, 0.95)`,
+          borderColor: "#0f1216",
+          borderSize: 1.5,
+          borderRadius: 8,
+          paddingLeft: 4,
+          paddingRight: 4,
+          paddingTop: 4,
+          paddingBottom: 4,
+        },
         ignoreEvent: true,
       },
     ];
@@ -667,7 +691,7 @@ registerOverlay({
             { x: xr, y: yE },
           ],
         },
-        styles: { color: `rgba(${dirRgb}, 0.6)`, size: 1, style: "dashed", dashedValue: [4, 3] },
+        styles: { color: `rgba(${dirRgb}, 0.85)`, size: 2, style: "dashed", dashedValue: [5, 3] },
         ignoreEvent: true,
       });
       figs.push({
@@ -704,13 +728,25 @@ registerOverlay({
             { x: x1, y: yX },
           ],
         },
-        styles: { color: `rgba(${pnlRgb}, 0.8)`, size: 1.5 },
+        styles: { color: `rgba(${pnlRgb}, 0.9)`, size: 2.2 },
         ignoreEvent: true,
       });
       figs.push({
         type: "text",
         attrs: { x: x1, y: yX, text: "✕", align: "center", baseline: "middle" },
-        styles: { color: `rgba(${pnlRgb}, 1)`, size: 11, weight: "bold" },
+        styles: {
+          color: "#0f1216",
+          size: 11,
+          weight: "bold",
+          backgroundColor: `rgba(${pnlRgb}, 0.95)`,
+          borderColor: "#0f1216",
+          borderSize: 1.5,
+          borderRadius: 8,
+          paddingLeft: 4,
+          paddingRight: 4,
+          paddingTop: 4,
+          paddingBottom: 4,
+        },
         ignoreEvent: true,
       });
     }

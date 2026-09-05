@@ -11,7 +11,7 @@ import {
 } from "./api";
 import ChartTradePanel from "./ChartTradePanel";
 import { type ChartContext, type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
-import { type PendingOrder, fetchUnderlyingLtp, fmt, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
+import { type PendingOrder, fetchUnderlyingLtp, fmt, fmtMoney, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
 
 // Standalone Intraday sub-tab wrapping the candlestick panel (see
 // LiveChartPanel.tsx for the live-data mechanics and the klinecharts
@@ -277,6 +277,7 @@ export default function LiveChartPage() {
             riskManaged: order.riskManaged,
             setupTag: order.setupTag,
             confidence: order.confidence,
+            entryInterval: order.entryInterval,
           });
           const note = result.rejected
             ? `Limit order rejected: ${result.reason ?? "unknown"}`
@@ -354,11 +355,30 @@ export default function LiveChartPage() {
                 <span className="chart-risk-per-trade" title="Max loss budgeted per trade (segment account)">
                   Risk/Trade{" "}
                   <b>
-                    {fmt((account.capital_per_trade * account.risk_per_trade_pct) / 100)} · {account.risk_per_trade_pct}%
+                    {/* capital_per_trade is rupee-denominated for every segment,
+                        including CRYPTO - see execution's AccountsPage fix - so
+                        this is always ₹, never the segment-native "$". */}
+                    &#8377;{fmtMoney((account.capital_per_trade * account.risk_per_trade_pct) / 100)} · {account.risk_per_trade_pct}%
                   </b>
                 </span>
               )}
             </label>
+            {/* Informational only, never a gate (see the "Trend only" removal
+                above) - a nudge when the chart's own interval isn't the
+                declared default (or its paired higher TF) for this segment.
+                Feeds the Discipline score's "Timeframe consistency"
+                component regardless of whether you switch back or not. */}
+            {account?.default_interval &&
+              trendInfo.interval !== account.default_interval &&
+              trendInfo.interval !== account.default_higher_interval && (
+                <span
+                  className="chart-tf-off-default"
+                  title={`Your default for ${active.segment} is ${account.default_interval}${account.default_higher_interval ? `/${account.default_higher_interval}` : ""} - set on the Money tab.`}
+                >
+                  off default ({account.default_interval}
+                  {account.default_higher_interval ? `/${account.default_higher_interval}` : ""})
+                </span>
+              )}
           </div>
 
           <ChartTradePanel

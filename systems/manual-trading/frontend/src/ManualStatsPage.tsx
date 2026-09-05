@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import ManualCalendarFilter from "./ManualCalendarFilter";
+import { breakdown, BreakdownTable } from "./statsBreakdown";
 import TradeImageThumb from "./TradeImageThumb";
 import {
   type ChecklistAnswer,
@@ -125,70 +126,6 @@ function formatSessionHistory(sessions: TradingSession[]): string {
       return `${recent} (+${previous.length} earlier, ${formatDurationMs(totalMs)})`;
     })
     .join(", ");
-}
-
-// One row of a breakdown table - the same win/PnL/R aggregate as DayStats
-// but keyed by an arbitrary dimension (setup tag, discipline flag, symbol...).
-type Bucket = { key: string; trades: number; wins: number; losses: number; pnl: number; rSum: number; rCount: number };
-
-function breakdown(trades: ClosedTrade[], keyFn: (t: ClosedTrade) => string | null): Bucket[] {
-  const m = new Map<string, Bucket>();
-  for (const t of trades) {
-    if (t.pnl == null) continue;
-    const k = keyFn(t);
-    if (k == null) continue;
-    const b = m.get(k) ?? { key: k, trades: 0, wins: 0, losses: 0, pnl: 0, rSum: 0, rCount: 0 };
-    b.trades += 1;
-    b.pnl += t.pnl;
-    if (t.pnl > 0) b.wins += 1;
-    else if (t.pnl < 0) b.losses += 1;
-    if (t.entry_price != null && t.stop_loss_price != null && t.quantity != null && t.entry_price !== t.stop_loss_price) {
-      const risk = Math.abs(t.entry_price - t.stop_loss_price) * t.quantity;
-      if (risk > 0) {
-        b.rSum += t.pnl / risk;
-        b.rCount += 1;
-      }
-    }
-    m.set(k, b);
-  }
-  return [...m.values()];
-}
-
-function BreakdownTable({ title, header, rows }: { title: string; header: string; rows: Bucket[] }) {
-  if (rows.length === 0) return null;
-  return (
-    <section className="manual-settings-section">
-      <h4>{title}</h4>
-      <div className="manual-stats-table-wrap">
-        <table className="manual-stats-table">
-          <thead>
-            <tr>
-              <th>{header}</th>
-              <th>Trades</th>
-              <th>Win rate</th>
-              <th>PnL</th>
-              <th>Avg PnL</th>
-              <th>Avg R</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((b) => (
-              <tr key={b.key}>
-                <td>{b.key}</td>
-                <td>{b.trades}</td>
-                <td>{fmt((b.wins / b.trades) * 100, 0)}%</td>
-                <td className={pnlClass(b.pnl)}>{fmt(b.pnl)}</td>
-                <td className={pnlClass(b.pnl / b.trades)}>{fmt(b.pnl / b.trades)}</td>
-                <td className={b.rCount > 0 ? pnlClass(b.rSum / b.rCount) : ""}>
-                  {b.rCount > 0 ? `${b.rSum / b.rCount >= 0 ? "+" : ""}${fmt(b.rSum / b.rCount)}R` : "-"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
 }
 
 export default function ManualStatsPage() {
@@ -355,6 +292,17 @@ export default function ManualStatsPage() {
     <div className="manual-wide-page">
       <div className="manual-page-header">
         <h3>Trading Performance</h3>
+        {/* The "Discipline — trend"/"Discipline — sizing" breakdowns that
+            used to sit below moved to their own page 2026-09-05 (the
+            overall discipline score + more graphics live there) - same
+            postMessage jump OiSummaryPage's "Intraday Chart ↗" link uses. */}
+        <button
+          type="button"
+          className="ctp-link"
+          onClick={() => window.parent.postMessage({ source: "algo-trading-app", type: "navigate-discipline" }, "*")}
+        >
+          Discipline score ↗
+        </button>
       </div>
 
       {/* Collapsed by default (ManualCalendarFilter's own documented
@@ -435,44 +383,36 @@ export default function ManualStatsPage() {
             </div>
           </section>
 
-          <BreakdownTable
-            title="By setup"
-            header="Setup"
-            rows={breakdown(trades, (t) => t.setup_tag ?? "— untagged —").sort((a, b) => b.pnl - a.pnl)}
-          />
-          <BreakdownTable
-            title="Discipline — trend"
-            header="Direction"
-            rows={breakdown(trades, (t) =>
-              t.trend_followed == null ? null : t.trend_followed ? "With the trend" : "Against the trend",
-            ).sort((a, b) => b.pnl - a.pnl)}
-          />
-          <BreakdownTable
-            title="Discipline — sizing"
-            header="Sizing"
-            rows={breakdown(trades, (t) =>
-              t.risk_managed == null ? null : t.risk_managed ? "Risk-managed" : "Discretionary size",
-            ).sort((a, b) => b.pnl - a.pnl)}
-          />
-          <BreakdownTable
-            title="By confidence"
-            header="Rated"
-            rows={breakdown(trades, (t) => (t.confidence == null ? null : `${t.confidence} / 5`)).sort((a, b) =>
-              a.key < b.key ? -1 : 1,
-            )}
-          />
-          <BreakdownTable
-            title="By symbol"
-            header="Symbol"
-            rows={breakdown(trades, (t) => t.symbol).sort((a, b) => b.pnl - a.pnl)}
-          />
-          <BreakdownTable
-            title="By entry hour"
-            header="Hour"
-            rows={breakdown(trades, (t) =>
-              t.entry_time ? `${String(new Date(t.entry_time).getHours()).padStart(2, "0")}:00` : null,
-            ).sort((a, b) => (a.key < b.key ? -1 : 1))}
-          />
+          {/* A grid instead of 4 full-width stacked tables - most of these
+              are a handful of short rows (confidence has at most 5) that
+              never needed the whole page width a single column gave them.
+              Shared with the Discipline page - see .stats-grid. */}
+          <div className="stats-grid">
+            <BreakdownTable
+              title="By setup"
+              header="Setup"
+              rows={breakdown(trades, (t) => t.setup_tag ?? "— untagged —").sort((a, b) => b.pnl - a.pnl)}
+            />
+            <BreakdownTable
+              title="By confidence"
+              header="Rated"
+              rows={breakdown(trades, (t) => (t.confidence == null ? null : `${t.confidence} / 5`)).sort((a, b) =>
+                a.key < b.key ? -1 : 1,
+              )}
+            />
+            <BreakdownTable
+              title="By symbol"
+              header="Symbol"
+              rows={breakdown(trades, (t) => t.symbol).sort((a, b) => b.pnl - a.pnl)}
+            />
+            <BreakdownTable
+              title="By entry hour"
+              header="Hour"
+              rows={breakdown(trades, (t) =>
+                t.entry_time ? `${String(new Date(t.entry_time).getHours()).padStart(2, "0")}:00` : null,
+              ).sort((a, b) => (a.key < b.key ? -1 : 1))}
+            />
+          </div>
 
           <section className="manual-settings-section">
             <h4>Trades on {selectedDate}</h4>

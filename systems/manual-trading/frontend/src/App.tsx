@@ -10,6 +10,9 @@ const ManualStatsPage = lazy(() => import("./ManualStatsPage"));
 // Standalone price alerts (market-data's price_alerts + Telegram) - same
 // lazy-load reasoning.
 const PriceAlertsPage = lazy(() => import("./PriceAlertsPage"));
+// Discipline score + the trend/sizing breakdowns split out of Performance
+// 2026-09-05 - same lazy-load reasoning.
+const DisciplinePage = lazy(() => import("./DisciplinePage"));
 
 // Split out of signal-generation's frontend (see docs/architecture.md §
 // "Manual Trading module split") - Manual Trading and Options OI never
@@ -48,6 +51,10 @@ export default function App() {
         ) : tab === "alerts" ? (
           <Suspense fallback={<p className="muted">Loading…</p>}>
             <PriceAlertsPage />
+          </Suspense>
+        ) : tab === "discipline" ? (
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            <DisciplinePage />
           </Suspense>
         ) : (
           <IntradayPage />

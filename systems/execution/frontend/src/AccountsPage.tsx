@@ -9,6 +9,8 @@ import {
   type StrategyAccount,
   type StrategyPerformance,
   type StrategySummary,
+  CHART_INTERVALS,
+  SUGGESTED_HIGHER_INTERVAL,
   createStrategyAccount,
   deleteStrategyAccount,
   fetchAccounts,
@@ -43,34 +45,41 @@ type AccountsTab = "mine" | "platform" | "live-status" | "strategy-accounts" | "
 // and unrealized (live mark-to-market on OPEN positions) - the same pair
 // shown for "Your account"/Platform/Dedicated strategy accounts, so one
 // shared renderer keeps the three displays consistent.
+//
+// currentBalance/realizedPnl are ALWAYS rupees, every segment including
+// CRYPTO - `current_balance`/`starting_balance` are INR-denominated
+// account-ledger columns (see position_manager.py's _apply_realized_pnl:
+// "credits/debits its current_balance - which is ALWAYS INR-denominated,
+// every segment"), and realizedPnl is just current_balance minus
+// starting_balance, so it inherits that. unrealizedPnl is different - it's
+// summed straight from each OPEN position's own pnl (position_manager.py's
+// compute_unrealized_pnl), which stays in that position's NATIVE currency
+// (raw USD for CRYPTO) - so it alone takes a caller-supplied currency/
+// locale. Passing one shared "$" for all three (the pre-2026-09-05 bug)
+// mislabeled a real INR balance as dollars for every CRYPTO account.
 function BalanceBreakdown({
   currentBalance,
   realizedPnl,
   unrealizedPnl,
-  currency = "₹",
-  locale = "en-IN",
+  pnlCurrency = "₹",
+  pnlLocale = "en-IN",
 }: {
   currentBalance: number;
   realizedPnl: number;
   unrealizedPnl: number;
-  currency?: string;
-  locale?: string;
+  pnlCurrency?: string;
+  pnlLocale?: string;
 }) {
   return (
     <span className="balance-breakdown">
-      <strong>
-        {currency}
-        {fmtMoney(currentBalance, locale)}
-      </strong>
+      <strong>₹{fmtMoney(currentBalance)}</strong>
       <span className={`balance-breakdown-detail ${realizedPnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
-        Realized {realizedPnl >= 0 ? "+" : ""}
-        {currency}
-        {fmtMoney(realizedPnl, locale)}
+        Realized {realizedPnl >= 0 ? "+" : ""}₹{fmtMoney(realizedPnl)}
       </span>
       <span className={`balance-breakdown-detail ${unrealizedPnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
         Unrealized {unrealizedPnl >= 0 ? "+" : ""}
-        {currency}
-        {fmtMoney(unrealizedPnl, locale)}
+        {pnlCurrency}
+        {fmtMoney(unrealizedPnl, pnlLocale)}
       </span>
     </span>
   );
@@ -143,6 +152,15 @@ export default function AccountsPage() {
   const [myDraftLiveEnabled, setMyDraftLiveEnabled] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
   const [myDraftMaxOrderValue, setMyDraftMaxOrderValue] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftMaxDailyLoss, setMyDraftMaxDailyLoss] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  // Personal execution timeframe preference (feeds manual-trading's
+  // Discipline score "Timeframe consistency") - "" means no default set,
+  // same convention as the other optional draft strings above.
+  const [myDraftDefaultInterval, setMyDraftDefaultInterval] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
+  const [myDraftDefaultHigherInterval, setMyDraftDefaultHigherInterval] = useState<Record<Segment, string>>({
+    NSE: "",
+    MCX: "",
+    CRYPTO: "",
+  });
   const [mySavingSegment, setMySavingSegment] = useState<Segment | null>(null);
   const [myJustSavedSegment, setMyJustSavedSegment] = useState<Segment | null>(null);
   const [myResettingSegment, setMyResettingSegment] = useState<Segment | null>(null);
@@ -385,10 +403,12 @@ export default function AccountsPage() {
     const existing = myAccounts.find((a) => a.segment === segment);
     const startingBalanceChanged = existing != null && startingBalance !== existing.starting_balance;
     if (startingBalanceChanged) {
-      const currency = segment === "CRYPTO" ? "$" : "₹";
+      // starting_balance/current_balance are always rupees, even for
+      // CRYPTO - see BalanceBreakdown's own comment - never the
+      // segment-native "$".
       const confirmed = window.confirm(
-        `Change ${segment}'s starting balance from ${currency}${existing.starting_balance} to ${currency}${startingBalance}?\n\n` +
-          `This also resets the current balance to match (currently ${currency}${existing.current_balance.toFixed(2)}) - ` +
+        `Change ${segment}'s starting balance from ₹${existing.starting_balance} to ₹${startingBalance}?\n\n` +
+          `This also resets the current balance to match (currently ₹${existing.current_balance.toFixed(2)}) - ` +
           "any realized P&L standing on this account is cleared relative to the new baseline. This can't be undone.",
       );
       if (!confirmed) return;
@@ -418,6 +438,8 @@ export default function AccountsPage() {
         ...(segment !== "CRYPTO"
           ? { live_trading_enabled: myDraftLiveEnabled[segment], max_order_value: maxOrderValueNum, max_daily_loss: maxDailyLossNum }
           : {}),
+        default_interval: (myDraftDefaultInterval[segment] || null) as Account["default_interval"],
+        default_higher_interval: (myDraftDefaultHigherInterval[segment] || null) as Account["default_higher_interval"],
       });
       await refreshMyAccounts();
       setMyJustSavedSegment(segment);
@@ -450,6 +472,8 @@ export default function AccountsPage() {
     setMyDraftLiveEnabled((prev) => ({ ...prev, [segment]: account.live_trading_enabled }));
     setMyDraftMaxOrderValue((prev) => ({ ...prev, [segment]: account.max_order_value != null ? String(account.max_order_value) : "" }));
     setMyDraftMaxDailyLoss((prev) => ({ ...prev, [segment]: account.max_daily_loss != null ? String(account.max_daily_loss) : "" }));
+    setMyDraftDefaultInterval((prev) => ({ ...prev, [segment]: account.default_interval ?? "" }));
+    setMyDraftDefaultHigherInterval((prev) => ({ ...prev, [segment]: account.default_higher_interval ?? "" }));
   }
 
   function startMyEdit(segment: Segment) {
@@ -816,10 +840,10 @@ export default function AccountsPage() {
     const account = platformAccounts.find((a) => a.segment === segment);
     const startingBalanceChanged = account != null && draft.startingBalance !== account.starting_balance;
     if (startingBalanceChanged) {
-      const currency = segment === "CRYPTO" ? "$" : "₹";
+      // Always rupees - see BalanceBreakdown's own comment.
       const confirmed = window.confirm(
-        `Change the platform ${segment} account's starting balance from ${currency}${account.starting_balance} to ${currency}${draft.startingBalance}?\n\n` +
-          `This also resets the current balance to match (currently ${currency}${account.current_balance.toFixed(2)}) - ` +
+        `Change the platform ${segment} account's starting balance from ₹${account.starting_balance} to ₹${draft.startingBalance}?\n\n` +
+          `This also resets the current balance to match (currently ₹${account.current_balance.toFixed(2)}) - ` +
           "any realized P&L standing on this account is cleared relative to the new baseline. This can't be undone.",
       );
       if (!confirmed) return;
@@ -929,14 +953,25 @@ export default function AccountsPage() {
                 currentBalance={account.current_balance}
                 realizedPnl={account.realized_pnl}
                 unrealizedPnl={account.unrealized_pnl}
-                currency={currency}
-                locale={locale}
+                pnlCurrency={currency}
+                pnlLocale={locale}
               />
+              {/* capital_per_trade (and riskAmount, derived from it) is INR-
+                  denominated even for a CRYPTO account - see BalanceBreakdown's
+                  own comment - so this always reads in rupees, unlike the
+                  native-currency lines below (max order/daily loss, which are
+                  compared against native-currency order values, and the
+                  unrealized P&L above). */}
               <span className="account-summary-detail">
-                Capital/trade {currency}
-                {fmtMoney(account.capital_per_trade, locale)} &middot; Risk {currency}
-                {fmtMoney(riskAmount, locale)} ({account.risk_per_trade_pct}%)
+                Capital/trade &#8377;{fmtMoney(account.capital_per_trade)} &middot; Risk &#8377;
+                {fmtMoney(riskAmount)} ({account.risk_per_trade_pct}%)
               </span>
+              {account.default_interval && (
+                <span className="account-summary-detail" title="Your own declared execution timeframe - feeds the Discipline score.">
+                  Timeframe {account.default_interval}
+                  {account.default_higher_interval && <>/{account.default_higher_interval}</>}
+                </span>
+              )}
               {(seg === "CRYPTO" || seg === "NSE") && (
                 <span className="account-summary-detail">
                   Leverage {account.leverage}x
@@ -1028,6 +1063,46 @@ export default function AccountsPage() {
                           disabled={!account}
                           onChange={(e) => setMyDraftStartingBalance((prev) => ({ ...prev, [seg]: e.target.value }))}
                         />
+                      </label>
+                      <label title="Your own habitual execution timeframe for this segment - a personal preference only, nothing sizing/order-related reads it. Feeds the Live Chart's off-default nudge and manual-trading's Discipline score (Timeframe consistency).">
+                        Default interval
+                        <select
+                          value={myDraftDefaultInterval[seg]}
+                          disabled={!account}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setMyDraftDefaultInterval((prev) => ({ ...prev, [seg]: value }));
+                            // Auto-suggest the paired higher TF only when the
+                            // higher field is still empty - never overwrites
+                            // something the user already chose.
+                            if (value && !myDraftDefaultHigherInterval[seg]) {
+                              const suggested = SUGGESTED_HIGHER_INTERVAL[value as keyof typeof SUGGESTED_HIGHER_INTERVAL];
+                              if (suggested) setMyDraftDefaultHigherInterval((prev) => ({ ...prev, [seg]: suggested }));
+                            }
+                          }}
+                        >
+                          <option value="">not set</option>
+                          {CHART_INTERVALS.map((iv) => (
+                            <option key={iv} value={iv}>
+                              {iv}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label title="Auto-suggested when you set Default interval above (roughly a 3-5x higher timeframe, for confirmation/better R:R) - always editable, never enforced. Trading either one counts as 'on plan' for the Discipline score.">
+                        Default higher TF
+                        <select
+                          value={myDraftDefaultHigherInterval[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftDefaultHigherInterval((prev) => ({ ...prev, [seg]: e.target.value }))}
+                        >
+                          <option value="">not set</option>
+                          {CHART_INTERVALS.map((iv) => (
+                            <option key={iv} value={iv}>
+                              {iv}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       {(seg === "CRYPTO" || seg === "NSE") && (
                         <label
@@ -1335,8 +1410,8 @@ export default function AccountsPage() {
                 currentBalance={account.current_balance}
                 realizedPnl={account.realized_pnl}
                 unrealizedPnl={account.unrealized_pnl}
-                currency={currency}
-                locale={locale}
+                pnlCurrency={currency}
+                pnlLocale={locale}
               />
               <span className="account-summary-detail">Last updated {formatDateTime(account.updated_at)}</span>
             </div>
@@ -1702,8 +1777,8 @@ export default function AccountsPage() {
                         currentBalance={account.current_balance}
                         realizedPnl={account.realized_pnl}
                         unrealizedPnl={account.unrealized_pnl}
-                        currency={currency}
-                        locale={locale}
+                        pnlCurrency={currency}
+                        pnlLocale={locale}
                       />
                     </td>
                     {!editing ? (

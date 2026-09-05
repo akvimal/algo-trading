@@ -190,7 +190,34 @@ export type Account = {
   live_trading_enabled: boolean;
   max_order_value: number | null;
   max_daily_loss: number | null;
+  // The user's own declared execution timeframe for this segment + its
+  // auto-suggested-but-editable higher-TF pairing - a personal
+  // preference, read by nothing sizing/order-related. Feeds
+  // manual-trading's Discipline score ("Timeframe consistency"). null
+  // until set here.
+  default_interval: ChartInterval | null;
+  default_higher_interval: ChartInterval | null;
   updated_at: string;
+};
+
+// Same interval vocabulary manual-trading's Live Chart offers
+// (LiveChartPanel.tsx's INTERVAL_DEFS) - mirrors execution's own
+// ChartInterval Pydantic type exactly.
+export type ChartInterval = "1min" | "3min" | "5min" | "15min" | "30min" | "60min";
+export const CHART_INTERVALS: readonly ChartInterval[] = ["1min", "3min", "5min", "15min", "30min", "60min"];
+// A sensible higher-timeframe suggestion for a chosen lower one (roughly
+// 3-5x) - prefilled once when the lower interval is picked, always
+// editable after, never enforced. See docs/architecture.md § "Timeframe
+// consistency". Kept in sync with manual-trading's own
+// manualOrder.ts SUGGESTED_HIGHER_INTERVAL - duplicated, not shared
+// (systems/* self-contained).
+export const SUGGESTED_HIGHER_INTERVAL: Record<ChartInterval, ChartInterval | null> = {
+  "1min": "5min",
+  "3min": "15min",
+  "5min": "15min",
+  "15min": "60min",
+  "30min": "60min",
+  "60min": null,
 };
 
 // Optional per-strategy override of a segment's shared Account above - see
@@ -373,6 +400,8 @@ export async function updateAccount(
       | "live_trading_enabled"
       | "max_order_value"
       | "max_daily_loss"
+      | "default_interval"
+      | "default_higher_interval"
     >
   >,
 ): Promise<Account> {

@@ -1667,16 +1667,129 @@ function overlayStorageKey(exchange: string, symbol: string): string {
   return `manualLiveChartDrawings:${exchange}:${symbol}`;
 }
 
+// klinecharts' own timestamp->x-pixel conversion (TimeScaleStore.
+// timestampToDataIndex) is a *nearest-bar* lookup against whatever data is
+// currently loaded, not a continuous time->pixel mapping - so a point's
+// timestamp gets silently re-snapped to the closest candle of whichever
+// interval happens to be on screen. That's invisible while you stay on one
+// timeframe (the anchor bar IS the nearest bar), but switch from 5m to 1h
+// and a corner drawn at 09:07 can snap onto the 09:00 or 10:00 candle -
+// visibly moving a "price/time anchored, shared across every interval"
+// drawing (see above). We work around it by never handing klinecharts a
+// bare `timestamp` for a *restored* overlay: instead we convert to a
+// continuous, possibly-fractional `dataIndex` ourselves and hand it that
+// instead - `xAxis.convertToPixel` is linear in dataIndex, so a fractional
+// index places the point correctly between two bars rather than snapping to
+// whichever is closer.
+//
+// The conversion can't assume uniform calendar-time spacing between bars -
+// NSE/MCX candles only exist for market hours, so a naive
+// (ts - firstBarTs) / intervalMs formula massively overshoots the real
+// index the moment it crosses an overnight or weekend gap (a 5m chart has
+// ~75 real bars a trading day, not the 288 that formula assumes). Instead
+// we binary-search the *actual* loaded bar timestamps for the two real
+// bars bracketing `ts` and interpolate between them - exact when `ts`
+// lands on a real bar (the common case: every drawn point starts out
+// snapped to one), and still well-behaved across a gap (it just spreads
+// proportionally across whatever bars bracket it, the way index-based
+// axes always have). `timestamps` is the current interval's loaded bar
+// list, captured fresh in loadHistory right before every
+// applyNewData/loadDrawings (initial load and every interval switch).
+type BarTimeAnchor = { timestamps: number[] };
+
+// Index of the last bar at-or-before `ts`, via binary search (timestamps
+// assumed ascending, as loaded history always is). -1 if ts is before the
+// first bar.
+function floorBarIndex(ts: number, timestamps: number[]): number {
+  let lo = 0;
+  let hi = timestamps.length - 1;
+  let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (timestamps[mid] <= ts) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
+function tsToFractionalIndex(ts: number, anchor: BarTimeAnchor): number | null {
+  const { timestamps: t } = anchor;
+  if (!Number.isFinite(ts) || t.length === 0) return null;
+  const last = t.length - 1;
+  const i = floorBarIndex(ts, t);
+  if (i < 0) {
+    // Before the first loaded bar - extrapolate using the first pair's
+    // spacing (only reachable for a drawing older than the loaded window).
+    if (t.length < 2 || t[1] === t[0]) return 0;
+    return (ts - t[0]) / (t[1] - t[0]);
+  }
+  if (i >= last) {
+    if (ts === t[last]) return last;
+    if (t.length < 2 || t[last] === t[last - 1]) return last;
+    return last + (ts - t[last]) / (t[last] - t[last - 1]);
+  }
+  const span = t[i + 1] - t[i];
+  return span > 0 ? i + (ts - t[i]) / span : i;
+}
+
+function fractionalIndexToTs(idx: number, anchor: BarTimeAnchor): number | null {
+  const { timestamps: t } = anchor;
+  if (!Number.isFinite(idx) || t.length === 0) return null;
+  const last = t.length - 1;
+  if (idx <= 0) {
+    if (t.length < 2) return t[0];
+    return t[0] + idx * (t[1] - t[0]);
+  }
+  if (idx >= last) {
+    if (t.length < 2) return t[last];
+    return t[last] + (idx - last) * (t[last] - t[last - 1]);
+  }
+  const i0 = Math.floor(idx);
+  const i1 = i0 + 1;
+  return t[i0] + (idx - i0) * (t[i1] - t[i0]);
+}
+
+// A stored point -> what we actually hand `chart.createOverlay`: a
+// dataIndex (continuous, timeframe-stable) when we have an anchor to
+// convert with, falling back to the raw timestamp (klinecharts' own
+// nearest-bar behaviour) when we don't - e.g. before any history has
+// loaded. Never both: klinecharts recomputes dataIndex from timestamp on
+// every render frame whenever timestamp is present, so a bare timestamp
+// would silently undo the fix.
+function toChartPoint(p: { timestamp?: number; value?: number }, anchor: BarTimeAnchor | null): { dataIndex?: number; timestamp?: number; value?: number } {
+  const idx = typeof p.timestamp === "number" && anchor ? tsToFractionalIndex(p.timestamp, anchor) : null;
+  return idx != null ? { dataIndex: idx, value: p.value } : { timestamp: p.timestamp, value: p.value };
+}
+
+// The reverse, for serializeOverlay: a live overlay point coming back from
+// a drag on a dataIndex-only (restored) overlay carries no `timestamp` of
+// its own (klinecharts only fills it back in when it recomputes a point
+// from a fresh mouse position, e.g. dragging a single corner) - recover the
+// absolute time from its dataIndex so storage always keeps the real,
+// timeframe-independent anchor rather than losing it the first time a
+// restored drawing is moved.
+function resolvePointTimestamp(p: { timestamp?: number; dataIndex?: number }, anchor: BarTimeAnchor | null): number | undefined {
+  if (typeof p.timestamp === "number") return p.timestamp;
+  if (anchor && typeof p.dataIndex === "number") return fractionalIndexToTs(p.dataIndex, anchor) ?? undefined;
+  return undefined;
+}
+
 // Rebuild the persisted form from a live overlay, preserving the style +
 // alert + label we track alongside it (and re-seeding the alert's side,
 // since a drag may have moved the level). `serverAlertIds` is deliberately
 // NOT carried over here - a moved/redrawn overlay's caller is responsible
 // for unsyncing any linked standalone alert first (see onPressedMoveEnd),
 // since the server row would otherwise silently point at a stale price.
-function serializeOverlay(o: Overlay, prev?: StoredOverlay): StoredOverlay {
+// `anchor` recovers a real timestamp for a dataIndex-only point (see above);
+// null before any history has loaded, which can't happen for a live overlay.
+function serializeOverlay(o: Overlay, prev: StoredOverlay | undefined, anchor: BarTimeAnchor | null): StoredOverlay {
   return {
     name: o.name,
-    points: o.points.map((p) => ({ timestamp: p.timestamp, value: p.value })),
+    points: o.points.map((p) => ({ timestamp: resolvePointTimestamp(p, anchor), value: p.value })),
     style: prev?.style,
     alert: prev?.alert ? { ...prev.alert, lastSide: null } : undefined,
     label: prev?.label,
@@ -1961,6 +2074,12 @@ export function LiveChartPanel({
   // origin-less full-width line. A ref (not state) because the trades
   // poll reads it without wanting to restart on every candle refetch.
   const firstBarTsRef = useRef(0);
+  // The current interval's loaded bar timestamps - the BarTimeAnchor that
+  // converts a drawing's absolute timestamp to/from a continuous dataIndex
+  // (see tsToFractionalIndex/fractionalIndexToTs above). Set fresh right
+  // before applyNewData/loadDrawings, on the initial load and every
+  // interval switch.
+  const barTimestampsRef = useRef<number[]>([]);
   // The [fromTs, toTs] visible window captured by pickInterval, consumed
   // once by the next loadHistory so an interval switch keeps the same span.
   const preservedWindowRef = useRef<{ fromTs: number; toTs: number } | null>(null);
@@ -2260,17 +2379,21 @@ export function LiveChartPanel({
       removeLabelOverlay(parentId);
       return;
     }
-    const anchor = entry.points[0];
-    if (!anchor || typeof anchor.timestamp !== "number" || typeof anchor.value !== "number") return;
+    const pt = entry.points[0];
+    if (!pt || typeof pt.timestamp !== "number" || typeof pt.value !== "number") return;
+    // Same nearest-bar-snap workaround as the parent drawing (see
+    // toChartPoint above) - otherwise the label pill drifts independently
+    // of the zone/line it's supposed to sit on when the interval changes.
+    const anchorPoint = toChartPoint(pt, { timestamps: barTimestampsRef.current });
     const extendData: DrawLabelExtendData = { text: entry.label, color: entry.style?.color ?? drawStyleRef.current.color };
     const existing = labelOverlaysRef.current.get(parentId);
     if (existing) {
-      chart.overrideOverlay({ id: existing, points: [anchor], extendData });
+      chart.overrideOverlay({ id: existing, points: [anchorPoint], extendData });
       return;
     }
     const id = chart.createOverlay({
       name: "drawLabel",
-      points: [anchor],
+      points: [anchorPoint],
       lock: true,
       visible: !drawingsHiddenRef.current,
       extendData,
@@ -2349,9 +2472,15 @@ export function LiveChartPanel({
   // Delete-key handler + style bar, and let a right-click delete outright
   // (klinecharts ships no delete affordance of its own).
   function overlayHandlers() {
+    // Current interval's anchor, for recovering a real timestamp out of a
+    // dragged point that only carries a dataIndex (see resolvePointTimestamp
+    // above) - read fresh per call rather than closed over once, since a
+    // handler set can outlive an interval switch (klinecharts keeps calling
+    // the same handlers on a restored overlay).
+    const anchor = (): BarTimeAnchor => ({ timestamps: barTimestampsRef.current });
     return {
       onDrawEnd: (e: OverlayEvent) => {
-        overlaysRef.current.set(e.overlay.id, serializeOverlay(e.overlay, overlaysRef.current.get(e.overlay.id)));
+        overlaysRef.current.set(e.overlay.id, serializeOverlay(e.overlay, overlaysRef.current.get(e.overlay.id), anchor()));
         persistOverlays();
         pendingOverlayRef.current = null;
         setActiveTool(null);
@@ -2359,7 +2488,7 @@ export function LiveChartPanel({
       },
       onPressedMoveEnd: (e: OverlayEvent) => {
         const prev = overlaysRef.current.get(e.overlay.id);
-        const next = serializeOverlay(e.overlay, prev);
+        const next = serializeOverlay(e.overlay, prev, anchor());
         overlaysRef.current.set(e.overlay.id, next);
         persistOverlays();
         syncLabelOverlay(e.overlay.id, next);
@@ -2649,8 +2778,14 @@ export function LiveChartPanel({
   // Re-sync the drawn overlays from storage for the current instrument -
   // called on the initial load and again on every interval switch (which
   // reloads the series), so it clears first and is idempotent regardless
-  // of whether klinecharts keeps overlays across applyNewData.
-  function loadDrawings(exchange: string, sym: string) {
+  // of whether klinecharts keeps overlays across applyNewData. `anchor`
+  // (the new interval's own firstBarTs/intervalMs, already current by the
+  // time this runs - see loadHistory) is what lets a restored point land
+  // at its exact original time instead of snapping to the nearest bar of
+  // whichever timeframe is now on screen (see toChartPoint above);
+  // `overlaysRef`/persisted storage keep the untranslated, canonical
+  // timestamp regardless, so this is purely how it's handed to the chart.
+  function loadDrawings(exchange: string, sym: string, anchor: BarTimeAnchor) {
     const chart = chartRef.current;
     if (!chart) return;
     storageKeyRef.current = overlayStorageKey(exchange, sym);
@@ -2672,12 +2807,14 @@ export function LiveChartPanel({
         if (!s || typeof s.name !== "string" || !Array.isArray(s.points)) continue;
         const id = chart.createOverlay({
           name: s.name,
-          points: s.points,
+          points: s.points.map((p) => toChartPoint(p, anchor)),
           mode: magnetModeFor(magnetRef.current),
           styles: s.style ? styleToPatch(s.style) : undefined,
           ...overlayHandlers(),
         });
-        // A restored alert re-seeds its side on the next check.
+        // A restored alert re-seeds its side on the next check. Stored
+        // as-is (untranslated timestamps) - only the chart.createOverlay
+        // call above needs the dataIndex form.
         if (typeof id === "string") {
           const entry: StoredOverlay = s.alert ? { ...s, alert: { ...s.alert, lastSide: null } } : s;
           overlaysRef.current.set(id, entry);
@@ -3338,10 +3475,15 @@ export function LiveChartPanel({
         chart!.setPriceVolumePrecision(pricePrecision(newestClose), 0);
         chart!.applyNewData(bars);
         restorePreservedWindow(bars);
-        loadDrawings(ex, sym);
+        // Set before loadDrawings, which needs this exact interval's
+        // real bar timestamps to place restored drawings at their true
+        // time (see toChartPoint/BarTimeAnchor above) rather than snapping
+        // them to the previous interval's (or no) bar grid.
+        firstBarTsRef.current = bars[0].timestamp;
+        barTimestampsRef.current = bars.map((b) => b.timestamp);
+        loadDrawings(ex, sym, { timestamps: barTimestampsRef.current });
         setStatus("ready");
         setErrorMsg(null);
-        firstBarTsRef.current = bars[0].timestamp;
         setDataEpoch((e) => e + 1);
       } else {
         // updateData appends when the timestamp is newer than the last

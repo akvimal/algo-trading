@@ -928,3 +928,28 @@ ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS confidence
 ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_confidence_check;
 ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_confidence_check
     CHECK (confidence IS NULL OR confidence BETWEEN 1 AND 5);
+
+-- default_interval/default_higher_interval (2026-09-05) - a user's own
+-- declared execution timeframe per segment + its auto-suggested-but-
+-- editable higher pairing, set from "Your account" (execution's
+-- AccountsPage). A personal preference only - nothing sizing/order-
+-- related reads these; they exist purely so the Discipline score's
+-- "Timeframe consistency" component has something to compare a trade's
+-- entry_interval against. Same literal set the Live Chart's own interval
+-- switcher offers (LiveChartPanel.tsx's INTERVAL_DEFS).
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS default_interval TEXT;
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS default_higher_interval TEXT;
+ALTER TABLE execution.accounts DROP CONSTRAINT IF EXISTS accounts_default_interval_check;
+ALTER TABLE execution.accounts ADD CONSTRAINT accounts_default_interval_check
+    CHECK (default_interval IS NULL OR default_interval IN ('1min', '3min', '5min', '15min', '30min', '60min'));
+ALTER TABLE execution.accounts DROP CONSTRAINT IF EXISTS accounts_default_higher_interval_check;
+ALTER TABLE execution.accounts ADD CONSTRAINT accounts_default_higher_interval_check
+    CHECK (default_higher_interval IS NULL OR default_higher_interval IN ('1min', '3min', '5min', '15min', '30min', '60min'));
+
+-- entry_interval (2026-09-05) - the chart interval a manual trade was
+-- actually placed on, a pure journal label (same "just a caller-resolved
+-- value" pattern order_type already uses) - lets Trading Performance/
+-- Discipline compare it against the account's own declared default above.
+-- NULL for Strategy-driven rows and every pre-migration trade.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS entry_interval TEXT;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS entry_interval TEXT;

@@ -124,6 +124,10 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         # type + 1-5 confidence, for Trading Performance's by-setup slice.
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
+        # Chart interval this trade was placed on - null for every
+        # Strategy-driven position and every pre-migration trade. Feeds
+        # the Discipline score's "Timeframe consistency" component.
+        "entry_interval": row.entry_interval,
         # 'market' | 'limit' | null - see execution.positions.order_type's own comment.
         "order_type": row.order_type,
         # Live Chart trade panel discipline flags - null for every
@@ -329,6 +333,7 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag,
         confidence=payload.confidence,
+        entry_interval=payload.entry_interval,
     )
     return _position_to_out(row)
 

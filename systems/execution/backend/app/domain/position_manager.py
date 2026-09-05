@@ -1677,6 +1677,7 @@ def open_manual_position(
     risk_managed: Optional[bool] = None,
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
+    entry_interval: Optional[str] = None,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -1990,6 +1991,7 @@ def open_manual_position(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        entry_interval=entry_interval,
     )
     db.add(row)
     db.commit()

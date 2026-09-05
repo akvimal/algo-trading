@@ -610,6 +610,7 @@ def open_manual_option_group(
     risk_managed: Optional[bool] = None,
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
+    entry_interval: Optional[str] = None,
 ) -> db_models.OptionPositionGroup:
     """Manual tab (signal-generation's frontend) - option orders, bypassing
     signal-generation/signal-processing entirely (no auto-provisioned
@@ -853,6 +854,7 @@ def open_manual_option_group(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        entry_interval=entry_interval,
     )
     db.add(group)
 

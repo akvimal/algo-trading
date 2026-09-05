@@ -161,6 +161,13 @@ class ExecutionSettingsUpdate(BaseModel):
     usdinr_rate: Optional[float] = Field(default=None, gt=0)
 
 
+# The same interval vocabulary the Live Chart's own interval switcher
+# offers (manual-trading's LiveChartPanel.tsx INTERVAL_DEFS) - duplicated
+# here rather than imported (systems/* self-contained), same reasoning
+# every other cross-system-shaped literal in this file already follows.
+ChartInterval = Literal["1min", "3min", "5min", "15min", "30min", "60min"]
+
+
 class AccountOut(BaseModel):
     """One row per segment (NSE/MCX/CRYPTO) - see execution.accounts.
     current_balance moves only on realized P&L (square-off/stop-loss/
@@ -221,6 +228,14 @@ class AccountOut(BaseModel):
     live_trading_enabled: bool
     max_order_value: Optional[float] = None
     max_daily_loss: Optional[float] = None
+    # A user's own declared execution timeframe for this segment + its
+    # auto-suggested-but-editable higher-timeframe pairing - a personal
+    # preference, read by nothing sizing/order-related. NULL until set via
+    # "Your account". Feeds the Discipline score's "Timeframe consistency"
+    # component (manual-trading's discipline.ts / shell's own copy),
+    # compared against each closed trade's own entry_interval.
+    default_interval: Optional[ChartInterval] = None
+    default_higher_interval: Optional[ChartInterval] = None
     updated_at: datetime
 
 
@@ -260,6 +275,11 @@ class AccountUpdate(BaseModel):
     live_trading_enabled: Optional[bool] = None
     max_order_value: Optional[float] = Field(default=None, gt=0)
     max_daily_loss: Optional[float] = Field(default=None, gt=0)
+    # NULL is meaningful here too (clears a previously-set default, rather
+    # than "leave unchanged") - same model_fields_set-distinguished pattern
+    # square_off_time above already uses.
+    default_interval: Optional[ChartInterval] = None
+    default_higher_interval: Optional[ChartInterval] = None
 
 
 class StrategyAccountOut(BaseModel):
@@ -507,6 +527,12 @@ class ManualPositionCreate(BaseModel):
     # editable later via PUT /positions/{id}/tags. Feed Trading Performance.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # The Live Chart's own chart interval at the moment this was placed -
+    # a pure journal label like order_type above, never read by any
+    # sizing/order logic. Feeds the Discipline score's "Timeframe
+    # consistency" component against the account's own default_interval/
+    # default_higher_interval (see AccountOut). None from any other caller.
+    entry_interval: Optional[ChartInterval] = None
     stop_loss_method: Optional[Literal["previous_candle", "percent", "indicator", "breakeven"]] = None
     stop_loss_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
     stop_loss_percent: Optional[float] = Field(default=None, gt=0)
@@ -632,6 +658,8 @@ class ManualOptionPositionCreate(BaseModel):
     # Structured trade journal set at order time - see ManualPositionCreate.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # See ManualPositionCreate.entry_interval's own comment.
+    entry_interval: Optional[ChartInterval] = None
 
 
 class StopLossUpdate(BaseModel):

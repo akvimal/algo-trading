@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.domain.models import (
+    AccountUpdate,
     EmaStopParams,
     ManualPositionCreate,
     NotesUpdate,
@@ -41,6 +42,41 @@ def test_trade_tags_update_is_partial_and_bounded():
     assert TradeTagsUpdate().model_dump(exclude_unset=True) == {}
     with pytest.raises(ValidationError):
         TradeTagsUpdate(confidence=9)
+
+
+def test_manual_position_create_accepts_a_known_entry_interval():
+    p = ManualPositionCreate(**_base(entry_interval="5min"))
+    assert p.entry_interval == "5min"
+
+
+def test_manual_position_create_rejects_an_unknown_entry_interval():
+    with pytest.raises(ValidationError):
+        ManualPositionCreate(**_base(entry_interval="2min"))
+
+
+def test_account_update_accepts_known_intervals_and_an_explicit_null():
+    # default_interval/default_higher_interval follow the same
+    # model_fields_set-distinguished pattern as square_off_time/
+    # max_daily_loss - an explicit null is a real "clear it" value, not
+    # "leave unchanged" (that's just omitting the key entirely).
+    u = AccountUpdate(default_interval="1min", default_higher_interval="5min")
+    assert "default_interval" in u.model_fields_set
+    assert u.default_interval == "1min"
+    assert u.default_higher_interval == "5min"
+
+    cleared = AccountUpdate(default_interval=None)
+    assert "default_interval" in cleared.model_fields_set
+    assert cleared.default_interval is None
+
+    unset = AccountUpdate()
+    assert "default_interval" not in unset.model_fields_set
+
+
+def test_account_update_rejects_an_unknown_interval():
+    with pytest.raises(ValidationError):
+        AccountUpdate(default_interval="2min")
+    with pytest.raises(ValidationError):
+        AccountUpdate(default_higher_interval="45min")
 
 
 def _base(**overrides) -> dict:

@@ -87,6 +87,16 @@ class Account(Base):
     live_trading_enabled = Column(Boolean, nullable=False, default=False)
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
+    # A user's own declared execution timeframe for this segment
+    # (default_interval, e.g. "5min") + its auto-suggested-but-editable
+    # higher-timeframe pairing (default_higher_interval) - a personal
+    # preference only, read by nothing sizing/order-related. Exists purely
+    # so the Discipline score's "Timeframe consistency" component has
+    # something to compare a manual trade's own entry_interval (see
+    # Position/OptionPositionGroup above) against. NULL until the user
+    # opts in via "Your account" - see app/domain/models.py's AccountOut.
+    default_interval = Column(Text)
+    default_higher_interval = Column(Text)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -284,6 +294,12 @@ class OptionPositionGroup(Base):
     # Structured trade journal - see the Position mirror above.
     setup_tag = Column(Text)
     confidence = Column(SmallInteger)
+    # The chart interval this trade was actually placed on (e.g. "5min") -
+    # a pure journal label, same "just a caller-resolved value" pattern
+    # order_type already uses. NULL for Strategy-driven rows and every
+    # pre-migration trade. Feeds the Discipline score's "Timeframe
+    # consistency" component - see app/domain/models.py's AccountOut.
+    entry_interval = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -396,6 +412,8 @@ class Position(Base):
     # PUT /positions/{id}/tags. Feed Trading Performance's by-setup slice.
     setup_tag = Column(Text)
     confidence = Column(SmallInteger)
+    # See the OptionPositionGroup mirror above.
+    entry_interval = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     # Which option_position_groups row this leg belongs to - NULL for
     # every ordinary spot/future position. See docs/architecture.md

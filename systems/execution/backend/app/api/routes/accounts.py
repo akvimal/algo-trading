@@ -55,6 +55,10 @@ def _to_out(db: Session, row: db_models.Account) -> dict:
         "live_trading_enabled": row.live_trading_enabled,
         "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
         "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
+        # A user's own declared execution timeframe for this segment + its
+        # higher-TF pairing - see app/domain/models.py's AccountOut.
+        "default_interval": row.default_interval,
+        "default_higher_interval": row.default_higher_interval,
         "updated_at": row.updated_at.isoformat(),
     }
 
@@ -83,7 +87,11 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
     a meaningful value (never force-close, e.g. CRYPTO), not just "leave
     unchanged" - model_fields_set distinguishes an explicit
     {"square_off_time": null} from the key being omitted entirely, same
-    pattern signal-generation's update_strategy uses for fixed_lots."""
+    pattern signal-generation's update_strategy uses for fixed_lots.
+    default_interval/default_higher_interval follow the same
+    model_fields_set-distinguished pattern - an explicit null clears a
+    previously-set default rather than leaving it unchanged. Personal
+    account only - see app/domain/models.py's AccountUpdate."""
     row = load_account(db, user.id, segment.upper())
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
@@ -112,6 +120,10 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.max_order_value = update.max_order_value
     if "max_daily_loss" in update.model_fields_set:
         row.max_daily_loss = update.max_daily_loss
+    if "default_interval" in update.model_fields_set:
+        row.default_interval = update.default_interval
+    if "default_higher_interval" in update.model_fields_set:
+        row.default_higher_interval = update.default_higher_interval
     db.commit()
     db.refresh(row)
     return _to_out(db, row)

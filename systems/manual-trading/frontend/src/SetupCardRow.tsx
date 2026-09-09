@@ -10,7 +10,12 @@ import { SETUP_ART, SETUP_KIND } from "./setupArt";
 // one is running, else on the next order the panel / auto-trader will
 // place. Click the active card again to clear.
 
-const CARD_TAGS = SETUP_TAGS.filter((tag) => SETUP_ART[tag]);
+// Reversal setups first, then continuation - the order a discretionary
+// trader scans them (is this a turn? no -> is the trend still on?).
+// Array.sort is stable, so the SETUP_TAGS order holds within each group.
+const CARD_TAGS = SETUP_TAGS.filter((tag) => SETUP_ART[tag]).sort(
+  (a, b) => (SETUP_KIND[a] === "Reversal" ? 0 : 1) - (SETUP_KIND[b] === "Reversal" ? 0 : 1),
+);
 
 export default function SetupCardRow({
   selected,

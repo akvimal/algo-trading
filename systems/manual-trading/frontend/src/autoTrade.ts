@@ -58,7 +58,18 @@ const STATE_KEY = "manualChartAutoTradeState"; // { [segment:symbol]: AutoTradeR
 export type AutoTradeRunState = {
   armedAt: number;
   lastActedBarTs: number;
+  // A flip whose order was REJECTED or errored - not counted as acted
+  // (`lastActedBarTs` unchanged) so the watcher retries it on later
+  // ticks. Transient quote-fetch timeouts are common on NSE and a
+  // rejected stop-and-reverse leaves the old position open the WRONG way,
+  // so retrying matters. Given up on after AUTO_TRADE_MAX_RETRIES.
+  retryBarTs?: number;
+  retryCount?: number;
 };
+
+// How many ticks (~POLL_MS apart) to keep retrying a rejected flip order
+// before advancing past it. ~6 * 15s = 90s of transient-failure tolerance.
+export const AUTO_TRADE_MAX_RETRIES = 6;
 
 function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {
   const n = Math.round(Number(v));

@@ -13,6 +13,7 @@ import {
   fetchOptionGroups,
 } from "./api";
 import {
+  AUTO_TRADE_MAX_RETRIES,
   type AutoTradeConfig,
   type AutoTradeInstrument,
   intervalMinutes,
@@ -141,11 +142,16 @@ export default function AutoTradePanel({
 
   // --- The watcher loop (only while armed). ---
   const firingRef = useRef(false);
+  // Retry counter for the ON-ARM entry (which persists no state until it
+  // lands - a rejected seed just re-seeds next tick). Non-seed flip
+  // retries live in the persisted run state instead.
+  const seedRetriesRef = useRef(0);
   useEffect(() => {
     if (!on) {
       setStatus(null);
       return;
     }
+    seedRetriesRef.current = 0;
     const key = symbolKey(segment, symbol);
     const iv = config.interval;
     const ivMs = intervalMinutes(iv) * 60_000;
@@ -327,7 +333,10 @@ export default function AutoTradePanel({
       if (act == null) {
         // Nothing to act on - seed the cursor (if seeding) and just
         // refresh the status line.
-        if (seeding) saveAutoTradeState(key, { armedAt: Date.now(), lastActedBarTs: latestFlipTs });
+        if (seeding) {
+          seedRetriesRef.current = 0;
+          saveAutoTradeState(key, { armedAt: Date.now(), lastActedBarTs: latestFlipTs });
+        }
         setStatus({
           phase: "watching",
           message: seeding
@@ -358,20 +367,59 @@ export default function AutoTradePanel({
         dir: flip.direction,
         line: flip.line,
       });
+      // A rejected / errored order - retry on later ticks rather than
+      // advancing past the flip (transient NSE quote timeouts are common,
+      // and a rejected stop-and-reverse leaves the OLD position open the
+      // wrong way). Bounded by AUTO_TRADE_MAX_RETRIES so a permanent
+      // rejection (balance, validation) doesn't loop forever.
+      const onFailure = (reason: string) => {
+        if (seed) {
+          seedRetriesRef.current += 1;
+          const n = seedRetriesRef.current;
+          if (n >= AUTO_TRADE_MAX_RETRIES) {
+            seedRetriesRef.current = 0;
+            saveAutoTradeState(key, { armedAt: Date.now(), lastActedBarTs: latestFlipTs });
+            setStatus({ phase: "error", message: `Gave up entering after ${n} tries: ${reason}. Waiting for the next flip.`, dir: flip.direction, line: flip.line });
+          } else {
+            // No state saved -> next tick re-seeds and retries the entry.
+            setStatus({ phase: "error", message: `Entry rejected (${reason}) — retrying (${n}/${AUTO_TRADE_MAX_RETRIES}).`, dir: flip.direction, line: flip.line });
+          }
+          return;
+        }
+        const s = state as NonNullable<typeof state>;
+        const attempts = (s.retryBarTs === flip.barTs ? (s.retryCount ?? 0) : 0) + 1;
+        if (attempts >= AUTO_TRADE_MAX_RETRIES) {
+          saveAutoTradeState(key, { armedAt: s.armedAt, lastActedBarTs: flip.barTs });
+          setStatus({
+            phase: "error",
+            message: `Gave up reversing after ${attempts} tries: ${reason}. Your position from the previous flip is still open — square it off manually if it's against the trend.`,
+            dir: flip.direction,
+            line: flip.line,
+          });
+        } else {
+          saveAutoTradeState(key, { armedAt: s.armedAt, lastActedBarTs: s.lastActedBarTs, retryBarTs: flip.barTs, retryCount: attempts });
+          setStatus({
+            phase: "error",
+            message: `Reverse rejected (${reason}) — retrying (${attempts}/${AUTO_TRADE_MAX_RETRIES}). Your position from the previous flip is still live and now against the trend.`,
+            dir: flip.direction,
+            line: flip.line,
+          });
+        }
+      };
+
       try {
         const result = await executeFlip(flip);
-        // Persist the cursor on a settled outcome (placed / rejected /
-        // skipped). For a SEED entry the cursor is the last historical
-        // flip, so the next REAL flip still fires. A thrown error saves
-        // nothing on a seed (retry the entry next tick) and doesn't
-        // advance the cursor on a flip (retry that flip next tick).
+        if (result.rejected) {
+          onFailure(result.reason ?? "order rejected");
+          return;
+        }
+        // Settled OK (placed or skipped) - advance the cursor, clear retries.
+        seedRetriesRef.current = 0;
         saveAutoTradeState(key, {
-          armedAt: seeding ? Date.now() : state.armedAt,
+          armedAt: seeding ? Date.now() : (state as NonNullable<typeof state>).armedAt,
           lastActedBarTs: seed ? latestFlipTs : flip.barTs,
         });
-        if (result.rejected) {
-          setStatus({ phase: "error", message: `Order rejected: ${result.reason ?? "unknown"}.`, dir: flip.direction, line: flip.line });
-        } else if (result.skipped) {
+        if (result.skipped) {
           setStatus({ phase: "watching", message: result.reason ?? "Skipped.", dir: flip.direction, line: flip.line });
         } else {
           setStatus({
@@ -386,7 +434,7 @@ export default function AutoTradePanel({
           });
         }
       } catch (e) {
-        setStatus({ phase: "error", message: e instanceof Error ? e.message : "failed to place the auto order.", dir: flip.direction, line: flip.line });
+        onFailure(e instanceof Error ? e.message : "failed to place the auto order");
       } finally {
         firingRef.current = false;
       }

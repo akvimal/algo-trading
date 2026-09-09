@@ -269,6 +269,7 @@ export default function ChartTradePanel({
   chartInterval,
   riskManaged,
   chartLtp,
+  autoTradeActive,
   pendingOrder,
   pendingNote,
   onArmPending,
@@ -298,6 +299,10 @@ export default function ChartTradePanel({
   // them), and Proceed blocked until reward:risk clears the segment's
   // min_reward_risk_ratio.
   riskManaged: boolean;
+  // The Intraday auto-trader (AutoTradePanel) is armed for this symbol -
+  // hide the manual entry form (entries are automatic) but keep the
+  // open-position manage bar + history visible.
+  autoTradeActive?: boolean;
   // The chart's own live price - used as THE ltp (display + target watch)
   // so the panel never drifts from the chart. null until the chart has a
   // tick; the panel's own fetch is only a fallback for that gap.
@@ -1055,7 +1060,14 @@ export default function ChartTradePanel({
       )}
       {pendingNote && !pendingOrder && <p className="ctp-error">{pendingNote}</p>}
 
-      {!hasOpen && !pendingOrder && (
+      {!hasOpen && !pendingOrder && autoTradeActive && (
+        <p className="ctp-hint ctp-auto-note">
+          Auto-trade is armed — entries fire automatically on each SuperTrend flip. Turn it off above to place a manual
+          order.
+        </p>
+      )}
+
+      {!hasOpen && !pendingOrder && !autoTradeActive && (
         <>
           <div className="ctp-seg" role="group" aria-label="Direction">
             <button type="button" className={action === "BUY" ? "active buy" : ""} onClick={() => setAction("BUY")}>

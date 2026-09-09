@@ -3299,6 +3299,111 @@ button.btn-exit {
   gap: 0.4rem;
 }
 
+/* --- Intraday auto-trader (AutoTradePanel.tsx) --- */
+.auto-trade-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+.auto-trade-panel.armed {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.auto-trade-panel.armed.at-up {
+  border-color: color-mix(in srgb, var(--buy) 45%, var(--border));
+  background: color-mix(in srgb, var(--buy) 8%, var(--surface));
+}
+.auto-trade-panel.armed.at-down {
+  border-color: color-mix(in srgb, var(--sell) 45%, var(--border));
+  background: color-mix(in srgb, var(--sell) 8%, var(--surface));
+}
+.auto-trade-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.auto-trade-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.auto-trade-toggle input {
+  margin: 0;
+}
+.auto-trade-toggle > span:first-of-type {
+  font-weight: 600;
+  color: var(--text);
+}
+.auto-trade-sub {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+.auto-trade-cfg-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.2rem;
+  white-space: nowrap;
+}
+.auto-trade-config {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.6rem;
+  padding-top: 0.2rem;
+  border-top: 1px dashed var(--border);
+}
+.auto-trade-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.7rem;
+}
+.auto-trade-field span {
+  color: var(--text-dim);
+}
+.auto-trade-field input,
+.auto-trade-field select {
+  width: 4.5rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.76rem;
+}
+.auto-trade-config-note {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+.auto-trade-status {
+  margin: 0;
+  padding-top: 0.25rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+.auto-trade-status.is-firing {
+  color: var(--accent);
+  font-weight: 600;
+}
+.auto-trade-status.is-error,
+.auto-trade-status.is-halted {
+  color: var(--sell);
+}
+.ctp-auto-note {
+  font-style: italic;
+}
+
 /* ⏳ marker on a symbol tab that has a limit armed. */
 .live-chart-symbol-pending {
   margin-left: 0.3rem;

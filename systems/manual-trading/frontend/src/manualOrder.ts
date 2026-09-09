@@ -12,6 +12,7 @@ import {
   type ChecklistItem,
   type ManualOptionGroup,
   type ManualPosition,
+  type ManualStopLossConfig,
   type OptionStrikeMoneyness,
   type ResolvedUnderlying,
   type Segment,
@@ -305,6 +306,12 @@ export type PlaceManualOrderParams = {
   setupTag: string | null;
   confidence: number | null;
   entryInterval: ChartInterval | null;
+  // Method-based stop-loss (trailing indicator / previous-candle / …) for
+  // a `future` order - mutually exclusive with `stop` (a flat price).
+  // Used by the Intraday auto-trader to open with a server-trailed
+  // SuperTrend stop that keeps working even if the browser tab closes.
+  // Ignored on the option path (execution has no method SL for options).
+  slConfig?: ManualStopLossConfig;
 };
 
 export type PlaceManualOrderResult = {
@@ -323,6 +330,9 @@ export type PlaceManualOrderResult = {
 // endpoints (execution enforces all of them server-side).
 export async function placeManualOrder(p: PlaceManualOrderParams): Promise<PlaceManualOrderResult> {
   if (p.strategy === "future") {
+    // A method-based stop (p.slConfig) and a flat stop price (p.stop) are
+    // mutually exclusive - execution 422s if both are sent. slConfig wins.
+    const stopFields = p.slConfig ?? (p.stop != null ? { stop_loss_price: p.stop } : {});
     const position = await createManualPosition({
       segment: p.segment,
       symbol: p.symbol,
@@ -332,7 +342,7 @@ export async function placeManualOrder(p: PlaceManualOrderParams): Promise<Place
       ...(p.quantity != null ? { quantity: p.quantity } : {}),
       plan_checklist: [],
       order_type: p.orderType,
-      ...(p.stop != null ? { stop_loss_price: p.stop } : {}),
+      ...stopFields,
       ...(p.target != null ? { target_price: p.target } : {}),
       trend_followed: p.trendFollowed,
       risk_managed: p.riskManaged,

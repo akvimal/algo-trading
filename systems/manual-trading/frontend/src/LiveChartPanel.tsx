@@ -23,6 +23,7 @@ import {
 
 import { TrashIcon } from "./Icons";
 import { fmtQty } from "./manualOrder";
+import { computeSupertrend } from "./supertrend";
 import { BUILDUP_META } from "./OiSummaryPage";
 import {
   type Candle,
@@ -780,9 +781,12 @@ registerOverlay({
 // are [ATR period, multiplier]; both editable via the Indicators menu's
 // params box. Drawn as two lines on the candle pane - a green one while
 // price is above the trend (uptrend) and a red one while below - so the
-// trend flip reads as the colour handing off. ATR is Wilder-smoothed.
-type SupertrendPoint = { up?: number; down?: number };
-registerIndicator<SupertrendPoint>({
+// trend flip reads as the colour handing off. The math lives in the
+// shared supertrend.ts (computeSupertrend) so the line drawn here and the
+// line the Intraday auto-trader stops against are literally the same
+// function - see that module's header.
+type SupertrendFigurePoint = { up?: number; down?: number };
+registerIndicator<SupertrendFigurePoint>({
   name: "SUPERTREND",
   shortName: "Supertrend",
   series: IndicatorSeries.Price,
@@ -796,55 +800,9 @@ registerIndicator<SupertrendPoint>({
   regenerateFigures: null,
   calc: (dataList, indicator) => {
     const [rawPeriod, rawMult] = indicator.calcParams as number[];
-    const period = Math.max(1, Math.round(rawPeriod || 10));
-    const mult = rawMult > 0 ? rawMult : 3;
-    const n = dataList.length;
-    const out: SupertrendPoint[] = new Array(n);
-    if (n === 0) return out;
-
-    // Wilder ATR.
-    const atr: number[] = new Array(n);
-    let trSum = 0;
-    let prevAtr = 0;
-    for (let i = 0; i < n; i++) {
-      const k = dataList[i];
-      const prevClose = i > 0 ? dataList[i - 1].close : k.close;
-      const tr = Math.max(k.high - k.low, Math.abs(k.high - prevClose), Math.abs(k.low - prevClose));
-      if (i < period) {
-        trSum += tr;
-        atr[i] = trSum / (i + 1);
-        prevAtr = atr[i];
-      } else {
-        prevAtr = (prevAtr * (period - 1) + tr) / period;
-        atr[i] = prevAtr;
-      }
-    }
-
-    let upperBand = 0;
-    let lowerBand = 0;
-    let uptrend = true;
-    for (let i = 0; i < n; i++) {
-      const k = dataList[i];
-      const hl2 = (k.high + k.low) / 2;
-      const basicUpper = hl2 + mult * atr[i];
-      const basicLower = hl2 - mult * atr[i];
-      const prevClose = i > 0 ? dataList[i - 1].close : k.close;
-
-      upperBand = i === 0 || basicUpper < upperBand || prevClose > upperBand ? basicUpper : upperBand;
-      lowerBand = i === 0 || basicLower > lowerBand || prevClose < lowerBand ? basicLower : lowerBand;
-
-      if (i === 0) {
-        uptrend = k.close >= hl2;
-      } else if (k.close > upperBand) {
-        uptrend = true;
-      } else if (k.close < lowerBand) {
-        uptrend = false;
-      }
-
-      const value = uptrend ? lowerBand : upperBand;
-      out[i] = uptrend ? { up: value } : { down: value };
-    }
-    return out;
+    return computeSupertrend(dataList, rawPeriod, rawMult).map((pt) =>
+      pt.dir === "up" ? { up: pt.line } : { down: pt.line },
+    );
   },
 });
 

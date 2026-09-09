@@ -953,3 +953,26 @@ ALTER TABLE execution.accounts ADD CONSTRAINT accounts_default_higher_interval_c
 -- NULL for Strategy-driven rows and every pre-migration trade.
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS entry_interval TEXT;
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS entry_interval TEXT;
+
+-- entry_setup_tag / entry_confidence (2026-09-09) - an IMMUTABLE snapshot
+-- of setup_tag/confidence AS THEY WERE at order time. setup_tag/confidence
+-- stay editable (PUT .../tags) so a post-trade review can fill/fix them;
+-- these record what was declared UP FRONT. The Discipline score's "plan
+-- review" component rewards having both a before (these) and an after
+-- (the editable pair + a note/review). NULL for Strategy-driven and
+-- pre-migration rows.
+-- auto_traded (2026-09-09) - this fill came from the Intraday SuperTrend
+-- auto-trader, not a discretionary decision; the Discipline score skips
+-- these rows entirely.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS entry_setup_tag TEXT;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS entry_confidence SMALLINT;
+ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_entry_confidence_check;
+ALTER TABLE execution.positions ADD CONSTRAINT positions_entry_confidence_check
+    CHECK (entry_confidence IS NULL OR entry_confidence BETWEEN 1 AND 5);
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS auto_traded BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS entry_setup_tag TEXT;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS entry_confidence SMALLINT;
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_entry_confidence_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_entry_confidence_check
+    CHECK (entry_confidence IS NULL OR entry_confidence BETWEEN 1 AND 5);
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS auto_traded BOOLEAN NOT NULL DEFAULT false;

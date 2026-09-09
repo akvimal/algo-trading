@@ -1677,6 +1677,7 @@ def open_manual_position(
     risk_managed: Optional[bool] = None,
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
+    auto_traded: bool = False,
     entry_interval: Optional[str] = None,
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
@@ -1991,6 +1992,10 @@ def open_manual_position(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        # Immutable entry snapshot - see OptionPositionGroup's identical pair.
+        entry_setup_tag=setup_tag or None,
+        entry_confidence=confidence,
+        auto_traded=auto_traded,
         entry_interval=entry_interval,
     )
     db.add(row)

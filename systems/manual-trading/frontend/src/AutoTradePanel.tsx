@@ -235,6 +235,7 @@ export default function AutoTradePanel({
           trendFollowed: false,
           riskManaged: false,
           setupTag: setupTagRef.current || null,
+        autoTraded: true,
           confidence: null,
           entryInterval: iv,
         });
@@ -270,6 +271,7 @@ export default function AutoTradePanel({
         trendFollowed: false,
         riskManaged: false,
         setupTag: setupTagRef.current || null,
+        autoTraded: true,
         confidence: null,
         entryInterval: iv,
         // Server-trailed SuperTrend stop - keeps working with the tab

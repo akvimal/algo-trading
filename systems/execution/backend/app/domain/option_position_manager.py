@@ -611,6 +611,7 @@ def open_manual_option_group(
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
     entry_interval: Optional[str] = None,
+    auto_traded: bool = False,
 ) -> db_models.OptionPositionGroup:
     """Manual tab (signal-generation's frontend) - option orders, bypassing
     signal-generation/signal-processing entirely (no auto-provisioned
@@ -854,6 +855,11 @@ def open_manual_option_group(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        # Immutable entry snapshot - setup_tag/confidence above stay
+        # editable for the post-trade review; these don't.
+        entry_setup_tag=setup_tag or None,
+        entry_confidence=confidence,
+        auto_traded=auto_traded,
         entry_interval=entry_interval,
     )
     db.add(group)

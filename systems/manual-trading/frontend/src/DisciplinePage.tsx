@@ -1,22 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { type Account, type ChartInterval, type Segment, fetchAccounts, fetchExecPositions, fetchOptionGroups } from "./api";
-import { computeDisciplineScore, disciplineColor } from "./discipline";
+import { type Segment, fetchExecPositions, fetchOptionGroups } from "./api";
+import { computeDisciplineScore, DISCIPLINE_WEIGHTS, disciplineColor } from "./discipline";
 import { breakdown, BreakdownTable } from "./statsBreakdown";
 
-// Split out of ManualStatsPage (Performance) 2026-09-05 - the overall
-// discipline score + "more graphics and data" the user asked for, then
-// reworked the same day ("this page takes too much space, make it
-// concise and more informative with multiple dimensions") into a wide,
-// dense layout instead of a narrow centered column - see
-// docs/architecture.md § "Discipline score" for the full design.
+// The overall discipline score + supporting breakdowns. Redesigned
+// 2026-09-09 around the plan (Limit + stop, stick to it, review it,
+// win) - see discipline.ts and docs/architecture.md § "Discipline score".
 
 const WINDOW_OPTIONS = [7, 14, 30, 60, 90];
 const WINDOW_STORAGE_KEY = "manualDisciplineWindowDays";
 
-// The full trade shape both the score (discipline.ts) and the moved
-// breakdown tables (statsBreakdown.tsx) need - a superset of each of
-// their own narrower input types.
+// The full trade shape the score (discipline.ts) and the breakdown tables
+// (statsBreakdown.tsx) both need.
 type Trade = {
   id: string;
   segment: Segment;
@@ -24,11 +20,17 @@ type Trade = {
   pnl: number | null;
   entry_price: number | null;
   stop_loss_price: number | null;
+  target_price: number | null;
   quantity: number | null;
   exit_time: string;
-  trend_followed: boolean | null;
-  risk_managed: boolean | null;
-  entry_interval: ChartInterval | null;
+  exit_reason: string | null;
+  order_type: "market" | "limit" | null;
+  entry_setup_tag: string | null;
+  entry_confidence: number | null;
+  setup_tag: string | null;
+  confidence: number | null;
+  reviewed: boolean;
+  auto_traded: boolean;
 };
 
 function fmtPct(rate: number | null): string {
@@ -40,9 +42,6 @@ function loadWindowDays(): number {
   return WINDOW_OPTIONS.includes(raw) ? raw : 30;
 }
 
-// A compact ring gauge - stroke-dasharray on a circle, the same
-// hand-rolled-SVG convention every other chart in this repo uses (no
-// charting-library dependency for something this simple). 0-100 -> 0-360°.
 function ScoreGauge({ score }: { score: number | null }) {
   const r = 46;
   const circumference = 2 * Math.PI * r;
@@ -73,16 +72,27 @@ function ScoreGauge({ score }: { score: number | null }) {
   );
 }
 
-// One compact stat card - label, big rate, a thin bar, trade count. Four
-// of these sit in a grid next to the gauge instead of stacking as full-
-// width bars (the original layout - too tall, mostly empty either side
-// of a narrow centered column).
-function StatCard({ label, rate, trades, detail }: { label: string; rate: number | null; trades: number; detail?: string }) {
+function StatCard({
+  label,
+  rate,
+  trades,
+  weight,
+  detail,
+}: {
+  label: string;
+  rate: number | null;
+  trades: number;
+  weight: number;
+  detail?: string;
+}) {
   const pct = rate == null ? 0 : Math.round(rate * 100);
   const color = disciplineColor(rate == null ? null : pct);
   return (
     <div className={`discipline-card is-${color}`}>
-      <span className="discipline-card-label">{label}</span>
+      <span className="discipline-card-label">
+        {label}
+        {weight > 1 && <span className="discipline-card-weight" title={`Counts ${weight}× in the overall score`}>{weight}×</span>}
+      </span>
       <span className="discipline-card-value">{fmtPct(rate)}</span>
       <div className="discipline-bar-track">
         <div className="discipline-bar-fill" style={{ width: `${pct}%` }} />
@@ -96,7 +106,6 @@ function StatCard({ label, rate, trades, detail }: { label: string; rate: number
 
 export default function DisciplinePage() {
   const [trades, setTrades] = useState<Trade[] | null>(null);
-  const [accounts, setAccounts] = useState<Account[]>([]);
   const [error, setError] = useState<string | undefined>();
   const [windowDays, setWindowDays] = useState<number>(loadWindowDays);
 
@@ -110,11 +119,12 @@ export default function DisciplinePage() {
 
   async function refresh() {
     try {
-      const [positions, groups, accs] = await Promise.all([
+      const [positions, groups] = await Promise.all([
         fetchExecPositions({ status: "CLOSED", manualOnly: true, limit: 1000 }),
         fetchOptionGroups({ status: "CLOSED", manualOnly: true, limit: 1000 }),
-        fetchAccounts(),
       ]);
+      const reviewed = (reviewed_at: string | null, notes: string | null) =>
+        reviewed_at != null || (notes != null && notes.trim().length > 0);
       const fromPositions: Trade[] = positions
         .filter((p) => p.option_group_id == null && p.exit_time != null)
         .map((p) => ({
@@ -124,11 +134,17 @@ export default function DisciplinePage() {
           pnl: p.pnl,
           entry_price: p.entry_price,
           stop_loss_price: p.stop_loss_price,
+          target_price: p.target_price,
           quantity: p.quantity,
           exit_time: p.exit_time!,
-          trend_followed: p.trend_followed,
-          risk_managed: p.risk_managed,
-          entry_interval: p.entry_interval,
+          exit_reason: p.exit_reason,
+          order_type: p.order_type,
+          entry_setup_tag: p.entry_setup_tag,
+          entry_confidence: p.entry_confidence,
+          setup_tag: p.setup_tag,
+          confidence: p.confidence,
+          reviewed: reviewed(p.reviewed_at, p.notes),
+          auto_traded: p.auto_traded,
         }));
       const fromGroups: Trade[] = groups
         .filter((g) => g.exit_time != null)
@@ -138,82 +154,66 @@ export default function DisciplinePage() {
           symbol: g.underlying_symbol,
           pnl: g.pnl,
           entry_price: null,
-          stop_loss_price: null,
+          stop_loss_price: g.spot_stop_loss_price,
+          target_price: g.spot_target_price,
           quantity: g.quantity,
           exit_time: g.exit_time!,
-          trend_followed: g.trend_followed,
-          risk_managed: g.risk_managed,
-          entry_interval: g.entry_interval,
+          exit_reason: g.exit_reason,
+          order_type: g.order_type,
+          entry_setup_tag: g.entry_setup_tag,
+          entry_confidence: g.entry_confidence,
+          setup_tag: g.setup_tag,
+          confidence: g.confidence,
+          reviewed: reviewed(g.reviewed_at, g.notes),
+          auto_traded: g.auto_traded,
         }));
       setTrades([...fromPositions, ...fromGroups]);
-      setAccounts(accs);
       setError(undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  const result = useMemo(() => computeDisciplineScore(trades ?? [], accounts, windowDays), [trades, accounts, windowDays]);
+  const result = useMemo(() => computeDisciplineScore(trades ?? [], [], windowDays), [trades, windowDays]);
 
-  // Same window the score itself used (windowStart..now) - every table/
-  // breakdown below reads this same slice, not the full trade history, so
+  // Same window the score used - every table below reads this slice, so
   // nothing on the page can disagree with the number at the top.
+  // Auto-traded fills are excluded (they're not discretionary decisions).
   const windowed = useMemo(() => {
     if (!trades || !result.windowStart) return [];
-    return trades.filter((t) => new Date(t.exit_time).toLocaleDateString("en-CA") >= result.windowStart!);
+    return trades.filter(
+      (t) => !t.auto_traded && new Date(t.exit_time).toLocaleDateString("en-CA") >= result.windowStart!,
+    );
   }, [trades, result.windowStart]);
 
-  // A new dimension: the SAME 4 components, broken out per segment - the
-  // header/gauge only ever show one blended number, but NSE/MCX/CRYPTO
-  // are traded quite differently, and a segment dragging the overall
-  // score down is exactly the kind of thing worth surfacing.
+  const hasPlan = (t: Trade) => t.order_type === "limit" && t.stop_loss_price != null;
+
+  // The 4 components broken out per segment.
   const bySegment = useMemo(() => {
     const segments = [...new Set(windowed.map((t) => t.segment))] as Segment[];
     return segments
       .map((seg) => {
-        const segTrades = windowed.filter((t) => t.segment === seg);
-        const withPnl = segTrades.filter((t) => t.pnl != null);
-        const known = (flags: (boolean | null)[]) => flags.filter((f): f is boolean => f != null);
-        const trendKnown = known(segTrades.map((t) => t.trend_followed));
-        const riskKnown = known(segTrades.map((t) => t.risk_managed));
-        const acct = accounts.find((a) => a.segment === seg);
-        const tfFlags =
-          acct?.default_interval != null
-            ? segTrades
-                .filter((t) => t.entry_interval != null)
-                .map((t) => t.entry_interval === acct.default_interval || t.entry_interval === acct.default_higher_interval)
-            : [];
+        const ts = windowed.filter((t) => t.segment === seg);
+        const withPnl = ts.filter((t) => t.pnl != null);
+        const mean = (vals: number[]) => (vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null);
         return {
           segment: seg,
-          trades: segTrades.length,
+          trades: ts.length,
           pnl: withPnl.reduce((s, t) => s + (t.pnl ?? 0), 0),
           winRate: withPnl.length > 0 ? withPnl.filter((t) => (t.pnl as number) > 0).length / withPnl.length : null,
-          trendRate: trendKnown.length > 0 ? trendKnown.filter(Boolean).length / trendKnown.length : null,
-          riskRate: riskKnown.length > 0 ? riskKnown.filter(Boolean).length / riskKnown.length : null,
-          timeframeRate: tfFlags.length > 0 ? tfFlags.filter(Boolean).length / tfFlags.length : null,
+          plannedRate: mean(ts.map((t) => (hasPlan(t) ? 1 : 0))),
+          adherenceRate: mean(ts.map((t) => (!hasPlan(t) ? 0 : t.exit_reason === "manual" ? 0.4 : 1))),
+          reviewRate: mean(
+            ts.map(
+              (t) =>
+                0.5 * (t.entry_setup_tag && t.entry_confidence != null ? 1 : 0) +
+                0.5 * (t.reviewed && t.setup_tag && t.confidence != null ? 1 : 0),
+            ),
+          ),
         };
       })
       .sort((a, b) => b.trades - a.trades);
-  }, [windowed, accounts]);
-
-  // Per (segment, day) loss-budget rows - the same aggregation
-  // computeDisciplineScore does internally, recomputed here just for
-  // display (small enough not to bother threading through the shared fn).
-  const lossDays = useMemo(() => {
-    const capBySegment = new Map(accounts.filter((a) => a.max_daily_loss != null).map((a) => [a.segment, a.max_daily_loss as number]));
-    const byKey = new Map<string, { segment: Segment; day: string; pnl: number }>();
-    for (const t of windowed) {
-      if (t.pnl == null || !capBySegment.has(t.segment)) continue;
-      const day = new Date(t.exit_time).toLocaleDateString("en-CA");
-      const key = `${t.segment}|${day}`;
-      const row = byKey.get(key) ?? { segment: t.segment, day, pnl: 0 };
-      row.pnl += t.pnl;
-      byKey.set(key, row);
-    }
-    return [...byKey.values()]
-      .map((r) => ({ ...r, cap: capBySegment.get(r.segment)!, within: r.pnl >= -capBySegment.get(r.segment)! }))
-      .sort((a, b) => b.day.localeCompare(a.day));
-  }, [windowed, accounts]);
+  }, [windowed]);
 
   if (trades === null) {
     return (
@@ -242,38 +242,48 @@ export default function DisciplinePage() {
         </label>
       </div>
       <p className="muted discipline-intro">
-        A read on trading HABITS, not just outcomes - averaged only over dimensions you actually have tracked data for,
-        over the last {windowDays} days you placed at least one trade{result.windowStart && ` (since ${result.windowStart})`}.
+        Scores four habits, not outcomes alone: place a <b>Limit order with a stop</b>, <b>stick to it</b> (let the stop /
+        target / square-off decide, don't bail), <b>declare the setup + confidence before and review after</b>, and{" "}
+        <b>win</b>. Averaged over the last {windowDays} days you placed at least one discretionary trade
+        {result.windowStart && ` (since ${result.windowStart})`}. Auto-trader fills don't count.
       </p>
 
       <section className="discipline-hero">
         <ScoreGauge score={result.score} />
         <div className="discipline-cards">
-          <StatCard label="Trend-followed" rate={result.trend.rate} trades={result.trend.trades} />
-          <StatCard label="Risk-managed" rate={result.riskManaged.rate} trades={result.riskManaged.trades} />
           <StatCard
-            label="Loss-budget"
-            rate={result.lossDiscipline.rate}
-            trades={result.lossDiscipline.trades}
-            detail={result.lossDiscipline.days > 0 ? `${result.lossDiscipline.days} day(s) w/ a cap` : undefined}
+            label="Planned"
+            rate={result.planned.rate}
+            trades={result.planned.trades}
+            weight={DISCIPLINE_WEIGHTS.planned}
+            detail="Limit order + a stop"
           />
           <StatCard
-            label="Outcome"
-            rate={result.outcome.rate}
-            trades={result.outcome.trades}
+            label="Stuck to plan"
+            rate={result.planAdherence.rate}
+            trades={result.planAdherence.trades}
+            weight={DISCIPLINE_WEIGHTS.planAdherence}
+            detail="no plan = 0 · bailed early = 40%"
+          />
+          <StatCard
+            label="Review (before + after)"
+            rate={result.planReview.rate}
+            trades={result.planReview.trades}
+            weight={DISCIPLINE_WEIGHTS.planReview}
             detail={
-              result.outcome.winRate != null
-                ? `${fmtPct(result.outcome.winRate)} win${result.outcome.avgR != null ? ` · ${result.outcome.avgR >= 0 ? "+" : ""}${result.outcome.avgR.toFixed(2)}R avg` : ""}`
+              result.planReview.beforeRate != null
+                ? `${fmtPct(result.planReview.beforeRate)} before · ${fmtPct(result.planReview.afterRate)} after`
                 : undefined
             }
           />
           <StatCard
-            label="Timeframe"
-            rate={result.timeframe.rate}
-            trades={result.timeframe.trades}
+            label="Winning"
+            rate={result.outcome.rate}
+            trades={result.outcome.trades}
+            weight={DISCIPLINE_WEIGHTS.outcome}
             detail={
-              result.timeframe.trades === 0
-                ? "set a default interval on the Money tab"
+              result.outcome.winRate != null
+                ? `${fmtPct(result.outcome.winRate)} win${result.outcome.avgR != null ? ` · ${result.outcome.avgR >= 0 ? "+" : ""}${result.outcome.avgR.toFixed(2)}R avg` : ""}`
                 : undefined
             }
           />
@@ -290,9 +300,9 @@ export default function DisciplinePage() {
                   <tr>
                     <th>Segment</th>
                     <th>Trades</th>
-                    <th>Trend</th>
-                    <th>Risk-managed</th>
-                    <th>Timeframe</th>
+                    <th>Planned</th>
+                    <th>Stuck to plan</th>
+                    <th>Review</th>
                     <th>Win rate</th>
                     <th>PnL</th>
                   </tr>
@@ -302,9 +312,9 @@ export default function DisciplinePage() {
                     <tr key={s.segment}>
                       <td>{s.segment}</td>
                       <td>{s.trades}</td>
-                      <td>{fmtPct(s.trendRate)}</td>
-                      <td>{fmtPct(s.riskRate)}</td>
-                      <td>{fmtPct(s.timeframeRate)}</td>
+                      <td>{fmtPct(s.plannedRate)}</td>
+                      <td>{fmtPct(s.adherenceRate)}</td>
+                      <td>{fmtPct(s.reviewRate)}</td>
                       <td>{fmtPct(s.winRate)}</td>
                       <td className={s.pnl >= 0 ? "pnl-positive" : "pnl-negative"}>{s.pnl.toFixed(2)}</td>
                     </tr>
@@ -315,61 +325,31 @@ export default function DisciplinePage() {
           </section>
         )}
 
-        {lossDays.length > 0 && (
-          <section className="manual-settings-section">
-            <h4>Daily loss-budget compliance</h4>
-            <div className="manual-stats-table-wrap">
-              <table className="manual-stats-table">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Segment</th>
-                    <th>Day P&L</th>
-                    <th>Cap</th>
-                    <th>Result</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lossDays.map((r) => (
-                    <tr key={`${r.segment}|${r.day}`}>
-                      <td>{r.day}</td>
-                      <td>{r.segment}</td>
-                      <td className={r.pnl >= 0 ? "pnl-positive" : "pnl-negative"}>{r.pnl.toFixed(2)}</td>
-                      <td className="muted">-{r.cap.toFixed(2)}</td>
-                      <td>
-                        <span className={`badge ${r.within ? "badge-buy" : "badge-sell"}`}>{r.within ? "within" : "breached"}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
-
         <BreakdownTable
-          title="Discipline — trend"
-          header="Direction"
+          title="By order type"
+          header="Entry"
           rows={breakdown(windowed, (t) =>
-            t.trend_followed == null ? null : t.trend_followed ? "With the trend" : "Against the trend",
+            t.order_type == null ? null : t.order_type === "limit" ? "Limit" : "Market",
           ).sort((a, b) => b.pnl - a.pnl)}
         />
         <BreakdownTable
-          title="Discipline — sizing"
-          header="Sizing"
-          rows={breakdown(windowed, (t) =>
-            t.risk_managed == null ? null : t.risk_managed ? "Risk-managed" : "Discretionary size",
-          ).sort((a, b) => b.pnl - a.pnl)}
-        />
-        <BreakdownTable
-          title="Discipline — timeframe"
-          header="Timeframe"
+          title="Plan adherence"
+          header="Plan"
           rows={breakdown(windowed, (t) => {
-            if (t.entry_interval == null) return null;
-            const acct = accounts.find((a) => a.segment === t.segment);
-            if (acct?.default_interval == null) return null;
-            const onDefault = t.entry_interval === acct.default_interval || t.entry_interval === acct.default_higher_interval;
-            return onDefault ? "On default" : "Off default";
+            if (!hasPlan(t)) return "No plan (market / no stop)";
+            return t.exit_reason === "manual" ? "Bailed manually" : "Let the plan run";
+          }).sort((a, b) => b.pnl - a.pnl)}
+        />
+        <BreakdownTable
+          title="Plan review"
+          header="Journal"
+          rows={breakdown(windowed, (t) => {
+            const before = !!t.entry_setup_tag && t.entry_confidence != null;
+            const after = t.reviewed && !!t.setup_tag && t.confidence != null;
+            if (before && after) return "Before + after";
+            if (before) return "Before only";
+            if (after) return "After only";
+            return "Neither";
           }).sort((a, b) => b.pnl - a.pnl)}
         />
       </div>

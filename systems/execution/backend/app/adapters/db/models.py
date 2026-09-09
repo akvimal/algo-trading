@@ -294,6 +294,12 @@ class OptionPositionGroup(Base):
     # Structured trade journal - see the Position mirror above.
     setup_tag = Column(Text)
     confidence = Column(SmallInteger)
+    # Immutable snapshot of setup_tag/confidence at order time + whether
+    # this fill came from the auto-trader - see the Position mirror below
+    # and infra/postgres/init/02-execution.sql.
+    entry_setup_tag = Column(Text)
+    entry_confidence = Column(SmallInteger)
+    auto_traded = Column(Boolean, nullable=False, default=False)
     # The chart interval this trade was actually placed on (e.g. "5min") -
     # a pure journal label, same "just a caller-resolved value" pattern
     # order_type already uses. NULL for Strategy-driven rows and every
@@ -412,6 +418,15 @@ class Position(Base):
     # PUT /positions/{id}/tags. Feed Trading Performance's by-setup slice.
     setup_tag = Column(Text)
     confidence = Column(SmallInteger)
+    # Immutable snapshot of setup_tag/confidence as declared at order time
+    # (setup_tag/confidence stay editable for the post-trade review). The
+    # Discipline score's "plan review" component wants both a before
+    # (these) and an after. auto_traded: this fill came from the Intraday
+    # SuperTrend auto-trader - the Discipline score skips it. See
+    # infra/postgres/init/02-execution.sql.
+    entry_setup_tag = Column(Text)
+    entry_confidence = Column(SmallInteger)
+    auto_traded = Column(Boolean, nullable=False, default=False)
     # See the OptionPositionGroup mirror above.
     entry_interval = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

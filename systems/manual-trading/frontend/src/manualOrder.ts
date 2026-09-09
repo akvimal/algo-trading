@@ -312,6 +312,9 @@ export type PlaceManualOrderParams = {
   // SuperTrend stop that keeps working even if the browser tab closes.
   // Ignored on the option path (execution has no method SL for options).
   slConfig?: ManualStopLossConfig;
+  // This fill is from the Intraday auto-trader - flagged on the row so
+  // the Discipline score excludes it (it's not a discretionary decision).
+  autoTraded?: boolean;
 };
 
 export type PlaceManualOrderResult = {
@@ -348,6 +351,7 @@ export async function placeManualOrder(p: PlaceManualOrderParams): Promise<Place
       risk_managed: p.riskManaged,
       ...(p.setupTag ? { setup_tag: p.setupTag } : {}),
       ...(p.confidence != null ? { confidence: p.confidence } : {}),
+      ...(p.autoTraded ? { auto_traded: true } : {}),
       ...(p.entryInterval ? { entry_interval: p.entryInterval } : {}),
     });
     return {
@@ -370,6 +374,7 @@ export async function placeManualOrder(p: PlaceManualOrderParams): Promise<Place
     risk_managed: p.riskManaged,
     ...(p.setupTag ? { setup_tag: p.setupTag } : {}),
     ...(p.confidence != null ? { confidence: p.confidence } : {}),
+    ...(p.autoTraded ? { auto_traded: true } : {}),
     ...(p.entryInterval ? { entry_interval: p.entryInterval } : {}),
   });
   if (group.status === "REJECTED") {

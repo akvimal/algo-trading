@@ -1,60 +1,74 @@
 // Discipline score - a single 0-100 read on trading HABITS (not just
-// outcomes), computed entirely client-side from data every consumer
-// already has: closed manual positions/groups (trend_followed,
-// risk_managed, pnl, stop_loss_price, entry_interval) and each segment's
-// own max_daily_loss/default_interval/default_higher_interval. No new
-// backend endpoint - see docs/architecture.md § "Discipline score" /
-// "Timeframe consistency" for the full design + why.
+// outcomes), computed entirely client-side from closed manual
+// positions/groups. No new backend endpoint - see docs/architecture.md
+// § "Discipline score" for the full design.
+//
+// Redesigned 2026-09-09 around the plan: it now scores exactly four
+// things, and drops the earlier trend / timeframe / loss-budget mix.
+//   1. planned          (weight 1) - was this a Limit order with a stop?
+//   2. plan adherence   (weight 2) - given a plan, did you let it run
+//                                    (stop / target / square-off) rather
+//                                    than bailing manually? No plan (a
+//                                    market order, or a limit with no
+//                                    stop) scores 0 here.
+//   3. plan review      (weight 2) - setup + confidence declared BEFORE
+//                                    (entry snapshot) and confirmed AFTER
+//                                    (still set + a note / formal review).
+//   4. outcome          (weight 1) - win rate blended with realized R.
+// Overall = weighted mean of the components that have data.
+//
+// Auto-trader fills (auto_traded) are excluded entirely - they're not a
+// discretionary decision.
 //
 // Deliberately duplicated in shell/index.html (vanilla JS, for the header
-// badge) rather than shared - shell is a separate static app with no
-// build step of its own, same "small enough that copying beats adding a
-// cross-system frontend dependency" precedent as SignalNotifier. Keep the
-// two in sync if the formula changes.
+// badge). Keep the two in sync if the formula changes.
 
-import type { Account, ChartInterval, Segment } from "./api";
+import type { Account, Segment } from "./api";
 
 export type DisciplineTrade = {
   segment: Segment;
   pnl: number | null;
   entry_price: number | null;
   stop_loss_price: number | null;
+  target_price: number | null;
   quantity: number | null;
   exit_time: string;
-  trend_followed: boolean | null;
-  risk_managed: boolean | null;
-  // The chart interval this trade was placed on - null for a
-  // Strategy-driven trade or one placed before this field existed.
-  entry_interval: ChartInterval | null;
+  exit_reason: string | null;
+  order_type: "market" | "limit" | null;
+  // Immutable snapshot of setup_tag/confidence at order time.
+  entry_setup_tag: string | null;
+  entry_confidence: number | null;
+  // Current (editable) journal + whether the trade was reviewed after
+  // close (reviewed_at set, or a free-text note left).
+  setup_tag: string | null;
+  confidence: number | null;
+  reviewed: boolean;
+  auto_traded: boolean;
 };
 
 export type DisciplineComponent = {
-  // 0-1. null = not enough tracked data to judge this dimension at all
-  // (excluded from the overall average rather than counted as 0 - an
-  // untracked dimension isn't a discipline FAILURE, it's just unknown).
+  // 0-1. null = no data at all for this dimension in the window (excluded
+  // from the overall mean rather than counted as 0).
   rate: number | null;
-  trades: number; // how many trades this rate is based on
+  trades: number;
 };
+
+// Component weights - plan adherence and plan review are the habits most
+// worth reinforcing, so they count double.
+export const DISCIPLINE_WEIGHTS = { planned: 1, planAdherence: 2, planReview: 2, outcome: 1 } as const;
 
 export type DisciplineScore = {
   score: number | null; // 0-100, null if too few trades in the window
   windowDays: number;
   windowStart: string | null; // YYYY-MM-DD, the earliest day counted
-  tradeCount: number; // trades actually inside the window
-  trend: DisciplineComponent;
-  riskManaged: DisciplineComponent;
-  lossDiscipline: DisciplineComponent & { days: number };
+  tradeCount: number; // discretionary trades inside the window
+  planned: DisciplineComponent;
+  planAdherence: DisciplineComponent;
+  planReview: DisciplineComponent & { beforeRate: number | null; afterRate: number | null };
   outcome: DisciplineComponent & { winRate: number | null; avgR: number | null };
-  // Rate of trades placed on the segment's own declared default_interval
-  // OR its paired default_higher_interval (trading either leg of your own
-  // declared pair counts as consistent - only an undeclared third
-  // timeframe counts as drift). null (excluded) whenever the segment has
-  // no default configured, or the trade predates entry_interval.
-  timeframe: DisciplineComponent;
 };
 
-// Minimum trades before a score is considered meaningful - a 1-trade
-// "100%" is noise, not a habit.
+// Minimum trades before a score is considered meaningful.
 const MIN_TRADES_FOR_SCORE = 5;
 
 function dayKey(iso: string): string {
@@ -63,9 +77,8 @@ function dayKey(iso: string): string {
 
 // Walk backward from the most recent trade, collecting whole calendar
 // days that actually had a trade, until `days` distinct such days are
-// found (or trades run out) - per the user's own framing: a rolling
-// window measured in days-with-activity, not calendar days, so a quiet
-// stretch (weekend, a week off) doesn't dilute or stall the window.
+// found - a rolling window measured in days-with-activity, so a quiet
+// stretch doesn't dilute or stall it.
 function windowTrades<T extends { exit_time: string }>(trades: T[], days: number): { trades: T[]; windowStart: string | null } {
   if (trades.length === 0) return { trades: [], windowStart: null };
   const sorted = [...trades].sort((a, b) => b.exit_time.localeCompare(a.exit_time));
@@ -83,16 +96,13 @@ function windowTrades<T extends { exit_time: string }>(trades: T[], days: number
   return { trades: sorted.filter((t) => cutoff.has(dayKey(t.exit_time))), windowStart: activeDays[activeDays.length - 1] ?? null };
 }
 
-function rateOf(flags: (boolean | null)[]): DisciplineComponent {
-  const known = flags.filter((f): f is boolean => f != null);
-  if (known.length === 0) return { rate: null, trades: 0 };
-  return { rate: known.filter(Boolean).length / known.length, trades: known.length };
+function meanOf(values: number[]): DisciplineComponent {
+  if (values.length === 0) return { rate: null, trades: 0 };
+  return { rate: values.reduce((s, v) => s + v, 0) / values.length, trades: values.length };
 }
 
-// Realized R-multiple for one trade - same calc ManualStatsPage's own
-// `breakdown()` uses (pnl / (|entry-stop| * qty)). Only meaningful for
-// spot/future (options carry no stop_loss_price here - see ClosedTrade's
-// own comment in ManualStatsPage.tsx).
+// Realized R-multiple for one trade (pnl / (|entry-stop| * qty)) - only
+// meaningful for spot/future (options carry no stop_loss_price here).
 function realizedR(t: DisciplineTrade): number | null {
   if (t.pnl == null || t.entry_price == null || t.stop_loss_price == null || t.quantity == null) return null;
   if (t.entry_price === t.stop_loss_price) return null;
@@ -100,41 +110,56 @@ function realizedR(t: DisciplineTrade): number | null {
   return risk > 0 ? t.pnl / risk : null;
 }
 
-export function computeDisciplineScore(trades: DisciplineTrade[], accounts: Account[], days: number): DisciplineScore {
+// A "plan" = a Limit entry protected by a stop. A market order, or a
+// limit with no stop, is not a plan.
+function hasPlan(t: DisciplineTrade): boolean {
+  return t.order_type === "limit" && t.stop_loss_price != null;
+}
+
+// Declared the setup + confidence up front (the immutable entry snapshot).
+function declaredBefore(t: DisciplineTrade): boolean {
+  return t.entry_setup_tag != null && t.entry_setup_tag !== "" && t.entry_confidence != null;
+}
+
+// Reviewed it afterwards: the (editable) journal is filled in AND the
+// trade was actually revisited (a note left, or the formal review done).
+function reviewedAfter(t: DisciplineTrade): boolean {
+  return t.reviewed && t.setup_tag != null && t.setup_tag !== "" && t.confidence != null;
+}
+
+export function computeDisciplineScore(
+  allTrades: DisciplineTrade[],
+  _accounts: Account[],
+  days: number,
+): DisciplineScore {
+  const trades = allTrades.filter((t) => !t.auto_traded);
   const { trades: windowed, windowStart } = windowTrades(trades, days);
 
-  const trend = rateOf(windowed.map((t) => t.trend_followed));
-  const riskManaged = rateOf(windowed.map((t) => t.risk_managed));
+  // 1. Planned: rate of Limit-with-a-stop entries.
+  const planned = meanOf(windowed.map((t) => (hasPlan(t) ? 1 : 0)));
 
-  // Loss-budget discipline: for each segment with a configured
-  // max_daily_loss, group this window's trades by (segment, day) and
-  // check whether that day's realized pnl stayed within the cap. Rate =
-  // days that held / days with a cap AND at least one trade.
-  const capBySegment = new Map(accounts.filter((a) => a.max_daily_loss != null).map((a) => [a.segment, a.max_daily_loss as number]));
-  const dailyPnl = new Map<string, number>(); // `${segment}|${day}` -> pnl
-  for (const t of windowed) {
-    if (t.pnl == null || !capBySegment.has(t.segment)) continue;
-    const key = `${t.segment}|${dayKey(t.exit_time)}`;
-    dailyPnl.set(key, (dailyPnl.get(key) ?? 0) + t.pnl);
-  }
-  let daysWithin = 0;
-  for (const [key, pnl] of dailyPnl) {
-    const segment = key.split("|")[0] as Segment;
-    const cap = capBySegment.get(segment)!;
-    if (pnl >= -cap) daysWithin += 1;
-  }
-  const lossDiscipline = {
-    rate: dailyPnl.size > 0 ? daysWithin / dailyPnl.size : null,
-    trades: windowed.filter((t) => capBySegment.has(t.segment) && t.pnl != null).length,
-    days: dailyPnl.size,
+  // 2. Plan adherence: no plan -> 0; a plan you bailed on (closed manually
+  //    before the stop/target could) -> 0.4; a plan you let run -> 1.
+  const planAdherence = meanOf(
+    windowed.map((t) => {
+      if (!hasPlan(t)) return 0;
+      return t.exit_reason === "manual" ? 0.4 : 1;
+    }),
+  );
+
+  // 3. Plan review: half for a before, half for an after.
+  const beforeFlags: number[] = windowed.map((t) => (declaredBefore(t) ? 1 : 0));
+  const afterFlags: number[] = windowed.map((t) => (reviewedAfter(t) ? 1 : 0));
+  const beforeRate = beforeFlags.length ? beforeFlags.reduce((s, v) => s + v, 0) / beforeFlags.length : null;
+  const afterRate = afterFlags.length ? afterFlags.reduce((s, v) => s + v, 0) / afterFlags.length : null;
+  const planReview = {
+    ...meanOf(windowed.map((t) => 0.5 * (declaredBefore(t) ? 1 : 0) + 0.5 * (reviewedAfter(t) ? 1 : 0))),
+    beforeRate,
+    afterRate,
   };
 
-  // Outcome: win rate (any closed trade with a pnl), blended with realized
-  // R for the subset that has a real stop-loss distance to measure it
-  // against. avgR is clamped into 0..1 via /2 (an average of "2R" per
-  // trade maxes this half out - a deliberately loose bar, not a
-  // universal risk-management standard) so it combines cleanly with the
-  // 0..1 win rate; avgR itself (unclamped) is reported separately too.
+  // 4. Outcome: win rate blended with realized R (avgR/2 clamped to
+  //    0..1 - "2R average" maxes that half out).
   const withPnl = windowed.filter((t) => t.pnl != null);
   const winRate = withPnl.length > 0 ? withPnl.filter((t) => (t.pnl as number) > 0).length / withPnl.length : null;
   const rValues = windowed.map(realizedR).filter((r): r is number => r != null);
@@ -143,36 +168,22 @@ export function computeDisciplineScore(trades: DisciplineTrade[], accounts: Acco
   if (winRate != null && avgR != null) {
     outcomeRate = 0.5 * winRate + 0.5 * Math.max(0, Math.min(1, avgR / 2));
   } else if (winRate != null) {
-    outcomeRate = winRate; // no stop-loss data at all in this window (e.g. all options)
+    outcomeRate = winRate;
   }
   const outcome = { rate: outcomeRate, trades: withPnl.length, winRate, avgR };
 
-  // Timeframe consistency: did this trade land on the segment's own
-  // declared default_interval, or its paired default_higher_interval?
-  // Both count as "on plan" - the whole point of suggesting a pair is
-  // that trading either leg of it is fine, only an undeclared third
-  // interval counts as drift. A segment with no default configured
-  // contributes nothing either way (not a failure, just untracked).
-  const defaultsBySegment = new Map(
-    accounts.filter((a) => a.default_interval != null).map((a) => [a.segment, a]),
-  );
-  const timeframeFlags = windowed
-    .filter((t) => t.entry_interval != null && defaultsBySegment.has(t.segment))
-    .map((t) => {
-      const acct = defaultsBySegment.get(t.segment)!;
-      return t.entry_interval === acct.default_interval || t.entry_interval === acct.default_higher_interval;
-    });
-  const timeframe = rateOf(timeframeFlags);
-
-  const components = [trend.rate, riskManaged.rate, lossDiscipline.rate, outcome.rate, timeframe.rate].filter(
-    (r): r is number => r != null,
-  );
+  const parts: { rate: number; w: number }[] = [];
+  if (planned.rate != null) parts.push({ rate: planned.rate, w: DISCIPLINE_WEIGHTS.planned });
+  if (planAdherence.rate != null) parts.push({ rate: planAdherence.rate, w: DISCIPLINE_WEIGHTS.planAdherence });
+  if (planReview.rate != null) parts.push({ rate: planReview.rate, w: DISCIPLINE_WEIGHTS.planReview });
+  if (outcome.rate != null) parts.push({ rate: outcome.rate, w: DISCIPLINE_WEIGHTS.outcome });
+  const totalW = parts.reduce((s, p) => s + p.w, 0);
   const score =
-    windowed.length >= MIN_TRADES_FOR_SCORE && components.length > 0
-      ? Math.round((components.reduce((s, r) => s + r, 0) / components.length) * 100)
+    windowed.length >= MIN_TRADES_FOR_SCORE && totalW > 0
+      ? Math.round((parts.reduce((s, p) => s + p.rate * p.w, 0) / totalW) * 100)
       : null;
 
-  return { score, windowDays: days, windowStart, tradeCount: windowed.length, trend, riskManaged, lossDiscipline, outcome, timeframe };
+  return { score, windowDays: days, windowStart, tradeCount: windowed.length, planned, planAdherence, planReview, outcome };
 }
 
 // Colour band for a score - shared by the header badge and the gauge.

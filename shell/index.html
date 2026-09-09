@@ -650,30 +650,30 @@
       return { trades: sorted.filter((t) => cutoff.has(dayKeyOf(t.exit_time))), windowStart: activeDays[activeDays.length - 1] ?? null };
     }
 
-    function disciplineRateOf(flags) {
-      const known = flags.filter((f) => f != null);
-      if (known.length === 0) return null;
-      return known.filter(Boolean).length / known.length;
-    }
+    // Redesigned 2026-09-09 around the plan - keep in sync with
+    // manual-trading/frontend/src/discipline.ts. Four weighted components:
+    //   planned (1x)      - Limit order with a stop
+    //   adherence (2x)    - given a plan, let it run (not a manual bail)
+    //   review (2x)       - setup+confidence declared before AND after
+    //   outcome (1x)      - win rate blended with realized R
+    // Auto-trader fills (auto_traded) are excluded.
+    function computeDisciplineScoreJs(trades, days) {
+      const nonAuto = trades.filter((t) => !t.auto_traded);
+      const { trades: windowed } = disciplineWindowTrades(nonAuto, days);
+      if (windowed.length < DISCIPLINE_MIN_TRADES) return null;
 
-    function computeDisciplineScoreJs(trades, accounts, days) {
-      const { trades: windowed } = disciplineWindowTrades(trades, days);
-      const trendRate = disciplineRateOf(windowed.map((t) => t.trend_followed));
-      const riskRate = disciplineRateOf(windowed.map((t) => t.risk_managed));
+      const mean = (vals) => (vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null);
+      const hasPlan = (t) => t.order_type === "limit" && t.stop_loss_price != null;
 
-      const capBySegment = new Map(accounts.filter((a) => a.max_daily_loss != null).map((a) => [a.segment, a.max_daily_loss]));
-      const dailyPnl = new Map();
-      for (const t of windowed) {
-        if (t.pnl == null || !capBySegment.has(t.segment)) continue;
-        const key = `${t.segment}|${dayKeyOf(t.exit_time)}`;
-        dailyPnl.set(key, (dailyPnl.get(key) ?? 0) + t.pnl);
-      }
-      let daysWithin = 0;
-      for (const [key, pnl] of dailyPnl) {
-        const cap = capBySegment.get(key.split("|")[0]);
-        if (pnl >= -cap) daysWithin += 1;
-      }
-      const lossRate = dailyPnl.size > 0 ? daysWithin / dailyPnl.size : null;
+      const plannedRate = mean(windowed.map((t) => (hasPlan(t) ? 1 : 0)));
+      const adherenceRate = mean(windowed.map((t) => (!hasPlan(t) ? 0 : t.exit_reason === "manual" ? 0.4 : 1)));
+      const reviewRate = mean(
+        windowed.map(
+          (t) =>
+            0.5 * (t.entry_setup_tag && t.entry_confidence != null ? 1 : 0) +
+            0.5 * (t.reviewed && t.setup_tag && t.confidence != null ? 1 : 0),
+        ),
+      );
 
       const withPnl = windowed.filter((t) => t.pnl != null);
       const winRate = withPnl.length > 0 ? withPnl.filter((t) => t.pnl > 0).length / withPnl.length : null;
@@ -690,23 +690,14 @@
       if (winRate != null && avgR != null) outcomeRate = 0.5 * winRate + 0.5 * Math.max(0, Math.min(1, avgR / 2));
       else if (winRate != null) outcomeRate = winRate;
 
-      // Timeframe consistency - see discipline.ts's identical comment
-      // (manual-trading frontend) for the full reasoning. Trading either
-      // leg of a segment's declared default_interval/default_higher_interval
-      // pair counts as "on plan"; a segment with no default configured
-      // contributes nothing either way.
-      const defaultsBySegment = new Map(accounts.filter((a) => a.default_interval != null).map((a) => [a.segment, a]));
-      const tfFlags = windowed
-        .filter((t) => t.entry_interval != null && defaultsBySegment.has(t.segment))
-        .map((t) => {
-          const acct = defaultsBySegment.get(t.segment);
-          return t.entry_interval === acct.default_interval || t.entry_interval === acct.default_higher_interval;
-        });
-      const timeframeRate = disciplineRateOf(tfFlags);
-
-      const components = [trendRate, riskRate, lossRate, outcomeRate, timeframeRate].filter((r) => r != null);
-      if (windowed.length < DISCIPLINE_MIN_TRADES || components.length === 0) return null;
-      return Math.round((components.reduce((s, r) => s + r, 0) / components.length) * 100);
+      const parts = [];
+      if (plannedRate != null) parts.push([plannedRate, 1]);
+      if (adherenceRate != null) parts.push([adherenceRate, 2]);
+      if (reviewRate != null) parts.push([reviewRate, 2]);
+      if (outcomeRate != null) parts.push([outcomeRate, 1]);
+      const totalW = parts.reduce((s, p) => s + p[1], 0);
+      if (totalW === 0) return null;
+      return Math.round((parts.reduce((s, p) => s + p[0] * p[1], 0) / totalW) * 100);
     }
 
     function disciplineColorOf(score) {
@@ -725,42 +716,50 @@
       try {
         const base = `http://${location.hostname}:${EXECUTION_BACKEND_PORT + PORT_OFFSET}`;
         const headers = { Authorization: `Bearer ${token}` };
-        const [posRes, groupRes, accRes] = await Promise.all([
+        const [posRes, groupRes] = await Promise.all([
           fetch(`${base}/positions?status=CLOSED&manual_only=true&limit=1000`, { headers }),
           fetch(`${base}/option-groups?status=CLOSED&manual_only=true&limit=1000`, { headers }),
-          fetch(`${base}/accounts`, { headers }),
         ]);
-        if (!posRes.ok || !groupRes.ok || !accRes.ok) throw new Error("discipline fetch failed");
-        const [positions, groups, accounts] = await Promise.all([posRes.json(), groupRes.json(), accRes.json()]);
+        if (!posRes.ok || !groupRes.ok) throw new Error("discipline fetch failed");
+        const [positions, groups] = await Promise.all([posRes.json(), groupRes.json()]);
+        const reviewed = (r, n) => r != null || (n != null && String(n).trim().length > 0);
         const trades = positions
           .filter((p) => p.option_group_id == null && p.exit_time != null)
           .map((p) => ({
-            segment: p.segment,
             pnl: p.pnl,
             entry_price: p.entry_price,
             stop_loss_price: p.stop_loss_price,
             quantity: p.quantity,
             exit_time: p.exit_time,
-            trend_followed: p.trend_followed,
-            risk_managed: p.risk_managed,
-            entry_interval: p.entry_interval,
+            exit_reason: p.exit_reason,
+            order_type: p.order_type,
+            entry_setup_tag: p.entry_setup_tag,
+            entry_confidence: p.entry_confidence,
+            setup_tag: p.setup_tag,
+            confidence: p.confidence,
+            reviewed: reviewed(p.reviewed_at, p.notes),
+            auto_traded: p.auto_traded,
           }))
           .concat(
             groups
               .filter((g) => g.exit_time != null)
               .map((g) => ({
-                segment: g.segment,
                 pnl: g.pnl,
                 entry_price: null,
-                stop_loss_price: null,
+                stop_loss_price: g.spot_stop_loss_price,
                 quantity: g.quantity,
                 exit_time: g.exit_time,
-                trend_followed: g.trend_followed,
-                risk_managed: g.risk_managed,
-                entry_interval: g.entry_interval,
+                exit_reason: g.exit_reason,
+                order_type: g.order_type,
+                entry_setup_tag: g.entry_setup_tag,
+                entry_confidence: g.entry_confidence,
+                setup_tag: g.setup_tag,
+                confidence: g.confidence,
+                reviewed: reviewed(g.reviewed_at, g.notes),
+                auto_traded: g.auto_traded,
               })),
           );
-        const score = computeDisciplineScoreJs(trades, accounts, DISCIPLINE_WINDOW_DAYS);
+        const score = computeDisciplineScoreJs(trades, DISCIPLINE_WINDOW_DAYS);
         disciplineBadgeEl.textContent = `Discipline ${score ?? "—"}`;
         disciplineBadgeEl.className = `discipline-badge is-${disciplineColorOf(score)}`;
         disciplineBadgeEl.hidden = false;

@@ -527,6 +527,11 @@ class ManualPositionCreate(BaseModel):
     # editable later via PUT /positions/{id}/tags. Feed Trading Performance.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # This fill came from the Intraday SuperTrend auto-trader (AutoTradePanel),
+    # not a discretionary decision - open_manual_position records it on the
+    # row so the Discipline score can exclude it. None/False from every
+    # other caller.
+    auto_traded: bool = False
     # The Live Chart's own chart interval at the moment this was placed -
     # a pure journal label like order_type above, never read by any
     # sizing/order logic. Feeds the Discipline score's "Timeframe
@@ -658,6 +663,8 @@ class ManualOptionPositionCreate(BaseModel):
     # Structured trade journal set at order time - see ManualPositionCreate.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # See ManualPositionCreate.auto_traded's own comment.
+    auto_traded: bool = False
     # See ManualPositionCreate.entry_interval's own comment.
     entry_interval: Optional[ChartInterval] = None
 

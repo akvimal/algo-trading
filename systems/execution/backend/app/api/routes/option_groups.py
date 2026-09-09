@@ -135,6 +135,11 @@ def _group_to_out(
         # Structured trade journal (PUT /option-groups/{id}/tags).
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
+        # Immutable entry snapshot + auto-trade flag - see positions.py's
+        # _position_to_out.
+        "entry_setup_tag": row.entry_setup_tag,
+        "entry_confidence": row.entry_confidence,
+        "auto_traded": bool(row.auto_traded),
         # Chart interval this trade was placed on - see positions.py's
         # identical field on _position_to_out.
         "entry_interval": row.entry_interval,
@@ -329,6 +334,7 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         payload.setup_tag,
         payload.confidence,
         payload.entry_interval,
+        payload.auto_traded,
     )
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])

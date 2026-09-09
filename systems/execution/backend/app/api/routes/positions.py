@@ -124,6 +124,12 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         # type + 1-5 confidence, for Trading Performance's by-setup slice.
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
+        # Immutable entry snapshot of the two above + whether the fill was
+        # auto-traded - the Discipline score's "plan review" component
+        # (before vs after) and its auto-trade exclusion.
+        "entry_setup_tag": row.entry_setup_tag,
+        "entry_confidence": row.entry_confidence,
+        "auto_traded": bool(row.auto_traded),
         # Chart interval this trade was placed on - null for every
         # Strategy-driven position and every pre-migration trade. Feeds
         # the Discipline score's "Timeframe consistency" component.
@@ -333,6 +339,7 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag,
         confidence=payload.confidence,
+        auto_traded=payload.auto_traded,
         entry_interval=payload.entry_interval,
     )
     return _position_to_out(row)

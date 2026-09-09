@@ -1765,6 +1765,14 @@ button.btn-exit {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+.discipline-card-weight {
+  margin-left: 0.35rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 0.62rem;
+  color: var(--accent);
+}
 .discipline-card-value {
   font-size: 1.15rem;
   font-weight: 700;

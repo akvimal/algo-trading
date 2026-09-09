@@ -1432,6 +1432,15 @@ export type ManualPosition = {
   // Feed Trading Performance's "By setup" / discipline breakdowns.
   setup_tag: string | null;
   confidence: number | null;
+  // Immutable snapshot of setup_tag/confidence AS DECLARED at order time
+  // (the pair above stays editable for the post-trade review). The
+  // Discipline score's "plan review" component wants both a before
+  // (these) and an after. null for Strategy-driven / pre-migration rows.
+  entry_setup_tag: string | null;
+  entry_confidence: number | null;
+  // This fill came from the Intraday SuperTrend auto-trader, not a
+  // discretionary decision - the Discipline score skips it.
+  auto_traded: boolean;
   // The Live Chart's own chart interval at the moment this was placed -
   // null for Strategy-driven positions and every pre-migration trade.
   // Feeds the Discipline score's "Timeframe consistency" component
@@ -1521,6 +1530,11 @@ export type ManualOptionGroup = {
   // Structured trade journal - same meaning as ManualPosition's copies.
   setup_tag: string | null;
   confidence: number | null;
+  // Immutable entry snapshot + auto-trade flag - same meaning as
+  // ManualPosition's copies above.
+  entry_setup_tag: string | null;
+  entry_confidence: number | null;
+  auto_traded: boolean;
   // Same meaning as ManualPosition.entry_interval above.
   entry_interval: ChartInterval | null;
   legs: ManualOptionLeg[];
@@ -1814,6 +1828,9 @@ export async function createManualPosition(
     // Structured trade journal set at order time (SETUP_TAGS + 1-5).
     setup_tag?: string;
     confidence?: number;
+    // This fill is from the Intraday auto-trader - excluded from the
+    // Discipline score. Omitted (falsy) for every discretionary order.
+    auto_traded?: boolean;
     // The Live Chart's own chart interval at the moment of placing -
     // feeds the Discipline score's "Timeframe consistency" component.
     entry_interval?: ChartInterval;
@@ -2056,6 +2073,7 @@ export async function createManualOptionGroup(payload: {
   setup_tag?: string;
   confidence?: number;
   // See createManualPosition's own comment - identical meaning here.
+  auto_traded?: boolean;
   entry_interval?: ChartInterval;
   square_off_time?: string;
 }): Promise<ManualOptionGroup> {

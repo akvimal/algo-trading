@@ -3,21 +3,25 @@ import { useEffect, useRef, useState } from "react";
 import {
   type Account,
   type ChartInterval,
+  type ManualOptionGroup,
   type ManualPosition,
+  type OptionStrikeMoneyness,
   type ResolvedUnderlying,
   type Segment,
   fetchCandleHistory,
   fetchExecPositions,
+  fetchOptionGroups,
 } from "./api";
 import {
   type AutoTradeConfig,
+  type AutoTradeInstrument,
   intervalMinutes,
   loadAutoTradeState,
   lookbackDaysFor,
   saveAutoTradeState,
   symbolKey,
 } from "./autoTrade";
-import { fetchUnderlyingLtp, fmt, placeManualOrder, resolveUnderlyingCached } from "./manualOrder";
+import { CRYPTO_OPTION_SYMBOLS, fetchUnderlyingLtp, fmt, placeManualOrder, resolveUnderlyingCached } from "./manualOrder";
 import { computeSupertrend, detectSupertrendFlips, type SupertrendFlip } from "./supertrend";
 
 // The Intraday auto-trader panel + its watcher loop. Sits above
@@ -27,12 +31,16 @@ import { computeSupertrend, detectSupertrendFlips, type SupertrendFlip } from ".
 //
 // Watcher: every POLL_MS, fetch completed `interval` bars for the chart's
 // symbol, run the shared SuperTrend (supertrend.ts - literally the same
-// function the chart draws), and on a NEW flip (one past the seeded
-// `lastActedBarTs`) place a MARKET future order in the flip's direction
-// with a server-trailed SuperTrend stop. Stop-and-reverse comes for free:
-// execution's manual-future path always runs counter_signal_policy=
-// 'close_and_flip', so an opposite open position is closed atomically
-// when the new order lands.
+// function the chart draws), and on arm (the current direction) or a NEW
+// flip (one past the seeded `lastActedBarTs`) place a MARKET order in that
+// direction:
+//   - future: a future with a server-trailed SuperTrend stop
+//   - option: a naked call (up) / naked put (down) at `moneyness` with a
+//     flat spot stop at the SuperTrend line
+// Stop-and-reverse comes for free either way: both execution manual paths
+// (open_manual_position / open_manual_option_group) run
+// counter_signal_policy='close_and_flip', so an opposite open
+// position/group is closed atomically when the new order lands.
 //
 // This component is rendered by LiveChartPage, which does NOT remount on a
 // symbol-tab switch - but auto-trade is deliberately disarmed on a switch
@@ -48,6 +56,7 @@ const POLL_MS = 15_000;
 const SETTLE_BUFFER_MS = 10_000;
 
 const INTERVAL_OPTIONS: ChartInterval[] = ["1min", "3min", "5min", "15min", "30min", "60min"];
+const MONEYNESS_OPTIONS: OptionStrikeMoneyness[] = ["ITM2", "ITM1", "ATM", "OTM1", "OTM2"];
 
 function ymdLocal(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -96,6 +105,18 @@ export default function AutoTradePanel({
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<WatchStatus | null>(null);
 
+  const sym = symbol.trim().toUpperCase();
+  // Delta only lists options for BTCUSD/ETHUSD; every NSE/MCX symbol here
+  // has an option chain. Mirrors ChartTradePanel's own `optionEligible`.
+  const optionEligible = segment !== "CRYPTO" || CRYPTO_OPTION_SYMBOLS.includes(sym);
+  // Force back to Future when the current symbol has no option chain.
+  useEffect(() => {
+    if (!optionEligible && config.instrument === "option") {
+      onConfigChange({ ...config, instrument: "future" });
+    }
+  }, [optionEligible, config, onConfigChange]);
+  const instrument: AutoTradeInstrument = optionEligible ? config.instrument : "future";
+
   // Draft config strings so a half-typed number doesn't fight the parse.
   const [draft, setDraft] = useState(() => ({
     period: String(config.period),
@@ -128,7 +149,6 @@ export default function AutoTradePanel({
     const key = symbolKey(segment, symbol);
     const iv = config.interval;
     const ivMs = intervalMinutes(iv) * 60_000;
-    const sym = symbol.trim().toUpperCase();
     let cancelled = false;
 
     async function completedBars(): Promise<Bar[] | null> {
@@ -160,8 +180,54 @@ export default function AutoTradePanel({
         .filter((b) => now - b.timestamp >= ivMs + SETTLE_BUFFER_MS);
     }
 
+    // The effective instrument for THIS symbol - CRYPTO options only exist
+    // for BTCUSD/ETHUSD (matches ChartTradePanel's optionEligible).
+    const instr: AutoTradeInstrument =
+      segment !== "CRYPTO" || CRYPTO_OPTION_SYMBOLS.includes(sym) ? config.instrument : "future";
+
     async function executeFlip(flip: SupertrendFlip): Promise<{ rejected: boolean; skipped: boolean; reason: string | null }> {
       const desired: "BUY" | "SELL" = flip.direction === "up" ? "BUY" : "SELL";
+      const price = await fetchUnderlyingLtp(segment, sym);
+
+      if (instr === "option") {
+        // Naked call (up / BUY) or naked put (down / SELL). An open group
+        // in the OPPOSITE direction is closed by execution itself
+        // (counter_signal_policy='close_and_flip'); one in the SAME
+        // direction would pyramid (add_position), so skip that.
+        let groups: ManualOptionGroup[] = [];
+        try {
+          groups = await fetchOptionGroups({ segment, status: "OPEN", manualOnly: true });
+        } catch {
+          groups = [];
+        }
+        const mine = groups.filter((g) => g.underlying_symbol.toUpperCase() === sym);
+        if (mine.some((g) => g.action === desired)) {
+          return { rejected: false, skipped: true, reason: `Already holding a naked ${desired === "BUY" ? "call" : "put"} — no action.` };
+        }
+        const result = await placeManualOrder({
+          segment,
+          symbol: sym,
+          action: desired,
+          strategy: "naked",
+          moneyness: config.moneyness,
+          orderType: "market",
+          entryPrice: price,
+          quantity: config.lots,
+          // Flat spot stop at the SuperTrend line - execution has no
+          // method/trailing SL for options, so it doesn't trail (the
+          // opposite flip is the real exit anyway).
+          stop: flip.line,
+          target: null,
+          trendFollowed: false,
+          riskManaged: false,
+          setupTag: null,
+          confidence: null,
+          entryInterval: iv,
+        });
+        return { rejected: result.rejected, skipped: false, reason: result.reason };
+      }
+
+      // --- future ---
       let positions: ManualPosition[] = [];
       try {
         positions = await fetchExecPositions({ segment, status: "OPEN", manualOnly: true });
@@ -174,9 +240,8 @@ export default function AutoTradePanel({
         (p) => p.option_group_id == null && p.symbol.toUpperCase().startsWith(sym),
       );
       if (mine.some((p) => p.action === desired)) {
-        return { rejected: false, skipped: true, reason: `Already ${desired === "BUY" ? "Long" : "Short"} - no action.` };
+        return { rejected: false, skipped: true, reason: `Already ${desired === "BUY" ? "Long" : "Short"} — no action.` };
       }
-      const price = await fetchUnderlyingLtp(segment, sym);
       const result = await placeManualOrder({
         segment,
         symbol: sym,
@@ -275,11 +340,20 @@ export default function AutoTradePanel({
       }
 
       const { flip, seed } = act;
+      // "Long"/"Short" for a future, "naked call"/"naked put" for an option.
+      const posLabel =
+        instr === "option"
+          ? flip.direction === "up"
+            ? "a naked call"
+            : "a naked put"
+          : flip.direction === "up"
+            ? "Long"
+            : "Short";
       firingRef.current = true;
       setStatus({
         phase: "firing",
         message: seed
-          ? `Arming — entering ${flip.direction === "up" ? "Long" : "Short"} on the current ${iv} SuperTrend @ ${fmt(flip.close)}…`
+          ? `Arming — entering ${posLabel} on the current ${iv} SuperTrend @ ${fmt(flip.close)}…`
           : `SuperTrend flipped ${flip.direction === "up" ? "up → BUY" : "down → SELL"} @ ${fmt(flip.close)} — placing…`,
         dir: flip.direction,
         line: flip.line,
@@ -302,7 +376,11 @@ export default function AutoTradePanel({
         } else {
           setStatus({
             phase: "watching",
-            message: `In ${flip.direction === "up" ? "Long" : "Short"} ${config.lots} lot(s)${seed ? " (armed at current trend)" : ` from the ${iv} flip`} @ ${fmt(flip.close)}. SL trails SuperTrend(${config.period}, ${config.multiplier}).`,
+            message: `In ${posLabel} · ${config.lots} lot(s)${seed ? " (armed at current trend)" : ` from the ${iv} flip`} @ ${fmt(flip.close)}. ${
+              instr === "option"
+                ? `Spot SL ${fmt(flip.line)} (flat); exits on the opposite flip.`
+                : `SL trails SuperTrend(${config.period}, ${config.multiplier}).`
+            }`,
             dir: flip.direction,
             line: flip.line,
           });
@@ -328,11 +406,13 @@ export default function AutoTradePanel({
   return (
     <div className={`auto-trade-panel ${on ? "armed" : ""} ${dirClass}`}>
       <div className="auto-trade-head">
-        <label className="auto-trade-toggle" title="Enters the current SuperTrend direction on arming, then places a market future order on every flip after — server-trailed SuperTrend stop, stop-and-reverse. Futures only. Disarms if you switch symbols.">
+        <label className="auto-trade-toggle" title="Enters the current SuperTrend direction on arming, then places a market order on every flip after — stop-and-reverse. Future (server-trailed SuperTrend stop) or naked option (flat spot stop). Disarms if you switch symbols.">
           <input type="checkbox" checked={on} onChange={onToggle} />
           <span>Auto-trade</span>
           <span className="auto-trade-sub">
-            {symbol} · {config.interval} ST({config.period}, {config.multiplier}) · {config.lots} lot{config.lots === 1 ? "" : "s"}
+            {sym} · {config.interval} ST({config.period}, {config.multiplier}) ·{" "}
+            {instrument === "option" ? `naked ${config.moneyness}` : "future"} · {config.lots} lot
+            {config.lots === 1 ? "" : "s"}
           </span>
         </label>
         <button type="button" className="auto-trade-cfg-btn" onClick={() => setOpen((o) => !o)}>
@@ -342,6 +422,33 @@ export default function AutoTradePanel({
 
       {open && (
         <div className="auto-trade-config">
+          <label className="auto-trade-field">
+            <span>Instrument</span>
+            <select
+              value={instrument}
+              onChange={(e) => onConfigChange({ ...config, instrument: e.target.value as AutoTradeInstrument })}
+            >
+              <option value="future">Future</option>
+              <option value="option" disabled={!optionEligible}>
+                Naked option
+              </option>
+            </select>
+          </label>
+          {instrument === "option" && (
+            <label className="auto-trade-field">
+              <span>Strike</span>
+              <select
+                value={config.moneyness}
+                onChange={(e) => onConfigChange({ ...config, moneyness: e.target.value as OptionStrikeMoneyness })}
+              >
+                {MONEYNESS_OPTIONS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="auto-trade-field">
             <span>Interval</span>
             <select
@@ -383,9 +490,11 @@ export default function AutoTradePanel({
             />
           </label>
           <p className="auto-trade-config-note">
-            Futures only. On arming it enters the current SuperTrend direction, then places a market order on every flip
-            after (execution closes any opposite position and flips). The stop trails SuperTrend server-side, so it holds
-            even with this tab closed.
+            On arming it enters the current SuperTrend direction, then places a market order on every flip after
+            (execution closes any opposite position and flips).{" "}
+            {instrument === "option"
+              ? "Naked call on an up-flip, naked put on a down-flip, with a flat spot stop at the SuperTrend line — options have no server-side trailing stop, so the opposite flip is the real exit."
+              : "The stop trails SuperTrend server-side, so it holds even with this tab closed."}
           </p>
         </div>
       )}

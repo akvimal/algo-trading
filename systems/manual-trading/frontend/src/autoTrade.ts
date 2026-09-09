@@ -14,9 +14,18 @@
 //   - one armed symbol at a time; switching the chart symbol disarms it
 //   - fully automatic - no per-fire confirmation
 
-import { type ChartInterval } from "./api";
+import { type ChartInterval, type OptionStrikeMoneyness } from "./api";
+
+// What the auto-trader trades on each flip. `future` opens a market
+// future with a server-trailed SuperTrend stop; `option` opens a naked
+// call (flip up) / naked put (flip down) at `moneyness` with a flat spot
+// stop at the SuperTrend line. Both stop-and-reverse via execution's own
+// counter_signal_policy='close_and_flip'.
+export type AutoTradeInstrument = "future" | "option";
 
 export type AutoTradeConfig = {
+  instrument: AutoTradeInstrument;
+  moneyness: OptionStrikeMoneyness; // option only
   period: number; // SuperTrend ATR period (> 1)
   multiplier: number; // SuperTrend ATR multiplier (> 0)
   interval: ChartInterval; // bar interval the flip is evaluated on
@@ -24,6 +33,8 @@ export type AutoTradeConfig = {
 };
 
 export const DEFAULT_AUTO_TRADE_CONFIG: AutoTradeConfig = {
+  instrument: "future",
+  moneyness: "ATM",
   period: 10,
   multiplier: 3,
   interval: "5min",
@@ -31,6 +42,7 @@ export const DEFAULT_AUTO_TRADE_CONFIG: AutoTradeConfig = {
 };
 
 const VALID_INTERVALS: ChartInterval[] = ["1min", "3min", "5min", "15min", "30min", "60min"];
+const VALID_MONEYNESS: OptionStrikeMoneyness[] = ["ITM2", "ITM1", "ATM", "OTM1", "OTM2"];
 
 const ON_KEY = "manualChartAutoTradeOn";
 const CONFIG_KEY = "manualChartAutoTradeConfig";
@@ -80,6 +92,8 @@ export function loadAutoTradeConfig(): AutoTradeConfig {
     const raw = JSON.parse(localStorage.getItem(CONFIG_KEY) ?? "null");
     if (raw && typeof raw === "object") {
       return {
+        instrument: raw.instrument === "option" ? "option" : "future",
+        moneyness: VALID_MONEYNESS.includes(raw.moneyness) ? raw.moneyness : DEFAULT_AUTO_TRADE_CONFIG.moneyness,
         period: clampInt(raw.period, 2, 100, DEFAULT_AUTO_TRADE_CONFIG.period),
         multiplier: clampNum(raw.multiplier, 0.5, 20, DEFAULT_AUTO_TRADE_CONFIG.multiplier),
         interval: VALID_INTERVALS.includes(raw.interval) ? raw.interval : DEFAULT_AUTO_TRADE_CONFIG.interval,

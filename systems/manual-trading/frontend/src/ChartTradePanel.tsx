@@ -1062,8 +1062,8 @@ export default function ChartTradePanel({
 
       {!hasOpen && !pendingOrder && autoTradeActive && (
         <p className="ctp-hint ctp-auto-note">
-          Auto-trade is armed — entries fire automatically on each SuperTrend flip. Turn it off above to place a manual
-          order.
+          Auto-trade is armed — it enters on the current SuperTrend and on every flip after. Turn it off above to place a
+          manual order.
         </p>
       )}
 

@@ -217,26 +217,17 @@ export default function AutoTradePanel({
       const st = computeSupertrend(bars, config.period, config.multiplier);
       const cur = st[st.length - 1] ?? null;
       const flips = detectSupertrendFlips(bars, config.period, config.multiplier);
+      const lastBar = bars[bars.length - 1];
+      const latestFlipTs = flips.length ? flips[flips.length - 1].barTs : 0;
 
-      let state = loadAutoTradeState(key);
-      if (state == null) {
-        // Seed: arm from now. Any flip already on the chart is history -
-        // only a flip AFTER this point should ever fire.
-        const latestFlipTs = flips.length ? flips[flips.length - 1].barTs : 0;
-        state = { armedAt: Date.now(), lastActedBarTs: latestFlipTs };
-        saveAutoTradeState(key, state);
-        setStatus({
-          phase: "watching",
-          message: `Armed on ${iv} SuperTrend(${config.period}, ${config.multiplier}). Currently ${cur?.dir === "up" ? "bullish" : cur?.dir === "down" ? "bearish" : "—"} — waiting for the next flip.`,
-          dir: cur?.dir ?? null,
-          line: cur?.line ?? null,
-        });
-        return;
-      }
+      const state = loadAutoTradeState(key);
+      const seeding = state == null;
 
-      // Daily-loss safety net (halts until toggled off/on).
+      // Daily-loss safety net (halts until toggled off/on) - checked
+      // before an on-arm entry too, so being over budget never opens one.
       if (account?.max_daily_loss != null && account.max_daily_loss > 0) {
         const realized = await todayRealizedManualPnl(segment);
+        if (cancelled) return;
         if (realized <= -account.max_daily_loss) {
           setStatus({
             phase: "halted",
@@ -248,33 +239,62 @@ export default function AutoTradePanel({
         }
       }
 
-      const fresh = flips.filter((f) => f.barTs > state!.lastActedBarTs);
-      if (fresh.length === 0) {
+      // What to act on this tick:
+      //  - seeding + a current trend -> enter it NOW (synthesize a flip
+      //    from the latest completed bar; executeFlip no-ops if we're
+      //    already positioned that way). Stop-and-reverse then continues
+      //    from the real flips.
+      //  - otherwise -> the most recent flip past the dedupe cursor, if any
+      //    (an older un-acted flip would have been reversed straight back).
+      let act: { flip: SupertrendFlip; seed: boolean } | null = null;
+      if (seeding) {
+        if (cur) {
+          act = {
+            seed: true,
+            flip: { index: bars.length - 1, barTs: lastBar.timestamp, direction: cur.dir, line: cur.line, close: lastBar.close },
+          };
+        }
+      } else {
+        const fresh = flips.filter((f) => f.barTs > state.lastActedBarTs);
+        if (fresh.length > 0) act = { seed: false, flip: fresh[fresh.length - 1] };
+      }
+
+      if (act == null) {
+        // Nothing to act on - seed the cursor (if seeding) and just
+        // refresh the status line.
+        if (seeding) saveAutoTradeState(key, { armedAt: Date.now(), lastActedBarTs: latestFlipTs });
         setStatus({
           phase: "watching",
-          message: `Watching ${iv} SuperTrend(${config.period}, ${config.multiplier}). Trend ${cur?.dir === "up" ? "up" : cur?.dir === "down" ? "down" : "—"}${cur ? ` · line ${fmt(cur.line)}` : ""}.`,
+          message: seeding
+            ? `Armed on ${iv} SuperTrend(${config.period}, ${config.multiplier}) — no trend yet, waiting for a flip.`
+            : `Watching ${iv} SuperTrend(${config.period}, ${config.multiplier}). Trend ${cur?.dir === "up" ? "up" : cur?.dir === "down" ? "down" : "—"}${cur ? ` · line ${fmt(cur.line)}` : ""}.`,
           dir: cur?.dir ?? null,
           line: cur?.line ?? null,
         });
         return;
       }
 
-      // Only the most recent flip matters - an older un-acted one would
-      // have been reversed straight back by this one anyway.
-      const flip = fresh[fresh.length - 1];
+      const { flip, seed } = act;
       firingRef.current = true;
       setStatus({
         phase: "firing",
-        message: `SuperTrend flipped ${flip.direction === "up" ? "up → BUY" : "down → SELL"} @ ${fmt(flip.close)} — placing…`,
+        message: seed
+          ? `Arming — entering ${flip.direction === "up" ? "Long" : "Short"} on the current ${iv} SuperTrend @ ${fmt(flip.close)}…`
+          : `SuperTrend flipped ${flip.direction === "up" ? "up → BUY" : "down → SELL"} @ ${fmt(flip.close)} — placing…`,
         dir: flip.direction,
         line: flip.line,
       });
       try {
         const result = await executeFlip(flip);
-        // Advance the dedupe cursor only on a settled outcome (placed,
-        // rejected, or deliberately skipped) - a thrown error leaves it so
-        // the next tick retries the same flip.
-        saveAutoTradeState(key, { ...state, lastActedBarTs: flip.barTs });
+        // Persist the cursor on a settled outcome (placed / rejected /
+        // skipped). For a SEED entry the cursor is the last historical
+        // flip, so the next REAL flip still fires. A thrown error saves
+        // nothing on a seed (retry the entry next tick) and doesn't
+        // advance the cursor on a flip (retry that flip next tick).
+        saveAutoTradeState(key, {
+          armedAt: seeding ? Date.now() : state.armedAt,
+          lastActedBarTs: seed ? latestFlipTs : flip.barTs,
+        });
         if (result.rejected) {
           setStatus({ phase: "error", message: `Order rejected: ${result.reason ?? "unknown"}.`, dir: flip.direction, line: flip.line });
         } else if (result.skipped) {
@@ -282,7 +302,7 @@ export default function AutoTradePanel({
         } else {
           setStatus({
             phase: "watching",
-            message: `In ${flip.direction === "up" ? "Long" : "Short"} ${config.lots} lot(s) from the ${iv} flip @ ${fmt(flip.close)}. SL trails SuperTrend(${config.period}, ${config.multiplier}).`,
+            message: `In ${flip.direction === "up" ? "Long" : "Short"} ${config.lots} lot(s)${seed ? " (armed at current trend)" : ` from the ${iv} flip`} @ ${fmt(flip.close)}. SL trails SuperTrend(${config.period}, ${config.multiplier}).`,
             dir: flip.direction,
             line: flip.line,
           });
@@ -308,7 +328,7 @@ export default function AutoTradePanel({
   return (
     <div className={`auto-trade-panel ${on ? "armed" : ""} ${dirClass}`}>
       <div className="auto-trade-head">
-        <label className="auto-trade-toggle" title="Automatically place a market future order on every SuperTrend flip, with a server-trailed SuperTrend stop. Stop-and-reverse. Disarms if you switch symbols.">
+        <label className="auto-trade-toggle" title="Enters the current SuperTrend direction on arming, then places a market future order on every flip after — server-trailed SuperTrend stop, stop-and-reverse. Futures only. Disarms if you switch symbols.">
           <input type="checkbox" checked={on} onChange={onToggle} />
           <span>Auto-trade</span>
           <span className="auto-trade-sub">
@@ -363,8 +383,9 @@ export default function AutoTradePanel({
             />
           </label>
           <p className="auto-trade-config-note">
-            Futures only. Opens a market order on each flip; execution closes any opposite position and flips. The stop
-            trails SuperTrend server-side, so it holds even with this tab closed.
+            Futures only. On arming it enters the current SuperTrend direction, then places a market order on every flip
+            after (execution closes any opposite position and flips). The stop trails SuperTrend server-side, so it holds
+            even with this tab closed.
           </p>
         </div>
       )}

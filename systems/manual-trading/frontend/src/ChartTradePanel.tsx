@@ -358,6 +358,9 @@ export default function ChartTradePanel({
   // still forces `future` for a CRYPTO symbol with no option chain).
   const [strategy, setStrategy] = useState<PanelStrategy>(segment === "CRYPTO" ? "future" : "naked");
   const isOption = strategy !== "future";
+  // Trade vs History - a tab inside the card so the closed-trade list
+  // isn't always stretching the panel down the page.
+  const [tab, setTab] = useState<"trade" | "history">("trade");
   const [moneyness, setMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [qtyInput, setQtyInput] = useState("1");
   const [slInput, setSlInput] = useState("");
@@ -580,6 +583,12 @@ export default function ChartTradePanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openId]);
+
+  // Snap back to the Trade tab whenever something live appears, so a
+  // fill / armed limit is never hidden behind the History tab.
+  useEffect(() => {
+    if (openId || pendingOrder) setTab("trade");
+  }, [openId, pendingOrder]);
 
   // No option chain for this symbol -> a futures position.
   useEffect(() => {
@@ -1047,6 +1056,29 @@ export default function ChartTradePanel({
         </span>
       </div>
 
+      <div className="ctp-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "trade"}
+          className={tab === "trade" ? "active" : ""}
+          onClick={() => setTab("trade")}
+        >
+          Trade
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "history"}
+          className={tab === "history" ? "active" : ""}
+          onClick={() => setTab("history")}
+        >
+          History{history.length > 0 ? ` (${history.length})` : ""}
+        </button>
+      </div>
+
+      {tab === "trade" && (
+        <>
       {pendingOrder && (
         <div className="ctp-pending">
           <div className="ctp-pending-head">
@@ -1402,10 +1434,13 @@ export default function ChartTradePanel({
       )}
 
       {error && <p className="ctp-error">{error}</p>}
+        </>
+      )}
 
+      {tab === "history" && (
       <div className="ctp-history">
         <div className="ctp-history-head">
-          <span>History</span>
+          <span>Closed today</span>
           <span className="muted">{history.length} trade{history.length === 1 ? "" : "s"}</span>
         </div>
         {history.length === 0 && <p className="muted">No closed trades today.</p>}
@@ -1545,6 +1580,7 @@ export default function ChartTradePanel({
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

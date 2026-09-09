@@ -2976,6 +2976,31 @@ button.btn-exit {
   padding-bottom: 0.35rem;
 }
 
+/* Trade / History tab switch inside the panel. */
+.ctp-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+.ctp-tabs button {
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ctp-tabs button:hover {
+  color: var(--text);
+}
+.ctp-tabs button.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
 /* Two fields side by side (Strategy+Strike, Lots+SL) - each stacks its
    own label above the control so they fit a ~8rem column. */
 .ctp-row {

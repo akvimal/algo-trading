@@ -3485,14 +3485,6 @@ button.btn-exit {
   width: 100%;
   height: 100%;
 }
-.setup-card-glyph {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  font-size: 1.4rem;
-}
 .setup-card-name {
   font-size: 0.76rem;
   font-weight: 600;

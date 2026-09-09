@@ -8,6 +8,8 @@ import {
   fetchAccounts,
   fetchExecPositions,
   fetchOptionGroups,
+  updateOptionGroupTags,
+  updatePositionTags,
 } from "./api";
 import AutoTradePanel from "./AutoTradePanel";
 import {
@@ -22,6 +24,7 @@ import {
 import ChartTradePanel from "./ChartTradePanel";
 import { type ChartContext, type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
 import { type PendingOrder, fetchUnderlyingLtp, fmt, fmtMoney, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
+import SetupCardRow from "./SetupCardRow";
 
 // Standalone Intraday sub-tab wrapping the candlestick panel (see
 // LiveChartPanel.tsx for the live-data mechanics and the klinecharts
@@ -154,6 +157,47 @@ export default function LiveChartPage() {
   // reuse its already-fetched live P&L instead of polling for it again.
   const [openTrade, setOpenTrade] = useState<{ pos: ManualPosition | null; group: ManualOptionGroup | null } | null>(null);
 
+  // Setup tag, driven by the full-width SetupCardRow below the chart.
+  // While flat it's the tag the next order (manual OR auto-trade) carries;
+  // while a trade is open, selecting a card PUTs it onto that trade.
+  // Controlled prop into ChartTradePanel (its own Setup dropdown mirrors it).
+  const [chartSetup, setChartSetup] = useState<string>("");
+  const [setupBusy, setSetupBusy] = useState(false);
+  const openPos = openTrade?.pos ?? null;
+  const openGroup = openTrade?.group ?? null;
+  const openSetup = openGroup?.setup_tag ?? openPos?.setup_tag ?? "";
+
+  const onSelectSetup = useCallback(
+    async (tag: string) => {
+      if (openGroup || openPos) {
+        setSetupBusy(true);
+        // Optimistic: patch just setup_tag locally so the card highlights
+        // immediately. The API returns a row without live P&L, so don't
+        // swap the whole object in - the panel's 5s poll re-syncs it.
+        setOpenTrade((t) =>
+          t
+            ? t.group
+              ? { ...t, group: { ...t.group, setup_tag: tag || null } }
+              : t.pos
+                ? { ...t, pos: { ...t.pos, setup_tag: tag || null } }
+                : t
+            : t,
+        );
+        try {
+          if (openGroup) await updateOptionGroupTags(openGroup.id, { setup_tag: tag });
+          else if (openPos) await updatePositionTags(openPos.id, { setup_tag: tag });
+        } catch {
+          /* transient - the panel's own poll re-syncs the tag anyway */
+        } finally {
+          setSetupBusy(false);
+        }
+        return;
+      }
+      setChartSetup(tag);
+    },
+    [openGroup, openPos],
+  );
+
   // Which of the tab bar's symbols (any of them, not just the active one -
   // ChartTradePanel only ever knows about its own) currently has an open
   // manual position or option group - a small dot on that tab. HERE, not
@@ -221,6 +265,7 @@ export default function LiveChartPage() {
     setPickField(null);
     setPickedPrice(null);
     setOpenTrade(null);
+    setChartSetup("");
   }
 
   function toggleAutoTrade() {
@@ -432,6 +477,7 @@ export default function LiveChartPage() {
             segment={active.segment}
             symbol={active.symbol}
             account={account}
+            setupTag={chartSetup}
           />
 
           <ChartTradePanel
@@ -446,6 +492,8 @@ export default function LiveChartPage() {
             riskManaged={riskManaged}
             chartLtp={chartLtp}
             autoTradeActive={autoTradeOn}
+            setupTag={chartSetup}
+            onSetupTagChange={setChartSetup}
             pendingOrder={activePending}
             pendingNote={pendingNote[active.symbol] ?? null}
             onArmPending={armPending}
@@ -457,6 +505,13 @@ export default function LiveChartPage() {
           />
         </div>
       </div>
+
+      <SetupCardRow
+        selected={openPos || openGroup ? openSetup : chartSetup}
+        onSelect={onSelectSetup}
+        context={openPos || openGroup ? "open" : autoTradeOn ? "auto" : "entry"}
+        busy={setupBusy}
+      />
     </div>
   );
 }

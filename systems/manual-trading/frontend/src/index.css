@@ -1884,16 +1884,25 @@ button.btn-exit {
   color: var(--text-dim);
 }
 
-/* SVG diagram semantics, shared across every plate - the exact colours
-   the Live Chart's own candles use (LiveChartPanel.tsx's DARK_STYLES). */
-.setup-plate-art .sg-up { fill: var(--buy); }
-.setup-plate-art .sg-down { fill: var(--sell); }
-.setup-plate-art .sg-wick { stroke: var(--text-dim); stroke-width: 1.4; }
-.setup-plate-art .sg-zone { fill: var(--accent); fill-opacity: 0.16; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; }
-.setup-plate-art .sg-level { stroke: var(--text-dim); stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
-.setup-plate-art .sg-trend { stroke: var(--text-dim); stroke-width: 1.2; stroke-dasharray: 2 3; fill: none; }
-.setup-plate-art .sg-dot { fill: var(--accent); }
-.setup-plate-art .sg-rule { stroke: var(--border); stroke-width: 1; }
+/* SVG diagram semantics, shared across every plate AND the Live Chart's
+   setup-card strip - the exact colours the Live Chart's own candles use
+   (LiveChartPanel.tsx's DARK_STYLES). */
+.setup-plate-art .sg-up,
+.setup-card-art .sg-up { fill: var(--buy); }
+.setup-plate-art .sg-down,
+.setup-card-art .sg-down { fill: var(--sell); }
+.setup-plate-art .sg-wick,
+.setup-card-art .sg-wick { stroke: var(--text-dim); stroke-width: 1.4; }
+.setup-plate-art .sg-zone,
+.setup-card-art .sg-zone { fill: var(--accent); fill-opacity: 0.16; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 3; }
+.setup-plate-art .sg-level,
+.setup-card-art .sg-level { stroke: var(--text-dim); stroke-width: 1.2; stroke-dasharray: 4 3; fill: none; }
+.setup-plate-art .sg-trend,
+.setup-card-art .sg-trend { stroke: var(--text-dim); stroke-width: 1.2; stroke-dasharray: 2 3; fill: none; }
+.setup-plate-art .sg-dot,
+.setup-card-art .sg-dot { fill: var(--accent); }
+.setup-plate-art .sg-rule,
+.setup-card-art .sg-rule { stroke: var(--border); stroke-width: 1; }
 .setup-plate-art .sg-label {
   font-size: 8.5px;
   letter-spacing: 0.03em;
@@ -1901,6 +1910,8 @@ button.btn-exit {
   fill: var(--text-dim);
 }
 .setup-plate-art .sg-label-accent { fill: var(--accent); font-weight: 600; }
+/* The card strip is tiny - drop the in-diagram text labels there. */
+.setup-card-art .sg-label { display: none; }
 
 .setup-guide-notes-section .setup-guide-notes {
   display: flex;
@@ -3402,6 +3413,101 @@ button.btn-exit {
 }
 .ctp-auto-note {
   font-style: italic;
+}
+
+/* --- Full-width Setup card strip below the chart (SetupCardRow.tsx) --- */
+.setup-card-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.setup-card-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+.setup-card-row-title {
+  font-weight: 600;
+  color: var(--text);
+}
+.setup-card-row-hint {
+  flex: 1;
+  font-size: 0.72rem;
+}
+.setup-card-strip {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+  scrollbar-width: thin;
+}
+.setup-card {
+  flex: 1 0 8.5rem;
+  min-width: 8.5rem;
+  max-width: 13rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+.setup-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.setup-card.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+}
+.setup-card:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.setup-card-art {
+  display: block;
+  width: 100%;
+  aspect-ratio: 300 / 118;
+  border-radius: 4px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.setup-card-art svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.setup-card-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 1.4rem;
+}
+.setup-card-name {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.setup-card-kind {
+  font-size: 0.64rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.setup-card.active .setup-card-kind {
+  color: var(--accent);
 }
 
 /* ⏳ marker on a symbol tab that has a limit armed. */

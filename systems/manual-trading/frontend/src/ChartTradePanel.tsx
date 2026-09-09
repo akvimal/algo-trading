@@ -270,6 +270,8 @@ export default function ChartTradePanel({
   riskManaged,
   chartLtp,
   autoTradeActive,
+  setupTag,
+  onSetupTagChange,
   pendingOrder,
   pendingNote,
   onArmPending,
@@ -303,6 +305,11 @@ export default function ChartTradePanel({
   // hide the manual entry form (entries are automatic) but keep the
   // open-position manage bar + history visible.
   autoTradeActive?: boolean;
+  // Setup tag for the next order - driven by the full-width SetupCardRow
+  // below the chart (LiveChartPage owns the state); this panel's own
+  // Setup dropdown mirrors it. `""` = none.
+  setupTag: string;
+  onSetupTagChange: (tag: string) => void;
   // The chart's own live price - used as THE ltp (display + target watch)
   // so the panel never drifts from the chart. null until the chart has a
   // tick; the panel's own fetch is only a fallback for that gap.
@@ -356,7 +363,8 @@ export default function ChartTradePanel({
   const [slInput, setSlInput] = useState("");
   // Trade journal, set at order time - the setup reason + a 1-5 confidence.
   // Optional; feeds Trading Performance's by-setup / confidence slices.
-  const [setupTag, setSetupTag] = useState("");
+  // `setupTag` is a controlled prop (SetupCardRow below the chart drives
+  // it); confidence stays local.
   const [confidence, setConfidence] = useState<number | null>(null);
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1221,7 +1229,7 @@ export default function ChartTradePanel({
               <span>
                 Setup <SetupGuideLink />
               </span>
-              <select value={setupTag} onChange={(e) => setSetupTag(e.target.value)}>
+              <select value={setupTag} onChange={(e) => onSetupTagChange(e.target.value)}>
                 <option value="">— reason —</option>
                 {SETUP_TAGS.map((t) => (
                   <option key={t} value={t}>

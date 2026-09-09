@@ -94,6 +94,7 @@ export default function AutoTradePanel({
   segment,
   symbol,
   account,
+  setupTag,
 }: {
   on: boolean;
   onToggle: () => void;
@@ -102,6 +103,9 @@ export default function AutoTradePanel({
   segment: Segment;
   symbol: string;
   account: Account | null;
+  // Setup tag from the SetupCardRow below the chart - stamped on every
+  // auto-trade fill's journal. "" = none.
+  setupTag: string;
 }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<WatchStatus | null>(null);
@@ -142,6 +146,10 @@ export default function AutoTradePanel({
 
   // --- The watcher loop (only while armed). ---
   const firingRef = useRef(false);
+  // Current setup tag, read at fire time - a ref so changing it doesn't
+  // re-run the effect (which would re-seed / re-fire the on-arm entry).
+  const setupTagRef = useRef(setupTag);
+  setupTagRef.current = setupTag;
   // Retry counter for the ON-ARM entry (which persists no state until it
   // lands - a rejected seed just re-seeds next tick). Non-seed flip
   // retries live in the persisted run state instead.
@@ -226,7 +234,7 @@ export default function AutoTradePanel({
           target: null,
           trendFollowed: false,
           riskManaged: false,
-          setupTag: null,
+          setupTag: setupTagRef.current || null,
           confidence: null,
           entryInterval: iv,
         });
@@ -261,7 +269,7 @@ export default function AutoTradePanel({
         target: null,
         trendFollowed: false,
         riskManaged: false,
-        setupTag: null,
+        setupTag: setupTagRef.current || null,
         confidence: null,
         entryInterval: iv,
         // Server-trailed SuperTrend stop - keeps working with the tab

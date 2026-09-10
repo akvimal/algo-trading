@@ -30,6 +30,15 @@ export type AutoTradeConfig = {
   multiplier: number; // SuperTrend ATR multiplier (> 0)
   interval: ChartInterval; // bar interval the flip is evaluated on
   lots: number; // explicit lot count - auto mode never risk-sizes
+  // Gate: only act on a flip when GET /regime for `interval` reads
+  // trending IN the flip's direction (trending_up for an up-flip,
+  // trending_down for a down-flip - the label already folds in ADX
+  // strength + DMI direction). Opt-in.
+  adxGate: boolean;
+  // Gate: only act on a flip whose bar closes inside this local-time
+  // window. "" / "" = no window. start > end spans midnight (CRYPTO).
+  windowStart: string; // "HH:MM"
+  windowEnd: string; // "HH:MM"
 };
 
 export const DEFAULT_AUTO_TRADE_CONFIG: AutoTradeConfig = {
@@ -39,10 +48,32 @@ export const DEFAULT_AUTO_TRADE_CONFIG: AutoTradeConfig = {
   multiplier: 3,
   interval: "5min",
   lots: 1,
+  adxGate: false,
+  windowStart: "",
+  windowEnd: "",
 };
 
 const VALID_INTERVALS: ChartInterval[] = ["1min", "3min", "5min", "15min", "30min", "60min"];
 const VALID_MONEYNESS: OptionStrikeMoneyness[] = ["ITM2", "ITM1", "ATM", "OTM1", "OTM2"];
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// "HH:MM" -> minutes since local midnight, or null.
+function parseHhmm(s: unknown): number | null {
+  if (typeof s !== "string" || !HHMM_RE.test(s)) return null;
+  const [h, m] = s.split(":").map(Number);
+  return h * 60 + m;
+}
+
+// Is `now` (a Date) inside [start, end] local time? Both must be valid
+// "HH:MM"; a window that isn't fully set never gates (returns true).
+// start > end is treated as spanning midnight.
+export function withinTimeWindow(start: string, end: string, now: Date = new Date()): boolean {
+  const s = parseHhmm(start);
+  const e = parseHhmm(end);
+  if (s == null || e == null) return true;
+  const cur = now.getHours() * 60 + now.getMinutes();
+  return s <= e ? cur >= s && cur <= e : cur >= s || cur <= e;
+}
 
 const ON_KEY = "manualChartAutoTradeOn";
 const CONFIG_KEY = "manualChartAutoTradeConfig";
@@ -109,6 +140,9 @@ export function loadAutoTradeConfig(): AutoTradeConfig {
         multiplier: clampNum(raw.multiplier, 0.5, 20, DEFAULT_AUTO_TRADE_CONFIG.multiplier),
         interval: VALID_INTERVALS.includes(raw.interval) ? raw.interval : DEFAULT_AUTO_TRADE_CONFIG.interval,
         lots: clampInt(raw.lots, 1, 100000, DEFAULT_AUTO_TRADE_CONFIG.lots),
+        adxGate: raw.adxGate === true,
+        windowStart: HHMM_RE.test(raw.windowStart) ? raw.windowStart : "",
+        windowEnd: HHMM_RE.test(raw.windowEnd) ? raw.windowEnd : "",
       };
     }
   } catch {

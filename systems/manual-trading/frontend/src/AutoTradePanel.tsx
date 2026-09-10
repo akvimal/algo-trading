@@ -5,12 +5,14 @@ import {
   type ChartInterval,
   type ManualOptionGroup,
   type ManualPosition,
+  type MarketRegime,
   type OptionStrikeMoneyness,
   type ResolvedUnderlying,
   type Segment,
   fetchCandleHistory,
   fetchExecPositions,
   fetchOptionGroups,
+  fetchRegime,
 } from "./api";
 import {
   AUTO_TRADE_MAX_RETRIES,
@@ -20,6 +22,7 @@ import {
   loadAutoTradeState,
   lookbackDaysFor,
   saveAutoTradeState,
+  withinTimeWindow,
   symbolKey,
 } from "./autoTrade";
 import { CRYPTO_OPTION_SYMBOLS, fetchUnderlyingLtp, fmt, placeManualOrder, resolveUnderlyingCached } from "./manualOrder";
@@ -143,6 +146,36 @@ export default function AutoTradePanel({
       lots: Number.isFinite(lots) && lots >= 1 && lots <= 100000 ? lots : config.lots,
     });
   }
+
+  // --- ADX / regime gate: poll GET /regime for the auto-trade interval so
+  // a flip can be checked against "trending IN this direction". Only while
+  // armed AND the gate is on; a ref so the watcher reads it without a
+  // re-run. Slow poll - regime moves on the bar cadence, not tick-to-tick.
+  const [regime, setRegime] = useState<MarketRegime | null>(null);
+  const regimeRef = useRef<MarketRegime | null>(null);
+  regimeRef.current = regime;
+  useEffect(() => {
+    if (!on || !config.adxGate) {
+      setRegime(null);
+      return;
+    }
+    let cancelled = false;
+    async function poll() {
+      try {
+        const r = await resolveUnderlyingCached(segment, sym);
+        const rg = await fetchRegime(r.chart_exchange, r.chart_symbol, config.interval);
+        if (!cancelled) setRegime(rg);
+      } catch {
+        /* keep last */
+      }
+    }
+    void poll();
+    const id = window.setInterval(() => void poll(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [on, config.adxGate, config.interval, segment, sym]);
 
   // --- The watcher loop (only while armed). ---
   const firingRef = useRef(false);
@@ -359,6 +392,35 @@ export default function AutoTradePanel({
       }
 
       const { flip, seed } = act;
+
+      // --- Gates: a flip that clears these is acted on; one that doesn't
+      // is SKIPPED (cursor advances - don't chase it once conditions
+      // line up later without a fresh flip). ---
+      let gateBlock: string | null = null;
+      if (config.windowStart && config.windowEnd && !withinTimeWindow(config.windowStart, config.windowEnd)) {
+        gateBlock = `outside the ${config.windowStart}–${config.windowEnd} window`;
+      } else if (config.adxGate) {
+        const want = flip.direction === "up" ? "trending_up" : "trending_down";
+        const rg = regimeRef.current;
+        if (rg == null) gateBlock = `${iv} regime not read yet`;
+        else if (rg.regime !== want)
+          gateBlock = `${iv} regime is ${rg.regime.replace("_", " ")} (ADX ${Math.round(rg.adx)}), need ${want.replace("_", " ")}`;
+      }
+      if (gateBlock) {
+        seedRetriesRef.current = 0;
+        saveAutoTradeState(key, {
+          armedAt: seeding ? Date.now() : state!.armedAt,
+          lastActedBarTs: seed ? latestFlipTs : flip.barTs,
+        });
+        setStatus({
+          phase: "watching",
+          message: `Skipped ${flip.direction === "up" ? "up" : "down"}-flip @ ${fmt(flip.close)} — ${gateBlock}.`,
+          dir: cur?.dir ?? null,
+          line: cur?.line ?? null,
+        });
+        return;
+      }
+
       // "Long"/"Short" for a future, "naked call"/"naked put" for an option.
       const posLabel =
         instr === "option"
@@ -471,6 +533,8 @@ export default function AutoTradePanel({
             {sym} · {config.interval} ST({config.period}, {config.multiplier}) ·{" "}
             {instrument === "option" ? `naked ${config.moneyness}` : "future"} · {config.lots} lot
             {config.lots === 1 ? "" : "s"}
+            {config.adxGate && " · ADX gate"}
+            {config.windowStart && config.windowEnd && ` · ${config.windowStart}–${config.windowEnd}`}
           </span>
         </label>
         <button type="button" className="auto-trade-cfg-btn" onClick={() => setOpen((o) => !o)}>
@@ -547,12 +611,46 @@ export default function AutoTradePanel({
               onBlur={commitDraft}
             />
           </label>
+
+          <div className="auto-trade-gates">
+            <label className="auto-trade-gate-toggle" title="Only act on a flip when GET /regime for this interval reads trending IN the flip's direction (trending_up for an up-flip, trending_down for a down-flip — the label already folds in ADX strength + DMI direction).">
+              <input
+                type="checkbox"
+                checked={config.adxGate}
+                onChange={(e) => onConfigChange({ ...config, adxGate: e.target.checked })}
+              />
+              <span>ADX gate — trend must agree</span>
+              {config.adxGate && regime && (
+                <span className={`auto-trade-regime is-${regime.regime}`}>
+                  {regime.regime.replace("_", " ")} · ADX {Math.round(regime.adx)}
+                </span>
+              )}
+            </label>
+            <label className="auto-trade-field">
+              <span>Window (local)</span>
+              <span className="auto-trade-window">
+                <input
+                  type="time"
+                  value={config.windowStart}
+                  onChange={(e) => onConfigChange({ ...config, windowStart: e.target.value })}
+                />
+                <span>–</span>
+                <input
+                  type="time"
+                  value={config.windowEnd}
+                  onChange={(e) => onConfigChange({ ...config, windowEnd: e.target.value })}
+                />
+              </span>
+            </label>
+          </div>
+
           <p className="auto-trade-config-note">
             On arming it enters the current SuperTrend direction, then places a market order on every flip after
             (execution closes any opposite position and flips).{" "}
             {instrument === "option"
               ? "Naked call on an up-flip, naked put on a down-flip, with a flat spot stop at the SuperTrend line — options have no server-side trailing stop, so the opposite flip is the real exit."
-              : "The stop trails SuperTrend server-side, so it holds even with this tab closed."}
+              : "The stop trails SuperTrend server-side, so it holds even with this tab closed."}{" "}
+            A flip that fails a gate is skipped, not queued.
           </p>
         </div>
       )}

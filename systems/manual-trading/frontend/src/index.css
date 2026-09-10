@@ -3429,6 +3429,50 @@ button.btn-exit {
   line-height: 1.35;
   color: var(--text-dim);
 }
+.auto-trade-gates {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  padding-top: 0.3rem;
+  border-top: 1px dashed var(--border);
+}
+.auto-trade-gate-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.auto-trade-gate-toggle input {
+  margin: 0;
+}
+.auto-trade-regime {
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  font-size: 0.66rem;
+  border: 1px solid var(--border);
+}
+.auto-trade-regime.is-trending_up {
+  color: var(--buy);
+  border-color: color-mix(in srgb, var(--buy) 40%, var(--border));
+}
+.auto-trade-regime.is-trending_down {
+  color: var(--sell);
+  border-color: color-mix(in srgb, var(--sell) 40%, var(--border));
+}
+.auto-trade-window {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.auto-trade-window input {
+  width: auto;
+  padding: 0.15rem 0.25rem;
+  font-size: 0.72rem;
+}
 .auto-trade-status {
   margin: 0;
   padding-top: 0.25rem;

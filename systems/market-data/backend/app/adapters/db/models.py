@@ -11,7 +11,7 @@ this system, otherwise in-memory-cache-only by design, now has one.
 import uuid
 
 from sqlalchemy import BigInteger, Boolean, Column, Float, Integer, Numeric, Text, func
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
 from app.config import settings
@@ -67,3 +67,21 @@ class PriceAlert(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_triggered_at = Column(TIMESTAMP(timezone=True))
     trigger_count = Column(Integer, nullable=False, default=0)
+
+
+class NewsHistory(Base):
+    """One row per underlying per news-cache refresh - the AI digest
+    (bias/bias_reason/digest) plus its scored articles (JSONB), so a past
+    prediction can later be checked against what price actually did. See
+    app/providers/news.py's _persist_digest. Append-only, never updated."""
+
+    __tablename__ = "news_history"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    underlying = Column(Text, nullable=False)
+    bias = Column(Text, nullable=False)
+    bias_reason = Column(Text, nullable=False)
+    digest = Column(Text, nullable=False)
+    articles = Column(JSONB, nullable=False)

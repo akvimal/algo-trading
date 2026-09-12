@@ -209,12 +209,30 @@ class NewsDigest(BaseModel):
     """GET /news response - the Live Chart's News tab. `articles` is
     marketaux's raw feed for the underlying, filtered and scored by AI
     (app/providers/news.py's _analyze_via_ai) down to the ones actually
-    relevant to its likely trend, sorted most-relevant first. `bias`/
-    `bias_reason`/`digest` are that same analysis' overall read. Without
-    OPENROUTER_API_KEY configured (or on an AI-call failure), this
+    relevant to its likely trend, sorted newest-published first (relevance
+    drives which articles make the cut, not their order in this list).
+    `bias`/`bias_reason`/`digest` are that same analysis' overall read.
+    Without OPENROUTER_API_KEY configured (or on an AI-call failure), this
     degrades to bias="neutral", digest/bias_reason explaining why, and
-    `articles` as marketaux's unscored, unfiltered list."""
+    `articles` as marketaux's unscored, unfiltered list. Every digest
+    produced also gets logged to market_data.news_history - see
+    GET /news/history and app/providers/news.py's _persist_digest."""
 
+    bias: Literal["bullish", "bearish", "neutral"]
+    bias_reason: str
+    digest: str
+    articles: list[NewsArticle]
+
+
+class NewsHistoryPoint(BaseModel):
+    """One market_data.news_history row - GET /news/history. A past
+    digest, so its bias/articles can later be checked against what price
+    actually did afterward - same purpose as SentimentHistoryPoint above,
+    for the News tab's AI read instead of the OI-based sentiment badge."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    recorded_at: datetime
     bias: Literal["bullish", "bearish", "neutral"]
     bias_reason: str
     digest: str

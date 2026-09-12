@@ -7,6 +7,8 @@ from typing import Optional
 
 import requests
 
+from app.adapters.db.models import NewsHistory
+from app.adapters.db.session import SessionLocal
 from app.config import settings
 from app.domain.models import NewsArticle, NewsDigest
 
@@ -159,12 +161,9 @@ def _to_article(row: dict, entity_symbol: Optional[str]) -> NewsArticle:
 def _fallback_digest(rows: list[dict], entity_symbol: Optional[str], reason: str) -> NewsDigest:
     """No AI analysis available (key unset or the call failed) - the raw,
     unfiltered, unscored marketaux headlines are still useful on their own."""
-    return NewsDigest(
-        bias="neutral",
-        bias_reason=reason,
-        digest=reason,
-        articles=[_to_article(row, entity_symbol) for row in rows[:_MAX_ARTICLES_IN_DIGEST]],
-    )
+    articles = [_to_article(row, entity_symbol) for row in rows[:_MAX_ARTICLES_IN_DIGEST]]
+    articles.sort(key=lambda a: a.published_at, reverse=True)
+    return NewsDigest(bias="neutral", bias_reason=reason, digest=reason, articles=articles)
 
 
 def _analyze_via_ai(underlying: str, rows: list[dict], entity_symbol: Optional[str]) -> NewsDigest:
@@ -238,6 +237,10 @@ def _analyze_via_ai(underlying: str, rows: list[dict], entity_symbol: Optional[s
             article.relevance_score = entry.get("relevance_score")
             article.why = entry.get("why")
             scored_articles.append(article)
+        # The AI picks which articles matter but its own list order isn't
+        # meaningful (confirmed live - not chronological); newest-first is
+        # what the tab should actually show.
+        scored_articles.sort(key=lambda a: a.published_at, reverse=True)
 
         return NewsDigest(
             bias=parsed["bias"],
@@ -248,6 +251,30 @@ def _analyze_via_ai(underlying: str, rows: list[dict], entity_symbol: Optional[s
     except Exception as exc:
         logger.warning("OpenRouter news analysis failed for %s: %s", underlying, exc)
         return _fallback_digest(rows, entity_symbol, "AI analysis temporarily unavailable - showing raw headlines.")
+
+
+def _persist_digest(underlying: str, digest: NewsDigest) -> None:
+    """Logs one market_data.news_history row so this digest's bias/articles
+    can later be checked against what price actually did (see that table's
+    own comment in infra/postgres/init/05-market-data.sql). Best-effort -
+    a DB hiccup here shouldn't take down the News tab itself."""
+    db = SessionLocal()
+    try:
+        db.add(
+            NewsHistory(
+                underlying=underlying,
+                bias=digest.bias,
+                bias_reason=digest.bias_reason,
+                digest=digest.digest,
+                articles=[a.model_dump() for a in digest.articles],
+            )
+        )
+        db.commit()
+    except Exception:
+        logger.exception("failed to persist news_history row for %s", underlying)
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _refresh_crypto_bucket() -> None:
@@ -261,7 +288,9 @@ def _refresh_crypto_bucket() -> None:
             return
         for underlying, entity_symbol in _CRYPTO_SYMBOLS.items():
             matched = [row for row in rows if any(e.get("symbol") == entity_symbol for e in row.get("entities") or [])]
-            _cache_set(underlying, _analyze_via_ai(underlying, matched, entity_symbol))
+            digest = _analyze_via_ai(underlying, matched, entity_symbol)
+            _cache_set(underlying, digest)
+            _persist_digest(underlying, digest)
 
 
 def _refresh_search_underlying(underlying: str) -> None:
@@ -286,7 +315,9 @@ def _refresh_search_underlying(underlying: str) -> None:
         except Exception as exc:
             logger.warning("marketaux news refresh failed for %s: %s", underlying, exc)
             return
-        _cache_set(underlying, _analyze_via_ai(underlying, rows, None))
+        digest = _analyze_via_ai(underlying, rows, None)
+        _cache_set(underlying, digest)
+        _persist_digest(underlying, digest)
 
 
 def get_news(underlying: str) -> NewsDigest:

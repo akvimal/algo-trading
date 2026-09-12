@@ -4,12 +4,12 @@ from app.config import settings
 from app.providers import news
 
 
-def _row(title: str, entities: list[dict]) -> dict:
+def _row(title: str, entities: list[dict], published_at: str = "2026-09-12T00:00:00.000000Z") -> dict:
     return {
         "title": title,
         "url": f"https://example.com/{title}",
         "source": "example.com",
-        "published_at": "2026-09-12T00:00:00.000000Z",
+        "published_at": published_at,
         "image_url": None,
         "entities": entities,
     }
@@ -19,6 +19,32 @@ def _row(title: str, entities: list[dict]) -> dict:
 def _fake_api_key(monkeypatch):
     monkeypatch.setattr(settings, "marketaux_api_key", "test-key")
     monkeypatch.setattr(settings, "openrouter_api_key", "")  # AI off unless a test opts in
+
+
+class _NoopSession:
+    def add(self, obj):
+        pass
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _stub_session_local(monkeypatch):
+    """_refresh_crypto_bucket/_refresh_search_underlying call _persist_digest
+    on every refresh, which opens a real SessionLocal() - without stubbing
+    it, every test above would try to write to whatever Postgres
+    settings.database_url happens to point at (e.g. the dev stack on a dev
+    machine). Tests that want to verify persistence itself override this
+    back with their own fake session (see below) - since monkeypatch is
+    shared per test, a later setattr in the test body wins over this one."""
+    monkeypatch.setattr(news, "SessionLocal", lambda: _NoopSession())
 
 
 def test_get_news_rejects_unsupported_underlying():
@@ -191,3 +217,107 @@ def test_ai_analysis_failure_falls_back_to_unscored_headlines(monkeypatch):
     assert digest.bias == "neutral"
     assert digest.articles[0].title == "Gold rises on Fed bets"
     assert digest.articles[0].relevance_score is None
+
+
+def test_ai_scored_articles_are_sorted_newest_first(monkeypatch):
+    """Confirmed live: the AI's own article order isn't chronological (it
+    orders by whatever it judged most relevant) - the tab should still
+    show newest first regardless of that order."""
+    monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
+    rows = [
+        _row("Older article", [{"symbol": "CC:BTC"}], published_at="2026-09-10T00:00:00.000000Z"),
+        _row("Newest article", [{"symbol": "CC:BTC"}], published_at="2026-09-12T00:00:00.000000Z"),
+        _row("Middle article", [{"symbol": "CC:BTC"}], published_at="2026-09-11T00:00:00.000000Z"),
+    ]
+    monkeypatch.setattr(news, "_fetch", lambda params: rows)
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": {
+                                "bias": "neutral",
+                                "bias_reason": "mixed",
+                                "digest": "mixed signals",
+                                # Deliberately NOT in chronological order.
+                                "articles": [
+                                    {"url": rows[0]["url"], "relevance_score": 90, "why": "x"},
+                                    {"url": rows[1]["url"], "relevance_score": 50, "why": "y"},
+                                    {"url": rows[2]["url"], "relevance_score": 70, "why": "z"},
+                                ],
+                            }
+                        }
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(news.requests, "post", lambda *a, **k: FakeResponse())
+
+    digest = news.get_news("BTCUSD")
+
+    assert [a.title for a in digest.articles] == ["Newest article", "Middle article", "Older article"]
+
+
+def test_persist_digest_writes_a_news_history_row(monkeypatch):
+    added = []
+
+    class FakeSession:
+        def add(self, obj):
+            added.append(obj)
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(news, "SessionLocal", lambda: FakeSession())
+
+    digest = news.NewsDigest(
+        bias="bullish",
+        bias_reason="Strong demand",
+        digest="Demand is picking up.",
+        articles=[
+            news.NewsArticle(
+                title="Test headline",
+                url="https://example.com/test",
+                source="example.com",
+                published_at="2026-09-12T00:00:00.000000Z",
+                relevance_score=80,
+                why="Direct demand signal.",
+            )
+        ],
+    )
+
+    news._persist_digest("BTCUSD", digest)
+
+    assert len(added) == 1
+    row = added[0]
+    assert row.underlying == "BTCUSD"
+    assert row.bias == "bullish"
+    assert row.articles[0]["title"] == "Test headline"
+
+
+def test_persist_digest_failure_does_not_raise(monkeypatch):
+    class FailingSession:
+        def add(self, obj):
+            raise RuntimeError("db is down")
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(news, "SessionLocal", lambda: FailingSession())
+
+    digest = news.NewsDigest(bias="neutral", bias_reason="n/a", digest="n/a", articles=[])
+    news._persist_digest("BTCUSD", digest)  # should not raise

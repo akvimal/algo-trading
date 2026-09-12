@@ -71,3 +71,24 @@ CREATE TABLE IF NOT EXISTS market_data.price_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_price_alerts_active
     ON market_data.price_alerts (active) WHERE active;
+
+-- One row per underlying per news-cache refresh (see app/providers/news.py's
+-- _refresh_crypto_bucket/_refresh_search_underlying) - the AI trend-relevance
+-- digest (bias/bias_reason/digest) plus the scored articles it was built
+-- from, so a past prediction can later be checked against what price
+-- actually did (same "append-only, checked against reality later" purpose
+-- as sentiment_history above). `articles` is the same shape GET /news
+-- returns for `articles`, stored as JSONB rather than a child table since
+-- it's never queried below the whole-row granularity.
+CREATE TABLE IF NOT EXISTS market_data.news_history (
+    id          BIGSERIAL PRIMARY KEY,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    underlying  TEXT NOT NULL,
+    bias        TEXT NOT NULL,
+    bias_reason TEXT NOT NULL,
+    digest      TEXT NOT NULL,
+    articles    JSONB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_history_underlying_time
+    ON market_data.news_history (underlying, recorded_at DESC);

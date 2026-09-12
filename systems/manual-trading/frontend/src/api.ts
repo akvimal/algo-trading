@@ -659,6 +659,46 @@ const SIGNAL_ENGINE_BASE_URL = `http://${location.hostname}:${SIGNAL_ENGINE_PORT
 // for the universe picker below, same pattern as signal-engine above.
 const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
 
+// Bare fetch() has no timeout and rejects with a bare, unhelpful
+// "TypeError: Failed to fetch" on any network-level hiccup - a dropped
+// connection, or a backend momentarily queued behind e.g. market-data's
+// own Dhan rate-limit throttle. Several call sites showed that raw
+// message straight to the user with no recovery attempt. This wraps
+// every fetch() in this file with a request timeout and exactly one
+// retry (short backoff) for that class of failure only - never for an
+// actual HTTP response, even an error one, since that's a real answer
+// from the server, not a transient network problem.
+const FETCH_TIMEOUT_MS = 10000;
+const FETCH_RETRY_DELAY_MS = 400;
+
+// A non-native crypto interval (e.g. "3min" on Delta, which only has
+// native 1/5/15/30/60min resolutions) forces the backend to fetch and
+// locally aggregate raw 1-minute candles across the whole lookback range,
+// chunked behind Delta's own rate-limit throttle - GET /candles/history,
+// /order-blocks and /regime each do this independently for the same
+// symbol, so all three can legitimately take much longer than the default
+// timeout even though the server is fine. Give just these three a longer
+// budget rather than raising it for every call (most of which should
+// still fail fast on a real connectivity problem).
+const CHART_DATA_FETCH_TIMEOUT_MS = 40000;
+
+async function resilientFetch(input: string, init?: RequestInit, timeoutMs: number = FETCH_TIMEOUT_MS): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, { ...init, signal: controller.signal });
+    } catch (e) {
+      if (attempt > 0) {
+        throw new Error("Connection issue - could not reach the server. Check your connection and try again.");
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, FETCH_RETRY_DELAY_MS));
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+}
+
 // FastAPI's own error body shape is {"detail": "..."} - a specific reason
 // (e.g. DELETE /rules/{id}'s own "cannot delete rule - 2 strategies still
 // reference it") is far more useful to show than the bare status code
@@ -683,12 +723,12 @@ async function asJson<T>(res: Response, what: string): Promise<T> {
 }
 
 export async function fetchIndicators(): Promise<Indicator[]> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`);
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`);
   return asJson(res, "GET /indicators");
 }
 
 export async function createIndicator(payload: IndicatorCreate): Promise<Indicator> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -697,7 +737,7 @@ export async function createIndicator(payload: IndicatorCreate): Promise<Indicat
 }
 
 export async function updateIndicator(id: string, payload: IndicatorUpdate): Promise<Indicator> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -706,19 +746,19 @@ export async function updateIndicator(id: string, payload: IndicatorUpdate): Pro
 }
 
 export async function deleteIndicator(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, { method: "DELETE" });
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /indicators/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
 export async function fetchRules(): Promise<Rule[]> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules`);
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules`);
   return asJson(res, "GET /rules");
 }
 
 export async function createRule(payload: RuleCreate): Promise<Rule> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -727,7 +767,7 @@ export async function createRule(payload: RuleCreate): Promise<Rule> {
 }
 
 export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -736,7 +776,7 @@ export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule>
 }
 
 export async function deleteRule(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, { method: "DELETE" });
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /rules/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -749,7 +789,7 @@ export async function backtestRule(
   overrides: RuleBacktestRequest = {},
 ): Promise<BacktestResult | UniverseBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest?${params}`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(overrides),
@@ -758,12 +798,12 @@ export async function backtestRule(
 }
 
 export async function listSavedBacktests(ruleId: string): Promise<SavedBacktestSummary[]> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`);
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`);
   return asJson(res, "GET /rules/{id}/saved-backtests");
 }
 
 export async function createSavedBacktest(ruleId: string, payload: SavedBacktestCreate): Promise<SavedBacktestOut> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -772,12 +812,12 @@ export async function createSavedBacktest(ruleId: string, payload: SavedBacktest
 }
 
 export async function getSavedBacktest(id: string): Promise<SavedBacktestOut> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`);
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`);
   return asJson(res, "GET /saved-backtests/{id}");
 }
 
 export async function deleteSavedBacktest(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /saved-backtests/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -794,7 +834,7 @@ export async function backtestRuleGrid(
   overrides: Omit<RuleBacktestGridRequest, "param_grid"> = {},
 ): Promise<GridBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...overrides, param_grid: paramGrid }),
@@ -804,12 +844,12 @@ export async function backtestRuleGrid(
 
 export async function fetchStrategies(sourceType?: SourceType): Promise<Strategy[]> {
   const params = sourceType ? `?source_type=${sourceType}` : "";
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies${params}`);
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies${params}`);
   return asJson(res, "GET /strategies");
 }
 
 export async function createStrategy(payload: StrategyCreate): Promise<Strategy> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -818,7 +858,7 @@ export async function createStrategy(payload: StrategyCreate): Promise<Strategy>
 }
 
 export async function updateStrategy(id: string, payload: StrategyEdit): Promise<Strategy> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -827,7 +867,7 @@ export async function updateStrategy(id: string, payload: StrategyEdit): Promise
 }
 
 export async function deleteStrategy(id: string): Promise<void> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, { method: "DELETE" });
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /strategies/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -835,7 +875,7 @@ export async function deleteStrategy(id: string): Promise<void> {
 
 export async function fetchSignalsForStrategy(strategyId: string, limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ strategy_id: strategyId, limit: String(limit) });
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals?strategy_id=...");
 }
 
@@ -844,7 +884,7 @@ export async function fetchSignalsForStrategy(strategyId: string, limit = 20): P
 // ANY strategy, not just whichever one's row happens to be expanded.
 export async function fetchRecentSignals(limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals");
 }
 
@@ -864,7 +904,7 @@ export async function sendManualSignal(payload: {
   action: "BUY" | "SELL";
   price: number;
 }): Promise<{ signal_id: string; status: string }> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals`, {
+  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/signals`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, source: "manual", source_meta: {} }),
@@ -876,7 +916,7 @@ export async function sendManualSignal(payload: {
 // universe picker when underlying_type='universe'. market-data owns this
 // list (see its app/providers/nse_indices.py).
 export async function fetchUniverses(): Promise<string[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/universes`);
+  const res = await resilientFetch(`${MARKET_DATA_BASE_URL}/instruments/universes`);
   const data = await asJson<{ universes: string[] }>(res, "GET /instruments/universes");
   return data.universes;
 }
@@ -886,7 +926,7 @@ export async function fetchUniverses(): Promise<string[]> {
 // tradeable symbol is chosen instead of typed free-hand. CRYPTO-only -
 // NSE/MCX symbols stay a free-text input, see ManualTab.tsx.
 export async function fetchCryptoSymbols(): Promise<string[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/crypto-symbols`);
+  const res = await resilientFetch(`${MARKET_DATA_BASE_URL}/instruments/crypto-symbols`);
   const data = await asJson<{ symbols: string[] }>(res, "GET /instruments/crypto-symbols");
   return data.symbols;
 }
@@ -920,7 +960,7 @@ export type ResolvedUnderlying = {
 };
 
 export async function resolveUnderlying(segment: string, underlying: string): Promise<ResolvedUnderlying> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/resolve?${new URLSearchParams({ segment, underlying })}`);
+  const res = await resilientFetch(`${MARKET_DATA_BASE_URL}/instruments/resolve?${new URLSearchParams({ segment, underlying })}`);
   return asJson<ResolvedUnderlying>(res, `GET /instruments/resolve (${segment}/${underlying})`);
 }
 
@@ -929,7 +969,7 @@ export async function resolveUnderlying(segment: string, underlying: string): Pr
 // with no futures (CRYPTO perpetuals) - just don't render the picker.
 export type FutureContract = { trading_symbol: string; expiry_date: string; exchange: string };
 export async function fetchFutureContracts(segment: string, underlying: string): Promise<FutureContract[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/futures?${new URLSearchParams({ segment, underlying })}`);
+  const res = await resilientFetch(`${MARKET_DATA_BASE_URL}/instruments/futures?${new URLSearchParams({ segment, underlying })}`);
   return asJson<FutureContract[]>(res, `GET /instruments/futures (${segment}/${underlying})`);
 }
 
@@ -939,7 +979,7 @@ export async function fetchFutureContracts(segment: string, underlying: string):
 // "Lots" quantity field for CRYPTO futures, matching execution's own
 // lot-based sizing (see docs/architecture.md).
 export async function fetchLotSize(exchange: string, symbol: string): Promise<number> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/lot-size?${new URLSearchParams({ exchange, symbol })}`);
+  const res = await resilientFetch(`${MARKET_DATA_BASE_URL}/instruments/lot-size?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ lot_size: number }>(res, `GET /instruments/lot-size (${exchange}/${symbol})`);
   return data.lot_size;
 }
@@ -1132,6 +1172,8 @@ export async function fetchCandleHistory(
 ): Promise<Candle[]> {
   const res = await authFetch(
     `${MARKET_DATA_BASE_URL}/candles/history?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
+    undefined,
+    CHART_DATA_FETCH_TIMEOUT_MS,
   );
   return asJson<Candle[]>(res, `GET /candles/history (${exchange}/${symbol}/${interval})`);
 }
@@ -1252,7 +1294,7 @@ export async function fetchChartStructure(
   if (opts.breakers) params.set("breakers", "true");
   if (opts.fvg) params.set("fvg", "true");
   if (opts.setups) params.set("setups", "true");
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/order-blocks?${params}`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/order-blocks?${params}`, undefined, CHART_DATA_FETCH_TIMEOUT_MS);
   return asJson<ChartStructure>(res, `GET /order-blocks (${exchange}/${symbol}/${interval})`);
 }
 
@@ -1269,6 +1311,8 @@ export type MarketRegime = {
 export async function fetchRegime(exchange: string, symbol: string, interval: string): Promise<MarketRegime> {
   const res = await authFetch(
     `${MARKET_DATA_BASE_URL}/regime?${new URLSearchParams({ exchange, symbol, interval })}`,
+    undefined,
+    CHART_DATA_FETCH_TIMEOUT_MS,
   );
   return asJson<MarketRegime>(res, `GET /regime (${exchange}/${symbol}/${interval})`);
 }
@@ -1292,7 +1336,7 @@ export type DataAvailability = {
 };
 
 export async function fetchDataAvailability(exchange: string, symbol: string, interval: string): Promise<DataAvailability> {
-  const res = await fetch(
+  const res = await resilientFetch(
     `${MARKET_DATA_BASE_URL}/candles/availability?${new URLSearchParams({ exchange, symbol, interval })}`,
   );
   return asJson<DataAvailability>(res, `GET /candles/availability (${exchange}/${symbol}/${interval})`);
@@ -1315,7 +1359,7 @@ export async function fetchCandleCacheStatus(
   from: string,
   to: string,
 ): Promise<CandleCacheStatus> {
-  const res = await fetch(
+  const res = await resilientFetch(
     `${MARKET_DATA_BASE_URL}/candles/cache-status?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
   );
   return asJson<CandleCacheStatus>(res, `GET /candles/cache-status (${exchange}/${symbol}/${interval})`);
@@ -1325,7 +1369,7 @@ export async function fetchCandleCacheStatus(
 // backtest run for this exact symbol/interval/range genuinely re-fetches
 // from the provider instead of serving the cached copy.
 export async function clearCandleCache(exchange: string, symbol: string, interval: string, from: string, to: string): Promise<void> {
-  const res = await fetch(
+  const res = await resilientFetch(
     `${MARKET_DATA_BASE_URL}/candles/cache/clear?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
     { method: "POST" },
   );
@@ -1357,11 +1401,11 @@ const EXECUTION_BASE_URL = `http://${location.hostname}:${EXECUTION_PORT}`;
 // a domain error), so it's safe to treat any 401 as "session expired" and
 // force back to the login screen - the reload re-mounts AuthGate, which
 // picks up the now-empty token and renders LoginPage.
-function authFetch(input: string, init?: RequestInit): Promise<Response> {
+function authFetch(input: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   const token = getAuthToken();
   const headers = new Headers(init?.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(input, { ...init, headers }).then((res) => {
+  return resilientFetch(input, { ...init, headers }, timeoutMs).then((res) => {
     if (res.status === 401) {
       clearAuthToken();
       window.location.reload();

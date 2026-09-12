@@ -370,12 +370,15 @@ class DeltaProvider(QuoteProvider):
         regardless of how many symbols are asked for, same goal
         DhanProvider.get_ltp_batch has via a different mechanism."""
         with self._ticker_lock:
-            wait = MIN_TICKER_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_ticker_call_at)
+            now = time.monotonic()
+            wait = MIN_TICKER_CALL_INTERVAL_SECONDS - (now - self._last_ticker_call_at)
             if wait > MAX_THROTTLE_WAIT_SECONDS:
                 raise RuntimeError(f"Delta ticker queue is backed up ({wait:.1f}s wait) - try again shortly")
-            if wait > 0:
-                time.sleep(wait)
-            self._last_ticker_call_at = time.monotonic()
+            next_at = max(now, self._last_ticker_call_at + MIN_TICKER_CALL_INTERVAL_SECONDS)
+            self._last_ticker_call_at = next_at
+        wait = next_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
 
         resp = requests.get(
             f"{settings.delta_base_url}/v2/tickers", params={"contract_types": "perpetual_futures"}, timeout=15
@@ -489,12 +492,15 @@ class DeltaProvider(QuoteProvider):
         resolution = _RESOLUTION_BY_MINUTES[interval_minutes]
 
         with self._candle_lock:
-            wait = MIN_CANDLE_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_candle_call_at)
+            now = time.monotonic()
+            wait = MIN_CANDLE_CALL_INTERVAL_SECONDS - (now - self._last_candle_call_at)
             if wait > MAX_THROTTLE_WAIT_SECONDS:
                 raise RuntimeError(f"Delta candle queue is backed up ({wait:.1f}s wait) - try again shortly")
-            if wait > 0:
-                time.sleep(wait)
-            self._last_candle_call_at = time.monotonic()
+            next_at = max(now, self._last_candle_call_at + MIN_CANDLE_CALL_INTERVAL_SECONDS)
+            self._last_candle_call_at = next_at
+        wait = next_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
 
         resp = requests.get(
             f"{settings.delta_base_url}/v2/history/candles",
@@ -677,12 +683,15 @@ class DeltaProvider(QuoteProvider):
             return cached
 
         with self._option_lock:
-            wait = MIN_OPTION_CALL_INTERVAL_SECONDS - (time.monotonic() - self._last_option_call_at)
+            now = time.monotonic()
+            wait = MIN_OPTION_CALL_INTERVAL_SECONDS - (now - self._last_option_call_at)
             if wait > MAX_THROTTLE_WAIT_SECONDS:
                 raise RuntimeError(f"Delta option queue is backed up ({wait:.1f}s wait) - try again shortly")
-            if wait > 0:
-                time.sleep(wait)
-            self._last_option_call_at = time.monotonic()
+            next_at = max(now, self._last_option_call_at + MIN_OPTION_CALL_INTERVAL_SECONDS)
+            self._last_option_call_at = next_at
+        wait = next_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
 
         resp = requests.get(
             f"{settings.delta_base_url}/v2/tickers",

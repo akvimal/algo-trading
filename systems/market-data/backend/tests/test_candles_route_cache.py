@@ -8,7 +8,8 @@ signal-generation's own route tests already use - this backend has no
 TestClient-based route test layer either (confirmed: no conftest.py, no
 TestClient usage anywhere in tests/)."""
 
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -72,19 +73,39 @@ def test_get_candle_history_cache_returns_the_same_data(monkeypatch):
     assert first == second
 
 
-def test_history_cache_ttl_historical_range_is_long():
+def test_history_cache_fresh_for_historical_range_within_ttl():
     yesterday = date.today() - timedelta(days=1)
-    assert candles_route._history_cache_ttl_seconds("15min", yesterday) == candles_route._HISTORICAL_RANGE_TTL_SECONDS
+    fetched_at_monotonic = time.monotonic() - 60  # 1 minute ago
+    assert candles_route._is_cache_fresh("15min", yesterday, fetched_at_monotonic, datetime.now(timezone.utc)) is True
 
 
-def test_history_cache_ttl_range_including_today_scoped_to_interval():
+def test_history_cache_stale_for_historical_range_past_ttl():
+    yesterday = date.today() - timedelta(days=1)
+    fetched_at_monotonic = time.monotonic() - candles_route._HISTORICAL_RANGE_TTL_SECONDS - 1
+    assert candles_route._is_cache_fresh("15min", yesterday, fetched_at_monotonic, datetime.now(timezone.utc)) is False
+
+
+def test_history_cache_fresh_for_live_range_within_same_bar():
     today = date.today()
-    assert candles_route._history_cache_ttl_seconds("15min", today) == 15 * 60
-    assert candles_route._history_cache_ttl_seconds("60min", today) == 60 * 60
+    fetched_at_wall = datetime.now(timezone.utc)
+    assert candles_route._is_cache_fresh("15min", today, time.monotonic(), fetched_at_wall) is True
+    assert candles_route._is_cache_fresh("60min", today, time.monotonic(), fetched_at_wall) is True
 
 
-def test_history_cache_ttl_daily_interval_gets_a_long_fallback():
-    assert candles_route._history_cache_ttl_seconds("daily", date.today()) == 1440 * 60
+def test_history_cache_stale_for_live_range_once_bar_boundary_crossed():
+    # A fetch from well over one bar ago must be treated as stale even
+    # though a flat elapsed-seconds TTL might not have expired yet - this
+    # is exactly the bug being fixed (a mid-bar fetch staying "valid"
+    # past the next bar's actual close).
+    today = date.today()
+    fetched_at_wall = datetime.now(timezone.utc) - timedelta(minutes=20)
+    assert candles_route._is_cache_fresh("15min", today, time.monotonic(), fetched_at_wall) is False
+
+
+def test_history_cache_fresh_for_daily_interval_within_same_day():
+    today = date.today()
+    fetched_at_wall = datetime.now(timezone.utc)
+    assert candles_route._is_cache_fresh("daily", today, time.monotonic(), fetched_at_wall) is True
 
 
 # --- GET /candles/cache-status / POST /candles/cache/clear -------------------------------------

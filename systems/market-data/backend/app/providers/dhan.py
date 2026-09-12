@@ -778,14 +778,26 @@ class DhanProvider(QuoteProvider):
         shared across every DhanProvider instance, not per-instance),
         keyed by `key` (None = platform-default credential, str(user_id)
         for a BYO one - see DhanCredentials's own docstring) so each gets
-        an independent rate-limit clock."""
+        an independent rate-limit clock.
+
+        Reserves this call's slot atomically under `lock` (so concurrent
+        callers for the same key queue up min_interval apart rather than
+        racing), then sleeps *outside* the lock - holding it across
+        time.sleep() serialized every caller for every key on one mutex,
+        which under manual-trading's several concurrent pollers stretched
+        request latency enough to surface as "Failed to fetch" in the
+        browser."""
         with lock:
-            wait = min_interval - (time.monotonic() - timestamps.get(key, 0.0))
+            now = time.monotonic()
+            last = timestamps.get(key, 0.0)
+            wait = min_interval - (now - last)
             if wait > MAX_THROTTLE_WAIT_SECONDS:
                 raise RuntimeError(f"Dhan {label} queue is backed up ({wait:.1f}s wait) - try again shortly")
-            if wait > 0:
-                time.sleep(wait)
-            timestamps[key] = time.monotonic()
+            next_at = max(now, last + min_interval)
+            timestamps[key] = next_at
+        wait = next_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
 
     def sync_instruments(self) -> dict:
         logger.info("syncing Dhan instrument master from %s (%s)", INSTRUMENT_MASTER_URL, self.name)

@@ -37,21 +37,32 @@ _history_cache: dict[tuple[str, str, str, date, date], tuple[list[Candle], float
 
 # A range ending strictly before today is a genuinely completed, immutable
 # series - nothing about it will ever change, so it's safe to cache far
-# longer than any live-trailing-edge concern would allow. A range
-# reaching up to today can still gain a fresh completed candle every
-# `interval`, so that TTL is scoped to the interval itself instead (the
-# regex only sizes the cache window - the provider itself is what
-# actually validates the interval string, this never rejects one).
+# longer than any live-trailing-edge concern would allow.
 _HISTORICAL_RANGE_TTL_SECONDS = 24 * 3600
 _INTERVAL_MINUTES_RE = re.compile(r"^(\d+)")
 
 
-def _history_cache_ttl_seconds(interval: str, to_date: date) -> float:
+def _is_cache_fresh(interval: str, to_date: date, fetched_at_monotonic: float, fetched_at_wall: datetime) -> bool:
+    """Whether a cached (interval, to_date) entry is still usable. A
+    completed range (to_date before today) is immutable, so a flat,
+    long, monotonic-clock TTL is safe (immune to wall-clock adjustments).
+
+    A live range (reaching up to today) gains a newly-completed candle at
+    each bar's own close boundary - a flat "one interval's worth of
+    elapsed seconds since fetch" TTL let a fetch made mid-bar stay valid
+    well past the *next* bar's actual close (up to a full interval late),
+    so the live chart's own reconciliation poll (LiveChartPanel.tsx's
+    histTimer) could silently miss the just-closed candle for nearly a
+    full interval. Comparing bar-boundary indices against the stored
+    wall-clock fetch time instead invalidates exactly when a new bar
+    closes, regardless of how far into the previous bar the fetch landed."""
     if to_date < date.today():
-        return _HISTORICAL_RANGE_TTL_SECONDS
+        return (time.monotonic() - fetched_at_monotonic) < _HISTORICAL_RANGE_TTL_SECONDS
     match = _INTERVAL_MINUTES_RE.match(interval)
     minutes = int(match.group(1)) if match else 1440  # "daily" (or anything unparsed) - new bars are rare either way
-    return minutes * 60
+    interval_seconds = minutes * 60
+    now = datetime.now(timezone.utc)
+    return int(fetched_at_wall.timestamp() // interval_seconds) == int(now.timestamp() // interval_seconds)
 
 
 @router.get("/candles/previous", response_model=Candle)
@@ -96,7 +107,7 @@ def get_candle_history(
     one value. `from_` (query param `from`) defaults to 7 days back,
     `to` defaults to today, if omitted. Cached per exact (exchange,
     symbol, interval, from_date, to_date) tuple - see
-    _history_cache_ttl_seconds for how long. Note: this route-level cache
+    _is_cache_fresh for how long. Note: this route-level cache
     isn't credential-aware (a cache hit returns the same candle DATA
     regardless of who fetched it originally, so this is harmless - it
     just means a cache hit never even resolves BYO credentials, which is
@@ -127,12 +138,11 @@ def fetch_candle_history_cached(provider, exchange, symbol, interval, from_date,
     interval) / RuntimeError (provider error) for the caller to map. The
     cache isn't credential-aware - see GET /candles/history's docstring."""
     cache_key = (exchange, symbol, interval, from_date, to_date)
-    ttl = _history_cache_ttl_seconds(interval, to_date)
     with _history_cache_lock:
         cached = _history_cache.get(cache_key)
     if cached is not None:
-        candles, fetched_at, _ = cached
-        if (time.monotonic() - fetched_at) < ttl:
+        candles, fetched_at_monotonic, fetched_at_wall = cached
+        if _is_cache_fresh(interval, to_date, fetched_at_monotonic, fetched_at_wall):
             return candles
 
     candles = provider.get_candle_history(symbol, interval, from_date, to_date, credentials=credentials)
@@ -161,14 +171,13 @@ def get_candle_cache_status(
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
     cache_key = (exchange, symbol, interval, from_date, to_date)
-    ttl = _history_cache_ttl_seconds(interval, to_date)
     with _history_cache_lock:
         cached = _history_cache.get(cache_key)
     if cached is None:
         return CandleCacheStatus(cached=False)
 
     _, fetched_at_monotonic, fetched_at_wall = cached
-    if (time.monotonic() - fetched_at_monotonic) >= ttl:
+    if not _is_cache_fresh(interval, to_date, fetched_at_monotonic, fetched_at_wall):
         return CandleCacheStatus(cached=False)
     return CandleCacheStatus(cached=True, fetched_at=fetched_at_wall.isoformat())
 

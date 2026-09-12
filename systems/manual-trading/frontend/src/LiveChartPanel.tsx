@@ -1093,10 +1093,14 @@ function loadStructureConfig(): StructureConfig {
   }
 }
 
-// LTP poll cadence for the still-forming bar - matches WorkspacePage's
-// own 5s watch loop; market-data's LTP cache is short-lived, so polling
-// faster than this just re-reads the same number.
-const LTP_POLL_MS = 5000;
+// LTP poll cadence for the still-forming bar. Was 5000ms (matching
+// WorkspacePage's own watch loop), which was the dominant source of the
+// "doesn't feel live" lag - market-data's real floor is its ~2s Dhan
+// self-throttle plus a 3s quote cache (QUOTE_CACHE_TTL_SECONDS in
+// app/api/routes/dhan.py), so polling much faster than ~2s just re-reads
+// the same cached number, but polling slower than that leaves the chart
+// visibly behind for no reason.
+const LTP_POLL_MS = 2000;
 
 // --- Setup alerts. When a structure refresh surfaces a new planned
 // (`confirmed`) or live (`triggered`) setup, we show a strip above the

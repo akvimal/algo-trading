@@ -153,3 +153,62 @@ def test_clear_candle_cache_entry_forces_a_real_refetch(monkeypatch):
 
 def test_clear_candle_cache_entry_is_a_noop_when_nothing_cached():
     candles_route.clear_candle_cache_entry("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))  # no error
+
+
+# --- source=yahoo -------------------------------------------------------
+
+
+def test_source_yahoo_never_resolves_a_quote_provider(monkeypatch):
+    def fail_get_provider(exchange):
+        raise AssertionError("source=yahoo must not call get_provider at all")
+
+    monkeypatch.setattr(candles_route, "get_provider", fail_get_provider)
+    monkeypatch.setattr(
+        candles_route.yahoo,
+        "get_candle_history",
+        lambda exchange, symbol, interval, from_date, to_date: [
+            Candle(exchange=exchange, symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, volume=1, timestamp=f"{from_date}T00:00:00", provider="yahoo")
+        ],
+    )
+
+    candles = candles_route.get_candle_history("NSE", "ABB", "daily", date(2026, 1, 1), date(2026, 6, 1), source="yahoo")
+
+    assert candles[0].provider == "yahoo"
+
+
+def test_source_yahoo_and_default_source_are_separate_cache_entries(monkeypatch):
+    provider = FakeProvider()
+    yahoo_calls = []
+    monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
+    monkeypatch.setattr(
+        candles_route.yahoo,
+        "get_candle_history",
+        lambda exchange, symbol, interval, from_date, to_date: yahoo_calls.append(1)
+        or [Candle(exchange=exchange, symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, volume=1, timestamp=f"{from_date}T00:00:00", provider="yahoo")],
+    )
+
+    from_date, to_date = date(2026, 1, 1), date(2026, 6, 1)
+    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date, source="yahoo")
+    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date)  # no source - Dhan path
+
+    assert len(yahoo_calls) == 1
+    assert provider.call_count == 1
+
+
+def test_cache_status_and_clear_are_source_scoped(monkeypatch):
+    monkeypatch.setattr(
+        candles_route.yahoo,
+        "get_candle_history",
+        lambda exchange, symbol, interval, from_date, to_date: [
+            Candle(exchange=exchange, symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, volume=1, timestamp=f"{from_date}T00:00:00", provider="yahoo")
+        ],
+    )
+
+    from_date, to_date = date(2026, 1, 1), date(2026, 6, 1)
+    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date, source="yahoo")
+
+    assert candles_route.get_candle_cache_status("NSE", "ABB", "daily", from_date, to_date, source="yahoo").cached is True
+    assert candles_route.get_candle_cache_status("NSE", "ABB", "daily", from_date, to_date).cached is False  # no source - different key
+
+    candles_route.clear_candle_cache_entry("NSE", "ABB", "daily", from_date, to_date)  # clearing the no-source key...
+    assert candles_route.get_candle_cache_status("NSE", "ABB", "daily", from_date, to_date, source="yahoo").cached is True  # ...leaves yahoo's untouched

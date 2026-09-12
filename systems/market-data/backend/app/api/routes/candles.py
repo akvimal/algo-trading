@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.adapters.accounts_client import get_user_dhan_credentials
 from app.auth import get_optional_user_id
 from app.domain.models import Candle, CandleCacheStatus, DataAvailability
+from app.providers import yahoo
 from app.providers.router import get_provider
 
 router = APIRouter()
@@ -33,7 +34,7 @@ router = APIRouter()
 # human-readable fetched_at - monotonic time has no fixed epoch, so it
 # can't be rendered as a timestamp).
 _history_cache_lock = threading.Lock()
-_history_cache: dict[tuple[str, str, str, date, date], tuple[list[Candle], float, datetime]] = {}
+_history_cache: dict[tuple[str, str, str, date, date, Optional[str]], tuple[list[Candle], float, datetime]] = {}
 
 # A range ending strictly before today is a genuinely completed, immutable
 # series - nothing about it will ever change, so it's safe to cache far
@@ -99,6 +100,7 @@ def get_candle_history(
     interval: str,
     from_: Optional[date] = Query(default=None, alias="from"),
     to: Optional[date] = None,
+    source: Optional[str] = None,
     user_id: Optional[UUID] = Depends(get_optional_user_id),
 ):
     """A general multi-bar series over [from_, to] - used to warm up
@@ -106,38 +108,49 @@ def get_candle_history(
     backtesting, unlike GET /candles/previous which only ever returns
     one value. `from_` (query param `from`) defaults to 7 days back,
     `to` defaults to today, if omitted. Cached per exact (exchange,
-    symbol, interval, from_date, to_date) tuple - see
+    symbol, interval, from_date, to_date, source) tuple - see
     _is_cache_fresh for how long. Note: this route-level cache
     isn't credential-aware (a cache hit returns the same candle DATA
     regardless of who fetched it originally, so this is harmless - it
     just means a cache hit never even resolves BYO credentials, which is
-    fine since candle values don't depend on whose token fetched them)."""
-    try:
-        provider = get_provider(exchange)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    fine since candle values don't depend on whose token fetched them).
+
+    `source=yahoo` bypasses the exchange's own quote provider (Dhan/Delta)
+    entirely and serves daily/weekly history from Yahoo Finance instead
+    (see app/providers/yahoo.py) - for long-history (>90 day) NSE OHLCV,
+    which Dhan's own history endpoint doesn't reliably carry that far
+    back. Any other interval, or a non-NSE exchange, 422s - Yahoo isn't
+    wired for intraday bars or MCX/CRYPTO."""
+    provider = None
+    if source != "yahoo":
+        try:
+            provider = get_provider(exchange)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     to_date = to or date.today()
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
     try:
         credentials = get_user_dhan_credentials(user_id) if user_id else None
-        return fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials)
+        return fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials, source=source)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-def fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials=None) -> list[Candle]:
-    """The cached (exchange, symbol, interval, from, to) fetch behind GET
-    /candles/history - also reused by GET /order-blocks, which needs the
-    same series (usually at a coarser interval than the chart is showing)
-    and benefits from the same cache. Takes an already-resolved `provider`
-    (the caller owns the unknown-exchange 404); raises ValueError (bad
-    interval) / RuntimeError (provider error) for the caller to map. The
-    cache isn't credential-aware - see GET /candles/history's docstring."""
-    cache_key = (exchange, symbol, interval, from_date, to_date)
+def fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials=None, source: Optional[str] = None) -> list[Candle]:
+    """The cached (exchange, symbol, interval, from, to, source) fetch
+    behind GET /candles/history - also reused by GET /order-blocks, which
+    needs the same series (usually at a coarser interval than the chart is
+    showing) and benefits from the same cache. Takes an already-resolved
+    `provider` (the caller owns the unknown-exchange 404) - None when
+    `source="yahoo"`, since that path never touches Dhan/Delta at all.
+    Raises ValueError (bad interval) / RuntimeError (provider error) for
+    the caller to map. The cache isn't credential-aware - see GET
+    /candles/history's docstring."""
+    cache_key = (exchange, symbol, interval, from_date, to_date, source)
     with _history_cache_lock:
         cached = _history_cache.get(cache_key)
     if cached is not None:
@@ -145,7 +158,10 @@ def fetch_candle_history_cached(provider, exchange, symbol, interval, from_date,
         if _is_cache_fresh(interval, to_date, fetched_at_monotonic, fetched_at_wall):
             return candles
 
-    candles = provider.get_candle_history(symbol, interval, from_date, to_date, credentials=credentials)
+    if source == "yahoo":
+        candles = yahoo.get_candle_history(exchange, symbol, interval, from_date, to_date)
+    else:
+        candles = provider.get_candle_history(symbol, interval, from_date, to_date, credentials=credentials)
     with _history_cache_lock:
         _history_cache[cache_key] = (candles, time.monotonic(), datetime.now(timezone.utc))
     return candles
@@ -158,19 +174,20 @@ def get_candle_cache_status(
     interval: str,
     from_: Optional[date] = Query(default=None, alias="from"),
     to: Optional[date] = None,
+    source: Optional[str] = None,
 ):
     """Whether GET /candles/history currently holds a live (not yet TTL-
     expired) cache entry for this exact tuple, and when it was fetched -
     backs the signal-generation backtest form's "data cached at HH:MM"
-    hint. Same from_/to defaulting as GET /candles/history itself, so a
-    caller passing the same args to both always asks about the same key -
-    doesn't validate exchange/interval against a real provider (an
+    hint. Same from_/to/source defaulting as GET /candles/history itself,
+    so a caller passing the same args to both always asks about the same
+    key - doesn't validate exchange/interval against a real provider (an
     unknown/malformed one just reports cached=False, same as a genuine
     miss, since there's nothing more specific to say)."""
     to_date = to or date.today()
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
-    cache_key = (exchange, symbol, interval, from_date, to_date)
+    cache_key = (exchange, symbol, interval, from_date, to_date, source)
     with _history_cache_lock:
         cached = _history_cache.get(cache_key)
     if cached is None:
@@ -189,6 +206,7 @@ def clear_candle_cache_entry(
     interval: str,
     from_: Optional[date] = Query(default=None, alias="from"),
     to: Optional[date] = None,
+    source: Optional[str] = None,
 ):
     """Evicts one exact cache entry (same tuple/defaulting as GET
     /candles/history and /candles/cache-status) - a manual "force refresh"
@@ -200,7 +218,7 @@ def clear_candle_cache_entry(
     to_date = to or date.today()
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
-    cache_key = (exchange, symbol, interval, from_date, to_date)
+    cache_key = (exchange, symbol, interval, from_date, to_date, source)
     with _history_cache_lock:
         _history_cache.pop(cache_key, None)
 

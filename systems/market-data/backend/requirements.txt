@@ -9,3 +9,6 @@ requests==2.32.3
 tzdata==2024.1
 websocket-client==1.8.0
 PyJWT==2.8.0
+# Long-history (>90 day) daily/weekly OHLCV for NSE equities/indices, where
+# Dhan's own history endpoint is capped - see app/providers/yahoo.py.
+yfinance==1.7.0

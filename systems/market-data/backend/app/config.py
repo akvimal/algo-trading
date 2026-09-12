@@ -123,5 +123,12 @@ class Settings(BaseSettings):
     # how that's budgeted. Blank -> GET /news 502s with a clear message.
     marketaux_api_key: str = ""
 
+    # OpenRouter (openrouter.ai) - turns the raw marketaux headlines into an
+    # AI trend-relevance digest (bias + filtered/scored articles), same News
+    # tab. Blank -> get_news() falls back to plain unscored headlines rather
+    # than failing the whole tab (see app/providers/news.py's _analyze_via_ai).
+    openrouter_api_key: str = ""
+    openrouter_model: str = "anthropic/claude-haiku-4.5"
+
 
 settings = Settings()

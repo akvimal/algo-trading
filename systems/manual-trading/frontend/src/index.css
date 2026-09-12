@@ -3036,14 +3036,66 @@ button.btn-exit {
   font-size: 0.78rem;
   line-height: 1.3;
 }
-.ctp-news-sentiment {
-  font-size: 0.6rem;
-  margin-right: 0.3rem;
+.ctp-news-relevance {
+  display: inline-block;
+  min-width: 1.3rem;
+  padding: 0 0.25rem;
+  margin-right: 0.35rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-align: center;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg));
+  color: var(--text-dim);
   vertical-align: middle;
+}
+.ctp-news-why {
+  font-size: 0.72rem;
+  margin-top: 0.1rem;
 }
 .ctp-news-meta {
   font-size: 0.7rem;
   margin-top: 0.15rem;
+}
+
+/* AI digest strip at the top of the News tab (bias + one-liner + short
+   summary) - a faint bias tint, same "wash" pattern as the trade panel's
+   own ctp-bull/ctp-bear. */
+.ctp-news-digest {
+  padding: 0.5rem 0.6rem;
+  margin-bottom: 0.3rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.ctp-news-bias-bullish {
+  background: color-mix(in srgb, var(--buy) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--buy) 35%, var(--border));
+}
+.ctp-news-bias-bearish {
+  background: color-mix(in srgb, var(--sell) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--sell) 35%, var(--border));
+}
+.ctp-news-digest-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+}
+.ctp-news-bias-badge {
+  font-weight: 700;
+  font-size: 0.74rem;
+}
+.ctp-news-bias-bullish .ctp-news-bias-badge {
+  color: var(--buy);
+}
+.ctp-news-bias-bearish .ctp-news-bias-badge {
+  color: var(--sell);
+}
+.ctp-news-digest-text {
+  margin: 0.25rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.35;
 }
 
 /* Two fields side by side (Strategy+Strike, Lots+SL) - each stacks its

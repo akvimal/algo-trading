@@ -1320,7 +1320,9 @@ export async function fetchRegime(exchange: string, symbol: string, interval: st
 // GET /news - the Live Chart's News tab. Cached server-side (market-data's
 // app/providers/news.py) against marketaux's 100-req/day free tier, so
 // this can be polled cheaply - a symbol-tab switch just re-reads whatever
-// that underlying's cache currently holds.
+// that underlying's cache currently holds. `relevance_score`/`why` are the
+// OpenRouter AI analysis layered on top of the raw marketaux headline -
+// both null when OPENROUTER_API_KEY isn't configured or that call failed.
 export type NewsArticle = {
   title: string;
   url: string;
@@ -1328,11 +1330,20 @@ export type NewsArticle = {
   published_at: string;
   image_url: string | null;
   sentiment_score: number | null;
+  relevance_score: number | null;
+  why: string | null;
 };
 
-export async function fetchNews(underlying: string): Promise<NewsArticle[]> {
+export type NewsDigest = {
+  bias: "bullish" | "bearish" | "neutral";
+  bias_reason: string;
+  digest: string;
+  articles: NewsArticle[];
+};
+
+export async function fetchNews(underlying: string): Promise<NewsDigest> {
   const res = await authFetch(`${MARKET_DATA_BASE_URL}/news?${new URLSearchParams({ underlying })}`);
-  return asJson<NewsArticle[]>(res, `GET /news (${underlying})`);
+  return asJson<NewsDigest>(res, `GET /news (${underlying})`);
 }
 
 // Backs the Rules page's backtest form - what date range is actually

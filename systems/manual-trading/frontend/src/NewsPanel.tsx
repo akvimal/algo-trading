@@ -1,18 +1,25 @@
 import { useEffect, useState } from "react";
 
-import { type NewsArticle, fetchNews } from "./api";
-import { formatCompact, pnlClass } from "./manualOrder";
+import { type NewsDigest, fetchNews } from "./api";
+import { formatCompact } from "./manualOrder";
 
-// News tab inside ChartTradePanel - a cached headline feed for the
+// News tab inside ChartTradePanel - an AI trend-relevance digest for the
 // chart's current underlying (server-side cache in market-data's
-// app/providers/news.py, backed by marketaux.com). Polls gently on an
-// interval so a cache refresh over there eventually shows up here without
-// the user having to switch tabs - cheap since it's just re-reading
-// market-data's own cache, not spending marketaux quota per poll.
+// app/providers/news.py: marketaux.com for raw headlines, OpenRouter for
+// the bias/relevance analysis on top). Polls gently on an interval so a
+// cache refresh over there eventually shows up here without the user
+// having to switch tabs - cheap since it's just re-reading market-data's
+// own cache, not spending marketaux/OpenRouter quota per poll.
 const POLL_MS = 3 * 60 * 1000;
 
+const BIAS_LABEL: Record<NewsDigest["bias"], string> = {
+  bullish: "Bullish",
+  bearish: "Bearish",
+  neutral: "Neutral",
+};
+
 export default function NewsPanel({ underlying }: { underlying: string }) {
-  const [articles, setArticles] = useState<NewsArticle[] | null>(null);
+  const [digest, setDigest] = useState<NewsDigest | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -20,9 +27,9 @@ export default function NewsPanel({ underlying }: { underlying: string }) {
 
     async function load() {
       try {
-        const rows = await fetchNews(underlying);
+        const d = await fetchNews(underlying);
         if (!cancelled) {
-          setArticles(rows);
+          setDigest(d);
           setError(null);
         }
       } catch (e) {
@@ -30,7 +37,7 @@ export default function NewsPanel({ underlying }: { underlying: string }) {
       }
     }
 
-    setArticles(null);
+    setDigest(null);
     setError(null);
     void load();
     const timer = window.setInterval(() => void load(), POLL_MS);
@@ -41,24 +48,30 @@ export default function NewsPanel({ underlying }: { underlying: string }) {
   }, [underlying]);
 
   if (error) return <p className="ctp-news-error muted">Couldn't load news: {error}</p>;
-  if (articles === null) return <p className="muted">Loading news…</p>;
-  if (articles.length === 0) return <p className="muted">No recent news for {underlying}.</p>;
+  if (digest === null) return <p className="muted">Loading news…</p>;
 
   return (
     <div className="ctp-news">
-      {articles.map((a, i) => (
+      <div className={`ctp-news-digest ctp-news-bias-${digest.bias}`}>
+        <div className="ctp-news-digest-head">
+          <span className="ctp-news-bias-badge">{BIAS_LABEL[digest.bias]}</span>
+          <span className="muted">{digest.bias_reason}</span>
+        </div>
+        <p className="ctp-news-digest-text">{digest.digest}</p>
+      </div>
+
+      {digest.articles.length === 0 && <p className="muted">No recent news for {underlying}.</p>}
+      {digest.articles.map((a, i) => (
         <a key={`${a.url}-${i}`} className="ctp-news-row" href={a.url} target="_blank" rel="noreferrer">
           <div className="ctp-news-title">
-            {a.sentiment_score != null && (
-              <span
-                className={`ctp-news-sentiment ${pnlClass(a.sentiment_score)}`}
-                title={`Sentiment ${a.sentiment_score.toFixed(2)}`}
-              >
-                ●
+            {a.relevance_score != null && (
+              <span className="ctp-news-relevance" title={`Relevance to trend: ${a.relevance_score}/100`}>
+                {a.relevance_score}
               </span>
             )}
             {a.title}
           </div>
+          {a.why && <div className="ctp-news-why muted">{a.why}</div>}
           <div className="ctp-news-meta muted">
             {a.source} · {formatCompact(a.published_at)}
           </div>

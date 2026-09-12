@@ -4,20 +4,18 @@ from app.config import settings
 from app.providers import news
 
 
-def _row(title: str, entities: list[dict], published_at: str = "2026-09-12T00:00:00.000000Z") -> dict:
+def _row(title: str, published_at: str = "2026-09-12T00:00:00+00:00", description: str = "") -> dict:
     return {
         "title": title,
         "url": f"https://example.com/{title}",
-        "source": "example.com",
+        "description": description,
         "published_at": published_at,
-        "image_url": None,
-        "entities": entities,
+        "source": "Test Source",
     }
 
 
 @pytest.fixture(autouse=True)
-def _fake_api_key(monkeypatch):
-    monkeypatch.setattr(settings, "marketaux_api_key", "test-key")
+def _fake_openrouter_key_off(monkeypatch):
     monkeypatch.setattr(settings, "openrouter_api_key", "")  # AI off unless a test opts in
 
 
@@ -37,13 +35,13 @@ class _NoopSession:
 
 @pytest.fixture(autouse=True)
 def _stub_session_local(monkeypatch):
-    """_refresh_crypto_bucket/_refresh_search_underlying call _persist_digest
-    on every refresh, which opens a real SessionLocal() - without stubbing
-    it, every test above would try to write to whatever Postgres
-    settings.database_url happens to point at (e.g. the dev stack on a dev
-    machine). Tests that want to verify persistence itself override this
-    back with their own fake session (see below) - since monkeypatch is
-    shared per test, a later setattr in the test body wins over this one."""
+    """_refresh_bucket calls _persist_digest on every refresh, which opens
+    a real SessionLocal() - without stubbing it, every test above would try
+    to write to whatever Postgres settings.database_url happens to point
+    at (e.g. the dev stack on a dev machine). Tests that want to verify
+    persistence itself override this back with their own fake session (see
+    below) - since monkeypatch is shared per test, a later setattr in the
+    test body wins over this one."""
     monkeypatch.setattr(news, "SessionLocal", lambda: _NoopSession())
 
 
@@ -52,58 +50,62 @@ def test_get_news_rejects_unsupported_underlying():
         news.get_news("DOGEUSD")
 
 
-def test_get_news_without_api_key_raises(monkeypatch):
-    monkeypatch.setattr(settings, "marketaux_api_key", "")
-    with pytest.raises(RuntimeError):
-        news.get_news("BTCUSD")
-
-
-def test_crypto_bucket_is_one_call_covering_all_three_symbols(monkeypatch):
+def test_crypto_bucket_is_one_fetch_covering_all_three_symbols(monkeypatch):
     calls = []
 
-    def fake_fetch(params):
-        calls.append(params)
+    def fake_fetch_bucket(feeds):
+        calls.append(feeds)
         return [
-            _row("BTC and ETH both rally", [{"symbol": "CC:BTC", "sentiment_score": 0.5}, {"symbol": "CC:ETH", "sentiment_score": 0.2}]),
-            _row("SOL breaks out", [{"symbol": "CC:SOL", "sentiment_score": -0.1}]),
-            _row("Unrelated equity news", [{"symbol": "AAPL", "sentiment_score": 0.9}]),
+            _row("Bitcoin and Ethereum both rally", description="Bitcoin and Ethereum surge together"),
+            _row("Solana breaks out"),
+            _row("Unrelated equity news"),
         ]
 
-    monkeypatch.setattr(news, "_fetch", fake_fetch)
+    monkeypatch.setattr(news, "_fetch_bucket", fake_fetch_bucket)
 
     btc = news.get_news("BTCUSD")
     eth = news.get_news("ETHUSD")
     sol = news.get_news("SOLUSD")
 
-    assert len(calls) == 1  # one combined call served all three underlyings
-    assert calls[0]["symbols"] == "CC:BTC,CC:ETH,CC:SOL"
+    assert len(calls) == 1  # one combined fetch served all three underlyings
+    assert calls[0] is news._CRYPTO_FEEDS
 
-    assert [a.title for a in btc.articles] == ["BTC and ETH both rally"]
-    assert btc.articles[0].sentiment_score == 0.5
-    assert [a.title for a in eth.articles] == ["BTC and ETH both rally"]
-    assert eth.articles[0].sentiment_score == 0.2
-    assert [a.title for a in sol.articles] == ["SOL breaks out"]
+    assert [a.title for a in btc.articles] == ["Bitcoin and Ethereum both rally"]
+    assert [a.title for a in eth.articles] == ["Bitcoin and Ethereum both rally"]
+    assert [a.title for a in sol.articles] == ["Solana breaks out"]
 
 
-def test_search_underlying_uses_its_own_keyword(monkeypatch):
+def test_nse_mcx_bucket_is_one_fetch_covering_all_four_underlyings(monkeypatch):
     calls = []
 
-    def fake_fetch(params):
-        calls.append(params)
-        return [_row("Nifty 50 hits record high", [])]
+    def fake_fetch_bucket(feeds):
+        calls.append(feeds)
+        return [
+            _row("Nifty 50 hits record high"),
+            _row("Bank Nifty slips on rate fears"),
+            _row("Gold prices steady ahead of Fed"),
+            _row("Crude oil rises on supply concerns"),
+        ]
 
-    monkeypatch.setattr(news, "_fetch", fake_fetch)
+    monkeypatch.setattr(news, "_fetch_bucket", fake_fetch_bucket)
 
-    digest = news.get_news("NIFTY")
+    nifty = news.get_news("NIFTY")
+    banknifty = news.get_news("BANKNIFTY")
+    goldm = news.get_news("GOLDM")
+    crudeoilm = news.get_news("CRUDEOILM")
 
     assert len(calls) == 1
-    assert calls[0]["search"] == "Nifty 50"
-    assert digest.articles[0].title == "Nifty 50 hits record high"
+    assert calls[0] is news._NSE_MCX_FEEDS
+
+    assert nifty.articles[0].title == "Nifty 50 hits record high"
+    assert banknifty.articles[0].title == "Bank Nifty slips on rate fears"
+    assert goldm.articles[0].title == "Gold prices steady ahead of Fed"
+    assert crudeoilm.articles[0].title == "Crude oil rises on supply concerns"
 
 
 def test_cache_is_reused_within_ttl(monkeypatch):
     calls = []
-    monkeypatch.setattr(news, "_fetch", lambda params: calls.append(params) or [])
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: calls.append(feeds) or [])
 
     news.get_news("BTCUSD")
     news.get_news("BTCUSD")
@@ -113,8 +115,8 @@ def test_cache_is_reused_within_ttl(monkeypatch):
 
 
 def test_stale_cache_is_served_when_refresh_fails(monkeypatch):
-    good_rows = [_row("Gold steady ahead of Fed", [])]
-    monkeypatch.setattr(news, "_fetch", lambda params: good_rows)
+    good_rows = [_row("Gold steady ahead of Fed")]
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: good_rows)
     first = news.get_news("GOLDM")
     assert first.articles[0].title == "Gold steady ahead of Fed"
 
@@ -123,22 +125,45 @@ def test_stale_cache_is_served_when_refresh_fails(monkeypatch):
     underlying, (digest, _fetched_at) = "GOLDM", news._cache["GOLDM"]
     news._cache[underlying] = (digest, 0.0)
 
-    def failing_fetch(params):
-        raise RuntimeError("marketaux is down")
+    def failing_fetch(feeds):
+        raise RuntimeError("all news feeds are down")
 
-    monkeypatch.setattr(news, "_fetch", failing_fetch)
+    monkeypatch.setattr(news, "_fetch_bucket", failing_fetch)
     second = news.get_news("GOLDM")
     assert second.articles[0].title == "Gold steady ahead of Fed"
 
 
 def test_raises_when_nothing_cached_and_refresh_fails(monkeypatch):
-    monkeypatch.setattr(news, "_fetch", lambda params: (_ for _ in ()).throw(RuntimeError("down")))
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: (_ for _ in ()).throw(RuntimeError("down")))
     with pytest.raises(RuntimeError):
         news.get_news("CRUDEOILM")
 
 
+def test_fetch_bucket_tolerates_one_feed_failing(monkeypatch):
+    """A Livemint hiccup shouldn't blank ET's articles too - only raises
+    when every feed in the bucket failed."""
+
+    def fake_fetch_rss(url, label):
+        if label == "Mint":
+            raise RuntimeError("Mint is down")
+        return [_row("ET headline")]
+
+    monkeypatch.setattr(news, "_fetch_rss", fake_fetch_rss)
+
+    rows = news._fetch_bucket(news._NSE_MCX_FEEDS)
+
+    assert [r["title"] for r in rows] == ["ET headline"]
+
+
+def test_fetch_bucket_raises_when_every_feed_fails(monkeypatch):
+    monkeypatch.setattr(news, "_fetch_rss", lambda url, label: (_ for _ in ()).throw(RuntimeError(f"{label} down")))
+
+    with pytest.raises(RuntimeError):
+        news._fetch_bucket(news._NSE_MCX_FEEDS)
+
+
 def test_without_openrouter_key_falls_back_to_unscored_headlines(monkeypatch):
-    monkeypatch.setattr(news, "_fetch", lambda params: [_row("Nifty 50 hits record high", [])])
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: [_row("Nifty 50 hits record high")])
 
     digest = news.get_news("NIFTY")
 
@@ -149,11 +174,15 @@ def test_without_openrouter_key_falls_back_to_unscored_headlines(monkeypatch):
 
 def test_ai_analysis_scores_and_filters_articles(monkeypatch):
     monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
+    # Both rows mention "bitcoin" so both pass the keyword pre-filter and
+    # reach the (mocked) AI call - the AI's own response below excludes
+    # the second one, demonstrating AI-level relevance filtering rather
+    # than the keyword-match step doing the work.
     rows = [
-        _row("Bitcoin ETF sees record inflows", [{"symbol": "CC:BTC", "sentiment_score": 0.6}]),
-        _row("Celebrity chef opens new restaurant", [{"symbol": "CC:BTC", "sentiment_score": 0.0}]),
+        _row("Bitcoin ETF sees record inflows", description="Spot ETF inflows hit a record"),
+        _row("Bitcoin-themed restaurant opens downtown"),
     ]
-    monkeypatch.setattr(news, "_fetch", lambda params: rows)
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: rows)
 
     calls = []
 
@@ -196,16 +225,15 @@ def test_ai_analysis_scores_and_filters_articles(monkeypatch):
     assert calls[0]["json"]["model"] == settings.openrouter_model
     assert digest.bias == "bullish"
     assert digest.bias_reason == "Strong ETF inflows"
-    assert len(digest.articles) == 1  # the irrelevant celebrity-chef article was filtered out
+    assert len(digest.articles) == 1  # the AI excluded the irrelevant restaurant article
     assert digest.articles[0].title == "Bitcoin ETF sees record inflows"
     assert digest.articles[0].relevance_score == 85
     assert digest.articles[0].why == "Direct demand signal for BTC."
-    assert digest.articles[0].sentiment_score == 0.6  # re-attached from the original marketaux row
 
 
 def test_ai_analysis_failure_falls_back_to_unscored_headlines(monkeypatch):
     monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
-    monkeypatch.setattr(news, "_fetch", lambda params: [_row("Gold rises on Fed bets", [])])
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: [_row("Gold rises on Fed bets")])
 
     def failing_post(*args, **kwargs):
         raise RuntimeError("OpenRouter is down")
@@ -225,11 +253,11 @@ def test_ai_scored_articles_are_sorted_newest_first(monkeypatch):
     show newest first regardless of that order."""
     monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
     rows = [
-        _row("Older article", [{"symbol": "CC:BTC"}], published_at="2026-09-10T00:00:00.000000Z"),
-        _row("Newest article", [{"symbol": "CC:BTC"}], published_at="2026-09-12T00:00:00.000000Z"),
-        _row("Middle article", [{"symbol": "CC:BTC"}], published_at="2026-09-11T00:00:00.000000Z"),
+        _row("Older Bitcoin article", published_at="2026-09-10T00:00:00+00:00"),
+        _row("Newest Bitcoin article", published_at="2026-09-12T00:00:00+00:00"),
+        _row("Middle Bitcoin article", published_at="2026-09-11T00:00:00+00:00"),
     ]
-    monkeypatch.setattr(news, "_fetch", lambda params: rows)
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: rows)
 
     class FakeResponse:
         def raise_for_status(self):
@@ -260,7 +288,7 @@ def test_ai_scored_articles_are_sorted_newest_first(monkeypatch):
 
     digest = news.get_news("BTCUSD")
 
-    assert [a.title for a in digest.articles] == ["Newest article", "Middle article", "Older article"]
+    assert [a.title for a in digest.articles] == ["Newest Bitcoin article", "Middle Bitcoin article", "Older Bitcoin article"]
 
 
 def test_persist_digest_writes_a_news_history_row(monkeypatch):
@@ -289,8 +317,8 @@ def test_persist_digest_writes_a_news_history_row(monkeypatch):
             news.NewsArticle(
                 title="Test headline",
                 url="https://example.com/test",
-                source="example.com",
-                published_at="2026-09-12T00:00:00.000000Z",
+                source="Test Source",
+                published_at="2026-09-12T00:00:00+00:00",
                 relevance_score=80,
                 why="Direct demand signal.",
             )
@@ -321,3 +349,45 @@ def test_persist_digest_failure_does_not_raise(monkeypatch):
 
     digest = news.NewsDigest(bias="neutral", bias_reason="n/a", digest="n/a", articles=[])
     news._persist_digest("BTCUSD", digest)  # should not raise
+
+
+def test_parse_pubdate_normalizes_rfc822_to_iso():
+    iso = news._parse_pubdate("Sat, 12 Sep 2026 13:24:36 +0530")
+    assert iso.startswith("2026-09-12T13:24:36")
+
+
+def test_parse_pubdate_passes_through_unparseable_input():
+    assert news._parse_pubdate("not a date") == "not a date"
+    assert news._parse_pubdate(None) == ""
+
+
+def test_fetch_rss_parses_items(monkeypatch):
+    xml = """<?xml version="1.0"?>
+    <rss version="2.0"><channel>
+      <item>
+        <title><![CDATA[Nifty 50 hits record high]]></title>
+        <link>https://example.com/nifty-record</link>
+        <description><![CDATA[Some <b>bold</b> summary text]]></description>
+        <pubDate>Sat, 12 Sep 2026 13:24:36 +0530</pubDate>
+      </item>
+      <item>
+        <title></title>
+        <link>https://example.com/no-title</link>
+      </item>
+    </channel></rss>"""
+
+    class FakeResponse:
+        content = xml.encode("utf-8")
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(news.requests, "get", lambda url, timeout, headers: FakeResponse())
+
+    rows = news._fetch_rss("https://example.com/rss", "Example")
+
+    assert len(rows) == 1  # the title-less item is skipped
+    assert rows[0]["title"] == "Nifty 50 hits record high"
+    assert rows[0]["url"] == "https://example.com/nifty-record"
+    assert rows[0]["source"] == "Example"
+    assert rows[0]["published_at"].startswith("2026-09-12T13:24:36")

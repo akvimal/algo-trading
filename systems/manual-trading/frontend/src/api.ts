@@ -1318,18 +1318,19 @@ export async function fetchRegime(exchange: string, symbol: string, interval: st
 }
 
 // GET /news - the Live Chart's News tab. Cached server-side (market-data's
-// app/providers/news.py) against marketaux's 100-req/day free tier, so
-// this can be polled cheaply - a symbol-tab switch just re-reads whatever
-// that underlying's cache currently holds. `relevance_score`/`why` are the
-// OpenRouter AI analysis layered on top of the raw marketaux headline -
-// both null when OPENROUTER_API_KEY isn't configured or that call failed.
+// app/providers/news.py, sourced from free RSS feeds - ET/Mint for
+// NSE-MCX, CoinDesk/Cointelegraph for crypto - no API key or quota for
+// any of them), so this can be polled cheaply - a symbol-tab switch just
+// re-reads whatever that underlying's cache currently holds.
+// `relevance_score`/`why` are the OpenRouter AI analysis layered on top
+// of the raw headline - both null when OPENROUTER_API_KEY isn't
+// configured or that call failed.
 export type NewsArticle = {
   title: string;
   url: string;
   source: string;
   published_at: string;
   image_url: string | null;
-  sentiment_score: number | null;
   relevance_score: number | null;
   why: string | null;
 };

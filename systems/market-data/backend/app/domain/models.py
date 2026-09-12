@@ -185,38 +185,36 @@ class MarketRegime(BaseModel):
 
 
 class NewsArticle(BaseModel):
-    """One headline within GET /news' NewsDigest - see that model. Backed by
-    marketaux.com raw data (see app/providers/news.py); `relevance_score`/
-    `why` are the AI analysis layered on top (app/providers/news.py's
-    _analyze_via_ai) - both None when OPENROUTER_API_KEY isn't configured
-    or that call failed, in which case this is just the raw marketaux
-    headline. `sentiment_score` is marketaux's own entity-level score for
-    the requested underlying (-1..1, None when it didn't tag one) - a
-    different signal from `relevance_score` (0-100, AI-assessed relevance
-    to this underlying's likely trend, not sentiment polarity)."""
+    """One headline within GET /news' NewsDigest - see that model. Backed
+    by plain publisher RSS feeds (ET/Mint for NSE-MCX, CoinDesk/
+    Cointelegraph for crypto - see app/providers/news.py, no API key or
+    quota for any of them); `relevance_score`/`why` are the AI analysis
+    layered on top (that module's _analyze_via_ai) - both None when
+    OPENROUTER_API_KEY isn't configured or that call failed, in which case
+    this is just the raw RSS headline."""
 
     title: str
     url: str
     source: str
     published_at: str
     image_url: Optional[str] = None
-    sentiment_score: Optional[float] = None
     relevance_score: Optional[int] = None
     why: Optional[str] = None
 
 
 class NewsDigest(BaseModel):
-    """GET /news response - the Live Chart's News tab. `articles` is
-    marketaux's raw feed for the underlying, filtered and scored by AI
-    (app/providers/news.py's _analyze_via_ai) down to the ones actually
-    relevant to its likely trend, sorted newest-published first (relevance
-    drives which articles make the cut, not their order in this list).
-    `bias`/`bias_reason`/`digest` are that same analysis' overall read.
-    Without OPENROUTER_API_KEY configured (or on an AI-call failure), this
-    degrades to bias="neutral", digest/bias_reason explaining why, and
-    `articles` as marketaux's unscored, unfiltered list. Every digest
-    produced also gets logged to market_data.news_history - see
-    GET /news/history and app/providers/news.py's _persist_digest."""
+    """GET /news response - the Live Chart's News tab. `articles` is the
+    RSS feed matched to the underlying by keyword (see
+    app/providers/news.py's _KEYWORDS), filtered and scored by AI down to
+    the ones actually relevant to its likely trend, sorted newest-
+    published first (relevance drives which articles make the cut, not
+    their order in this list). `bias`/`bias_reason`/`digest` are that same
+    analysis' overall read. Without OPENROUTER_API_KEY configured (or on
+    an AI-call failure), this degrades to bias="neutral", digest/
+    bias_reason explaining why, and `articles` as the unscored, unfiltered
+    RSS list. Every digest produced also gets logged to
+    market_data.news_history - see GET /news/history and
+    app/providers/news.py's _persist_digest."""
 
     bias: Literal["bullish", "bearish", "neutral"]
     bias_reason: str

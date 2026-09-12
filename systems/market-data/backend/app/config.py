@@ -118,15 +118,11 @@ class Settings(BaseSettings):
     # How often the scheduler polls the LTP for every active alert.
     price_alert_check_interval_seconds: int = 60
 
-    # marketaux.com news API key (Live Chart's News tab) - free tier is a
-    # hard 100 requests/day, see app/providers/news.py's own comments for
-    # how that's budgeted. Blank -> GET /news 502s with a clear message.
-    marketaux_api_key: str = ""
-
-    # OpenRouter (openrouter.ai) - turns the raw marketaux headlines into an
-    # AI trend-relevance digest (bias + filtered/scored articles), same News
-    # tab. Blank -> get_news() falls back to plain unscored headlines rather
-    # than failing the whole tab (see app/providers/news.py's _analyze_via_ai).
+    # OpenRouter (openrouter.ai) - turns the raw RSS headlines (see
+    # app/providers/news.py) into an AI trend-relevance digest (bias +
+    # filtered/scored articles) for the Live Chart's News tab. Blank ->
+    # get_news() falls back to plain unscored headlines rather than
+    # failing the whole tab (see that module's _analyze_via_ai).
     openrouter_api_key: str = ""
     openrouter_model: str = "anthropic/claude-haiku-4.5"
 

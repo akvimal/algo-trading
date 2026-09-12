@@ -146,9 +146,8 @@ services:
       # still evaluate/persist, nothing gets pushed (see app/domain/notify.py).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
-      # marketaux.com news API (Live Chart's News tab) - see app/config.py.
-      MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
-      # OpenRouter (Live Chart's News tab AI digest) - see app/config.py.
+      # OpenRouter (Live Chart's News tab AI digest, see app/providers/news.py -
+      # raw headlines come from free RSS feeds, no key needed there) - see app/config.py.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-4.5}
     volumes:

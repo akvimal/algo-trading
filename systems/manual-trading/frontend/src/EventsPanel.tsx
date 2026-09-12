@@ -18,6 +18,28 @@ const IMPACT_LABEL: Record<EconomicEvent["impact"], string> = {
   holiday: "Holiday",
 };
 
+function EventRow({ e }: { e: EconomicEvent }) {
+  return (
+    <div className="ctp-events-row">
+      <div className="ctp-events-title">
+        <span className={`ctp-events-impact ctp-events-impact-${e.impact}`}>{IMPACT_LABEL[e.impact]}</span>
+        {e.title}
+      </div>
+      <div className="ctp-events-meta muted">
+        {e.currency} · {formatCompact(e.timestamp)}
+        {(e.forecast || e.previous) && (
+          <>
+            {" · "}
+            {e.forecast && <>fcst {e.forecast}</>}
+            {e.forecast && e.previous && " / "}
+            {e.previous && <>prev {e.previous}</>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function EventsPanel({ underlying }: { underlying: string }) {
   const [events, setEvents] = useState<EconomicEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,31 +74,35 @@ export default function EventsPanel({ underlying }: { underlying: string }) {
   if (events.length === 0) return <p className="muted">No medium/high-impact events this week.</p>;
 
   const now = Date.now();
+  // API returns soonest-first overall; split rather than re-sort so each
+  // half keeps that same underlying order - upcoming ascending (next
+  // event first), past reversed (most recently happened first, which
+  // reads far more naturally than "oldest first" once you're scrolling
+  // through things that already happened).
+  const upcoming = events.filter((e) => Date.parse(e.timestamp) >= now);
+  const past = events.filter((e) => Date.parse(e.timestamp) < now).reverse();
 
   return (
     <div className="ctp-events">
-      {events.map((e, i) => {
-        const past = Date.parse(e.timestamp) < now;
-        return (
-          <div key={`${e.title}-${e.timestamp}-${i}`} className={`ctp-events-row${past ? " ctp-events-past" : ""}`}>
-            <div className="ctp-events-title">
-              <span className={`ctp-events-impact ctp-events-impact-${e.impact}`}>{IMPACT_LABEL[e.impact]}</span>
-              {e.title}
+      <div className="ctp-events-section-head">Upcoming</div>
+      {upcoming.length === 0 ? (
+        <p className="muted ctp-events-empty">
+          No upcoming events in this week's calendar yet - it typically refreshes for the next week early Monday.
+        </p>
+      ) : (
+        upcoming.map((e, i) => <EventRow key={`up-${e.title}-${e.timestamp}-${i}`} e={e} />)
+      )}
+
+      {past.length > 0 && (
+        <>
+          <div className="ctp-events-section-head">Recent</div>
+          {past.map((e, i) => (
+            <div key={`past-${e.title}-${e.timestamp}-${i}`} className="ctp-events-past">
+              <EventRow e={e} />
             </div>
-            <div className="ctp-events-meta muted">
-              {e.currency} · {formatCompact(e.timestamp)}
-              {(e.forecast || e.previous) && (
-                <>
-                  {" · "}
-                  {e.forecast && <>fcst {e.forecast}</>}
-                  {e.forecast && e.previous && " / "}
-                  {e.previous && <>prev {e.previous}</>}
-                </>
-              )}
-            </div>
-          </div>
-        );
-      })}
+          ))}
+        </>
+      )}
     </div>
   );
 }

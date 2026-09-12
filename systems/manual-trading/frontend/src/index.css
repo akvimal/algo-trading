@@ -3117,6 +3117,17 @@ button.btn-exit {
 .ctp-events-past {
   opacity: 0.55;
 }
+.ctp-events-section-head {
+  padding: 0.3rem 0.3rem 0.1rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.ctp-events-empty {
+  padding: 0 0.3rem 0.4rem;
+}
 .ctp-events-title {
   font-size: 0.78rem;
   line-height: 1.3;

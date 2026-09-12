@@ -335,8 +335,8 @@ export default function ChartTradePanel({
   // The "Risk managed" checkbox row + AutoTradePanel - rendered by
   // LiveChartPage (which owns their state, since neither should reset on
   // a symbol-tab switch the way this panel itself does), just placed here
-  // visually so they sit under the sym/price head rather than above the
-  // whole card.
+  // visually, at the top of the Trade tab (not History/News - those don't
+  // need it).
   headerExtra?: ReactNode;
 }) {
   const sym = symbol.trim().toUpperCase();
@@ -1064,8 +1064,6 @@ export default function ChartTradePanel({
         </span>
       </div>
 
-      {headerExtra}
-
       <div className="ctp-tabs" role="tablist">
         <button
           type="button"
@@ -1098,6 +1096,7 @@ export default function ChartTradePanel({
 
       {tab === "trade" && (
         <>
+      {headerExtra}
       {pendingOrder && (
         <div className="ctp-pending">
           <div className="ctp-pending-head">

@@ -1317,6 +1317,24 @@ export async function fetchRegime(exchange: string, symbol: string, interval: st
   return asJson<MarketRegime>(res, `GET /regime (${exchange}/${symbol}/${interval})`);
 }
 
+// GET /news - the Live Chart's News tab. Cached server-side (market-data's
+// app/providers/news.py) against marketaux's 100-req/day free tier, so
+// this can be polled cheaply - a symbol-tab switch just re-reads whatever
+// that underlying's cache currently holds.
+export type NewsArticle = {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  image_url: string | null;
+  sentiment_score: number | null;
+};
+
+export async function fetchNews(underlying: string): Promise<NewsArticle[]> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/news?${new URLSearchParams({ underlying })}`);
+  return asJson<NewsArticle[]>(res, `GET /news (${underlying})`);
+}
+
 // Backs the Rules page's backtest form - what date range is actually
 // usable, per market-data's GET /candles/availability. NSE/MCX (Dhan)
 // report a fixed `max_days_per_request` (a hard per-call cap - real

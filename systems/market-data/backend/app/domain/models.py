@@ -184,6 +184,20 @@ class MarketRegime(BaseModel):
     advice: str
 
 
+class NewsArticle(BaseModel):
+    """GET /news - one headline for the Live Chart's News tab. Backed by
+    marketaux.com (see app/providers/news.py) - `sentiment_score` is that
+    article's own entity-level score for the requested underlying (-1..1,
+    None when marketaux didn't tag one), not a whole-article score."""
+
+    title: str
+    url: str
+    source: str
+    published_at: str
+    image_url: Optional[str] = None
+    sentiment_score: Optional[float] = None
+
+
 class TrendChange(BaseModel):
     """One confirmed-trend flip - part of GET /order-blocks' ChartStructure.
     Emitted at a BOS/CHoCH break where `structure_state`'s confirmed trend

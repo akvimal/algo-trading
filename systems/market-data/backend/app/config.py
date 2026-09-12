@@ -118,5 +118,10 @@ class Settings(BaseSettings):
     # How often the scheduler polls the LTP for every active alert.
     price_alert_check_interval_seconds: int = 60
 
+    # marketaux.com news API key (Live Chart's News tab) - free tier is a
+    # hard 100 requests/day, see app/providers/news.py's own comments for
+    # how that's budgeted. Blank -> GET /news 502s with a clear message.
+    marketaux_api_key: str = ""
+
 
 settings = Settings()

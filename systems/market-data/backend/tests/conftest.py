@@ -1,6 +1,16 @@
 import pytest
 
-from app.providers import dhan
+from app.providers import dhan, news
+
+
+@pytest.fixture(autouse=True)
+def _reset_news_cache():
+    """app/providers/news.py's cache is module-level (shared across every
+    call, not per-request) - same leak risk as dhan's throttle clocks
+    below if left dirty between tests."""
+    news._cache.clear()
+    yield
+    news._cache.clear()
 
 
 @pytest.fixture(autouse=True)

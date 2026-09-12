@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type Account,
@@ -28,6 +28,7 @@ import {
   updateStopLoss,
 } from "./api";
 import type { PricePickField } from "./LiveChartPanel";
+import NewsPanel from "./NewsPanel";
 import {
   CRYPTO_OPTION_SYMBOLS,
   type PanelStrategy,
@@ -280,6 +281,7 @@ export default function ChartTradePanel({
   onPickField,
   pickedPrice,
   onOpenTradeChange,
+  headerExtra,
 }: {
   segment: Segment;
   symbol: string;
@@ -330,6 +332,12 @@ export default function ChartTradePanel({
   // Emits this panel's single open trade (with its live P&L) so the chart
   // can mark it without a second live-P&L poll.
   onOpenTradeChange?: (t: { pos: ManualPosition | null; group: ManualOptionGroup | null }) => void;
+  // The "Risk managed" checkbox row + AutoTradePanel - rendered by
+  // LiveChartPage (which owns their state, since neither should reset on
+  // a symbol-tab switch the way this panel itself does), just placed here
+  // visually so they sit under the sym/price head rather than above the
+  // whole card.
+  headerExtra?: ReactNode;
 }) {
   const sym = symbol.trim().toUpperCase();
   const optionEligible = segment !== "CRYPTO" || CRYPTO_OPTION_SYMBOLS.includes(sym);
@@ -360,7 +368,7 @@ export default function ChartTradePanel({
   const isOption = strategy !== "future";
   // Trade vs History - a tab inside the card so the closed-trade list
   // isn't always stretching the panel down the page.
-  const [tab, setTab] = useState<"trade" | "history">("trade");
+  const [tab, setTab] = useState<"trade" | "history" | "news">("trade");
   const [moneyness, setMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [qtyInput, setQtyInput] = useState("1");
   const [slInput, setSlInput] = useState("");
@@ -1056,6 +1064,8 @@ export default function ChartTradePanel({
         </span>
       </div>
 
+      {headerExtra}
+
       <div className="ctp-tabs" role="tablist">
         <button
           type="button"
@@ -1074,6 +1084,15 @@ export default function ChartTradePanel({
           onClick={() => setTab("history")}
         >
           History{history.length > 0 ? ` (${history.length})` : ""}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "news"}
+          className={tab === "news" ? "active" : ""}
+          onClick={() => setTab("news")}
+        >
+          News
         </button>
       </div>
 
@@ -1581,6 +1600,8 @@ export default function ChartTradePanel({
         ))}
       </div>
       )}
+
+      {tab === "news" && <NewsPanel underlying={sym} />}
     </div>
   );
 }

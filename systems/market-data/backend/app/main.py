@@ -7,6 +7,7 @@ from app.api.routes import (
     dhan,
     health,
     instruments,
+    news,
     options,
     order_blocks,
     price_alerts,
@@ -36,6 +37,7 @@ app.include_router(price_alerts.router)
 app.include_router(dhan.router)
 app.include_router(delta.router)
 app.include_router(options.router)
+app.include_router(news.router)
 
 
 @app.on_event("startup")

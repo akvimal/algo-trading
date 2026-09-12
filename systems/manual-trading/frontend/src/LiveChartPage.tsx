@@ -428,58 +428,6 @@ export default function LiveChartPage() {
         />
 
         <div className="chart-trade-col">
-          <div className="chart-discipline-row">
-            <label
-              className="chart-trend-lock"
-              title="When on: limit orders only, Limit/Stop-loss/Target all required, the lot count is sized from your risk budget (limit price → stop-loss distance), and Proceed stays disabled until reward:risk clears the segment minimum (Money → account settings)."
-            >
-              <input
-                type="checkbox"
-                checked={riskManaged}
-                onChange={() => toggleFlag(RISK_MANAGED_STORAGE_KEY, setRiskManaged)}
-              />
-              <span className="chart-trend-lock-text">Risk managed</span>
-              {account && (
-                <span className="chart-risk-per-trade" title="Max loss budgeted per trade (segment account)">
-                  Risk/Trade{" "}
-                  <b>
-                    {/* capital_per_trade is rupee-denominated for every segment,
-                        including CRYPTO - see execution's AccountsPage fix - so
-                        this is always ₹, never the segment-native "$". */}
-                    &#8377;{fmtMoney((account.capital_per_trade * account.risk_per_trade_pct) / 100)} · {account.risk_per_trade_pct}%
-                  </b>
-                </span>
-              )}
-            </label>
-            {/* Informational only, never a gate (see the "Trend only" removal
-                above) - a nudge when the chart's own interval isn't the
-                declared default (or its paired higher TF) for this segment.
-                Feeds the Discipline score's "Timeframe consistency"
-                component regardless of whether you switch back or not. */}
-            {account?.default_interval &&
-              trendInfo.interval !== account.default_interval &&
-              trendInfo.interval !== account.default_higher_interval && (
-                <span
-                  className="chart-tf-off-default"
-                  title={`Your default for ${active.segment} is ${account.default_interval}${account.default_higher_interval ? `/${account.default_higher_interval}` : ""} - set on the Money tab.`}
-                >
-                  off default ({account.default_interval}
-                  {account.default_higher_interval ? `/${account.default_higher_interval}` : ""})
-                </span>
-              )}
-          </div>
-
-          <AutoTradePanel
-            on={autoTradeOn}
-            onToggle={toggleAutoTrade}
-            config={autoConfig}
-            onConfigChange={updateAutoConfig}
-            segment={active.segment}
-            symbol={active.symbol}
-            account={account}
-            setupTag={chartSetup}
-          />
-
           <ChartTradePanel
             key={`ctp:${active.segment}:${active.symbol}`}
             segment={active.segment}
@@ -502,6 +450,60 @@ export default function LiveChartPage() {
             onPickField={setPickField}
             pickedPrice={pickedPrice}
             onOpenTradeChange={setOpenTrade}
+            headerExtra={
+              <div className="chart-discipline-row">
+                <label
+                  className="chart-trend-lock"
+                  title="When on: limit orders only, Limit/Stop-loss/Target all required, the lot count is sized from your risk budget (limit price → stop-loss distance), and Proceed stays disabled until reward:risk clears the segment minimum (Money → account settings)."
+                >
+                  <input
+                    type="checkbox"
+                    checked={riskManaged}
+                    onChange={() => toggleFlag(RISK_MANAGED_STORAGE_KEY, setRiskManaged)}
+                  />
+                  <span className="chart-trend-lock-text">Risk managed</span>
+                  {account && (
+                    <span className="chart-risk-per-trade" title="Max loss budgeted per trade (segment account)">
+                      Risk/Trade{" "}
+                      <b>
+                        {/* capital_per_trade is rupee-denominated for every segment,
+                            including CRYPTO - see execution's AccountsPage fix - so
+                            this is always ₹, never the segment-native "$". */}
+                        &#8377;{fmtMoney((account.capital_per_trade * account.risk_per_trade_pct) / 100)} ·{" "}
+                        {account.risk_per_trade_pct}%
+                      </b>
+                    </span>
+                  )}
+                </label>
+                {/* Informational only, never a gate (see the "Trend only" removal
+                    above) - a nudge when the chart's own interval isn't the
+                    declared default (or its paired higher TF) for this segment.
+                    Feeds the Discipline score's "Timeframe consistency"
+                    component regardless of whether you switch back or not. */}
+                {account?.default_interval &&
+                  trendInfo.interval !== account.default_interval &&
+                  trendInfo.interval !== account.default_higher_interval && (
+                    <span
+                      className="chart-tf-off-default"
+                      title={`Your default for ${active.segment} is ${account.default_interval}${account.default_higher_interval ? `/${account.default_higher_interval}` : ""} - set on the Money tab.`}
+                    >
+                      off default ({account.default_interval}
+                      {account.default_higher_interval ? `/${account.default_higher_interval}` : ""})
+                    </span>
+                  )}
+
+                <AutoTradePanel
+                  on={autoTradeOn}
+                  onToggle={toggleAutoTrade}
+                  config={autoConfig}
+                  onConfigChange={updateAutoConfig}
+                  segment={active.segment}
+                  symbol={active.symbol}
+                  account={account}
+                  setupTag={chartSetup}
+                />
+              </div>
+            }
           />
         </div>
       </div>

@@ -146,6 +146,8 @@ services:
       # still evaluate/persist, nothing gets pushed (see app/domain/notify.py).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # marketaux.com news API (Live Chart's News tab) - see app/config.py.
+      MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
     volumes:
       # PUT /dhan/credentials persists here (app/providers/dhan.py) so a
       # UI-submitted Dhan token survives a container restart instead of

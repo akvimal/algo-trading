@@ -291,6 +291,69 @@ def test_ai_scored_articles_are_sorted_newest_first(monkeypatch):
     assert [a.title for a in digest.articles] == ["Newest Bitcoin article", "Middle Bitcoin article", "Older Bitcoin article"]
 
 
+def _fake_ai_response(bias="neutral"):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": {"bias": bias, "bias_reason": "x", "digest": "y", "articles": []}}}]}
+
+    return FakeResponse()
+
+
+def test_unchanged_articles_skip_a_second_ai_call(monkeypatch):
+    """The whole point of _last_fingerprint: an RSS refresh that turns up
+    the exact same matched articles as last time shouldn't spend another
+    OpenRouter call (or log another news_history row) re-digesting input
+    it's already analyzed."""
+    monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
+    rows = [_row("Bitcoin holds steady above $70k")]
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: rows)
+
+    ai_calls = []
+    persisted = []
+    monkeypatch.setattr(news.requests, "post", lambda *a, **k: ai_calls.append(1) or _fake_ai_response())
+    monkeypatch.setattr(news, "_persist_digest", lambda underlying, digest: persisted.append(underlying))
+
+    first = news.get_news("BTCUSD")
+    assert len(ai_calls) == 1
+    # ETHUSD/SOLUSD also persist on this first pass (no matching rows for
+    # either, but still a first-ever - and therefore fresh - digest each).
+    assert persisted.count("BTCUSD") == 1
+
+    # Expire the cache (simulating the next refresh cycle) without changing
+    # the underlying feed content at all.
+    digest, _fetched_at = news._cache["BTCUSD"]
+    news._cache["BTCUSD"] = (digest, 0.0)
+
+    second = news.get_news("BTCUSD")
+    assert len(ai_calls) == 1  # no second OpenRouter call
+    assert persisted.count("BTCUSD") == 1  # no second news_history row
+    assert second is first  # the exact same digest object was reused
+
+
+def test_new_articles_trigger_a_fresh_ai_call(monkeypatch):
+    monkeypatch.setattr(settings, "openrouter_api_key", "test-or-key")
+    rows = [_row("Bitcoin holds steady above $70k")]
+    current_rows = list(rows)
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: current_rows)
+
+    ai_calls = []
+    monkeypatch.setattr(news.requests, "post", lambda *a, **k: ai_calls.append(1) or _fake_ai_response())
+
+    news.get_news("BTCUSD")
+    assert len(ai_calls) == 1
+
+    # Expire the cache AND let a genuinely new article show up this time.
+    digest, _fetched_at = news._cache["BTCUSD"]
+    news._cache["BTCUSD"] = (digest, 0.0)
+    current_rows.append(_row("Bitcoin ETF sees fresh inflows"))
+
+    news.get_news("BTCUSD")
+    assert len(ai_calls) == 2  # the changed article set triggered a new call
+
+
 def test_persist_digest_writes_a_news_history_row(monkeypatch):
     added = []
 

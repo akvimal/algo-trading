@@ -5,12 +5,15 @@ from app.providers import dhan, news
 
 @pytest.fixture(autouse=True)
 def _reset_news_cache():
-    """app/providers/news.py's cache is module-level (shared across every
-    call, not per-request) - same leak risk as dhan's throttle clocks
-    below if left dirty between tests."""
+    """app/providers/news.py's cache (and its _last_fingerprint change-
+    detection map) are module-level, shared across every call, not per-
+    request - same leak risk as dhan's throttle clocks below if left dirty
+    between tests."""
     news._cache.clear()
+    news._last_fingerprint.clear()
     yield
     news._cache.clear()
+    news._last_fingerprint.clear()
 
 
 @pytest.fixture(autouse=True)

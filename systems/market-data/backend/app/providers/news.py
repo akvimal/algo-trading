@@ -95,6 +95,14 @@ _cache: dict[str, tuple[NewsDigest, float]] = {}
 _crypto_refresh_lock = threading.Lock()
 _nse_mcx_refresh_lock = threading.Lock()
 
+# The set of article urls that matched an underlying on its last refresh -
+# an unchanged set means no new article arrived since the last AI call, so
+# _refresh_bucket skips re-analyzing (and re-persisting) rather than
+# spending an OpenRouter call on input it's already digested. A missing
+# key never equals a real (possibly empty) frozenset, so the first-ever
+# refresh always runs analysis.
+_last_fingerprint: dict[str, frozenset] = {}
+
 _DIGEST_SCHEMA = {
     "type": "object",
     "properties": {
@@ -201,6 +209,13 @@ def _fetch_bucket(feeds: dict[str, str]) -> list[dict]:
 def _matches(row: dict, keywords: list[str]) -> bool:
     haystack = f"{row.get('title', '')} {row.get('description', '')}".lower()
     return any(kw in haystack for kw in keywords)
+
+
+def _fingerprint(rows: list[dict]) -> frozenset:
+    """Identifies the article set matched for one underlying - an
+    unchanged fingerprint across refreshes means no new article arrived,
+    see _last_fingerprint."""
+    return frozenset(row["url"] for row in rows if row.get("url"))
 
 
 def _to_article(row: dict) -> NewsArticle:
@@ -330,10 +345,14 @@ def _persist_digest(underlying: str, digest: NewsDigest) -> None:
 
 
 def _refresh_bucket(feeds: dict[str, str], lock: threading.Lock, underlyings: list[str]) -> None:
-    """Fetches every feed in a bucket ONCE, then filters/analyzes/caches/
-    persists separately for each underlying that shares it - e.g. one
-    round of (CoinDesk, Cointelegraph) fetches covers BTCUSD/ETHUSD/SOLUSD
-    without re-fetching per symbol."""
+    """Fetches every feed in a bucket ONCE, then filters each underlying's
+    matches out of that same fetch - e.g. one round of (CoinDesk,
+    Cointelegraph) fetches covers BTCUSD/ETHUSD/SOLUSD without re-fetching
+    per symbol. Re-analyzing via AI (and logging a news_history row) only
+    happens when that underlying's matched article set actually changed
+    since last time (see _last_fingerprint) - an unchanged RSS feed just
+    extends the existing digest's freshness instead of spending another
+    OpenRouter call on input it's already digested."""
     with lock:
         if _cache_get(underlyings[0], _NEWS_TTL_SECONDS) is not None:
             return  # someone else refreshed it while we waited for the lock
@@ -345,9 +364,15 @@ def _refresh_bucket(feeds: dict[str, str], lock: threading.Lock, underlyings: li
         rows.sort(key=lambda r: r.get("published_at") or "", reverse=True)
         for underlying in underlyings:
             matched = [row for row in rows if _matches(row, _KEYWORDS[underlying])]
+            fingerprint = _fingerprint(matched)
+            existing = _cache_stale(underlying)
+            if existing is not None and fingerprint == _last_fingerprint.get(underlying):
+                _cache_set(underlying, existing)  # no new articles - just extend freshness
+                continue
             digest = _analyze_via_ai(underlying, matched)
             _cache_set(underlying, digest)
             _persist_digest(underlying, digest)
+            _last_fingerprint[underlying] = fingerprint
 
 
 def get_news(underlying: str) -> NewsDigest:

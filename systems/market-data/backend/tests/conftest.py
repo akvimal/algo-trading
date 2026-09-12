@@ -1,6 +1,16 @@
 import pytest
 
-from app.providers import dhan, news
+from app.providers import calendar, dhan, news
+
+
+@pytest.fixture(autouse=True)
+def _reset_calendar_cache():
+    """app/providers/calendar.py's cache is a module-level variable
+    (shared across every call, not per-request) - same leak risk as
+    news'/dhan's below if left dirty between tests."""
+    calendar._cache = None
+    yield
+    calendar._cache = None
 
 
 @pytest.fixture(autouse=True)

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
+    calendar,
     candles,
     delta,
     dhan,
@@ -38,6 +39,7 @@ app.include_router(dhan.router)
 app.include_router(delta.router)
 app.include_router(options.router)
 app.include_router(news.router)
+app.include_router(calendar.router)
 
 
 @app.on_event("startup")

@@ -237,6 +237,29 @@ class NewsHistoryPoint(BaseModel):
     articles: list[NewsArticle]
 
 
+class EconomicEvent(BaseModel):
+    """GET /calendar - one scheduled macro event (a Fed decision, a CPI
+    print, ...) for the Live Chart's Events tab. Backed by Forex Factory's
+    public calendar feed (see app/providers/calendar.py) - `currency` is
+    the 3-letter code the feed itself uses (a country/bloc, not a
+    tradeable symbol - e.g. "USD" for a Fed release), matched to a chart
+    underlying by app/providers/calendar.py's _CURRENCY_FOR_UNDERLYING
+    (every underlying here maps to USD - the feed doesn't cover INR at
+    all, see that module's comment). `forecast`/`previous`/`actual` are
+    the feed's own free-text values (units vary by indicator - "2.5%",
+    "228K", ...); `actual` is optional defensively but wasn't observed
+    populated even for already-past events in this feed (confirmed live
+    2026-09-12) - treat its absence as normal, not a bug."""
+
+    title: str
+    currency: str
+    timestamp: str
+    impact: Literal["low", "medium", "high", "holiday"]
+    forecast: Optional[str] = None
+    previous: Optional[str] = None
+    actual: Optional[str] = None
+
+
 class TrendChange(BaseModel):
     """One confirmed-trend flip - part of GET /order-blocks' ChartStructure.
     Emitted at a BOS/CHoCH break where `structure_state`'s confirmed trend

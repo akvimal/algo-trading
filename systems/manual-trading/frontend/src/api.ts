@@ -1347,6 +1347,26 @@ export async function fetchNews(underlying: string): Promise<NewsDigest> {
   return asJson<NewsDigest>(res, `GET /news (${underlying})`);
 }
 
+// GET /calendar - the Live Chart's Events tab. Medium/high-impact
+// scheduled macro releases (Fed decisions, CPI, ...) from a free public
+// feed (market-data's app/providers/calendar.py) - every underlying maps
+// to USD (the feed doesn't cover INR at all), so this is the same list
+// for every chart symbol, not instrument-specific the way News is.
+export type EconomicEvent = {
+  title: string;
+  currency: string;
+  timestamp: string;
+  impact: "low" | "medium" | "high" | "holiday";
+  forecast: string | null;
+  previous: string | null;
+  actual: string | null;
+};
+
+export async function fetchCalendar(underlying: string): Promise<EconomicEvent[]> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/calendar?${new URLSearchParams({ underlying })}`);
+  return asJson<EconomicEvent[]>(res, `GET /calendar (${underlying})`);
+}
+
 // Backs the Rules page's backtest form - what date range is actually
 // usable, per market-data's GET /candles/availability. NSE/MCX (Dhan)
 // report a fixed `max_days_per_request` (a hard per-call cap - real

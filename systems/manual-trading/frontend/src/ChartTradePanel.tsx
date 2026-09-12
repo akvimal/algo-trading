@@ -28,6 +28,7 @@ import {
   updateStopLoss,
 } from "./api";
 import type { PricePickField } from "./LiveChartPanel";
+import EventsPanel from "./EventsPanel";
 import NewsPanel from "./NewsPanel";
 import {
   CRYPTO_OPTION_SYMBOLS,
@@ -368,7 +369,7 @@ export default function ChartTradePanel({
   const isOption = strategy !== "future";
   // Trade vs History - a tab inside the card so the closed-trade list
   // isn't always stretching the panel down the page.
-  const [tab, setTab] = useState<"trade" | "history" | "news">("trade");
+  const [tab, setTab] = useState<"trade" | "history" | "news" | "events">("trade");
   const [moneyness, setMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [qtyInput, setQtyInput] = useState("1");
   const [slInput, setSlInput] = useState("");
@@ -1092,6 +1093,15 @@ export default function ChartTradePanel({
         >
           News
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "events"}
+          className={tab === "events" ? "active" : ""}
+          onClick={() => setTab("events")}
+        >
+          Events
+        </button>
       </div>
 
       {tab === "trade" && (
@@ -1601,6 +1611,8 @@ export default function ChartTradePanel({
       )}
 
       {tab === "news" && <NewsPanel underlying={sym} />}
+
+      {tab === "events" && <EventsPanel underlying={sym} />}
     </div>
   );
 }

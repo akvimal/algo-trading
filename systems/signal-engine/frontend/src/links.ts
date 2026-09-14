@@ -11,6 +11,17 @@ export function executionUrl(signalId: string): string {
   return `http://${location.hostname}:${EXECUTION_FRONTEND_PORT}/?signal_id=${encodeURIComponent(signalId)}`;
 }
 
+// Manual-trading's Live Chart (its default tab, no ?tab= needed) - reads
+// ?symbol= on load. As of 2026-09-12 this accepts ANY NSE symbol, not just
+// its fixed 7-symbol desk (see LiveChartPage.tsx's isCustomSymbol) - opens
+// as a one-off view with full drawing-toolbar support, not added to the
+// permanent desk. Used by WeeklyAdvisorPage's "Open chart" link.
+const MANUAL_TRADING_FRONTEND_PORT = 8084;
+
+export function manualTradingChartUrl(symbol: string): string {
+  return `http://${location.hostname}:${MANUAL_TRADING_FRONTEND_PORT}/?symbol=${encodeURIComponent(symbol)}`;
+}
+
 // This service's own backend (signal-engine, not any frontend) - the same
 // VITE_SIGNAL_ENGINE_PORT convention api.ts uses.
 const SIGNAL_ENGINE_BACKEND_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";

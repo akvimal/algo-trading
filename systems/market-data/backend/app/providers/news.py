@@ -207,8 +207,13 @@ def _fetch_bucket(feeds: dict[str, str]) -> list[dict]:
 
 
 def _matches(row: dict, keywords: list[str]) -> bool:
+    """Word-boundary match (not a bare substring) - matters most for the
+    generic per-stock path below, where the "keyword" is just a bare NSE
+    ticker (e.g. "ABB", "ITC"): a plain substring test would false-positive
+    inside unrelated words. The curated multi-word keywords ("nifty 50",
+    "bitcoin") are unaffected either way."""
     haystack = f"{row.get('title', '')} {row.get('description', '')}".lower()
-    return any(kw in haystack for kw in keywords)
+    return any(re.search(rf"\b{re.escape(kw)}\b", haystack) for kw in keywords)
 
 
 def _fingerprint(rows: list[dict]) -> frozenset:
@@ -375,14 +380,61 @@ def _refresh_bucket(feeds: dict[str, str], lock: threading.Lock, underlyings: li
             _last_fingerprint[underlying] = fingerprint
 
 
-def get_news(underlying: str) -> NewsDigest:
+def _generic_stock_news(symbol: str) -> NewsDigest:
+    """News for an arbitrary NSE stock NOT in the curated desk (e.g. any
+    weekly_advisor F&O symbol opened via manual-trading's "Open chart") -
+    same ET+Mint markets feeds as the curated NSE/MCX bucket (no new
+    source, no new ToS exposure), just keyword-matched on the bare ticker
+    instead of a hand-curated phrase. Deliberately its own cache/fetch
+    path rather than folding into _refresh_bucket/_NSE_MCX_UNDERLYINGS -
+    that list is fixed at import time, but an arbitrary stock symbol isn't
+    known in advance. Costs one extra RSS fetch of the same 2 feeds when a
+    stock's news is checked around the same time as the curated bucket's
+    own refresh - an accepted duplication, not worth a shared-cache
+    refactor for what's normally an occasional, one-off lookup."""
+    cached = _cache_get(symbol, _NEWS_TTL_SECONDS)
+    if cached is not None:
+        return cached
+
+    try:
+        rows = _fetch_bucket(_NSE_MCX_FEEDS)
+    except Exception as exc:
+        stale = _cache_stale(symbol)
+        if stale is not None:
+            return stale
+        raise RuntimeError(f"news feed fetch failed: {exc}") from exc
+
+    rows.sort(key=lambda r: r.get("published_at") or "", reverse=True)
+    matched = [row for row in rows if _matches(row, [symbol.lower()])]
+    fingerprint = _fingerprint(matched)
+    existing = _cache_stale(symbol)
+    if existing is not None and fingerprint == _last_fingerprint.get(symbol):
+        _cache_set(symbol, existing)  # no new articles - just extend freshness
+        return existing
+
+    digest = _analyze_via_ai(symbol, matched)
+    _cache_set(symbol, digest)
+    _persist_digest(symbol, digest)
+    _last_fingerprint[symbol] = fingerprint
+    return digest
+
+
+def get_news(underlying: str, segment: Optional[str] = None) -> NewsDigest:
     """Cached AI trend-relevance digest for one chart underlying - see the
     module-level comments above for the RSS sourcing/bucketing and the
     OpenRouter analysis layered on top. Falls back to a stale cached copy
     (if any) rather than raising when a refresh fails, so a transient
     hiccup doesn't blank the News tab; raises only when there's truly
-    nothing to show yet."""
+    nothing to show yet.
+
+    An underlying outside the curated desk (SUPPORTED_UNDERLYINGS) is
+    treated as a generic NSE stock ticker - see _generic_stock_news - only
+    when the caller says `segment="NSE"`; otherwise (unknown/MCX/CRYPTO
+    symbol) it's rejected same as before. `segment` exists purely to tell
+    those apart - it's never itself part of the keyword match."""
     if underlying not in SUPPORTED_UNDERLYINGS:
+        if segment == "NSE":
+            return _generic_stock_news(underlying)
         raise ValueError(f"no news source configured for '{underlying}'")
 
     cached = _cache_get(underlying, _NEWS_TTL_SECONDS)

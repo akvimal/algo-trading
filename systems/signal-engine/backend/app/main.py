@@ -3,7 +3,18 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, indicators, ingest, rules, saved_backtests, signals, strategies, watchlists, webhooks
+from app.api.routes import (
+    health,
+    indicators,
+    ingest,
+    rules,
+    saved_backtests,
+    signals,
+    strategies,
+    watchlists,
+    weekly_advisor,
+    webhooks,
+)
 from app.consumers.signal_resolution_consumer import start_background as start_resolution_consumer
 from app.scheduler import start_scheduler
 
@@ -39,6 +50,7 @@ app.include_router(saved_backtests.router)
 app.include_router(signals.router)
 app.include_router(strategies.router)
 app.include_router(watchlists.router)
+app.include_router(weekly_advisor.router)
 app.include_router(webhooks.router)
 
 _consumer_stop_event = None

@@ -894,13 +894,23 @@ registerIndicator<RsiPoint>({
 // MACD/RSI/... each get a lower pane), the active set remembered in
 // localStorage. Phase 3 (auto zone detection) is still just scoped.
 
-type IntervalDef = { label: string; value: string; minutes: number; lookbackDays: number };
+type IntervalDef = { label: string; value: string; minutes: number; lookbackDays: number; source?: string };
 
 // value = market-data's own interval vocabulary (1/5/15/60min native to
 // Dhan, 3min/30min locally aggregated from 1min bars - see its
 // providers/dhan.py + candle_aggregation.py). lookback keeps the initial
 // series to a few hundred bars regardless of interval; panning further
 // back (klinecharts' setLoadDataCallback) is a later phase, not wired here.
+//
+// "1d" is the one exception: `source: "yahoo"` routes it to market-data's
+// yfinance-backed provider (app/domain/weekly_advisor's own data source)
+// instead of Dhan - added 2026-09-12 because opening an arbitrary NSE
+// stock's chart (via the "Other symbol" box / weekly_advisor's "Open
+// chart" link) otherwise has no candles at all whenever the Dhan token is
+// stale/expired, which is a real, recurring state for this dev token (see
+// [[project_dhan_token_renewal]]). Every OTHER interval still requires
+// Dhan - yahoo has no intraday granularity - so this is a "did the daily
+// picture load" fallback, not a Dhan replacement.
 const INTERVALS: IntervalDef[] = [
   { label: "1m", value: "1min", minutes: 1, lookbackDays: 3 },
   { label: "3m", value: "3min", minutes: 3, lookbackDays: 6 },
@@ -908,6 +918,7 @@ const INTERVALS: IntervalDef[] = [
   { label: "15m", value: "15min", minutes: 15, lookbackDays: 30 },
   { label: "30m", value: "30min", minutes: 30, lookbackDays: 45 },
   { label: "1h", value: "60min", minutes: 60, lookbackDays: 75 },
+  { label: "1d", value: "daily", minutes: 1440, lookbackDays: 365, source: "yahoo" },
 ];
 
 const INTERVAL_STORAGE_KEY = "manualLiveChartInterval";
@@ -1034,13 +1045,19 @@ function openOiAnalysis(symbol: string) {
 // chart's display interval. Each needs its OWN (wider) lookback so a
 // coarse timeframe has enough bars to find structure, regardless of how
 // little history the displayed chart pulled.
-const OB_TIMEFRAMES: { label: string; value: string; lookbackDays: number }[] = [
+//
+// "1d" mirrors INTERVALS' own yahoo fallback (see that comment) - so a
+// custom symbol defaulted to the daily display interval (LiveChartPage's
+// defaultInterval, e.g. weekly_advisor's "Open chart") can still run
+// structure detection without a live Dhan token. NSE only, same reason.
+const OB_TIMEFRAMES: { label: string; value: string; lookbackDays: number; source?: string }[] = [
   { label: "1m", value: "1min", lookbackDays: 4 },
   { label: "3m", value: "3min", lookbackDays: 8 },
   { label: "5m", value: "5min", lookbackDays: 12 },
   { label: "15m", value: "15min", lookbackDays: 30 },
   { label: "30m", value: "30min", lookbackDays: 50 },
   { label: "1h", value: "60min", lookbackDays: 90 },
+  { label: "1d", value: "daily", lookbackDays: 365, source: "yahoo" },
 ];
 
 const OB_TF_VALUES = new Set(OB_TIMEFRAMES.map((t) => t.value));
@@ -1875,6 +1892,7 @@ export type ChartContext = { regime: MarketRegime | null; oiBias: "bullish" | "b
 export function LiveChartPanel({
   segment,
   symbol,
+  defaultInterval,
   onTrendChange,
   onContextChange,
   onLtpChange,
@@ -1884,6 +1902,16 @@ export function LiveChartPanel({
 }: {
   segment: string;
   symbol: string;
+  // Overrides the remembered (localStorage) interval for this mount only,
+  // and switching intervals here doesn't overwrite that shared preference
+  // either - for a one-off symbol (LiveChartPage's isCustomSymbol) opened
+  // via a deep link, e.g. weekly_advisor's "Open chart": Dhan is the only
+  // source for every intraday interval, so a stock chart opened while the
+  // dev Dhan token is stale/expired would otherwise render nothing at all.
+  // Defaulting those to "daily" (routed to yahoo.py, see INTERVALS) means
+  // it at least shows the daily picture immediately, without silently
+  // changing what interval the fixed desk's own symbols come up on.
+  defaultInterval?: string;
   // Fired with the confirmed structure trend for the *chart's own
   // interval* (null when structure detection isn't running on that
   // timeframe) - the trade panel uses it to optionally lock direction.
@@ -1922,7 +1950,7 @@ export function LiveChartPanel({
   // an index, active-month future for a commodity).
   const [futures, setFutures] = useState<FutureContract[]>([]);
   const [contract, setContract] = useState<FutureContract | null>(null);
-  const [interval, setInterval_] = useState<string>(() => localStorage.getItem(INTERVAL_STORAGE_KEY) ?? "5min");
+  const [interval, setInterval_] = useState<string>(() => defaultInterval ?? localStorage.getItem(INTERVAL_STORAGE_KEY) ?? "5min");
   // The exchange/symbol the CHART is on - a user-picked future contract
   // overrides resolveUnderlying's default (spot for an index, active-month
   // future for a commodity). OI / sentiment still key off the underlying
@@ -1982,7 +2010,20 @@ export function LiveChartPanel({
   // parsed+applied on every keystroke - committed on blur / Enter.
   const [paramDrafts, setParamDrafts] = useState<Record<string, string>>({});
 
-  const [structure, setStructure] = useState<StructureConfig>(loadStructureConfig);
+  const [structure, setStructure] = useState<StructureConfig>(() => {
+    const loaded = loadStructureConfig();
+    if (defaultInterval == null) return loaded;
+    // A custom symbol (defaultInterval set - weekly_advisor's "Open
+    // chart", or the "Other symbol" box) always opens with order-block
+    // detection ON at the same daily timeframe the chart itself defaults
+    // to - an intraday detection timeframe would just fail the same way
+    // the chart would without the display-interval override above.
+    // Trade-setup detection (entry/SL/target walk-forward + alerts) stays
+    // OFF here regardless of the fixed desk's own setting - it's a
+    // noisier, more opinionated layer than plain order blocks and isn't
+    // part of what opening a one-off symbol's chart asked for.
+    return { ...loaded, tfs: [defaultInterval], setups: false };
+  });
   const [trendByTf, setTrendByTf] = useState<Record<string, "up" | "down" | "range">>({});
   const [obMenuOpen, setObMenuOpen] = useState(false);
   const obMenuRef = useRef<HTMLDivElement | null>(null);
@@ -2112,7 +2153,10 @@ export function LiveChartPanel({
       // candle effect's own loadHistory sets this back to "ready".
       setStatus("loading");
     }
-    localStorage.setItem(INTERVAL_STORAGE_KEY, value);
+    // A custom/one-off symbol's interval choice stays local to this mount
+    // (see defaultInterval's own comment) - it must not overwrite the
+    // fixed desk's own remembered interval.
+    if (defaultInterval == null) localStorage.setItem(INTERVAL_STORAGE_KEY, value);
     setInterval_(value);
     // Keep order-block detection pointed at the chart's own interval:
     // switching the chart timeframe re-detects structure at that same
@@ -2124,10 +2168,13 @@ export function LiveChartPanel({
       if (prev.tfs.length === 0) return prev;
       if (prev.tfs.length === 1 && prev.tfs[0] === value) return prev;
       const next = { ...prev, tfs: [value] };
-      try {
-        localStorage.setItem(ORDER_BLOCKS_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // storage disabled - the change still applies this session
+      // Same custom-symbol persistence guard as the interval write above.
+      if (defaultInterval == null) {
+        try {
+          localStorage.setItem(ORDER_BLOCKS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // storage disabled - the change still applies this session
+        }
       }
       return next;
     });
@@ -2202,10 +2249,15 @@ export function LiveChartPanel({
   function updateStructure(patch: Partial<StructureConfig>) {
     setStructure((prev) => {
       const next = { ...prev, ...patch };
-      try {
-        localStorage.setItem(ORDER_BLOCKS_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // storage disabled - the change still applies this session
+      // A custom symbol's structure config stays local to this mount, same
+      // reasoning as pickInterval's own defaultInterval guard - it must not
+      // overwrite the fixed desk's own remembered detection timeframe(s).
+      if (defaultInterval == null) {
+        try {
+          localStorage.setItem(ORDER_BLOCKS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // storage disabled - the change still applies this session
+        }
       }
       return next;
     });
@@ -2978,7 +3030,7 @@ export function LiveChartPanel({
         const to = new Date();
         const from = new Date(to.getTime() - def.lookbackDays * 86_400_000);
         try {
-          const data = await fetchChartStructure(ex, sym, tf, ymd(from), ymd(to), { breakers, fvg, setups });
+          const data = await fetchChartStructure(ex, sym, tf, ymd(from), ymd(to), { breakers, fvg, setups, source: def.source });
           if (cancelled) return;
           batches.push({ label: def.label, tf, data });
         } catch {
@@ -3413,7 +3465,7 @@ export function LiveChartPanel({
       const from = new Date(to.getTime() - def.lookbackDays * 86_400_000);
       let candles: Candle[];
       try {
-        candles = await fetchCandleHistory(ex, sym, interval, ymd(from), ymd(to));
+        candles = await fetchCandleHistory(ex, sym, interval, ymd(from), ymd(to), def.source);
       } catch (e) {
         if (!cancelled && initial) {
           setStatus("error");
@@ -3559,7 +3611,10 @@ export function LiveChartPanel({
       <div className="live-chart-toolbar">
         <div className="live-chart-toolbar-left">
           <div className="live-chart-intervals">
-            {INTERVALS.map((i) => (
+            {/* "1d" only offered for NSE - its yahoo.py source is wired for
+                NSE only (see the INTERVALS comment above), MCX/CRYPTO would
+                just error. */}
+            {INTERVALS.filter((i) => i.source !== "yahoo" || segment === "NSE").map((i) => (
               <button
                 key={i.value}
                 type="button"
@@ -3600,7 +3655,7 @@ export function LiveChartPanel({
             {obMenuOpen && (
               <div className="live-chart-indicators-menu">
                 <div className="live-chart-indicators-group">Detection timeframe</div>
-                {OB_TIMEFRAMES.map((t) => {
+                {OB_TIMEFRAMES.filter((t) => t.source !== "yahoo" || segment === "NSE").map((t) => {
                   const on = structure.tfs.includes(t.value);
                   const tr = on ? trendByTf[t.value] : undefined;
                   return (

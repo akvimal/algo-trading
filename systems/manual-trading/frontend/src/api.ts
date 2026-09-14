@@ -1169,9 +1169,12 @@ export async function fetchCandleHistory(
   interval: string,
   from: string,
   to: string,
+  source?: string,
 ): Promise<Candle[]> {
+  const params: Record<string, string> = { exchange, symbol, interval, from, to };
+  if (source) params.source = source;
   const res = await authFetch(
-    `${MARKET_DATA_BASE_URL}/candles/history?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
+    `${MARKET_DATA_BASE_URL}/candles/history?${new URLSearchParams(params)}`,
     undefined,
     CHART_DATA_FETCH_TIMEOUT_MS,
   );
@@ -1288,12 +1291,13 @@ export async function fetchChartStructure(
   interval: string,
   from: string,
   to: string,
-  opts: { breakers?: boolean; fvg?: boolean; setups?: boolean } = {},
+  opts: { breakers?: boolean; fvg?: boolean; setups?: boolean; source?: string } = {},
 ): Promise<ChartStructure> {
   const params = new URLSearchParams({ exchange, symbol, interval, from, to });
   if (opts.breakers) params.set("breakers", "true");
   if (opts.fvg) params.set("fvg", "true");
   if (opts.setups) params.set("setups", "true");
+  if (opts.source) params.set("source", opts.source);
   const res = await authFetch(`${MARKET_DATA_BASE_URL}/order-blocks?${params}`, undefined, CHART_DATA_FETCH_TIMEOUT_MS);
   return asJson<ChartStructure>(res, `GET /order-blocks (${exchange}/${symbol}/${interval})`);
 }
@@ -1342,8 +1346,8 @@ export type NewsDigest = {
   articles: NewsArticle[];
 };
 
-export async function fetchNews(underlying: string): Promise<NewsDigest> {
-  const res = await authFetch(`${MARKET_DATA_BASE_URL}/news?${new URLSearchParams({ underlying })}`);
+export async function fetchNews(underlying: string, segment: string): Promise<NewsDigest> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/news?${new URLSearchParams({ underlying, segment })}`);
   return asJson<NewsDigest>(res, `GET /news (${underlying})`);
 }
 

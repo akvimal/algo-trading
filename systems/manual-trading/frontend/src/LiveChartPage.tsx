@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type Account,
@@ -79,14 +79,35 @@ const SYMBOLS: { symbol: string; segment: Segment }[] = [
   { symbol: "SOLUSD", segment: "CRYPTO" },
 ];
 
-function storedSymbol(): (typeof SYMBOLS)[number] {
-  // Deep link (?symbol=NIFTY) - the shell reloads this iframe at that URL
-  // when the "Intraday Chart" link on the OI page is clicked (same
-  // mechanism as ?tab=oi&symbol=). Wins over the remembered symbol;
-  // falls back silently for an unknown/missing value.
+// A symbol outside the fixed desk list - typed into "Other symbol" below,
+// or arrived at via a ?symbol= deep link the fixed list doesn't cover
+// (e.g. weekly_advisor's "Open chart" link for an arbitrary F&O stock).
+// Always NSE - every caller of this (weekly_advisor, the OI page's own
+// deep link) only ever names individual NSE equities/indices, never MCX/
+// CRYPTO, which stay reachable solely through the fixed tabs. Everything
+// downstream (LiveChartPanel, ChartTradePanel, drawing persistence via
+// overlayStorageKey) is already keyed by plain {segment, symbol} strings,
+// not by membership in SYMBOLS, so this needs no changes below the page
+// level - it really is just the tab bar/storedSymbol lookup that was
+// fixed-list-only.
+type SymbolEntry = { symbol: string; segment: Segment };
+
+function isCustomSymbol(entry: SymbolEntry): boolean {
+  return !SYMBOLS.some((s) => s.symbol === entry.symbol && s.segment === entry.segment);
+}
+
+function storedSymbol(): SymbolEntry {
+  // Deep link (?symbol=NIFTY, or now any NSE symbol) - the shell reloads
+  // this iframe at that URL when the "Intraday Chart" link on the OI page
+  // is clicked (same mechanism as ?tab=oi&symbol=), or weekly_advisor's
+  // own "Open chart" link. Wins over the remembered symbol. A value not in
+  // the fixed list is treated as an ad-hoc NSE symbol rather than silently
+  // falling back - see the SymbolEntry comment above.
   const requested = new URLSearchParams(window.location.search).get("symbol");
-  const byUrl = requested ? SYMBOLS.find((s) => s.symbol === requested.toUpperCase()) : null;
-  if (byUrl) return byUrl;
+  if (requested) {
+    const upper = requested.toUpperCase();
+    return SYMBOLS.find((s) => s.symbol === upper) ?? { symbol: upper, segment: "NSE" };
+  }
   const v = localStorage.getItem(SYMBOL_STORAGE_KEY);
   return SYMBOLS.find((s) => s.symbol === v) ?? SYMBOLS[0];
 }
@@ -110,7 +131,8 @@ function loadPending(): Record<string, PendingOrder> {
 }
 
 export default function LiveChartPage() {
-  const [active, setActive] = useState<(typeof SYMBOLS)[number]>(storedSymbol);
+  const [active, setActive] = useState<SymbolEntry>(storedSymbol);
+  const [customSymbolInput, setCustomSymbolInput] = useState("");
   // The chart-interval structure trend, lifted from LiveChartPanel so the
   // trade panel can lock direction to it.
   const [trendInfo, setTrendInfo] = useState<IntervalTrend>({ trend: null, interval: "5min" });
@@ -247,7 +269,7 @@ export default function LiveChartPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [pickField]);
 
-  function pick(entry: (typeof SYMBOLS)[number]) {
+  function pick(entry: SymbolEntry) {
     if (entry.symbol === active.symbol) return;
     // Auto-trade is armed for one symbol only - switching disarms it. Any
     // position it opened keeps its server-side trailing SuperTrend stop.
@@ -256,7 +278,10 @@ export default function LiveChartPage() {
       setAutoTradeOn(false);
       saveAutoTradeOn(false);
     }
-    localStorage.setItem(SYMBOL_STORAGE_KEY, entry.symbol);
+    // A custom (non-fixed) symbol is deliberately NOT remembered as the
+    // page's default - it's a one-off deep-link/lookup, not a desk switch.
+    // Reloading the page without ?symbol= should return to the fixed desk.
+    if (!isCustomSymbol(entry)) localStorage.setItem(SYMBOL_STORAGE_KEY, entry.symbol);
     setActive(entry);
     setTrendInfo({ trend: null, interval: "5min" });
     setChartLtp(null);
@@ -266,6 +291,14 @@ export default function LiveChartPage() {
     setPickedPrice(null);
     setOpenTrade(null);
     setChartSetup("");
+  }
+
+  function goToCustomSymbol(e: FormEvent) {
+    e.preventDefault();
+    const symbol = customSymbolInput.trim().toUpperCase();
+    if (!symbol) return;
+    pick({ symbol, segment: "NSE" });
+    setCustomSymbolInput("");
   }
 
   function toggleAutoTrade() {
@@ -409,6 +442,19 @@ export default function LiveChartPage() {
             )}
           </button>
         ))}
+        {isCustomSymbol(active) && (
+          <button className="active" onClick={() => pick(active)}>
+            {active.symbol}
+          </button>
+        )}
+        <form className="live-chart-custom-symbol" onSubmit={goToCustomSymbol}>
+          <input
+            value={customSymbolInput}
+            onChange={(e) => setCustomSymbolInput(e.target.value)}
+            placeholder="Other NSE symbol"
+            title="Any NSE symbol not on the desk above (e.g. an individual F&O stock) - opens here as a one-off, not added to the desk. Drawings still save per-symbol."
+          />
+        </form>
       </nav>
 
       <div className="live-chart-layout">
@@ -416,6 +462,7 @@ export default function LiveChartPage() {
           key={`${active.segment}:${active.symbol}`}
           segment={active.segment}
           symbol={active.symbol}
+          defaultInterval={isCustomSymbol(active) ? "daily" : undefined}
           onTrendChange={setTrendInfo}
           onContextChange={setChartContext}
           onLtpChange={setChartLtp}

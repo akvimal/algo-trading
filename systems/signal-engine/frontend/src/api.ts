@@ -1964,3 +1964,232 @@ export async function deleteTradeImage(imageId: string): Promise<void> {
     throw new Error(`DELETE /images/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
+
+// --- Weekly Options Advisor (app/domain/weekly_advisor) -------------------
+// GET /weekly-advisor/recommendations is on-demand, stateless: builds each
+// symbol's read fresh from live NSE OHLCV every call, no AI memo yet (see
+// the backend pipeline's own docstring for the explicitly deferred scope).
+// Mirrors docs/contracts/weekly-recommendation.v1.schema.json by hand,
+// same "no codegen" convention every other cross-system contract here
+// uses. Saving (POST .../recommendations/save) is a separate, explicit
+// step that freezes one symbol's recommendation with a timestamp; "select/
+// execute" is a manual trade JOURNAL against a saved recommendation, not a
+// real execution-opened position - every weekly_advisor strategy is
+// net-short-premium, which execution's option P&L/sizing math can't price
+// yet (see app/domain/weekly_advisor/journal.py's module docstring).
+
+export type WeeklyAdvisorZone = { low: number; high: number; basis: string };
+
+export type WeeklyAdvisorTrendChannel = { upper: number; mid: number; lower: number; slope_per_bar: number };
+
+export type WeeklyAdvisorTechnicalSnapshot = {
+  timeframe: "daily" | "weekly";
+  close: number;
+  ema20: number;
+  ema50: number;
+  adx14: number;
+  adx14_slope: "rising" | "falling" | "flat";
+  atr14: number;
+  trend_channel: WeeklyAdvisorTrendChannel | null;
+  support_zones: WeeklyAdvisorZone[];
+  resistance_zones: WeeklyAdvisorZone[];
+  volume: number;
+  volume_sma20: number;
+  volume_confirmed: boolean;
+};
+
+export type WeeklyAdvisorOiSnapshot = {
+  available: boolean;
+  pcr: number | null;
+  max_pain: number | null;
+  aggregate_signal: "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding" | null;
+};
+
+export type WeeklyAdvisorRegime = {
+  bias: "bullish" | "bearish" | "neutral";
+  trend_strength: "trending" | "decelerating" | "ranging";
+  confidence: number;
+  reasons: string[];
+};
+
+export type WeeklyAdvisorLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; basis: string };
+
+export type WeeklyAdvisorStrategy = {
+  action: "sell_otm_put" | "sell_otm_call" | "short_strangle" | "iron_condor" | "avoid_new_entry" | "close_existing";
+  legs: WeeklyAdvisorLeg[];
+  entry_window: { earliest: string; latest: string; days_to_expiry_at_entry: number };
+  exit_rule: { target_pct_of_max_profit: number; hard_exit_days_before_expiry: number };
+};
+
+export type WeeklyRecommendation = {
+  symbol: string;
+  as_of: string;
+  technical: WeeklyAdvisorTechnicalSnapshot;
+  oi: WeeklyAdvisorOiSnapshot;
+  regime: WeeklyAdvisorRegime;
+  strategy: WeeklyAdvisorStrategy;
+  ai_memo: string | null;
+  generated_by: { engine_version: string; ai_model: string | null };
+};
+
+export type WeeklyAdvisorSkipped = { symbol: string; reason: string };
+
+export type WeeklyAdvisorResponse = { recommendations: WeeklyRecommendation[]; skipped: WeeklyAdvisorSkipped[] };
+
+export async function fetchWeeklyAdvisorRecommendations(symbols?: string[]): Promise<WeeklyAdvisorResponse> {
+  const params = symbols && symbols.length > 0 ? `?${new URLSearchParams({ symbols: symbols.join(",") })}` : "";
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations${params}`);
+  return asJson(res, "GET /weekly-advisor/recommendations");
+}
+
+export type WeeklyAdvisorDecision = "execute" | "hold" | "drop";
+
+export type SavedWeeklyRecommendation = {
+  id: string;
+  symbol: string;
+  as_of: string;
+  action: WeeklyRecommendation["strategy"]["action"];
+  saved_at: string;
+  payload: WeeklyRecommendation;
+  decision: WeeklyAdvisorDecision | null;
+  confidence: number | null;
+  decision_comments: string | null;
+  decided_at: string | null;
+};
+
+export async function saveWeeklyAdvisorRecommendation(symbol: string, asOf?: string): Promise<SavedWeeklyRecommendation> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol, as_of: asOf ?? null }),
+  });
+  return asJson(res, "POST /weekly-advisor/recommendations/save");
+}
+
+export async function fetchWeeklyAdvisorHistory(symbol?: string, limit = 50): Promise<SavedWeeklyRecommendation[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (symbol) params.set("symbol", symbol);
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/history?${params}`);
+  return asJson(res, "GET /weekly-advisor/recommendations/history");
+}
+
+export type WeeklyAdvisorDecisionSet = { decision: WeeklyAdvisorDecision; confidence?: number; comments?: string };
+
+export async function setWeeklyAdvisorDecision(recommendationId: string, payload: WeeklyAdvisorDecisionSet): Promise<SavedWeeklyRecommendation> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}/decision`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PUT /weekly-advisor/recommendations/{id}/decision");
+}
+
+export type WeeklyAdvisorTradeStatus = "open" | "closed";
+
+// Per-leg entry data - independent of the recommendation's own read-only
+// WeeklyAdvisorLeg (no quantity/entry_price, since that's a stateless
+// plan). entry_price starts null at creation (not known until the leg
+// actually fills, whether that's the same session or days later) and is
+// overwritten via updateWeeklyAdvisorTradeEntry once it does.
+export type WeeklyAdvisorTradeLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; quantity: number | null; entry_price: number | null };
+
+export type WeeklyAdvisorTrade = {
+  id: string;
+  recommendation_id: string;
+  symbol: string;
+  action: WeeklyRecommendation["strategy"]["action"];
+  status: WeeklyAdvisorTradeStatus;
+  quantity: number | null;
+  entry_credit: number | null;
+  entry_notes: string | null;
+  taken_at: string;
+  exit_debit: number | null;
+  realized_pnl: number | null;
+  exit_notes: string | null;
+  closed_at: string | null;
+  funds_needed: number | null;
+  margin_needed: number | null;
+  pop: number | null;
+  max_profit: number | null;
+  max_loss: number | null;
+  days_to_expiry_at_entry: number | null;
+  actual_bias: "bullish" | "bearish" | "neutral" | null;
+  actual_strategy: string | null;
+  legs: WeeklyAdvisorTradeLeg[] | null;
+  target_pct_of_max_profit: number | null;
+  stop_loss_pct_of_max_loss: number | null;
+};
+
+export type WeeklyAdvisorTradeCreate = {
+  quantity?: number;
+  entry_credit?: number;
+  entry_notes?: string;
+  funds_needed?: number;
+  margin_needed?: number;
+  pop?: number;
+  max_profit?: number;
+  max_loss?: number;
+  actual_bias?: "bullish" | "bearish" | "neutral";
+  actual_strategy?: string;
+  target_pct_of_max_profit?: number;
+  stop_loss_pct_of_max_loss?: number;
+};
+
+export async function createWeeklyAdvisorTrade(recommendationId: string, payload: WeeklyAdvisorTradeCreate): Promise<WeeklyAdvisorTrade> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}/trades`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "POST /weekly-advisor/recommendations/{id}/trades");
+}
+
+// PUT .../trades/{id}/entry - overwrite provisional entry data (planned
+// off-session) with the real thing once the legs actually fill. Merge-style
+// like the decision endpoint: only fields present in the payload change.
+export type WeeklyAdvisorTradeEntryUpdate = WeeklyAdvisorTradeCreate & { legs?: WeeklyAdvisorTradeLeg[] };
+
+export async function updateWeeklyAdvisorTradeEntry(tradeId: string, payload: WeeklyAdvisorTradeEntryUpdate): Promise<WeeklyAdvisorTrade> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}/entry`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PUT /weekly-advisor/trades/{id}/entry");
+}
+
+export async function fetchWeeklyAdvisorTrades(filters?: { status?: WeeklyAdvisorTradeStatus; symbol?: string }): Promise<WeeklyAdvisorTrade[]> {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.symbol) params.set("symbol", filters.symbol);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades${qs ? `?${qs}` : ""}`);
+  return asJson(res, "GET /weekly-advisor/trades");
+}
+
+export type WeeklyAdvisorTradeClose = { exit_debit?: number; realized_pnl?: number; exit_notes?: string };
+
+export async function closeWeeklyAdvisorTrade(tradeId: string, payload: WeeklyAdvisorTradeClose): Promise<WeeklyAdvisorTrade> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}/close`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return asJson(res, "PUT /weekly-advisor/trades/{id}/close");
+}
+
+export type WeeklyAdvisorPerformanceSummary = {
+  open_count: number;
+  closed_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number | null;
+  total_realized_pnl: number;
+  by_symbol: Record<string, number>;
+};
+
+export async function fetchWeeklyAdvisorPerformance(symbol?: string): Promise<WeeklyAdvisorPerformanceSummary> {
+  const params = symbol ? `?${new URLSearchParams({ symbol })}` : "";
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/performance/summary${params}`);
+  return asJson(res, "GET /weekly-advisor/performance/summary");
+}

@@ -18,7 +18,7 @@ const BIAS_LABEL: Record<NewsDigest["bias"], string> = {
   neutral: "Neutral",
 };
 
-export default function NewsPanel({ underlying }: { underlying: string }) {
+export default function NewsPanel({ underlying, segment }: { underlying: string; segment: string }) {
   const [digest, setDigest] = useState<NewsDigest | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,7 +27,7 @@ export default function NewsPanel({ underlying }: { underlying: string }) {
 
     async function load() {
       try {
-        const d = await fetchNews(underlying);
+        const d = await fetchNews(underlying, segment);
         if (!cancelled) {
           setDigest(d);
           setError(null);
@@ -45,7 +45,7 @@ export default function NewsPanel({ underlying }: { underlying: string }) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [underlying]);
+  }, [underlying, segment]);
 
   if (error) return <p className="ctp-news-error muted">Couldn't load news: {error}</p>;
   if (digest === null) return <p className="muted">Loading news…</p>;

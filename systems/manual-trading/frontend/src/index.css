@@ -151,6 +151,22 @@ nav.tabs.subtabs button {
   font-size: 0.8rem;
 }
 
+/* "Other symbol" lookup - a one-off NSE symbol not on the fixed desk
+   above (see LiveChartPage.tsx's isCustomSymbol/goToCustomSymbol). Sits
+   inline at the end of the tab row rather than its own settings row -
+   it's an escape hatch, not a primary control. */
+.live-chart-custom-symbol {
+  display: inline-flex;
+  align-self: center;
+  margin-left: 0.5rem;
+}
+
+.live-chart-custom-symbol input {
+  width: 8rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.78rem;
+}
+
 /* IntradayPage's own wrapper (subtabs nav + whichever sub-page is active) -
    same 1rem rhythm as .manual-settings-page/.manual-wide-page below, which
    the OI tab's own top-level wrapper already uses. WorkspacePage in

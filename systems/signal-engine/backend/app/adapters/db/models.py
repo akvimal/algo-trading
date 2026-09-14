@@ -171,3 +171,69 @@ class SavedBacktest(Base):
     request = Column(JSONB, nullable=False)
     result = Column(JSONB, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class WeeklyAdvisorRecommendation(Base):
+    """A saved, point-in-time snapshot of one symbol's weekly_advisor
+    recommendation - see infra/postgres/init/03-signal-generation.sql for
+    why this freezes the result rather than replaying the request later."""
+
+    __tablename__ = "weekly_advisor_recommendations"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    symbol = Column(Text, nullable=False)
+    as_of = Column(Date, nullable=False)
+    action = Column(Text, nullable=False)
+    payload = Column(JSONB, nullable=False)
+    saved_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    # Decision log - see infra/postgres/init/03-signal-generation.sql's own
+    # comment. One decision per recommendation, overwritten on re-decide.
+    decision = Column(Text)
+    confidence = Column(Integer)
+    decision_comments = Column(Text)
+    decided_at = Column(TIMESTAMP(timezone=True))
+
+
+class WeeklyAdvisorTrade(Base):
+    """A manual trade-journal entry against one saved recommendation - see
+    infra/postgres/init/03-signal-generation.sql for why this is a manual
+    log rather than a real execution-opened position (every weekly_advisor
+    strategy is net-short-premium, which execution can't price/size yet)."""
+
+    __tablename__ = "weekly_advisor_trades"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    recommendation_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.weekly_advisor_recommendations.id"), nullable=False)
+    status = Column(Text, nullable=False, default="open")
+    quantity = Column(Numeric)
+    entry_credit = Column(Numeric)
+    entry_notes = Column(Text)
+    taken_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    exit_debit = Column(Numeric)
+    realized_pnl = Column(Numeric)
+    exit_notes = Column(Text)
+    closed_at = Column(TIMESTAMP(timezone=True))
+    # Manually-entered trade economics - see infra/postgres/init/
+    # 03-signal-generation.sql's own comment on why these are typed in,
+    # not computed. days_to_expiry_at_entry is the one derived field here.
+    funds_needed = Column(Numeric)
+    margin_needed = Column(Numeric)
+    pop = Column(Numeric)
+    max_profit = Column(Numeric)
+    max_loss = Column(Numeric)
+    days_to_expiry_at_entry = Column(Integer)
+    # What the user actually did, captured at mark-as-taken time - may
+    # differ from the recommendation's own regime.bias/strategy.action.
+    # See infra/postgres/init/03-signal-generation.sql's own comment.
+    actual_bias = Column(Text)
+    actual_strategy = Column(Text)
+    # Per-leg entry data (list of {option_type, strike, side, quantity,
+    # entry_price}) + close-out targets - editable after creation (see the
+    # /entry route) so provisional numbers logged off-session can be
+    # overwritten with real fill prices once the legs actually trigger.
+    # See infra/postgres/init/03-signal-generation.sql's own comment.
+    legs = Column(JSONB)
+    target_pct_of_max_profit = Column(Numeric)
+    stop_loss_pct_of_max_loss = Column(Numeric)

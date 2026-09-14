@@ -31,6 +31,7 @@ def get_order_blocks(
     swing_lookback: int = 5,
     min_risk_reward: float = 1.5,
     max_zones: int = 8,
+    source: Optional[str] = None,
     user_id: Optional[UUID] = Depends(get_optional_user_id),
 ):
     """SMC structure for one (exchange, symbol, interval) candle series:
@@ -46,18 +47,23 @@ def get_order_blocks(
     detection timeframes mostly serves from cache between bar closes. See
     app/domain/order_blocks.py for the detection and its tunables (all
     optional query params here); `zone_mode`/`mitigation` fall back to
-    "wick" on any unrecognised value."""
-    try:
-        provider = get_provider(exchange)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    "wick" on any unrecognised value. `source=yahoo` mirrors GET
+    /candles/history's own flag (daily/weekly NSE only, no Dhan/Delta
+    needed) - added so a "daily" detection timeframe can run structure
+    detection for a symbol whose intraday Dhan token is stale/expired."""
+    provider = None
+    if source != "yahoo":
+        try:
+            provider = get_provider(exchange)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     to_date = to or date.today()
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
     try:
         credentials = get_user_dhan_credentials(user_id) if user_id else None
-        candles = fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials)
+        candles = fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials, source=source)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:

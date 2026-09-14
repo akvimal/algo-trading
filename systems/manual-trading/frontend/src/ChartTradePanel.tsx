@@ -1610,7 +1610,7 @@ export default function ChartTradePanel({
       </div>
       )}
 
-      {tab === "news" && <NewsPanel underlying={sym} />}
+      {tab === "news" && <NewsPanel underlying={sym} segment={segment} />}
 
       {tab === "events" && <EventsPanel underlying={sym} />}
     </div>

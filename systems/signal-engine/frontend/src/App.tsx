@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import AuthGate from "./AuthGate";
 import { ConditionsTextEditor } from "./ConditionsTextEditor";
 import SignalsPage from "./SignalsPage";
+import WeeklyAdvisorPage from "./WeeklyAdvisorPage";
 import { type ParseError, parseConditionsText, stringifyConditions } from "./conditionsExpression";
 
 import {
@@ -92,7 +93,7 @@ import { chartinkWebhookUrls, executionUrl } from "./links";
 
 const POLL_INTERVAL_MS = 5000;
 
-type TabId = "strategies" | "rules" | "indicators" | "watchlists" | "signals";
+type TabId = "strategies" | "rules" | "indicators" | "watchlists" | "signals" | "weekly-advisor";
 
 // A performance advisory (not a real data-availability limit) for the
 // Backtest tab's From/To range - finer intervals mean far more bars to
@@ -4854,7 +4855,7 @@ function StrategiesTab() {
   );
 }
 
-const VALID_TABS: TabId[] = ["strategies", "rules", "indicators", "watchlists", "signals"];
+const VALID_TABS: TabId[] = ["strategies", "rules", "indicators", "watchlists", "signals", "weekly-advisor"];
 
 export default function App() {
   // Deep-link support (?tab=rules) - falls back to the Signals default
@@ -4890,6 +4891,9 @@ export default function App() {
             <button className={tab === "watchlists" ? "active" : ""} onClick={() => setTab("watchlists")}>
               Watchlists
             </button>
+            <button className={tab === "weekly-advisor" ? "active" : ""} onClick={() => setTab("weekly-advisor")}>
+              Weekly Advisor
+            </button>
           </nav>
         </div>
         <p className="subtitle">
@@ -4901,6 +4905,7 @@ export default function App() {
         {tab === "rules" && <RulesTab />}
         {tab === "indicators" && <IndicatorsTab />}
         {tab === "watchlists" && <WatchlistManager />}
+        {tab === "weekly-advisor" && <WeeklyAdvisorPage />}
       </main>
     </AuthGate>
   );

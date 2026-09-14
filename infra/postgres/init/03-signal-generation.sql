@@ -426,3 +426,117 @@ CREATE INDEX IF NOT EXISTS idx_saved_backtests_rule_id ON signal_generation.save
 -- scripts don't re-run), same convention as use_margin above. See
 -- strategies.created_by's own comment near its CREATE TABLE definition.
 ALTER TABLE signal_generation.strategies ADD COLUMN IF NOT EXISTS created_by UUID;
+
+-- Weekly Options Advisor (app/domain/weekly_advisor) - a saved, point-in-time
+-- snapshot of one symbol's recommendation, same "freeze the result, don't
+-- replay the request later" reasoning as saved_backtests above (the
+-- underlying OHLCV/option chain keeps moving, so re-running later would
+-- silently produce different numbers than what was actually reviewed).
+-- Recomputed and persisted fresh via POST /weekly-advisor/recommendations/save
+-- (never trusts a client-supplied payload) - see app/domain/weekly_advisor/
+-- pipeline.py for what's in `payload` (the full WeeklyRecommendation contract).
+CREATE TABLE IF NOT EXISTS signal_generation.weekly_advisor_recommendations (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    symbol     TEXT NOT NULL,
+    as_of      DATE NOT NULL,
+    -- Denormalized copy of payload->strategy->action, so the history list
+    -- can filter/sort without unpacking JSONB - same reasoning
+    -- strategies.status etc. get a dedicated column instead of living
+    -- only inside a JSON blob.
+    action     TEXT NOT NULL,
+    payload    JSONB NOT NULL,
+    saved_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_advisor_recommendations_symbol ON signal_generation.weekly_advisor_recommendations (symbol);
+
+-- A manual trade journal entry against one saved recommendation - "select/
+-- execute" deliberately does NOT open a real position in execution: every
+-- weekly_advisor strategy (sell_otm_put/sell_otm_call/short_strangle/
+-- iron_condor) is net-short-premium, and execution's option P&L/sizing/SL
+-- math hardcodes a long-premium assumption in ~8 places (see
+-- docs/architecture.md's "Open questions -> Credit spreads", deferred
+-- 2026-08-18, not started - a sign error there would silently misreport
+-- PnL/SL). This table is a lightweight, honest substitute: the user
+-- records what they actually did by hand (entry credit received, exit
+-- debit paid, realized P&L) rather than the platform pretending to track
+-- a position it can't actually price. One recommendation can have at most
+-- one open trade at a time (enforced at the API layer, not here) but any
+-- number of historical (closed) ones. ON DELETE CASCADE: a journal entry
+-- for a deleted recommendation snapshot has nothing left to reference.
+CREATE TABLE IF NOT EXISTS signal_generation.weekly_advisor_trades (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    recommendation_id UUID NOT NULL REFERENCES signal_generation.weekly_advisor_recommendations (id) ON DELETE CASCADE,
+    status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    quantity          NUMERIC,
+    entry_credit      NUMERIC,
+    entry_notes       TEXT,
+    taken_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    exit_debit        NUMERIC,
+    realized_pnl      NUMERIC,
+    exit_notes        TEXT,
+    closed_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_weekly_advisor_trades_recommendation_id ON signal_generation.weekly_advisor_trades (recommendation_id);
+CREATE INDEX IF NOT EXISTS idx_weekly_advisor_trades_status ON signal_generation.weekly_advisor_trades (status);
+
+-- Decision log (2026-09-12) - a lightweight "did you act on this or not"
+-- note against a saved recommendation, independent of whether a trade was
+-- ever journaled: 'execute' (with a confidence level) or 'hold'/'drop'
+-- (with a reason in comments) so a later review can see not just the
+-- trades taken but the calls made and why. One decision per
+-- recommendation - re-deciding overwrites it rather than appending a
+-- history, since it's a working note, not an audit trail.
+ALTER TABLE signal_generation.weekly_advisor_recommendations ADD COLUMN IF NOT EXISTS decision TEXT CHECK (decision IN ('execute', 'hold', 'drop'));
+ALTER TABLE signal_generation.weekly_advisor_recommendations ADD COLUMN IF NOT EXISTS confidence INTEGER CHECK (confidence BETWEEN 1 AND 5);
+ALTER TABLE signal_generation.weekly_advisor_recommendations ADD COLUMN IF NOT EXISTS decision_comments TEXT;
+ALTER TABLE signal_generation.weekly_advisor_recommendations ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ;
+
+-- Manually-entered trade economics (2026-09-12), typed in from the user's
+-- own options-analytics platform (Sensibull etc.) at the time a
+-- recommendation is marked taken - this platform has no margin engine or
+-- live option-Greeks-based POP model of its own (same gap noted on the
+-- table's own comment above re: credit-spread execution), so these are
+-- honest manual fields, not computed ones. days_to_expiry_at_entry IS
+-- derived (from the recommendation's own entry_window at journal-create
+-- time), not user-entered.
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS funds_needed NUMERIC;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS margin_needed NUMERIC;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS pop NUMERIC;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS max_profit NUMERIC;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS max_loss NUMERIC;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS days_to_expiry_at_entry INTEGER;
+
+-- What the user actually did (2026-09-13), captured at mark-as-taken time
+-- - deliberately separate from the recommendation's own payload->regime->
+-- bias / payload->strategy->action, since a trader reviewing a
+-- recommendation is free to (and often will) act on a different read than
+-- the deterministic engine produced. actual_bias mirrors the same
+-- bullish/bearish/neutral vocabulary as regime.bias for comparability;
+-- actual_strategy is free text (not constrained to StrategyAction) since
+-- what someone actually traded can be a shape the engine doesn't model at
+-- all (e.g. a naked leg instead of the recommended iron condor).
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS actual_bias TEXT CHECK (actual_bias IN ('bullish', 'bearish', 'neutral'));
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS actual_strategy TEXT;
+
+-- Per-leg entry data + close-out targets (2026-09-13), for a real
+-- paper-trading workflow: a trade is often journaled off-session (a
+-- weekend or mid-week review) with provisional numbers copied from an
+-- options-analytics platform, then the legs actually fill once the market
+-- opens - `legs` is editable after creation (see PUT .../trades/{id}/entry)
+-- specifically so those provisional numbers can be overwritten with real
+-- fill prices without re-creating the trade. Stored as JSONB (a list of
+-- {option_type, strike, side, quantity, entry_price}) rather than a child
+-- table - this platform has no margin/Greeks engine of its own to join
+-- against per-leg rows for, so a table would only add join overhead with
+-- no query it actually enables; array-shaped data like the recommendation
+-- payload itself already lives in a JSONB column the same way. target_pct
+-- defaults from the recommendation's own strategy.exit_rule.
+-- target_pct_of_max_profit (already shown as descriptive text on every
+-- card, e.g. "Exit at 65% of max profit"); stop_loss_pct has no engine
+-- default at all - it's the first stop-loss concept in this module, set
+-- by the user, not computed.
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS legs JSONB;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS target_pct_of_max_profit NUMERIC;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS stop_loss_pct_of_max_loss NUMERIC;

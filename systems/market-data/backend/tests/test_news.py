@@ -50,6 +50,58 @@ def test_get_news_rejects_unsupported_underlying():
         news.get_news("DOGEUSD")
 
 
+def test_get_news_rejects_unsupported_underlying_even_with_non_nse_segment():
+    with pytest.raises(ValueError):
+        news.get_news("DOGEUSD", segment="CRYPTO")
+
+
+# --- generic NSE stock fallback (segment="NSE", underlying not curated) --
+
+
+def test_generic_stock_news_matches_bare_ticker_as_a_whole_word(monkeypatch):
+    monkeypatch.setattr(
+        news,
+        "_fetch_bucket",
+        lambda feeds: [
+            _row("TCS reports strong Q2 results", description="Tata Consultancy Services beat estimates"),
+            _row("Some abbreviation nonsense"),  # must NOT match "ABB" as a bare substring
+            _row("Unrelated market wrap"),
+        ],
+    )
+
+    digest = news.get_news("TCS", segment="NSE")
+
+    assert [a.title for a in digest.articles] == ["TCS reports strong Q2 results"]
+
+
+def test_generic_stock_news_does_not_substring_match_inside_another_word(monkeypatch):
+    monkeypatch.setattr(
+        news,
+        "_fetch_bucket",
+        lambda feeds: [_row("Some abbreviation nonsense"), _row("Cabbage prices unrelated")],
+    )
+
+    digest = news.get_news("ABB", segment="NSE")
+
+    assert digest.articles == []
+
+
+def test_generic_stock_news_falls_back_to_stale_cache_on_fetch_failure(monkeypatch):
+    monkeypatch.setattr(news, "_fetch_bucket", lambda feeds: [_row("TCS wins a new deal")])
+    first = news.get_news("TCS", segment="NSE")
+
+    news._cache.pop("TCS")  # simulate TTL expiry while keeping the stale-fallback path exercised
+    news._cache["TCS"] = (first, 0.0)  # re-seed as "stale" (fetched_at=0 is always expired)
+
+    def fail_fetch(feeds):
+        raise RuntimeError("feed down")
+
+    monkeypatch.setattr(news, "_fetch_bucket", fail_fetch)
+
+    second = news.get_news("TCS", segment="NSE")
+    assert second is first
+
+
 def test_crypto_bucket_is_one_fetch_covering_all_three_symbols(monkeypatch):
     calls = []
 

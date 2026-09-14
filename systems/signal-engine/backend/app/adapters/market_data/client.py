@@ -95,18 +95,26 @@ def get_universe_constituents(key: str) -> Optional[list[str]]:
     return resp.json()["constituents"]
 
 
-def get_candle_history(exchange: str, symbol: str, interval: str, from_date: date, to_date: date) -> list[CandleClose]:
+def get_candle_history(
+    exchange: str, symbol: str, interval: str, from_date: date, to_date: date, source: Optional[str] = None
+) -> list[CandleClose]:
     """Oldest-first, completed bars only - ready to feed straight into
-    evaluate_rsi_sma_crossover (or any future rule)."""
+    evaluate_rsi_sma_crossover (or any future rule). `source` is passed
+    through unchanged to market-data (e.g. "yahoo" for long-history NSE
+    daily/weekly bars beyond what the default provider keeps) - None uses
+    market-data's own default provider for this exchange."""
+    params = {
+        "exchange": exchange,
+        "symbol": symbol,
+        "interval": interval,
+        "from": from_date.isoformat(),
+        "to": to_date.isoformat(),
+    }
+    if source is not None:
+        params["source"] = source
     resp = requests.get(
         f"{settings.market_data_base_url}/candles/history",
-        params={
-            "exchange": exchange,
-            "symbol": symbol,
-            "interval": interval,
-            "from": from_date.isoformat(),
-            "to": to_date.isoformat(),
-        },
+        params=params,
         timeout=settings.market_data_timeout_seconds,
     )
     resp.raise_for_status()
@@ -179,6 +187,33 @@ def get_expiry_list(exchange: str, symbol: str) -> Optional[list[str]]:
         return None
     resp.raise_for_status()
     return resp.json()["expiries"]
+
+
+def get_order_blocks(
+    exchange: str, symbol: str, interval: str, from_date: date, to_date: date, source: Optional[str] = None
+) -> Optional[list[dict]]:
+    """SMC order blocks for one (exchange, symbol, interval) series - the
+    raw `order_blocks` entries from market-data's ChartStructure (see its
+    GET /order-blocks), not re-modeled here since callers only ever read a
+    few fields off each ({kind, proximal, distal, mitigated} today - see
+    app/domain/weekly_advisor/regime_engine.py's OrderBlockZone). `source`
+    mirrors get_candle_history's own flag. None if unresolvable (unknown
+    exchange, or market-data has no candle data for this series)."""
+    params = {
+        "exchange": exchange, "symbol": symbol, "interval": interval,
+        "from": from_date.isoformat(), "to": to_date.isoformat(),
+    }
+    if source is not None:
+        params["source"] = source
+    resp = requests.get(
+        f"{settings.market_data_base_url}/order-blocks",
+        params=params,
+        timeout=settings.market_data_timeout_seconds,
+    )
+    if resp.status_code in (404, 422):
+        return None
+    resp.raise_for_status()
+    return resp.json()["order_blocks"]
 
 
 def get_option_chain(exchange: str, symbol: str, expiry: str) -> Optional[dict]:

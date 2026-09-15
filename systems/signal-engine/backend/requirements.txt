@@ -9,3 +9,4 @@ apscheduler==3.10.4
 requests==2.32.3
 tzdata==2024.1
 PyJWT==2.8.0
+playwright==1.47.0

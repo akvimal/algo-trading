@@ -35,6 +35,18 @@ def _no_order_blocks(exchange, symbol, interval, from_date, to_date, source=None
     return None
 
 
+@pytest.fixture(autouse=True)
+def _no_real_fundamentals_fetch(monkeypatch):
+    """screener_fetch.get_fundamentals opens its own DB session (see that
+    module) - without this, every run_symbol() test below would silently
+    hit whatever Postgres app.config.settings.database_url happens to
+    point at (reachable or not) instead of staying a hermetic unit test.
+    Individual tests override this via monkeypatch when they care about
+    the fundamental vote specifically - see test_run_symbol_surfaces_the_
+    fundamental_vote_in_regime_reasons below."""
+    monkeypatch.setattr(pipeline.screener_fetch, "get_fundamentals", lambda symbol: None)
+
+
 def test_run_symbol_falls_back_to_guessed_strike_interval_when_chain_unavailable(monkeypatch):
     # close stays under 500 -> guess_strike_interval() gives 5.0
     weekly_bars = _bars(60, 400.0, 1.0)
@@ -130,3 +142,46 @@ def test_run_symbol_surfaces_the_order_block_vote_in_regime_reasons(monkeypatch)
     rec = pipeline.run_symbol("TESTSYM", as_of=date(2026, 6, 1))
 
     assert any("demand order block" in r for r in rec.regime.reasons)
+
+
+def test_run_symbol_surfaces_the_fundamental_vote_in_regime_reasons(monkeypatch):
+    from app.domain.weekly_advisor.screener_fetch import FundamentalAnalysis
+
+    weekly_bars = _bars(60, 400.0, 1.0)
+    daily_bars = _bars(60, 400.0, 0.2)
+    monkeypatch.setattr(pipeline.market_data_client, "get_candle_history", _fake_history_factory(weekly_bars, daily_bars))
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: None)
+    monkeypatch.setattr(pipeline.market_data_client, "get_order_blocks", _no_order_blocks)
+    monkeypatch.setattr(
+        pipeline.screener_fetch, "get_fundamentals",
+        lambda symbol: FundamentalAnalysis(
+            symbol=symbol, bias="bullish", confidence=0.8, summary="Improving margins, deleveraging.",
+            pros=["Consistent profit growth"], cons=[], reasons=["profit growth"],
+        ),
+    )
+
+    rec = pipeline.run_symbol("TESTSYM", as_of=date(2026, 6, 1))
+
+    assert rec.fundamentals.available is True
+    assert rec.fundamentals.bias == "bullish"
+    assert rec.fundamentals.summary == "Improving margins, deleveraging."
+    assert any("screener.in fundamentals read bullish" in r for r in rec.regime.reasons)
+
+
+def test_run_symbol_fundamentals_unavailable_when_screener_fetch_returns_none(monkeypatch):
+    weekly_bars = _bars(60, 400.0, 1.0)
+    daily_bars = _bars(60, 400.0, 0.2)
+    monkeypatch.setattr(pipeline.market_data_client, "get_candle_history", _fake_history_factory(weekly_bars, daily_bars))
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: None)
+    monkeypatch.setattr(pipeline.market_data_client, "get_order_blocks", _no_order_blocks)
+    # _no_real_fundamentals_fetch autouse fixture already stubs this to None
+
+    rec = pipeline.run_symbol("TESTSYM", as_of=date(2026, 6, 1))
+
+    # available=False -> pipeline.run_symbol passes fundamental=None to
+    # assess_regime (same "None means couldn't fetch, omit the vote
+    # entirely" convention order_blocks already uses), so no fundamentals
+    # reason is added at all - distinct from the vote firing but reading
+    # neutral/unavailable, see test_regime.py's own coverage of that.
+    assert rec.fundamentals.available is False
+    assert not any("fundamentals" in r for r in rec.regime.reasons)

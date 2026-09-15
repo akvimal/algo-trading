@@ -2422,6 +2422,12 @@ button.btn-exit {
   grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
   gap: 0.9rem;
   margin-top: 0.75rem;
+  /* Don't stretch a card to match the tallest one in its row - with the
+     verbose sections collapsed by default (see RecommendationCard) every
+     card's natural height is already close to uniform, so stretching would
+     only add ugly blank space under a genuinely shorter card (no legs, or
+     fundamentals unavailable for that symbol). */
+  align-items: start;
 }
 
 .weekly-advisor-card-head {
@@ -2441,6 +2447,71 @@ button.btn-exit {
   font-size: 0.78rem;
 }
 
+.weekly-advisor-watchlist-control {
+  position: relative;
+}
+
+.weekly-advisor-watchlist-popover {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 5;
+  min-width: 13rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.weekly-advisor-watchlist-popover ul {
+  list-style: none;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  max-height: 10rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.weekly-advisor-watchlist-popover ul button {
+  width: 100%;
+  text-align: left;
+}
+
+.weekly-advisor-watchlist-new {
+  display: flex;
+  gap: 0.3rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.4rem;
+}
+
+.weekly-advisor-watchlist-new input {
+  min-width: 0;
+  flex: 1;
+}
+
+.weekly-advisor-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.weekly-advisor-legs-summary {
+  font-size: 0.82rem;
+  font-family: var(--font-mono, monospace);
+}
+
+.weekly-advisor-action-row button,
+.weekly-advisor-section-head button {
+  margin-left: auto;
+}
+
 .weekly-advisor-technicals {
   display: flex;
   flex-wrap: wrap;
@@ -2448,6 +2519,17 @@ button.btn-exit {
   margin: 0.6rem 0;
   font-size: 0.82rem;
   color: var(--text-dim);
+}
+
+/* Shared by the technical-reasons toggle and the fundamentals toggle -
+   badges/confidence stay visible at a glance, the verbose content behind
+   each is collapsed until "Details" is clicked. */
+.weekly-advisor-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
 }
 
 .weekly-advisor-reasons {
@@ -2461,13 +2543,34 @@ button.btn-exit {
   margin-bottom: 0.15rem;
 }
 
-.weekly-advisor-strategy {
+.weekly-advisor-fundamentals {
   border-top: 1px solid var(--border);
-  padding-top: 0.7rem;
+  padding-top: 0.6rem;
+  margin-top: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.weekly-advisor-fundamentals .weekly-advisor-section-head {
+  margin-top: 0;
+}
+
+.weekly-advisor-pros-cons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin-top: 0.3rem;
+}
+
+.weekly-advisor-pros-cons ul {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  min-width: 12rem;
 }
 
 .weekly-advisor-legs {
-  margin: 0.5rem 0 0;
+  margin: 0.4rem 0 0;
   width: 100%;
 }
 
@@ -2482,7 +2585,7 @@ button.btn-exit {
 }
 
 .weekly-advisor-exit {
-  margin: 0.6rem 0 0;
+  margin: 0.5rem 0 0;
 }
 
 .weekly-advisor-subtabs {

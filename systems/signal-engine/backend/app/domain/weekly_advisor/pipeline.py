@@ -1,10 +1,14 @@
 """Orchestrates one symbol's weekly options recommendation: OHLCV ->
-TechnicalSnapshot -> (best-effort) OI/strike-interval -> regime -> strategy.
+TechnicalSnapshot -> (best-effort) OI/strike-interval/fundamentals -> regime
+-> strategy.
 
 Deliberately out of scope for this pass, same as stated to the user before
-building it: no AI memo, no DB persistence, no scheduler, no Redis publish.
-This is an on-demand, stateless read - GET /weekly-advisor/recommendations
-calls run_symbol() fresh every request.
+building it: no AI memo (ai_memo stays None - the AI usage this module does
+have, screener_fetch.py's fundamentals read, is a structured vote input,
+not free-text commentary), no scheduler, no Redis publish. This is an
+on-demand read - GET /weekly-advisor/recommendations calls run_symbol()
+fresh every request; screener_fetch.py is the one exception to "no DB
+persistence" (its own long-lived fundamentals cache, see that module).
 
 Real strike interval, when available: market-data's GET /options/chain
 returns the actual strike ladder for the nearest expiry (OptionChain.strikes,
@@ -22,8 +26,10 @@ from app.adapters.market_data import client as market_data_client
 
 from . import indicators as ind
 from . import regime_engine as regime
+from . import screener_fetch
 from . import strategy_selector as strat
 from .contracts import (
+    FundamentalSnapshot,
     GeneratedBy,
     OISnapshot,
     TechnicalSnapshot,
@@ -137,6 +143,26 @@ def _fetch_order_blocks(symbol: str, as_of: date, interval: str, lookback_days: 
         return None
 
 
+def _fetch_fundamentals(symbol: str) -> FundamentalSnapshot:
+    """Best-effort screener.in read (see screener_fetch.py) - a scrape/AI
+    hiccup here degrades to "no fundamental vote this cycle", same
+    graceful-degradation convention as _fetch_order_blocks above, rather
+    than failing the whole recommendation over an optional input. Can be
+    slow on a cache miss (a real headless-browser page load plus a vision-
+    model call, not the ~1-3s the rest of a run takes) - see
+    weekly_advisor_fundamentals_cache_days in app/config.py."""
+    try:
+        analysis = screener_fetch.get_fundamentals(symbol)
+    except Exception:
+        analysis = None
+    if analysis is None:
+        return FundamentalSnapshot(available=False)
+    return FundamentalSnapshot(
+        available=True, bias=analysis.bias, confidence=analysis.confidence, summary=analysis.summary,
+        pros=analysis.pros, cons=analysis.cons, reasons=analysis.reasons, fetched_at=analysis.fetched_at,
+    )
+
+
 def run_symbol(symbol: str, as_of: Optional[date] = None) -> WeeklyRecommendation:
     """Raises on missing/insufficient OHLCV - the route catches this per
     symbol and skips it rather than failing the whole batch."""
@@ -164,10 +190,12 @@ def run_symbol(symbol: str, as_of: Optional[date] = None) -> WeeklyRecommendatio
     expiry_date = date.fromisoformat(expiry_str) if expiry_str else _naive_monthly_expiry(as_of)
     order_blocks = _fetch_order_blocks(symbol, as_of, "weekly", 3 * 365)
     daily_order_blocks = _fetch_order_blocks(symbol, as_of, "daily", 365)
+    fundamentals = _fetch_fundamentals(symbol)
 
     assessment = regime.assess_regime(
         primary=weekly_snap, oi=oi_snap, secondary=daily_snap,
         order_blocks=order_blocks, daily_order_blocks=daily_order_blocks,
+        fundamental=fundamentals if fundamentals.available else None,
     )
     recommendation = strat.select_strategy(
         regime=assessment, technical=weekly_snap, corporate_event=None,
@@ -179,6 +207,7 @@ def run_symbol(symbol: str, as_of: Optional[date] = None) -> WeeklyRecommendatio
         as_of=datetime.combine(as_of, datetime.min.time()),
         technical=weekly_snap,
         oi=oi_snap,
+        fundamentals=fundamentals,
         corporate_event=None,
         regime=assessment,
         strategy=recommendation,

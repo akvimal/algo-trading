@@ -2,8 +2,8 @@
 - confirmed live 2026-09-13 against JUBLFOOD: weekly EMA50 alone can call a
   stock bearish while it sits inside a bullish weekly demand order block,
   a real, different signal this vote now surfaces (and can outweigh)."""
-from app.domain.weekly_advisor.contracts import OISnapshot, TechnicalSnapshot
-from app.domain.weekly_advisor.regime_engine import OrderBlockZone, _order_block_vote, assess_regime
+from app.domain.weekly_advisor.contracts import FundamentalSnapshot, OISnapshot, TechnicalSnapshot
+from app.domain.weekly_advisor.regime_engine import OrderBlockZone, _fundamental_vote, _order_block_vote, assess_regime
 
 
 def _snapshot(close: float, ema50: float, adx14: float = 15.0) -> TechnicalSnapshot:
@@ -87,3 +87,44 @@ def test_daily_order_block_votes_at_half_weight_and_never_alone_flips_bias():
     assert assessment.confidence < 1.0  # but confidence is pulled down from what EMA alone would give
     assert any("not sitting inside any weekly order block" in r for r in assessment.reasons)
     assert any("(daily, half-weight)" in r and "daily demand order block" in r for r in assessment.reasons)
+
+
+def test_fundamental_vote_is_silent_when_unavailable():
+    vote = _fundamental_vote(FundamentalSnapshot(available=False))
+    assert vote.direction is None
+    assert vote.weight == 0.0
+
+
+def test_fundamental_vote_is_silent_when_read_neutral():
+    vote = _fundamental_vote(FundamentalSnapshot(available=True, bias="neutral", confidence=0.9))
+    assert vote.direction is None
+    assert vote.weight == 0.0
+
+
+def test_fundamental_vote_is_half_weighted_by_confidence():
+    vote = _fundamental_vote(FundamentalSnapshot(available=True, bias="bullish", confidence=0.8, summary="Deleveraging."))
+    assert vote.direction == "bullish"
+    assert vote.weight == 0.4  # 0.8 * 0.5, same half-weight convention as the daily secondary votes
+    assert "screener.in fundamentals read bullish" in vote.reason
+    assert "Deleveraging." in vote.reason
+
+
+def test_fundamental_vote_defaults_confidence_weight_when_none_given():
+    vote = _fundamental_vote(FundamentalSnapshot(available=True, bias="bearish"))
+    assert vote.weight == 0.25  # 0.5 default * 0.5 half-weight
+
+
+def test_assess_regime_with_no_fundamental_argument_omits_the_vote_entirely():
+    assessment = assess_regime(primary=_snapshot(100.0, 100.0), oi=OISnapshot(available=False))
+    assert not any("fundamentals" in r for r in assessment.reasons)
+
+
+def test_fundamental_vote_can_pull_confidence_down_against_a_bearish_ema_read():
+    snapshot = _snapshot(close=470.0, ema50=500.0)  # bearish EMA read, weight 1.0
+    fundamentals = FundamentalSnapshot(available=True, bias="bullish", confidence=1.0)  # half-weight -> 0.5
+
+    assessment = assess_regime(primary=snapshot, oi=OISnapshot(available=False), fundamental=fundamentals)
+
+    assert assessment.bias == "bearish"  # 1.0 still outweighs 0.5
+    assert assessment.confidence < 1.0
+    assert any("screener.in fundamentals read bullish" in r for r in assessment.reasons)

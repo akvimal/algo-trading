@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, Numeric, Text, func
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -237,3 +237,28 @@ class WeeklyAdvisorTrade(Base):
     legs = Column(JSONB)
     target_pct_of_max_profit = Column(Numeric)
     stop_loss_pct_of_max_loss = Column(Numeric)
+
+
+class WeeklyAdvisorFundamentals(Base):
+    """Cached screener.in screenshot + AI-extracted fundamentals read for
+    one symbol - see infra/postgres/init/03-signal-generation.sql for the
+    TTL/caching reasoning. Read and written directly by
+    app/domain/weekly_advisor/screener_fetch.py via its own SessionLocal
+    (not Depends(get_db)) - it's an internal pipeline dependency called
+    from inside run_symbol(), not a route handler, same self-contained-
+    session pattern as market-data's news.py."""
+
+    __tablename__ = "weekly_advisor_fundamentals"
+    __table_args__ = {"schema": SCHEMA}
+
+    symbol = Column(Text, primary_key=True)
+    screenshot = Column(LargeBinary, nullable=False)
+    fetched_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+    bias = Column(Text)
+    confidence = Column(Numeric)
+    summary = Column(Text)
+    pros = Column(JSONB)
+    cons = Column(JSONB)
+    reasons = Column(JSONB)
+    ai_model = Column(Text)
+    analyzed_at = Column(TIMESTAMP(timezone=True))

@@ -88,6 +88,7 @@ import {
   updateIndicator,
   updateRule,
   updateStrategy,
+  updateWatchlist,
 } from "./api";
 import { chartinkWebhookUrls, executionUrl } from "./links";
 
@@ -831,6 +832,12 @@ function WatchlistManager() {
   const [newSymbols, setNewSymbols] = useState("");
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Which watchlist's symbols are currently shown/edited below its row -
+  // the table itself only ever showed a count (see w.symbol_count below),
+  // with no way to actually see which symbols were in it once created.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSymbols, setEditSymbols] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -863,6 +870,29 @@ function WatchlistManager() {
       setError(err instanceof Error ? err.message : "Failed to create watchlist");
     } finally {
       setCreating(false);
+    }
+  }
+
+  function toggleEdit(w: Watchlist) {
+    if (editingId === w.id) {
+      setEditingId(null);
+      return;
+    }
+    setEditingId(w.id);
+    setEditSymbols(w.symbols);
+  }
+
+  async function handleSaveEdit(w: Watchlist) {
+    setSavingEdit(true);
+    setError(null);
+    try {
+      const updated = await updateWatchlist(w.id, { symbols: editSymbols });
+      setWatchlists((prev) => prev.map((x) => (x.id === w.id ? updated : x)));
+      setEditingId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save watchlist");
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -908,22 +938,48 @@ function WatchlistManager() {
             </tr>
           )}
           {watchlists.map((w) => (
-            <tr key={w.id}>
-              <td className="symbol">{w.name}</td>
-              <td>{w.symbol_count} symbols</td>
-              <td className="edit-actions">
-                <button
-                  type="button"
-                  className="icon-btn danger"
-                  onClick={() => handleDeleteWatchlist(w)}
-                  disabled={deletingId === w.id}
-                  title={`Delete watchlist "${w.name}"`}
-                  aria-label={`Delete watchlist "${w.name}"`}
-                >
-                  <TrashIcon />
-                </button>
-              </td>
-            </tr>
+            <Fragment key={w.id}>
+              <tr>
+                <td className="symbol">{w.name}</td>
+                <td>
+                  <button type="button" className="secondary tiny" onClick={() => toggleEdit(w)}>
+                    {w.symbol_count} symbol{w.symbol_count === 1 ? "" : "s"} {editingId === w.id ? "▾" : "▸"}
+                  </button>
+                </td>
+                <td className="edit-actions">
+                  <button
+                    type="button"
+                    className="icon-btn danger"
+                    onClick={() => handleDeleteWatchlist(w)}
+                    disabled={deletingId === w.id}
+                    title={`Delete watchlist "${w.name}"`}
+                    aria-label={`Delete watchlist "${w.name}"`}
+                  >
+                    <TrashIcon />
+                  </button>
+                </td>
+              </tr>
+              {editingId === w.id && (
+                <tr>
+                  <td colSpan={3}>
+                    <textarea
+                      value={editSymbols}
+                      onChange={(e) => setEditSymbols(e.target.value.toUpperCase())}
+                      rows={4}
+                      style={{ width: "100%" }}
+                    />
+                    <div className="settings-row">
+                      <button type="button" onClick={() => handleSaveEdit(w)} disabled={savingEdit || !editSymbols.trim()}>
+                        {savingEdit ? "Saving..." : "Save"}
+                      </button>
+                      <button type="button" className="secondary" onClick={() => setEditingId(null)} disabled={savingEdit}>
+                        Cancel
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

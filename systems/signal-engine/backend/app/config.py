@@ -77,5 +77,19 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
 
+    # Weekly Advisor fundamentals (app/domain/weekly_advisor/screener_fetch.py)
+    # - same OpenRouter account/model market-data's news.py already uses, a
+    # vision-capable model here instead of text-only (the call sends a
+    # screener.in screenshot, not headlines).
+    openrouter_api_key: str = ""
+    openrouter_model: str = "anthropic/claude-haiku-4.5"
+    # How long a captured screenshot + AI fundamentals read is trusted
+    # before the next request re-fetches - screener.in's own content only
+    # moves on a new quarterly result/corporate action, so re-scraping
+    # (real headless-browser page load) every run would be pure waste for
+    # no new information most weeks. "First time" (no cached row yet)
+    # always fetches regardless of this TTL.
+    weekly_advisor_fundamentals_cache_days: int = 90
+
 
 settings = Settings()

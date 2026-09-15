@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .contracts import OISnapshot, RegimeAssessment, TechnicalSnapshot, Zone
+from .contracts import FundamentalSnapshot, OISnapshot, RegimeAssessment, TechnicalSnapshot, Zone
 
 BULLISH_BUILDUPS = {"long_buildup", "short_covering"}
 BEARISH_BUILDUPS = {"short_buildup", "long_unwinding"}
@@ -118,6 +118,27 @@ def _oi_vote(oi: OISnapshot) -> _Vote:
     return _Vote("bearish", 1.0, f"OI aggregate signal: {oi.aggregate_signal}")
 
 
+def _fundamental_vote(f: FundamentalSnapshot) -> _Vote:
+    """A screener.in screenshot read (app/domain/weekly_advisor/
+    screener_fetch.py) - pre-classified by that module's AI call, same
+    "classify externally, vote internally" split as _oi_vote's own
+    aggregate_signal input (oi_classifier.py does the OI classifying,
+    this module only ever consumes an already-classified direction). Half
+    weight, same split as the daily secondary/order-block votes: a
+    quarterly-cadence fundamentals read is real context for a WEEKLY
+    options decision, but shouldn't singlehandedly flip technical/OI's
+    faster-moving read."""
+    if not f.available or f.bias is None:
+        return _Vote(None, 0.0, "fundamentals unavailable this cycle -- no fundamental vote")
+    if f.bias == "neutral":
+        return _Vote(None, 0.0, "screener.in fundamentals read neutral -- no vote either way")
+    weight = (f.confidence if f.confidence is not None else 0.5) * 0.5
+    reason = f"screener.in fundamentals read {f.bias}" + (f" (confidence {f.confidence:.0%})" if f.confidence is not None else "")
+    if f.summary:
+        reason += f" -- {f.summary}"
+    return _Vote(f.bias, weight, reason)
+
+
 def _trend_strength(t: TechnicalSnapshot) -> str:
     if t.adx14 < 20:
         return "ranging"
@@ -134,6 +155,7 @@ def assess_regime(
     secondary: TechnicalSnapshot | None = None,
     order_blocks: list[OrderBlockZone] | None = None,
     daily_order_blocks: list[OrderBlockZone] | None = None,
+    fundamental: FundamentalSnapshot | None = None,
 ) -> RegimeAssessment:
     """`primary` should be the WEEKLY snapshot -- per the ABB session
     conclusion that weekly should outrank daily on a weekly decision
@@ -149,8 +171,13 @@ def assess_regime(
     (confirmed live 2026-09-13, JUBLFOOD: daily demand zone 461.60-472.95
     containing spot 470.25, weekly's nearest demand zone at 408.55-426.75 -
     both readings are correct, they're just different timeframes).
+    `fundamental` is a screener.in screenshot read (see _fundamental_vote) -
+    optional and defaults to no vote, same graceful-degradation convention
+    as order_blocks/oi above.
     """
     votes: list[_Vote] = [_ema_vote(primary), _zone_vote(primary), _oi_vote(oi)]
+    if fundamental is not None:
+        votes.append(_fundamental_vote(fundamental))
     if order_blocks is not None:
         votes.append(_order_block_vote(order_blocks, primary.close, timeframe="weekly"))
     if secondary is not None:

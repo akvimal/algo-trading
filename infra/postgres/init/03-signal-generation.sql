@@ -540,3 +540,39 @@ ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS act
 ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS legs JSONB;
 ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS target_pct_of_max_profit NUMERIC;
 ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS stop_loss_pct_of_max_loss NUMERIC;
+
+-- Weekly Advisor fundamentals (2026-09-14, app/domain/weekly_advisor/
+-- screener_fetch.py) - a long-lived cache of one symbol's screener.in
+-- company-page screenshot plus an AI-extracted fundamentals read
+-- (bias/pros/cons/summary), consumed as an additional vote in
+-- regime_engine.py's assess_regime (see _fundamental_vote) alongside the
+-- existing technical/OI/order-block votes, so it feeds both the bias and
+-- (through regime) the strategy pick, not just a display-only panel.
+-- Captured via a real headless browser (screener.in's ratios/results
+-- render client-side, a plain HTTP GET would only see the empty shell),
+-- read by an OpenRouter vision model - see that module for why this is a
+-- screenshot read rather than structured HTML scraping (robustness to
+-- screener.in markup changes). One row per symbol - "first time" (no row
+-- yet) always fetches; every request after that within
+-- weekly_advisor_fundamentals_cache_days (default 90, app/config.py)
+-- reads the cached row back with no browser launch and no AI call.
+-- screenshot is kept (not discarded after analysis) so a failed/changed
+-- AI read can be retried against the same capture without re-scraping,
+-- and so GET /weekly-advisor/fundamentals/{symbol}/screenshot can show
+-- the user exactly what the AI saw.
+CREATE TABLE IF NOT EXISTS signal_generation.weekly_advisor_fundamentals (
+    symbol      TEXT PRIMARY KEY,
+    screenshot  BYTEA NOT NULL,
+    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Null when the AI read failed on a cycle that still refreshed the
+    -- screenshot (e.g. OPENROUTER_API_KEY unset, or a flaky call) - the
+    -- screenshot itself is still cached either way, see above.
+    bias        TEXT CHECK (bias IN ('bullish', 'bearish', 'neutral')),
+    confidence  NUMERIC,
+    summary     TEXT,
+    pros        JSONB,
+    cons        JSONB,
+    reasons     JSONB,
+    ai_model    TEXT,
+    analyzed_at TIMESTAMPTZ
+);

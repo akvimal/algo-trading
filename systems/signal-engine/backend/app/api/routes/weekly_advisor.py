@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
@@ -23,6 +24,7 @@ from app.domain.weekly_advisor.journal import (
     compute_performance_summary,
 )
 from app.domain.weekly_advisor.pipeline import run_symbol
+from app.domain.weekly_advisor.screener_fetch import get_cached_screenshot
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,21 @@ def get_weekly_recommendations(
     skipped: list[dict] = [{"symbol": s, "reason": reason} for s, rec, reason in results if rec is None]
 
     return {"recommendations": recommendations, "skipped": skipped}
+
+
+@router.get("/weekly-advisor/fundamentals/{symbol}/screenshot")
+def get_fundamentals_screenshot(symbol: str):
+    """Raw PNG of the cached screener.in screenshot the AI fundamentals
+    read (WeeklyRecommendation.fundamentals, see screener_fetch.py) was
+    produced from - lets the user visually verify what the AI actually
+    saw. 404s when nothing's been captured for this symbol yet (no
+    recommendation run has touched it, or capture failed every time so
+    far); never triggers a fetch itself - that only happens as a side
+    effect of run_symbol() above."""
+    screenshot = get_cached_screenshot(symbol.strip().upper())
+    if screenshot is None:
+        raise HTTPException(status_code=404, detail="no cached screener.in screenshot for this symbol yet")
+    return Response(content=screenshot, media_type="image/png")
 
 
 def _parse_uuid(value: str, what: str) -> uuid.UUID:

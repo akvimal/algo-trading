@@ -2014,6 +2014,28 @@ export type WeeklyAdvisorRegime = {
 
 export type WeeklyAdvisorLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; basis: string };
 
+// A screener.in screenshot read (app/domain/weekly_advisor/screener_fetch.py)
+// - available=false when nothing's been captured/analyzed for this symbol
+// yet, or the AI read failed this cycle (the screenshot itself may still
+// exist server-side even then - screenerScreenshotUrl always resolves,
+// GET .../screenshot 404s if truly nothing's cached). fetched_at is the
+// cached screenshot's own capture time, not this recommendation's as_of -
+// can be up to weekly_advisor_fundamentals_cache_days old (default 90).
+export type WeeklyAdvisorFundamentals = {
+  available: boolean;
+  bias: "bullish" | "bearish" | "neutral" | null;
+  confidence: number | null;
+  summary: string | null;
+  pros: string[];
+  cons: string[];
+  reasons: string[];
+  fetched_at: string | null;
+};
+
+export function screenerScreenshotUrl(symbol: string): string {
+  return `${API_BASE_URL}/weekly-advisor/fundamentals/${encodeURIComponent(symbol)}/screenshot`;
+}
+
 export type WeeklyAdvisorStrategy = {
   action: "sell_otm_put" | "sell_otm_call" | "short_strangle" | "iron_condor" | "avoid_new_entry" | "close_existing";
   legs: WeeklyAdvisorLeg[];
@@ -2026,6 +2048,7 @@ export type WeeklyRecommendation = {
   as_of: string;
   technical: WeeklyAdvisorTechnicalSnapshot;
   oi: WeeklyAdvisorOiSnapshot;
+  fundamentals: WeeklyAdvisorFundamentals;
   regime: WeeklyAdvisorRegime;
   strategy: WeeklyAdvisorStrategy;
   ai_memo: string | null;
@@ -2131,6 +2154,7 @@ export type WeeklyAdvisorTradeCreate = {
   max_loss?: number;
   actual_bias?: "bullish" | "bearish" | "neutral";
   actual_strategy?: string;
+  legs?: WeeklyAdvisorTradeLeg[];
   target_pct_of_max_profit?: number;
   stop_loss_pct_of_max_loss?: number;
 };

@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 
 import {
   closeWeeklyAdvisorTrade,
+  createWatchlist,
   createWeeklyAdvisorTrade,
   fetchWatchlists,
   fetchWeeklyAdvisorHistory,
@@ -9,7 +10,9 @@ import {
   fetchWeeklyAdvisorRecommendations,
   fetchWeeklyAdvisorTrades,
   saveWeeklyAdvisorRecommendation,
+  screenerScreenshotUrl,
   setWeeklyAdvisorDecision,
+  updateWatchlist,
   updateWeeklyAdvisorTradeEntry,
   type SavedWeeklyRecommendation,
   type Watchlist,
@@ -140,6 +143,7 @@ function DecisionForm({
   existingTrade,
   onDone,
   onTradeUpdated,
+  onCancel,
 }: {
   rec: WeeklyRecommendation;
   recommendationId: string;
@@ -158,6 +162,7 @@ function DecisionForm({
   existingTrade: WeeklyAdvisorTrade | null;
   onDone: (row: SavedWeeklyRecommendation, trade: WeeklyAdvisorTrade | null) => void;
   onTradeUpdated: (trade: WeeklyAdvisorTrade) => void;
+  onCancel: () => void;
 }) {
   const [decision, setDecision] = useState<WeeklyAdvisorDecision>(existingDecision ?? "execute");
   const [confidence, setConfidence] = useState(existingConfidence != null ? String(existingConfidence) : "3");
@@ -171,6 +176,12 @@ function DecisionForm({
   const [pop, setPop] = useState("");
   const [maxProfit, setMaxProfit] = useState("");
   const [maxLoss, setMaxLoss] = useState("");
+  // Per-leg fill price at entry time - same fields EditTradeForm lets you
+  // correct later, but captured up front too now, since a trade is often
+  // journaled the moment it's actually filled (not always off-session).
+  // Left blank ("not filled yet") is fine - _default_legs-equivalent
+  // behavior client-side, just with whatever prices are already known.
+  const [legEntryPrices, setLegEntryPrices] = useState<string[]>(() => rec.strategy.legs.map(() => ""));
   // The close-out thresholds to watch this position against. Target
   // defaults from the recommendation's own exit rule (already shown as
   // descriptive text on every card, e.g. "Exit at 65% of max profit") -
@@ -210,6 +221,16 @@ function DecisionForm({
       });
       let trade: WeeklyAdvisorTrade | null = null;
       if (decision === "execute" && !alreadyTaken) {
+        const legs: WeeklyAdvisorTradeLeg[] | undefined =
+          rec.strategy.legs.length > 0
+            ? rec.strategy.legs.map((leg, i) => ({
+                option_type: leg.option_type,
+                strike: leg.strike,
+                side: leg.side,
+                quantity: quantity ? Number(quantity) : null,
+                entry_price: legEntryPrices[i] ? Number(legEntryPrices[i]) : null,
+              }))
+            : undefined;
         trade = await createWeeklyAdvisorTrade(recommendationId, {
           quantity: quantity ? Number(quantity) : undefined,
           entry_credit: entryCredit ? Number(entryCredit) : undefined,
@@ -220,6 +241,7 @@ function DecisionForm({
           max_loss: maxLoss ? Number(maxLoss) : undefined,
           actual_bias: actualBias,
           actual_strategy: actualStrategy,
+          legs,
           entry_notes: comments || undefined,
           target_pct_of_max_profit: targetPct ? Number(targetPct) : undefined,
           stop_loss_pct_of_max_loss: stopLossPct ? Number(stopLossPct) : undefined,
@@ -288,6 +310,22 @@ function DecisionForm({
         )}
         {capturingTrade && (
           <>
+            {rec.strategy.legs.length > 0 && (
+              <div className="weekly-advisor-legs-edit">
+                {rec.strategy.legs.map((leg, i) => (
+                  <label key={i}>
+                    {leg.side.toUpperCase()} {leg.option_type} {leg.strike} - fill price
+                    <input
+                      type="number"
+                      step="any"
+                      value={legEntryPrices[i] ?? ""}
+                      onChange={(e) => setLegEntryPrices((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+                      placeholder="not filled yet"
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
             <label>
               Your bias
               <select value={actualBias} onChange={(e) => handleBiasChange(e.target.value as WeeklyRecommendation["regime"]["bias"])}>
@@ -336,7 +374,7 @@ function DecisionForm({
             </label>
             <label>
               Max loss
-              <input type="number" step="any" value={maxLoss} onChange={(e) => setMaxLoss(e.target.value)} />
+              <input type="number" min="0" step="any" value={maxLoss} onChange={(e) => setMaxLoss(e.target.value)} placeholder="positive amount, e.g. 4500" />
             </label>
             <label>
               Target % of max profit
@@ -362,6 +400,9 @@ function DecisionForm({
         </label>
         <button type="submit" className="secondary" disabled={saving}>
           {saving ? "Saving..." : capturingTrade ? "Log decision & mark as taken" : "Log decision"}
+        </button>
+        <button type="button" className="secondary tiny" onClick={onCancel} disabled={saving}>
+          Cancel
         </button>
       </form>
     </>
@@ -464,7 +505,7 @@ function EditTradeForm({ trade, onDone, onCancel }: { trade: WeeklyAdvisorTrade;
       </label>
       <label>
         Max loss
-        <input type="number" step="any" value={maxLoss} onChange={(e) => setMaxLoss(e.target.value)} />
+        <input type="number" min="0" step="any" value={maxLoss} onChange={(e) => setMaxLoss(e.target.value)} placeholder="positive amount, e.g. 4500" />
       </label>
       <label>
         Target % of max profit
@@ -591,6 +632,7 @@ function SaveControl({ rec }: { rec: WeeklyRecommendation }) {
               if (newTrade) setTrade(newTrade);
             }}
             onTradeUpdated={(updated) => setTrade(updated)}
+            onCancel={() => setShowDecisionForm(false)}
           />
         )}
       </div>
@@ -607,9 +649,141 @@ function SaveControl({ rec }: { rec: WeeklyRecommendation }) {
   );
 }
 
+// Adds one symbol to an existing (or brand-new) Watchlist - the write
+// counterpart to RunTab's own Watchlist dropdown (which only reads them,
+// to pick what to run against). Watchlists aren't fetched until the
+// popover is actually opened (not on every card's initial render, since a
+// batch run can show dozens of cards at once and most never get this
+// clicked) - each card's popover keeps its own copy rather than sharing
+// one across cards, same "plain, no premature shared-state abstraction"
+// trade this file already makes elsewhere (e.g. DecisionForm/EditTradeForm
+// not sharing state either).
+function SaveToWatchlistControl({ symbol }: { symbol: string }) {
+  const [open, setOpen] = useState(false);
+  const [watchlists, setWatchlists] = useState<Watchlist[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedTo, setSavedTo] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+
+  async function toggleOpen() {
+    const next = !open;
+    setOpen(next);
+    if (next && watchlists === null) {
+      setLoading(true);
+      setError(null);
+      try {
+        setWatchlists(await fetchWatchlists());
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load watchlists");
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  function symbolsOf(w: Watchlist): string[] {
+    return w.symbols.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+
+  async function addTo(w: Watchlist) {
+    const existing = symbolsOf(w);
+    if (existing.includes(symbol)) {
+      setSavedTo(w.name);
+      setOpen(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const updated = await updateWatchlist(w.id, { symbols: [...existing, symbol].join(",") });
+      setWatchlists((prev) => prev?.map((x) => (x.id === w.id ? updated : x)) ?? null);
+      setSavedTo(w.name);
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createAndAdd(e: React.FormEvent) {
+    e.preventDefault();
+    const name = newName.trim();
+    if (!name) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const created = await createWatchlist({ name, symbols: symbol });
+      setWatchlists((prev) => (prev ? [...prev, created] : [created]));
+      setSavedTo(created.name);
+      setNewName("");
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create watchlist");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="weekly-advisor-watchlist-control">
+      <button type="button" className="secondary tiny" onClick={toggleOpen}>
+        {savedTo ? `✓ ${savedTo}` : "Save to watchlist ▾"}
+      </button>
+      {open && (
+        <div className="weekly-advisor-watchlist-popover">
+          {error && <p className="error">{error}</p>}
+          {loading && watchlists === null && <p className="hint">Loading...</p>}
+          {watchlists && watchlists.length > 0 && (
+            <ul>
+              {watchlists.map((w) => {
+                const already = symbolsOf(w).includes(symbol);
+                return (
+                  <li key={w.id}>
+                    <button type="button" className="secondary tiny" disabled={loading || already} onClick={() => addTo(w)}>
+                      {already ? `✓ ${w.name}` : `+ ${w.name}`}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {watchlists && watchlists.length === 0 && <p className="hint">No watchlists yet.</p>}
+          <form onSubmit={createAndAdd} className="weekly-advisor-watchlist-new">
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="New watchlist name" />
+            <button type="submit" className="secondary tiny" disabled={loading || !newName.trim()}>
+              + Create
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Emphasis order, top to bottom: symbol/bias/confidence (the headline) ->
+// recommended action + legs summary (the actual takeaway) -> everything
+// else (the technical/fundamental "why", each collapsed by default behind
+// its own toggle) -> footer. Collapsing the bulky, symbol-to-symbol
+// variable-length content (reasons list, leg detail table, fundamentals
+// pros/cons) is what keeps every card's default (unexpanded) height close
+// to uniform in the grid below, instead of a symbol with 8 reasons towering
+// over one with 2.
 function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer?: React.ReactNode }) {
   const bias = rec.regime.bias;
   const noNewEntry = rec.strategy.action === "avoid_new_entry" || rec.strategy.action === "close_existing";
+  const [showTechnical, setShowTechnical] = useState(false);
+  const [showFundamentals, setShowFundamentals] = useState(false);
+  const [showLegs, setShowLegs] = useState(false);
+
+  // The fundamentals vote's own reason (regime_engine.py's _fundamental_vote)
+  // is already shown in full in the Fundamentals section below (its summary
+  // is richer than this one-liner) - excluded here so technical vs
+  // fundamental reasoning reads as two distinct sections, not one list with
+  // the fundamentals line repeated a second time underneath.
+  const technicalReasons = rec.regime.reasons.filter((r) => !r.startsWith("screener.in fundamentals"));
+  const legsSummary = rec.strategy.legs.map((leg) => `${leg.side === "sell" ? "SELL" : "BUY"} ${leg.strike} ${leg.option_type}`).join(" / ");
 
   return (
     <div className="panel weekly-advisor-card">
@@ -628,8 +802,47 @@ function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer
         >
           Open chart ↗
         </a>
+        <SaveToWatchlistControl symbol={rec.symbol} />
         <span className="muted weekly-advisor-confidence">confidence {Math.round(rec.regime.confidence * 100)}%</span>
       </div>
+
+      <div className="weekly-advisor-action-row">
+        <span className={`badge-mini ${noNewEntry ? "badge-mini-sell" : "badge-mini-buy"}`}>
+          {ACTION_LABELS[rec.strategy.action]}
+        </span>
+        {legsSummary && <span className="weekly-advisor-legs-summary muted">{legsSummary}</span>}
+        {rec.strategy.legs.length > 0 && (
+          <button type="button" className="secondary tiny" onClick={() => setShowLegs((v) => !v)}>
+            {showLegs ? "Hide" : "Leg detail ▸"}
+          </button>
+        )}
+      </div>
+      {showLegs && rec.strategy.legs.length > 0 && (
+        <table className="weekly-advisor-legs">
+          <tbody>
+            {rec.strategy.legs.map((leg, i) => (
+              <tr key={i}>
+                <td>
+                  <span className={leg.side === "sell" ? "badge-mini badge-mini-sell" : "badge-mini badge-mini-buy"}>
+                    {leg.side.toUpperCase()}
+                  </span>
+                </td>
+                <td className="num">{leg.strike}</td>
+                <td>{leg.option_type}</td>
+                <td className="muted weekly-advisor-leg-basis">{leg.basis}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {!noNewEntry && (
+        <p className="hint weekly-advisor-exit">
+          Entry window: {formatDate(rec.strategy.entry_window.earliest)} – {formatDate(rec.strategy.entry_window.latest)}{" "}
+          ({rec.strategy.entry_window.days_to_expiry_at_entry}d to expiry). Exit at{" "}
+          {Math.round(rec.strategy.exit_rule.target_pct_of_max_profit * 100)}% of max profit or{" "}
+          {rec.strategy.exit_rule.hard_exit_days_before_expiry}d before expiry, whichever comes first.
+        </p>
+      )}
 
       <div className="weekly-advisor-technicals">
         <span>Close <strong>{rec.technical.close.toFixed(2)}</strong></span>
@@ -641,41 +854,67 @@ function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer
         </span>
       </div>
 
-      <ul className="weekly-advisor-reasons">
-        {rec.regime.reasons.map((r, i) => (
-          <li key={i}>{r}</li>
-        ))}
-      </ul>
-
-      <div className="weekly-advisor-strategy">
-        <span className={`badge-mini ${noNewEntry ? "badge-mini-sell" : "badge-mini-buy"}`}>
-          {ACTION_LABELS[rec.strategy.action]}
+      <div className="weekly-advisor-section-head">
+        <span className="muted">
+          {technicalReasons.length} technical signal{technicalReasons.length === 1 ? "" : "s"}
         </span>
-        {rec.strategy.legs.length > 0 && (
-          <table className="weekly-advisor-legs">
-            <tbody>
-              {rec.strategy.legs.map((leg, i) => (
-                <tr key={i}>
-                  <td>
-                    <span className={leg.side === "sell" ? "badge-mini badge-mini-sell" : "badge-mini badge-mini-buy"}>
-                      {leg.side.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="num">{leg.strike}</td>
-                  <td>{leg.option_type}</td>
-                  <td className="muted weekly-advisor-leg-basis">{leg.basis}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <p className="hint weekly-advisor-exit">
-          Entry window: {formatDate(rec.strategy.entry_window.earliest)} – {formatDate(rec.strategy.entry_window.latest)}{" "}
-          ({rec.strategy.entry_window.days_to_expiry_at_entry}d to expiry). Exit at{" "}
-          {Math.round(rec.strategy.exit_rule.target_pct_of_max_profit * 100)}% of max profit or{" "}
-          {rec.strategy.exit_rule.hard_exit_days_before_expiry}d before expiry, whichever comes first.
-        </p>
+        <button type="button" className="secondary tiny" onClick={() => setShowTechnical((v) => !v)}>
+          {showTechnical ? "Hide" : "Details ▸"}
+        </button>
       </div>
+      {showTechnical && (
+        <ul className="weekly-advisor-reasons">
+          {technicalReasons.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      )}
+
+      {rec.fundamentals.available && (
+        <div className="weekly-advisor-fundamentals">
+          <div className="weekly-advisor-section-head">
+            {rec.fundamentals.bias && rec.fundamentals.bias !== "neutral" && (
+              <span className={`badge-mini ${BIAS_BADGE[rec.fundamentals.bias]}`}>fundamentals {rec.fundamentals.bias}</span>
+            )}
+            {rec.fundamentals.confidence != null && <span className="muted">confidence {Math.round(rec.fundamentals.confidence * 100)}%</span>}
+            <button type="button" className="secondary tiny" onClick={() => setShowFundamentals((v) => !v)}>
+              {showFundamentals ? "Hide" : "Details ▸"}
+            </button>
+          </div>
+          {showFundamentals && (
+            <>
+              <a
+                className="crosslink"
+                href={screenerScreenshotUrl(rec.symbol)}
+                target="_blank"
+                rel="noreferrer"
+                title="The screener.in screenshot the AI read this from"
+              >
+                View screener.in ↗
+              </a>
+              {rec.fundamentals.summary && <p className="hint">{rec.fundamentals.summary}</p>}
+              {(rec.fundamentals.pros.length > 0 || rec.fundamentals.cons.length > 0) && (
+                <div className="weekly-advisor-pros-cons">
+                  {rec.fundamentals.pros.length > 0 && (
+                    <ul className="weekly-advisor-pros">
+                      {rec.fundamentals.pros.map((p, i) => (
+                        <li key={i}>+ {p}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {rec.fundamentals.cons.length > 0 && (
+                    <ul className="weekly-advisor-cons">
+                      {rec.fundamentals.cons.map((c, i) => (
+                        <li key={i}>- {c}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {footer && <div className="weekly-advisor-card-footer">{footer}</div>}
     </div>
@@ -782,7 +1021,9 @@ function RunTab() {
         <p className="subtitle">
           Weekly options bias + defined-risk strategy per symbol, built fresh from live NSE OHLCV on every run - large
           lists (e.g. the full F&amp;O universe) run in chunks of {RUN_CHUNK_SIZE} with a progress bar below; roughly
-          1-3s/symbol depending on cache state, so ~200 symbols takes a couple of minutes.
+          1-3s/symbol depending on cache state, so ~200 symbols takes a couple of minutes. A symbol's{" "}
+          <em>first-ever</em> run is slower still - it also captures and AI-reads a screener.in fundamentals screenshot,
+          cached for 90 days after that.
           {lastUpdated && <span className="updated"> Last run {lastUpdated.toLocaleTimeString()}</span>}
         </p>
       </header>
@@ -1031,6 +1272,7 @@ function HistoryTab({ active }: { active: boolean }) {
                                 load();
                               }}
                               onTradeUpdated={(updated) => setTradesByRecommendation((prev) => new Map(prev).set(row.id, updated))}
+                              onCancel={() => setDecidingId(null)}
                             />
                           ) : (
                             <>

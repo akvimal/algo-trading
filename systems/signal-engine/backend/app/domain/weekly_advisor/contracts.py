@@ -71,6 +71,25 @@ class OISnapshot(BaseModel):
     by_strike: list[StrikeOI] = Field(default_factory=list)
 
 
+class FundamentalSnapshot(BaseModel):
+    """A screener.in screenshot read (app/domain/weekly_advisor/
+    screener_fetch.py) - `available=False` when nothing's been captured/
+    analyzed for this symbol yet or the AI read failed this cycle, same
+    "available" convention OISnapshot already uses. `fetched_at` is the
+    cached screenshot's own capture time (can be well older than this
+    recommendation's `as_of` - see weekly_advisor_fundamentals_cache_days),
+    not this request's time."""
+
+    available: bool
+    bias: Optional[Bias] = None
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    summary: Optional[str] = None
+    pros: list[str] = Field(default_factory=list)
+    cons: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    fetched_at: Optional[datetime] = None
+
+
 class CorporateEvent(BaseModel):
     type: Literal["results", "corporate_action", "other"] = "results"
     date: date
@@ -122,6 +141,7 @@ class WeeklyRecommendation(BaseModel):
     as_of: datetime
     technical: TechnicalSnapshot
     oi: OISnapshot
+    fundamentals: FundamentalSnapshot = Field(default_factory=lambda: FundamentalSnapshot(available=False))
     corporate_event: Optional[CorporateEvent] = None
     regime: RegimeAssessment
     strategy: StrategyRecommendation

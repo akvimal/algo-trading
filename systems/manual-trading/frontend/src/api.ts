@@ -1351,6 +1351,35 @@ export async function fetchNews(underlying: string, segment: string): Promise<Ne
   return asJson<NewsDigest>(res, `GET /news (${underlying})`);
 }
 
+// BYO OpenRouter key (2026-09-16) - lets the News tab's AI digest above run
+// on the viewer's own key instead of the platform-wide OPENROUTER_API_KEY
+// env var (see accounts.broker_credentials). Called directly against
+// systems/accounts (CORS-enabled), same direct-from-browser cross-system
+// pattern this file already uses for market-data/execution - NOT proxied
+// through either of those. Deliberately its own minimal copy of the
+// Dhan/Delta/OpenRouter credentials form execution/frontend's AccountsPage
+// already has (that page owns the full broker-credentials UI) rather than
+// a shared component - small enough, and this frontend has no other
+// reason to know about accounts.broker_credentials's other fields.
+const ACCOUNTS_PORT = import.meta.env.VITE_ACCOUNTS_PORT ?? "8004";
+const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
+
+export async function fetchHasOpenrouterKey(): Promise<boolean> {
+  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`);
+  const body = await asJson<{ has_openrouter: boolean }>(res, "GET /credentials");
+  return body.has_openrouter;
+}
+
+export async function saveOpenrouterKey(openrouter_api_key: string): Promise<boolean> {
+  const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ openrouter_api_key }),
+  });
+  const body = await asJson<{ has_openrouter: boolean }>(res, "PUT /credentials");
+  return body.has_openrouter;
+}
+
 // GET /calendar - the Live Chart's Events tab. Medium/high-impact
 // scheduled macro releases (Fed decisions, CPI, ...) from a free public
 // feed (market-data's app/providers/calendar.py) - every underlying maps

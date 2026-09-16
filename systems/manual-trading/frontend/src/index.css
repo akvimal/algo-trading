@@ -3114,6 +3114,25 @@ button.btn-exit {
   line-height: 1.35;
 }
 
+/* BYO OpenRouter key (2026-09-16) - a collapsed toggle by default, an
+   inline password-input row once opened. */
+.ctp-news-key {
+  margin-bottom: 0.4rem;
+}
+.ctp-news-key-toggle {
+  color: var(--text-dim);
+}
+.ctp-news-key-form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.ctp-news-key-form input {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
 /* Events tab (EventsPanel.tsx) - a scrollable calendar list, same cap as
    the News tab so the panel doesn't outgrow the chart beside it. */
 .ctp-events {

@@ -4616,12 +4616,18 @@ button.btn-exit {
   opacity: 1;
 }
 
-.live-chart-oi-levels-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  cursor: pointer;
+/* Chain-pull freshness (2026-09-16) - was always-visible "chain @ HH:MM"
+   text; now a small dot, exact time on hover only (see its own title). */
+.live-chart-oi-at-dot {
+  font-size: 0.55rem;
   color: var(--text-dim);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.live-chart-oi-at-dot.is-stale {
+  color: var(--sell);
+  opacity: 1;
 }
 
 /* "Trades" checkbox in the chart toolbar - draw your own entries/exits. */

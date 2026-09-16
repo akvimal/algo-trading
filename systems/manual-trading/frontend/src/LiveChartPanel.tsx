@@ -3790,6 +3790,11 @@ export function LiveChartPanel({
             <input type="checkbox" checked={tradesOn} onChange={toggleTrades} />
             Trades
           </label>
+
+          <label className="live-chart-trades-toggle" title="Draw the OI support/resistance levels on the chart">
+            <input type="checkbox" checked={oiLevelsOn} onChange={toggleOiLevels} />
+            OI Levels
+          </label>
         </div>
 
         <div className="live-chart-meta">
@@ -4153,10 +4158,6 @@ export function LiveChartPanel({
               </>
             );
           })()}
-          <label className="live-chart-oi-levels-toggle" title="Draw the OI support/resistance levels on the chart">
-            <input type="checkbox" checked={oiLevelsOn} onChange={toggleOiLevels} />
-            levels on chart
-          </label>
           {(oi.total_call_buildup || oi.total_put_buildup) && (
             <span className="live-chart-oi-buildup-group">
               {oi.total_call_buildup && (
@@ -4188,7 +4189,7 @@ export function LiveChartPanel({
             return (
               <span
                 className="live-chart-oi-sent"
-                title={`OI shift % (${last.win}) over the last readings — bars are the reading, ⚡ marks a major move or a side flip. Source: sentiment_history, written every 5 min.`}
+                title={`OI shift % (${last.win}) over the last readings — bars are the reading, ⚡ marks a major move or a side flip. Source: sentiment_history, written every 5 min. Last reading ${hhmm(last.pt.recorded_at)}${stale ? " (stale)" : ""}.`}
               >
                 OI shift {last.win}
                 <span className="live-chart-oi-spark">
@@ -4214,19 +4215,20 @@ export function LiveChartPanel({
                     {(last.score - prev.score).toFixed(2)} vs {hhmm(prev.pt.recorded_at)}
                   </span>
                 )}
-                <span className={`live-chart-oi-at${stale ? " is-stale" : ""}`}>
-                  {hhmm(last.pt.recorded_at)}
-                  {stale ? " (stale)" : ""}
-                </span>
+                {stale && (
+                  <span className="live-chart-oi-at is-stale" title={`Last reading ${hhmm(last.pt.recorded_at)} — more than 2 recording cycles old`}>
+                    stale
+                  </span>
+                )}
               </span>
             );
           })()}
           {oiAt != null && (
             <span
-              className={`live-chart-oi-at${Date.now() - oiAt > 4 * 60_000 ? " is-stale" : ""}`}
-              title="When this client last pulled a fresh option chain — server-cached 30s; NSE re-disseminates OI roughly every 3 min"
+              className={`live-chart-oi-at-dot${Date.now() - oiAt > 4 * 60_000 ? " is-stale" : ""}`}
+              title={`Chain last pulled ${new Date(oiAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} — server-cached 30s; NSE re-disseminates OI roughly every 3 min`}
             >
-              chain @ {new Date(oiAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+              ●
             </span>
           )}
         </div>

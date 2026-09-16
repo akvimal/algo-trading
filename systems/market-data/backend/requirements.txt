@@ -9,6 +9,12 @@ requests==2.32.3
 tzdata==2024.1
 websocket-client==1.8.0
 PyJWT==2.8.0
+# Shared quote cache + pub/sub fan-out for the live LTP push layer
+# (app/providers/dhan_feed.py's _publish_tick, app/api/routes/quotes_ws.py)
+# - this service's first-ever Redis dependency, otherwise in-memory-cache-
+# only by design (see its README). Same pin execution/signal-engine
+# already use.
+redis==5.0.4
 # Long-history (>90 day) daily/weekly OHLCV for NSE equities/indices, where
 # Dhan's own history endpoint is capped - see app/providers/yahoo.py.
 yfinance==1.7.0

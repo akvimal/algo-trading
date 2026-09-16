@@ -11,11 +11,35 @@ session, so every test that touches it resets first via monkeypatch -
 same pattern test_dhan_auth.py already established for dhan.py's
 _renewed_token."""
 
+import json
 import struct
 
 import pytest
+import redis
 
 from app.providers import dhan_feed
+
+
+class FakeRedis:
+    """Records setex/publish calls instead of touching a real Redis -
+    installed by _reset() below so no test in this module makes a real
+    network call by accident. raise_on_call, if set, makes both methods
+    raise redis.RedisError (see test_publish_tick's own resilience test)."""
+
+    def __init__(self, raise_on_call: bool = False):
+        self.raise_on_call = raise_on_call
+        self.setex_calls: list[tuple] = []
+        self.publish_calls: list[tuple] = []
+
+    def setex(self, key, ttl, value):
+        if self.raise_on_call:
+            raise redis.RedisError("boom")
+        self.setex_calls.append((key, ttl, value))
+
+    def publish(self, channel, message):
+        if self.raise_on_call:
+            raise redis.RedisError("boom")
+        self.publish_calls.append((channel, message))
 
 
 def _reset(monkeypatch):
@@ -29,6 +53,9 @@ def _reset(monkeypatch):
     monkeypatch.setattr(dhan_feed, "_subscribed", set())
     monkeypatch.setattr(dhan_feed, "_symbol_by_segment_security", {})
     monkeypatch.setattr(dhan_feed, "_ws_app", None)
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(dhan_feed, "_redis_client", fake_redis)
+    return fake_redis
 
 
 # --- parse_ticker / parse_prev_close / parse_disconnect: pure byte decoding -------------------
@@ -195,7 +222,7 @@ def test_subscribe_sends_message_when_connected(monkeypatch):
 
 
 def test_handle_ticker_updates_last_ticks_for_known_symbol(monkeypatch):
-    _reset(monkeypatch)
+    fake_redis = _reset(monkeypatch)
     monkeypatch.setattr(dhan_feed, "_symbol_by_segment_security", {("IDX_I", "13"): ("NSE", "NIFTY")})
 
     dhan_feed._handle_ticker({"segment": 0, "security_id": 13, "ltp": 24500.123, "ltt": 1700000000})
@@ -203,12 +230,51 @@ def test_handle_ticker_updates_last_ticks_for_known_symbol(monkeypatch):
     status = dhan_feed.feed_status()
     assert "NSE:NIFTY" in status["ticks"]
     assert status["ticks"]["NSE:NIFTY"]["price"] == 24500.12
+    # Same update also reaches Redis - see test_handle_ticker_writes_to_redis_cache_and_publishes
+    # for the detailed shape assertions; this just confirms both happened together.
+    assert len(fake_redis.setex_calls) == 1
+    assert len(fake_redis.publish_calls) == 1
 
 
 def test_handle_ticker_ignores_unknown_segment_security(monkeypatch):
-    _reset(monkeypatch)
+    fake_redis = _reset(monkeypatch)
     monkeypatch.setattr(dhan_feed, "_symbol_by_segment_security", {})
 
     dhan_feed._handle_ticker({"segment": 0, "security_id": 999, "ltp": 100.0, "ltt": 1700000000})
 
     assert dhan_feed.feed_status()["ticks"] == {}
+    assert fake_redis.setex_calls == []
+    assert fake_redis.publish_calls == []
+
+
+# --- _publish_tick: the Redis cache/pub-sub side of a tick, additive to the in-memory path ----
+
+
+def test_handle_ticker_writes_to_redis_cache_and_publishes(monkeypatch):
+    fake_redis = _reset(monkeypatch)
+    monkeypatch.setattr(dhan_feed, "_symbol_by_segment_security", {("IDX_I", "13"): ("NSE", "NIFTY")})
+
+    dhan_feed._handle_ticker({"segment": 0, "security_id": 13, "ltp": 24500.123, "ltt": 1700000000})
+
+    (key, ttl, value) = fake_redis.setex_calls[0]
+    assert key == "md:ltp:NSE:NIFTY"
+    assert ttl == 86400
+    payload = json.loads(value)
+    assert payload["exchange"] == "NSE"
+    assert payload["symbol"] == "NIFTY"
+    assert payload["price"] == 24500.12
+
+    (channel, message) = fake_redis.publish_calls[0]
+    assert channel == "md:ltp-updates:NSE:NIFTY"
+    assert json.loads(message) == payload
+
+
+def test_handle_ticker_still_updates_in_memory_cache_when_redis_raises(monkeypatch):
+    _reset(monkeypatch)
+    monkeypatch.setattr(dhan_feed, "_redis_client", FakeRedis(raise_on_call=True))
+    monkeypatch.setattr(dhan_feed, "_symbol_by_segment_security", {("IDX_I", "13"): ("NSE", "NIFTY")})
+
+    dhan_feed._handle_ticker({"segment": 0, "security_id": 13, "ltp": 24500.123, "ltt": 1700000000})
+
+    status = dhan_feed.feed_status()
+    assert status["ticks"]["NSE:NIFTY"]["price"] == 24500.12

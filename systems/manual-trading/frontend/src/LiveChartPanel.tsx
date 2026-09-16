@@ -24,6 +24,7 @@ import {
 import { TrashIcon } from "./Icons";
 import { fmtQty } from "./manualOrder";
 import { computeSupertrend } from "./supertrend";
+import { useQuoteSocket } from "./useQuoteSocket";
 import { BUILDUP_META } from "./OiSummaryPage";
 import {
   type Candle,
@@ -1110,13 +1111,20 @@ function loadStructureConfig(): StructureConfig {
   }
 }
 
-// LTP poll cadence for the still-forming bar. Was 5000ms (matching
+// LTP cadence for the still-forming bar. Was 5000ms (matching
 // WorkspacePage's own watch loop), which was the dominant source of the
 // "doesn't feel live" lag - market-data's real floor is its ~2s Dhan
 // self-throttle plus a 3s quote cache (QUOTE_CACHE_TTL_SECONDS in
 // app/api/routes/dhan.py), so polling much faster than ~2s just re-reads
 // the same cached number, but polling slower than that leaves the chart
 // visibly behind for no reason.
+//
+// 2026-09-16: this is now the REST FALLBACK cadence only - the primary
+// path is useQuoteSocket's WebSocket push (see the component-level
+// comment near wsConnectedRef/applyLtpRef), which delivers ticks as Dhan's
+// feed produces them rather than on a fixed timer. Kept at the same value
+// so a WS-drop's fallback still feels exactly as live as before this
+// change, not because 2000ms means anything new on its own.
 const LTP_POLL_MS = 2000;
 
 // --- Setup alerts. When a structure refresh surfaces a new planned
@@ -1957,6 +1965,26 @@ export function LiveChartPanel({
   // (`resolved`), not this.
   const chartExchange = contract?.exchange ?? resolved?.chart_exchange ?? null;
   const chartSymbol = contract?.trading_symbol ?? resolved?.chart_symbol ?? null;
+
+  // Live LTP push (2026-09-16, see useQuoteSocket's own docstring) - the
+  // candle effect below (re)creates applyLtp per chartExchange/chartSymbol/
+  // interval change and points this ref at it, since useQuoteSocket must
+  // live at this top level (Rules of Hooks) while applyLtp itself needs
+  // that effect's own local liveBar/lastLtp/ltpLineId state. wsConnectedRef
+  // lets tickLtp's REST poll (inside that same effect) early-return while
+  // the socket's live - kept as a ref, not read directly, since tickLtp is
+  // closured once per effect run and would otherwise see a stale value.
+  const applyLtpRef = useRef<((ltp: number) => void) | null>(null);
+  const wsConnectedRef = useRef(false);
+  const quoteSubscriptions = useMemo(
+    () => (chartExchange && chartSymbol ? [{ exchange: chartExchange, symbol: chartSymbol }] : []),
+    [chartExchange, chartSymbol],
+  );
+  const { connected: quoteSocketConnected } = useQuoteSocket(quoteSubscriptions, (tick) => applyLtpRef.current?.(tick.price));
+  useEffect(() => {
+    wsConnectedRef.current = quoteSocketConnected;
+  }, [quoteSocketConnected]);
+
   const [status, setStatus] = useState<Status>("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastPrice, setLastPrice] = useState<number | null>(null);
@@ -3533,14 +3561,11 @@ export function LiveChartPanel({
       }
     }
 
-    async function tickLtp() {
-      if (cancelled) return;
-      let ltp: number;
-      try {
-        ltp = await fetchLtp(ex, sym);
-      } catch {
-        return; // transient - retry next tick
-      }
+    // Shared by both the WS push path (useQuoteSocket's onTick, via
+    // applyLtpRef - see the component-level comment near that ref) and the
+    // REST fallback below, so a tick's downstream effect on the chart is
+    // identical regardless of which one delivered it.
+    function applyLtp(ltp: number) {
       if (cancelled) return;
       lastLtp = ltp;
       // The page LTP readout updates every tick regardless of whether
@@ -3586,11 +3611,32 @@ export function LiveChartPanel({
       chart!.updateData(liveBar);
     }
 
+    applyLtpRef.current = applyLtp;
+
+    // REST fallback - always armed (see the component-level comment near
+    // wsConnectedRef), but a no-op while useQuoteSocket's WebSocket is
+    // connected, in which case applyLtp is driven by its onTick callback
+    // via applyLtpRef instead. This means REST self-heals the instant the
+    // socket drops, with no extra teardown/rearm wiring - same
+    // "always degrade, never break" convention as accounts_client.py's
+    // BYO-credential fallback elsewhere in this codebase.
+    async function tickLtp() {
+      if (cancelled || wsConnectedRef.current) return;
+      let ltp: number;
+      try {
+        ltp = await fetchLtp(ex, sym);
+      } catch {
+        return; // transient - retry next tick
+      }
+      applyLtp(ltp);
+    }
+
     // Kick an LTP tick as soon as history is on the chart, so the last
     // candle syncs to the ticker within a moment of load rather than
-    // after a full poll interval.
+    // after a full poll interval - REST regardless of WS state, since the
+    // socket likely hasn't finished its handshake yet this early.
     void loadHistory(true).then(() => {
-      if (!cancelled) void tickLtp();
+      if (!cancelled) void fetchLtp(ex, sym).then(applyLtp, () => {});
     });
     const ltpTimer = window.setInterval(tickLtp, LTP_POLL_MS);
     // Floor at 60s so a 1m chart doesn't hammer the provider on every
@@ -3603,6 +3649,7 @@ export function LiveChartPanel({
       window.clearInterval(ltpTimer);
       window.clearInterval(histTimer);
       clearLtpLine();
+      if (applyLtpRef.current === applyLtp) applyLtpRef.current = null;
     };
   }, [chartExchange, chartSymbol, interval]);
 

@@ -126,5 +126,13 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "anthropic/claude-haiku-4.5"
 
+    # Live LTP push layer (2026-09-16, Phase 1 of the SaaS scaling work -
+    # see docs/architecture.md) - the shared quote cache + pub/sub channel
+    # app/providers/dhan_feed.py publishes to and app/api/routes/quotes_ws.py
+    # fans out from. Same Redis container every other system already uses
+    # (execution's REDIS_URL, signal-engine's), just this service's first
+    # time actually depending on it.
+    redis_url: str = "redis://localhost:6379/0"
+
 
 settings = Settings()

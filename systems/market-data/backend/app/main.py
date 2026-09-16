@@ -13,6 +13,7 @@ from app.api.routes import (
     order_blocks,
     price_alerts,
     quotes,
+    quotes_ws,
     regime,
 )
 from app.providers.delta_feed import start_feed as start_delta_feed
@@ -30,6 +31,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(quotes.router)
+app.include_router(quotes_ws.router)
 app.include_router(instruments.router)
 app.include_router(candles.router)
 app.include_router(order_blocks.router)

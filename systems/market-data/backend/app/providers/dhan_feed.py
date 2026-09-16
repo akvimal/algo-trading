@@ -21,6 +21,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+import redis
 import websocket
 
 from app.config import settings
@@ -30,6 +31,17 @@ from app.providers.router import get_provider
 logger = logging.getLogger(__name__)
 
 FEED_URL = "wss://api-feed.dhan.co"
+
+# Shared cache/fan-out for the live LTP push layer (2026-09-16) - a
+# lazily-connecting client, same construction style
+# execution/app/consumers/orders_consumer.py already uses. Module-level,
+# not per-call, since this is a hot path (one write per tick). Ticks are
+# still cached above too, in the in-process _last_ticks dict - this is an
+# ADDITIVE distribution mechanism for other processes/browsers, never a
+# replacement for it (feed_status() and every other reader of _last_ticks
+# must keep working exactly as today even if Redis is down).
+_redis_client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+_QUOTE_CACHE_TTL_SECONDS = 86400  # self-cleaning; re-armed on every tick
 REQUEST_CODE_TICKER_SUBSCRIBE = 15
 # Exponential backoff, not a fixed delay - a broken/expired token (or any
 # other persistent failure) would otherwise retry the handshake every
@@ -164,17 +176,34 @@ def subscribe(exchange: str, symbol: str) -> bool:
     return True
 
 
+def _publish_tick(exchange: str, symbol: str, tick: dict) -> None:
+    """Best-effort - a Redis outage must never break the in-memory tick
+    path _handle_ticker already maintains (that's the one behavior this
+    module cannot regress). Called OUTSIDE _lock (see caller) - that lock
+    only protects the in-memory dict, and holding it across a network
+    round-trip would stall every other _on_message callback if Redis is
+    ever slow."""
+    payload = json.dumps({"exchange": exchange, "symbol": symbol, **tick})
+    try:
+        _redis_client.setex(f"md:ltp:{exchange}:{symbol}", _QUOTE_CACHE_TTL_SECONDS, payload)
+        _redis_client.publish(f"md:ltp-updates:{exchange}:{symbol}", payload)
+    except redis.RedisError:
+        logger.warning("Dhan live feed: Redis publish failed for %s:%s", exchange, symbol)
+
+
 def _handle_ticker(parsed: dict) -> None:
     key = (NUMERIC_SEGMENT_TO_KEY.get(parsed["segment"]), str(parsed["security_id"]))
     with _lock:
         target = _symbol_by_segment_security.get(key)
         if target is None:
             return  # a tick for something we don't recognize - ignore rather than guess
-        _last_ticks[target] = {
+        tick = {
             "price": round(parsed["ltp"], 2),
             "ltt": datetime.fromtimestamp(parsed["ltt"], tz=timezone.utc).isoformat(),
             "received_at": datetime.now(timezone.utc).isoformat(),
         }
+        _last_ticks[target] = tick
+    _publish_tick(target[0], target[1], tick)
 
 
 def _on_open(ws: "websocket.WebSocketApp") -> None:

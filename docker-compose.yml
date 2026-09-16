@@ -163,6 +163,13 @@ services:
       # raw headlines come from free RSS feeds, no key needed there) - see app/config.py.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-4.5}
+      # Live LTP push layer (2026-09-16, Phase 1 of the SaaS scaling work -
+      # see docs/architecture.md) - app/providers/dhan_feed.py's shared
+      # quote cache/pub-sub and app/api/routes/quotes_ws.py's fan-out, both
+      # against the SAME Redis container execution/signal-engine already
+      # use, not a new instance. This service's first-ever Redis
+      # dependency (otherwise in-memory-cache-only by design).
+      REDIS_URL: redis://redis:6379/0
     volumes:
       # PUT /dhan/credentials persists here (app/providers/dhan.py) so a
       # UI-submitted Dhan token survives a container restart instead of
@@ -176,6 +183,8 @@ services:
       - "${MARKET_DATA_BACKEND_PORT}:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   market-data-frontend:

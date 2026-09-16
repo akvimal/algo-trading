@@ -85,6 +85,141 @@ def test_run_symbol_uses_real_strike_interval_from_option_chain(monkeypatch):
     assert rec.strategy.entry_window.latest == date(2026, 6, 25)
 
 
+# --- _fetch_expiry_and_chain_with_retry: survives market-data's option-chain throttle backing
+# up (2026-09-16 - see this function's own module-level comment for the concurrency mechanics
+# that make this necessary: weekly_advisor.py's 5-wide batch concurrency vs. Dhan's 3s-per-call
+# expiry-list/option-chain throttle, whose own queue-depth guard raises rather than queuing a
+# caller more than ~1 slot deep.)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep_in_retry_tests(monkeypatch):
+    """Keeps these tests fast regardless of _OPTION_CHAIN_RETRY_SLEEP_SECONDS's
+    real value - records each call instead of actually blocking."""
+    monkeypatch.setattr(pipeline.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+
+sleep_calls: list[float] = []
+
+
+@pytest.fixture(autouse=True)
+def _reset_sleep_calls():
+    sleep_calls.clear()
+    yield
+    sleep_calls.clear()
+
+
+def test_fetch_expiry_and_chain_with_retry_succeeds_on_first_try(monkeypatch):
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: ["2026-06-25"])
+    monkeypatch.setattr(pipeline.market_data_client, "get_option_chain", lambda exchange, symbol, expiry: {"strikes": []})
+
+    expiry, chain = pipeline._fetch_expiry_and_chain_with_retry("TESTSYM")
+
+    assert expiry == "2026-06-25"
+    assert chain == {"strikes": []}
+    assert sleep_calls == []
+
+
+def test_fetch_expiry_and_chain_with_retry_returns_none_when_no_expiries(monkeypatch):
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: [])
+
+    expiry, chain = pipeline._fetch_expiry_and_chain_with_retry("TESTSYM")
+
+    assert (expiry, chain) == (None, None)
+    assert sleep_calls == []
+
+
+def test_fetch_expiry_and_chain_with_retry_retries_past_a_backed_up_chain_call(monkeypatch):
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: ["2026-06-25"])
+    calls = {"n": 0}
+
+    def flaky(exchange, symbol, expiry):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("Dhan option-chain queue is backed up (6.0s wait) - try again shortly")
+        return {"strikes": [{"strike": 100.0}]}
+
+    monkeypatch.setattr(pipeline.market_data_client, "get_option_chain", flaky)
+
+    expiry, chain = pipeline._fetch_expiry_and_chain_with_retry("TESTSYM")
+
+    assert expiry == "2026-06-25"
+    assert chain == {"strikes": [{"strike": 100.0}]}
+    assert calls["n"] == 3
+    assert sleep_calls == [pipeline._OPTION_CHAIN_RETRY_SLEEP_SECONDS] * 2
+
+
+def test_fetch_expiry_and_chain_with_retry_retries_past_a_backed_up_expiry_list_call(monkeypatch):
+    """The expiry-list call shares the SAME throttle/queue as the chain
+    call (see the module-level comment) - a batch with a cold expiry-list
+    cache can back up on this step just as easily as the chain step."""
+    calls = {"n": 0}
+
+    def flaky(exchange, symbol):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RuntimeError("Dhan option-chain queue is backed up (6.0s wait) - try again shortly")
+        return ["2026-06-25"]
+
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", flaky)
+    monkeypatch.setattr(pipeline.market_data_client, "get_option_chain", lambda exchange, symbol, expiry: {"strikes": [{"strike": 100.0}]})
+
+    expiry, chain = pipeline._fetch_expiry_and_chain_with_retry("TESTSYM")
+
+    assert expiry == "2026-06-25"
+    assert chain == {"strikes": [{"strike": 100.0}]}
+    assert calls["n"] == 2
+    assert sleep_calls == [pipeline._OPTION_CHAIN_RETRY_SLEEP_SECONDS]
+
+
+def test_fetch_expiry_and_chain_with_retry_raises_after_exhausting_every_attempt(monkeypatch):
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: ["2026-06-25"])
+
+    def always_backed_up(exchange, symbol, expiry):
+        raise RuntimeError("Dhan option-chain queue is backed up (9.0s wait) - try again shortly")
+
+    monkeypatch.setattr(pipeline.market_data_client, "get_option_chain", always_backed_up)
+
+    with pytest.raises(RuntimeError, match="backed up"):
+        pipeline._fetch_expiry_and_chain_with_retry("TESTSYM")
+
+    assert len(sleep_calls) == pipeline._OPTION_CHAIN_RETRY_ATTEMPTS - 1
+
+
+def test_run_symbol_recovers_real_oi_after_the_chain_fetch_initially_backs_up(monkeypatch):
+    """The end-to-end version of the retry test above - run_symbol still
+    gets a real OI vote (not a silent guess) when the first attempt at the
+    option-chain fetch hits a backed-up throttle, as long as a later retry
+    succeeds - this is the actual bug this whole retry exists to fix."""
+    weekly_bars = _bars(60, 2000.0, 1.0)
+    daily_bars = _bars(60, 2000.0, 1.0)
+    monkeypatch.setattr(pipeline.market_data_client, "get_candle_history", _fake_history_factory(weekly_bars, daily_bars))
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: ["2026-06-25"])
+    monkeypatch.setattr(pipeline.market_data_client, "get_order_blocks", _no_order_blocks)
+    calls = {"n": 0}
+
+    def flaky(exchange, symbol, expiry):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Dhan option-chain queue is backed up (6.0s wait) - try again shortly")
+        return {
+            "strikes": [
+                _chain_strike(2000.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+                _chain_strike(2050.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+                _chain_strike(2100.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+            ]
+        }
+
+    monkeypatch.setattr(pipeline.market_data_client, "get_option_chain", flaky)
+
+    rec = pipeline.run_symbol("TESTSYM", as_of=date(2026, 6, 1))
+
+    assert rec.oi.available is True
+    assert rec.oi.aggregate_signal == "long_buildup"
+    # real chain reached, not the naive fallback expiry
+    assert rec.strategy.entry_window.latest == date(2026, 6, 25)
+
+
 def test_run_symbol_raises_on_insufficient_history(monkeypatch):
     short_bars = _bars(10, 2000.0, 5.0)
     monkeypatch.setattr(
@@ -142,6 +277,89 @@ def test_run_symbol_surfaces_the_order_block_vote_in_regime_reasons(monkeypatch)
     rec = pipeline.run_symbol("TESTSYM", as_of=date(2026, 6, 1))
 
     assert any("demand order block" in r for r in rec.regime.reasons)
+
+
+# --- _fetch_oi: a real buildup read from the SAME chain fetch used for strike interval -------
+
+
+def _chain_strike(strike, ce_oi=None, ce_prev_oi=None, pe_oi=None, pe_prev_oi=None):
+    row = {"strike": strike}
+    if ce_oi is not None:
+        row["ce"] = {"oi": ce_oi, "previous_oi": ce_prev_oi}
+    if pe_oi is not None:
+        row["pe"] = {"oi": pe_oi, "previous_oi": pe_prev_oi}
+    return row
+
+
+def test_fetch_oi_unavailable_when_no_chain():
+    assert pipeline._fetch_oi(None, price_change=5.0, spot=2000.0).available is False
+
+
+def test_fetch_oi_unavailable_when_chain_has_no_ce_pe_legs():
+    # same shape test_run_symbol_uses_real_strike_interval_from_option_chain
+    # feeds get_option_chain - a chain with strikes but no CE/PE legs at all.
+    chain_strikes = [{"strike": 1750.0}, {"strike": 1800.0}, {"strike": 1850.0}]
+
+    assert pipeline._fetch_oi(chain_strikes, price_change=5.0, spot=1800.0).available is False
+
+
+def test_fetch_oi_skips_a_leg_missing_previous_oi_without_raising():
+    chain_strikes = [_chain_strike(2000.0, ce_oi=1000, ce_prev_oi=None)]
+
+    assert pipeline._fetch_oi(chain_strikes, price_change=5.0, spot=2000.0).available is False
+
+
+def test_fetch_oi_classifies_long_buildup_from_price_up_oi_up():
+    # Price up (price_change > 0) + OI up at every near-the-money strike ->
+    # long_buildup, matching oi_classifier.classify_buildup's own truth table.
+    chain_strikes = [
+        _chain_strike(2000.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+        _chain_strike(2050.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+        _chain_strike(2100.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+    ]
+
+    oi = pipeline._fetch_oi(chain_strikes, price_change=10.0, spot=2059.0)
+
+    assert oi.available is True
+    assert oi.aggregate_signal == "long_buildup"
+    assert oi.pcr == pytest.approx(1.0)  # equal put/call OI in this fixture
+    assert len(oi.by_strike) == 6  # 3 strikes x CE+PE
+    assert all(row.buildup == "long_buildup" for row in oi.by_strike)
+
+
+def test_fetch_oi_computes_max_pain_at_the_least_loss_strike():
+    # Only strike 2050 has any OI at all - it's trivially the max-pain strike
+    # (every other candidate strike pays out more against it).
+    chain_strikes = [_chain_strike(2050.0, ce_oi=5000, ce_prev_oi=4000, pe_oi=5000, pe_prev_oi=4000)]
+
+    oi = pipeline._fetch_oi(chain_strikes, price_change=10.0, spot=2050.0)
+
+    assert oi.max_pain == 2050.0
+
+
+def test_run_symbol_surfaces_the_oi_vote_in_regime_reasons(monkeypatch):
+    weekly_bars = _bars(60, 2000.0, 1.0)  # last weekly close = 2059.0
+    daily_bars = _bars(60, 2000.0, 1.0)  # last two closes: 2058.0 -> 2059.0, a positive price_change
+    monkeypatch.setattr(pipeline.market_data_client, "get_candle_history", _fake_history_factory(weekly_bars, daily_bars))
+    monkeypatch.setattr(pipeline.market_data_client, "get_expiry_list", lambda exchange, symbol: ["2026-06-25"])
+    monkeypatch.setattr(
+        pipeline.market_data_client,
+        "get_option_chain",
+        lambda exchange, symbol, expiry: {
+            "strikes": [
+                _chain_strike(2000.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+                _chain_strike(2050.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+                _chain_strike(2100.0, ce_oi=1500, ce_prev_oi=1000, pe_oi=1500, pe_prev_oi=1000),
+            ]
+        },
+    )
+    monkeypatch.setattr(pipeline.market_data_client, "get_order_blocks", _no_order_blocks)
+
+    rec = pipeline.run_symbol("TESTSYM", as_of=date(2026, 6, 1))
+
+    assert rec.oi.available is True
+    assert rec.oi.aggregate_signal == "long_buildup"
+    assert any("OI aggregate signal: long_buildup" in r for r in rec.regime.reasons)
 
 
 def test_run_symbol_surfaces_the_fundamental_vote_in_regime_reasons(monkeypatch):

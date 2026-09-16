@@ -19,12 +19,14 @@ e.g. the dev Dhan token being expired at the time this was built.
 """
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app.adapters.market_data import client as market_data_client
 
 from . import indicators as ind
+from . import oi_classifier
 from . import regime_engine as regime
 from . import screener_fetch
 from . import strategy_selector as strat
@@ -32,11 +34,13 @@ from .contracts import (
     FundamentalSnapshot,
     GeneratedBy,
     OISnapshot,
+    StrikeOI,
     TechnicalSnapshot,
     TrendChannel,
     WeeklyRecommendation,
     Zone,
 )
+from .oi_classifier import StrikeOIRow
 from .regime_engine import OrderBlockZone
 
 ENGINE_VERSION = "weekly_advisor@signal-engine-1.0"
@@ -83,24 +87,135 @@ def _guess_strike_interval(close: float) -> float:
     return 100.0
 
 
-def _resolve_expiry_and_strike_interval(symbol: str, weekly_close: float) -> tuple[Optional[str], float]:
+# market-data's Dhan option-chain/expiry-list calls self-throttle to 1
+# request per 3s (MIN_OPTION_CHAIN_CALL_INTERVAL_SECONDS in that service's
+# providers/dhan.py - get_expiry_list and get_option_chain share the same
+# throttle clock/queue), shared across EVERY concurrent caller using the
+# platform-default credential - which every Weekly Advisor batch request
+# is, since it's an internal job with no per-user context.
+# weekly_advisor.py's own _BATCH_CONCURRENCY (5) fires that many symbols'
+# expiry+chain fetches at once, but that throttle's own queue-depth guard
+# (MAX_THROTTLE_WAIT_SECONDS, 4s) raises rather than queuing a caller more
+# than ~1 slot deep - so without a retry here, only the first ~1-2 of 5
+# concurrent symbols ever get a real chain, and with a cold expiry-list
+# cache (e.g. right after a restart) each symbol needs up to 2 slots
+# (expiry list + chain), doubling the effective queue depth. The rest
+# silently degrade to a guessed expiry AND lose the OI vote, non-
+# deterministically depending on thread scheduling (confirmed live
+# 2026-09-16: the same 5-symbol batch produced different available/
+# unavailable OI results run to run, and a first attempt at only retrying
+# the chain call - not expiry-list too - still left 2/5 symbols failing
+# after a cold restart). Retrying the WHOLE expiry+chain sequence, a fixed
+# 3s apart (matching the throttle's own interval), lets a later-queued
+# symbol simply wait its fair turn instead of giving up - retrying
+# get_expiry_list too is cheap even when it already succeeded, since its
+# own 300s cache (EXPIRY_LIST_CACHE_TTL_SECONDS) makes every retry after
+# the first free. Total worst-case patience here (9 retries x 3s = 27s)
+# comfortably drains a 5-wide burst even at 2 slots/symbol; a weekly
+# recommendation isn't a latency-sensitive path the way live quote/order
+# calls are.
+_OPTION_CHAIN_RETRY_ATTEMPTS = 10
+_OPTION_CHAIN_RETRY_SLEEP_SECONDS = 3.0
+
+
+def _fetch_expiry_and_chain_with_retry(symbol: str) -> tuple[Optional[str], Optional[dict]]:
+    last_exc: Optional[Exception] = None
+    for attempt in range(_OPTION_CHAIN_RETRY_ATTEMPTS):
+        try:
+            expiries = market_data_client.get_expiry_list(EXCHANGE, symbol)
+            if not expiries:
+                return None, None
+            chain = market_data_client.get_option_chain(EXCHANGE, symbol, expiries[0])
+            return expiries[0], chain
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _OPTION_CHAIN_RETRY_ATTEMPTS - 1:
+                time.sleep(_OPTION_CHAIN_RETRY_SLEEP_SECONDS)
+    raise last_exc  # noqa: TRY201 - re-raised as-is so the caller's own except Exception still degrades gracefully
+
+
+def _resolve_expiry_strike_interval_and_chain(symbol: str, weekly_close: float) -> tuple[Optional[str], float, Optional[list[dict]]]:
     """Best-effort: real nearest expiry + real strike interval from
     market-data's option chain when it's reachable, else a placeholder
     expiry (None, caller falls back to a naive monthly-Thursday guess) and
     a price-scaled strike-interval guess. Never raises - a broker-token
-    outage here shouldn't take down the whole recommendation."""
+    outage here shouldn't take down the whole recommendation (the fetch
+    itself retries first - see _fetch_expiry_and_chain_with_retry).
+
+    Also hands back the chain's own `strikes` list (raw dicts, same shape
+    market-data's GET /options/chain returns) so _fetch_oi below can build
+    a real OI read off the SAME fetch, rather than a second call to
+    market-data for the same chain - None whenever a chain wasn't fetched
+    or didn't resolve (unresolvable underlying, no expiry, broker outage)."""
     try:
-        expiries = market_data_client.get_expiry_list(EXCHANGE, symbol)
-        if not expiries:
-            return None, _guess_strike_interval(weekly_close)
-        chain = market_data_client.get_option_chain(EXCHANGE, symbol, expiries[0])
+        expiry, chain = _fetch_expiry_and_chain_with_retry(symbol)
+        if expiry is None:
+            return None, _guess_strike_interval(weekly_close), None
         if not chain or len(chain.get("strikes", [])) < 2:
-            return expiries[0], _guess_strike_interval(weekly_close)
-        strikes = sorted(s["strike"] for s in chain["strikes"])
+            return expiry, _guess_strike_interval(weekly_close), None
+        chain_strikes = chain["strikes"]
+        strikes = sorted(s["strike"] for s in chain_strikes)
         interval = round(strikes[1] - strikes[0], 2)
-        return expiries[0], (interval if interval > 0 else _guess_strike_interval(weekly_close))
+        return expiry, (interval if interval > 0 else _guess_strike_interval(weekly_close)), chain_strikes
     except Exception:
-        return None, _guess_strike_interval(weekly_close)
+        return None, _guess_strike_interval(weekly_close), None
+
+
+def _fetch_oi(chain_strikes: Optional[list[dict]], price_change: float, spot: float) -> OISnapshot:
+    """Builds a real OI buildup read from the SAME option-chain fetch
+    _resolve_expiry_strike_interval_and_chain already made for the strike
+    ladder. Needs no separate persistence/diffing pass - Dhan's own
+    `previous_oi` figure per leg (see OptionLegQuote's docstring in
+    market-data's app/domain/models.py; it's the exchange's own previous-
+    session OI, not something market-data computes) means one chain fetch
+    already carries everything oi_classifier.classify_buildup needs
+    (current OI vs prior, and the underlying's own price change since
+    then). `price_change` is the underlying's own (not per-strike) latest-
+    vs-previous daily close, same convention classify_buildup expects -
+    only its sign matters. available=False (never raises) whenever the
+    chain wasn't reachable or carries no CE/PE OI at all - same graceful-
+    degradation convention _fetch_fundamentals/_fetch_order_blocks already
+    use elsewhere in this module."""
+    if not chain_strikes:
+        return OISnapshot(available=False)
+    try:
+        rows: list[StrikeOIRow] = []
+        call_oi_by_strike: dict[float, float] = {}
+        put_oi_by_strike: dict[float, float] = {}
+        total_call_oi = 0.0
+        total_put_oi = 0.0
+        for s in chain_strikes:
+            strike = s["strike"]
+            for option_type, leg_key in (("CE", "ce"), ("PE", "pe")):
+                leg = s.get(leg_key)
+                if not leg or leg.get("oi") is None or leg.get("previous_oi") is None:
+                    continue
+                oi = float(leg["oi"])
+                oi_change = oi - float(leg["previous_oi"])
+                rows.append(StrikeOIRow(strike=strike, option_type=option_type, oi=oi, oi_change=oi_change, underlying_price_change=price_change))
+                if option_type == "CE":
+                    call_oi_by_strike[strike] = oi
+                    total_call_oi += oi
+                else:
+                    put_oi_by_strike[strike] = oi
+                    total_put_oi += oi
+
+        if not rows:
+            return OISnapshot(available=False)
+
+        return OISnapshot(
+            available=True,
+            pcr=oi_classifier.put_call_ratio(total_put_oi, total_call_oi),
+            max_pain=oi_classifier.max_pain(call_oi_by_strike, put_oi_by_strike),
+            aggregate_signal=oi_classifier.aggregate_signal(rows, near_the_money_only=True, spot=spot),
+            by_strike=[
+                StrikeOI(strike=r.strike, option_type=r.option_type, oi=r.oi, oi_change=r.oi_change, buildup=r.buildup)
+                for r in rows
+                if r.buildup is not None  # StrikeOI.buildup is required - a flat/no-signal row is simply omitted
+            ],
+        )
+    except Exception:
+        return OISnapshot(available=False)
 
 
 def _naive_monthly_expiry(as_of: date) -> date:
@@ -184,14 +299,13 @@ def run_symbol(symbol: str, as_of: Optional[date] = None, openrouter_api_key: Op
     weekly_snap = build_technical_snapshot(weekly_bars, "weekly")
     daily_snap = build_technical_snapshot(daily_bars, "daily")
 
-    # OI diffing needs a stored previous chain snapshot, which this
-    # persistence-free pass doesn't have - always OI-blind for now, same
-    # graceful-degradation path the scaffold's own pipeline takes when OI
-    # is missing. Real strike interval is still worth reading from the
-    # chain even without a diff.
-    oi_snap = OISnapshot(available=False)
-    expiry_str, strike_interval = _resolve_expiry_and_strike_interval(symbol, weekly_snap.close)
+    expiry_str, strike_interval, chain_strikes = _resolve_expiry_strike_interval_and_chain(symbol, weekly_snap.close)
     expiry_date = date.fromisoformat(expiry_str) if expiry_str else _naive_monthly_expiry(as_of)
+    # Daily close-to-close, not weekly - Dhan's own previous_oi figure this
+    # reads against (see _fetch_oi) is the previous SESSION's OI, so the
+    # price side of the comparison should match that same cadence.
+    daily_price_change = daily_bars[-1].close - daily_bars[-2].close
+    oi_snap = _fetch_oi(chain_strikes, daily_price_change, weekly_snap.close)
     order_blocks = _fetch_order_blocks(symbol, as_of, "weekly", 3 * 365)
     daily_order_blocks = _fetch_order_blocks(symbol, as_of, "daily", 365)
     fundamentals = _fetch_fundamentals(symbol, openrouter_api_key)

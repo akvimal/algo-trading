@@ -2010,11 +2010,27 @@ export type WeeklyAdvisorOiSnapshot = {
   aggregate_signal: "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding" | null;
 };
 
+// One vote assess_regime (backend regime_engine.py) folded into the
+// overall bias - the structured, category-tagged counterpart to
+// WeeklyAdvisorRegime.reasons below (same reason strings, 1:1, just also
+// carrying which category produced it and whether it argued bullish/
+// bearish/neither) so the UI can group + color-code without parsing free
+// text. Added 2026-09-16.
+export type WeeklyAdvisorSignalCategory = "trend" | "structure" | "order_blocks" | "oi" | "fundamentals" | "momentum";
+
+export type WeeklyAdvisorSignal = {
+  category: WeeklyAdvisorSignalCategory;
+  direction: "bullish" | "bearish" | null;
+  weight: number;
+  reason: string;
+};
+
 export type WeeklyAdvisorRegime = {
   bias: "bullish" | "bearish" | "neutral";
   trend_strength: "trending" | "decelerating" | "ranging";
   confidence: number;
   reasons: string[];
+  signals: WeeklyAdvisorSignal[];
 };
 
 export type WeeklyAdvisorLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; basis: string };

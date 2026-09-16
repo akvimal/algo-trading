@@ -18,6 +18,8 @@ import {
   type Watchlist,
   type WeeklyAdvisorDecision,
   type WeeklyAdvisorPerformanceSummary,
+  type WeeklyAdvisorSignal,
+  type WeeklyAdvisorSignalCategory,
   type WeeklyAdvisorSkipped,
   type WeeklyAdvisorTrade,
   type WeeklyAdvisorTradeLeg,
@@ -51,6 +53,27 @@ const BIAS_BADGE: Record<WeeklyRecommendation["regime"]["bias"], string> = {
   bearish: "badge-sell",
   neutral: "badge-mini-muted",
 };
+
+// Fixed reading order for the technical-signal groups below (fundamentals
+// gets its own separate card section, same as before this grouping was
+// added - excluded here, see technicalSignals in RecommendationCard).
+const SIGNAL_CATEGORY_ORDER: WeeklyAdvisorSignalCategory[] = ["trend", "structure", "order_blocks", "oi", "momentum"];
+const SIGNAL_CATEGORY_LABEL: Record<WeeklyAdvisorSignalCategory, string> = {
+  trend: "Trend",
+  structure: "Price structure",
+  order_blocks: "Order blocks",
+  oi: "Open interest",
+  momentum: "Momentum",
+  fundamentals: "Fundamentals",
+};
+
+// ▲/▼/– rather than a plain bullet - direction is exactly the thing this
+// list previously made you read every sentence to find out.
+function SignalIndicator({ direction }: { direction: WeeklyAdvisorSignal["direction"] }) {
+  if (direction === "bullish") return <span className="weekly-advisor-signal-dot bullish">▲</span>;
+  if (direction === "bearish") return <span className="weekly-advisor-signal-dot bearish">▼</span>;
+  return <span className="weekly-advisor-signal-dot neutral">–</span>;
+}
 
 const ACTION_LABELS: Record<WeeklyRecommendation["strategy"]["action"], string> = {
   sell_otm_put: "Sell OTM Put",
@@ -781,8 +804,17 @@ function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer
   // is already shown in full in the Fundamentals section below (its summary
   // is richer than this one-liner) - excluded here so technical vs
   // fundamental reasoning reads as two distinct sections, not one list with
-  // the fundamentals line repeated a second time underneath.
-  const technicalReasons = rec.regime.reasons.filter((r) => !r.startsWith("screener.in fundamentals"));
+  // the fundamentals line repeated a second time underneath. Grouped by
+  // category (2026-09-16, see contracts.RegimeSignal on the backend)
+  // instead of one flat sentence-by-sentence list - each category only
+  // renders when it actually has a signal this cycle.
+  const technicalSignals = rec.regime.signals.filter((s) => s.category !== "fundamentals");
+  const technicalGroups = SIGNAL_CATEGORY_ORDER.map((category) => ({
+    category,
+    signals: technicalSignals.filter((s) => s.category === category),
+  })).filter((g) => g.signals.length > 0);
+  const bullishCount = technicalSignals.filter((s) => s.direction === "bullish").length;
+  const bearishCount = technicalSignals.filter((s) => s.direction === "bearish").length;
   const legsSummary = rec.strategy.legs.map((leg) => `${leg.side === "sell" ? "SELL" : "BUY"} ${leg.strike} ${leg.option_type}`).join(" / ");
 
   return (
@@ -855,19 +887,33 @@ function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer
       </div>
 
       <div className="weekly-advisor-section-head">
-        <span className="muted">
-          {technicalReasons.length} technical signal{technicalReasons.length === 1 ? "" : "s"}
+        <span className="muted weekly-advisor-signal-summary">
+          {bullishCount > 0 && <span className="bullish">{bullishCount} bullish</span>}
+          {bearishCount > 0 && <span className="bearish">{bearishCount} bearish</span>}
+          {technicalSignals.length - bullishCount - bearishCount > 0 && (
+            <span>{technicalSignals.length - bullishCount - bearishCount} neutral</span>
+          )}
         </span>
         <button type="button" className="secondary tiny" onClick={() => setShowTechnical((v) => !v)}>
           {showTechnical ? "Hide" : "Details ▸"}
         </button>
       </div>
       {showTechnical && (
-        <ul className="weekly-advisor-reasons">
-          {technicalReasons.map((r, i) => (
-            <li key={i}>{r}</li>
+        <div className="weekly-advisor-signal-groups">
+          {technicalGroups.map(({ category, signals }) => (
+            <div key={category} className="weekly-advisor-signal-group">
+              <div className="weekly-advisor-signal-group-label">{SIGNAL_CATEGORY_LABEL[category]}</div>
+              <ul className="weekly-advisor-reasons">
+                {signals.map((s, i) => (
+                  <li key={i}>
+                    <SignalIndicator direction={s.direction} />
+                    {s.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
 
       {rec.fundamentals.available && (
@@ -925,14 +971,13 @@ type BiasFilter = "all" | "bullish" | "bearish" | "neutral";
 type ZoneFilter = "all" | "testing" | "mid-range";
 type TrendFilter = "all" | WeeklyRecommendation["regime"]["trend_strength"];
 
-// _zone_vote (regime_engine.py) emits exactly this string when price isn't
-// within 2% of any support/resistance zone - the one place that "no zone
-// vote" state is observable from the API today (no dedicated boolean on
-// the contract), so this is a text match against that fixed wording
-// rather than a real field. Update this if that message's wording ever
-// changes.
+// _zone_vote (regime_engine.py) votes bullish/bearish only when price is
+// within 2% of a support/resistance zone, direction=null otherwise - now
+// a real field to check (regime.signals, added 2026-09-16) instead of the
+// text-match against _zone_vote's exact "no zone test in play" wording
+// this used to be.
 function isTestingZone(rec: WeeklyRecommendation): boolean {
-  return !rec.regime.reasons.some((r) => r.includes("no zone test in play"));
+  return rec.regime.signals.some((s) => s.category === "structure" && s.direction !== null);
 }
 
 function RunTab() {
@@ -1017,18 +1062,7 @@ function RunTab() {
 
   return (
     <>
-      <header className="header-row">
-        <p className="subtitle">
-          Weekly options bias + defined-risk strategy per symbol, built fresh from live NSE OHLCV on every run - large
-          lists (e.g. the full F&amp;O universe) run in chunks of {RUN_CHUNK_SIZE} with a progress bar below; roughly
-          1-3s/symbol depending on cache state, so ~200 symbols takes a couple of minutes. A symbol's{" "}
-          <em>first-ever</em> run is slower still - it also captures and AI-reads a screener.in fundamentals screenshot,
-          cached for 90 days after that.
-          {lastUpdated && <span className="updated"> Last run {lastUpdated.toLocaleTimeString()}</span>}
-        </p>
-      </header>
-
-      <div className="settings-row">
+      <div className="settings-row weekly-advisor-run-row">
         <label>
           Watchlist
           <select value={selectedWatchlistId} onChange={(e) => handleWatchlistChange(e.target.value)}>
@@ -1041,7 +1075,7 @@ function RunTab() {
           </select>
         </label>
         <label>
-          Symbols (comma-separated)
+          Symbols
           <input
             value={symbolsInput}
             onChange={(e) => {
@@ -1049,12 +1083,14 @@ function RunTab() {
               setSelectedWatchlistId("");
             }}
             placeholder={DEFAULT_SYMBOLS}
+            title="Comma-separated NSE symbols"
             style={{ minWidth: "22rem" }}
           />
         </label>
         <button type="button" onClick={handleRun} disabled={loading}>
           {loading ? "Running..." : "Run"}
         </button>
+        {lastUpdated && <span className="muted weekly-advisor-last-run">Last run {lastUpdated.toLocaleTimeString()}</span>}
       </div>
 
       {progress && (
@@ -1081,7 +1117,7 @@ function RunTab() {
       )}
 
       {recommendations.length > 0 && (
-        <div className="settings-row">
+        <div className="settings-row weekly-advisor-filter-row">
           <label>
             Bias
             <select value={biasFilter} onChange={(e) => setBiasFilter(e.target.value as BiasFilter)}>
@@ -1092,20 +1128,20 @@ function RunTab() {
             </select>
           </label>
           <label>
-            Confidence min %
-            <input
-              type="number" min={0} max={100} step={5} value={minConfidence}
-              onChange={(e) => setMinConfidence(Math.min(Number(e.target.value), maxConfidence))}
-              style={{ width: "5rem" }}
-            />
-          </label>
-          <label>
-            Confidence max %
-            <input
-              type="number" min={0} max={100} step={5} value={maxConfidence}
-              onChange={(e) => setMaxConfidence(Math.max(Number(e.target.value), minConfidence))}
-              style={{ width: "5rem" }}
-            />
+            Confidence %
+            <span className="weekly-advisor-confidence-range">
+              <input
+                type="number" min={0} max={100} step={5} value={minConfidence} title="Minimum confidence"
+                onChange={(e) => setMinConfidence(Math.min(Number(e.target.value), maxConfidence))}
+                style={{ width: "4rem" }}
+              />
+              <span className="muted">–</span>
+              <input
+                type="number" min={0} max={100} step={5} value={maxConfidence} title="Maximum confidence"
+                onChange={(e) => setMaxConfidence(Math.max(Number(e.target.value), minConfidence))}
+                style={{ width: "4rem" }}
+              />
+            </span>
           </label>
           <label>
             Zone

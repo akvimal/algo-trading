@@ -98,11 +98,30 @@ class CorporateEvent(BaseModel):
     source: str
 
 
+SignalCategory = Literal["trend", "structure", "order_blocks", "oi", "fundamentals", "momentum"]
+
+
+class RegimeSignal(BaseModel):
+    """One vote regime_engine.py's assess_regime folded into the overall
+    bias - the structured counterpart to RegimeAssessment.reasons below
+    (which stays a flat list of the same reason strings, unchanged, for
+    whatever already depends on it). Added 2026-09-16 so the frontend can
+    group signals by category and show a bullish/bearish/neutral indicator
+    without parsing free text - see regime_engine.py's own _Vote (this is
+    that dataclass's category-tagged, JSON-facing mirror)."""
+
+    category: SignalCategory
+    direction: Optional[Literal["bullish", "bearish"]] = None
+    weight: float
+    reason: str
+
+
 class RegimeAssessment(BaseModel):
     bias: Bias
     trend_strength: TrendStrength
     confidence: float = Field(ge=0, le=1)
     reasons: list[str] = Field(default_factory=list)
+    signals: list[RegimeSignal] = Field(default_factory=list)
 
 
 class StrategyLeg(BaseModel):

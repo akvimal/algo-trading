@@ -2532,15 +2532,75 @@ button.btn-exit {
   margin-top: 0.5rem;
 }
 
-.weekly-advisor-reasons {
+/* Grouped, category-labeled technical signals (2026-09-16) - replaces a
+   single flat <ul> of every reason sentence. */
+.weekly-advisor-signal-groups {
   margin: 0.4rem 0 0.8rem;
-  padding-left: 1.1rem;
+}
+
+.weekly-advisor-signal-group {
+  margin-bottom: 0.5rem;
+}
+
+.weekly-advisor-signal-group-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+  opacity: 0.75;
+  margin-bottom: 0.1rem;
+}
+
+.weekly-advisor-reasons {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
   font-size: 0.8rem;
   color: var(--text-dim);
 }
 
 .weekly-advisor-reasons li {
   margin-bottom: 0.15rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.weekly-advisor-signal-dot {
+  flex: none;
+  width: 1rem;
+  text-align: center;
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.weekly-advisor-signal-dot.bullish {
+  color: var(--buy);
+}
+
+.weekly-advisor-signal-dot.bearish {
+  color: var(--sell);
+}
+
+.weekly-advisor-signal-dot.neutral {
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
+/* The "N bullish · N bearish · N neutral" summary line replacing the old
+   plain "N technical signals" count. */
+.weekly-advisor-signal-summary {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.weekly-advisor-signal-summary .bullish {
+  color: var(--buy);
+}
+
+.weekly-advisor-signal-summary .bearish {
+  color: var(--sell);
 }
 
 .weekly-advisor-fundamentals {
@@ -2569,6 +2629,18 @@ button.btn-exit {
   min-width: 12rem;
 }
 
+/* Plain "+ "/"- " text prefixes, uncolored, before 2026-09-16 - same
+   "read every line to know if it's good or bad" problem the technical
+   signals list had, fixed the same way: color carries the polarity, the
+   symbol alone no longer has to. */
+.weekly-advisor-pros li {
+  color: var(--buy);
+}
+
+.weekly-advisor-cons li {
+  color: var(--sell);
+}
+
 .weekly-advisor-legs {
   margin: 0.4rem 0 0;
   width: 100%;
@@ -2590,6 +2662,26 @@ button.btn-exit {
 
 .weekly-advisor-subtabs {
   margin-bottom: 1rem;
+}
+
+/* Run/filter rows (2026-09-16) - tighter than the generic .settings-row
+   default (1rem bottom margin) now that the long explanatory paragraph
+   that used to sit above them is gone; these two rows are the page's
+   header now, so they shouldn't need as much breathing room around them. */
+.weekly-advisor-run-row,
+.weekly-advisor-filter-row {
+  margin-bottom: 0.6rem;
+}
+
+.weekly-advisor-last-run {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+
+.weekly-advisor-confidence-range {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
 .weekly-advisor-card-footer {

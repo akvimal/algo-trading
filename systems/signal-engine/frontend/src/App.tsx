@@ -4952,9 +4952,15 @@ export default function App() {
             </button>
           </nav>
         </div>
-        <p className="subtitle">
-          Strategies - external providers and in-house rules - that produce BUY/SELL ideas, plus the signals they've fired.
-        </p>
+        {/* Describes Signals/Strategies, not Weekly Advisor - hidden there
+            specifically (2026-09-16) rather than shown as a fixed subtitle
+            regardless of tab, which was just adding header space above a
+            page it didn't describe. */}
+        {tab !== "weekly-advisor" && (
+          <p className="subtitle">
+            Strategies - external providers and in-house rules - that produce BUY/SELL ideas, plus the signals they've fired.
+          </p>
+        )}
 
         {tab === "signals" && <SignalsPage />}
         {tab === "strategies" && <StrategiesTab />}

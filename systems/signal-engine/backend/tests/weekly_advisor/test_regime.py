@@ -128,3 +128,50 @@ def test_fundamental_vote_can_pull_confidence_down_against_a_bearish_ema_read():
     assert assessment.bias == "bearish"  # 1.0 still outweighs 0.5
     assert assessment.confidence < 1.0
     assert any("screener.in fundamentals read bullish" in r for r in assessment.reasons)
+
+
+# --- signals: the structured, category-tagged mirror of reasons (2026-09-16) --------------
+
+
+def test_assess_regime_signals_are_category_tagged_and_mirror_reasons_1_for_1():
+    snapshot = _snapshot(close=470.0, ema50=500.0)  # bearish EMA read
+    zones = [OrderBlockZone(kind="demand", proximal=95.0, distal=90.0, mitigated=False)]
+    fundamentals = FundamentalSnapshot(available=True, bias="bullish", confidence=1.0)
+
+    assessment = assess_regime(primary=snapshot, oi=OISnapshot(available=False), order_blocks=zones, fundamental=fundamentals)
+
+    assert len(assessment.signals) == len(assessment.reasons)
+    assert [s.reason for s in assessment.signals] == assessment.reasons
+    categories = {s.category for s in assessment.signals}
+    assert categories == {"trend", "structure", "oi", "order_blocks", "fundamentals", "momentum"}
+
+
+def test_assess_regime_signal_direction_matches_the_underlying_vote():
+    snapshot = _snapshot(close=470.0, ema50=500.0)  # close below EMA50 -> bearish trend vote
+
+    assessment = assess_regime(primary=snapshot, oi=OISnapshot(available=False))
+
+    trend_signal = next(s for s in assessment.signals if s.category == "trend")
+    assert trend_signal.direction == "bearish"
+    assert trend_signal.weight == 1.0
+
+
+def test_assess_regime_momentum_signal_has_no_direction():
+    # The ADX-derived reason isn't a bullish/bearish vote (it's already
+    # folded into confidence, not bullish/bearish) - direction stays None.
+    assessment = assess_regime(primary=_snapshot(100.0, 100.0, adx14=25.0), oi=OISnapshot(available=False))
+
+    momentum_signal = next(s for s in assessment.signals if s.category == "momentum")
+    assert momentum_signal.direction is None
+
+
+def test_assess_regime_daily_order_block_signal_is_tagged_order_blocks_not_a_new_category():
+    zones = [OrderBlockZone(kind="demand", proximal=95.0, distal=90.0, mitigated=False)]
+    daily = _snapshot(close=92.0, ema50=90.0)
+
+    assessment = assess_regime(primary=_snapshot(100.0, 100.0), oi=OISnapshot(available=False), secondary=daily, daily_order_blocks=zones)
+
+    order_block_signals = [s for s in assessment.signals if s.category == "order_blocks"]
+    assert len(order_block_signals) == 1
+    assert order_block_signals[0].direction == "bullish"
+    assert order_block_signals[0].weight == 0.5  # half-weight, daily

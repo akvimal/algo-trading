@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .contracts import FundamentalSnapshot, OISnapshot, RegimeAssessment, TechnicalSnapshot, Zone
+from .contracts import FundamentalSnapshot, OISnapshot, RegimeAssessment, RegimeSignal, SignalCategory, TechnicalSnapshot, Zone
 
 BULLISH_BUILDUPS = {"long_buildup", "short_covering"}
 BEARISH_BUILDUPS = {"short_buildup", "long_unwinding"}
@@ -175,26 +175,39 @@ def assess_regime(
     optional and defaults to no vote, same graceful-degradation convention
     as order_blocks/oi above.
     """
-    votes: list[_Vote] = [_ema_vote(primary), _zone_vote(primary), _oi_vote(oi)]
+    # (category, vote) pairs - category is this function's own tagging
+    # (not something _Vote itself carries, see that dataclass's own
+    # comment) purely so the frontend can group/color signals without
+    # parsing the free-text reason - see contracts.RegimeSignal.
+    votes: list[tuple[SignalCategory, _Vote]] = [
+        ("trend", _ema_vote(primary)),
+        ("structure", _zone_vote(primary)),
+        ("oi", _oi_vote(oi)),
+    ]
     if fundamental is not None:
-        votes.append(_fundamental_vote(fundamental))
+        votes.append(("fundamentals", _fundamental_vote(fundamental)))
     if order_blocks is not None:
-        votes.append(_order_block_vote(order_blocks, primary.close, timeframe="weekly"))
+        votes.append(("order_blocks", _order_block_vote(order_blocks, primary.close, timeframe="weekly")))
     if secondary is not None:
         v = _ema_vote(secondary)
         v.weight *= 0.5  # daily gets half the say of weekly, never the deciding vote alone
         v.reason = "(daily, half-weight) " + v.reason
-        votes.append(v)
+        votes.append(("trend", v))
     if daily_order_blocks is not None:
         close = secondary.close if secondary is not None else primary.close
         v = _order_block_vote(daily_order_blocks, close, timeframe="daily")
         v.weight *= 0.5
         v.reason = "(daily, half-weight) " + v.reason
-        votes.append(v)
+        votes.append(("order_blocks", v))
 
-    bullish = sum(v.weight for v in votes if v.direction == "bullish")
-    bearish = sum(v.weight for v in votes if v.direction == "bearish")
-    reasons = [v.reason for v in votes if v.weight > 0 or v.direction is None]
+    bullish = sum(v.weight for _, v in votes if v.direction == "bullish")
+    bearish = sum(v.weight for _, v in votes if v.direction == "bearish")
+    reasons = [v.reason for _, v in votes if v.weight > 0 or v.direction is None]
+    signals = [
+        RegimeSignal(category=cat, direction=v.direction, weight=v.weight, reason=v.reason)
+        for cat, v in votes
+        if v.weight > 0 or v.direction is None
+    ]
 
     total = bullish + bearish
     if total == 0:
@@ -211,8 +224,10 @@ def assess_regime(
         # even if the vote count looks lopsided -- this is exactly the
         # August-vs-September ADX divergence from the ABB session.
         confidence = round(confidence * 0.6, 2)
-        reasons.append(f"weekly ADX {primary.adx14:.1f} < 20 -- ranging regime, directional confidence discounted")
+        adx_reason = f"weekly ADX {primary.adx14:.1f} < 20 -- ranging regime, directional confidence discounted"
     else:
-        reasons.append(f"weekly ADX {primary.adx14:.1f}, slope {primary.adx14_slope} -> {trend_strength}")
+        adx_reason = f"weekly ADX {primary.adx14:.1f}, slope {primary.adx14_slope} -> {trend_strength}"
+    reasons.append(adx_reason)
+    signals.append(RegimeSignal(category="momentum", direction=None, weight=0.0, reason=adx_reason))
 
-    return RegimeAssessment(bias=bias, trend_strength=trend_strength, confidence=confidence, reasons=reasons)
+    return RegimeAssessment(bias=bias, trend_strength=trend_strength, confidence=confidence, reasons=reasons, signals=signals)

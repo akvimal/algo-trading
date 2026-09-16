@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app.adapters import accounts_client
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.auth import get_optional_user_id
 from app.domain.weekly_advisor.contracts import WeeklyRecommendation
 from app.domain.weekly_advisor.journal import (
     DecisionSet,
@@ -51,6 +53,7 @@ _BATCH_CONCURRENCY = 5
 def get_weekly_recommendations(
     symbols: Optional[str] = Query(None, description="comma-separated NSE symbols; defaults to a small starter list"),
     as_of: Optional[date] = None,
+    user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
 ):
     """On-demand, stateless: builds each symbol's recommendation fresh off
     live NSE OHLCV (via market-data's source=yahoo) - no AI memo yet (see
@@ -60,12 +63,20 @@ def get_weekly_recommendations(
     list plus a `skipped` list with reasons, in the requested symbol order
     regardless of which finished first. Persistence is a separate, explicit
     step (POST .../recommendations/save below) - a preview run here is
-    never saved on its own."""
+    never saved on its own.
+
+    BYO OpenRouter key (2026-09-16): the fundamentals vote's AI read, when
+    this batch hits a stale/missing per-symbol cache, is paid for with the
+    calling user's own key (accounts_client.get_user_openrouter_key) - see
+    screener_fetch.py's own module docstring for why the resulting
+    fundamentals read is still cached/shared per-symbol across every user
+    regardless of whose key produced it."""
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else DEFAULT_SYMBOLS
+    openrouter_api_key = accounts_client.get_user_openrouter_key(user_id) if user_id else None
 
     def _run(symbol: str):
         try:
-            return symbol, run_symbol(symbol, as_of=as_of), None
+            return symbol, run_symbol(symbol, as_of=as_of, openrouter_api_key=openrouter_api_key), None
         except Exception as exc:
             logger.warning("weekly-advisor: skipping %s (%s: %s)", symbol, exc.__class__.__name__, exc)
             return symbol, None, str(exc)

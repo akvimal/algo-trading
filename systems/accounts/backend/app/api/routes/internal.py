@@ -40,3 +40,21 @@ def get_internal_dhan_credentials(user_id: uuid.UUID, db: Session = Depends(get_
         return {"has_dhan": False, "dhan_client_id": None, "dhan_access_token": None}
 
     return {"has_dhan": True, "dhan_client_id": row.dhan_client_id, "dhan_access_token": access_token}
+
+
+@router.get("/credentials/{user_id}/openrouter", dependencies=[Depends(_require_internal_secret)])
+def get_internal_openrouter_credentials(user_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Mirrors get_internal_dhan_credentials above - called by both
+    market-data (news.py's AI digest) and signal-engine (screener_fetch.py's
+    fundamentals read), the two BYO-OpenRouter-key consumers (2026-09-16).
+    has_openrouter=False (never a 500) whenever nothing's stored or the
+    ciphertext fails to decrypt, same degrade-to-absent reasoning as Dhan."""
+    row = db.get(models.BrokerCredentials, user_id)
+    if row is None or not row.openrouter_api_key_encrypted:
+        return {"has_openrouter": False, "openrouter_api_key": None}
+
+    api_key = try_decrypt_secret(row.openrouter_api_key_encrypted)
+    if api_key is None:
+        return {"has_openrouter": False, "openrouter_api_key": None}
+
+    return {"has_openrouter": True, "openrouter_api_key": api_key}

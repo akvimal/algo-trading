@@ -143,16 +143,20 @@ def _fetch_order_blocks(symbol: str, as_of: date, interval: str, lookback_days: 
         return None
 
 
-def _fetch_fundamentals(symbol: str) -> FundamentalSnapshot:
+def _fetch_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None) -> FundamentalSnapshot:
     """Best-effort screener.in read (see screener_fetch.py) - a scrape/AI
     hiccup here degrades to "no fundamental vote this cycle", same
     graceful-degradation convention as _fetch_order_blocks above, rather
     than failing the whole recommendation over an optional input. Can be
     slow on a cache miss (a real headless-browser page load plus a vision-
     model call, not the ~1-3s the rest of a run takes) - see
-    weekly_advisor_fundamentals_cache_days in app/config.py."""
+    weekly_advisor_fundamentals_cache_days in app/config.py.
+
+    `openrouter_api_key`: the requesting user's own BYO key (2026-09-16),
+    threaded down from run_symbol's own caller - see screener_fetch.py's
+    get_fundamentals."""
     try:
-        analysis = screener_fetch.get_fundamentals(symbol)
+        analysis = screener_fetch.get_fundamentals(symbol, openrouter_api_key)
     except Exception:
         analysis = None
     if analysis is None:
@@ -163,7 +167,7 @@ def _fetch_fundamentals(symbol: str) -> FundamentalSnapshot:
     )
 
 
-def run_symbol(symbol: str, as_of: Optional[date] = None) -> WeeklyRecommendation:
+def run_symbol(symbol: str, as_of: Optional[date] = None, openrouter_api_key: Optional[str] = None) -> WeeklyRecommendation:
     """Raises on missing/insufficient OHLCV - the route catches this per
     symbol and skips it rather than failing the whole batch."""
     as_of = as_of or date.today()
@@ -190,7 +194,7 @@ def run_symbol(symbol: str, as_of: Optional[date] = None) -> WeeklyRecommendatio
     expiry_date = date.fromisoformat(expiry_str) if expiry_str else _naive_monthly_expiry(as_of)
     order_blocks = _fetch_order_blocks(symbol, as_of, "weekly", 3 * 365)
     daily_order_blocks = _fetch_order_blocks(symbol, as_of, "daily", 365)
-    fundamentals = _fetch_fundamentals(symbol)
+    fundamentals = _fetch_fundamentals(symbol, openrouter_api_key)
 
     assessment = regime.assess_regime(
         primary=weekly_snap, oi=oi_snap, secondary=daily_snap,

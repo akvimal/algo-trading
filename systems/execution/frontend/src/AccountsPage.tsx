@@ -187,6 +187,9 @@ export default function AccountsPage() {
   const [draftDeltaApiSecret, setDraftDeltaApiSecret] = useState("");
   const [savingDeltaCreds, setSavingDeltaCreds] = useState(false);
   const [deltaCredsMessage, setDeltaCredsMessage] = useState<string | null>(null);
+  const [draftOpenrouterApiKey, setDraftOpenrouterApiKey] = useState("");
+  const [savingOpenrouterCreds, setSavingOpenrouterCreds] = useState(false);
+  const [openrouterCredsMessage, setOpenrouterCredsMessage] = useState<string | null>(null);
 
   // Platform-wide (user_id IS NULL) accounts - the rows the automated
   // Strategy-driven flow actually reads (see api.ts's own comment on
@@ -547,6 +550,22 @@ export default function AccountsPage() {
       setDeltaCredsMessage(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSavingDeltaCreds(false);
+    }
+  }
+
+  async function handleSaveOpenrouterCredentials() {
+    if (!draftOpenrouterApiKey.trim()) return;
+    setSavingOpenrouterCreds(true);
+    setOpenrouterCredsMessage(null);
+    try {
+      const updated = await saveCredentials({ openrouter_api_key: draftOpenrouterApiKey.trim() });
+      setCredentials(updated);
+      setDraftOpenrouterApiKey("");
+      setOpenrouterCredsMessage("Saved.");
+    } catch (err) {
+      setOpenrouterCredsMessage(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSavingOpenrouterCreds(false);
     }
   }
 
@@ -1305,12 +1324,17 @@ export default function AccountsPage() {
 
         <details className="manual-settings-section">
           <summary>Credentials</summary>
-          <p className="subtitle">Your own Dhan (NSE/MCX) and Delta Exchange India (CRYPTO) keys.</p>
+          <p className="subtitle">Your own Dhan (NSE/MCX), Delta Exchange India (CRYPTO), and OpenRouter keys.</p>
           <InfoDisclosure summary="Why set these?">
             <p>
               Once saved, quotes/candles/option chains, your own manual orders, and the Live trading section
               above all use YOUR credentials and rate budget instead of the platform default. Never shown back
               once saved - paste a new value to replace it.
+            </p>
+            <p>
+              OpenRouter is different: the AI reads it pays for (news digest, fundamentals) are cached and shared
+              across every user, not just you - whoever's request hits a stale cache first pays with their own
+              key, and everyone else reads that same result for free until it goes stale again.
             </p>
           </InfoDisclosure>
           {credentialsError && <p className="error">{credentialsError}</p>}
@@ -1366,6 +1390,32 @@ export default function AccountsPage() {
             </button>
             {deltaCredsMessage && <span className="manual-saved-badge">{deltaCredsMessage}</span>}
           </div>
+
+          <div className="settings-row">
+            <label>
+              OpenRouter API key
+              <input
+                type="password"
+                autoComplete="new-password"
+                placeholder={credentials?.has_openrouter ? "Configured - paste a new one to replace" : "Not set"}
+                value={draftOpenrouterApiKey}
+                onChange={(e) => setDraftOpenrouterApiKey(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="tiny"
+              disabled={savingOpenrouterCreds || !draftOpenrouterApiKey.trim()}
+              onClick={() => void handleSaveOpenrouterCredentials()}
+            >
+              {savingOpenrouterCreds ? "Saving..." : "Save"}
+            </button>
+            {openrouterCredsMessage && <span className="manual-saved-badge">{openrouterCredsMessage}</span>}
+          </div>
+          <p className="subtitle">
+            Powers the Weekly Advisor's fundamentals read and the Live Chart's News tab AI digest - both fall back
+            to a plain, unscored view when no key is set here (yours or the platform's).
+          </p>
         </details>
       </div>
       </>

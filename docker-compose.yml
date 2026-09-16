@@ -72,6 +72,14 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-4.5}
       WEEKLY_ADVISOR_FUNDAMENTALS_CACHE_DAYS: ${WEEKLY_ADVISOR_FUNDAMENTALS_CACHE_DAYS:-90}
+      # BYO OpenRouter key (2026-09-16, app/adapters/accounts_client.py) -
+      # same pair market-data's own accounts_client.py uses to reach
+      # accounts-backend; must match exactly. accounts-backend sits behind
+      # the "execution" profile while this service is infra-tier/always-up,
+      # so accounts_client.py degrades to the platform OPENROUTER_API_KEY
+      # above whenever it's not running rather than failing requests.
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      ACCOUNTS_BASE_URL: http://accounts-backend:8000
     ports:
       - "${SIGNAL_ENGINE_BACKEND_PORT}:8000"
     depends_on:

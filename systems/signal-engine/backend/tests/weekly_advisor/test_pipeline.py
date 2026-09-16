@@ -44,7 +44,7 @@ def _no_real_fundamentals_fetch(monkeypatch):
     Individual tests override this via monkeypatch when they care about
     the fundamental vote specifically - see test_run_symbol_surfaces_the_
     fundamental_vote_in_regime_reasons below."""
-    monkeypatch.setattr(pipeline.screener_fetch, "get_fundamentals", lambda symbol: None)
+    monkeypatch.setattr(pipeline.screener_fetch, "get_fundamentals", lambda symbol, openrouter_api_key=None: None)
 
 
 def test_run_symbol_falls_back_to_guessed_strike_interval_when_chain_unavailable(monkeypatch):
@@ -154,7 +154,7 @@ def test_run_symbol_surfaces_the_fundamental_vote_in_regime_reasons(monkeypatch)
     monkeypatch.setattr(pipeline.market_data_client, "get_order_blocks", _no_order_blocks)
     monkeypatch.setattr(
         pipeline.screener_fetch, "get_fundamentals",
-        lambda symbol: FundamentalAnalysis(
+        lambda symbol, openrouter_api_key=None: FundamentalAnalysis(
             symbol=symbol, bias="bullish", confidence=0.8, summary="Improving margins, deleveraging.",
             pros=["Consistent profit growth"], cons=[], reasons=["profit growth"],
         ),

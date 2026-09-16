@@ -534,6 +534,7 @@ const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
 export type CredentialsOut = {
   has_dhan: boolean;
   has_delta: boolean;
+  has_openrouter: boolean;
   dhan_client_id_masked: string | null;
 };
 
@@ -542,6 +543,7 @@ export type CredentialsUpdate = {
   dhan_access_token?: string;
   delta_api_key?: string;
   delta_api_secret?: string;
+  openrouter_api_key?: string;
 };
 
 export async function fetchCredentials(): Promise<CredentialsOut> {

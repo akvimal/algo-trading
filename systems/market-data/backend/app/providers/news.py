@@ -240,7 +240,7 @@ def _fallback_digest(rows: list[dict], reason: str) -> NewsDigest:
     return NewsDigest(bias="neutral", bias_reason=reason, digest=reason, articles=articles)
 
 
-def _analyze_via_ai(underlying: str, rows: list[dict]) -> NewsDigest:
+def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = None) -> NewsDigest:
     """Runs the raw RSS headlines matched for one underlying through
     OpenRouter (see app/config.py's openrouter_model, default a cheap/fast
     Haiku) to get a trend-relevance digest: an overall bullish/bearish/
@@ -248,10 +248,16 @@ def _analyze_via_ai(underlying: str, rows: list[dict]) -> NewsDigest:
     that actually matter, each scored 0-100 with a one-line reason. Runs
     once per cache refresh (not per request) - see _NEWS_TTL_SECONDS.
     Degrades to the plain unscored headline list (never raises) so a
-    missing key or a flaky OpenRouter call doesn't blank the News tab."""
+    missing key or a flaky OpenRouter call doesn't blank the News tab.
+
+    `api_key` is the requesting user's own BYO OpenRouter key (2026-09-16,
+    see app/adapters/accounts_client.get_user_openrouter_key) when one was
+    resolved for this refresh; falls back to the platform-wide
+    OPENROUTER_API_KEY env var otherwise, same as before this feature."""
     if not rows:
         return _fallback_digest(rows, "No recent news found.")
-    if not settings.openrouter_api_key:
+    key = api_key or settings.openrouter_api_key
+    if not key:
         return _fallback_digest(rows, "AI analysis not configured - set OPENROUTER_API_KEY.")
 
     candidates = rows[:_MAX_ARTICLES_FOR_AI]
@@ -271,7 +277,7 @@ def _analyze_via_ai(underlying: str, rows: list[dict]) -> NewsDigest:
     try:
         resp = requests.post(
             OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
                 "model": settings.openrouter_model,
                 "messages": [
@@ -349,7 +355,7 @@ def _persist_digest(underlying: str, digest: NewsDigest) -> None:
         db.close()
 
 
-def _refresh_bucket(feeds: dict[str, str], lock: threading.Lock, underlyings: list[str]) -> None:
+def _refresh_bucket(feeds: dict[str, str], lock: threading.Lock, underlyings: list[str], api_key: Optional[str] = None) -> None:
     """Fetches every feed in a bucket ONCE, then filters each underlying's
     matches out of that same fetch - e.g. one round of (CoinDesk,
     Cointelegraph) fetches covers BTCUSD/ETHUSD/SOLUSD without re-fetching
@@ -357,7 +363,11 @@ def _refresh_bucket(feeds: dict[str, str], lock: threading.Lock, underlyings: li
     happens when that underlying's matched article set actually changed
     since last time (see _last_fingerprint) - an unchanged RSS feed just
     extends the existing digest's freshness instead of spending another
-    OpenRouter call on input it's already digested."""
+    OpenRouter call on input it's already digested.
+
+    `api_key`: whichever request's BYO key happened to trigger this
+    refresh pays for every underlying in the bucket re-analyzed this pass -
+    see _analyze_via_ai's own docstring."""
     with lock:
         if _cache_get(underlyings[0], _NEWS_TTL_SECONDS) is not None:
             return  # someone else refreshed it while we waited for the lock
@@ -374,13 +384,13 @@ def _refresh_bucket(feeds: dict[str, str], lock: threading.Lock, underlyings: li
             if existing is not None and fingerprint == _last_fingerprint.get(underlying):
                 _cache_set(underlying, existing)  # no new articles - just extend freshness
                 continue
-            digest = _analyze_via_ai(underlying, matched)
+            digest = _analyze_via_ai(underlying, matched, api_key)
             _cache_set(underlying, digest)
             _persist_digest(underlying, digest)
             _last_fingerprint[underlying] = fingerprint
 
 
-def _generic_stock_news(symbol: str) -> NewsDigest:
+def _generic_stock_news(symbol: str, api_key: Optional[str] = None) -> NewsDigest:
     """News for an arbitrary NSE stock NOT in the curated desk (e.g. any
     weekly_advisor F&O symbol opened via manual-trading's "Open chart") -
     same ET+Mint markets feeds as the curated NSE/MCX bucket (no new
@@ -412,14 +422,14 @@ def _generic_stock_news(symbol: str) -> NewsDigest:
         _cache_set(symbol, existing)  # no new articles - just extend freshness
         return existing
 
-    digest = _analyze_via_ai(symbol, matched)
+    digest = _analyze_via_ai(symbol, matched, api_key)
     _cache_set(symbol, digest)
     _persist_digest(symbol, digest)
     _last_fingerprint[symbol] = fingerprint
     return digest
 
 
-def get_news(underlying: str, segment: Optional[str] = None) -> NewsDigest:
+def get_news(underlying: str, segment: Optional[str] = None, openrouter_api_key: Optional[str] = None) -> NewsDigest:
     """Cached AI trend-relevance digest for one chart underlying - see the
     module-level comments above for the RSS sourcing/bucketing and the
     OpenRouter analysis layered on top. Falls back to a stale cached copy
@@ -434,7 +444,7 @@ def get_news(underlying: str, segment: Optional[str] = None) -> NewsDigest:
     those apart - it's never itself part of the keyword match."""
     if underlying not in SUPPORTED_UNDERLYINGS:
         if segment == "NSE":
-            return _generic_stock_news(underlying)
+            return _generic_stock_news(underlying, openrouter_api_key)
         raise ValueError(f"no news source configured for '{underlying}'")
 
     cached = _cache_get(underlying, _NEWS_TTL_SECONDS)
@@ -442,9 +452,9 @@ def get_news(underlying: str, segment: Optional[str] = None) -> NewsDigest:
         return cached
 
     if underlying in _CRYPTO_UNDERLYINGS:
-        _refresh_bucket(_CRYPTO_FEEDS, _crypto_refresh_lock, _CRYPTO_UNDERLYINGS)
+        _refresh_bucket(_CRYPTO_FEEDS, _crypto_refresh_lock, _CRYPTO_UNDERLYINGS, openrouter_api_key)
     else:
-        _refresh_bucket(_NSE_MCX_FEEDS, _nse_mcx_refresh_lock, _NSE_MCX_UNDERLYINGS)
+        _refresh_bucket(_NSE_MCX_FEEDS, _nse_mcx_refresh_lock, _NSE_MCX_UNDERLYINGS, openrouter_api_key)
 
     fresh = _cache_get(underlying, _NEWS_TTL_SECONDS)
     if fresh is not None:

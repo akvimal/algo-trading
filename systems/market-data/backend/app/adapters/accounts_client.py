@@ -33,6 +33,12 @@ _cache_lock = threading.Lock()
 # doesn't retry accounts on every single call either.
 _cache: dict[UUID, tuple[Optional[DhanCredentials], float]] = {}
 
+# Separate small cache for BYO OpenRouter keys (2026-09-16, news.py's AI
+# digest) - same TTL/shape reasoning as the Dhan cache above, just keyed
+# on a different secret.
+_openrouter_cache_lock = threading.Lock()
+_openrouter_cache: dict[UUID, tuple[Optional[str], float]] = {}
+
 
 def get_user_dhan_credentials(user_id: UUID) -> Optional[DhanCredentials]:
     """None if accounts has nothing stored for this user, or the internal
@@ -96,3 +102,34 @@ def get_user_dhan_credentials_strict(user_id: UUID) -> DhanCredentials:
     if not data.get("has_dhan"):
         raise RuntimeError(f"user {user_id} has no Dhan credentials configured - cannot place a real order on their behalf")
     return DhanCredentials(client_id=data["dhan_client_id"], access_token=data["dhan_access_token"], throttle_key=str(user_id))
+
+
+def get_user_openrouter_key(user_id: UUID) -> Optional[str]:
+    """BYO OpenRouter key (2026-09-16) - the news digest's counterpart to
+    get_user_dhan_credentials above. None if accounts has nothing stored,
+    or the internal call fails for any reason - news.py already treats a
+    missing key as "fall back to the platform OPENROUTER_API_KEY env var,
+    or skip the AI step entirely", same graceful-degradation convention
+    every other optional credential here uses."""
+    with _openrouter_cache_lock:
+        cached = _openrouter_cache.get(user_id)
+    if cached is not None and (time.monotonic() - cached[1]) < _CACHE_TTL_SECONDS:
+        return cached[0]
+
+    try:
+        resp = requests.get(
+            f"{settings.accounts_base_url}/internal/credentials/{user_id}/openrouter",
+            headers={"X-Internal-Secret": settings.internal_service_secret},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.exceptions.RequestException:
+        logger.warning("could not fetch OpenRouter key for user %s from accounts - falling back to platform default", user_id)
+        return None
+
+    result: Optional[str] = data.get("openrouter_api_key") if data.get("has_openrouter") else None
+
+    with _openrouter_cache_lock:
+        _openrouter_cache[user_id] = (result, time.monotonic())
+    return result

@@ -41,7 +41,7 @@ def _fake_recommendation(symbol: str) -> WeeklyRecommendation:
 
 
 def test_recommendations_route_skips_failing_symbol_without_failing_the_batch(monkeypatch):
-    def fake_run_symbol(symbol, as_of=None):
+    def fake_run_symbol(symbol, as_of=None, openrouter_api_key=None):
         if symbol == "BADSYM":
             raise ValueError("insufficient history for a stable weekly read")
         return _fake_recommendation(symbol)
@@ -59,7 +59,7 @@ def test_recommendations_route_skips_failing_symbol_without_failing_the_batch(mo
 def test_recommendations_route_defaults_to_starter_symbol_list(monkeypatch):
     seen = []
 
-    def fake_run_symbol(symbol, as_of=None):
+    def fake_run_symbol(symbol, as_of=None, openrouter_api_key=None):
         seen.append(symbol)
         return _fake_recommendation(symbol)
 
@@ -77,7 +77,7 @@ def test_recommendations_route_preserves_requested_order_despite_concurrency(mon
     must not end up later in the response."""
     delays = {"SLOW": 0.05, "FAST1": 0.0, "FAST2": 0.0}
 
-    def fake_run_symbol(symbol, as_of=None):
+    def fake_run_symbol(symbol, as_of=None, openrouter_api_key=None):
         time.sleep(delays[symbol])
         return _fake_recommendation(symbol)
 

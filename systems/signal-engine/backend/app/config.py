@@ -91,5 +91,14 @@ class Settings(BaseSettings):
     # always fetches regardless of this TTL.
     weekly_advisor_fundamentals_cache_days: int = 90
 
+    # BYO OpenRouter key (2026-09-16, app/adapters/accounts_client.py) -
+    # lets a fundamentals request use the calling user's own OpenRouter
+    # key (falls back to openrouter_api_key above when absent/unreachable)
+    # instead of always spending the platform one. Same
+    # INTERNAL_SERVICE_SECRET/ACCOUNTS_BASE_URL pair market-data's own
+    # accounts_client.py already uses - must match exactly.
+    internal_service_secret: str = "change-me-in-production"
+    accounts_base_url: str = "http://accounts-backend:8000"
+
 
 settings = Settings()

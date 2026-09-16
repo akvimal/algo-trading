@@ -133,12 +133,18 @@ def _capture_screenshot(symbol: str) -> bytes:
             browser.close()
 
 
-def _analyze_via_ai(symbol: str, screenshot: bytes) -> Optional[dict]:
+def _analyze_via_ai(symbol: str, screenshot: bytes, api_key: Optional[str] = None) -> Optional[dict]:
     """OpenRouter vision call. Returns None (never raises) on a missing key
     or any failure - the screenshot is still cached by the caller even
     when this fails, so the next request past the TTL just retries the AI
-    read against a fresh screenshot rather than losing the capture too."""
-    if not settings.openrouter_api_key:
+    read against a fresh screenshot rather than losing the capture too.
+
+    `api_key`: the requesting user's own BYO OpenRouter key (2026-09-16,
+    see app/adapters/accounts_client.get_user_openrouter_key) when one was
+    resolved; falls back to the platform-wide OPENROUTER_API_KEY env var
+    otherwise, same as before this feature."""
+    key = api_key or settings.openrouter_api_key
+    if not key:
         logger.info("weekly-advisor fundamentals: AI analysis not configured - set OPENROUTER_API_KEY")
         return None
 
@@ -146,7 +152,7 @@ def _analyze_via_ai(symbol: str, screenshot: bytes) -> Optional[dict]:
     try:
         resp = requests.post(
             OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
                 "model": settings.openrouter_model,
                 "messages": [
@@ -198,7 +204,7 @@ def _row_to_analysis(row: db_models.WeeklyAdvisorFundamentals) -> FundamentalAna
     )
 
 
-def get_fundamentals(symbol: str) -> Optional[FundamentalAnalysis]:
+def get_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None) -> Optional[FundamentalAnalysis]:
     """Cache-first: a row fetched within the last
     weekly_advisor_fundamentals_cache_days is returned as-is - no
     Playwright, no OpenRouter call. Past that TTL (or "first time", no row
@@ -224,7 +230,7 @@ def get_fundamentals(symbol: str) -> Optional[FundamentalAnalysis]:
             logger.warning("weekly-advisor fundamentals: screenshot capture failed for %s: %s", symbol, exc)
             return _row_to_analysis(row) if row is not None else None
 
-        analysis = _analyze_via_ai(symbol, screenshot)
+        analysis = _analyze_via_ai(symbol, screenshot, openrouter_api_key)
         now = datetime.now(timezone.utc)
         if row is None:
             row = db_models.WeeklyAdvisorFundamentals(symbol=symbol, screenshot=screenshot)

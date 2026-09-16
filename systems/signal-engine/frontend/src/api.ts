@@ -1,3 +1,8 @@
+// getAuthToken is only needed for the one route below that resolves a BYO
+// OpenRouter key server-side (fetchWeeklyAdvisorRecommendations) - every
+// other route in this file stays anonymous/open, unchanged.
+import { getAuthToken } from "./auth";
+
 // Free-form: only "in_house" is reserved/special (see backend
 // app/domain/models.py's SourceType) - anything else names an external
 // webhook provider (chartink, tradingview, or any new one).
@@ -2059,9 +2064,16 @@ export type WeeklyAdvisorSkipped = { symbol: string; reason: string };
 
 export type WeeklyAdvisorResponse = { recommendations: WeeklyRecommendation[]; skipped: WeeklyAdvisorSkipped[] };
 
+// Sends the caller's own bearer token (if logged in) so the backend can
+// resolve their BYO OpenRouter key for the fundamentals vote's AI read
+// (2026-09-16, see accounts_client.get_user_openrouter_key) - every other
+// call in this file stays anonymous, this is the only one that needs it.
 export async function fetchWeeklyAdvisorRecommendations(symbols?: string[]): Promise<WeeklyAdvisorResponse> {
   const params = symbols && symbols.length > 0 ? `?${new URLSearchParams({ symbols: symbols.join(",") })}` : "";
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations${params}`);
+  const token = getAuthToken();
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations${params}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
   return asJson(res, "GET /weekly-advisor/recommendations");
 }
 

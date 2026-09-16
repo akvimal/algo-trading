@@ -44,6 +44,7 @@ class CredentialsUpdate(BaseModel):
     dhan_access_token: Optional[str] = None
     delta_api_key: Optional[str] = None
     delta_api_secret: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
 
 
 # Deliberately never carries decrypted secrets - only presence flags and a
@@ -53,4 +54,5 @@ class CredentialsUpdate(BaseModel):
 class CredentialsOut(BaseModel):
     has_dhan: bool
     has_delta: bool
+    has_openrouter: bool
     dhan_client_id_masked: Optional[str] = None

@@ -45,3 +45,20 @@ CREATE TABLE IF NOT EXISTS accounts.broker_credentials (
     delta_api_secret_encrypted   TEXT,
     updated_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- BYO OpenRouter key (2026-09-16) - reuses this same table/row rather than
+-- a new one, even though OpenRouter isn't a broker: it's still "one user's
+-- own credential for an outside service", same shape as the four columns
+-- above. Powers both market-data's news digest and signal-engine's Weekly
+-- Advisor fundamentals read (both call OPENROUTER_URL directly, no shared
+-- cross-system code - see each service's own accounts_client.py). Unlike
+-- Dhan/Delta, the AI call this backs produces a result cached and shared
+-- across ALL users (news digest per underlying, fundamentals per symbol) -
+-- whichever user's request hits a stale/missing cache first pays for that
+-- refresh with their own key; everyone else reads the same cached result
+-- for free until it goes stale again. A user with no key configured here
+-- simply never triggers a refresh themselves (falls back to the platform
+-- OPENROUTER_API_KEY env var if set, otherwise degrades to no AI read -
+-- same "never break, just skip the AI step" convention news.py/
+-- screener_fetch.py already use for a missing key).
+ALTER TABLE accounts.broker_credentials ADD COLUMN IF NOT EXISTS openrouter_api_key_encrypted TEXT;

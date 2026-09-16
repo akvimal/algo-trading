@@ -20,10 +20,11 @@ def _mask(client_id: str | None) -> str | None:
 
 def _to_out(row: models.BrokerCredentials | None) -> CredentialsOut:
     if row is None:
-        return CredentialsOut(has_dhan=False, has_delta=False, dhan_client_id_masked=None)
+        return CredentialsOut(has_dhan=False, has_delta=False, has_openrouter=False, dhan_client_id_masked=None)
     return CredentialsOut(
         has_dhan=bool(row.dhan_client_id and row.dhan_access_token_encrypted),
         has_delta=bool(row.delta_api_key_encrypted and row.delta_api_secret_encrypted),
+        has_openrouter=bool(row.openrouter_api_key_encrypted),
         dhan_client_id_masked=_mask(row.dhan_client_id),
     )
 
@@ -57,6 +58,8 @@ def update_credentials(
         row.delta_api_key_encrypted = encrypt_secret(payload.delta_api_key)
     if payload.delta_api_secret is not None:
         row.delta_api_secret_encrypted = encrypt_secret(payload.delta_api_secret)
+    if payload.openrouter_api_key is not None:
+        row.openrouter_api_key_encrypted = encrypt_secret(payload.openrouter_api_key)
 
     db.commit()
     db.refresh(row)

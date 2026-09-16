@@ -32,7 +32,7 @@ class User(Base):
 class BrokerCredentials(Base):
     """One row per user, created lazily on first PUT /credentials - not
     seeded at signup (a fresh signup has none yet, see CredentialsOut's
-    has_dhan/has_delta flags). The four secret columns are Fernet
+    has_dhan/has_delta flags). The secret columns are Fernet
     ciphertext (app/domain/security.py's encrypt_secret/decrypt_secret),
     never plaintext at rest and never returned by any route."""
 
@@ -44,4 +44,5 @@ class BrokerCredentials(Base):
     dhan_access_token_encrypted = Column(Text)
     delta_api_key_encrypted = Column(Text)
     delta_api_secret_encrypted = Column(Text)
+    openrouter_api_key_encrypted = Column(Text)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())

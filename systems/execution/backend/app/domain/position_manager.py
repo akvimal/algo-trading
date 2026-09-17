@@ -1360,20 +1360,37 @@ def open_position(
         db.commit()
         return row
 
+    # Don't close positions_to_close yet - every rejection check between
+    # here and the new position's own final commit below (lot size,
+    # balance, a degenerate stop-loss, max_order_value, the daily-loss
+    # cap, a live-broker submission failure) calls db.commit() on its own
+    # rejection row, which would ALSO persist these positions as already-
+    # CLOSED if that mutation ran up front - a "flip" that silently
+    # destroyed the original leg without ever opening its replacement
+    # (reproduced live: an auto-trade reversal that failed the balance
+    # check still closed the position it was supposed to flip). Only the
+    # PROJECTED effect on available balance is computed here, for sizing;
+    # the real close (with full fee/interest netting via
+    # _net_pnl_with_costs) happens for real only once every rejection
+    # point has been passed - see the mirrored close loop further down.
+    projected_close_pnl = 0.0
     for pos in positions_to_close:
-        pos.exit_price = order.price
-        pos.exit_time = datetime.now(dt_timezone.utc)
         raw_pnl = compute_pnl(pos.action, float(pos.entry_price), order.price, float(pos.quantity))
-        _apply_realized_pnl(pos, capital_account, _net_pnl_with_costs(pos, order.price, raw_pnl), settings.usdinr_rate)
-        pos.status = "CLOSED"
-        pos.exit_reason = "counter_signal"
+        if pos.segment == "CRYPTO" and settings.usdinr_rate is not None:
+            raw_pnl *= settings.usdinr_rate
+        projected_close_pnl += raw_pnl
 
     # Sizing is capped by whatever's actually left in the account, not
     # just the account's configured capital_per_trade - a depleted
     # account sizes smaller (or rejects outright below) rather than
     # opening a position it can't afford. See docs/architecture.md
     # § 'Why paper-trading accounts are per-segment, not per-strategy'.
-    effective_capital = min(float(capital_account.capital_per_trade), float(capital_account.current_balance))
+    # Includes positions_to_close's PROJECTED close pnl (a stop-and-
+    # reverse's freed-up/charged balance affects what the new leg can
+    # afford), even though the close itself hasn't been applied yet.
+    effective_capital = min(
+        float(capital_account.capital_per_trade), float(capital_account.current_balance) + projected_close_pnl
+    )
     if order.segment == "CRYPTO":
         # capital_per_trade/current_balance are INR-denominated like every
         # other segment, but order.price (from Delta Exchange India) is
@@ -1626,6 +1643,17 @@ def open_position(
         liquidation_price=liquidation_price,
         mtf_interest_rate_pct=mtf_interest_rate_pct,
     )
+    # The real close, deferred from right after conflict resolution above -
+    # every rejection point between there and here returned before this
+    # line, so positions_to_close is only ever actually closed together
+    # with the new leg that replaces it, atomically, in one commit.
+    for pos in positions_to_close:
+        pos.exit_price = order.price
+        pos.exit_time = datetime.now(dt_timezone.utc)
+        raw_pnl = compute_pnl(pos.action, float(pos.entry_price), order.price, float(pos.quantity))
+        _apply_realized_pnl(pos, capital_account, _net_pnl_with_costs(pos, order.price, raw_pnl), settings.usdinr_rate)
+        pos.status = "CLOSED"
+        pos.exit_reason = "counter_signal"
     db.add(row)
     db.commit()
     if broker_order is not None:
@@ -1819,15 +1847,20 @@ def open_manual_position(
         db.commit()
         return row
 
+    # Don't close positions_to_close yet - same reasoning as open_position's
+    # own identical deferral (see its comment): every rejection check
+    # below commits its own rejection row, which would also persist these
+    # as already-CLOSED if that mutation ran up front. Only the PROJECTED
+    # balance effect is used for sizing here; the real close happens right
+    # before the final commit further down.
+    projected_close_pnl = 0.0
     for pos in positions_to_close:
-        pos.exit_price = price
-        pos.exit_time = datetime.now(dt_timezone.utc)
         raw_pnl = compute_pnl(pos.action, float(pos.entry_price), price, float(pos.quantity))
-        _apply_realized_pnl(pos, account, _net_pnl_with_costs(pos, price, raw_pnl), settings.usdinr_rate)
-        pos.status = "CLOSED"
-        pos.exit_reason = "counter_signal"
+        if pos.segment == "CRYPTO" and settings.usdinr_rate is not None:
+            raw_pnl *= settings.usdinr_rate
+        projected_close_pnl += raw_pnl
 
-    effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
+    effective_capital = min(float(account.capital_per_trade), float(account.current_balance) + projected_close_pnl)
     if segment == "CRYPTO":
         if settings.usdinr_rate is None:
             row = _reject_manual(
@@ -1998,6 +2031,15 @@ def open_manual_position(
         auto_traded=auto_traded,
         entry_interval=entry_interval,
     )
+    # The real close, deferred from right after conflict resolution above -
+    # see open_position's identical comment for why.
+    for pos in positions_to_close:
+        pos.exit_price = price
+        pos.exit_time = datetime.now(dt_timezone.utc)
+        raw_pnl = compute_pnl(pos.action, float(pos.entry_price), price, float(pos.quantity))
+        _apply_realized_pnl(pos, account, _net_pnl_with_costs(pos, price, raw_pnl), settings.usdinr_rate)
+        pos.status = "CLOSED"
+        pos.exit_reason = "counter_signal"
     db.add(row)
     db.commit()
     if broker_order is not None:

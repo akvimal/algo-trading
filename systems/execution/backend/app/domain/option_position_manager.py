@@ -380,27 +380,34 @@ def open_option_group(
         db.commit()
         return row
 
-    if groups_to_close:
-        legs_to_close = legs_by_group(db, groups_to_close)
-        for grp in groups_to_close:
-            grp_legs = legs_to_close.get(grp.id)
-            closed = (
-                grp_legs is not None
-                and "BUY" in grp_legs
-                and _close_group_at_cmp(
-                    grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, capital_account, "counter_signal", settings.usdinr_rate
-                )
+    # Don't actually close groups_to_close yet - every rejection point
+    # between here and the new group's own final commit below (balance, a
+    # degenerate stop-loss) calls db.commit() on its own rejection row,
+    # which would ALSO persist these groups as already-CLOSED if that
+    # mutation ran up front - the same imprecise-flip bug
+    # position_manager.open_position had (see its own comment). A missing
+    # quote still rejects right away below (nothing to project or close in
+    # that case); the real close happens for real only once every
+    # rejection point has been passed, right before the new group's commit.
+    legs_to_close = legs_by_group(db, groups_to_close) if groups_to_close else {}
+    projected_close_pnl = 0.0
+    for grp in groups_to_close:
+        projected_pnl = _project_group_close_pnl(grp, legs_to_close.get(grp.id), get_ltp_batch)
+        if projected_pnl is None:
+            row = _reject_group(
+                db, order, signal_id,
+                f"could not close conflicting option group {grp.id} (quote unavailable) - "
+                "counter_signal_policy='close_and_flip' requires closing it first",
             )
-            if not closed:
-                row = _reject_group(
-                    db, order, signal_id,
-                    f"could not close conflicting option group {grp.id} (quote unavailable) - "
-                    "counter_signal_policy='close_and_flip' requires closing it first",
-                )
-                db.commit()
-                return row
+            db.commit()
+            return row
+        if grp.segment == "CRYPTO" and settings.usdinr_rate is not None:
+            projected_pnl *= settings.usdinr_rate
+        projected_close_pnl += projected_pnl
 
-    effective_capital = min(float(capital_account.capital_per_trade), float(capital_account.current_balance))
+    effective_capital = min(
+        float(capital_account.capital_per_trade), float(capital_account.current_balance) + projected_close_pnl
+    )
     if order.segment == "CRYPTO":
         # Same reasoning as position_manager.open_position - net_debit
         # (from Delta Exchange India) is raw USD, capital_per_trade/
@@ -527,6 +534,28 @@ def open_option_group(
         status="OPEN",
         square_off_time=account.square_off_time,
     )
+    # The real close, deferred from right after conflict resolution above -
+    # see position_manager.open_position's identical comment for why. Each
+    # group was already confirmed closeable (quotes available) in the
+    # projection above; re-fetches a fresh quote at the actual close
+    # moment rather than reusing the (by now slightly stale) projected
+    # one. Still checks the return value - closeable a moment ago doesn't
+    # guarantee closeable now (a provider hiccup between the two calls) -
+    # rejecting cleanly here is strictly better than silently opening the
+    # new leg on top of a conflicting one still left open.
+    for grp in groups_to_close:
+        grp_legs = legs_to_close.get(grp.id)
+        closed = _close_group_at_cmp(
+            grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, capital_account, "counter_signal", settings.usdinr_rate
+        )
+        if not closed:
+            row = _reject_group(
+                db, order, signal_id,
+                f"could not close conflicting option group {grp.id} (quote unavailable) - "
+                "counter_signal_policy='close_and_flip' requires closing it first",
+            )
+            db.commit()
+            return row
     db.add(group)
 
     legs_to_write = [(long_leg_dict, long_symbol, long_premium, long_stop_loss_price, long_target_price)]
@@ -774,27 +803,26 @@ def open_manual_option_group(
         db.commit()
         return row
 
-    if groups_to_close:
-        legs_to_close = legs_by_group(db, groups_to_close)
-        for grp in groups_to_close:
-            grp_legs = legs_to_close.get(grp.id)
-            closed = (
-                grp_legs is not None
-                and "BUY" in grp_legs
-                and _close_group_at_cmp(
-                    grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, account, "counter_signal", settings.usdinr_rate
-                )
+    # Don't actually close groups_to_close yet - see open_option_group's
+    # identical comment for why (a rejection further below must never
+    # persist these groups as already-CLOSED with nothing replacing them).
+    legs_to_close = legs_by_group(db, groups_to_close) if groups_to_close else {}
+    projected_close_pnl = 0.0
+    for grp in groups_to_close:
+        projected_pnl = _project_group_close_pnl(grp, legs_to_close.get(grp.id), get_ltp_batch)
+        if projected_pnl is None:
+            row = _reject_manual_group(
+                db, user_id, signal_id, symbol, segment, action, strategy_type,
+                f"could not close conflicting option group {grp.id} (quote unavailable) - "
+                "counter_signal_policy='close_and_flip' requires closing it first",
             )
-            if not closed:
-                row = _reject_manual_group(
-                    db, user_id, signal_id, symbol, segment, action, strategy_type,
-                    f"could not close conflicting option group {grp.id} (quote unavailable) - "
-                    "counter_signal_policy='close_and_flip' requires closing it first",
-                )
-                db.commit()
-                return row
+            db.commit()
+            return row
+        if grp.segment == "CRYPTO" and settings.usdinr_rate is not None:
+            projected_pnl *= settings.usdinr_rate
+        projected_close_pnl += projected_pnl
 
-    effective_capital = min(float(account.capital_per_trade), float(account.current_balance))
+    effective_capital = min(float(account.capital_per_trade), float(account.current_balance) + projected_close_pnl)
     capital_unit = "USD" if segment == "CRYPTO" else "INR"
     if segment == "CRYPTO":
         if settings.usdinr_rate is None:
@@ -862,6 +890,21 @@ def open_manual_option_group(
         auto_traded=auto_traded,
         entry_interval=entry_interval,
     )
+    # The real close, deferred from right after conflict resolution above -
+    # see open_option_group's identical comment for why.
+    for grp in groups_to_close:
+        grp_legs = legs_to_close.get(grp.id)
+        closed = _close_group_at_cmp(
+            grp, grp_legs["BUY"], grp_legs.get("SELL"), get_ltp_batch, account, "counter_signal", settings.usdinr_rate
+        )
+        if not closed:
+            row = _reject_manual_group(
+                db, user_id, signal_id, symbol, segment, action, strategy_type,
+                f"could not close conflicting option group {grp.id} (quote unavailable) - "
+                "counter_signal_policy='close_and_flip' requires closing it first",
+            )
+            db.commit()
+            return row
     db.add(group)
 
     legs_to_write = [(long_leg_dict, long_symbol, long_premium)]
@@ -918,6 +961,35 @@ def submit_option_group_review(
     row.review_checklist = review_checklist
     db.commit()
     return row, None
+
+
+def _project_group_close_pnl(grp, legs: Optional[dict], get_ltp_batch: GetLtpBatch) -> Optional[float]:
+    """Read-only projection of what _close_group_at_cmp would realize for
+    `grp` right now, in its own native currency (pre-USDINR conversion) -
+    used ONLY for open_option_group/open_manual_option_group's
+    close_and_flip sizing check, so a stop-and-reverse's freed-up/charged
+    balance affects what the new leg can afford WITHOUT actually closing
+    anything yet (the real close happens later, right before the new
+    group's own commit - see those functions' own comments for why the
+    close itself is deferred that far). Mirrors _close_group_at_cmp's own
+    pnl math exactly, just without mutating `grp`/its legs/the account.
+    None if a live quote for either leg (or the BUY leg itself) is
+    missing - same "can't safely proceed" signal _close_group_at_cmp's own
+    False return means."""
+    if legs is None or "BUY" not in legs:
+        return None
+    long_leg = legs["BUY"]
+    short_leg = legs.get("SELL")
+    symbols = [long_leg.symbol] + ([short_leg.symbol] if short_leg else [])
+    quotes = get_ltp_batch(grp.exchange, symbols)
+    long_cmp = quotes.get(long_leg.symbol)
+    short_cmp = quotes.get(short_leg.symbol) if short_leg else 0.0
+    if long_cmp is None or (short_leg and short_cmp is None):
+        return None
+    combined_price = long_cmp - short_cmp
+    raw_pnl = (combined_price - float(grp.net_debit)) * float(grp.quantity)
+    close_fee = _close_delta_option_fee(grp.segment, None, float(grp.quantity), long_cmp, short_cmp)
+    return raw_pnl - float(grp.open_fee or 0) - (close_fee or 0)
 
 
 def _close_group_at_cmp(

@@ -21,9 +21,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
+from app.adapters.db import processing_models
 from app.config import settings
 from app.domain.generation import breakout, multi_condition, range_breakout
-from app.domain.generation.indicators import evaluate_regime_indicator, regime_indicator_warmup
+from app.domain.generation.indicators import compute_indicator, compute_indicator_signal, evaluate_regime_indicator, regime_indicator_warmup
 from app.domain.generation.models import WEEKDAY_NAMES
 from app.domain.generation.rule import (
     BreakoutRuleConfig,
@@ -33,7 +34,7 @@ from app.domain.generation.rule import (
     validate_indicator_params,
     validate_rule_config,
 )
-from app.domain.generation.rules import Bias, CandleClose, bars_needed, find_crossovers_since
+from app.domain.generation.rules import Bias, CandleClose, bars_needed, current_bias_at, find_crossovers_since
 
 logger = logging.getLogger(__name__)
 
@@ -623,18 +624,67 @@ def _run_one(
         db.add(run)
     run.last_checked_at = datetime.now(timezone.utc)
 
-    # Every crossover since the last one actually signaled, not just the
-    # newest bar - a 60s poll tick isn't guaranteed to align with the
-    # candle cadence (processing lag, or plain phase drift against the
-    # exchange's minute boundaries), so 2+ candles can complete between
-    # one tick and the next; comparing only the latest bar-pair would
-    # silently miss a crossover-then-reversal entirely contained in the
-    # skipped bars. Naturally bounded by this tick's own `candles` fetch
-    # (sized off the indicator's warmup, see bar_count above) - a strategy
-    # reactivated after a long pause backfills at most that window, not
-    # its entire history. See find_crossovers_since's own docstring
-    # (reproduced live 2026-08-21).
-    crossovers = find_crossovers_since(rule, indicator.type, indicator_params, candles, run.last_signal_candle_ts)
+    if run.pending_signal_id is not None:
+        # Resolve the outcome of whatever this run posted last tick before
+        # doing anything else - resolution happens asynchronously (a
+        # background Redis consumer, not inline in post_signal itself, see
+        # app/domain/processing/intake/core.py's create_signal_from_ingest/
+        # resolve_and_finalize_signal split), so its outcome was never
+        # knowable at post time, only now, a tick later. A transient
+        # failure (ResolvedOrder.retryable, e.g. market-data itself timed
+        # out or 5xx'd resolving the option chain/expiry) rewinds the
+        # cursor so the SAME bar gets re-evaluated below instead of being
+        # permanently skipped - reproduced live 2026-09-17 (a 502 from
+        # market-data's own /options/chain silently ate a flip). Anything
+        # else (resolved OK, or rejected for a structural reason that will
+        # just fail identically again - unknown/non-live strategy, outside
+        # its active window, no valid expiry today) leaves
+        # last_signal_candle_ts exactly as it already was, advanced past
+        # this bar when it was first posted - nothing to undo.
+        prior_order = (
+            db.query(processing_models.ResolvedOrder).filter_by(signal_id=run.pending_signal_id).one_or_none()
+        )
+        if prior_order is not None and prior_order.status == "rejected" and prior_order.retryable:
+            run.last_signal_candle_ts = run.pending_signal_prior_ts
+        run.pending_signal_id = None
+        run.pending_signal_prior_ts = None
+
+    if strategy.seed_on_activation and run.last_signal_candle_ts is None:
+        # Arm on the CURRENT trend rather than waiting for the next real
+        # flip - matches manual-trading's browser SuperTrend auto-trader's
+        # own "enter on arm" behavior, and works regardless of whether the
+        # underlying crossover happened moments ago or hours ago (e.g. at
+        # today's session open) - this reads whichever side of the
+        # indicator line price is CURRENTLY on, not "was there a fresh
+        # crossover". Keyed off last_signal_candle_ts (not "is this the
+        # first-ever tick") so a seed attempt that gets gated out (regime
+        # filter, active_windows/weekdays) RETRIES on every later tick
+        # instead of being permanently missed - a one-shot-on-first-tick
+        # check would silently give up forever the moment a gate blocked
+        # it once (reproduced: an ADX-gated strategy activated against the
+        # gate never got a second chance to seed). Once a signal actually
+        # posts (seeded or a real crossover), last_signal_candle_ts is set
+        # and this branch stops running for good, on this EngineRun row -
+        # see PATCH /strategies/{id}'s reset_engine_run for re-arming
+        # after a pause.
+        value_series = compute_indicator(indicator.type, indicator_params, candles)
+        signal_series = compute_indicator_signal(indicator.type, indicator_params, candles)
+        latest_index = len(candles) - 1
+        seeded_bias = current_bias_at(value_series, signal_series, latest_index)
+        crossovers = [(latest_index, seeded_bias)] if seeded_bias is not None else []
+    else:
+        # Every crossover since the last one actually signaled, not just the
+        # newest bar - a 60s poll tick isn't guaranteed to align with the
+        # candle cadence (processing lag, or plain phase drift against the
+        # exchange's minute boundaries), so 2+ candles can complete between
+        # one tick and the next; comparing only the latest bar-pair would
+        # silently miss a crossover-then-reversal entirely contained in the
+        # skipped bars. Naturally bounded by this tick's own `candles` fetch
+        # (sized off the indicator's warmup, see bar_count above) - a strategy
+        # reactivated after a long pause backfills at most that window, not
+        # its entire history. See find_crossovers_since's own docstring
+        # (reproduced live 2026-08-21).
+        crossovers = find_crossovers_since(rule, indicator.type, indicator_params, candles, run.last_signal_candle_ts)
     if not crossovers:
         return False
 
@@ -674,7 +724,8 @@ def _run_one(
             # simulated trade.
             price = candles[index].close
 
-        post_signal(
+        prior_ts = run.last_signal_candle_ts
+        result = post_signal(
             {
                 "strategy_id": str(strategy.id),
                 # For instrument_type='option', signal-processing's
@@ -713,6 +764,16 @@ def _run_one(
         # earlier, already-posted bar to be silently skipped or re-signaled.
         run.last_signal_candle_ts = datetime.fromisoformat(candles[index].timestamp)
         signaled_any = True
+        # Tracked for the retry check at the top of this function's NEXT
+        # call - only the LAST post of this tick is recoverable this way;
+        # an earlier one in the same multi-crossover backfill tick keeps
+        # today's fire-and-forget behavior (overwritten by the next
+        # iteration below), which is fine - a same-tick backfill is
+        # already a rare edge case (see find_crossovers_since's own
+        # docstring), and the most-recent flip is what actually matters
+        # for a live auto-trader.
+        run.pending_signal_id = uuid.UUID(result["signal_id"])
+        run.pending_signal_prior_ts = prior_ts
 
     return signaled_any
 

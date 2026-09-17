@@ -22,6 +22,7 @@ from app.domain.generation.rules import (
     CandleClose,
     bars_needed,
     build_crossover_bias_fn,
+    current_bias_at,
     evaluate,
     evaluate_crossover,
     evaluate_crossover_at,
@@ -105,6 +106,30 @@ def test_evaluate_crossover_at_index_zero_returns_none():
 
 def test_evaluate_crossover_at_negative_index_returns_none():
     assert evaluate_crossover_at([1.0], [1.0], -1) is None
+
+
+# --- current_bias_at: seed_on_activation's "current trend, no crossover required" read ----------
+
+
+def test_current_bias_at_bullish_when_value_above_signal():
+    # No crossover here (both bars already above) - current_bias_at reads
+    # the side, unlike evaluate_crossover_at which requires a fresh flip.
+    value = compute_rsi([10, 11, 10, 13, 20], period=2)
+    signal = compute_sma(value, period=2)
+    assert evaluate_crossover_at(value, signal, len(value) - 1) is None
+    assert current_bias_at(value, signal, len(value) - 1) == "bullish"
+
+
+def test_current_bias_at_bearish_when_value_below_signal():
+    value = compute_rsi([10, 11, 10, 13, 20, 15], period=2)
+    signal = compute_sma(value, period=2)
+    assert current_bias_at(value, signal, len(value) - 1) == "bearish"
+
+
+def test_current_bias_at_none_when_either_series_not_warmed_up():
+    value = compute_rsi([10, 11, 12], period=2)
+    signal = compute_sma(value, period=2)
+    assert current_bias_at(value, signal, 0) is None
 
 
 # --- build_crossover_bias_fn: the O(1)-per-bar precomputed replacement for evaluate() ----------

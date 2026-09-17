@@ -355,6 +355,13 @@ export type Strategy = {
   // weekdays-only) - independent of active_windows, same signal-
   // ACCEPTANCE-only scope. Empty array means unrestricted.
   active_weekdays: Weekday[];
+  // rule_config.type='crossover' only (harmlessly ignored otherwise) - on
+  // this strategy's first-ever engine tick for a given symbol, arm on the
+  // indicator's CURRENT bias instead of waiting for the next real
+  // crossover. Used by the Live Chart's server-side auto-trader (see
+  // AutoTradePanel.tsx) to match the old browser-only auto-trader's own
+  // "enter the current trend on arm" behavior.
+  seed_on_activation: boolean;
   status: StrategyStatus;
   // MAX(engine_runs.last_checked_at) across every symbol this strategy
   // scans - null if the engine has never ticked it yet (e.g. just
@@ -389,6 +396,7 @@ export type StrategyCreate = {
   // See Strategy's own comment above. Omitted = empty (unrestricted).
   active_windows?: ActiveWindow[];
   active_weekdays?: Weekday[];
+  seed_on_activation?: boolean;
 };
 
 // source_type/exchange aren't here - not editable after creation, see
@@ -426,6 +434,14 @@ export type StrategyEdit = {
   // fixed_lots above already established for a nullable field).
   active_windows?: ActiveWindow[];
   active_weekdays?: Weekday[];
+  seed_on_activation?: boolean;
+  // One-shot action, not a persisted field - deletes this strategy's
+  // EngineRun rows as a side effect of this same PATCH, so
+  // seed_on_activation actually re-fires on RE-arming after a pause (its
+  // own last_signal_candle_ts otherwise stays set forever once a signal
+  // has posted once). Default false/omitted - a plain status edit
+  // doesn't reset anything unless this is explicitly set.
+  reset_engine_run?: boolean;
 };
 
 // A simulated paper trade from POST /rules/{id}/backtest - entry on a

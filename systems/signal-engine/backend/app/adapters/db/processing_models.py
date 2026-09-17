@@ -7,7 +7,7 @@ column, update both places.
 
 import uuid
 
-from sqlalchemy import BigInteger, Column, ForeignKey, Numeric, Text, func
+from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -59,4 +59,6 @@ class ResolvedOrder(Base):
     price = Column(Numeric, nullable=False)
     status = Column(Text, nullable=False, default="pending")
     rejection_reason = Column(Text)
+    # status='rejected' only - see infra/postgres/init/01-signal-processing.sql's full comment.
+    retryable = Column(Boolean, nullable=False, default=False)
     resolved_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

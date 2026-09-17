@@ -12,15 +12,6 @@ import {
   updatePositionTags,
 } from "./api";
 import AutoTradePanel from "./AutoTradePanel";
-import {
-  type AutoTradeConfig,
-  clearAutoTradeState,
-  loadAutoTradeConfig,
-  loadAutoTradeOn,
-  saveAutoTradeConfig,
-  saveAutoTradeOn,
-  symbolKey,
-} from "./autoTrade";
 import ChartTradePanel from "./ChartTradePanel";
 import { type ChartContext, type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
 import { type PendingOrder, fetchUnderlyingLtp, fmt, fmtMoney, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
@@ -137,12 +128,11 @@ export default function LiveChartPage() {
   // trade panel can lock direction to it.
   const [trendInfo, setTrendInfo] = useState<IntervalTrend>({ trend: null, interval: "5min" });
   const [riskManaged, setRiskManaged] = useState<boolean>(() => storedFlag(RISK_MANAGED_STORAGE_KEY));
-  // Intraday auto-trader (SuperTrend flip -> market future + trailing
-  // stop, stop-and-reverse). Armed for ONE symbol at a time - a
-  // symbol-tab switch disarms it (see pick()). Default OFF: unlike the
-  // discipline aids above this places real orders, so it's opt-in.
-  const [autoTradeOn, setAutoTradeOn] = useState<boolean>(loadAutoTradeOn);
-  const [autoConfig, setAutoConfig] = useState<AutoTradeConfig>(loadAutoTradeConfig);
+  // Mirrors AutoTradePanel's own (server-side) armed status for the
+  // active symbol, purely for ChartTradePanel/SetupCardRow's display -
+  // AutoTradePanel owns the actual arm/disarm logic and config now, this
+  // is a read-only echo via its onArmedChange callback.
+  const [autoTradeOn, setAutoTradeOn] = useState(false);
   // The chart's own live price, so the trade panel shows exactly what the
   // chart shows instead of running a second, out-of-step LTP poll.
   const [chartLtp, setChartLtp] = useState<number | null>(null);
@@ -271,13 +261,14 @@ export default function LiveChartPage() {
 
   function pick(entry: SymbolEntry) {
     if (entry.symbol === active.symbol) return;
-    // Auto-trade is armed for one symbol only - switching disarms it. Any
-    // position it opened keeps its server-side trailing SuperTrend stop.
-    if (autoTradeOn) {
-      clearAutoTradeState(symbolKey(active.segment, active.symbol));
-      setAutoTradeOn(false);
-      saveAutoTradeOn(false);
-    }
+    // Auto-trade is now server-side, per (segment, symbol) - switching the
+    // chart's own symbol tab no longer disarms anything; AutoTradePanel
+    // just shows/arms whichever Strategy belongs to the newly-active
+    // symbol, independent of any other symbol's own armed Strategy. Reset
+    // the mirrored display flag though, so it doesn't show the PREVIOUS
+    // symbol's armed status for an instant before the new symbol's own
+    // status loads.
+    setAutoTradeOn(false);
     // A custom (non-fixed) symbol is deliberately NOT remembered as the
     // page's default - it's a one-off deep-link/lookup, not a desk switch.
     // Reloading the page without ?symbol= should return to the fixed desk.
@@ -299,25 +290,6 @@ export default function LiveChartPage() {
     if (!symbol) return;
     pick({ symbol, segment: "NSE" });
     setCustomSymbolInput("");
-  }
-
-  function toggleAutoTrade() {
-    setAutoTradeOn((v) => {
-      const next = !v;
-      saveAutoTradeOn(next);
-      // Clear this symbol's run state either way: on -> re-seed fresh
-      // (arm from "now", don't act on old flips); off -> forget the cursor.
-      clearAutoTradeState(symbolKey(active.segment, active.symbol));
-      return next;
-    });
-  }
-
-  function updateAutoConfig(c: AutoTradeConfig) {
-    setAutoConfig(c);
-    saveAutoTradeConfig(c);
-    // Any config change re-seeds the watcher (a different interval /
-    // SuperTrend has a different flip history).
-    clearAutoTradeState(symbolKey(active.segment, active.symbol));
   }
 
   function toggleFlag(key: string, setter: (fn: (v: boolean) => boolean) => void) {
@@ -539,16 +511,7 @@ export default function LiveChartPage() {
                     </span>
                   )}
 
-                <AutoTradePanel
-                  on={autoTradeOn}
-                  onToggle={toggleAutoTrade}
-                  config={autoConfig}
-                  onConfigChange={updateAutoConfig}
-                  segment={active.segment}
-                  symbol={active.symbol}
-                  account={account}
-                  setupTag={chartSetup}
-                />
+                <AutoTradePanel segment={active.segment} symbol={active.symbol} onArmedChange={setAutoTradeOn} />
               </div>
             }
           />

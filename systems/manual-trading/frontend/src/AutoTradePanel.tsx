@@ -1,540 +1,403 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
-  type Account,
   type ChartInterval,
-  type ManualOptionGroup,
-  type ManualPosition,
-  type MarketRegime,
+  type Indicator,
   type OptionStrikeMoneyness,
-  type ResolvedUnderlying,
+  type Rule,
   type Segment,
+  type Strategy,
+  createIndicator,
+  createRule,
+  createStrategy,
+  deleteIndicator,
+  deleteRule,
+  deleteStrategy,
   fetchCandleHistory,
-  fetchExecPositions,
-  fetchOptionGroups,
-  fetchRegime,
+  fetchIndicators,
+  fetchRules,
+  fetchStrategies,
+  updateIndicator,
+  updateRule,
+  updateStrategy,
 } from "./api";
 import {
-  AUTO_TRADE_MAX_RETRIES,
   type AutoTradeConfig,
-  type AutoTradeInstrument,
-  intervalMinutes,
-  loadAutoTradeState,
-  lookbackDaysFor,
-  saveAutoTradeState,
-  withinTimeWindow,
-  symbolKey,
+  type AutoTradeWindow,
+  DEFAULT_AUTO_TRADE_CONFIG,
+  autoTradeAdxIndicatorName,
+  autoTradeDmiIndicatorName,
+  autoTradeIndicatorName,
+  autoTradeStrategyName,
+  isValidHhmm,
+  loadAutoTradeConfig,
+  saveAutoTradeConfig,
 } from "./autoTrade";
-import { CRYPTO_OPTION_SYMBOLS, fetchUnderlyingLtp, fmt, placeManualOrder, resolveUnderlyingCached } from "./manualOrder";
-import { computeSupertrend, detectSupertrendFlips, type SupertrendFlip } from "./supertrend";
+import { CRYPTO_OPTION_SYMBOLS, fmt, formatCompact, resolveUnderlyingCached } from "./manualOrder";
+import { computeSupertrend } from "./supertrend";
 
-// The Intraday auto-trader panel + its watcher loop. Sits above
-// ChartTradePanel in LiveChartPage's .chart-trade-col. See autoTrade.ts
-// for the config/state model and docs/architecture.md § "Live chart -
-// Intraday auto-trader" for the full design.
+// The Intraday auto-trader panel - config + a thin status readout. The
+// watcher/order-placement itself is SERVER-SIDE (signal-engine's in-house
+// Rule engine, see autoTrade.ts's own module docstring): pressing "Auto-
+// trade: ON" provisions (find-or-creates, by name - see autoTrade.ts's
+// autoTradeStrategyName) an Indicator+Rule+Strategy trio there and flips
+// the Strategy to status='live'; pressing it again PATCHes status='paused'.
+// Nothing here runs a poll loop or places an order directly any more -
+// this component only reads back signal-engine's own state to show it.
 //
-// Watcher: every POLL_MS, fetch completed `interval` bars for the chart's
-// symbol, run the shared SuperTrend (supertrend.ts - literally the same
-// function the chart draws), and on arm (the current direction) or a NEW
-// flip (one past the seeded `lastActedBarTs`) place a MARKET order in that
-// direction:
-//   - future: a future with a server-trailed SuperTrend stop
-//   - option: a naked call (up) / naked put (down) at `moneyness` with a
-//     flat spot stop at the SuperTrend line
-// Stop-and-reverse comes for free either way: both execution manual paths
-// (open_manual_position / open_manual_option_group) run
-// counter_signal_policy='close_and_flip', so an opposite open
-// position/group is closed atomically when the new order lands.
-//
-// This component is rendered by LiveChartPage, which does NOT remount on a
-// symbol-tab switch - but auto-trade is deliberately disarmed on a switch
-// (LiveChartPage.pick), so "one armed symbol at a time" holds and there's
-// no orphaned-watcher problem. An already-open position keeps its
-// server-side trailing stop regardless.
-
-const POLL_MS = 15_000;
-// Ignore a bar until this long past its scheduled close - the provider
-// can still be finalising the most recent candle's OHLC (same reason
-// signal-engine's engine.py waits breakout_ltf_settle_seconds; a touch
-// more here since we read market-data's cache, not Dhan directly).
-const SETTLE_BUFFER_MS = 10_000;
+// One Strategy per (segment, symbol) - switching the chart's symbol just
+// shows/arms a DIFFERENT Strategy, it does NOT disarm whatever's already
+// armed elsewhere (unlike the old browser-only version, which could only
+// ever run one symbol at a time and died on tab close) - see
+// docs/architecture.md § "Live chart - Intraday auto-trader".
 
 const INTERVAL_OPTIONS: ChartInterval[] = ["1min", "3min", "5min", "15min", "30min", "60min"];
 const MONEYNESS_OPTIONS: OptionStrikeMoneyness[] = ["ITM2", "ITM1", "ATM", "OTM1", "OTM2"];
+// Sensible fixed defaults for the ADX-gate's regime indicators - not
+// exposed in this panel's UI (it's one checkbox, "ADX gate — trend must
+// agree", same as before) since tuning them isn't this panel's job; edit
+// the provisioned Indicator rows directly in signal-engine's own
+// Indicators screen if you need something other than these.
+const ADX_GATE_PARAMS = { period: 14, trend_threshold: 20 };
+const DMI_GATE_PARAMS = { period: 14 };
+
+const STATUS_POLL_MS = 20_000;
+// How long a candle series to fetch for the read-only trend preview below
+// the toggle - generous enough for the SuperTrend warmup at any offered
+// interval, not tied to what the server-side Rule actually uses (it fetches
+// its own window independently).
+function previewLookbackDays(interval: ChartInterval): number {
+  return { "1min": 3, "3min": 6, "5min": 10, "15min": 30, "30min": 45, "60min": 75 }[interval];
+}
 
 function ymdLocal(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-type Bar = { timestamp: number; open: number; high: number; low: number; close: number };
-
-type Phase = "idle" | "seeding" | "watching" | "firing" | "error" | "halted";
-
-type WatchStatus = {
-  phase: Phase;
-  message: string;
-  dir: "up" | "down" | null;
-  line: number | null;
-};
-
-async function todayRealizedManualPnl(segment: Segment): Promise<number> {
-  try {
-    const closed = await fetchExecPositions({ segment, status: "CLOSED", manualOnly: true, limit: 100 });
-    const today = ymdLocal(new Date());
-    return closed
-      .filter((p) => p.exit_time != null && ymdLocal(new Date(p.exit_time)) === today)
-      .reduce((s, p) => s + (p.pnl ?? 0), 0);
-  } catch {
-    return 0;
-  }
-}
+type TrendPreview = { dir: "up" | "down"; line: number } | null;
 
 export default function AutoTradePanel({
-  on,
-  onToggle,
-  config,
-  onConfigChange,
   segment,
   symbol,
-  account,
-  setupTag,
+  onArmedChange,
 }: {
-  on: boolean;
-  onToggle: () => void;
-  config: AutoTradeConfig;
-  onConfigChange: (c: AutoTradeConfig) => void;
   segment: Segment;
   symbol: string;
-  account: Account | null;
-  // Setup tag from the SetupCardRow below the chart - stamped on every
-  // auto-trade fill's journal. "" = none.
-  setupTag: string;
+  // Read-only echo of this panel's own armed status for this symbol, for
+  // a parent that wants to reflect it elsewhere (e.g. ChartTradePanel's
+  // own display) - this panel still owns all the actual arm/disarm logic.
+  // No `account` prop any more - the old client-side daily-loss halt (see
+  // git history's AutoTradePanel.tsx) doesn't have a server-side
+  // equivalent yet; this is a known gap, not carried over silently.
+  onArmedChange?: (armed: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<WatchStatus | null>(null);
-
   const sym = symbol.trim().toUpperCase();
   // Delta only lists options for BTCUSD/ETHUSD; every NSE/MCX symbol here
   // has an option chain. Mirrors ChartTradePanel's own `optionEligible`.
   const optionEligible = segment !== "CRYPTO" || CRYPTO_OPTION_SYMBOLS.includes(sym);
-  // Force back to Future when the current symbol has no option chain.
-  useEffect(() => {
-    if (!optionEligible && config.instrument === "option") {
-      onConfigChange({ ...config, instrument: "future" });
-    }
-  }, [optionEligible, config, onConfigChange]);
-  const instrument: AutoTradeInstrument = optionEligible ? config.instrument : "future";
 
-  // Draft config strings so a half-typed number doesn't fight the parse.
-  const [draft, setDraft] = useState(() => ({
-    period: String(config.period),
-    multiplier: String(config.multiplier),
-    lots: String(config.lots),
+  const [open, setOpen] = useState(false);
+  const [strategyRow, setStrategyRow] = useState<Strategy | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<AutoTradeConfig>(() => loadAutoTradeConfig());
+  const [trend, setTrend] = useState<TrendPreview>(null);
+  // In-page Yes/No for "Clear config" (not window.confirm - a native
+  // dialog blocks the whole tab's event loop, same reasoning
+  // WorkspacePage.tsx's own confirmRemoveId already established) - a
+  // destructive action (deletes the provisioned Strategy/Rule/Indicator
+  // rows), so it asks first.
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const armed = strategyRow?.status === "live";
+  const instrument = optionEligible ? draft.instrument : "future";
+
+  useEffect(() => {
+    onArmedChange?.(armed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [armed]);
+
+  // Draft numeric fields as strings so a half-typed number doesn't fight
+  // the parse - same pattern account/strategy edit forms elsewhere use.
+  const [numDraft, setNumDraft] = useState(() => ({
+    period: String(draft.period),
+    multiplier: String(draft.multiplier),
+    lots: String(draft.lots),
   }));
   useEffect(() => {
-    setDraft({ period: String(config.period), multiplier: String(config.multiplier), lots: String(config.lots) });
-  }, [config.period, config.multiplier, config.lots]);
+    setNumDraft({ period: String(draft.period), multiplier: String(draft.multiplier), lots: String(draft.lots) });
+  }, [draft.period, draft.multiplier, draft.lots]);
 
-  function commitDraft() {
-    const period = Math.round(Number(draft.period));
-    const multiplier = Number(draft.multiplier);
-    const lots = Math.round(Number(draft.lots));
-    onConfigChange({
-      ...config,
-      period: Number.isFinite(period) && period >= 2 && period <= 100 ? period : config.period,
-      multiplier: Number.isFinite(multiplier) && multiplier >= 0.5 && multiplier <= 20 ? multiplier : config.multiplier,
-      lots: Number.isFinite(lots) && lots >= 1 && lots <= 100000 ? lots : config.lots,
+  function commitConfig(patch: Partial<AutoTradeConfig>) {
+    setDraft((d) => {
+      const next = { ...d, ...patch };
+      saveAutoTradeConfig(next);
+      return next;
     });
   }
 
-  // --- ADX / regime gate: poll GET /regime for the auto-trade interval so
-  // a flip can be checked against "trending IN this direction". Only while
-  // armed AND the gate is on; a ref so the watcher reads it without a
-  // re-run. Slow poll - regime moves on the bar cadence, not tick-to-tick.
-  const [regime, setRegime] = useState<MarketRegime | null>(null);
-  const regimeRef = useRef<MarketRegime | null>(null);
-  regimeRef.current = regime;
-  useEffect(() => {
-    if (!on || !config.adxGate) {
-      setRegime(null);
-      return;
+  function commitNumDraft() {
+    const period = Math.round(Number(numDraft.period));
+    const multiplier = Number(numDraft.multiplier);
+    const lots = Math.round(Number(numDraft.lots));
+    commitConfig({
+      period: Number.isFinite(period) && period >= 2 && period <= 100 ? period : draft.period,
+      multiplier: Number.isFinite(multiplier) && multiplier >= 0.5 && multiplier <= 20 ? multiplier : draft.multiplier,
+      lots: Number.isFinite(lots) && lots >= 1 && lots <= 100000 ? lots : draft.lots,
+    });
+  }
+
+  function addWindow() {
+    commitConfig({ windows: [...draft.windows, { start: "09:15", end: "15:15" }] });
+  }
+  function updateWindow(i: number, patch: Partial<AutoTradeWindow>) {
+    commitConfig({ windows: draft.windows.map((w, idx) => (idx === i ? { ...w, ...patch } : w)) });
+  }
+  function removeWindow(i: number) {
+    commitConfig({ windows: draft.windows.filter((_, idx) => idx !== i) });
+  }
+
+  // --- Status: does a live/paused auto-trade Strategy already exist for
+  // (segment, symbol)? Also reconstructs the config form from it, so
+  // reopening the chart on an already-armed symbol shows what's actually
+  // running, not a stale local draft. ---
+  const loadingRef = useRef(false);
+  async function loadStatus(repopulateDraft: boolean) {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const [strategies, rules] = await Promise.all([fetchStrategies("in_house"), fetchRules()]);
+      const name = autoTradeStrategyName(segment, sym);
+      const row = strategies.find((s) => s.name === name) ?? null;
+      setStrategyRow(row);
+      if (row && repopulateDraft) {
+        const rule = row.rule_id ? (rules.find((r) => r.id === row.rule_id) ?? null) : null;
+        const next: AutoTradeConfig = {
+          instrument: row.instrument_type === "option" ? "option" : "future",
+          moneyness: row.option_strike_moneyness,
+          period: row.stop_loss_indicator_params?.period ?? DEFAULT_AUTO_TRADE_CONFIG.period,
+          multiplier: row.stop_loss_indicator_params?.multiplier ?? DEFAULT_AUTO_TRADE_CONFIG.multiplier,
+          interval: (rule?.interval as ChartInterval) ?? DEFAULT_AUTO_TRADE_CONFIG.interval,
+          lots: row.fixed_lots ?? DEFAULT_AUTO_TRADE_CONFIG.lots,
+          adxGate: (rule?.regime_indicator_ids.length ?? 0) > 0,
+          windows: row.active_windows,
+        };
+        setDraft(next);
+        saveAutoTradeConfig(next);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to read auto-trade status");
+    } finally {
+      loadingRef.current = false;
     }
+  }
+
+  useEffect(() => {
+    setStrategyRow(null);
+    setError(null);
+    setLoadingStatus(true);
+    void loadStatus(true).finally(() => setLoadingStatus(false));
+    const id = window.setInterval(() => void loadStatus(false), STATUS_POLL_MS);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segment, sym]);
+
+  // --- Read-only trend preview (not decision-driving - the server-side
+  // Rule fetches and evaluates its own candles independently). ---
+  useEffect(() => {
     let cancelled = false;
     async function poll() {
       try {
-        const r = await resolveUnderlyingCached(segment, sym);
-        const rg = await fetchRegime(r.chart_exchange, r.chart_symbol, config.interval);
-        if (!cancelled) setRegime(rg);
+        const resolved = await resolveUnderlyingCached(segment, sym);
+        const to = new Date();
+        const from = new Date(to.getTime() - previewLookbackDays(draft.interval) * 86_400_000);
+        const candles = await fetchCandleHistory(resolved.chart_exchange, resolved.chart_symbol, draft.interval, ymdLocal(from), ymdLocal(to));
+        if (cancelled || candles.length < draft.period + 2) return;
+        const st = computeSupertrend(candles, draft.period, draft.multiplier);
+        const last = st[st.length - 1];
+        if (last) setTrend({ dir: last.dir, line: last.line });
       } catch {
-        /* keep last */
+        /* keep last preview on a transient failure */
       }
     }
     void poll();
-    const id = window.setInterval(() => void poll(), 60_000);
+    const id = window.setInterval(() => void poll(), STATUS_POLL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [on, config.adxGate, config.interval, segment, sym]);
+  }, [segment, sym, draft.interval, draft.period, draft.multiplier]);
 
-  // --- The watcher loop (only while armed). ---
-  const firingRef = useRef(false);
-  // Current setup tag, read at fire time - a ref so changing it doesn't
-  // re-run the effect (which would re-seed / re-fire the on-arm entry).
-  const setupTagRef = useRef(setupTag);
-  setupTagRef.current = setupTag;
-  // Retry counter for the ON-ARM entry (which persists no state until it
-  // lands - a rejected seed just re-seeds next tick). Non-seed flip
-  // retries live in the persisted run state instead.
-  const seedRetriesRef = useRef(0);
-  useEffect(() => {
-    if (!on) {
-      setStatus(null);
+  // --- Provisioning: find-or-create the Indicator(s)/Rule/Strategy trio,
+  // then flip the Strategy live. Idempotent by name (autoTrade.ts's own
+  // naming scheme) - re-arming after a config change updates the SAME
+  // rows rather than leaving orphaned old ones behind. ---
+  async function findOrCreateIndicator(
+    existing: Indicator[],
+    name: string,
+    type: Indicator["type"],
+    params: Indicator["params"],
+  ): Promise<string> {
+    const found = existing.find((i) => i.name === name && i.type === type);
+    if (found) {
+      await updateIndicator(found.id, { params });
+      return found.id;
+    }
+    return (await createIndicator({ name, type, params })).id;
+  }
+
+  async function armAutoTrade() {
+    if (draft.windows.some((w) => !isValidHhmm(w.start) || !isValidHhmm(w.end) || w.end <= w.start)) {
+      setError("every window needs a valid start time strictly before its end time");
       return;
     }
-    seedRetriesRef.current = 0;
-    const key = symbolKey(segment, symbol);
-    const iv = config.interval;
-    const ivMs = intervalMinutes(iv) * 60_000;
-    let cancelled = false;
+    setBusy(true);
+    setError(null);
+    try {
+      const [indicators, rules, strategies] = await Promise.all([fetchIndicators(), fetchRules(), fetchStrategies("in_house")]);
 
-    async function completedBars(): Promise<Bar[] | null> {
-      let resolved: ResolvedUnderlying;
-      try {
-        resolved = await resolveUnderlyingCached(segment, sym);
-      } catch {
-        return null;
-      }
-      const to = new Date();
-      const from = new Date(to.getTime() - lookbackDaysFor(iv) * 86_400_000);
-      let candles: Awaited<ReturnType<typeof fetchCandleHistory>>;
-      try {
-        candles = await fetchCandleHistory(resolved.chart_exchange, resolved.chart_symbol, iv, ymdLocal(from), ymdLocal(to));
-      } catch {
-        return null;
-      }
-      const now = Date.now();
-      return candles
-        .map((c) => ({
-          timestamp: Date.parse(c.timestamp),
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        }))
-        .filter((b) => Number.isFinite(b.timestamp))
-        .sort((a, b) => a.timestamp - b.timestamp)
-        .filter((b) => now - b.timestamp >= ivMs + SETTLE_BUFFER_MS);
-    }
+      const stIndicatorId = await findOrCreateIndicator(indicators, autoTradeIndicatorName(segment, sym), "supertrend", {
+        period: draft.period,
+        multiplier: draft.multiplier,
+      });
 
-    // The effective instrument for THIS symbol - CRYPTO options only exist
-    // for BTCUSD/ETHUSD (matches ChartTradePanel's optionEligible).
-    const instr: AutoTradeInstrument =
-      segment !== "CRYPTO" || CRYPTO_OPTION_SYMBOLS.includes(sym) ? config.instrument : "future";
-
-    async function executeFlip(flip: SupertrendFlip): Promise<{ rejected: boolean; skipped: boolean; reason: string | null }> {
-      const desired: "BUY" | "SELL" = flip.direction === "up" ? "BUY" : "SELL";
-      const price = await fetchUnderlyingLtp(segment, sym);
-
-      if (instr === "option") {
-        // Naked call (up / BUY) or naked put (down / SELL). An open group
-        // in the OPPOSITE direction is closed by execution itself
-        // (counter_signal_policy='close_and_flip'); one in the SAME
-        // direction would pyramid (add_position), so skip that.
-        let groups: ManualOptionGroup[] = [];
-        try {
-          groups = await fetchOptionGroups({ segment, status: "OPEN", manualOnly: true });
-        } catch {
-          groups = [];
-        }
-        const mine = groups.filter((g) => g.underlying_symbol.toUpperCase() === sym);
-        if (mine.some((g) => g.action === desired)) {
-          return { rejected: false, skipped: true, reason: `Already holding a naked ${desired === "BUY" ? "call" : "put"} — no action.` };
-        }
-        const result = await placeManualOrder({
-          segment,
-          symbol: sym,
-          action: desired,
-          strategy: "naked",
-          moneyness: config.moneyness,
-          orderType: "market",
-          entryPrice: price,
-          quantity: config.lots,
-          // Flat spot stop at the SuperTrend line - execution has no
-          // method/trailing SL for options, so it doesn't trail (the
-          // opposite flip is the real exit anyway).
-          stop: flip.line,
-          target: null,
-          trendFollowed: false,
-          riskManaged: false,
-          setupTag: setupTagRef.current || null,
-        autoTraded: true,
-          confidence: null,
-          entryInterval: iv,
-        });
-        return { rejected: result.rejected, skipped: false, reason: result.reason };
+      let regimeIndicatorIds: string[] = [];
+      if (draft.adxGate) {
+        const adxId = await findOrCreateIndicator(indicators, autoTradeAdxIndicatorName(segment, sym), "adx", ADX_GATE_PARAMS);
+        const dmiId = await findOrCreateIndicator(indicators, autoTradeDmiIndicatorName(segment, sym), "dmi_direction", DMI_GATE_PARAMS);
+        regimeIndicatorIds = [adxId, dmiId];
       }
 
-      // --- future ---
-      let positions: ManualPosition[] = [];
-      try {
-        positions = await fetchExecPositions({ segment, status: "OPEN", manualOnly: true });
-      } catch {
-        positions = [];
-      }
-      // A manual future persists its resolved contract symbol (not the
-      // bare underlying) - prefix-match, and exclude option legs.
-      const mine = positions.filter(
-        (p) => p.option_group_id == null && p.symbol.toUpperCase().startsWith(sym),
-      );
-      if (mine.some((p) => p.action === desired)) {
-        return { rejected: false, skipped: true, reason: `Already ${desired === "BUY" ? "Long" : "Short"} — no action.` };
-      }
-      const result = await placeManualOrder({
+      const ruleName = autoTradeStrategyName(segment, sym);
+      const existingRule: Rule | undefined = rules.find((r) => r.name === ruleName);
+      const ruleFields = {
+        name: ruleName,
         segment,
-        symbol: sym,
-        action: desired,
-        strategy: "future",
-        moneyness: "ATM",
-        orderType: "market",
-        entryPrice: price,
-        quantity: config.lots,
-        stop: null,
-        target: null,
-        trendFollowed: false,
-        riskManaged: false,
-        setupTag: setupTagRef.current || null,
-        autoTraded: true,
-        confidence: null,
-        entryInterval: iv,
-        // Server-trailed SuperTrend stop - keeps working with the tab
-        // closed, and re-anchors to the same line the chart draws.
-        slConfig: {
-          stop_loss_method: "indicator",
-          stop_loss_indicator_type: "supertrend",
-          stop_loss_indicator_params: { period: config.period, multiplier: config.multiplier },
-          stop_loss_interval: iv,
-          trailing_stop_enabled: true,
-        },
-      });
-      return { rejected: result.rejected, skipped: false, reason: result.reason };
-    }
-
-    async function tick() {
-      if (cancelled || firingRef.current) return;
-      const bars = await completedBars();
-      if (cancelled || bars == null) return;
-      if (bars.length < config.period + 2) {
-        setStatus({ phase: "error", message: `Not enough completed ${iv} bars yet (${bars.length}).`, dir: null, line: null });
-        return;
-      }
-      const st = computeSupertrend(bars, config.period, config.multiplier);
-      const cur = st[st.length - 1] ?? null;
-      const flips = detectSupertrendFlips(bars, config.period, config.multiplier);
-      const lastBar = bars[bars.length - 1];
-      const latestFlipTs = flips.length ? flips[flips.length - 1].barTs : 0;
-
-      const state = loadAutoTradeState(key);
-      const seeding = state == null;
-
-      // Daily-loss safety net (halts until toggled off/on) - checked
-      // before an on-arm entry too, so being over budget never opens one.
-      if (account?.max_daily_loss != null && account.max_daily_loss > 0) {
-        const realized = await todayRealizedManualPnl(segment);
-        if (cancelled) return;
-        if (realized <= -account.max_daily_loss) {
-          setStatus({
-            phase: "halted",
-            message: `Daily loss budget reached (${fmt(realized)} / ${fmt(-account.max_daily_loss)}). Auto-trade halted — toggle off and on to resume.`,
-            dir: cur?.dir ?? null,
-            line: cur?.line ?? null,
-          });
-          return;
-        }
-      }
-
-      // What to act on this tick:
-      //  - seeding + a current trend -> enter it NOW (synthesize a flip
-      //    from the latest completed bar; executeFlip no-ops if we're
-      //    already positioned that way). Stop-and-reverse then continues
-      //    from the real flips.
-      //  - otherwise -> the most recent flip past the dedupe cursor, if any
-      //    (an older un-acted flip would have been reversed straight back).
-      let act: { flip: SupertrendFlip; seed: boolean } | null = null;
-      if (seeding) {
-        if (cur) {
-          act = {
-            seed: true,
-            flip: { index: bars.length - 1, barTs: lastBar.timestamp, direction: cur.dir, line: cur.line, close: lastBar.close },
-          };
-        }
-      } else {
-        const fresh = flips.filter((f) => f.barTs > state.lastActedBarTs);
-        if (fresh.length > 0) act = { seed: false, flip: fresh[fresh.length - 1] };
-      }
-
-      if (act == null) {
-        // Nothing to act on - seed the cursor (if seeding) and just
-        // refresh the status line.
-        if (seeding) {
-          seedRetriesRef.current = 0;
-          saveAutoTradeState(key, { armedAt: Date.now(), lastActedBarTs: latestFlipTs });
-        }
-        setStatus({
-          phase: "watching",
-          message: seeding
-            ? `Armed on ${iv} SuperTrend(${config.period}, ${config.multiplier}) — no trend yet, waiting for a flip.`
-            : `Watching ${iv} SuperTrend(${config.period}, ${config.multiplier}). Trend ${cur?.dir === "up" ? "up" : cur?.dir === "down" ? "down" : "—"}${cur ? ` · line ${fmt(cur.line)}` : ""}.`,
-          dir: cur?.dir ?? null,
-          line: cur?.line ?? null,
-        });
-        return;
-      }
-
-      const { flip, seed } = act;
-
-      // --- Gates: a flip that clears these is acted on; one that doesn't
-      // is SKIPPED (cursor advances - don't chase it once conditions
-      // line up later without a fresh flip). ---
-      let gateBlock: string | null = null;
-      if (config.windowStart && config.windowEnd && !withinTimeWindow(config.windowStart, config.windowEnd)) {
-        gateBlock = `outside the ${config.windowStart}–${config.windowEnd} window`;
-      } else if (config.adxGate) {
-        const want = flip.direction === "up" ? "trending_up" : "trending_down";
-        const rg = regimeRef.current;
-        if (rg == null) gateBlock = `${iv} regime not read yet`;
-        else if (rg.regime !== want)
-          gateBlock = `${iv} regime is ${rg.regime.replace("_", " ")} (ADX ${Math.round(rg.adx)}), need ${want.replace("_", " ")}`;
-      }
-      if (gateBlock) {
-        seedRetriesRef.current = 0;
-        saveAutoTradeState(key, {
-          armedAt: seeding ? Date.now() : state!.armedAt,
-          lastActedBarTs: seed ? latestFlipTs : flip.barTs,
-        });
-        setStatus({
-          phase: "watching",
-          message: `Skipped ${flip.direction === "up" ? "up" : "down"}-flip @ ${fmt(flip.close)} — ${gateBlock}.`,
-          dir: cur?.dir ?? null,
-          line: cur?.line ?? null,
-        });
-        return;
-      }
-
-      // "Long"/"Short" for a future, "naked call"/"naked put" for an option.
-      const posLabel =
-        instr === "option"
-          ? flip.direction === "up"
-            ? "a naked call"
-            : "a naked put"
-          : flip.direction === "up"
-            ? "Long"
-            : "Short";
-      firingRef.current = true;
-      setStatus({
-        phase: "firing",
-        message: seed
-          ? `Arming — entering ${posLabel} on the current ${iv} SuperTrend @ ${fmt(flip.close)}…`
-          : `SuperTrend flipped ${flip.direction === "up" ? "up → BUY" : "down → SELL"} @ ${fmt(flip.close)} — placing…`,
-        dir: flip.direction,
-        line: flip.line,
-      });
-      // A rejected / errored order - retry on later ticks rather than
-      // advancing past the flip (transient NSE quote timeouts are common,
-      // and a rejected stop-and-reverse leaves the OLD position open the
-      // wrong way). Bounded by AUTO_TRADE_MAX_RETRIES so a permanent
-      // rejection (balance, validation) doesn't loop forever.
-      const onFailure = (reason: string) => {
-        if (seed) {
-          seedRetriesRef.current += 1;
-          const n = seedRetriesRef.current;
-          if (n >= AUTO_TRADE_MAX_RETRIES) {
-            seedRetriesRef.current = 0;
-            saveAutoTradeState(key, { armedAt: Date.now(), lastActedBarTs: latestFlipTs });
-            setStatus({ phase: "error", message: `Gave up entering after ${n} tries: ${reason}. Waiting for the next flip.`, dir: flip.direction, line: flip.line });
-          } else {
-            // No state saved -> next tick re-seeds and retries the entry.
-            setStatus({ phase: "error", message: `Entry rejected (${reason}) — retrying (${n}/${AUTO_TRADE_MAX_RETRIES}).`, dir: flip.direction, line: flip.line });
-          }
-          return;
-        }
-        const s = state as NonNullable<typeof state>;
-        const attempts = (s.retryBarTs === flip.barTs ? (s.retryCount ?? 0) : 0) + 1;
-        if (attempts >= AUTO_TRADE_MAX_RETRIES) {
-          saveAutoTradeState(key, { armedAt: s.armedAt, lastActedBarTs: flip.barTs });
-          setStatus({
-            phase: "error",
-            message: `Gave up reversing after ${attempts} tries: ${reason}. Your position from the previous flip is still open — square it off manually if it's against the trend.`,
-            dir: flip.direction,
-            line: flip.line,
-          });
-        } else {
-          saveAutoTradeState(key, { armedAt: s.armedAt, lastActedBarTs: s.lastActedBarTs, retryBarTs: flip.barTs, retryCount: attempts });
-          setStatus({
-            phase: "error",
-            message: `Reverse rejected (${reason}) — retrying (${attempts}/${AUTO_TRADE_MAX_RETRIES}). Your position from the previous flip is still live and now against the trend.`,
-            dir: flip.direction,
-            line: flip.line,
-          });
-        }
+        underlying: sym,
+        underlying_type: "symbol" as const,
+        interval: draft.interval,
+        rule_config: { type: "crossover" as const, indicator_id: stIndicatorId },
+        regime_indicator_ids: regimeIndicatorIds,
       };
+      const ruleId = existingRule ? (await updateRule(existingRule.id, ruleFields)).id : (await createRule(ruleFields)).id;
 
-      try {
-        const result = await executeFlip(flip);
-        if (result.rejected) {
-          onFailure(result.reason ?? "order rejected");
-          return;
-        }
-        // Settled OK (placed or skipped) - advance the cursor, clear retries.
-        seedRetriesRef.current = 0;
-        saveAutoTradeState(key, {
-          armedAt: seeding ? Date.now() : (state as NonNullable<typeof state>).armedAt,
-          lastActedBarTs: seed ? latestFlipTs : flip.barTs,
-        });
-        if (result.skipped) {
-          setStatus({ phase: "watching", message: result.reason ?? "Skipped.", dir: flip.direction, line: flip.line });
-        } else {
-          setStatus({
-            phase: "watching",
-            message: `In ${posLabel} · ${config.lots} lot(s)${seed ? " (armed at current trend)" : ` from the ${iv} flip`} @ ${fmt(flip.close)}. ${
-              instr === "option"
-                ? `Spot SL ${fmt(flip.line)} (flat); exits on the opposite flip.`
-                : `SL trails SuperTrend(${config.period}, ${config.multiplier}).`
-            }`,
-            dir: flip.direction,
-            line: flip.line,
-          });
-        }
-      } catch (e) {
-        onFailure(e instanceof Error ? e.message : "failed to place the auto order");
-      } finally {
-        firingRef.current = false;
-      }
+      const stratName = autoTradeStrategyName(segment, sym);
+      const existingStrategy: Strategy | undefined = strategies.find((s) => s.name === stratName);
+      const stratFields = {
+        instrument_type: instrument,
+        rule_id: ruleId,
+        stop_loss_method: "indicator" as const,
+        stop_loss_interval: draft.interval,
+        stop_loss_indicator_type: "supertrend" as const,
+        stop_loss_indicator_params: { period: draft.period, multiplier: draft.multiplier },
+        trailing_stop_enabled: true,
+        option_position_style: instrument === "option" ? ("naked" as const) : undefined,
+        option_strike_moneyness: instrument === "option" ? draft.moneyness : undefined,
+        fixed_lots: draft.lots,
+        segment,
+        duplicate_signal_policy: "skip" as const,
+        counter_signal_policy: "close_and_flip" as const,
+        active_windows: draft.windows,
+        seed_on_activation: true,
+      };
+      const strategyId = existingStrategy
+        ? existingStrategy.id
+        : (
+            await createStrategy({
+              name: stratName,
+              source_type: "in_house",
+              horizon: "intraday",
+              ...stratFields,
+            })
+          ).id;
+      if (existingStrategy) await updateStrategy(strategyId, stratFields);
+      // reset_engine_run: true - every arm re-seeds the CURRENT trend, not
+      // just a brand new Strategy's first-ever activation (its
+      // last_signal_candle_ts otherwise stays set forever once any signal
+      // has posted, so a plain status='live' PATCH alone wouldn't re-seed
+      // a strategy that was paused and is now being re-armed).
+      const finalRow = await updateStrategy(strategyId, { status: "live", reset_engine_run: true });
+      setStrategyRow(finalRow);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to arm auto-trade");
+    } finally {
+      setBusy(false);
     }
+  }
 
-    setStatus({ phase: "seeding", message: "Reading recent candles…", dir: null, line: null });
-    void tick();
-    const id = window.setInterval(() => void tick(), POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [on, segment, symbol, config, account]);
+  async function disarmAutoTrade() {
+    if (!strategyRow) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await updateStrategy(strategyRow.id, { status: "paused" });
+      setStrategyRow(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to pause auto-trade");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-  const dirClass = status?.dir === "up" ? "at-up" : status?.dir === "down" ? "at-down" : "";
+  function onToggle() {
+    if (busy) return;
+    if (armed) void disarmAutoTrade();
+    else void armAutoTrade();
+  }
+
+  // Deletes the provisioned Strategy (hard delete - fine to run while
+  // still 'live', same as deleting any other Strategy) and its backing
+  // Rule + Indicator(s) - so a symbol you're done experimenting with
+  // doesn't linger as a paused Strategy forever in signal-engine's own
+  // Strategies/Rules/Indicators screens - then resets the local draft
+  // form back to defaults. Best-effort on the Rule/Indicator cleanup: a
+  // partial failure there still resets the local form and clears
+  // strategyRow, since the Strategy itself (the thing that actually ran
+  // trades) is already gone either way.
+  async function clearConfig() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (strategyRow) {
+        await deleteStrategy(strategyRow.id);
+        const [rules, indicators] = await Promise.all([fetchRules(), fetchIndicators()]);
+        const ruleName = autoTradeStrategyName(segment, sym);
+        const rule = rules.find((r) => r.name === ruleName);
+        if (rule) await deleteRule(rule.id).catch(() => {});
+        const indicatorNames = [autoTradeIndicatorName(segment, sym), autoTradeAdxIndicatorName(segment, sym), autoTradeDmiIndicatorName(segment, sym)];
+        for (const ind of indicators.filter((i) => indicatorNames.includes(i.name))) {
+          await deleteIndicator(ind.id).catch(() => {});
+        }
+      }
+      setStrategyRow(null);
+      setDraft(DEFAULT_AUTO_TRADE_CONFIG);
+      saveAutoTradeConfig(DEFAULT_AUTO_TRADE_CONFIG);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "failed to clear auto-trade config");
+    } finally {
+      setConfirmClear(false);
+      setBusy(false);
+    }
+  }
+
+  const dirClass = trend?.dir === "up" ? "at-up" : trend?.dir === "down" ? "at-down" : "";
 
   return (
-    <div className={`auto-trade-panel ${on ? "armed" : ""} ${dirClass}`}>
+    <div className={`auto-trade-panel ${armed ? "armed" : ""} ${dirClass}`}>
       <div className="auto-trade-head">
-        <label className="auto-trade-toggle" title="Enters the current SuperTrend direction on arming, then places a market order on every flip after — stop-and-reverse. Future (server-trailed SuperTrend stop) or naked option (flat spot stop). Disarms if you switch symbols.">
-          <input type="checkbox" checked={on} onChange={onToggle} />
-          <span>Auto-trade</span>
+        <label
+          className="auto-trade-toggle"
+          title="Server-side: places a market future or naked-option order on every SuperTrend flip, with a server-trailed stop - keeps running (and keeps trailing/flipping) with every browser tab closed. Enters the current trend immediately on arming. One Strategy per symbol - arming a different chart symbol does NOT disarm this one."
+        >
+          <input type="checkbox" checked={armed} disabled={busy || loadingStatus} onChange={onToggle} />
+          <span>Auto-trade{busy ? " (working…)" : ""}</span>
           <span className="auto-trade-sub">
-            {sym} · {config.interval} ST({config.period}, {config.multiplier}) ·{" "}
-            {instrument === "option" ? `naked ${config.moneyness}` : "future"} · {config.lots} lot
-            {config.lots === 1 ? "" : "s"}
-            {config.adxGate && " · ADX gate"}
-            {config.windowStart && config.windowEnd && ` · ${config.windowStart}–${config.windowEnd}`}
+            {sym} · {draft.interval} ST({draft.period}, {draft.multiplier}) ·{" "}
+            {instrument === "option" ? `naked ${draft.moneyness}` : "future"} · {draft.lots} lot
+            {draft.lots === 1 ? "" : "s"}
+            {draft.adxGate && " · ADX gate"}
+            {draft.windows.length > 0 && ` · ${draft.windows.length} window${draft.windows.length === 1 ? "" : "s"}`}
           </span>
         </label>
         <button type="button" className="auto-trade-cfg-btn" onClick={() => setOpen((o) => !o)}>
@@ -548,7 +411,8 @@ export default function AutoTradePanel({
             <span>Instrument</span>
             <select
               value={instrument}
-              onChange={(e) => onConfigChange({ ...config, instrument: e.target.value as AutoTradeInstrument })}
+              disabled={busy}
+              onChange={(e) => commitConfig({ instrument: e.target.value as AutoTradeConfig["instrument"] })}
             >
               <option value="future">Future</option>
               <option value="option" disabled={!optionEligible}>
@@ -559,10 +423,7 @@ export default function AutoTradePanel({
           {instrument === "option" && (
             <label className="auto-trade-field">
               <span>Strike</span>
-              <select
-                value={config.moneyness}
-                onChange={(e) => onConfigChange({ ...config, moneyness: e.target.value as OptionStrikeMoneyness })}
-              >
+              <select value={draft.moneyness} disabled={busy} onChange={(e) => commitConfig({ moneyness: e.target.value as OptionStrikeMoneyness })}>
                 {MONEYNESS_OPTIONS.map((m) => (
                   <option key={m} value={m}>
                     {m}
@@ -573,10 +434,7 @@ export default function AutoTradePanel({
           )}
           <label className="auto-trade-field">
             <span>Interval</span>
-            <select
-              value={config.interval}
-              onChange={(e) => onConfigChange({ ...config, interval: e.target.value as ChartInterval })}
-            >
+            <select value={draft.interval} disabled={busy} onChange={(e) => commitConfig({ interval: e.target.value as ChartInterval })}>
               {INTERVAL_OPTIONS.map((iv) => (
                 <option key={iv} value={iv}>
                   {iv.replace("min", "m")}
@@ -588,79 +446,101 @@ export default function AutoTradePanel({
             <span>ATR period</span>
             <input
               inputMode="numeric"
-              value={draft.period}
-              onChange={(e) => setDraft((d) => ({ ...d, period: e.target.value }))}
-              onBlur={commitDraft}
+              disabled={busy}
+              value={numDraft.period}
+              onChange={(e) => setNumDraft((d) => ({ ...d, period: e.target.value }))}
+              onBlur={commitNumDraft}
             />
           </label>
           <label className="auto-trade-field">
             <span>Multiplier</span>
             <input
               inputMode="decimal"
-              value={draft.multiplier}
-              onChange={(e) => setDraft((d) => ({ ...d, multiplier: e.target.value }))}
-              onBlur={commitDraft}
+              disabled={busy}
+              value={numDraft.multiplier}
+              onChange={(e) => setNumDraft((d) => ({ ...d, multiplier: e.target.value }))}
+              onBlur={commitNumDraft}
             />
           </label>
           <label className="auto-trade-field">
             <span>Lots</span>
             <input
               inputMode="numeric"
-              value={draft.lots}
-              onChange={(e) => setDraft((d) => ({ ...d, lots: e.target.value }))}
-              onBlur={commitDraft}
+              disabled={busy}
+              value={numDraft.lots}
+              onChange={(e) => setNumDraft((d) => ({ ...d, lots: e.target.value }))}
+              onBlur={commitNumDraft}
             />
           </label>
 
           <div className="auto-trade-gates">
-            <label className="auto-trade-gate-toggle" title="Only act on a flip when GET /regime for this interval reads trending IN the flip's direction (trending_up for an up-flip, trending_down for a down-flip — the label already folds in ADX strength + DMI direction).">
-              <input
-                type="checkbox"
-                checked={config.adxGate}
-                onChange={(e) => onConfigChange({ ...config, adxGate: e.target.checked })}
-              />
+            <label
+              className="auto-trade-gate-toggle"
+              title="Only act on a flip when server-side ADX + DMI-direction indicators (auto-provisioned) confirm trend strength AND direction agree with the flip."
+            >
+              <input type="checkbox" checked={draft.adxGate} disabled={busy} onChange={(e) => commitConfig({ adxGate: e.target.checked })} />
               <span>ADX gate — trend must agree</span>
-              {config.adxGate && regime && (
-                <span className={`auto-trade-regime is-${regime.regime}`}>
-                  {regime.regime.replace("_", " ")} · ADX {Math.round(regime.adx)}
-                </span>
-              )}
             </label>
-            <label className="auto-trade-field">
-              <span>Window (local)</span>
-              <span className="auto-trade-window">
-                <input
-                  type="time"
-                  value={config.windowStart}
-                  onChange={(e) => onConfigChange({ ...config, windowStart: e.target.value })}
-                />
-                <span>–</span>
-                <input
-                  type="time"
-                  value={config.windowEnd}
-                  onChange={(e) => onConfigChange({ ...config, windowEnd: e.target.value })}
-                />
-              </span>
-            </label>
+
+            <div className="auto-trade-windows">
+              <span>Entry windows (local)</span>
+              {draft.windows.length === 0 && <p className="muted tiny">None set — acts on a flip any time.</p>}
+              {draft.windows.map((w, i) => (
+                <div key={i} className="auto-trade-window-row">
+                  <input type="time" value={w.start} disabled={busy} onChange={(e) => updateWindow(i, { start: e.target.value })} />
+                  <span>–</span>
+                  <input type="time" value={w.end} disabled={busy} onChange={(e) => updateWindow(i, { end: e.target.value })} />
+                  <button type="button" className="tiny" disabled={busy} onClick={() => removeWindow(i)}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="tiny" disabled={busy} onClick={addWindow}>
+                + Add window
+              </button>
+            </div>
           </div>
 
           <p className="auto-trade-config-note">
-            On arming it enters the current SuperTrend direction, then places a market order on every flip after
-            (execution closes any opposite position and flips).{" "}
-            {instrument === "option"
-              ? "Naked call on an up-flip, naked put on a down-flip, with a flat spot stop at the SuperTrend line — options have no server-side trailing stop, so the opposite flip is the real exit."
-              : "The stop trails SuperTrend server-side, so it holds even with this tab closed."}{" "}
-            A flip that fails a gate is skipped, not queued.
+            Runs server-side in signal-engine's in-house engine (Strategy "{autoTradeStrategyName(segment, sym)}") - arming enters the current
+            SuperTrend direction immediately, then places a market order on every flip after (a server-trailed stop; execution closes any opposite
+            position and flips). Keeps running with this tab closed. A flip outside every configured window, or against the ADX gate, is skipped,
+            not queued. Editable directly in signal-engine's own Strategies/Rules screens too.
           </p>
+
+          <div className="auto-trade-clear-row">
+            {confirmClear ? (
+              <span className="auto-trade-confirm-clear">
+                <span className="muted">
+                  {strategyRow ? "Delete the provisioned Strategy/Rule/Indicator and reset this form?" : "Reset this form to defaults?"}
+                </span>
+                <button type="button" className="tiny btn-exit" disabled={busy} onClick={() => void clearConfig()}>
+                  Yes
+                </button>
+                <button type="button" className="tiny secondary" disabled={busy} onClick={() => setConfirmClear(false)}>
+                  No
+                </button>
+              </span>
+            ) : (
+              <button type="button" className="tiny secondary" disabled={busy} onClick={() => setConfirmClear(true)}>
+                Clear config
+              </button>
+            )}
+          </div>
         </div>
       )}
 
-      {on && status && (
-        <p className={`auto-trade-status is-${status.phase}`}>
-          {status.phase === "firing" && "⚡ "}
-          {status.phase === "error" && "⚠ "}
-          {status.phase === "halted" && "⛔ "}
-          {status.message}
+      {error && <p className="auto-trade-status is-error">⚠ {error}</p>}
+      {!error && loadingStatus && <p className="auto-trade-status muted">Checking auto-trade status…</p>}
+      {!error && !loadingStatus && strategyRow && (
+        <p className={`auto-trade-status ${armed ? "is-watching" : "is-paused"}`}>
+          {armed ? "Armed server-side" : "Paused"} — last scanned {formatCompact(strategyRow.last_scan_at)}
+          {trend && ` · trend ${trend.dir === "up" ? "up" : "down"} · line ${fmt(trend.line)}`}
+        </p>
+      )}
+      {!error && !loadingStatus && !strategyRow && trend && (
+        <p className="auto-trade-status muted">
+          Not armed · current {draft.interval} trend {trend.dir === "up" ? "up" : "down"} · line {fmt(trend.line)}
         </p>
       )}
     </div>

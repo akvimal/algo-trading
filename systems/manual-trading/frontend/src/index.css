@@ -3639,28 +3639,35 @@ button.btn-exit {
 .auto-trade-gate-toggle input {
   margin: 0;
 }
-.auto-trade-regime {
-  padding: 0 0.3rem;
-  border-radius: 3px;
-  font-size: 0.66rem;
-  border: 1px solid var(--border);
+.auto-trade-windows {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.7rem;
 }
-.auto-trade-regime.is-trending_up {
-  color: var(--buy);
-  border-color: color-mix(in srgb, var(--buy) 40%, var(--border));
+.auto-trade-windows > span {
+  color: var(--text-dim);
 }
-.auto-trade-regime.is-trending_down {
-  color: var(--sell);
-  border-color: color-mix(in srgb, var(--sell) 40%, var(--border));
-}
-.auto-trade-window {
+.auto-trade-window-row {
   display: flex;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.3rem;
 }
-.auto-trade-window input {
+.auto-trade-window-row input {
   width: auto;
   padding: 0.15rem 0.25rem;
+  font-size: 0.72rem;
+}
+.auto-trade-clear-row {
+  flex: 1 1 100%;
+  display: flex;
+  justify-content: flex-end;
+}
+.auto-trade-confirm-clear {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.72rem;
 }
 .auto-trade-status {
@@ -3670,12 +3677,10 @@ button.btn-exit {
   font-size: 0.72rem;
   line-height: 1.35;
 }
-.auto-trade-status.is-firing {
+.auto-trade-status.is-watching {
   color: var(--accent);
-  font-weight: 600;
 }
-.auto-trade-status.is-error,
-.auto-trade-status.is-halted {
+.auto-trade-status.is-error {
   color: var(--sell);
 }
 .ctp-auto-note {

@@ -88,7 +88,10 @@ def choose_option_strategy(
     try:
         expiries = get_expiry_list(resolved.chart_exchange, resolved.chart_symbol)
     except requests.RequestException as exc:
-        raise ResolutionError(f"could not resolve option expiries for '{resolved.chart_symbol}': {exc}") from exc
+        # market-data itself failed to answer (timeout/connection/5xx) -
+        # transient, worth retrying on a later engine tick - see
+        # ResolutionError.retryable's own docstring.
+        raise ResolutionError(f"could not resolve option expiries for '{resolved.chart_symbol}': {exc}", retryable=True) from exc
     if not expiries:
         raise ResolutionError(f"could not resolve option expiries for '{resolved.chart_symbol}'")
 
@@ -119,7 +122,10 @@ def choose_option_strategy(
     try:
         chain = get_option_chain(resolved.chart_exchange, resolved.chart_symbol, expiry)
     except requests.RequestException as exc:
-        raise ResolutionError(f"could not resolve option chain for '{resolved.chart_symbol}' ({expiry}): {exc}") from exc
+        # Same reasoning as the expiries fetch above - transient.
+        raise ResolutionError(
+            f"could not resolve option chain for '{resolved.chart_symbol}' ({expiry}): {exc}", retryable=True
+        ) from exc
     if chain is None:
         raise ResolutionError(f"could not resolve option chain for '{resolved.chart_symbol}' ({expiry})")
 

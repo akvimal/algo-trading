@@ -129,6 +129,7 @@ def resolve_and_finalize_signal(db: Session, signal_id: str, signal: SignalInges
     except ResolutionError as exc:
         order_row.status = "rejected"
         order_row.rejection_reason = exc.reason
+        order_row.retryable = exc.retryable
         db.commit()
         return
 

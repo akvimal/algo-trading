@@ -116,6 +116,8 @@ class Strategy(Base):
     # DuplicateSignalPolicy/CounterSignalPolicy in app/domain/models.py.
     duplicate_signal_policy = Column(Text, nullable=False, default="skip")
     counter_signal_policy = Column(Text, nullable=False, default="close_and_flip")
+    # rule_config.type='crossover' only - see infra/postgres/init/03-signal-generation.sql's full comment.
+    seed_on_activation = Column(Boolean, nullable=False, default=False)
     status = Column(Text, nullable=False, default="draft")
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -152,6 +154,10 @@ class EngineRun(Base):
     symbol = Column(Text, primary_key=True)
     last_signal_candle_ts = Column(TIMESTAMP(timezone=True))
     last_checked_at = Column(TIMESTAMP(timezone=True))
+    # Retry-on-transient-resolution-failure state - see
+    # infra/postgres/init/03-signal-generation.sql's full comment.
+    pending_signal_id = Column(UUID(as_uuid=True))
+    pending_signal_prior_ts = Column(TIMESTAMP(timezone=True))
 
 
 class SavedBacktest(Base):

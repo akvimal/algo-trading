@@ -329,6 +329,16 @@ CREATE TABLE IF NOT EXISTS signal_generation.strategies (
     -- meaningless there) - harmlessly ignored for 'spot' too (no expiry
     -- concept at all).
     contract_day_filter TEXT NOT NULL DEFAULT 'any' CHECK (contract_day_filter IN ('any', 'start', 'expiry')),
+    -- rule_config.type='crossover' only (harmlessly ignored otherwise) -
+    -- on this strategy's FIRST-ever engine tick for a given symbol (no
+    -- EngineRun row yet), synthesize an entry from the indicator's CURRENT
+    -- bias on the latest completed bar instead of waiting for the next
+    -- real crossover - matches manual-trading's browser auto-trader's own
+    -- "enter the current SuperTrend direction on arm" behavior (see
+    -- app/domain/generation/engine.py's _run_one). Default false: every
+    -- pre-existing crossover strategy keeps waiting for a real crossover,
+    -- same as before this field existed.
+    seed_on_activation BOOLEAN NOT NULL DEFAULT false,
     status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'backtesting', 'live', 'paused')),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -387,6 +397,23 @@ CREATE TABLE IF NOT EXISTS signal_generation.engine_runs (
     symbol                 TEXT NOT NULL,
     last_signal_candle_ts  TIMESTAMPTZ,
     last_checked_at        TIMESTAMPTZ,
+    -- The crossover rule's own retry-on-transient-resolution-failure
+    -- state (app/domain/generation/engine.py's _run_one, crossover branch
+    -- only) - a signal posted THIS tick whose resolution outcome hasn't
+    -- been checked yet. NULL means nothing outstanding. On the NEXT tick,
+    -- if signal_processing.resolved_orders for this signal_id ended up
+    -- status='rejected' AND retryable=true (a transient market-data
+    -- failure, not a structural rejection), last_signal_candle_ts is
+    -- rewound to pending_signal_prior_ts so the SAME bar's crossover/seed
+    -- gets re-evaluated instead of being permanently skipped - otherwise
+    -- (resolved OK, or rejected for a structural reason) both columns
+    -- just clear with last_signal_candle_ts left as already advanced.
+    -- Cross-schema signal_id reference (signal_processing.resolved_orders
+    -- lives in a different schema, same backend/DB since the 2026-08-28
+    -- merge - not a systems/* boundary crossing, no FK across schemas by
+    -- this repo's own convention elsewhere either).
+    pending_signal_id      UUID,
+    pending_signal_prior_ts TIMESTAMPTZ,
     PRIMARY KEY (strategy_id, symbol)
 );
 

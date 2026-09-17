@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS signal_processing.resolved_orders (
     -- transitions this SAME row to 'pending'/'rejected' shortly after.
     status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('queued', 'pending', 'sent', 'rejected')),
     rejection_reason TEXT,
+    -- status='rejected' only (meaningless/false otherwise) - was this a
+    -- transient/infrastructure failure (a market-data request itself
+    -- timing out or 5xx-ing) rather than a structural one (unknown/non-
+    -- live strategy, outside active window, no valid option expiry)? Set
+    -- from ResolutionError.retryable (app/domain/processing/resolution/
+    -- errors.py) in resolve_and_finalize_signal. The only current reader
+    -- is the in-house engine's own tick (app/domain/generation/engine.py)
+    -- - re-attempts the SAME bar on its next tick when true instead of
+    -- permanently giving up on it, via EngineRun.pending_signal_id/
+    -- pending_signal_prior_ts (03-signal-generation.sql).
+    retryable        BOOLEAN NOT NULL DEFAULT false,
     resolved_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

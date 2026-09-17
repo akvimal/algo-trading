@@ -338,6 +338,11 @@ class StrategyCreate(BaseModel):
     # multiple-ranges concept needed since a weekday is already atomic
     # (unlike active_windows' time-of-day ranges).
     active_weekdays: list[Weekday] = Field(default_factory=list)
+    # rule_config.type='crossover' only (harmlessly ignored otherwise) - see
+    # infra/postgres/init/03-signal-generation.sql's full comment. Default
+    # false: existing crossover strategies still wait for a real crossover
+    # on first activation, same as before this field existed.
+    seed_on_activation: bool = False
 
     @model_validator(mode="after")
     def _check_stop_loss_consistency(self) -> "StrategyCreate":
@@ -438,6 +443,17 @@ class StrategyUpdate(BaseModel):
     # Same omitted-vs-explicit-empty distinction as active_windows above -
     # the route handler checks model_fields_set for this field too.
     active_weekdays: Optional[list[Weekday]] = None
+    seed_on_activation: Optional[bool] = None
+    # A one-shot ACTION, not a persisted field - deletes this strategy's
+    # EngineRun rows (every symbol it scans) as a side effect of this same
+    # PATCH, default false. Lets seed_on_activation actually re-fire on
+    # RE-arming after a pause, not just the strategy's first-ever
+    # activation - EngineRun.last_signal_candle_ts otherwise stays set
+    # forever once a signal has posted once, so a plain status='live'
+    # PATCH alone wouldn't re-seed a previously-armed-then-paused
+    # strategy. See app/domain/generation/engine.py's seed_on_activation
+    # branch for the read side.
+    reset_engine_run: bool = False
 
 
 class StrategyOut(BaseModel):
@@ -473,6 +489,7 @@ class StrategyOut(BaseModel):
     counter_signal_policy: CounterSignalPolicy = "close_and_flip"
     active_windows: list[ActiveWindow] = Field(default_factory=list)
     active_weekdays: list[Weekday] = Field(default_factory=list)
+    seed_on_activation: bool = False
     status: Status
     # MAX(engine_runs.last_checked_at) across every symbol this strategy
     # scans (a universe-scoped one has one EngineRun row per constituent) -

@@ -106,6 +106,7 @@ def _to_out(
         counter_signal_policy=row.counter_signal_policy,
         active_windows=row.active_windows,
         active_weekdays=row.active_weekdays,
+        seed_on_activation=row.seed_on_activation,
         status=row.status,
         last_scan_at=last_scan_at,
         last_signal_at=last_signal_at,
@@ -250,6 +251,7 @@ def create_strategy(
         counter_signal_policy=payload.counter_signal_policy,
         active_windows=[w.model_dump(mode="json") for w in payload.active_windows],
         active_weekdays=list(payload.active_weekdays),
+        seed_on_activation=payload.seed_on_activation,
         status="draft",
     )
     db.add(row)
@@ -339,6 +341,11 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
         row.name = payload.name
     if payload.status is not None:
         row.status = payload.status
+    if payload.reset_engine_run:
+        # One-shot action (see StrategyUpdate's own comment) - lets
+        # seed_on_activation actually re-fire on re-arming after a pause,
+        # not just this strategy's first-ever activation.
+        db.query(db_models.EngineRun).filter_by(strategy_id=row.id).delete()
     if payload.source_rule_name is not None:
         if row.source_type == "in_house":
             raise HTTPException(status_code=422, detail="source_rule_name only applies to external strategies")
@@ -429,6 +436,8 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     # Same omitted-vs-explicit-empty distinction as active_windows above.
     if "active_weekdays" in payload.model_fields_set:
         row.active_weekdays = list(payload.active_weekdays)
+    if payload.seed_on_activation is not None:
+        row.seed_on_activation = payload.seed_on_activation
 
     try:
         validate_stop_loss_fields(

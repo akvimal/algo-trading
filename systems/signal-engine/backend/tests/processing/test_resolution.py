@@ -786,16 +786,33 @@ def test_resolve_option_rejects_when_market_data_unreachable():
     responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
     responses.add(responses.GET, _expiries_url(), body=requests.exceptions.ConnectionError("refused"))
 
-    with pytest.raises(ResolutionError, match="could not resolve option expiries"):
+    with pytest.raises(ResolutionError, match="could not resolve option expiries") as excinfo:
         resolve(_signal(symbol="NIFTY"), _fetch(_option_strategy_json()))
+    # market-data itself failed to answer - transient, worth a retry on a
+    # later engine tick (see ResolutionError.retryable's own docstring).
+    assert excinfo.value.retryable is True
+
+
+@responses.activate
+def test_resolve_option_rejects_when_option_chain_fetch_fails():
+    responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
+    responses.add(responses.GET, _expiries_url(), json={"expiries": ["2026-09-22"]}, status=200)
+    responses.add(responses.GET, _chain_url(), body=requests.exceptions.ConnectionError("refused"))
+
+    with pytest.raises(ResolutionError, match="could not resolve option chain") as excinfo:
+        resolve(_signal(symbol="NIFTY"), _fetch(_option_strategy_json()))
+    assert excinfo.value.retryable is True
 
 
 @responses.activate
 def test_resolve_option_rejects_unresolvable_underlying():
     responses.add(responses.GET, _resolve_url(), json={"detail": "not found"}, status=404)
 
-    with pytest.raises(ResolutionError, match="could not resolve underlying"):
+    with pytest.raises(ResolutionError, match="could not resolve underlying") as excinfo:
         resolve(_signal(symbol="NOTREAL"), _fetch(_option_strategy_json()))
+    # A 404 (unknown symbol) is structural, not transient - retrying
+    # wouldn't help, unlike the market-data-unreachable case above.
+    assert excinfo.value.retryable is False
 
 
 @responses.activate
@@ -803,8 +820,9 @@ def test_resolve_option_rejects_unresolvable_expiries():
     responses.add(responses.GET, _resolve_url(), json=_resolved_underlying_json(), status=200)
     responses.add(responses.GET, _expiries_url(), json={"detail": "not found"}, status=404)
 
-    with pytest.raises(ResolutionError, match="could not resolve option expiries"):
+    with pytest.raises(ResolutionError, match="could not resolve option expiries") as excinfo:
         resolve(_signal(symbol="NIFTY"), _fetch(_option_strategy_json()))
+    assert excinfo.value.retryable is False
 
 
 def test_resolve_passes_through_exit_condition():

@@ -121,6 +121,20 @@ def evaluate_crossover_at(
     return "bullish" if curr_above else "bearish"
 
 
+def current_bias_at(value_series: list[Optional[float]], signal_series: list[Optional[float]], index: int) -> Optional[Bias]:
+    """Which side of its own signal line `value_series` is on at `index` -
+    unlike evaluate_crossover_at, this doesn't require a crossover to have
+    just happened, only that both series have a value there. The "enter
+    the CURRENT trend right now" counterpart to evaluate_crossover_at's
+    "only on a change of side" - used by engine.py's seed_on_activation
+    path (Strategy.seed_on_activation) so a freshly-activated crossover
+    strategy can arm on today's already-running trend instead of sitting
+    flat until the next real flip."""
+    if value_series[index] is None or signal_series[index] is None:
+        return None
+    return "bullish" if value_series[index] > signal_series[index] else "bearish"
+
+
 def find_crossovers_since(
     rule: RuleConfig, indicator_type: str, indicator_params: dict, candles: list[CandleClose], since_ts: Optional[datetime]
 ) -> list[tuple[int, Bias]]:

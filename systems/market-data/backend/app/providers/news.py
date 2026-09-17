@@ -299,6 +299,13 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
                     },
                 ],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "news_digest", "strict": True, "schema": _DIGEST_SCHEMA}},
+                # Caps what OpenRouter needs to reserve against - without this
+                # it defaults to the model's own max output (64000 for
+                # claude-haiku-4.5) and pre-flight-rejects with 402 on any
+                # account whose remaining balance can't cover that worst case,
+                # even though the actual digest reply is a few hundred tokens
+                # (confirmed live 2026-09-17).
+                "max_tokens": 2000,
             },
             timeout=30,
         )

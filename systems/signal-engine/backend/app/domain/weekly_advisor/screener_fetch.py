@@ -180,6 +180,11 @@ def _analyze_via_ai(symbol: str, screenshot: bytes, api_key: Optional[str] = Non
                     },
                 ],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "fundamentals", "strict": True, "schema": _FUNDAMENTALS_SCHEMA}},
+                # See news.py's own copy of this comment - without a cap,
+                # OpenRouter reserves against the model's max output (64000)
+                # and 402s any account whose remaining balance can't cover
+                # that worst case, even though the actual reply is small.
+                "max_tokens": 2000,
             },
             timeout=60,
         )

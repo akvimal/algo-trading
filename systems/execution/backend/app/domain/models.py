@@ -765,3 +765,19 @@ class TradeTagsUpdate(BaseModel):
 
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+
+
+class AdminResetAllConfirm(BaseModel):
+    """POST /admin/reset-all - a literal, exact-match confirmation string
+    (not just a boolean) so this can't be triggered by a fat-fingered or
+    scripted `{"confirm": true}`-shaped call reusing some other endpoint's
+    body shape. See reset_all_accounts_and_trades's own docstring for what
+    this actually deletes/resets."""
+
+    confirm: str
+
+    @model_validator(mode="after")
+    def _check_confirm(self) -> "AdminResetAllConfirm":
+        if self.confirm != "RESET":
+            raise ValueError("confirm must be exactly 'RESET'")
+        return self

@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -7,7 +8,7 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_ltp_batch
 from app.auth import User, get_current_user, require_admin
-from app.domain.models import AccountUpdate, StrategyAccountCreate, StrategyAccountUpdate
+from app.domain.models import AccountUpdate, AdminResetAllConfirm, StrategyAccountCreate, StrategyAccountUpdate
 from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
 
 router = APIRouter()
@@ -198,6 +199,77 @@ def live_trading_status(admin: User = Depends(require_admin), db: Session = Depe
     scoped. See get_live_trading_status's own docstring for the exact
     "effectively_live"/"reason" semantics."""
     return get_live_trading_status(db)
+
+
+@router.post("/admin/users/{user_id}/reset-all")
+def reset_user_accounts_and_trades(
+    user_id: str, payload: AdminResetAllConfirm, admin: User = Depends(require_admin), db: Session = Depends(get_db)
+):
+    """Wipes every position/option group (open and closed) belonging to
+    ONE user, or the platform's own Strategy-driven rows if `user_id` is
+    the literal "platform" (same special path-segment convention as
+    GET/PUT /accounts/platform and DELETE /positions/platform) - never
+    another user's data. Also resets that scope's account balances
+    (current_balance) back to starting_balance. Leaves account CONFIG
+    (capital_per_trade, leverage, square_off_time, etc.) untouched -
+    only trade data + balances.
+
+    broker_orders/trade_images are deleted first since they reference
+    positions/option_position_groups without ON DELETE CASCADE
+    (position_pnl_snapshots/option_group_pnl_snapshots DO cascade
+    automatically once positions/option_position_groups themselves are
+    deleted). trade_images has no user_id of its own - scoped via
+    whichever position/group it's attached to instead.
+
+    Requires the literal {"confirm": "RESET"} body (AdminResetAllConfirm)
+    - a 422 on anything else, given the blast radius even at single-user
+    scope. strategy_accounts (per-strategy capital pools) has no user_id
+    of its own - only reset when user_id == "platform", since a strategy
+    isn't owned by any one SaaS user."""
+    if user_id == "platform":
+        target_id: Optional[uuid.UUID] = None
+    else:
+        try:
+            target_id = uuid.UUID(user_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail=f"no such user '{user_id}'")
+
+    position_ids = db.query(db_models.Position.id).filter_by(user_id=target_id)
+    group_ids = db.query(db_models.OptionPositionGroup.id).filter_by(user_id=target_id)
+
+    broker_orders_deleted = db.query(db_models.BrokerOrder).filter_by(user_id=target_id).delete(synchronize_session=False)
+    trade_images_deleted = (
+        db.query(db_models.TradeImage)
+        .filter(db_models.TradeImage.position_id.in_(position_ids) | db_models.TradeImage.option_group_id.in_(group_ids))
+        .delete(synchronize_session=False)
+    )
+    positions_deleted = db.query(db_models.Position).filter_by(user_id=target_id).delete(synchronize_session=False)
+    option_groups_deleted = (
+        db.query(db_models.OptionPositionGroup).filter_by(user_id=target_id).delete(synchronize_session=False)
+    )
+
+    accounts_reset = (
+        db.query(db_models.Account)
+        .filter_by(user_id=target_id)
+        .update({db_models.Account.current_balance: db_models.Account.starting_balance}, synchronize_session=False)
+    )
+    strategy_accounts_reset = 0
+    if target_id is None:
+        strategy_accounts_reset = db.query(db_models.StrategyAccount).update(
+            {db_models.StrategyAccount.current_balance: db_models.StrategyAccount.starting_balance},
+            synchronize_session=False,
+        )
+
+    db.commit()
+    return {
+        "user_id": user_id,
+        "broker_orders_deleted": broker_orders_deleted,
+        "trade_images_deleted": trade_images_deleted,
+        "positions_deleted": positions_deleted,
+        "option_groups_deleted": option_groups_deleted,
+        "accounts_reset": accounts_reset,
+        "strategy_accounts_reset": strategy_accounts_reset,
+    }
 
 
 @router.post("/accounts/{segment}/reset")

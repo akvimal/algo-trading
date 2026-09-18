@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, credentials, health, internal
+from app.api.routes import admin, auth, credentials, health, internal
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,3 +24,4 @@ app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(credentials.router)
 app.include_router(internal.router)
+app.include_router(admin.router)

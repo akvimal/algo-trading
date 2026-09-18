@@ -583,6 +583,23 @@ export async function saveCredentials(update: CredentialsUpdate): Promise<Creden
   return asJson(res, "PUT /credentials");
 }
 
+export type AdminUser = {
+  id: string;
+  email: string;
+  name: string;
+  created_at: string;
+  is_admin: boolean;
+};
+
+// GET /admin/users lives on accounts-backend (the only service that owns
+// user identity - see that route's own docstring), not execution - lets
+// the Danger zone panel below pick a real user instead of typing a raw
+// UUID blind.
+export async function fetchAllUsers(): Promise<AdminUser[]> {
+  const res = await authFetch(`${ACCOUNTS_BASE_URL}/admin/users`);
+  return asJson(res, "GET /admin/users");
+}
+
 // ---------------------------------------------------------------------
 // Strategy names - signal-engine's own backend (the 2026-08-28 merger of
 // signal-generation/signal-processing, see docs/architecture.md), read

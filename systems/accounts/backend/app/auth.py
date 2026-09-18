@@ -36,3 +36,14 @@ def get_current_user(
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="user no longer exists")
     return user
+
+
+def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
+    """For the admin-only user-management surface (GET /admin/users) -
+    same 401-then-403 shape as execution's/market-data's own
+    require_admin, but this one looks the row up fresh from the DB
+    (get_current_user already did) rather than trusting a JWT claim,
+    since this service IS the source of truth for is_admin."""
+    if not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin access required")
+    return user

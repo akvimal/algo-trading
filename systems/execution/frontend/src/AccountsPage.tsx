@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   type Account,
+  type AdminUser,
   type CredentialsOut,
   type LiveTradingStatus,
   type SignalCount,
@@ -14,6 +15,7 @@ import {
   createStrategyAccount,
   deleteStrategyAccount,
   fetchAccounts,
+  fetchAllUsers,
   fetchCredentials,
   fetchLiveTradingStatus,
   fetchPlatformAccounts,
@@ -215,6 +217,26 @@ export default function AccountsPage() {
   const [resetUserId, setResetUserId] = useState("platform");
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMessage, setResetMessage] = useState<string | null>(null);
+  // Every signed-up user (accounts-backend's own GET /admin/users, the
+  // only service that owns identity) - lets the picker below show real
+  // emails instead of asking the admin to type a raw UUID from memory.
+  const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
+  const [allUsersError, setAllUsersError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    fetchAllUsers()
+      .then((users) => {
+        if (!cancelled) setAllUsers(users);
+      })
+      .catch((err) => {
+        if (!cancelled) setAllUsersError(err instanceof Error ? err.message : "Failed to load users");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
 
   // Optional per-strategy dedicated accounts (execution.strategy_accounts) -
   // strategies list comes from signal-generation directly (same
@@ -930,8 +952,11 @@ export default function AccountsPage() {
   async function handleResetUser() {
     const targetId = resetUserId.trim();
     if (!targetId) return;
+    const matchedUser = allUsers.find((u) => u.id === targetId);
+    const targetLabel =
+      targetId === "platform" ? "the PLATFORM (Strategy-driven) account" : `user "${matchedUser?.email ?? targetId}"`;
     const confirmed = window.confirm(
-      `Delete EVERY position/option group and reset balances for ${targetId === "platform" ? "the PLATFORM (Strategy-driven) account" : `user "${targetId}"`} ` +
+      `Delete EVERY position/option group and reset balances for ${targetLabel} ` +
         "- open and closed trades, PnL history, broker orders, trade images. Account config (capital/leverage/square-off) is left as-is. This can't be undone.",
     );
     if (!confirmed) return;
@@ -1697,9 +1722,34 @@ export default function AccountsPage() {
           starting balance. Account config (capital/trade, leverage, square-off time, etc.) is left untouched.{" "}
           <strong>This can't be undone</strong> - back up first if the data matters.
         </p>
+        {allUsersError && (
+          <p className="error">
+            Could not load the user list ({allUsersError}) - you can still type a user ID directly below.
+          </p>
+        )}
         <div className="danger-zone-controls">
           <label>
-            User ID (or "platform")
+            User
+            <select
+              value={allUsers.some((u) => u.id === resetUserId) ? resetUserId : ""}
+              onChange={(e) => e.target.value && setResetUserId(e.target.value)}
+              disabled={resetBusy}
+            >
+              <option value="platform">platform (Strategy-driven account)</option>
+              {allUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.email}
+                  {u.name ? ` (${u.name})` : ""}
+                  {u.is_admin ? " - admin" : ""}
+                </option>
+              ))}
+              {!allUsers.some((u) => u.id === resetUserId) && resetUserId !== "platform" && (
+                <option value={resetUserId}>{resetUserId} (typed manually)</option>
+              )}
+            </select>
+          </label>
+          <label>
+            or a user ID directly
             <input
               type="text"
               value={resetUserId}

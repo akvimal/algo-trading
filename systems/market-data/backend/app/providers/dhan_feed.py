@@ -292,7 +292,17 @@ def start_feed() -> None:
     the exact rate-limit problem this change addresses worse, not
     better)."""
     global _feed_thread_started
-    if not settings.dhan_client_id or not settings.dhan_access_token:
+    # current_access_token(), not the raw settings.dhan_access_token - the
+    # latter is only ever the env-var seed value. A UI-submitted or
+    # auto-renewed token lives in the _renewed_token slot instead
+    # (load_persisted_credentials() only ever patches settings.dhan_client_id,
+    # never settings.dhan_access_token - see that function's own comment),
+    # so checking the raw field here made this silently no-op forever on
+    # any account actually running a renewed/persisted token, even though
+    # every REST call path (which does use current_access_token()) worked
+    # fine - reproduced live: feed-status stayed at its untouched startup
+    # state indefinitely, no error logged, despite real quotes flowing.
+    if not settings.dhan_client_id or not current_access_token():
         logger.info("Dhan live feed not started - DHAN_CLIENT_ID/DHAN_ACCESS_TOKEN not configured")
         return
     with _lock:

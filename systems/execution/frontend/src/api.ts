@@ -490,6 +490,29 @@ export async function fetchLiveTradingStatus(): Promise<LiveTradingStatus> {
   return asJson(res, "GET /live-trading/status");
 }
 
+export type ResetAllResult = {
+  user_id: string;
+  broker_orders_deleted: number;
+  trade_images_deleted: number;
+  positions_deleted: number;
+  option_groups_deleted: number;
+  accounts_reset: number;
+  strategy_accounts_reset: number;
+};
+
+// POST /admin/users/{user_id}/reset-all (admin-only) - wipes every
+// position/option group + resets balances for ONE user, or "platform" for
+// the Strategy-driven flow's own rows - see that route's own docstring.
+// confirm must be the literal string "RESET" or the backend 422s.
+export async function resetUserAccountsAndTrades(userId: string, confirm: string): Promise<ResetAllResult> {
+  const res = await authFetch(`${API_BASE}/admin/users/${userId}/reset-all`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm }),
+  });
+  return asJson(res, `POST /admin/users/${userId}/reset-all`);
+}
+
 export async function fetchSettings(): Promise<Settings> {
   const res = await authFetch(`${API_BASE}/settings`);
   return asJson(res, "GET /settings");

@@ -24,6 +24,7 @@ import {
   fetchStrategyPerformance,
   resetAccount,
   resetStrategyAccount,
+  resetUserAccountsAndTrades,
   saveCredentials,
   updateAccount,
   updatePlatformAccount,
@@ -204,6 +205,16 @@ export default function AccountsPage() {
   const [platformError, setPlatformError] = useState<string | null>(null);
   const [savingPlatform, setSavingPlatform] = useState<string | null>(null);
   const [platformMessage, setPlatformMessage] = useState<string | null>(null);
+
+  // Admin-only reset-all-data action (POST /admin/users/{user_id}/reset-all)
+  // - "platform" targets the Strategy-driven flow's own rows, same special
+  // path-segment convention as this page's own platform account section.
+  // A double confirmation (window.confirm, then a typed "RESET") since the
+  // backend itself already requires the literal string too - this just
+  // avoids a guaranteed-422 round trip for a mistyped confirmation.
+  const [resetUserId, setResetUserId] = useState("platform");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
 
   // Optional per-strategy dedicated accounts (execution.strategy_accounts) -
   // strategies list comes from signal-generation directly (same
@@ -914,6 +925,37 @@ export default function AccountsPage() {
     syncPlatformDraftFromAccount(segment);
     setPlatformMessage(null);
     setPlatformEditing((prev) => ({ ...prev, [segment]: false }));
+  }
+
+  async function handleResetUser() {
+    const targetId = resetUserId.trim();
+    if (!targetId) return;
+    const confirmed = window.confirm(
+      `Delete EVERY position/option group and reset balances for ${targetId === "platform" ? "the PLATFORM (Strategy-driven) account" : `user "${targetId}"`} ` +
+        "- open and closed trades, PnL history, broker orders, trade images. Account config (capital/leverage/square-off) is left as-is. This can't be undone.",
+    );
+    if (!confirmed) return;
+    const typed = window.prompt('Type RESET (all caps) to confirm:');
+    if (typed !== "RESET") {
+      setResetMessage(typed === null ? null : "Not confirmed - typed value didn't match \"RESET\", nothing was reset.");
+      return;
+    }
+    setResetBusy(true);
+    setResetMessage(null);
+    try {
+      const result = await resetUserAccountsAndTrades(targetId, typed);
+      setResetMessage(
+        `Reset done for "${result.user_id}": ${result.positions_deleted} positions, ${result.option_groups_deleted} option groups, ` +
+          `${result.broker_orders_deleted} broker orders, ${result.trade_images_deleted} trade images deleted; ` +
+          `${result.accounts_reset} account(s)${result.strategy_accounts_reset ? ` + ${result.strategy_accounts_reset} strategy account(s)` : ""} balance-reset.`,
+      );
+      // The platform-accounts polling effect above picks up the reset
+      // balance on its own next tick - no separate refresh needed here.
+    } catch (err) {
+      setResetMessage(err instanceof Error ? err.message : "Failed to reset");
+    } finally {
+      setResetBusy(false);
+    }
   }
 
   return (
@@ -1645,6 +1687,32 @@ export default function AccountsPage() {
             })}
           </tbody>
         </table>
+      </div>
+
+      <h2>Danger zone</h2>
+      <div className="danger-zone">
+        <p>
+          Wipes every position/option group (open and closed), their PnL history, broker orders and trade images for
+          one user - or the platform account itself - and resets that scope's account balance(s) back to their
+          starting balance. Account config (capital/trade, leverage, square-off time, etc.) is left untouched.{" "}
+          <strong>This can't be undone</strong> - back up first if the data matters.
+        </p>
+        <div className="danger-zone-controls">
+          <label>
+            User ID (or "platform")
+            <input
+              type="text"
+              value={resetUserId}
+              onChange={(e) => setResetUserId(e.target.value)}
+              placeholder="platform"
+              disabled={resetBusy}
+            />
+          </label>
+          <button type="button" className="danger" onClick={handleResetUser} disabled={resetBusy || !resetUserId.trim()}>
+            {resetBusy ? "Resetting..." : "Reset all data"}
+          </button>
+        </div>
+        {resetMessage && <p className="action-message">{resetMessage}</p>}
       </div>
       </>
       )}

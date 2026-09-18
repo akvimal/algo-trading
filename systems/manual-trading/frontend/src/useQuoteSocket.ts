@@ -13,8 +13,6 @@ import { useEffect, useRef, useState } from "react";
 // feed, never a per-user BYO-credentialed quote, so there's no identity
 // for a token to carry.
 
-const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
-
 // One tab reconnecting is cheap (unlike the upstream Dhan connection
 // dhan_feed.py protects with real exponential backoff) - a flat retry is
 // simple and plenty.
@@ -36,13 +34,17 @@ function keyOf(s: QuoteSubscription): string {
   return `${s.exchange}:${s.symbol}`;
 }
 
-// A WS handshake fails outright on a scheme mismatch (unlike a plain
-// fetch()), so this derives ws:/wss: from the page's own scheme rather
-// than hardcoding http: the way this frontend's other *_BASE_URL
-// constants do.
+// Same-origin, through this frontend's own nginx (see its /ws/ location
+// block) rather than a direct browser connection to market-data-backend's
+// bare port - that port isn't guaranteed reachable from outside Docker
+// (e.g. a VPS firewall/security group that only opens frontend ports), and
+// an unreachable bare port fails the handshake with no server-side trace
+// at all, silently degrading every Live Chart tab to REST polling. A WS
+// handshake fails outright on a scheme mismatch (unlike a plain fetch()),
+// so this derives ws:/wss: from the page's own scheme.
 function wsUrl(): string {
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.hostname}:${MARKET_DATA_PORT}/ws/quotes`;
+  return `${scheme}//${location.host}/ws/quotes`;
 }
 
 /** Subscribes to a small set of (exchange, symbol) quotes over one shared

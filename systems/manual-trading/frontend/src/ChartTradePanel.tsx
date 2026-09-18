@@ -461,6 +461,66 @@ export default function ChartTradePanel({
   );
   const isThisGroup = useCallback((g: ManualOptionGroup) => g.underlying_symbol.toUpperCase() === sym, [sym]);
 
+  // Last known-good (live_price, unrealized_pnl) per position/leg id - a
+  // single throttled Dhan quote batch failing (or exceeding
+  // MAX_THROTTLE_WAIT_SECONDS under contention from every other poller
+  // sharing that same rate limit - see compute_unrealized_pnl/
+  // compute_group_unrealized_pnl in execution's position_manager.py/
+  // option_position_manager.py) makes THAT tick's live_price/
+  // unrealized_pnl come back null for an otherwise still-open position,
+  // even though nothing about the trade actually changed - without this,
+  // the card's LTP/P&L blink blank and back every time that happens.
+  // Carried forward here instead of ever showing a blank flash; only
+  // cleared once the id itself is gone (a real close).
+  const lastGoodRef = useRef<Map<string, { ltp: number; pnl: number }>>(new Map());
+  const fillLiveGaps = useCallback((pos: ManualPosition | null, grp: ManualOptionGroup | null) => {
+    const cache = lastGoodRef.current;
+    const liveIds = new Set<string>();
+    if (pos) {
+      liveIds.add(pos.id);
+      if (pos.live_price != null && pos.unrealized_pnl != null) {
+        cache.set(pos.id, { ltp: pos.live_price, pnl: pos.unrealized_pnl });
+      } else {
+        const last = cache.get(pos.id);
+        if (last) {
+          pos.live_price = last.ltp;
+          pos.unrealized_pnl = last.pnl;
+        }
+      }
+    }
+    if (grp) {
+      liveIds.add(grp.id);
+      for (const leg of grp.legs) {
+        liveIds.add(leg.id);
+        if (leg.live_price != null && leg.unrealized_pnl != null) {
+          cache.set(leg.id, { ltp: leg.live_price, pnl: leg.unrealized_pnl });
+        } else {
+          const last = cache.get(leg.id);
+          if (last) {
+            leg.live_price = last.ltp;
+            leg.unrealized_pnl = last.pnl;
+          }
+        }
+      }
+      // The group's own combined figures follow the same fallback, keyed
+      // off the group id alongside its legs'.
+      if (grp.unrealized_pnl != null) {
+        cache.set(grp.id, { ltp: grp.live_combined_price ?? 0, pnl: grp.unrealized_pnl });
+      } else {
+        const last = cache.get(grp.id);
+        if (last) {
+          grp.live_combined_price = last.ltp;
+          grp.unrealized_pnl = last.pnl;
+        }
+      }
+    }
+    // Drop anything no longer part of the live trade - a genuine close,
+    // not a transient quote miss.
+    for (const id of cache.keys()) {
+      if (!liveIds.has(id)) cache.delete(id);
+    }
+  }, []);
+
   // --- Poll: LTP + open-position live P&L (+ backend-close detection).
   // History refreshes on the open→closed edge, not every tick. ---
   const refreshOpen = useCallback(async (): Promise<boolean | null> => {
@@ -472,13 +532,14 @@ export default function ChartTradePanel({
       ]);
       const pos = positions.find(isStandaloneFuture) ?? null;
       const grp = groups.find(isThisGroup) ?? null;
+      fillLiveGaps(pos, grp);
       setOpenPos(pos);
       setOpenGroup(grp);
       return pos != null || grp != null;
     } catch {
       return null;
     }
-  }, [sym, segment, isStandaloneFuture, isThisGroup]);
+  }, [sym, segment, isStandaloneFuture, isThisGroup, fillLiveGaps]);
 
   const refreshHistory = useCallback(async () => {
     if (!sym) return;

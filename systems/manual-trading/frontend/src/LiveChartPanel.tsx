@@ -2905,6 +2905,28 @@ export function LiveChartPanel({
     };
   }, []);
 
+  // The shell (shell/index.html) keeps every tab's iframe mounted and
+  // toggles display:none/block on tab switch rather than tearing it down
+  // (see its own activate()) - the ResizeObserver above doesn't reliably
+  // see a size change on that transition in every browser/network
+  // condition (observed live: tick data/LTP kept updating fine since
+  // that's plain text, but the canvas stayed frozen at whatever it last
+  // painted while hidden - only reproduced through the shell on a
+  // higher-latency host, not standalone or on a fast local one, pointing
+  // at a timing-sensitive resize-detection race rather than a data
+  // problem). The shell posts this message to a tab's iframe right after
+  // activating it - an explicit resize call here covers the gap
+  // regardless of the exact browser quirk. No-op outside the shell
+  // (nothing ever posts this message standalone).
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (!event.data || event.data.source !== "algo-trading-shell" || event.data.type !== "tab-activated") return;
+      chartRef.current?.resize();
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
   // --- Reconcile the chart's indicators against `indicators`: this runs
   // on mount (applying the remembered set) and on every toggle. Overlay
   // indicators stack on the candle pane; the rest each get their own

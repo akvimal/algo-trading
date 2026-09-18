@@ -613,6 +613,20 @@
       document
         .querySelectorAll(".frame-wrap > *")
         .forEach((el) => el.classList.toggle("active", el.id === `frame-${id}`));
+      // Every tab's iframe is created up front and just toggled between
+      // display:none/block above - never torn down/recreated - so a chart
+      // living in one (manual-trading's Live Chart) can miss its own
+      // ResizeObserver firing on that transition (ticks/LTP keep updating
+      // fine since that's plain text; only the canvas paint gets stuck -
+      // reproduced live on a higher-latency host, timing-sensitive rather
+      // than every time). Nudge the newly-active tab's iframe to resize its
+      // own chart explicitly rather than relying solely on that observer -
+      // ignored by any iframe with no listener for it (every tab but Live
+      // Chart today).
+      const activeIframe = document.getElementById(`frame-${id}`);
+      if (activeIframe && activeIframe.tagName === "IFRAME" && activeIframe.contentWindow && activeIframe.dataset.origin) {
+        activeIframe.contentWindow.postMessage({ source: "algo-trading-shell", type: "tab-activated" }, activeIframe.dataset.origin);
+      }
     }
 
     // --- Discipline score badge, next to the username -------------------

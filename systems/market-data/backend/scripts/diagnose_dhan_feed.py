@@ -24,7 +24,18 @@ import time
 sys.path.insert(0, "/app")
 
 from app.config import settings  # noqa: E402
-from app.providers.dhan import current_access_token  # noqa: E402
+from app.providers.dhan import current_access_token, load_persisted_credentials  # noqa: E402
+
+# This script runs as a brand-new process (docker exec spawns a fresh
+# interpreter, sharing no memory with the real uvicorn process) - it never
+# goes through app.main's startup event, so without this call it would see
+# whatever's in the raw DHAN_CLIENT_ID/DHAN_ACCESS_TOKEN env vars only
+# (blank on any deployment that relies on a UI-submitted/renewed token
+# persisted to disk instead - see dhan.py's own comment on
+# settings.dhan_access_token vs the _renewed_token slot). Mirrors exactly
+# what app.main does at boot so this script sees the same credentials the
+# real process does.
+load_persisted_credentials()
 
 FEED_HOST = "api-feed.dhan.co"
 FEED_PORT = 443

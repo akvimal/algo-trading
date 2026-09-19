@@ -10,12 +10,14 @@ import {
   fetchDhanStatus,
   fetchFeedStatus,
   fetchHealth,
+  fetchNewsSettings,
   fetchSyncStatus,
   renewDhanToken,
   subscribeDeltaFeed,
   subscribeFeed,
   triggerSync,
   updateDhanCredentials,
+  updateNewsSettings,
 } from "./api";
 
 const POLL_INTERVAL_MS = 5000;
@@ -375,6 +377,71 @@ function DhanCredentialsPanel() {
   );
 }
 
+// AI model used for the Live Chart News tab's digest (see
+// app/providers/news.py's _analyze_via_ai) - free-text OpenRouter model
+// slug (e.g. "anthropic/claude-haiku-4.5", "deepseek/deepseek-v4-flash-0731")
+// rather than a fixed dropdown, since the model landscape moves faster
+// than this UI would be maintained. Same in-memory/no-restart-persistence
+// tradeoff as DhanCredentialsPanel above.
+function NewsAiSettingsPanel() {
+  const [current, setCurrent] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchNewsSettings()
+      .then((s) => {
+        setCurrent(s.openrouter_model);
+        setDraft(s.openrouter_model);
+      })
+      .catch(() => {
+        // Same "don't block the rest of the page" reasoning as the other panels.
+      });
+  }, []);
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const updated = await updateNewsSettings(trimmed);
+      setCurrent(updated.openrouter_model);
+      setDraft(updated.openrouter_model);
+      setMessage("Saved - takes effect on the next News tab cache refresh.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2>News digest AI model</h2>
+      <p className="status-line">
+        OpenRouter model slug for the Live Chart News tab's AI digest (text-only - see openrouter.ai/models). No
+        restart needed, but reverts to .env's OPENROUTER_MODEL on one.
+      </p>
+      <div className="subscribe-form">
+        <input
+          type="text"
+          autoComplete="off"
+          placeholder="e.g. anthropic/claude-haiku-4.5"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button type="button" onClick={handleSave} disabled={saving || !draft.trim() || draft.trim() === current}>
+          {saving ? "Saving..." : "Save"}
+        </button>
+      </div>
+      {message && <p className="status-line">{message}</p>}
+      {current && <p className="status-line">Currently: {current}</p>}
+    </section>
+  );
+}
+
 export default function App() {
   return (
     <main>
@@ -385,6 +452,7 @@ export default function App() {
         <HealthPanel />
         <DataFreshnessPanel />
         <DhanCredentialsPanel />
+        <NewsAiSettingsPanel />
         <LiveFeedPanel
           title="Dhan live feed"
           fetchStatus={fetchFeedStatus}

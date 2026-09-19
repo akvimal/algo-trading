@@ -157,3 +157,26 @@ export async function subscribeDeltaFeed(exchange: Exchange, symbol: string): Pr
   });
   return asJson(res, "POST /delta/feed/subscribe");
 }
+
+// OpenRouter model used for the Live Chart News tab's AI digest (see
+// app/providers/news.py's _analyze_via_ai) - text-only, distinct from
+// signal-engine's own Weekly Advisor vision-model setting. In-memory only
+// (same caveat as updateDhanCredentials above): no restart needed, but
+// reverts to .env's OPENROUTER_MODEL on one.
+export type NewsAiSettings = {
+  openrouter_model: string;
+};
+
+export async function fetchNewsSettings(): Promise<NewsAiSettings> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/news/settings`);
+  return asJson(res, "GET /news/settings");
+}
+
+export async function updateNewsSettings(openrouterModel: string): Promise<NewsAiSettings> {
+  const res = await fetch(`${MARKET_DATA_BASE_URL}/news/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ openrouter_model: openrouterModel }),
+  });
+  return asJson(res, "PUT /news/settings");
+}

@@ -154,7 +154,7 @@ def _analyze_via_ai(symbol: str, screenshot: bytes, api_key: Optional[str] = Non
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
-                "model": settings.openrouter_model,
+                "model": settings.openrouter_vision_model,
                 "messages": [
                     {
                         "role": "system",
@@ -249,7 +249,7 @@ def get_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None) -> O
             row.pros = analysis.get("pros")
             row.cons = analysis.get("cons")
             row.reasons = analysis.get("reasons")
-            row.ai_model = settings.openrouter_model
+            row.ai_model = settings.openrouter_vision_model
             row.analyzed_at = now
         db.commit()
         db.refresh(row)

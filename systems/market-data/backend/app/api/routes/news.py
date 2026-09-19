@@ -4,6 +4,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters import accounts_client
@@ -74,3 +75,27 @@ def get_news_history(underlying: str, day: Optional[date] = Query(None), db: Ses
         .all()
     )
     return [NewsHistoryPoint.model_validate(row) for row in rows]
+
+
+class NewsAiSettings(BaseModel):
+    # The OpenRouter model _analyze_via_ai sends headlines to - text-only,
+    # separate from signal-engine's own openrouter_vision_model setting
+    # (that one needs a vision-capable model for its screenshot read).
+    openrouter_model: str
+
+
+@router.get("/news/settings", response_model=NewsAiSettings)
+def get_news_settings():
+    return NewsAiSettings(openrouter_model=settings.openrouter_model)
+
+
+@router.put("/news/settings", response_model=NewsAiSettings)
+def update_news_settings(payload: NewsAiSettings):
+    """In-memory only, same pattern as PUT /dhan/credentials - takes effect
+    on the next cache refresh (see _NEWS_TTL_SECONDS), no restart needed,
+    but reverts to OPENROUTER_MODEL from .env on one."""
+    model = payload.openrouter_model.strip()
+    if not model:
+        raise HTTPException(status_code=422, detail="openrouter_model must not be blank")
+    settings.openrouter_model = model
+    return NewsAiSettings(openrouter_model=settings.openrouter_model)

@@ -78,11 +78,15 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
 
     # Weekly Advisor fundamentals (app/domain/weekly_advisor/screener_fetch.py)
-    # - same OpenRouter account/model market-data's news.py already uses, a
-    # vision-capable model here instead of text-only (the call sends a
-    # screener.in screenshot, not headlines).
+    # - same OpenRouter account market-data's news.py already uses, but its
+    # own model setting (openrouter_vision_model, distinct from that
+    # service's text-only openrouter_model) since the call sends a
+    # screener.in screenshot, not headlines - a vision-capable model is
+    # required here, and the two call sites' best model choice can differ
+    # (e.g. for A/B'ing an open model against Claude Haiku on one leg
+    # without touching the other).
     openrouter_api_key: str = ""
-    openrouter_model: str = "anthropic/claude-haiku-4.5"
+    openrouter_vision_model: str = "anthropic/claude-haiku-4.5"
     # How long a captured screenshot + AI fundamentals read is trusted
     # before the next request re-fetches - screener.in's own content only
     # moves on a new quarterly result/corporate action, so re-scraping

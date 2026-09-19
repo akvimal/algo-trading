@@ -8,11 +8,13 @@ import {
   fetchWeeklyAdvisorHistory,
   fetchWeeklyAdvisorPerformance,
   fetchWeeklyAdvisorRecommendations,
+  fetchWeeklyAdvisorSettings,
   fetchWeeklyAdvisorTrades,
   saveWeeklyAdvisorRecommendation,
   screenerScreenshotUrl,
   setWeeklyAdvisorDecision,
   updateWatchlist,
+  updateWeeklyAdvisorSettings,
   updateWeeklyAdvisorTradeEntry,
   type SavedWeeklyRecommendation,
   type Watchlist,
@@ -46,7 +48,7 @@ const RUN_CHUNK_SIZE = 20;
 // engine, plus explicit save/journal/performance below.
 const DEFAULT_SYMBOLS = "RELIANCE,TCS,HDFCBANK,ABB,TATASTEEL";
 
-type SubTab = "run" | "history" | "performance";
+type SubTab = "run" | "history" | "performance" | "settings";
 
 const BIAS_BADGE: Record<WeeklyRecommendation["regime"]["bias"], string> = {
   bullish: "badge-buy",
@@ -1482,6 +1484,70 @@ function PerformanceTab() {
   );
 }
 
+// Free-text OpenRouter model slug for the fundamentals screenshot read
+// (screener_fetch.py needs a vision-capable model) - not a fixed dropdown,
+// same reasoning as market-data's NewsAiSettingsPanel.
+function SettingsTab() {
+  const [current, setCurrent] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchWeeklyAdvisorSettings()
+      .then((s) => {
+        setCurrent(s.openrouter_vision_model);
+        setDraft(s.openrouter_vision_model);
+      })
+      .catch(() => {
+        // Same "don't block the rest of the tab" reasoning as elsewhere.
+      });
+  }, []);
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const updated = await updateWeeklyAdvisorSettings(trimmed);
+      setCurrent(updated.openrouter_vision_model);
+      setDraft(updated.openrouter_vision_model);
+      setMessage("Saved - takes effect on the next fundamentals fetch.");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="panel weekly-advisor-card">
+      <h3>Fundamentals AI model</h3>
+      <p className="subtitle">
+        OpenRouter model slug (see openrouter.ai/models) used to read each symbol's screener.in screenshot - must
+        support image input. No restart needed, but reverts to .env's OPENROUTER_VISION_MODEL on one. Already-cached
+        fundamentals (see weekly_advisor_fundamentals_cache_days, default 90d) keep whatever model produced them
+        until their own cache expires.
+      </p>
+      <div className="settings-row">
+        <input
+          type="text"
+          autoComplete="off"
+          placeholder="e.g. anthropic/claude-haiku-4.5"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button type="button" onClick={handleSave} disabled={saving || !draft.trim() || draft.trim() === current}>
+          {saving ? "Saving..." : "Save"}
+        </button>
+      </div>
+      {message && <p className="hint">{message}</p>}
+      {current && <p className="hint">Currently: {current}</p>}
+    </div>
+  );
+}
+
 export default function WeeklyAdvisorPage() {
   const [subTab, setSubTab] = useState<SubTab>("run");
 
@@ -1497,8 +1563,11 @@ export default function WeeklyAdvisorPage() {
         <button className={subTab === "performance" ? "active" : ""} onClick={() => setSubTab("performance")}>
           Performance
         </button>
+        <button className={subTab === "settings" ? "active" : ""} onClick={() => setSubTab("settings")}>
+          Settings
+        </button>
       </nav>
-      {/* All three stay mounted permanently (hidden via the `hidden` attribute,
+      {/* All four stay mounted permanently (hidden via the `hidden` attribute,
           not conditional rendering) - Run's batch results (and its filters) used
           to reset every time a subtab switch unmounted it, losing an expensive
           multi-minute run just from clicking over to History and back. */}
@@ -1510,6 +1579,9 @@ export default function WeeklyAdvisorPage() {
       </div>
       <div hidden={subTab !== "performance"}>
         <PerformanceTab />
+      </div>
+      <div hidden={subTab !== "settings"}>
+        <SettingsTab />
       </div>
     </>
   );

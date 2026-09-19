@@ -68,9 +68,12 @@ services:
       # own comment). Must match ACCOUNTS_JWT_SECRET exactly.
       JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
       # Weekly Advisor fundamentals (app/domain/weekly_advisor/screener_fetch.py)
-      # - same OpenRouter account market-data's news.py already uses.
+      # - same OpenRouter account market-data's news.py already uses, but
+      # its own model setting (a vision model, since this call sends a
+      # screener.in screenshot) so it can be A/B'd independently of
+      # market-data's text-only OPENROUTER_MODEL.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-4.5}
+      OPENROUTER_VISION_MODEL: ${OPENROUTER_VISION_MODEL:-anthropic/claude-haiku-4.5}
       WEEKLY_ADVISOR_FUNDAMENTALS_CACHE_DAYS: ${WEEKLY_ADVISOR_FUNDAMENTALS_CACHE_DAYS:-90}
       # BYO OpenRouter key (2026-09-16, app/adapters/accounts_client.py) -
       # same pair market-data's own accounts_client.py uses to reach

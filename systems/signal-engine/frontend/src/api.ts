@@ -2245,3 +2245,23 @@ export async function fetchWeeklyAdvisorPerformance(symbol?: string): Promise<We
   const res = await fetch(`${API_BASE_URL}/weekly-advisor/performance/summary${params}`);
   return asJson(res, "GET /weekly-advisor/performance/summary");
 }
+
+// The OpenRouter model screener_fetch.py sends the screener.in screenshot
+// to (vision-capable, distinct from market-data's own text-only News tab
+// model). In-memory only - no restart needed, but reverts to .env's
+// OPENROUTER_VISION_MODEL on one.
+export type WeeklyAdvisorSettings = { openrouter_vision_model: string };
+
+export async function fetchWeeklyAdvisorSettings(): Promise<WeeklyAdvisorSettings> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/settings`);
+  return asJson(res, "GET /weekly-advisor/settings");
+}
+
+export async function updateWeeklyAdvisorSettings(openrouterVisionModel: string): Promise<WeeklyAdvisorSettings> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ openrouter_vision_model: openrouterVisionModel }),
+  });
+  return asJson(res, "PUT /weekly-advisor/settings");
+}

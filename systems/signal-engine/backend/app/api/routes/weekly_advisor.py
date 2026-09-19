@@ -6,12 +6,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters import accounts_client
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.auth import get_optional_user_id
+from app.config import settings
 from app.domain.weekly_advisor.contracts import WeeklyRecommendation
 from app.domain.weekly_advisor.journal import (
     DecisionSet,
@@ -338,3 +340,30 @@ def get_performance_summary(symbol: Optional[str] = None, db: Session = Depends(
     rows = query.all()
     trades = [_to_trade_out(trade, rec) for trade, rec in rows]
     return compute_performance_summary(trades)
+
+
+class WeeklyAdvisorSettings(BaseModel):
+    # The OpenRouter model screener_fetch.py's _analyze_via_ai sends the
+    # screener.in screenshot to - see app/config.py's own comment for why
+    # this is a separate setting from market-data's (text-only) one.
+    openrouter_vision_model: str
+
+
+@router.get("/weekly-advisor/settings", response_model=WeeklyAdvisorSettings)
+def get_weekly_advisor_settings():
+    return WeeklyAdvisorSettings(openrouter_vision_model=settings.openrouter_vision_model)
+
+
+@router.put("/weekly-advisor/settings", response_model=WeeklyAdvisorSettings)
+def update_weekly_advisor_settings(payload: WeeklyAdvisorSettings):
+    """In-memory only, like market-data's own PUT /settings - takes effect
+    on the very next fundamentals read, no restart needed, but reverts to
+    OPENROUTER_VISION_MODEL from .env on one. Only affects future reads;
+    already-cached weekly_advisor_fundamentals rows (see
+    weekly_advisor_fundamentals_cache_days) keep whatever model produced
+    them until their own TTL expires and they're re-fetched."""
+    model = payload.openrouter_vision_model.strip()
+    if not model:
+        raise HTTPException(status_code=422, detail="openrouter_vision_model must not be blank")
+    settings.openrouter_vision_model = model
+    return WeeklyAdvisorSettings(openrouter_vision_model=settings.openrouter_vision_model)

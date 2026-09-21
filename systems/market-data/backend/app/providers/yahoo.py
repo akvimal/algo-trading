@@ -45,6 +45,17 @@ def get_candle_history(exchange: str, symbol: str, interval: str, from_date: dat
     df = yf.Ticker(yahoo_symbol).history(start=from_date, end=to_date + timedelta(days=1), interval=yf_interval)
     if df.empty:
         raise ValueError(f"no Yahoo Finance data for '{symbol}' ({yahoo_symbol}) - unknown symbol or no data in range")
+    # Yahoo's own history has NaN OHLC rows for some NSE symbols with messy
+    # corporate history (a moratorium, a demerger/relisting, a recent IPO -
+    # e.g. YESBANK/INDUSTOWER/PAYTM) - float(nan) builds a Candle fine, but
+    # FastAPI's strict JSON encoder then 500s on the whole response trying
+    # to serialize it (json.dumps(..., allow_nan=False), so ONE bad row
+    # anywhere in the range broke the entire fetch). Drop incomplete rows
+    # before building candles rather than after - the caller only ever
+    # wants complete, chartable bars anyway.
+    df = df.dropna(subset=["Open", "High", "Low", "Close", "Volume"])
+    if df.empty:
+        raise ValueError(f"no complete Yahoo Finance data for '{symbol}' ({yahoo_symbol}) in range - every row had a gap")
 
     candles = []
     for ts, row in df.iterrows():

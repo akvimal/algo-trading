@@ -92,39 +92,6 @@
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
-  /* Discipline score badge, next to the username - see
-     refreshDisciplineBadge()/computeDisciplineScoreJs() below. Colour
-     mirrors discipline.ts's disciplineColor() (good/warn/bad/dim). */
-  .discipline-badge {
-    align-self: center;
-    margin-bottom: 0.6rem;
-    padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    cursor: pointer;
-    border: 1px solid transparent;
-  }
-  .discipline-badge.is-good {
-    background: rgba(62, 207, 142, 0.15);
-    color: var(--buy);
-    border-color: rgba(62, 207, 142, 0.35);
-  }
-  .discipline-badge.is-warn {
-    background: rgba(224, 176, 88, 0.15);
-    color: #e0b058;
-    border-color: rgba(224, 176, 88, 0.35);
-  }
-  .discipline-badge.is-bad {
-    background: rgba(232, 88, 106, 0.15);
-    color: var(--sell);
-    border-color: rgba(232, 88, 106, 0.35);
-  }
-  .discipline-badge.is-dim {
-    background: var(--surface-raised, #1a1f27);
-    color: var(--text-dim);
-    border-color: var(--border);
-  }
   .user-logout-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -170,65 +137,6 @@
   .notif-sound-label.active {
     display: flex;
   }
-  /* OI ticker settings (Show / Hide neutral) - a single gear button
-     instead of checkboxes sitting directly in the header (an earlier
-     "Hide neutral" checkbox took up header space on its own; this is the
-     same two settings behind one icon, so the header cost stays constant
-     regardless of how many ticker settings there end up being). */
-  .oi-settings {
-    position: relative;
-    padding-bottom: 0.6rem;
-    flex-shrink: 0;
-  }
-  .oi-settings-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-dim);
-    font-size: 0.85rem;
-    line-height: 1;
-    padding: 0.3rem 0.5rem;
-    cursor: pointer;
-  }
-  .oi-settings-toggle:hover,
-  .oi-settings-toggle.active {
-    color: var(--text);
-    border-color: var(--text-dim);
-  }
-  .oi-settings-menu {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 0.4rem;
-    padding: 0.55rem 0.75rem;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-    font-size: 0.8rem;
-    color: var(--text-dim);
-    white-space: nowrap;
-    z-index: 20;
-  }
-  /* Wins the display tie over .oi-settings-menu above by appearing later
-     in the sheet - an attribute selector alone won't beat a class rule of
-     equal specificity that comes first, and native <button hidden> vs. an
-     author display:flex rule would otherwise leave it visible. */
-  .oi-settings-menu[hidden] {
-    display: none;
-  }
-  .oi-settings-menu label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    cursor: pointer;
-  }
-  .oi-settings-menu input {
-    margin: 0;
-  }
   #notif-blocked {
     display: none;
     font-size: 0.72rem;
@@ -237,85 +145,6 @@
   }
   #notif-blocked.active {
     display: block;
-  }
-  /* Ported from manual-trading's own SentimentBadges.tsx (moved here
-     2026-09-01, same "one shared display instead of a per-module copy"
-     reasoning as user-area/notif-area above - visible regardless of
-     which tab is active, not just while viewing Manual Trading's OI
-     page). Font sizes are a notch larger than that component's own
-     (0.78/0.68/0.7rem there) - more prominent up here in the shared
-     header than it was as a secondary readout on one tab's own page. */
-  .sentiment-bar {
-    display: flex;
-    gap: 0.9rem;
-    font-size: 0.9rem;
-    padding-bottom: 0.6rem;
-    flex-shrink: 0;
-  }
-  .sentiment-segment {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-  .segment-label {
-    font-size: 0.76rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--text-dim);
-  }
-  .sentiment-badge {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    color: var(--text-dim);
-    cursor: pointer;
-    /* Reset - this is a real <button> now (see renderSentimentBar), not
-       a <span>, so it needs its own browser button chrome stripped
-       rather than inheriting .sentiment-bar's plain text look for free. */
-    background: none;
-    border: none;
-    padding: 0;
-    margin: 0;
-    font: inherit;
-  }
-  .sentiment-badge:hover {
-    color: var(--text);
-  }
-  .sentiment-badge.bullish:hover {
-    color: var(--buy);
-    text-decoration: underline;
-  }
-  .sentiment-badge.bearish:hover {
-    color: var(--sell);
-    text-decoration: underline;
-  }
-  .sentiment-badge .symbol {
-    color: var(--text);
-  }
-  .sentiment-badge.bullish {
-    color: var(--buy);
-  }
-  .sentiment-badge.bearish {
-    color: var(--sell);
-  }
-  .sentiment-badge .glyph {
-    font-size: 0.8rem;
-    letter-spacing: -0.05em;
-  }
-  /* Briefly pulses a badge whose direction/strength just changed - same
-     4s window as SentimentBadges.tsx's own FLASH_DURATION_MS. */
-  .sentiment-badge.flash {
-    animation: sentiment-flash 0.8s ease-in-out 5;
-    border-radius: 4px;
-  }
-  @keyframes sentiment-flash {
-    0%, 100% {
-      background: transparent;
-    }
-    50% {
-      background: rgba(76, 139, 245, 0.35);
-    }
   }
   .frame-wrap {
     flex: 1;
@@ -364,23 +193,6 @@
   <div class="top-bar">
     <nav id="tabs"></nav>
     <div class="top-bar-right">
-      <div class="sentiment-bar" id="sentiment-bar"></div>
-      <div class="oi-settings" id="oi-settings">
-        <button type="button" class="oi-settings-toggle" id="oi-settings-toggle" title="OI ticker settings" aria-haspopup="true">
-          ⚙
-        </button>
-        <div class="oi-settings-menu" id="oi-settings-menu" hidden>
-          <label>
-            <input type="checkbox" id="oi-settings-show" />
-            Show
-          </label>
-          <label>
-            <input type="checkbox" id="oi-settings-hide-neutral" />
-            Hide neutral
-          </label>
-        </div>
-      </div>
-      <div class="discipline-badge" id="discipline-badge" title="Discipline score - click to see the full breakdown" hidden></div>
       <div class="user-area" id="user-area"></div>
       <div class="notif-area">
         <span id="notif-blocked"></span>
@@ -519,18 +331,18 @@
         setSharedToken(data.token);
         broadcastToken(data.token, event.source);
         refreshUserArea();
-        refreshDisciplineBadge();
       } else if (data.type === "navigate-oi" && typeof data.symbol === "string") {
         // Live Chart's "OI Analysis" link - same jump the sentiment
-        // badges already do (goToOiTab), but requested from inside the
+        // badges used to (goToOiTab), but requested from inside the
         // Intraday iframe rather than clicked here in the shell header.
         goToOiTab(data.symbol);
       } else if (data.type === "navigate-intraday" && typeof data.symbol === "string") {
         // The OI page's "Intraday Chart" link - the reverse jump.
         goToIntradayTab(data.symbol);
       } else if (data.type === "navigate-discipline") {
-        // Performance page's "Discipline score" link, and the header
-        // badge's own click handler below - same tab, two entry points.
+        // Performance page's "Discipline score" link - the header badge
+        // that used to also fire this was moved into the Intraday page's
+        // own tab bar 2026-09-21 (see LiveChartPage.tsx).
         activate("manual-trading-discipline");
       }
     });
@@ -583,7 +395,6 @@
         setSharedToken(null);
         broadcastToken(null);
         renderUserArea(null);
-        disciplineBadgeEl.hidden = true;
       };
       userAreaEl.appendChild(logoutBtn);
     }
@@ -606,7 +417,6 @@
     }
 
     refreshUserArea();
-    refreshDisciplineBadge();
 
     function activate(id) {
       document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === id));
@@ -628,165 +438,6 @@
         activeIframe.contentWindow.postMessage({ source: "algo-trading-shell", type: "tab-activated" }, activeIframe.dataset.origin);
       }
     }
-
-    // --- Discipline score badge, next to the username -------------------
-    // A single 0-100 read on trading HABITS (not just outcomes) - see
-    // systems/manual-trading/frontend/src/discipline.ts for the full
-    // design/reasoning and docs/architecture.md's own writeup. Deliberately
-    // DUPLICATED here in vanilla JS rather than shared - shell is a
-    // separate static app with no build step, same "small enough that
-    // copying beats adding a cross-system frontend dependency" precedent
-    // as SignalNotifier. Keep the two in sync if the formula changes.
-    const EXECUTION_BACKEND_PORT = 8002;
-    const DISCIPLINE_WINDOW_DAYS = 30;
-    const DISCIPLINE_MIN_TRADES = 5;
-    const disciplineBadgeEl = document.getElementById("discipline-badge");
-    disciplineBadgeEl.onclick = () => activate("manual-trading-discipline");
-
-    function dayKeyOf(iso) {
-      return new Date(iso).toLocaleDateString("en-CA");
-    }
-
-    function disciplineWindowTrades(trades, days) {
-      if (trades.length === 0) return { trades: [], windowStart: null };
-      const sorted = [...trades].sort((a, b) => b.exit_time.localeCompare(a.exit_time));
-      const activeDays = [];
-      const seen = new Set();
-      for (const t of sorted) {
-        const k = dayKeyOf(t.exit_time);
-        if (!seen.has(k)) {
-          seen.add(k);
-          activeDays.push(k);
-          if (activeDays.length >= days) break;
-        }
-      }
-      const cutoff = new Set(activeDays);
-      return { trades: sorted.filter((t) => cutoff.has(dayKeyOf(t.exit_time))), windowStart: activeDays[activeDays.length - 1] ?? null };
-    }
-
-    // Redesigned 2026-09-09 around the plan - keep in sync with
-    // manual-trading/frontend/src/discipline.ts. Four weighted components:
-    //   planned (1x)      - Limit order with a stop
-    //   adherence (2x)    - given a plan, let it run (not a manual bail)
-    //   review (2x)       - setup+confidence declared before AND after
-    //   outcome (1x)      - win rate blended with realized R
-    // Auto-trader fills (auto_traded) are excluded.
-    function computeDisciplineScoreJs(trades, days) {
-      const nonAuto = trades.filter((t) => !t.auto_traded);
-      const { trades: windowed } = disciplineWindowTrades(nonAuto, days);
-      if (windowed.length < DISCIPLINE_MIN_TRADES) return null;
-
-      const mean = (vals) => (vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null);
-      const hasPlan = (t) => t.order_type === "limit" && t.stop_loss_price != null;
-
-      const plannedRate = mean(windowed.map((t) => (hasPlan(t) ? 1 : 0)));
-      const adherenceRate = mean(windowed.map((t) => (!hasPlan(t) ? 0 : t.exit_reason === "manual" ? 0.4 : 1)));
-      const reviewRate = mean(
-        windowed.map(
-          (t) =>
-            0.5 * (t.entry_setup_tag && t.entry_confidence != null ? 1 : 0) +
-            0.5 * (t.reviewed && t.setup_tag && t.confidence != null ? 1 : 0),
-        ),
-      );
-
-      const withPnl = windowed.filter((t) => t.pnl != null);
-      const winRate = withPnl.length > 0 ? withPnl.filter((t) => t.pnl > 0).length / withPnl.length : null;
-      const rValues = windowed
-        .map((t) => {
-          if (t.pnl == null || t.entry_price == null || t.stop_loss_price == null || t.quantity == null) return null;
-          if (t.entry_price === t.stop_loss_price) return null;
-          const risk = Math.abs(t.entry_price - t.stop_loss_price) * t.quantity;
-          return risk > 0 ? t.pnl / risk : null;
-        })
-        .filter((r) => r != null);
-      const avgR = rValues.length > 0 ? rValues.reduce((s, r) => s + r, 0) / rValues.length : null;
-      let outcomeRate = null;
-      if (winRate != null && avgR != null) outcomeRate = 0.5 * winRate + 0.5 * Math.max(0, Math.min(1, avgR / 2));
-      else if (winRate != null) outcomeRate = winRate;
-
-      const parts = [];
-      if (plannedRate != null) parts.push([plannedRate, 1]);
-      if (adherenceRate != null) parts.push([adherenceRate, 2]);
-      if (reviewRate != null) parts.push([reviewRate, 2]);
-      if (outcomeRate != null) parts.push([outcomeRate, 1]);
-      const totalW = parts.reduce((s, p) => s + p[1], 0);
-      if (totalW === 0) return null;
-      return Math.round((parts.reduce((s, p) => s + p[0] * p[1], 0) / totalW) * 100);
-    }
-
-    function disciplineColorOf(score) {
-      if (score == null) return "dim";
-      if (score >= 75) return "good";
-      if (score >= 50) return "warn";
-      return "bad";
-    }
-
-    async function refreshDisciplineBadge() {
-      const token = getSharedToken();
-      if (!token) {
-        disciplineBadgeEl.hidden = true;
-        return;
-      }
-      try {
-        const base = `http://${location.hostname}:${EXECUTION_BACKEND_PORT + PORT_OFFSET}`;
-        const headers = { Authorization: `Bearer ${token}` };
-        const [posRes, groupRes] = await Promise.all([
-          fetch(`${base}/positions?status=CLOSED&manual_only=true&limit=1000`, { headers }),
-          fetch(`${base}/option-groups?status=CLOSED&manual_only=true&limit=1000`, { headers }),
-        ]);
-        if (!posRes.ok || !groupRes.ok) throw new Error("discipline fetch failed");
-        const [positions, groups] = await Promise.all([posRes.json(), groupRes.json()]);
-        const reviewed = (r, n) => r != null || (n != null && String(n).trim().length > 0);
-        const trades = positions
-          .filter((p) => p.option_group_id == null && p.exit_time != null)
-          .map((p) => ({
-            pnl: p.pnl,
-            entry_price: p.entry_price,
-            stop_loss_price: p.stop_loss_price,
-            quantity: p.quantity,
-            exit_time: p.exit_time,
-            exit_reason: p.exit_reason,
-            order_type: p.order_type,
-            entry_setup_tag: p.entry_setup_tag,
-            entry_confidence: p.entry_confidence,
-            setup_tag: p.setup_tag,
-            confidence: p.confidence,
-            reviewed: reviewed(p.reviewed_at, p.notes),
-            auto_traded: p.auto_traded,
-          }))
-          .concat(
-            groups
-              .filter((g) => g.exit_time != null)
-              .map((g) => ({
-                pnl: g.pnl,
-                entry_price: null,
-                stop_loss_price: g.spot_stop_loss_price,
-                quantity: g.quantity,
-                exit_time: g.exit_time,
-                exit_reason: g.exit_reason,
-                order_type: g.order_type,
-                entry_setup_tag: g.entry_setup_tag,
-                entry_confidence: g.entry_confidence,
-                setup_tag: g.setup_tag,
-                confidence: g.confidence,
-                reviewed: reviewed(g.reviewed_at, g.notes),
-                auto_traded: g.auto_traded,
-              })),
-          );
-        const score = computeDisciplineScoreJs(trades, DISCIPLINE_WINDOW_DAYS);
-        disciplineBadgeEl.textContent = `Discipline ${score ?? "—"}`;
-        disciplineBadgeEl.className = `discipline-badge is-${disciplineColorOf(score)}`;
-        disciplineBadgeEl.hidden = false;
-      } catch {
-        // market-data/execution unreachable, or not logged in yet - leave
-        // whatever was last shown (same "don't flap the UI on a transient
-        // error" convention the sentiment bar poll uses) rather than
-        // hiding a badge the user was just looking at.
-      }
-    }
-
-    refreshDisciplineBadge();
-    setInterval(refreshDisciplineBadge, 60000);
 
     // Dhan access-token expiry banner - the NSE/MCX in-house engine (and
     // any Dhan quote call) 401s the instant this token expires, but
@@ -839,146 +490,17 @@
     checkDhanTokenExpiry();
     setInterval(checkDhanTokenExpiry, DHAN_POLL_INTERVAL_MS);
 
-    // --- Global sentiment indicator (visual) --------------------------------
-    // Ported from manual-trading's own SentimentBadges.tsx into plain JS
-    // here (moved 2026-09-01) - same "one shared display instead of a
-    // per-module copy" reasoning as user-area/notif-area above, visible
-    // regardless of which tab is active rather than only while viewing
-    // Manual Trading's own OI page. Runs unconditionally - independent of
-    // Notification support/permission, unlike the notification-bell
-    // section below's OWN pollSentiment(), which only drives the desktop-
-    // notification side of this same underlying data (that one stays
-    // gated on notifEnabled; this one always renders).
-    const sentimentBarEl = document.getElementById("sentiment-bar");
-    const SENTIMENT_STRENGTH_LABEL_DISPLAY = { mild: "Mild", strong: "Strong", very_strong: "Very Strong" };
-
-    // OI ticker settings - "Show" (the whole bar) and "Hide neutral" (only
-    // the underlyings with an actual bullish/bearish read; an errored
-    // badge stays visible either way - that's a data problem, not
-    // "nothing going on"), behind one gear button rather than checkboxes
-    // sitting directly in the header (an earlier version put "Hide
-    // neutral" straight in the header - it cost header space on its own,
-    // and every setting added after it would have too). Both persisted;
-    // "Show" defaults on, "Hide neutral" defaults off - both unchanged
-    // behavior from before this menu existed.
-    const SHOW_SENTIMENT_KEY = "shellShowSentimentBar";
-    const HIDE_NEUTRAL_KEY = "shellHideNeutralSentiment";
-    const oiSettingsEl = document.getElementById("oi-settings");
-    const oiSettingsToggleEl = document.getElementById("oi-settings-toggle");
-    const oiSettingsMenuEl = document.getElementById("oi-settings-menu");
-    const showSentimentEl = document.getElementById("oi-settings-show");
-    const hideNeutralEl = document.getElementById("oi-settings-hide-neutral");
-
-    let showSentimentBar = localStorage.getItem(SHOW_SENTIMENT_KEY) !== "false";
-    let hideNeutralSentiment = localStorage.getItem(HIDE_NEUTRAL_KEY) === "true";
-    showSentimentEl.checked = showSentimentBar;
-    hideNeutralEl.checked = hideNeutralSentiment;
-    // The last poll's payload, so toggling "Hide neutral" re-renders
-    // immediately instead of waiting for the next DHAN_POLL_INTERVAL_MS tick.
-    let lastSentimentData = null;
-
-    function applySentimentBarVisibility() {
-      // Not the `hidden` attribute - .sentiment-bar's own `display: flex`
-      // class rule is equal specificity and declared first, so it would
-      // win the cascade over a bare `[hidden]` selector and leave the bar
-      // showing. A direct inline style always wins.
-      sentimentBarEl.style.display = showSentimentBar ? "" : "none";
-    }
-    applySentimentBarVisibility();
-
-    function closeOiSettingsMenu() {
-      oiSettingsMenuEl.hidden = true;
-      oiSettingsToggleEl.classList.remove("active");
-    }
-    oiSettingsToggleEl.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const willOpen = oiSettingsMenuEl.hidden;
-      oiSettingsMenuEl.hidden = !willOpen;
-      oiSettingsToggleEl.classList.toggle("active", willOpen);
-    });
-    document.addEventListener("click", (ev) => {
-      if (!oiSettingsMenuEl.hidden && !oiSettingsEl.contains(ev.target)) closeOiSettingsMenu();
-    });
-    document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape" && !oiSettingsMenuEl.hidden) closeOiSettingsMenu();
-    });
-
-    showSentimentEl.addEventListener("change", () => {
-      showSentimentBar = showSentimentEl.checked;
-      localStorage.setItem(SHOW_SENTIMENT_KEY, String(showSentimentBar));
-      applySentimentBarVisibility();
-    });
-    hideNeutralEl.addEventListener("change", () => {
-      hideNeutralSentiment = hideNeutralEl.checked;
-      localStorage.setItem(HIDE_NEUTRAL_KEY, String(hideNeutralSentiment));
-      if (lastSentimentData) renderSentimentBar(lastSentimentData, new Set(sentimentFlashTimers.keys()));
-    });
-
-    // Mirrors SentimentBadges.tsx's own fullLabel()/levelGlyph().
-    function sentimentFullLabel(direction, strength) {
-      if (direction === "neutral" || !strength) return "Neutral";
-      return `${direction === "bullish" ? "Bullish" : "Bearish"} (${SENTIMENT_STRENGTH_LABEL_DISPLAY[strength]})`;
-    }
-    function sentimentLevelGlyph(direction, strength) {
-      if (direction === "neutral" || !strength) return "•";
-      const count = strength === "very_strong" ? 3 : strength === "strong" ? 2 : 1;
-      return (direction === "bullish" ? "▲" : "▼").repeat(count);
-    }
-
-    // symbol -> "direction:strength" as of the last poll - null until
-    // seeded, same "don't flash everything just because the bar just
-    // mounted" convention as SentimentBadges.tsx's own prevRef.
-    let prevSentimentDisplay = null;
-    const sentimentFlashTimers = new Map();
-
-    function renderSentimentBar(data, flashingSymbols) {
-      sentimentBarEl.innerHTML = "";
-      for (const [exchange, entry] of Object.entries(data.exchanges ?? {})) {
-        // An errored read stays visible even with "Hide neutral" on - that's
-        // a data problem, not "nothing going on", worth surfacing regardless.
-        const underlyings = (entry.underlyings ?? []).filter(
-          (u) => u.error || !hideNeutralSentiment || u.direction !== "neutral",
-        );
-        if (underlyings.length === 0) continue; // nothing left to show for this exchange - skip its label too
-
-        const segment = document.createElement("span");
-        segment.className = "sentiment-segment";
-
-        const label = document.createElement("span");
-        label.className = "segment-label";
-        label.textContent = exchange;
-        segment.appendChild(label);
-
-        for (const u of underlyings) {
-          // A real <button>, not a <span> - every sentiment underlying
-          // (NIFTY/BANKNIFTY/GOLDM/CRUDEOILM) is also one of OiSummaryPage's
-          // own PRESETS keys, so every badge can jump straight to that
-          // asset's OI tab (see goToOiTab below) - no need to special-case
-          // which ones are clickable.
-          const badge = document.createElement("button");
-          badge.type = "button";
-          const flashing = flashingSymbols.has(u.symbol);
-          badge.className = `sentiment-badge ${u.error ? "neutral" : u.direction}${flashing ? " flash" : ""}`;
-          badge.title = u.error
-            ? `${u.symbol}: no data (${u.error})`
-            : `${u.symbol}: ${sentimentFullLabel(u.direction, u.strength)} - click to open in OI`;
-          badge.onclick = () => goToOiTab(u.symbol);
-
-          const symbolSpan = document.createElement("span");
-          symbolSpan.className = "symbol";
-          symbolSpan.textContent = u.symbol;
-          badge.appendChild(symbolSpan);
-
-          const glyphSpan = document.createElement("span");
-          glyphSpan.className = "glyph";
-          glyphSpan.textContent = u.error ? "?" : sentimentLevelGlyph(u.direction, u.strength);
-          badge.appendChild(glyphSpan);
-
-          segment.appendChild(badge);
-        }
-        sentimentBarEl.appendChild(segment);
-      }
-    }
+    // --- Cross-frontend OI/Intraday navigation --------------------------
+    // goToOiTab/goToIntradayTab used to also back the shell's own global
+    // sentiment badge bar (a badge click jumped to that symbol's OI tab).
+    // That bar moved into manual-trading's Intraday page itself as a
+    // per-instrument-tab glyph (2026-09-21, see LiveChartPage.tsx's
+    // sentimentBySymbol) - contextual to the tab it's about, instead of an
+    // always-on strip that cost every other shell tab header space too.
+    // These two functions stay: they're also each frontend's own
+    // "navigate-oi"/"navigate-intraday" postMessage jump (Live Chart's "OI
+    // Analysis" link and the OI page's "Intraday Chart" link, handled
+    // below in the message listener), unrelated to that badge bar.
 
     // Jumps straight to the OI menu tab (its own iframe of the
     // manual-trading frontend, loaded at ?tab=oi), pre-selected to this
@@ -1008,43 +530,6 @@
       if (!iframe || !iframe.dataset.origin) return;
       iframe.src = `${iframe.dataset.origin}/?symbol=${encodeURIComponent(symbol)}`;
     }
-
-    async function pollSentimentDisplay() {
-      const base = `http://${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
-      try {
-        const res = await fetch(`${base}/options/sentiment`);
-        if (!res.ok) return;
-        const data = await res.json();
-        lastSentimentData = data;
-
-        const next = new Map();
-        for (const [, entry] of Object.entries(data.exchanges ?? {})) {
-          for (const u of entry.underlyings ?? []) next.set(u.symbol, `${u.direction}:${u.strength ?? ""}`);
-        }
-        if (prevSentimentDisplay) {
-          for (const [symbol, key] of next) {
-            if (prevSentimentDisplay.get(symbol) !== key) {
-              clearTimeout(sentimentFlashTimers.get(symbol));
-              sentimentFlashTimers.set(
-                symbol,
-                setTimeout(() => {
-                  sentimentFlashTimers.delete(symbol);
-                  renderSentimentBar(data, new Set(sentimentFlashTimers.keys()));
-                }, 4000),
-              );
-            }
-          }
-        }
-        prevSentimentDisplay = next;
-        renderSentimentBar(data, new Set(sentimentFlashTimers.keys()));
-      } catch {
-        // market-data unreachable or a transient error - leave whatever
-        // was last shown rather than clearing the bar on one missed poll.
-      }
-    }
-
-    pollSentimentDisplay();
-    setInterval(pollSentimentDisplay, DHAN_POLL_INTERVAL_MS);
 
     // --- Global signal-notification bell ------------------------------------
     // Ported from signal-engine's/manual-trading's own (duplicated)

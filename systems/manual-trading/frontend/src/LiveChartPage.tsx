@@ -5,14 +5,17 @@ import {
   type ManualOptionGroup,
   type ManualPosition,
   type Segment,
+  type UnderlyingSentiment,
   fetchAccounts,
   fetchExecPositions,
   fetchOptionGroups,
+  fetchSentiment,
   updateOptionGroupTags,
   updatePositionTags,
 } from "./api";
 import AutoTradePanel from "./AutoTradePanel";
 import ChartTradePanel from "./ChartTradePanel";
+import { type DisciplineTrade, computeDisciplineScore, disciplineColor } from "./discipline";
 import { type ChartContext, type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
 import { type PendingOrder, fetchUnderlyingLtp, fmt, fmtMoney, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
 import SetupCardRow from "./SetupCardRow";
@@ -59,6 +62,93 @@ const PENDING_POLL_MS = 4000;
 // live-P&L readout (no with_live_pnl - a plain existence check for every
 // segment in one pair of calls, cheap and quote-free).
 const ACTIVE_TRADE_POLL_MS = 15_000;
+
+// How often the symbol tab bar re-checks OI sentiment - same cadence as
+// the shell's old global bar (moved here 2026-09-21, see the tab bar's
+// own comment below): each tick is a real Dhan/Delta option-chain fetch
+// per watchlist symbol server-side, no reason to poll more often than the
+// data itself actually refreshes.
+const SENTIMENT_POLL_MS = 5 * 60_000;
+
+// Mirrors SentimentBadges.tsx/the old shell bar's own levelGlyph() - ▲/▼
+// repeated 1-3x for mild/strong/very_strong. Neutral and errored reads
+// return null (render nothing) rather than a "•"/"?" placeholder - unlike
+// that global bar, this glyph sits right on the instrument it's about, so
+// a glyph on every tab all the time would out-clutter the open-trade dot/
+// pending-order hourglass already living there for no real benefit; only
+// an actual directional read earns the space.
+function sentimentGlyph(u: UnderlyingSentiment): string | null {
+  if (u.error || u.direction === "neutral" || !u.strength) return null;
+  const count = u.strength === "very_strong" ? 3 : u.strength === "strong" ? 2 : 1;
+  return (u.direction === "bullish" ? "▲" : "▼").repeat(count);
+}
+
+const SENTIMENT_STRENGTH_LABEL: Record<string, string> = { mild: "Mild", strong: "Strong", very_strong: "Very Strong" };
+
+function sentimentTitle(u: UnderlyingSentiment): string {
+  const strengthLabel = u.strength ? SENTIMENT_STRENGTH_LABEL[u.strength] : null;
+  const label = u.direction === "neutral" || !strengthLabel ? "Neutral" : `${u.direction === "bullish" ? "Bullish" : "Bearish"} (${strengthLabel})`;
+  return `OI sentiment: ${label}`;
+}
+
+// How often the tab bar's discipline badge re-checks the score - a slow
+// poll like ACTIVE_TRADE_POLL_MS above, not the fast pending-order loop -
+// the underlying trades change roughly at the pace you close positions.
+const DISCIPLINE_POLL_MS = 60_000;
+const DISCIPLINE_WINDOW_DAYS = 30;
+
+// Moved here 2026-09-21 from the shell's own global header badge - reuses
+// discipline.ts's computeDisciplineScore/disciplineColor directly (this
+// page, unlike the shell, IS part of the same React app, so no need for
+// the shell's vanilla-JS duplicate of the formula). Only the trade-
+// fetch+mapping is repeated, same as DisciplinePage.tsx's own copy.
+async function fetchDisciplineTrades(): Promise<DisciplineTrade[]> {
+  const [positions, groups] = await Promise.all([
+    fetchExecPositions({ status: "CLOSED", manualOnly: true, limit: 1000 }),
+    fetchOptionGroups({ status: "CLOSED", manualOnly: true, limit: 1000 }),
+  ]);
+  const reviewed = (reviewedAt: string | null, notes: string | null) =>
+    reviewedAt != null || (notes != null && notes.trim().length > 0);
+  const fromPositions: DisciplineTrade[] = positions
+    .filter((p) => p.option_group_id == null && p.exit_time != null)
+    .map((p) => ({
+      segment: p.segment,
+      pnl: p.pnl,
+      entry_price: p.entry_price,
+      stop_loss_price: p.stop_loss_price,
+      target_price: p.target_price,
+      quantity: p.quantity,
+      exit_time: p.exit_time!,
+      exit_reason: p.exit_reason,
+      order_type: p.order_type,
+      entry_setup_tag: p.entry_setup_tag,
+      entry_confidence: p.entry_confidence,
+      setup_tag: p.setup_tag,
+      confidence: p.confidence,
+      reviewed: reviewed(p.reviewed_at, p.notes),
+      auto_traded: p.auto_traded,
+    }));
+  const fromGroups: DisciplineTrade[] = groups
+    .filter((g) => g.exit_time != null)
+    .map((g) => ({
+      segment: g.segment,
+      pnl: g.pnl,
+      entry_price: null,
+      stop_loss_price: g.spot_stop_loss_price,
+      target_price: g.spot_target_price,
+      quantity: g.quantity,
+      exit_time: g.exit_time!,
+      exit_reason: g.exit_reason,
+      order_type: g.order_type,
+      entry_setup_tag: g.entry_setup_tag,
+      entry_confidence: g.entry_confidence,
+      setup_tag: g.setup_tag,
+      confidence: g.confidence,
+      reviewed: reviewed(g.reviewed_at, g.notes),
+      auto_traded: g.auto_traded,
+    }));
+  return [...fromPositions, ...fromGroups];
+}
 
 const SYMBOLS: { symbol: string; segment: Segment }[] = [
   { symbol: "NIFTY", segment: "NSE" },
@@ -250,6 +340,61 @@ export default function LiveChartPage() {
       window.clearInterval(id);
     };
   }, []);
+
+  // Per-tab OI-sentiment glyph (see sentimentGlyph above) - moved here
+  // 2026-09-21 from the shell's own global header bar, so it reads next
+  // to the instrument it's actually about. Not every SYMBOLS entry has a
+  // read (SOLUSD isn't on market-data's sentiment watchlist) - those tabs
+  // just render no glyph.
+  const [sentimentBySymbol, setSentimentBySymbol] = useState<Map<string, UnderlyingSentiment>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      try {
+        const data = await fetchSentiment();
+        if (cancelled) return;
+        const next = new Map<string, UnderlyingSentiment>();
+        for (const entry of Object.values(data.exchanges)) {
+          for (const u of entry.underlyings) next.set(u.symbol, u);
+        }
+        setSentimentBySymbol(next);
+      } catch {
+        // transient - keep the last known reads, retried next tick
+      }
+    }
+    void refresh();
+    const id = window.setInterval(() => void refresh(), SENTIMENT_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  // Discipline score badge, right-aligned at the end of the tab bar -
+  // moved here 2026-09-21 from the shell's own global header (next to the
+  // username), same reasoning as the sentiment glyphs above: it's about
+  // trading habits on exactly the trades this page places, so it reads
+  // better in context here than as an always-on badge on every shell tab.
+  const [disciplineScore, setDisciplineScore] = useState<number | null | undefined>(undefined); // undefined = not loaded yet
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      try {
+        const trades = await fetchDisciplineTrades();
+        if (cancelled) return;
+        setDisciplineScore(computeDisciplineScore(trades, [], DISCIPLINE_WINDOW_DAYS).score);
+      } catch {
+        // transient - keep the last known score, retried next tick
+      }
+    }
+    void refresh();
+    const id = window.setInterval(() => void refresh(), DISCIPLINE_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
   useEffect(() => {
     if (!pickField) return;
     const onKey = (e: KeyboardEvent) => {
@@ -399,21 +544,30 @@ export default function LiveChartPage() {
   return (
     <div className="live-chart-page">
       <nav className="tabs live-chart-symbols">
-        {SYMBOLS.map((s) => (
-          <button key={s.symbol} className={active.symbol === s.symbol ? "active" : ""} onClick={() => pick(s)}>
-            {s.symbol}
-            {activeTradeSymbols.has(s.symbol) && (
-              <span className="live-chart-symbol-active-trade" title="An open trade is running on this symbol">
-                ●
-              </span>
-            )}
-            {pending[s.symbol] && (
-              <span className="live-chart-symbol-pending" title={`Limit armed at ${fmt(pending[s.symbol].triggerPrice)}`}>
-                ⏳
-              </span>
-            )}
-          </button>
-        ))}
+        {SYMBOLS.map((s) => {
+          const sent = sentimentBySymbol.get(s.symbol);
+          const glyph = sent ? sentimentGlyph(sent) : null;
+          return (
+            <button key={s.symbol} className={active.symbol === s.symbol ? "active" : ""} onClick={() => pick(s)}>
+              {s.symbol}
+              {activeTradeSymbols.has(s.symbol) && (
+                <span className="live-chart-symbol-active-trade" title="An open trade is running on this symbol">
+                  ●
+                </span>
+              )}
+              {pending[s.symbol] && (
+                <span className="live-chart-symbol-pending" title={`Limit armed at ${fmt(pending[s.symbol].triggerPrice)}`}>
+                  ⏳
+                </span>
+              )}
+              {glyph && sent && (
+                <span className={`live-chart-symbol-sentiment ${sent.direction}`} title={sentimentTitle(sent)}>
+                  {glyph}
+                </span>
+              )}
+            </button>
+          );
+        })}
         {isCustomSymbol(active) && (
           <button className="active" onClick={() => pick(active)}>
             {active.symbol}
@@ -427,6 +581,16 @@ export default function LiveChartPage() {
             title="Any NSE symbol not on the desk above (e.g. an individual F&O stock) - opens here as a one-off, not added to the desk. Drawings still save per-symbol."
           />
         </form>
+        {disciplineScore !== undefined && (
+          <button
+            type="button"
+            className={`live-chart-discipline-badge is-${disciplineColor(disciplineScore)}`}
+            title="Discipline score - click to see the full breakdown"
+            onClick={() => window.parent.postMessage({ source: "algo-trading-app", type: "navigate-discipline" }, "*")}
+          >
+            Discipline {disciplineScore ?? "—"}
+          </button>
+        )}
       </nav>
 
       <div className="live-chart-layout">

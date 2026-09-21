@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
+import SetupCardRow from "./SetupCardRow";
 import {
   type Account,
   type ManualOptionGroup,
@@ -28,8 +29,6 @@ import {
   updateStopLoss,
 } from "./api";
 import type { PricePickField } from "./LiveChartPanel";
-import EventsPanel from "./EventsPanel";
-import NewsPanel from "./NewsPanel";
 import {
   CRYPTO_OPTION_SYMBOLS,
   type PanelStrategy,
@@ -274,6 +273,10 @@ export default function ChartTradePanel({
   autoTradeActive,
   setupTag,
   onSetupTagChange,
+  setupCardSelected,
+  onSelectSetupCard,
+  setupCardContext,
+  setupCardBusy,
   pendingOrder,
   pendingNote,
   onArmPending,
@@ -313,6 +316,12 @@ export default function ChartTradePanel({
   // Setup dropdown mirrors it. `""` = none.
   setupTag: string;
   onSetupTagChange: (tag: string) => void;
+  // Setup tab: which card is highlighted (open trade's tag if one is
+  // running, else the next-order tag) and where a click lands.
+  setupCardSelected: string;
+  onSelectSetupCard: (tag: string) => void;
+  setupCardContext: "entry" | "open" | "auto";
+  setupCardBusy: boolean;
   // The chart's own live price - used as THE ltp (display + target watch)
   // so the panel never drifts from the chart. null until the chart has a
   // tick; the panel's own fetch is only a fallback for that gap.
@@ -369,7 +378,7 @@ export default function ChartTradePanel({
   const isOption = strategy !== "future";
   // Trade vs History - a tab inside the card so the closed-trade list
   // isn't always stretching the panel down the page.
-  const [tab, setTab] = useState<"trade" | "history" | "news" | "events">("trade");
+  const [tab, setTab] = useState<"trade" | "setup" | "history">("trade");
   const [moneyness, setMoneyness] = useState<OptionStrikeMoneyness>("ATM");
   const [qtyInput, setQtyInput] = useState("1");
   const [slInput, setSlInput] = useState("");
@@ -1139,29 +1148,20 @@ export default function ChartTradePanel({
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "setup"}
+          className={tab === "setup" ? "active" : ""}
+          onClick={() => setTab("setup")}
+        >
+          Setup
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "history"}
           className={tab === "history" ? "active" : ""}
           onClick={() => setTab("history")}
         >
           History{history.length > 0 ? ` (${history.length})` : ""}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "news"}
-          className={tab === "news" ? "active" : ""}
-          onClick={() => setTab("news")}
-        >
-          News
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "events"}
-          className={tab === "events" ? "active" : ""}
-          onClick={() => setTab("events")}
-        >
-          Events
         </button>
       </div>
 
@@ -1526,6 +1526,15 @@ export default function ChartTradePanel({
         </>
       )}
 
+      {tab === "setup" && (
+        <SetupCardRow
+          selected={setupCardSelected}
+          onSelect={onSelectSetupCard}
+          context={setupCardContext}
+          busy={setupCardBusy}
+        />
+      )}
+
       {tab === "history" && (
       <div className="ctp-history">
         <div className="ctp-history-head">
@@ -1671,9 +1680,6 @@ export default function ChartTradePanel({
       </div>
       )}
 
-      {tab === "news" && <NewsPanel underlying={sym} segment={segment} />}
-
-      {tab === "events" && <EventsPanel underlying={sym} />}
     </div>
   );
 }

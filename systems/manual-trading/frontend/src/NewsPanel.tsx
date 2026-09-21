@@ -98,6 +98,7 @@ export default function NewsPanel({ underlying, segment }: { underlying: string;
         <p className="ctp-news-digest-text">{digest.digest}</p>
       </div>
 
+      {!hasKey && (
       <div className="ctp-news-key">
         {!showKeyForm ? (
           <button type="button" className="tiny ctp-news-key-toggle" onClick={() => setShowKeyForm(true)}>
@@ -122,6 +123,7 @@ export default function NewsPanel({ underlying, segment }: { underlying: string;
           </div>
         )}
       </div>
+      )}
 
       {digest.articles.length === 0 && <p className="muted">No recent news for {underlying}.</p>}
       {digest.articles.map((a, i) => (

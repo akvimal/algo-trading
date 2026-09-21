@@ -5087,3 +5087,12 @@ button.btn-exit {
   cursor: pointer;
   padding: 0 0.2rem;
 }
+
+/* News/Events tabs inside the Setup panel - shorter cap than the trade panel's. */
+.setup-card-row .ctp-news,
+.setup-card-row .ctp-events {
+  max-height: 14rem;
+}
+.setup-card-row-head .ctp-tabs {
+  margin: 0;
+}

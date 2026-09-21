@@ -1,8 +1,7 @@
 import { SETUP_TAGS } from "./manualOrder";
 import { SETUP_ART, SETUP_KIND } from "./setupArt";
 
-// A full-width strip of Setup cards below the Live Chart (LiveChartPage
-// renders it under .live-chart-layout). One card per chart-pattern tag
+// Setup cards, rendered as the "Setup" tab of ChartTradePanel. One card per chart-pattern tag
 // that has a Field-Guide diagram - the 3 non-pattern tags (News /
 // Revenge · FOMO / Other) are deliberately left out of the strip; pick
 // those from the panel's Setup dropdown or the History journal editor.
@@ -39,7 +38,6 @@ export default function SetupCardRow({
   return (
     <div className="setup-card-row">
       <div className="setup-card-row-head">
-        <span className="setup-card-row-title">Setup</span>
         <span className="setup-card-row-hint muted">{hint}</span>
         <a
           className="ctp-help-link"

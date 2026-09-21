@@ -18,7 +18,7 @@ import ChartTradePanel from "./ChartTradePanel";
 import { type DisciplineTrade, computeDisciplineScore, disciplineColor } from "./discipline";
 import { type ChartContext, type IntervalTrend, type PricePickField, LiveChartPanel } from "./LiveChartPanel";
 import { type PendingOrder, fetchUnderlyingLtp, fmt, fmtMoney, placeManualOrder, pendingTriggerCrossed } from "./manualOrder";
-import SetupCardRow from "./SetupCardRow";
+import InfoTabsRow from "./InfoTabsRow";
 
 // Standalone Intraday sub-tab wrapping the candlestick panel (see
 // LiveChartPanel.tsx for the live-data mechanics and the klinecharts
@@ -625,6 +625,10 @@ export default function LiveChartPage() {
             autoTradeActive={autoTradeOn}
             setupTag={chartSetup}
             onSetupTagChange={setChartSetup}
+            setupCardSelected={openPos || openGroup ? openSetup : chartSetup}
+            onSelectSetupCard={onSelectSetup}
+            setupCardContext={openPos || openGroup ? "open" : autoTradeOn ? "auto" : "entry"}
+            setupCardBusy={setupBusy}
             pendingOrder={activePending}
             pendingNote={pendingNote[active.symbol] ?? null}
             onArmPending={armPending}
@@ -682,12 +686,7 @@ export default function LiveChartPage() {
         </div>
       </div>
 
-      <SetupCardRow
-        selected={openPos || openGroup ? openSetup : chartSetup}
-        onSelect={onSelectSetup}
-        context={openPos || openGroup ? "open" : autoTradeOn ? "auto" : "entry"}
-        busy={setupBusy}
-      />
+      <InfoTabsRow segment={active.segment} symbol={active.symbol} />
     </div>
   );
 }

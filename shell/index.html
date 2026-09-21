@@ -192,7 +192,10 @@
     gap: 0.3rem;
     border-top: 1px solid var(--border);
     padding-top: 0.5rem;
-    max-width: 18rem;
+    width: 26rem;
+    max-width: 80vw;
+    max-height: 70vh;
+    overflow-y: auto;
   }
   .notif-history-empty {
     color: var(--text-dim);
@@ -654,7 +657,7 @@
     // count later doesn't need a schema change, just a slice.
     const NOTIF_HISTORY_KEY = "signalNotificationHistory";
     const NOTIF_HISTORY_KEEP = 20;
-    const NOTIF_HISTORY_SHOW = 5;
+    const NOTIF_HISTORY_SHOW = 10;
     const notifSupported = typeof window !== "undefined" && "Notification" in window;
     const notifSettingsEl = document.getElementById("notif-settings");
     const notifToggleEl = document.getElementById("notif-toggle");

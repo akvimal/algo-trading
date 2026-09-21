@@ -109,11 +109,16 @@
      from signal-engine's/manual-trading's own top rows) - it's the same
      underlying feature (new signal, across every strategy) regardless of
      which tab happens to be active, so it belongs up here, not
-     duplicated per tab. */
-  .notif-area {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+     duplicated per tab. Dropdown-on-click (2026-09-21, see the last-5
+     history feature) - same absolute-positioned-panel + click-outside/
+     Escape-to-close pattern the old "OI ticker settings" gear used
+     (removed 2026-09-21, see git history around 4d15089/4319e3a) -
+     consolidates what used to be two separate controls (the bell's own
+     instant-toggle click, the Sound checkbox sitting bare in the header)
+     into one panel, now joined by the enable checkbox and the last-5
+     notification history. */
+  .notif-settings {
+    position: relative;
     padding-bottom: 0.6rem;
     flex-shrink: 0;
   }
@@ -127,24 +132,104 @@
     padding: 0.35rem 0.55rem;
     cursor: pointer;
   }
-  .notif-sound-label {
+  #notif-toggle:hover,
+  #notif-toggle.active {
+    border-color: var(--text-dim);
+  }
+  .notif-settings-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 0.4rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+    z-index: 20;
+  }
+  /* Same cascade-order trick as the old .oi-settings-menu[hidden] - wins
+     the display tie over the flex rule above by appearing later. */
+  .notif-settings-menu[hidden] {
     display: none;
+  }
+  .notif-settings-row,
+  .notif-sound-label {
+    display: flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.4rem;
+    cursor: pointer;
     font-size: 0.78rem;
     color: var(--text-dim);
   }
-  .notif-sound-label.active {
-    display: flex;
+  .notif-settings-row input,
+  .notif-sound-label input {
+    margin: 0;
+  }
+  .notif-sound-label.dim {
+    opacity: 0.5;
+    pointer-events: none;
   }
   #notif-blocked {
     display: none;
     font-size: 0.72rem;
     color: #e8586a;
     max-width: 16rem;
+    white-space: normal;
   }
   #notif-blocked.active {
     display: block;
+  }
+  .notif-history {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.5rem;
+    max-width: 18rem;
+  }
+  .notif-history-empty {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    font-style: italic;
+  }
+  .notif-history-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 0.3rem 0.4rem;
+    cursor: pointer;
+    text-align: left;
+    white-space: normal;
+    color: inherit;
+    font: inherit;
+  }
+  .notif-history-item:hover {
+    background: var(--surface-raised, #1a1f27);
+  }
+  .notif-history-title {
+    color: var(--text);
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  .notif-history-body {
+    color: var(--text-dim);
+    font-size: 0.74rem;
+  }
+  .notif-history-time {
+    color: var(--text-dim);
+    font-size: 0.68rem;
+    opacity: 0.8;
   }
   .frame-wrap {
     flex: 1;
@@ -194,13 +279,20 @@
     <nav id="tabs"></nav>
     <div class="top-bar-right">
       <div class="user-area" id="user-area"></div>
-      <div class="notif-area">
-        <span id="notif-blocked"></span>
-        <label class="notif-sound-label" id="notif-sound-label">
-          <input type="checkbox" id="notif-sound" />
-          Sound
-        </label>
-        <button type="button" id="notif-toggle"></button>
+      <div class="notif-settings" id="notif-settings">
+        <button type="button" id="notif-toggle" aria-haspopup="true"></button>
+        <div class="notif-settings-menu" id="notif-settings-menu" hidden>
+          <label class="notif-settings-row">
+            <input type="checkbox" id="notif-enabled" />
+            Notifications
+          </label>
+          <label class="notif-sound-label" id="notif-sound-label">
+            <input type="checkbox" id="notif-sound" />
+            Sound
+          </label>
+          <span id="notif-blocked"></span>
+          <div class="notif-history" id="notif-history"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -554,11 +646,24 @@
     const NOTIF_POLL_MS = 5000;
     const NOTIF_ENABLED_KEY = "signalNotificationsEnabled";
     const NOTIF_SOUND_KEY = "signalNotificationSoundEnabled";
+    // Last-5 history (2026-09-21, GitHub issue #1) - localStorage, not a
+    // backend table (see the issue's own "Probable fix" for why: shell is
+    // a single static file with no backend of its own, and everything it
+    // already tracks here is localStorage-backed the same way). Keeps
+    // more than it shows (NOTIF_HISTORY_KEEP) so trimming the visible
+    // count later doesn't need a schema change, just a slice.
+    const NOTIF_HISTORY_KEY = "signalNotificationHistory";
+    const NOTIF_HISTORY_KEEP = 20;
+    const NOTIF_HISTORY_SHOW = 5;
     const notifSupported = typeof window !== "undefined" && "Notification" in window;
+    const notifSettingsEl = document.getElementById("notif-settings");
     const notifToggleEl = document.getElementById("notif-toggle");
+    const notifSettingsMenuEl = document.getElementById("notif-settings-menu");
+    const notifEnabledCheckboxEl = document.getElementById("notif-enabled");
     const notifSoundLabelEl = document.getElementById("notif-sound-label");
     const notifSoundCheckboxEl = document.getElementById("notif-sound");
     const notifBlockedEl = document.getElementById("notif-blocked");
+    const notifHistoryEl = document.getElementById("notif-history");
 
     if (notifSupported) {
       let notifEnabled = localStorage.getItem(NOTIF_ENABLED_KEY) === "true" && Notification.permission === "granted";
@@ -570,11 +675,106 @@
       let strategyNames = new Map();
       let audioCtx = null;
 
+      function loadNotifHistory() {
+        try {
+          const raw = JSON.parse(localStorage.getItem(NOTIF_HISTORY_KEY) ?? "[]");
+          return Array.isArray(raw) ? raw : [];
+        } catch {
+          return [];
+        }
+      }
+      let notifHistory = loadNotifHistory();
+
+      // `entry.tag` is the jump target for a click in the history list
+      // below - a signal_id for a signal, the bare symbol for a sentiment
+      // change (not `sentiment-${symbol}`, unlike the desktop
+      // Notification's own `tag` a few lines below - these are two
+      // different tags for two different purposes, they don't need to
+      // match).
+      function pushNotifHistory(entry) {
+        notifHistory = [entry, ...notifHistory].slice(0, NOTIF_HISTORY_KEEP);
+        try {
+          localStorage.setItem(NOTIF_HISTORY_KEY, JSON.stringify(notifHistory));
+        } catch {
+          // storage disabled/full - the entry still shows for this session,
+          // just won't survive a refresh
+        }
+        renderNotifHistory();
+      }
+
+      function relTime(at) {
+        const mins = Math.round((Date.now() - at) / 60000);
+        if (mins < 1) return "just now";
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.round(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        return `${Math.round(hrs / 24)}d ago`;
+      }
+
+      // The reverse of goToOiTab/goToIntradayTab's own iframe-reload
+      // mechanism, reused here for a history entry's own jump - a signal
+      // opens signal-engine's Signals tab at the same ?tab=signals&
+      // signal_id= deep link its own crosslinks already use (see
+      // App.tsx); a sentiment entry reuses goToOiTab directly.
+      function jumpToNotifEntry(entry) {
+        if (entry.type === "sentiment") {
+          goToOiTab(entry.tag);
+        } else if (entry.type === "signal") {
+          activate("signal-engine");
+          const iframe = document.getElementById("frame-signal-engine");
+          if (iframe && iframe.dataset.origin) {
+            iframe.src = `${iframe.dataset.origin}/?tab=signals&signal_id=${encodeURIComponent(entry.tag)}`;
+          }
+        }
+        closeNotifMenu();
+      }
+
+      function renderNotifHistory() {
+        notifHistoryEl.innerHTML = "";
+        const shown = notifHistory.slice(0, NOTIF_HISTORY_SHOW);
+        if (shown.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "notif-history-empty";
+          empty.textContent = "No notifications yet";
+          notifHistoryEl.appendChild(empty);
+          return;
+        }
+        for (const entry of shown) {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "notif-history-item";
+          item.onclick = () => jumpToNotifEntry(entry);
+
+          const title = document.createElement("span");
+          title.className = "notif-history-title";
+          title.textContent = entry.title;
+          item.appendChild(title);
+
+          const body = document.createElement("span");
+          body.className = "notif-history-body";
+          body.textContent = entry.body;
+          item.appendChild(body);
+
+          const time = document.createElement("span");
+          time.className = "notif-history-time";
+          time.textContent = relTime(entry.at);
+          item.appendChild(time);
+
+          notifHistoryEl.appendChild(item);
+        }
+      }
+
+      function closeNotifMenu() {
+        notifSettingsMenuEl.hidden = true;
+        notifToggleEl.classList.remove("active");
+      }
+
       function renderNotifButton() {
         notifToggleEl.textContent = notifEnabled ? "🔔" : "🔕";
         notifToggleEl.title = notifEnabled ? "Notifications on" : "Enable notifications";
         notifToggleEl.setAttribute("aria-label", notifToggleEl.title);
-        notifSoundLabelEl.classList.toggle("active", notifEnabled);
+        notifEnabledCheckboxEl.checked = notifEnabled;
+        notifSoundLabelEl.classList.toggle("dim", !notifEnabled);
         notifSoundCheckboxEl.checked = notifSoundEnabled;
       }
 
@@ -610,12 +810,12 @@
 
       function notifyOfSignal(s) {
         const strategyName = strategyNames.get(s.strategy_id) || s.strategy_id;
-        const n = new Notification(`${s.action} ${s.symbol}`, {
-          body: `${strategyName} · ${s.exchange} @ ${s.price}${s.status ? ` · ${s.status}` : ""}`,
-          tag: s.signal_id,
-        });
+        const title = `${s.action} ${s.symbol}`;
+        const body = `${strategyName} · ${s.exchange} @ ${s.price}${s.status ? ` · ${s.status}` : ""}`;
+        const n = new Notification(title, { body, tag: s.signal_id });
         n.onclick = () => window.focus();
         playSoundIfEnabled(SIGNAL_TUNE_HZ);
+        pushNotifHistory({ type: "signal", title, body, at: Date.now(), tag: s.signal_id });
       }
 
       function playSoundIfEnabled(frequencies) {
@@ -638,12 +838,12 @@
       }
 
       function notifyOfSentimentChange(symbol, exchange, prevLabel, nextLabel) {
-        const n = new Notification(`${symbol} sentiment: ${nextLabel}`, {
-          body: `${exchange} · was ${prevLabel}`,
-          tag: `sentiment-${symbol}`,
-        });
+        const title = `${symbol} sentiment: ${nextLabel}`;
+        const body = `${exchange} · was ${prevLabel}`;
+        const n = new Notification(title, { body, tag: `sentiment-${symbol}` });
         n.onclick = () => window.focus();
         playSoundIfEnabled(SENTIMENT_TUNE_HZ);
+        pushNotifHistory({ type: "sentiment", title, body, at: Date.now(), tag: symbol });
       }
 
       async function pollStrategyNames() {
@@ -722,8 +922,26 @@
         }
       }
 
-      notifToggleEl.addEventListener("click", async () => {
-        if (notifEnabled) {
+      // Bell click now only opens/closes the settings dropdown (issue #1 -
+      // consolidated with the OI-settings-gear pattern) - enabling/
+      // disabling moved to the checkbox below, since one click target
+      // can't both toggle state instantly AND open a panel.
+      notifToggleEl.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const willOpen = notifSettingsMenuEl.hidden;
+        notifSettingsMenuEl.hidden = !willOpen;
+        notifToggleEl.classList.toggle("active", willOpen);
+        if (willOpen) renderNotifHistory(); // refresh relative "Xm ago" timestamps
+      });
+      document.addEventListener("click", (ev) => {
+        if (!notifSettingsMenuEl.hidden && !notifSettingsEl.contains(ev.target)) closeNotifMenu();
+      });
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape" && !notifSettingsMenuEl.hidden) closeNotifMenu();
+      });
+
+      notifEnabledCheckboxEl.addEventListener("change", async (e) => {
+        if (!e.target.checked) {
           localStorage.setItem(NOTIF_ENABLED_KEY, "false");
           notifEnabled = false;
           seenIds = null;
@@ -740,12 +958,15 @@
         if (Notification.permission === "denied") {
           notifBlockedEl.textContent = "Notifications are blocked for this site - allow them in your browser's site settings, then try again.";
           notifBlockedEl.classList.add("active");
+          e.target.checked = false; // nothing was actually enabled - keep the checkbox honest
           return;
         }
-        // Everything below runs synchronously off this click (a real user
-        // gesture) up to the await - required both for
-        // Notification.requestPermission and to unlock the AudioContext for
-        // sounds the poll loop plays later with no gesture of its own.
+        // Everything below runs synchronously off this change event (a
+        // checkbox toggled by click/keyboard is a real user gesture, same
+        // as the click this used to be) up to the await - required both
+        // for Notification.requestPermission and to unlock the
+        // AudioContext for sounds the poll loop plays later with no
+        // gesture of its own.
         if (!audioCtx) {
           try {
             audioCtx = new AudioContext();
@@ -757,12 +978,16 @@
         if (permission === "granted") {
           localStorage.setItem(NOTIF_ENABLED_KEY, "true");
           notifEnabled = true;
-        } else if (permission === "denied") {
-          notifBlockedEl.textContent = "Notifications are blocked for this site - allow them in your browser's site settings, then try again.";
-          notifBlockedEl.classList.add("active");
+        } else {
+          if (permission === "denied") {
+            notifBlockedEl.textContent = "Notifications are blocked for this site - allow them in your browser's site settings, then try again.";
+            notifBlockedEl.classList.add("active");
+          }
+          // permission === "default" - the prompt was dismissed without a
+          // choice - stay quiet, but the checkbox still needs reverting
+          // since nothing was actually enabled.
+          e.target.checked = false;
         }
-        // permission === "default" - the prompt was dismissed without a
-        // choice - stay quiet, clicking again just re-prompts.
         renderNotifButton();
       });
 
@@ -772,6 +997,7 @@
       });
 
       renderNotifButton();
+      renderNotifHistory();
       pollStrategyNames();
       pollSignals();
       setInterval(pollStrategyNames, NOTIF_POLL_MS * 4);

@@ -1080,6 +1080,14 @@ type StructureConfig = {
   breaks: boolean;
   trendMarks: boolean;
   setups: boolean;
+  // Whether pickInterval's own auto-sync (below) keeps tfs pinned to
+  // whatever the chart's display interval currently is. Default true -
+  // today's exact original behavior, so nothing changes for anyone who
+  // doesn't touch the new "Follow chart interval" checkbox. Off lets a
+  // manually-picked detection timeframe (or a deliberately different one
+  // from the display interval) stick across interval switches instead of
+  // being overwritten - see GitHub issue #2.
+  followChartInterval: boolean;
 };
 const EMPTY_STRUCTURE_CONFIG: StructureConfig = {
   tfs: [],
@@ -1088,6 +1096,7 @@ const EMPTY_STRUCTURE_CONFIG: StructureConfig = {
   breaks: false,
   trendMarks: false,
   setups: false,
+  followChartInterval: true,
 };
 
 function loadStructureConfig(): StructureConfig {
@@ -1105,6 +1114,10 @@ function loadStructureConfig(): StructureConfig {
       breaks: raw?.breaks === true,
       trendMarks: raw?.trendMarks === true,
       setups: raw?.setups === true,
+      // Default ON (opt out, not in) - a pre-issue-#2 persisted config
+      // never had this field at all, and should keep behaving exactly as
+      // it did before this setting existed.
+      followChartInterval: raw?.followChartInterval !== false,
     };
   } catch {
     return EMPTY_STRUCTURE_CONFIG;
@@ -2268,8 +2281,13 @@ export function LiveChartPanel({
     // timeframe rather than leaving an unrelated one selected. Only while
     // structure is actually on - an interval change never switches the
     // layer on by itself. INTERVALS and OB_TIMEFRAMES share one value
-    // vocabulary, so `value` is always a valid detection timeframe.
+    // vocabulary, so `value` is always a valid detection timeframe. Only
+    // while followChartInterval is on (default) - off leaves tfs exactly
+    // as last manually picked via the "Structure ▾" menu, e.g. watching
+    // 5m price action while deliberately detecting structure off the 1h
+    // (see GitHub issue #2).
     setStructure((prev) => {
+      if (!prev.followChartInterval) return prev;
       if (prev.tfs.length === 0) return prev;
       if (prev.tfs.length === 1 && prev.tfs[0] === value) return prev;
       const next = { ...prev, tfs: [value] };
@@ -3816,6 +3834,17 @@ export function LiveChartPanel({
                     </label>
                   );
                 })}
+                <label
+                  className="live-chart-indicators-suboption"
+                  title="On (default): switching the chart's own display interval re-points detection at that same timeframe. Off: detection stays exactly as picked above, no matter how the display interval is switched - e.g. watching 5m price action while detecting structure off the 1h."
+                >
+                  <input
+                    type="checkbox"
+                    checked={structure.followChartInterval}
+                    onChange={() => updateStructure({ followChartInterval: !structure.followChartInterval })}
+                  />
+                  Follow chart interval
+                </label>
                 <div className="live-chart-indicators-group">Also show</div>
                 <label>
                   <input

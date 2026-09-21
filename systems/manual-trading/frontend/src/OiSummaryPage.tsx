@@ -214,16 +214,36 @@ function loadVisibleColumns(): Record<ColumnKey, boolean> {
 // Deep-link support (?tab=oi&symbol=NIFTY) - same convention App.tsx's
 // own ?tab= already uses (see its own comment), lets the shell's header
 // sentiment badges jump straight to a specific asset's tab here instead
-// of always landing on PRESETS[0]. Falls back silently to the default
-// for an unrecognized/missing symbol rather than erroring - this page is
-// still fully usable without the param.
+// of always landing on PRESETS[0]. A symbol outside PRESETS is a custom
+// one-off tab (see initialCustomPreset below), not a fallback - falls
+// back to PRESETS[0] only when the param is missing entirely.
 function initialActiveKey(): string {
   const requested = new URLSearchParams(window.location.search).get("symbol");
-  return PRESETS.some((p) => p.key === requested) ? (requested as string) : PRESETS[0].key;
+  return requested ? requested.toUpperCase() : PRESETS[0].key;
+}
+
+// A symbol outside the fixed watchlist, arrived at via ?symbol= - e.g.
+// Weekly Advisor's "View OI" link for an arbitrary F&O stock (see
+// WeeklyAdvisorPage.tsx/links.ts's manualTradingOiUrl). Always NSE - same
+// "every caller of this only ever names individual NSE equities/indices"
+// convention LiveChartPage.tsx's own SymbolEntry uses; MCX/CRYPTO stay
+// reachable solely through the fixed PRESETS tabs. Computed once at
+// mount, not reactively off activeKey - clicking back to a PRESETS tab
+// shouldn't make this one-off tab disappear for the rest of the session.
+function initialCustomPreset(): { key: string; exchange: OptionExchange; symbol: string } | null {
+  const requested = new URLSearchParams(window.location.search).get("symbol");
+  if (!requested) return null;
+  const upper = requested.toUpperCase();
+  return PRESETS.some((p) => p.key === upper) ? null : { key: upper, exchange: "NSE", symbol: upper };
 }
 
 export default function OiSummaryPage() {
   const [activeKey, setActiveKey] = useState(initialActiveKey);
+  const [customPreset] = useState(initialCustomPreset);
+  // Every effect below that used to iterate PRESETS directly now iterates
+  // this instead, so the custom one-off tab (if any) loads/polls exactly
+  // like a real preset.
+  const presetsToLoad = customPreset ? [...PRESETS, customPreset] : PRESETS;
   const [tabStates, setTabStates] = useState<Record<string, TabState>>({});
   // Which OI-change window the chart's increase/decrease caps are drawn
   // against - shared across tabs (not per-tab state) since it's a display
@@ -281,7 +301,7 @@ export default function OiSummaryPage() {
   // anything, the "why is this fetching every time I switch tabs"
   // complaint). Every preset starts loading immediately instead.
   useEffect(() => {
-    for (const preset of PRESETS) void loadExpiriesForTab(preset);
+    for (const preset of presetsToLoad) void loadExpiriesForTab(preset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -296,7 +316,7 @@ export default function OiSummaryPage() {
   // preset's own exchange before the tab has resolved, so the very first
   // render of a CRYPTO tab already formats right.
   const isCrypto =
-    (activeState.loaded?.exchange ?? PRESETS.find((p) => p.key === activeKey)?.exchange) === "CRYPTO";
+    (activeState.loaded?.exchange ?? presetsToLoad.find((p) => p.key === activeKey)?.exchange) === "CRYPTO";
 
   // Fires each tab's very first summary fetch as soon as ITS OWN expiries
   // land (staggered naturally, not synchronized) - guarded on summary
@@ -304,7 +324,7 @@ export default function OiSummaryPage() {
   // dropdown's own onChange handles a later expiry change directly
   // instead of relying on this effect re-firing.
   useEffect(() => {
-    for (const preset of PRESETS) {
+    for (const preset of presetsToLoad) {
       const state = tabStates[preset.key];
       if (state?.loaded && state.expiry && state.summary == null && !state.loadingSummary) {
         void loadSummaryForTab(preset.key, state.loaded, state.expiry);
@@ -326,7 +346,7 @@ export default function OiSummaryPage() {
     let tick = 0;
     const id = setInterval(() => {
       tick += 1;
-      for (const preset of PRESETS) {
+      for (const preset of presetsToLoad) {
         const state = tabStatesRef.current[preset.key];
         if (!state?.loaded || !state.expiry) continue;
         const isActive = preset.key === activeKeyRef.current;
@@ -417,6 +437,20 @@ export default function OiSummaryPage() {
               )}
             </button>
           ))}
+          {customPreset && (
+            <button
+              className={activeKey === customPreset.key ? "active" : ""}
+              onClick={() => setActiveKey(customPreset.key)}
+              title="Opened via a deep link (e.g. Weekly Advisor's 'View OI' link) - a one-off tab for this run, not added to the fixed watchlist"
+            >
+              {customPreset.key}
+              {tabStates[customPreset.key]?.expiry === todayLocalDate() && (
+                <span className="expiry-today-badge" title="This instrument's nearest expiry is today">
+                  EXP
+                </span>
+              )}
+            </button>
+          )}
         </nav>
 
         <button

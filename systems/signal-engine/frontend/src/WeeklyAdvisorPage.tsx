@@ -28,7 +28,7 @@ import {
   type WeeklyAdvisorTradeStatus,
   type WeeklyRecommendation,
 } from "./api";
-import { manualTradingChartUrl } from "./links";
+import { manualTradingChartUrl, manualTradingOiUrl } from "./links";
 
 // A batch run chunks the symbol list into requests of this size rather
 // than one giant call - the backend already runs up to 5 symbols
@@ -885,6 +885,16 @@ function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer
         <span>ATR {rec.technical.atr14.toFixed(1)}</span>
         <span title={rec.oi.available ? "" : "OI data unavailable this run"}>
           OI {rec.oi.available ? (rec.oi.aggregate_signal ?? "mixed") : "n/a"}
+          <a
+            className="crosslink"
+            href={manualTradingOiUrl(rec.symbol)}
+            target="_blank"
+            rel="noreferrer"
+            title="Open this symbol's OI tab in manual-trading (opens as a one-off tab; not added to the fixed watchlist)"
+          >
+            {" "}
+            ↗
+          </a>
         </span>
       </div>
 

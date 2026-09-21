@@ -29,6 +29,15 @@ export function manualTradingChartUrl(symbol: string): string {
   return `${PROTOCOL}//${location.hostname}:${MANUAL_TRADING_FRONTEND_PORT}/?symbol=${encodeURIComponent(symbol)}`;
 }
 
+// Manual-trading's OI tab - reads ?tab=oi&symbol= on load. As of 2026-09-21
+// a symbol outside the fixed 6-underlying watchlist opens as a one-off tab
+// (same "any NSE symbol" extension manualTradingChartUrl already got
+// 2026-09-12 - see OiSummaryPage.tsx's initialCustomPreset) rather than
+// silently falling back to NIFTY. Used by WeeklyAdvisorPage's "View OI" link.
+export function manualTradingOiUrl(symbol: string): string {
+  return `${PROTOCOL}//${location.hostname}:${MANUAL_TRADING_FRONTEND_PORT}/?tab=oi&symbol=${encodeURIComponent(symbol)}`;
+}
+
 // This service's own backend (signal-engine, not any frontend) - the same
 // VITE_SIGNAL_ENGINE_PORT convention api.ts uses.
 const SIGNAL_ENGINE_BACKEND_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";

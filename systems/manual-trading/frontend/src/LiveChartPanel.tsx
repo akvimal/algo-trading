@@ -1357,7 +1357,6 @@ function OiSentSpark({ sentHist, window }: { sentHist: SentimentHistoryPoint[]; 
       className="live-chart-oi-sent"
       title={`OI shift % (${window}) over the last readings — bars are the reading, ⚡ marks a major move or a side flip. Source: sentiment_history, written every 5 min, bucketed to clean ${window} slots. Last reading ${hhmm(last.pt.recorded_at)}${stale ? " (stale)" : ""}.`}
     >
-      OI shift {window}
       <span className="live-chart-oi-spark">
         {steps.map((s) => (
           <span
@@ -1375,6 +1374,7 @@ function OiSentSpark({ sentHist, window }: { sentHist: SentimentHistoryPoint[]; 
         {last.score >= 0 ? "+" : ""}
         {last.score.toFixed(2)}%
       </b>
+      <span className="live-chart-oi-sent-window">{window}</span>
       {last.major && (
         <span className="live-chart-oi-sent-flag">
           ⚡ {last.score - prev.score >= 0 ? "+" : ""}
@@ -4244,6 +4244,14 @@ export function LiveChartPanel({
                     title={res.map((l) => `R${l.rank} ${l.strike} · ${fmtOiCount(l.oi, oiIsCrypto)} call OI`).join("  ")}
                   >
                     R <b>{res.map((l) => l.strike).join(" · ")}</b>
+                    {oi.total_call_buildup && (
+                      <span
+                        className={`oi-buildup-badge ${BUILDUP_META[oi.total_call_buildup].cls}`}
+                        title={`Call OI: ${BUILDUP_META[oi.total_call_buildup].label}`}
+                      >
+                        {BUILDUP_META[oi.total_call_buildup].icon} CE {OI_BUILDUP_LABEL[oi.total_call_buildup]}
+                      </span>
+                    )}
                   </span>
                 )}
                 {sup.length > 0 && (
@@ -4252,33 +4260,24 @@ export function LiveChartPanel({
                     title={sup.map((l) => `S${l.rank} ${l.strike} · ${fmtOiCount(l.oi, oiIsCrypto)} put OI`).join("  ")}
                   >
                     S <b>{sup.map((l) => l.strike).join(" · ")}</b>
+                    {oi.total_put_buildup && (
+                      <span
+                        className={`oi-buildup-badge ${BUILDUP_META[oi.total_put_buildup].cls}`}
+                        title={`Put OI: ${BUILDUP_META[oi.total_put_buildup].label}`}
+                      >
+                        {BUILDUP_META[oi.total_put_buildup].icon} PE {OI_BUILDUP_LABEL[oi.total_put_buildup]}
+                      </span>
+                    )}
                   </span>
                 )}
               </>
             );
           })()}
-          {(oi.total_call_buildup || oi.total_put_buildup) && (
-            <span className="live-chart-oi-buildup-group">
-              {oi.total_call_buildup && (
-                <span
-                  className={`oi-buildup-badge ${BUILDUP_META[oi.total_call_buildup].cls}`}
-                  title={`Call OI: ${BUILDUP_META[oi.total_call_buildup].label}`}
-                >
-                  {BUILDUP_META[oi.total_call_buildup].icon} CE {OI_BUILDUP_LABEL[oi.total_call_buildup]}
-                </span>
-              )}
-              {oi.total_put_buildup && (
-                <span
-                  className={`oi-buildup-badge ${BUILDUP_META[oi.total_put_buildup].cls}`}
-                  title={`Put OI: ${BUILDUP_META[oi.total_put_buildup].label}`}
-                >
-                  {BUILDUP_META[oi.total_put_buildup].icon} PE {OI_BUILDUP_LABEL[oi.total_put_buildup]}
-                </span>
-              )}
-            </span>
+          {(sentimentSteps(sentHist, "15m").length >= 2 || sentimentSteps(sentHist, "5m").length >= 2) && (
+            <span className="live-chart-oi-sent-label">OI trend</span>
           )}
-          <OiSentSpark sentHist={sentHist} window="5m" />
           <OiSentSpark sentHist={sentHist} window="15m" />
+          <OiSentSpark sentHist={sentHist} window="5m" />
           {oiAt != null && (
             <span
               className={`live-chart-oi-at-dot${Date.now() - oiAt > 4 * 60_000 ? " is-stale" : ""}`}

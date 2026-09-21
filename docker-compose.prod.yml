@@ -1,0 +1,56 @@
+# VPS-only overlay - adds a single new service (Caddy) on top of the base
+# docker-compose.yml, never touching any service already defined there.
+# Purely additive by design: overriding an *existing* service's `ports:`
+# across two compose files risks depending on Compose's list-merge
+# semantics for that key, which has changed across versions - safer to
+# just add a new service here and let the base file's own BIND_ADDR (see
+# its top-of-file comment) do the actual rebinding.
+#
+# Usage (VPS only, after setting VPS_DOMAIN and BIND_ADDR=127.0.0.1 in .env):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile execution up -d --build
+#
+# Never used locally - `make up`/`make test-up` only ever reference the
+# base docker-compose.yml, so this file has zero effect on local dev/test.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      # Caddyfile reads {$VPS_DOMAIN} - Caddy substitutes env vars into a
+      # Caddyfile at load time, same mechanism docker-compose itself uses
+      # for ${VAR} here.
+      VPS_DOMAIN: ${VPS_DOMAIN}
+    ports:
+      # 80 is required for Caddy's ACME HTTP-01 challenge (issuing/renewing
+      # the Let's Encrypt cert) even though nothing in this app uses it
+      # directly. The rest mirror every *_PORT in .env - add a matching
+      # block to infra/caddy/Caddyfile AND a line here if a new service
+      # ever gets its own port.
+      - "80:80"
+      - "${SHELL_PORT}:${SHELL_PORT}"
+      - "${SIGNAL_ENGINE_FRONTEND_PORT}:${SIGNAL_ENGINE_FRONTEND_PORT}"
+      - "${SIGNAL_ENGINE_BACKEND_PORT}:${SIGNAL_ENGINE_BACKEND_PORT}"
+      - "${MARKET_DATA_FRONTEND_PORT}:${MARKET_DATA_FRONTEND_PORT}"
+      - "${MARKET_DATA_BACKEND_PORT}:${MARKET_DATA_BACKEND_PORT}"
+      - "${EXECUTION_FRONTEND_PORT}:${EXECUTION_FRONTEND_PORT}"
+      - "${EXECUTION_BACKEND_PORT}:${EXECUTION_BACKEND_PORT}"
+      - "${ACCOUNTS_BACKEND_PORT}:${ACCOUNTS_BACKEND_PORT}"
+      - "${MANUAL_TRADING_FRONTEND_PORT}:${MANUAL_TRADING_FRONTEND_PORT}"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Cert storage - MUST persist across restarts. Let's Encrypt rate-
+      # limits certificate requests per hostname; losing this volume and
+      # re-issuing repeatedly can trip that limit.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - shell
+      - signal-engine-frontend
+      - signal-engine-backend
+      - market-data-frontend
+      - market-data-backend
+
+volumes:
+  caddy-data:
+  caddy-config:

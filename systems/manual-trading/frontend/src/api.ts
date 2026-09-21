@@ -667,13 +667,20 @@ export type ProviderSignal = {
 const SIGNAL_ENGINE_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";
 const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
 
+// Local dev is always plain http:. A domain deploy behind Caddy (see
+// docker-compose.prod.yml) terminates TLS on these same ports, so every
+// cross-origin base URL below has to follow the PAGE's own scheme rather
+// than hardcoding http:, or the browser blocks the request as mixed
+// content the instant this frontend itself is loaded over https:.
+const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
+
 // signal-engine's API, read directly from the browser (CORS-enabled) for
 // strategy names and per-strategy signal activity - a view, not a copy
 // of that data.
-const SIGNAL_ENGINE_BASE_URL = `http://${location.hostname}:${SIGNAL_ENGINE_PORT}`;
+const SIGNAL_ENGINE_BASE_URL = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_PORT}`;
 // market-data's API, read directly from the browser (CORS-enabled) - just
 // for the universe picker below, same pattern as signal-engine above.
-const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
+const MARKET_DATA_BASE_URL = `${PROTOCOL}//${location.hostname}:${MARKET_DATA_PORT}`;
 
 // Bare fetch() has no timeout and rejects with a bare, unhelpful
 // "TypeError: Failed to fetch" on any network-level hiccup - a dropped
@@ -1378,7 +1385,7 @@ export async function fetchNews(underlying: string, segment: string): Promise<Ne
 // a shared component - small enough, and this frontend has no other
 // reason to know about accounts.broker_credentials's other fields.
 const ACCOUNTS_PORT = import.meta.env.VITE_ACCOUNTS_PORT ?? "8004";
-const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
+const ACCOUNTS_BASE_URL = `${PROTOCOL}//${location.hostname}:${ACCOUNTS_PORT}`;
 
 export async function fetchHasOpenrouterKey(): Promise<boolean> {
   const res = await authFetch(`${ACCOUNTS_BASE_URL}/credentials`);
@@ -1491,7 +1498,7 @@ export async function clearCandleCache(exchange: string, symbol: string, interva
 // ---------------------------------------------------------------------
 
 const EXECUTION_PORT = import.meta.env.VITE_EXECUTION_PORT ?? "8002";
-const EXECUTION_BASE_URL = `http://${location.hostname}:${EXECUTION_PORT}`;
+const EXECUTION_BASE_URL = `${PROTOCOL}//${location.hostname}:${EXECUTION_PORT}`;
 
 // Every execution route requires a Bearer token as of the multi-tenant SaaS
 // migration (Phase 2, see docs/architecture.md) - this wrapper layers the

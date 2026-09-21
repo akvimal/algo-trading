@@ -1,0 +1,49 @@
+# VPS-only TLS termination (docker-compose.prod.yml adds this service -
+# never part of local dev/test). One free Let's Encrypt cert for
+# {$VPS_DOMAIN} (a cert is scoped to a hostname, not a port), reused
+# across every port below via TLS SNI - so the existing per-service port
+# scheme (shell/index.html's TABS, every frontend's own api.ts) needs no
+# restructuring into per-service subdomains. Each block just terminates
+# TLS and reverse-proxies plaintext to the same container:port the host
+# used to publish directly - see docker-compose.prod.yml's own comment for
+# why those services stop publishing to 0.0.0.0 once this exists.
+#
+# Ports mirror .env's *_PORT values - if you change one there, mirror it
+# here too (this file has no access to .env's variable names, only
+# VPS_DOMAIN passed through docker-compose.prod.yml's environment:).
+
+{$VPS_DOMAIN}:8090 {
+	reverse_proxy shell:80
+}
+
+{$VPS_DOMAIN}:8085 {
+	reverse_proxy signal-engine-frontend:80
+}
+
+{$VPS_DOMAIN}:8000 {
+	reverse_proxy signal-engine-backend:8000
+}
+
+{$VPS_DOMAIN}:8083 {
+	reverse_proxy market-data-frontend:80
+}
+
+{$VPS_DOMAIN}:8001 {
+	reverse_proxy market-data-backend:8000
+}
+
+{$VPS_DOMAIN}:8081 {
+	reverse_proxy execution-frontend:80
+}
+
+{$VPS_DOMAIN}:8002 {
+	reverse_proxy execution-backend:8000
+}
+
+{$VPS_DOMAIN}:8004 {
+	reverse_proxy accounts-backend:8000
+}
+
+{$VPS_DOMAIN}:8084 {
+	reverse_proxy manual-trading-frontend:80
+}

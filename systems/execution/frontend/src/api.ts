@@ -551,8 +551,15 @@ export async function updateSettings(update: { usdinr_rate: number }): Promise<S
 // blank and shows this status text instead.
 // ---------------------------------------------------------------------
 
+// Local dev is always plain http:. A domain deploy behind Caddy (see
+// docker-compose.prod.yml) terminates TLS on these same ports, so every
+// cross-origin base URL below has to follow the PAGE's own scheme rather
+// than hardcoding http:, or the browser blocks the request as mixed
+// content the instant this frontend itself is loaded over https:.
+const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
+
 const ACCOUNTS_PORT = import.meta.env.VITE_ACCOUNTS_PORT ?? "8004";
-const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
+const ACCOUNTS_BASE_URL = `${PROTOCOL}//${location.hostname}:${ACCOUNTS_PORT}`;
 
 export type CredentialsOut = {
   has_dhan: boolean;
@@ -610,7 +617,7 @@ export async function fetchAllUsers(): Promise<AdminUser[]> {
 // ---------------------------------------------------------------------
 
 const SIGNAL_ENGINE_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";
-const SIGNAL_ENGINE_BASE_URL = `http://${location.hostname}:${SIGNAL_ENGINE_PORT}`;
+const SIGNAL_ENGINE_BASE_URL = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_PORT}`;
 
 export type StrategySummary = {
   id: string;

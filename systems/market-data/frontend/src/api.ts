@@ -11,7 +11,13 @@ export type Exchange = "NSE" | "MCX" | "CRYPTO";
 // backend instead of a hardcoded dev port. Default matches dev's port, so
 // `npm run dev` with no .env still works exactly as before.
 const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
-const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
+// Local dev is always plain http:. A domain deploy behind Caddy (see
+// docker-compose.prod.yml) terminates TLS on this same port, so this has
+// to follow the PAGE's own scheme rather than hardcoding http:, or the
+// browser blocks the request as mixed content the instant this frontend
+// itself is loaded over https:.
+const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
+const MARKET_DATA_BASE_URL = `${PROTOCOL}//${location.hostname}:${MARKET_DATA_PORT}`;
 
 async function asJson<T>(res: Response, what: string): Promise<T> {
   if (!res.ok) {

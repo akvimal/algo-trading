@@ -1,5 +1,13 @@
 name: algo-trading
 
+# BIND_ADDR (every service's port mapping below) - unset locally, so every
+# port publishes to 0.0.0.0 exactly as before (`make up`/`make test-up`
+# unaffected). A VPS behind Caddy (see docker-compose.prod.yml) sets
+# BIND_ADDR=127.0.0.1 in its own .env instead - every port then only
+# listens on loopback, so Caddy (added by that override file, publishing
+# the SAME port numbers to 0.0.0.0 with TLS) becomes the only thing the
+# internet can actually reach on them.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,7 +17,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - "${BIND_ADDR:-0.0.0.0}:${POSTGRES_PORT}:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -24,7 +32,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     ports:
-      - "${REDIS_PORT}:6379"
+      - "${BIND_ADDR:-0.0.0.0}:${REDIS_PORT}:6379"
     volumes:
       - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis-data:/data
@@ -84,7 +92,7 @@ services:
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       ACCOUNTS_BASE_URL: http://accounts-backend:8000
     ports:
-      - "${SIGNAL_ENGINE_BACKEND_PORT}:8000"
+      - "${BIND_ADDR:-0.0.0.0}:${SIGNAL_ENGINE_BACKEND_PORT}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,7 +114,7 @@ services:
         VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
-      - "${SIGNAL_ENGINE_FRONTEND_PORT}:80"
+      - "${BIND_ADDR:-0.0.0.0}:${SIGNAL_ENGINE_FRONTEND_PORT}:80"
     depends_on:
       - signal-engine-backend
 
@@ -183,7 +191,7 @@ services:
       # guarantee this stack already has.
       - dhan-credentials:/data
     ports:
-      - "${MARKET_DATA_BACKEND_PORT}:8000"
+      - "${BIND_ADDR:-0.0.0.0}:${MARKET_DATA_BACKEND_PORT}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -205,7 +213,7 @@ services:
         VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
-      - "${MARKET_DATA_FRONTEND_PORT}:80"
+      - "${BIND_ADDR:-0.0.0.0}:${MARKET_DATA_FRONTEND_PORT}:80"
     depends_on:
       - market-data-backend
 
@@ -236,7 +244,7 @@ services:
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       LIVE_TRADING_KILL_SWITCH: ${LIVE_TRADING_KILL_SWITCH:-false}
     ports:
-      - "${EXECUTION_BACKEND_PORT}:8000"
+      - "${BIND_ADDR:-0.0.0.0}:${EXECUTION_BACKEND_PORT}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -267,7 +275,7 @@ services:
       # caller is a trusted service rather than a user with a JWT.
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
     ports:
-      - "${ACCOUNTS_BACKEND_PORT}:8000"
+      - "${BIND_ADDR:-0.0.0.0}:${ACCOUNTS_BACKEND_PORT}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -288,7 +296,7 @@ services:
         VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
-      - "${EXECUTION_FRONTEND_PORT}:80"
+      - "${BIND_ADDR:-0.0.0.0}:${EXECUTION_FRONTEND_PORT}:80"
     depends_on:
       - execution-backend
 
@@ -313,7 +321,7 @@ services:
         VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
     restart: unless-stopped
     ports:
-      - "${MANUAL_TRADING_FRONTEND_PORT}:80"
+      - "${BIND_ADDR:-0.0.0.0}:${MANUAL_TRADING_FRONTEND_PORT}:80"
     depends_on:
       - execution-backend
 
@@ -324,7 +332,7 @@ services:
       context: ./shell
     restart: unless-stopped
     ports:
-      - "${SHELL_PORT}:80"
+      - "${BIND_ADDR:-0.0.0.0}:${SHELL_PORT}:80"
 
 # --- Later phases (see docs/architecture.md) plug in here behind profiles, e.g.: ---
 #   some-new-system-backend:

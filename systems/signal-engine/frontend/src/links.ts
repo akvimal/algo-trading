@@ -7,8 +7,15 @@
 // `?tab=signals&signal_id=...` href instead of a separate origin.
 const EXECUTION_FRONTEND_PORT = 8081;
 
+// Local dev is always plain http:. A domain deploy behind Caddy (see
+// docker-compose.prod.yml) terminates TLS on these same ports, so every
+// link built below has to follow the PAGE's own scheme rather than
+// hardcoding http: - most relevantly chartinkWebhookUrls below, since
+// that URL is handed to an external provider to call.
+const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
+
 export function executionUrl(signalId: string): string {
-  return `http://${location.hostname}:${EXECUTION_FRONTEND_PORT}/?signal_id=${encodeURIComponent(signalId)}`;
+  return `${PROTOCOL}//${location.hostname}:${EXECUTION_FRONTEND_PORT}/?signal_id=${encodeURIComponent(signalId)}`;
 }
 
 // Manual-trading's Live Chart (its default tab, no ?tab= needed) - reads
@@ -19,13 +26,13 @@ export function executionUrl(signalId: string): string {
 const MANUAL_TRADING_FRONTEND_PORT = 8084;
 
 export function manualTradingChartUrl(symbol: string): string {
-  return `http://${location.hostname}:${MANUAL_TRADING_FRONTEND_PORT}/?symbol=${encodeURIComponent(symbol)}`;
+  return `${PROTOCOL}//${location.hostname}:${MANUAL_TRADING_FRONTEND_PORT}/?symbol=${encodeURIComponent(symbol)}`;
 }
 
 // This service's own backend (signal-engine, not any frontend) - the same
 // VITE_SIGNAL_ENGINE_PORT convention api.ts uses.
 const SIGNAL_ENGINE_BACKEND_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";
-const signalEngineBackendUrl = `http://${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT}`;
+const signalEngineBackendUrl = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT}`;
 
 // A strategy's webhook URLs - one route per provider+direction handles
 // every strategy for that provider, differentiated by this query param

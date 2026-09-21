@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>algo-trading</title>
+<title>TradeRight</title>
 <style>
   :root {
     color-scheme: dark;
@@ -221,6 +221,14 @@
     const SHELL_DEV_PORT = 8090;
     const PORT_OFFSET = (Number(location.port) || SHELL_DEV_PORT) - SHELL_DEV_PORT;
 
+    // Local dev/test are always plain http: (no TLS locally). A domain
+    // deploy behind Caddy (see docker-compose.prod.yml) terminates TLS on
+    // these same ports, so every cross-origin URL below - each iframe src
+    // and every fetch base - has to follow the PAGE's own scheme rather
+    // than hardcoding http:, or the browser blocks them all as mixed
+    // content the instant this shell itself is loaded over https:.
+    const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
+
     // Environment tag in the browser tab. On localhost this is one of the
     // two local stacks (dev / .env.test, identical UI) - tell them apart
     // by the same PORT_OFFSET used for iframe routing above. Any other
@@ -229,7 +237,7 @@
     // mislabelled the VPS as [DEV].)
     const _host = location.hostname;
     const _isLocal = _host === "localhost" || _host === "127.0.0.1" || _host === "::1" || _host === "[::1]";
-    document.title = `algo-trading [${!_isLocal ? "LIVE" : PORT_OFFSET === 0 ? "DEV" : "TEST"}]`;
+    document.title = `TradeRight [${!_isLocal ? "LIVE" : PORT_OFFSET === 0 ? "DEV" : "TEST"}]`;
 
     // `path` (optional) is appended to the iframe src only - dataset.origin
     // below stays the bare origin (the session broker's postMessage
@@ -261,7 +269,7 @@
 
       if (tab.built) {
         const iframe = document.createElement("iframe");
-        const origin = `http://${location.hostname}:${tab.port + PORT_OFFSET}`;
+        const origin = `${PROTOCOL}//${location.hostname}:${tab.port + PORT_OFFSET}`;
         iframe.src = origin + (tab.path ?? "");
         iframe.dataset.origin = origin; // read back by the session broker below
         iframe.id = `frame-${tab.id}`;
@@ -360,7 +368,7 @@
     const userAreaEl = document.getElementById("user-area");
 
     async function fetchAccountUser(token) {
-      const base = `http://${location.hostname}:${ACCOUNTS_BACKEND_PORT + PORT_OFFSET}`;
+      const base = `${PROTOCOL}//${location.hostname}:${ACCOUNTS_BACKEND_PORT + PORT_OFFSET}`;
       const res = await fetch(`${base}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json(); // { id, email, name, is_admin }
@@ -457,7 +465,7 @@
     const bannerEl = document.getElementById("dhan-banner");
 
     async function checkDhanTokenExpiry() {
-      const base = `http://${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
+      const base = `${PROTOCOL}//${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
       let status;
       try {
         const res = await fetch(`${base}/dhan/token-expiry`);
@@ -639,7 +647,7 @@
       }
 
       async function pollStrategyNames() {
-        const base = `http://${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
+        const base = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
         try {
           const res = await fetch(`${base}/strategies`);
           if (!res.ok) return;
@@ -652,7 +660,7 @@
 
       async function pollSignals() {
         if (!notifEnabled) return;
-        const base = `http://${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
+        const base = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
         try {
           const res = await fetch(`${base}/signals?limit=20`);
           if (!res.ok) return;
@@ -682,7 +690,7 @@
 
       async function pollSentiment() {
         if (!notifEnabled) return;
-        const base = `http://${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
+        const base = `${PROTOCOL}//${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
         try {
           const res = await fetch(`${base}/options/sentiment`);
           if (!res.ok) return;

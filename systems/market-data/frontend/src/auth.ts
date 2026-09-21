@@ -9,7 +9,13 @@
 // precedent.
 
 const ACCOUNTS_PORT = import.meta.env.VITE_ACCOUNTS_PORT ?? "8004";
-const ACCOUNTS_BASE_URL = `http://${location.hostname}:${ACCOUNTS_PORT}`;
+// Local dev is always plain http:. A domain deploy behind Caddy (see
+// docker-compose.prod.yml) terminates TLS on this same port, so this has
+// to follow the PAGE's own scheme rather than hardcoding http:, or the
+// browser blocks the request as mixed content the instant this frontend
+// itself is loaded over https:.
+const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
+const ACCOUNTS_BASE_URL = `${PROTOCOL}//${location.hostname}:${ACCOUNTS_PORT}`;
 
 const TOKEN_KEY = "authToken";
 

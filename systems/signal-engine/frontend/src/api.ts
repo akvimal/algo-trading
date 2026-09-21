@@ -777,10 +777,17 @@ export type ProviderSignal = {
 const SIGNAL_ENGINE_PORT = import.meta.env.VITE_SIGNAL_ENGINE_PORT ?? "8000";
 const MARKET_DATA_PORT = import.meta.env.VITE_MARKET_DATA_PORT ?? "8001";
 
-const API_BASE_URL = `http://${location.hostname}:${SIGNAL_ENGINE_PORT}`;
+// Local dev is always plain http:. A domain deploy behind Caddy (see
+// docker-compose.prod.yml) terminates TLS on these same ports, so every
+// cross-origin base URL below has to follow the PAGE's own scheme rather
+// than hardcoding http:, or the browser blocks the request as mixed
+// content the instant this frontend itself is loaded over https:.
+const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
+
+const API_BASE_URL = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_PORT}`;
 // market-data's API, read directly from the browser (CORS-enabled) - just
 // for the universe picker below.
-const MARKET_DATA_BASE_URL = `http://${location.hostname}:${MARKET_DATA_PORT}`;
+const MARKET_DATA_BASE_URL = `${PROTOCOL}//${location.hostname}:${MARKET_DATA_PORT}`;
 
 // FastAPI's own error body shape is {"detail": "..."} - a specific reason
 // (e.g. DELETE /rules/{id}'s own "cannot delete rule - 2 strategies still
@@ -1404,7 +1411,7 @@ export async function clearCandleCache(exchange: string, symbol: string, interva
 // ---------------------------------------------------------------------
 
 const EXECUTION_PORT = import.meta.env.VITE_EXECUTION_PORT ?? "8002";
-const EXECUTION_BASE_URL = `http://${location.hostname}:${EXECUTION_PORT}`;
+const EXECUTION_BASE_URL = `${PROTOCOL}//${location.hostname}:${EXECUTION_PORT}`;
 
 export type ManualPosition = {
   id: string;

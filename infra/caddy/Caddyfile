@@ -12,25 +12,11 @@
 # here too (this file has no access to .env's variable names, only
 # VPS_DOMAIN passed through docker-compose.prod.yml's environment:).
 #
-# --- Runbook: when host port 80 already belongs to another web server ---
-# Caddy's ACME HTTP-01 challenge always targets port 80 on VPS_DOMAIN -
-# that's the standard ACME port and isn't configurable on the challenger's
-# side. If this VPS already runs its own nginx (or similar) for other
-# sites and legitimately owns host port 80, docker-compose.prod.yml maps
-# Caddy's ACME listener to host port 8078 instead of 80 - add ONE new
-# nginx server block (a new file, doesn't touch any existing site) that
-# forwards just the challenge path to it:
-#
-#   server {
-#       listen 80;
-#       server_name <your-VPS_DOMAIN-here>;
-#       location /.well-known/acme-challenge/ {
-#           proxy_pass http://127.0.0.1:8078;
-#       }
-#   }
-#
-# Then `sudo nginx -t && sudo systemctl reload nginx`. Every other nginx
-# site config is unaffected - this only matches requests for VPS_DOMAIN.
+# If host port 80 is ever NOT free (e.g. this VPS gets a real nginx site
+# again later) see docker-compose.prod.yml's own port-80 comment and this
+# file's git history (2026-09-21) for the workaround: Caddy's ACME
+# listener moves to host port 8078, plus one new nginx server block
+# forwarding just /.well-known/acme-challenge/ to it.
 
 {$VPS_DOMAIN}:8090 {
 	reverse_proxy shell:80

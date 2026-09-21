@@ -22,21 +22,18 @@ services:
       # for ${VAR} here.
       VPS_DOMAIN: ${VPS_DOMAIN}
     ports:
-      # Caddy's ACME HTTP-01 challenge (issuing/renewing the Let's Encrypt
-      # cert) needs port 80 reachable, but NOT owned by this container - a
-      # VPS that already runs its own nginx for other sites (found live
-      # 2026-09-21: agentpro.co.in etc. on this same box) legitimately
-      # keeps host port 80 for itself. So Caddy's own ACME listener (still
-      # its container's internal port 80 - that's fixed, not configurable
-      # without a global Caddyfile option) is only exposed on host port
-      # 8078 here; the existing nginx gets ONE new server block that
-      # forwards just /.well-known/acme-challenge/ for VPS_DOMAIN to
-      # 127.0.0.1:8078 - see the runbook comment in infra/caddy/Caddyfile.
-      # Every other site nginx already serves is completely untouched.
-      - "8078:80"
-      # The rest mirror every *_PORT in .env - add a matching block to
-      # infra/caddy/Caddyfile AND a line here if a new service ever gets
+      # 80 is required for Caddy's ACME HTTP-01 challenge (issuing/renewing
+      # the Let's Encrypt cert) even though nothing in this app uses it
+      # directly. (This VPS briefly also ran its own nginx on port 80 for
+      # unrelated sites - agentpro.co.in/rgp.agentpro.co.in - found live
+      # 2026-09-21; decommissioned rather than worked around, since nothing
+      # on it was still in use - see infra/caddy/Caddyfile's git history if
+      # that workaround (Caddy on 8078 + an nginx forwarding rule) is ever
+      # needed again on a box that DOES still need nginx for something
+      # else.) The rest mirror every *_PORT in .env - add a matching block
+      # to infra/caddy/Caddyfile AND a line here if a new service ever gets
       # its own port.
+      - "80:80"
       - "${SHELL_PORT}:${SHELL_PORT}"
       - "${SIGNAL_ENGINE_FRONTEND_PORT}:${SIGNAL_ENGINE_FRONTEND_PORT}"
       - "${SIGNAL_ENGINE_BACKEND_PORT}:${SIGNAL_ENGINE_BACKEND_PORT}"

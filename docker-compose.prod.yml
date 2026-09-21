@@ -1,10 +1,21 @@
-# VPS-only overlay - adds a single new service (Caddy) on top of the base
-# docker-compose.yml, never touching any service already defined there.
-# Purely additive by design: overriding an *existing* service's `ports:`
-# across two compose files risks depending on Compose's list-merge
-# semantics for that key, which has changed across versions - safer to
-# just add a new service here and let the base file's own BIND_ADDR (see
-# its top-of-file comment) do the actual rebinding.
+# VPS-only overlay - adds Caddy on top of the base docker-compose.yml, and
+# strips the host-port publish from every service Caddy fronts.
+#
+# Found live 2026-09-21: BIND_ADDR=127.0.0.1 alone (docker-compose.yml's
+# own mechanism) is NOT enough - a service still published to
+# 127.0.0.1:8000 collides with Caddy trying to publish 0.0.0.0:8000 on the
+# very same port number ("Bind for 127.0.0.1:8000 failed: port is already
+# allocated"). A wildcard (0.0.0.0) bind and a loopback-specific bind on
+# the SAME port genuinely conflict at the OS level, regardless of Docker -
+# only ONE thing can ever own a given port number on this host. Since
+# Caddy never needs the host-published port anyway (it reaches every
+# backing service over the docker-compose network directly via service
+# name - see infra/caddy/Caddyfile's reverse_proxy targets, container
+# port, not host port), the fix is to remove those services' host publish
+# entirely once Caddy exists, not just rebind its address. `ports: !reset
+# []` forces a real replacement (verified locally - Compose's default
+# list-merge for `ports` does NOT clear a base file's entries just because
+# an override re-declares an empty list; `!reset` is required for that).
 #
 # Usage (VPS only, after setting VPS_DOMAIN and BIND_ADDR=127.0.0.1 in .env):
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile execution up -d --build
@@ -13,6 +24,29 @@
 # base docker-compose.yml, so this file has zero effect on local dev/test.
 
 services:
+  # Host-port publish removed - Caddy is the only thing that should own
+  # these port numbers on the VPS. BIND_ADDR=127.0.0.1 in docker-compose.yml
+  # is now moot for these 9 (fully overridden here), but still applies -
+  # and still matters - to postgres/redis below, which Caddy doesn't front.
+  shell:
+    ports: !reset []
+  signal-engine-frontend:
+    ports: !reset []
+  signal-engine-backend:
+    ports: !reset []
+  market-data-frontend:
+    ports: !reset []
+  market-data-backend:
+    ports: !reset []
+  execution-frontend:
+    ports: !reset []
+  execution-backend:
+    ports: !reset []
+  accounts-backend:
+    ports: !reset []
+  manual-trading-frontend:
+    ports: !reset []
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped

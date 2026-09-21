@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { type OiBuildup, type OiSummary, type OiSummaryLeg, fetchOiSummary, fetchOptionExpiries, resolveUnderlying } from "./api";
+import { type OiBuildup, type OiSummary, type OiSummaryLeg, type OiSummaryStrike, fetchOiSummary, fetchOptionExpiries, resolveUnderlying } from "./api";
 import { IvSkewChart } from "./IvSkewChart";
 import { OiBarChart } from "./OiBarChart";
 import { SentimentHistoryChart } from "./SentimentHistoryChart";
@@ -130,6 +130,24 @@ function fmtIv(n: number | null, isCrypto = false): string {
 
 function fmtPcr(n: number | null): string {
   return n == null ? "-" : n.toFixed(2);
+}
+
+// Volume PCR (put volume / call volume) - the flow-based sibling of the
+// OI-based PCR above. OI is a standing position (can sit unchanged for
+// days); volume is TODAY's actual trading activity, so the two can read
+// very differently (e.g. heavy OI built up last week vs. who's actually
+// trading right now). Computed client-side from the already-fetched full
+// chain (summary.strikes - not the ATM-windowed visibleStrikes) rather
+// than a new backend field, mirroring oi_summary.py's own pcr formula
+// exactly (null, not Infinity/NaN, when call volume is 0).
+function volumePcr(strikes: OiSummaryStrike[]): number | null {
+  let callVolume = 0;
+  let putVolume = 0;
+  for (const s of strikes) {
+    callVolume += s.call?.volume ?? 0;
+    putVolume += s.put?.volume ?? 0;
+  }
+  return callVolume > 0 ? putVolume / callVolume : null;
 }
 
 function fmtVol(n: number): string {
@@ -520,6 +538,10 @@ export default function OiSummaryPage() {
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">PCR (OI)</span>
                 <span className="manual-stats-card-value">{fmtPcr(summary.pcr)}</span>
+              </div>
+              <div className="manual-stats-card" title="Put volume / call volume, today's actual trading activity - can disagree with PCR (OI), which reflects standing positions built up over any number of prior days">
+                <span className="manual-stats-card-label">PCR (Volume)</span>
+                <span className="manual-stats-card-value">{fmtPcr(volumePcr(summary.strikes))}</span>
               </div>
               <div className="manual-stats-card">
                 <span className="manual-stats-card-label">Total Call OI</span>

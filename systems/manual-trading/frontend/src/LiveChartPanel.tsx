@@ -1269,27 +1269,54 @@ function computeOiLevels(oi: OiSummary): OiLevel[] {
 
 const OI_LEVELS_STORAGE_KEY = "manualLiveChartOiLevels";
 
-// How many recent sentiment-history points the OI strip's mini-trend
-// shows (5-min cadence, so ~10 covers the last ~50 min).
+// How many bars each OI-strip sparkline shows, once downsampled to its
+// own window's spacing (10 bars = ~50 min for the 5m strip, ~150 min for
+// the 15m one).
 const SENT_HIST_WINDOW = 10;
 
 // Whether the step INTO point i (vs point i-1) is a "major" OI-shift move:
 // the score crossed zero (positioning flipped side), or the jump is both
 // absolute-large and large relative to the window's typical step.
-// `score` prefers the 15m OI-shift but falls back to 5m - the 15m figure
-// goes null whenever market-data's OI-history buffer can't reach back a
-// full 15 min (a fresh backend, or a thin-history session), and without
-// the fallback the strip would just freeze on the last 15m reading.
-type SentStep = { pt: SentimentHistoryPoint; score: number; win: "15m" | "5m"; major: boolean };
+// Two independent strips (5m + 15m, shown side by side) each read their
+// own fixed score column - no cross-window fallback, so a window with a
+// thin history buffer (a fresh backend/session) just renders fewer bars
+// rather than borrowing the other window's figure. `barTime` is the
+// clock-aligned slot the reading was bucketed into (see sentimentSteps) -
+// use it, not `pt.recorded_at`, for anything a viewer reads as "when this
+// bar is", so bar-to-bar spacing always reads as a clean 5/15-min step.
+type SentStep = { pt: SentimentHistoryPoint; score: number; win: "15m" | "5m"; major: boolean; barTime: number };
 
-function sentimentSteps(points: SentimentHistoryPoint[]): SentStep[] {
-  const scored = points
+// sentiment_history is recorded every 5 min regardless of window, on
+// whatever offset the scheduler happens to fire at (e.g. :02/:07/:12...),
+// so raw timestamps never land on a clean 5/15-min boundary and any drift
+// in the scheduler's own cadence shows up as bar-to-bar spacing that looks
+// inconsistent. Instead we snap each reading down to the clock-aligned
+// slot it falls in - a multiple of the window (:00/:05/:10/... for 5m,
+// :00/:15/:30/:45 for 15m) - and keep at most one bar per slot (the
+// latest reading in it, if the scheduler ever double-fires within one).
+// This also naturally fixes the old "15m re-measured every 5 min"
+// overlap - only one reading per 15-min slot survives.
+function sentimentSteps(points: SentimentHistoryPoint[], window: "15m" | "5m"): SentStep[] {
+  const intervalMs = (window === "15m" ? 15 : 5) * 60_000;
+  const withScore = points
     .map((p) => {
-      const s = p.score_15m ?? p.score_5m;
-      return s == null ? null : { pt: p, score: s, win: (p.score_15m != null ? "15m" : "5m") as "15m" | "5m" };
+      const s = window === "15m" ? p.score_15m : p.score_5m;
+      return s == null ? null : { pt: p, score: s, win: window };
     })
-    .filter((x): x is { pt: SentimentHistoryPoint; score: number; win: "15m" | "5m" } => x != null)
-    .slice(-SENT_HIST_WINDOW);
+    .filter((x): x is { pt: SentimentHistoryPoint; score: number; win: "15m" | "5m" } => x != null);
+
+  const slots = new Map<number, (typeof withScore)[number]>();
+  for (const p of withScore) {
+    const slot = Math.floor(new Date(p.pt.recorded_at).getTime() / intervalMs) * intervalMs;
+    const existing = slots.get(slot);
+    if (!existing || new Date(p.pt.recorded_at).getTime() > new Date(existing.pt.recorded_at).getTime()) {
+      slots.set(slot, p);
+    }
+  }
+  const scored = Array.from(slots.entries())
+    .sort(([a], [b]) => a - b)
+    .slice(-SENT_HIST_WINDOW)
+    .map(([slot, p]) => ({ ...p, barTime: slot }));
   const deltas: number[] = [];
   for (let i = 1; i < scored.length; i++) deltas.push(Math.abs(scored[i].score - scored[i - 1].score));
   const sorted = [...deltas].sort((a, b) => a - b);
@@ -1309,8 +1336,58 @@ function scoreColor(score: number): string {
   return score > 0 ? "var(--buy)" : "var(--sell)";
 }
 
-function hhmm(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+function hhmm(t: string | number): string {
+  return new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+// One "OI shift" sparkline strip for a single fixed window - the OI strip
+// renders one of these for 5m and one for 15m, side by side (flex-wrap),
+// so a short-term flip and a slower medium-term shift are both visible
+// instead of one blended line. Returns null below 2 points, same as before.
+function OiSentSpark({ sentHist, window }: { sentHist: SentimentHistoryPoint[]; window: "5m" | "15m" }) {
+  const steps = sentimentSteps(sentHist, window);
+  if (steps.length < 2) return null;
+  const maxAbs = Math.max(0.2, ...steps.map((s) => Math.abs(s.score)));
+  const last = steps[steps.length - 1];
+  const prev = steps[steps.length - 2];
+  const ageMs = Date.now() - new Date(last.pt.recorded_at).getTime();
+  const stale = ageMs > 12 * 60_000; // > 2 recording cycles behind
+  return (
+    <span
+      className="live-chart-oi-sent"
+      title={`OI shift % (${window}) over the last readings — bars are the reading, ⚡ marks a major move or a side flip. Source: sentiment_history, written every 5 min, bucketed to clean ${window} slots. Last reading ${hhmm(last.pt.recorded_at)}${stale ? " (stale)" : ""}.`}
+    >
+      OI shift {window}
+      <span className="live-chart-oi-spark">
+        {steps.map((s) => (
+          <span
+            key={s.barTime}
+            className={`live-chart-oi-spark-bar${s.major ? " is-major" : ""}`}
+            style={{
+              height: `${Math.max(8, (Math.abs(s.score) / maxAbs) * 100)}%`,
+              background: scoreColor(s.score),
+            }}
+            title={`${hhmm(s.barTime)} · ${s.win} · ${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)}%${s.major ? " · major move" : ""}`}
+          />
+        ))}
+      </span>
+      <b style={{ color: scoreColor(last.score) }}>
+        {last.score >= 0 ? "+" : ""}
+        {last.score.toFixed(2)}%
+      </b>
+      {last.major && (
+        <span className="live-chart-oi-sent-flag">
+          ⚡ {last.score - prev.score >= 0 ? "+" : ""}
+          {(last.score - prev.score).toFixed(2)} vs {hhmm(prev.barTime)}
+        </span>
+      )}
+      {stale && (
+        <span className="live-chart-oi-at is-stale" title={`Last reading ${hhmm(last.pt.recorded_at)} — more than 2 recording cycles old`}>
+          stale
+        </span>
+      )}
+    </span>
+  );
 }
 
 // Dark palette lifted straight from index.css's :root (this frontend is
@@ -4200,51 +4277,8 @@ export function LiveChartPanel({
               )}
             </span>
           )}
-          {(() => {
-            const steps = sentimentSteps(sentHist);
-            if (steps.length < 2) return null;
-            const maxAbs = Math.max(0.2, ...steps.map((s) => Math.abs(s.score)));
-            const last = steps[steps.length - 1];
-            const prev = steps[steps.length - 2];
-            const ageMs = Date.now() - new Date(last.pt.recorded_at).getTime();
-            const stale = ageMs > 12 * 60_000; // > 2 recording cycles behind
-            return (
-              <span
-                className="live-chart-oi-sent"
-                title={`OI shift % (${last.win}) over the last readings — bars are the reading, ⚡ marks a major move or a side flip. Source: sentiment_history, written every 5 min. Last reading ${hhmm(last.pt.recorded_at)}${stale ? " (stale)" : ""}.`}
-              >
-                OI shift {last.win}
-                <span className="live-chart-oi-spark">
-                  {steps.map((s) => (
-                    <span
-                      key={s.pt.recorded_at}
-                      className={`live-chart-oi-spark-bar${s.major ? " is-major" : ""}`}
-                      style={{
-                        height: `${Math.max(8, (Math.abs(s.score) / maxAbs) * 100)}%`,
-                        background: scoreColor(s.score),
-                      }}
-                      title={`${hhmm(s.pt.recorded_at)} · ${s.win} · ${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)}%${s.major ? " · major move" : ""}`}
-                    />
-                  ))}
-                </span>
-                <b style={{ color: scoreColor(last.score) }}>
-                  {last.score >= 0 ? "+" : ""}
-                  {last.score.toFixed(2)}%
-                </b>
-                {last.major && (
-                  <span className="live-chart-oi-sent-flag">
-                    ⚡ {last.score - prev.score >= 0 ? "+" : ""}
-                    {(last.score - prev.score).toFixed(2)} vs {hhmm(prev.pt.recorded_at)}
-                  </span>
-                )}
-                {stale && (
-                  <span className="live-chart-oi-at is-stale" title={`Last reading ${hhmm(last.pt.recorded_at)} — more than 2 recording cycles old`}>
-                    stale
-                  </span>
-                )}
-              </span>
-            );
-          })()}
+          <OiSentSpark sentHist={sentHist} window="5m" />
+          <OiSentSpark sentHist={sentHist} window="15m" />
           {oiAt != null && (
             <span
               className={`live-chart-oi-at-dot${Date.now() - oiAt > 4 * 60_000 ? " is-stale" : ""}`}

@@ -125,7 +125,14 @@ def start_scheduler() -> None:
         )
     _scheduler.add_job(
         _record_sentiment_history,
-        IntervalTrigger(minutes=settings.sentiment_history_interval_minutes),
+        # CronTrigger, not IntervalTrigger - an interval trigger's phase is
+        # whatever moment this job happened to be added (i.e. whenever the
+        # backend last started), so rows land on an arbitrary offset like
+        # :02/:07/:12 instead of a clean :00/:05/:10 - which the OI strip's
+        # sparklines (LiveChartPanel.tsx's sentimentSteps) then have to
+        # round down to display cleanly. Recording ON that boundary instead
+        # means every row already falls on one, no rounding needed downstream.
+        CronTrigger(minute=f"*/{settings.sentiment_history_interval_minutes}"),
         id="sentiment-history-record",
         replace_existing=True,
     )

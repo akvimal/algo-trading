@@ -240,6 +240,33 @@ def _fallback_digest(rows: list[dict], reason: str) -> NewsDigest:
     return NewsDigest(bias="neutral", bias_reason=reason, digest=reason, articles=articles)
 
 
+def _parse_ai_json(content) -> dict:
+    """Some OpenRouter-routed models don't reliably return bare JSON
+    despite response_format: json_schema strict mode - confirmed live
+    2026-09-21 on this same OpenRouter call's sibling in signal-engine
+    (screener_fetch.py's own vision-model read, a Gemini model configured
+    for OPENROUTER_VISION_MODEL there - "Expecting property name enclosed
+    in double quotes", JSON wrapped in a ```json ... ``` markdown fence).
+    Both OPENROUTER_MODEL here and OPENROUTER_VISION_MODEL there are
+    deliberately free-text, not a fixed dropdown, specifically so the
+    model can be swapped freely - the parser needs to tolerate whichever
+    model gets configured, not just the ones that behave perfectly."""
+    if isinstance(content, dict):
+        return content
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start : end + 1])
+        raise
+
+
 def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = None) -> NewsDigest:
     """Runs the raw RSS headlines matched for one underlying through
     OpenRouter (see app/config.py's openrouter_model, default a cheap/fast
@@ -311,7 +338,7 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
-        parsed = content if isinstance(content, dict) else json.loads(content)
+        parsed = _parse_ai_json(content)
 
         scored_articles = []
         for entry in parsed.get("articles") or []:

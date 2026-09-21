@@ -25,6 +25,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -78,6 +79,37 @@ _FUNDAMENTALS_SCHEMA = {
     "required": ["bias", "confidence", "summary", "pros", "cons", "reasons"],
     "additionalProperties": False,
 }
+
+
+def _parse_ai_json(content) -> dict:
+    """Some OpenRouter-routed models don't reliably return bare JSON
+    despite response_format: json_schema strict mode - confirmed live
+    2026-09-21 (a Gemini model configured for OPENROUTER_VISION_MODEL,
+    "Expecting property name enclosed in double quotes" - JSON wrapped in
+    a ```json ... ``` markdown fence). This field is deliberately
+    free-text, not a fixed dropdown (see the settings panel's own
+    comment/WeeklyAdvisorPage.tsx's SettingsTab) specifically so the model
+    can be swapped freely - the parser needs to tolerate whichever model
+    gets configured, not just the ones that behave perfectly, or every
+    fence-wrapping model change silently drops the whole analysis with no
+    visible error beyond a backend log line."""
+    if isinstance(content, dict):
+        return content
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Last resort: the first balanced-looking {...} block, in case
+        # there's leading/trailing prose around the JSON the model wasn't
+        # asked for (e.g. "Here's the analysis:\n{...}").
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start : end + 1])
+        raise
 
 
 @dataclass
@@ -190,7 +222,7 @@ def _analyze_via_ai(symbol: str, screenshot: bytes, api_key: Optional[str] = Non
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
-        return content if isinstance(content, dict) else json.loads(content)
+        return _parse_ai_json(content)
     except Exception as exc:
         logger.warning("weekly-advisor fundamentals: OpenRouter analysis failed for %s: %s", symbol, exc)
         return None

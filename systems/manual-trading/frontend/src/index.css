@@ -2722,6 +2722,23 @@ button.btn-exit {
   background: #e15b5b;
 }
 
+/* IvSkewChart's liquidity-overlay legend swatch - a hollow ring, matching
+   the hollow (stroke-only) point markers the chart draws for a wide
+   bid-ask spread, distinct from the solid-filled .oi-bar-chart-swatch
+   dots used for a normal/trustworthy reading. */
+.iv-skew-legend-hollow {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-dim);
+}
+
+.iv-skew-caveat {
+  margin-top: 0.4rem;
+  font-size: 0.74rem;
+}
+
 /* SentimentHistoryChart.tsx - spot price over time, points colored by
    that snapshot's own OI sentiment direction - same sizing/tooltip
    conventions as .oi-bar-chart above (own class names, not shared, same

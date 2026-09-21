@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { OiSummaryStrike } from "./api";
+import type { OiSummaryLeg, OiSummaryStrike } from "./api";
 
 // Call/Put implied-volatility skew across strikes - the chart that fills
 // OiSummaryPage.tsx's second chart slot for a custom (non-watchlist)
@@ -33,6 +33,27 @@ function ivPercent(n: number, isCrypto: boolean): number {
   return isCrypto ? n * 100 : n;
 }
 
+// Liquidity overlay: a deep-ITM/deep-OTM leg often trades rarely, so its
+// IV comes from a stale or lopsided quote rather than a real market view
+// (confirmed live 2026-09-21 cross-referencing this chart against the OI
+// bar chart for RELIANCE/BHEL - an isolated spike or a steady drift with
+// near-zero OI at those same strikes). A wide bid-ask spread is the
+// direct, per-leg signal for exactly that, available right on the same
+// leg (top_bid_price/top_ask_price, already fetched) - no need to
+// eyeball the OI chart separately every time. Relative to the quote's
+// own midpoint, not a fixed rupee amount, since deep ITM/OTM premiums
+// span a huge range - 15% is a starting heuristic, not a calibrated
+// number; a zero bid (or zero ask) is always flagged regardless of the
+// ratio, since that means no real two-sided market exists at all.
+const WIDE_SPREAD_THRESHOLD = 0.15;
+
+function isWideSpread(leg: OiSummaryLeg): boolean {
+  if (leg.top_bid_price <= 0 || leg.top_ask_price <= 0) return true;
+  const mid = (leg.top_bid_price + leg.top_ask_price) / 2;
+  if (mid <= 0) return true;
+  return (leg.top_ask_price - leg.top_bid_price) / mid > WIDE_SPREAD_THRESHOLD;
+}
+
 export function IvSkewChart({
   strikes,
   spot,
@@ -52,6 +73,8 @@ export function IvSkewChart({
 
   const callIv = strikes.map((s) => (s.call ? ivPercent(s.call.implied_volatility, isCrypto) : null));
   const putIv = strikes.map((s) => (s.put ? ivPercent(s.put.implied_volatility, isCrypto) : null));
+  const callWide = strikes.map((s) => (s.call ? isWideSpread(s.call) : false));
+  const putWide = strikes.map((s) => (s.put ? isWideSpread(s.put) : false));
   const allIv = [...callIv, ...putIv].filter((v): v is number => v != null);
 
   if (allIv.length === 0) {
@@ -152,11 +175,34 @@ export function IvSkewChart({
 
         <path d={pathFor(putIv)} fill="none" stroke={PUT_COLOR} strokeWidth={2} />
         <path d={pathFor(callIv)} fill="none" stroke={CALL_COLOR} strokeWidth={2} />
-        {putIv.map(
-          (v, i) => v != null && <circle key={`put-${strikes[i].strike}`} cx={bandCenterX(i)} cy={valueToY(v)} r={hoverIndex === i ? 4 : 2.5} fill={PUT_COLOR} />,
+        {/* Wide-spread (untrustworthy) points render hollow - stroke only,
+            no fill - instead of the normal solid dot, so an unreliable
+            reading is visually distinct without needing to hover it. */}
+        {putIv.map((v, i) =>
+          v == null ? null : (
+            <circle
+              key={`put-${strikes[i].strike}`}
+              cx={bandCenterX(i)}
+              cy={valueToY(v)}
+              r={hoverIndex === i ? 4 : 2.5}
+              fill={putWide[i] ? "none" : PUT_COLOR}
+              stroke={putWide[i] ? PUT_COLOR : "none"}
+              strokeWidth={putWide[i] ? 1.5 : 0}
+            />
+          ),
         )}
-        {callIv.map(
-          (v, i) => v != null && <circle key={`call-${strikes[i].strike}`} cx={bandCenterX(i)} cy={valueToY(v)} r={hoverIndex === i ? 4 : 2.5} fill={CALL_COLOR} />,
+        {callIv.map((v, i) =>
+          v == null ? null : (
+            <circle
+              key={`call-${strikes[i].strike}`}
+              cx={bandCenterX(i)}
+              cy={valueToY(v)}
+              r={hoverIndex === i ? 4 : 2.5}
+              fill={callWide[i] ? "none" : CALL_COLOR}
+              stroke={callWide[i] ? CALL_COLOR : "none"}
+              strokeWidth={callWide[i] ? 1.5 : 0}
+            />
+          ),
         )}
 
         {/* Spot-price marker - same placement convention as OiBarChart. */}
@@ -174,13 +220,35 @@ export function IvSkewChart({
         <span className="oi-bar-chart-legend-item">
           <i className="oi-bar-chart-swatch call" /> Call IV
         </span>
+        <span className="oi-bar-chart-legend-item" title={`Bid-ask spread wider than ${(WIDE_SPREAD_THRESHOLD * 100).toFixed(0)}% of mid price (or no two-sided quote at all) - this leg barely trades, so its IV may be stale rather than a real market view`}>
+          <i className="iv-skew-legend-hollow" /> Wide spread (unreliable)
+        </span>
       </div>
+
+      {(() => {
+        const wideCount = strikes.filter((_, i) => callWide[i] || putWide[i]).length;
+        return (
+          wideCount > 0 && (
+            <p className="muted iv-skew-caveat">
+              {wideCount} of {strikes.length} strikes shown have a wide bid-ask spread (hollow points) - treat those IV readings with caution, they likely reflect thin trading rather than a real market view.
+            </p>
+          )
+        );
+      })()}
 
       {hovered && (
         <div className="oi-bar-chart-tooltip">
           <strong>{hovered.strike}</strong>
-          {hoveredPutIv != null && <span style={{ color: PUT_COLOR }}>Put IV {hoveredPutIv.toFixed(2)}%</span>}
-          {hoveredCallIv != null && <span style={{ color: CALL_COLOR }}>Call IV {hoveredCallIv.toFixed(2)}%</span>}
+          {hoveredPutIv != null && (
+            <span style={{ color: PUT_COLOR }}>
+              Put IV {hoveredPutIv.toFixed(2)}%{hoverIndex != null && putWide[hoverIndex] ? " ⚠ wide spread" : ""}
+            </span>
+          )}
+          {hoveredCallIv != null && (
+            <span style={{ color: CALL_COLOR }}>
+              Call IV {hoveredCallIv.toFixed(2)}%{hoverIndex != null && callWide[hoverIndex] ? " ⚠ wide spread" : ""}
+            </span>
+          )}
         </div>
       )}
     </div>

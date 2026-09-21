@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { type OiBuildup, type OiSummary, type OiSummaryLeg, fetchOiSummary, fetchOptionExpiries, resolveUnderlying } from "./api";
+import { IvSkewChart } from "./IvSkewChart";
 import { OiBarChart } from "./OiBarChart";
 import { SentimentHistoryChart } from "./SentimentHistoryChart";
 
@@ -584,12 +585,29 @@ export default function OiSummaryPage() {
               />
             </section>
 
-            <section className="manual-settings-section oi-charts-row-item">
-              <div className="oi-summary-chart-header">
-                <h4>Sentiment history - {activeKey}</h4>
-              </div>
-              <SentimentHistoryChart symbol={activeKey} />
-            </section>
+            {PRESETS.some((p) => p.key === activeKey) ? (
+              <section className="manual-settings-section oi-charts-row-item">
+                <div className="oi-summary-chart-header">
+                  <h4>Sentiment history - {activeKey}</h4>
+                </div>
+                <SentimentHistoryChart symbol={activeKey} />
+              </section>
+            ) : (
+              // A custom (non-watchlist) symbol has no sentiment_history
+              // rows to show (that table only tracks the fixed 6 - see
+              // market-data's SENTIMENT_UNDERLYINGS). IV skew needs no
+              // history at all - every strike's implied_volatility is
+              // already fetched for OiBarChart above, just unused until
+              // now - so it fills this slot instead. See the "2-week
+              // daily OI history" GitHub issue for the longer-term plan
+              // to give this slot back to an OI-based chart for stocks too.
+              <section className="manual-settings-section oi-charts-row-item">
+                <div className="oi-summary-chart-header">
+                  <h4>IV skew - {summary.expiry}</h4>
+                </div>
+                <IvSkewChart strikes={visibleStrikes} spot={summary.underlying_last_price} symbol={summary.underlying_symbol} isCrypto={isCrypto} />
+              </section>
+            )}
           </div>
 
           <section className="manual-settings-section">

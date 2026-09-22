@@ -9,6 +9,7 @@ lot-size gotcha found doing so. Mocked responses below use those real,
 confirmed shapes, not a guess."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import responses
 
@@ -145,9 +146,44 @@ def test_get_lot_size_for_security_id_resolves_via_the_reverse_symbol_map():
     assert provider.get_lot_size_for_security_id("106369") == 500
 
 
-def test_get_lot_size_for_security_id_returns_none_for_an_unknown_id():
+def test_get_lot_size_for_security_id_returns_none_for_an_unknown_id(monkeypatch):
     provider = _provider()
     provider._security_id_to_symbol = {"106369": "RELIANCE-29Sep2026-1270-PE"}
     provider._symbol_to_lot_size = {"RELIANCE-29Sep2026-1270-PE": 500}
+    # Recent enough that the on-miss retry (tested separately below) is
+    # throttled - this test is about a genuinely-unknown ID, not the retry.
+    provider._last_synced_at = datetime.now(timezone.utc)
+    monkeypatch.setattr(provider, "sync_instruments", lambda: (_ for _ in ()).throw(AssertionError("should not resync - throttled")))
 
     assert provider.get_lot_size_for_security_id("999999") is None
+
+
+# --- on-miss resync retry: a contract Dhan lists after our last sync shouldn't
+# 404 forever until the next daily scheduled sync - confirmed live 2026-09-22 ---
+
+
+def test_get_lot_size_for_security_id_retries_a_sync_on_miss_when_stale(monkeypatch):
+    provider = _provider()
+    provider._security_id_to_symbol = {}
+    provider._symbol_to_lot_size = {}
+    provider._last_synced_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+    def fake_sync():
+        # Simulates a newly-listed contract showing up on this resync.
+        provider._security_id_to_symbol = {"144394": "RELIANCE-29Sep2026-1280-CE"}
+        provider._symbol_to_lot_size = {"RELIANCE-29Sep2026-1280-CE": 500}
+        provider._last_synced_at = datetime.now(timezone.utc)
+
+    monkeypatch.setattr(provider, "sync_instruments", fake_sync)
+
+    assert provider.get_lot_size_for_security_id("144394") == 500
+
+
+def test_get_lot_size_for_security_id_does_not_retry_a_sync_on_miss_when_recent(monkeypatch):
+    provider = _provider()
+    provider._security_id_to_symbol = {"106369": "RELIANCE-29Sep2026-1270-PE"}
+    provider._symbol_to_lot_size = {"RELIANCE-29Sep2026-1270-PE": 500}
+    provider._last_synced_at = datetime.now(timezone.utc)
+    monkeypatch.setattr(provider, "sync_instruments", lambda: (_ for _ in ()).throw(AssertionError("should not resync - throttled")))
+
+    assert provider.get_lot_size_for_security_id("144394") is None

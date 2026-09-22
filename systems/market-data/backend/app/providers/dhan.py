@@ -95,6 +95,17 @@ def _ipv4_preferred_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
 socket.getaddrinfo = _ipv4_preferred_getaddrinfo
 
 INSTRUMENT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
+# get_lot_size_for_security_id's on-miss resync throttle - see that
+# method's own comment. Once-per-process caching otherwise means a
+# contract Dhan lists intraday (e.g. a fresh weekly strike) 404s forever
+# until the next daily scheduled sync (app/scheduler.py's
+# instrument-sync-daily) or a container restart - confirmed live
+# 2026-09-22 on the VPS: a security_id resolved instantly from a fresh
+# sync while the long-running process's own cache (last synced ~2h
+# earlier at boot) kept missing it. 5 minutes bounds retries against a
+# genuinely-unknown/bad ID hammering Dhan's instrument-master CSV on
+# every call, while still recovering well within the same trading day.
+MISS_RESYNC_MIN_INTERVAL = timedelta(minutes=5)
 LTP_URL = "https://api.dhan.co/v2/marketfeed/ltp"
 CANDLE_URL = "https://api.dhan.co/v2/charts/intraday"
 # Dhan's separate daily-bars endpoint (see the DHAN_CANDLE_INTERVAL_MINUTES
@@ -1058,7 +1069,15 @@ class DhanProvider(QuoteProvider):
             self.sync_instruments()
         symbol = self._security_id_to_symbol.get(security_id)
         if symbol is None:
-            return None
+            # Not in our current snapshot - might be a contract Dhan
+            # listed after our last sync rather than a genuinely bad ID
+            # (see MISS_RESYNC_MIN_INTERVAL's own comment). One throttled
+            # on-demand retry before giving up.
+            if self._last_synced_at is None or datetime.now(timezone.utc) - self._last_synced_at > MISS_RESYNC_MIN_INTERVAL:
+                self.sync_instruments()
+                symbol = self._security_id_to_symbol.get(security_id)
+            if symbol is None:
+                return None
         return self._symbol_to_lot_size.get(symbol)
 
     def _cached_quote(self, symbol: str) -> Optional[float]:

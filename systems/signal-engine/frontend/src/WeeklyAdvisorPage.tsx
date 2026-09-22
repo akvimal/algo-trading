@@ -982,6 +982,19 @@ function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer
 type BiasFilter = "all" | "bullish" | "bearish" | "neutral";
 type ZoneFilter = "all" | "testing" | "mid-range";
 type TrendFilter = "all" | WeeklyRecommendation["regime"]["trend_strength"];
+// "none" means "no OI/fundamentals data available" (oi.available or
+// fundamentals.available is false that cycle) - a real, distinct option
+// rather than letting those rows just silently vanish under any specific
+// non-"all" choice with no explanation.
+type OiBuildupFilter = "all" | NonNullable<WeeklyRecommendation["oi"]["aggregate_signal"]> | "none";
+type FundamentalsBiasFilter = "all" | NonNullable<WeeklyRecommendation["fundamentals"]["bias"]> | "none";
+
+const OI_BUILDUP_LABELS: Record<NonNullable<WeeklyRecommendation["oi"]["aggregate_signal"]>, string> = {
+  long_buildup: "Long buildup",
+  short_buildup: "Short buildup",
+  short_covering: "Short covering",
+  long_unwinding: "Long unwinding",
+};
 
 // _zone_vote (regime_engine.py) votes bullish/bearish only when price is
 // within 2% of a support/resistance zone, direction=null otherwise - now
@@ -1011,6 +1024,15 @@ function RunTab() {
   const [maxConfidence, setMaxConfidence] = useState(100);
   const [zoneFilter, setZoneFilter] = useState<ZoneFilter>("all");
   const [trendFilter, setTrendFilter] = useState<TrendFilter>("all");
+  const [oiBuildupFilter, setOiBuildupFilter] = useState<OiBuildupFilter>("all");
+  const [fundamentalsBiasFilter, setFundamentalsBiasFilter] = useState<FundamentalsBiasFilter>("all");
+  // Same whole-percent convention as minConfidence/maxConfidence above -
+  // fundamentals.confidence is a separate 0-1 fraction from regime.confidence
+  // (this module's OWN overall call, folding fundamentals in as just one of
+  // several weighted votes - see regime_engine.py's _fundamental_vote), not
+  // a duplicate of the existing Confidence % filter.
+  const [minFundamentalsConfidence, setMinFundamentalsConfidence] = useState(0);
+  const [maxFundamentalsConfidence, setMaxFundamentalsConfidence] = useState(100);
 
   const filteredRecommendations = recommendations.filter((rec) => {
     if (biasFilter !== "all" && rec.regime.bias !== biasFilter) return false;
@@ -1019,6 +1041,19 @@ function RunTab() {
     if (zoneFilter === "testing" && !isTestingZone(rec)) return false;
     if (zoneFilter === "mid-range" && isTestingZone(rec)) return false;
     if (trendFilter !== "all" && rec.regime.trend_strength !== trendFilter) return false;
+    // "none" checks the nullable field itself, not just .available - OI can
+    // be available=true yet still have no clear buildup call (aggregate_signal's
+    // own "mixed, no >50% plurality" case, see oi_classifier.aggregate_signal),
+    // which should read the same as "no OI data" for this filter's purposes.
+    if (oiBuildupFilter === "none" && rec.oi.aggregate_signal !== null) return false;
+    if (oiBuildupFilter !== "all" && oiBuildupFilter !== "none" && rec.oi.aggregate_signal !== oiBuildupFilter) return false;
+    if (fundamentalsBiasFilter === "none" && rec.fundamentals.bias !== null) return false;
+    if (fundamentalsBiasFilter !== "all" && fundamentalsBiasFilter !== "none" && rec.fundamentals.bias !== fundamentalsBiasFilter) return false;
+    if (minFundamentalsConfidence > 0 || maxFundamentalsConfidence < 100) {
+      if (rec.fundamentals.confidence == null) return false;
+      const fundamentalsConfidencePct = Math.round(rec.fundamentals.confidence * 100);
+      if (fundamentalsConfidencePct < minFundamentalsConfidence || fundamentalsConfidencePct > maxFundamentalsConfidence) return false;
+    }
     return true;
   });
 
@@ -1172,7 +1207,53 @@ function RunTab() {
               <option value="ranging">Ranging</option>
             </select>
           </label>
-          {(biasFilter !== "all" || minConfidence > 0 || maxConfidence < 100 || zoneFilter !== "all" || trendFilter !== "all") && (
+          <label>
+            OI buildup
+            <select value={oiBuildupFilter} onChange={(e) => setOiBuildupFilter(e.target.value as OiBuildupFilter)}>
+              <option value="all">All</option>
+              {(Object.keys(OI_BUILDUP_LABELS) as (keyof typeof OI_BUILDUP_LABELS)[]).map((k) => (
+                <option key={k} value={k}>
+                  {OI_BUILDUP_LABELS[k]}
+                </option>
+              ))}
+              <option value="none">No OI data</option>
+            </select>
+          </label>
+          <label>
+            Fundamentals bias
+            <select value={fundamentalsBiasFilter} onChange={(e) => setFundamentalsBiasFilter(e.target.value as FundamentalsBiasFilter)}>
+              <option value="all">All</option>
+              <option value="bullish">Bullish</option>
+              <option value="bearish">Bearish</option>
+              <option value="neutral">Neutral</option>
+              <option value="none">No fundamentals data</option>
+            </select>
+          </label>
+          <label>
+            Fundamentals confidence %
+            <span className="weekly-advisor-confidence-range">
+              <input
+                type="number" min={0} max={100} step={5} value={minFundamentalsConfidence} title="Minimum fundamentals confidence"
+                onChange={(e) => setMinFundamentalsConfidence(Math.min(Number(e.target.value), maxFundamentalsConfidence))}
+                style={{ width: "4rem" }}
+              />
+              <span className="muted">–</span>
+              <input
+                type="number" min={0} max={100} step={5} value={maxFundamentalsConfidence} title="Maximum fundamentals confidence"
+                onChange={(e) => setMaxFundamentalsConfidence(Math.max(Number(e.target.value), minFundamentalsConfidence))}
+                style={{ width: "4rem" }}
+              />
+            </span>
+          </label>
+          {(biasFilter !== "all" ||
+            minConfidence > 0 ||
+            maxConfidence < 100 ||
+            zoneFilter !== "all" ||
+            trendFilter !== "all" ||
+            oiBuildupFilter !== "all" ||
+            fundamentalsBiasFilter !== "all" ||
+            minFundamentalsConfidence > 0 ||
+            maxFundamentalsConfidence < 100) && (
             <button
               type="button"
               className="secondary tiny"
@@ -1182,6 +1263,10 @@ function RunTab() {
                 setMaxConfidence(100);
                 setZoneFilter("all");
                 setTrendFilter("all");
+                setOiBuildupFilter("all");
+                setFundamentalsBiasFilter("all");
+                setMinFundamentalsConfidence(0);
+                setMaxFundamentalsConfidence(100);
               }}
             >
               Clear filter

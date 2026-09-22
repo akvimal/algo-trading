@@ -167,13 +167,23 @@ nav.tabs.subtabs button {
   font-size: 0.78rem;
 }
 
+/* Collapse/expand the right-hand trade panel (LiveChartPage.tsx) - a
+   chart-only view for someone who just wants price + OI strip + news,
+   with no order entry on screen. Sits right before the discipline badge,
+   both pushed to the tab row's far right; margin-left:auto now lives here
+   (not on the badge) since this button is unconditionally rendered and
+   the badge isn't (no discipline score yet on first load). */
+.live-chart-panel-toggle {
+  margin-left: auto;
+  align-self: center;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+}
+
 /* Discipline score badge - moved here 2026-09-21 from the shell's own
    global header (next to the username), same colour bands as before
-   (discipline.ts's disciplineColor: good/warn/bad/dim). margin-left:auto
-   pushes it to the far right of the tab row, past the custom-symbol
-   escape hatch. */
+   (discipline.ts's disciplineColor: good/warn/bad/dim). */
 .live-chart-discipline-badge {
-  margin-left: auto;
   align-self: center;
   padding: 0.25rem 0.6rem;
   border-radius: 999px;
@@ -2992,6 +3002,18 @@ button.btn-exit {
   flex-direction: column;
   gap: 0.4rem;
   min-width: 0;
+}
+
+/* Collapsed via the "Hide panel" toggle - kept mounted (not unmounted) so
+   ChartTradePanel/AutoTradePanel don't lose their own polling/local state
+   (armed pending order, open-trade tracking), just hidden and the chart
+   given the freed-up width. */
+.live-chart-layout.is-trade-panel-collapsed > .chart-trade-col {
+  display: none;
+}
+
+.live-chart-layout.is-trade-panel-collapsed > .live-chart-panel {
+  flex-basis: 100%;
 }
 
 .chart-trend-lock {

@@ -45,6 +45,13 @@ const SYMBOL_STORAGE_KEY = "manualLiveChartSymbol";
 // execution risk-sizes it. Persisted globally, default ON (opt out, same
 // as the trend lock - both are discipline aids).
 const RISK_MANAGED_STORAGE_KEY = "manualChartRiskManaged";
+// Whether the right-hand trade panel (ChartTradePanel + AutoTradePanel) is
+// shown - a user who just wants the chart + OI strip + news, with no order
+// entry in view, can collapse it. Persisted per-browser like the other
+// storedFlag/toggleFlag toggles here; the panel itself stays mounted while
+// collapsed (only hidden via CSS) so its own polling/local state (armed
+// pending order, open-trade tracking) isn't lost by a remount.
+const TRADE_PANEL_STORAGE_KEY = "manualLiveChartTradePanelVisible";
 
 // Armed limit orders, one per symbol max (the panel is single-slot). Held
 // HERE, not in ChartTradePanel, because this component does NOT remount
@@ -218,6 +225,7 @@ export default function LiveChartPage() {
   // trade panel can lock direction to it.
   const [trendInfo, setTrendInfo] = useState<IntervalTrend>({ trend: null, interval: "5min" });
   const [riskManaged, setRiskManaged] = useState<boolean>(() => storedFlag(RISK_MANAGED_STORAGE_KEY));
+  const [tradePanelVisible, setTradePanelVisible] = useState<boolean>(() => storedFlag(TRADE_PANEL_STORAGE_KEY));
   // Mirrors AutoTradePanel's own (server-side) armed status for the
   // active symbol, purely for ChartTradePanel/SetupCardRow's display -
   // AutoTradePanel owns the actual arm/disarm logic and config now, this
@@ -581,6 +589,14 @@ export default function LiveChartPage() {
             title="Any NSE symbol not on the desk above (e.g. an individual F&O stock) - opens here as a one-off, not added to the desk. Drawings still save per-symbol."
           />
         </form>
+        <button
+          type="button"
+          className="live-chart-panel-toggle"
+          title={tradePanelVisible ? "Collapse the trade panel - chart-only view" : "Show the trade panel"}
+          onClick={() => toggleFlag(TRADE_PANEL_STORAGE_KEY, setTradePanelVisible)}
+        >
+          {tradePanelVisible ? "Hide panel ▸" : "◂ Show panel"}
+        </button>
         {disciplineScore !== undefined && (
           <button
             type="button"
@@ -593,7 +609,7 @@ export default function LiveChartPage() {
         )}
       </nav>
 
-      <div className="live-chart-layout">
+      <div className={`live-chart-layout${tradePanelVisible ? "" : " is-trade-panel-collapsed"}`}>
         <LiveChartPanel
           key={`${active.segment}:${active.symbol}`}
           segment={active.segment}

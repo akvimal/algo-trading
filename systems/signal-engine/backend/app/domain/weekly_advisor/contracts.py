@@ -129,6 +129,16 @@ class StrategyLeg(BaseModel):
     strike: float
     side: Literal["sell", "buy"]
     basis: str
+    # This leg's own last_price from the SAME option-chain fetch
+    # select_strategy's strike anchoring already used (see pipeline.py's
+    # run_symbol, which attaches this after select_strategy returns - the
+    # strike-selection logic itself never needs to know premiums exist).
+    # An estimate as of THIS recommendation's `as_of` run, not a live/
+    # current quote and never a real fill - None whenever no chain was
+    # reachable that cycle, or this exact strike wasn't listed. Backs the
+    # Weekly Advisor decision-log form's fill-price/credit/max-profit/
+    # max-loss pre-fill (WeeklyAdvisorPage.tsx's DecisionForm).
+    premium_estimate: Optional[float] = None
 
 
 class EntryWindow(BaseModel):

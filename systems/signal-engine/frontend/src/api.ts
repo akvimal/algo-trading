@@ -2040,7 +2040,12 @@ export type WeeklyAdvisorRegime = {
   signals: WeeklyAdvisorSignal[];
 };
 
-export type WeeklyAdvisorLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; basis: string };
+// premium_estimate: this leg's last_price from the SAME option-chain fetch
+// used to pick the strike (see backend contracts.py's own field docstring)
+// - an estimate as of the recommendation's `as_of` run, never a live quote
+// or a real fill. null whenever no chain was reachable that cycle, or this
+// exact strike wasn't listed.
+export type WeeklyAdvisorLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; basis: string; premium_estimate: number | null };
 
 // A screener.in screenshot read (app/domain/weekly_advisor/screener_fetch.py)
 // - available=false when nothing's been captured/analyzed for this symbol

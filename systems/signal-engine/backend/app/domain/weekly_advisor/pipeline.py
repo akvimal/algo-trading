@@ -218,6 +218,34 @@ def _fetch_oi(chain_strikes: Optional[list[dict]], price_change: float, spot: fl
         return OISnapshot(available=False)
 
 
+def _leg_premiums(chain_strikes: Optional[list[dict]]) -> dict[tuple[float, str], float]:
+    """(strike, option_type) -> last_price, from the SAME option-chain
+    fetch _fetch_oi already reads oi/previous_oi off of - one more field
+    off a dict this pipeline already has in hand, not a second chain call.
+    Rounded to 2dp on the key so a strike that's gone through
+    strategy_selector.round_to_strike's own floating-point arithmetic still
+    finds its match. Backs StrategyLeg.premium_estimate (see that field's
+    own docstring) - never raises, an unparseable leg is just skipped, same
+    graceful-degradation convention as _fetch_oi itself."""
+    prices: dict[tuple[float, str], float] = {}
+    if not chain_strikes:
+        return prices
+    for s in chain_strikes:
+        try:
+            strike = round(float(s["strike"]), 2)
+        except (KeyError, TypeError, ValueError):
+            continue
+        for option_type, leg_key in (("CE", "ce"), ("PE", "pe")):
+            leg = s.get(leg_key)
+            if not leg or leg.get("last_price") is None:
+                continue
+            try:
+                prices[(strike, option_type)] = float(leg["last_price"])
+            except (TypeError, ValueError):
+                continue
+    return prices
+
+
 def _naive_monthly_expiry(as_of: date) -> date:
     """Placeholder only, used when market-data's own expiry list isn't
     reachable - last Thursday of the month, same approach the scaffold's
@@ -324,6 +352,9 @@ def run_symbol(symbol: str, as_of: Optional[date] = None, openrouter_api_key: Op
         # on _unmitigated_block_anchor/_best_oi_strike).
         order_blocks=order_blocks, daily_order_blocks=daily_order_blocks, oi=oi_snap,
     )
+    leg_premiums = _leg_premiums(chain_strikes)
+    for leg in recommendation.legs:
+        leg.premium_estimate = leg_premiums.get((round(leg.strike, 2), leg.option_type))
 
     return WeeklyRecommendation(
         symbol=symbol,

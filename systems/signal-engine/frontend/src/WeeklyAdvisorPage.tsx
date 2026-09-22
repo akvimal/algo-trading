@@ -182,6 +182,65 @@ function recommendedStrategyLabel(action: WeeklyRecommendation["strategy"]["acti
   return undefined;
 }
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+// Suggested starting values for the decision-log form's fill-price/credit/
+// max-profit/max-loss fields, from each leg's own premium_estimate - the
+// SAME option-chain fetch pipeline.py's strategy_selector already used to
+// pick these strikes, just never threaded through to this form before now
+// (see contracts.py's StrategyLeg.premium_estimate docstring). Every value
+// here is a plain suggested default, never locked - the caller still wires
+// these into ordinary editable useState initializers, same as
+// actualBias/actualStrategy/targetPct already are.
+//
+// Deliberately does NOT attempt funds_needed/margin_needed (broker-
+// specific) or pop (needs a live-Greeks model) - both stay "from broker" /
+// blank, same as before this change; see docs/architecture.md's Weekly
+// Advisor writeup for why.
+function estimateTradeEconomics(legs: WeeklyRecommendation["strategy"]["legs"]): {
+  legEntryPrices: string[];
+  entryCredit: string;
+  maxProfit: string;
+  maxLoss: string;
+} {
+  const legEntryPrices = legs.map((leg) => (leg.premium_estimate != null ? String(leg.premium_estimate) : ""));
+  if (legs.length === 0 || legs.some((leg) => leg.premium_estimate == null)) {
+    // Any missing premium (a chain miss, or an avoid_new_entry/close_existing
+    // recommendation with no legs at all) makes credit/max-profit/max-loss
+    // unreliable to guess at from a partial set - leave them blank rather
+    // than compute off incomplete data.
+    return { legEntryPrices, entryCredit: "", maxProfit: "", maxLoss: "" };
+  }
+  const netCredit = legs.reduce((sum, leg) => sum + (leg.side === "sell" ? 1 : -1) * (leg.premium_estimate ?? 0), 0);
+
+  // Strike width of one side's defined-risk spread (sell + protective buy
+  // on the same option_type) - null when that side has no wing at all
+  // (an undefined-risk naked leg, which max loss can't be computed for).
+  function widthOf(optionType: "PE" | "CE"): number | null {
+    const sell = legs.find((l) => l.option_type === optionType && l.side === "sell");
+    const buy = legs.find((l) => l.option_type === optionType && l.side === "buy");
+    return sell && buy ? Math.abs(sell.strike - buy.strike) : null;
+  }
+  const widths = [widthOf("PE"), widthOf("CE")].filter((w): w is number => w != null);
+  if (widths.length === 0) {
+    // No wing on either side - max loss is genuinely unbounded (a naked
+    // short), don't pretend to compute one. Credit is still meaningful.
+    return { legEntryPrices, entryCredit: String(round2(netCredit)), maxProfit: "", maxLoss: "" };
+  }
+  // An iron condor's max loss is bounded by whichever side actually gets
+  // tested at expiry - the wider of the two sides, not their sum (only one
+  // side can be breached).
+  const width = Math.max(...widths);
+  return {
+    legEntryPrices,
+    entryCredit: String(round2(netCredit)),
+    maxProfit: String(round2(netCredit)),
+    maxLoss: String(round2(width - netCredit)),
+  };
+}
+
 function DecisionForm({
   rec,
   recommendationId,
@@ -218,19 +277,22 @@ function DecisionForm({
   const [comments, setComments] = useState(existingComments ?? "");
   // Trade-journal fields - only captured (and only shown) the first time
   // "execute" is picked for this recommendation; see alreadyTaken above.
+  // Seeded from estimateTradeEconomics (each leg's own premium_estimate,
+  // from the same option-chain fetch that picked these strikes) rather
+  // than blank - a suggested starting value, always freely editable, never
+  // a substitute for the real fill once the trade is actually placed.
+  const [economics] = useState(() => estimateTradeEconomics(rec.strategy.legs));
   const [quantity, setQuantity] = useState("");
-  const [entryCredit, setEntryCredit] = useState("");
+  const [entryCredit, setEntryCredit] = useState(economics.entryCredit);
   const [fundsNeeded, setFundsNeeded] = useState("");
   const [marginNeeded, setMarginNeeded] = useState("");
   const [pop, setPop] = useState("");
-  const [maxProfit, setMaxProfit] = useState("");
-  const [maxLoss, setMaxLoss] = useState("");
+  const [maxProfit, setMaxProfit] = useState(economics.maxProfit);
+  const [maxLoss, setMaxLoss] = useState(economics.maxLoss);
   // Per-leg fill price at entry time - same fields EditTradeForm lets you
   // correct later, but captured up front too now, since a trade is often
   // journaled the moment it's actually filled (not always off-session).
-  // Left blank ("not filled yet") is fine - _default_legs-equivalent
-  // behavior client-side, just with whatever prices are already known.
-  const [legEntryPrices, setLegEntryPrices] = useState<string[]>(() => rec.strategy.legs.map(() => ""));
+  const [legEntryPrices, setLegEntryPrices] = useState<string[]>(economics.legEntryPrices);
   // The close-out thresholds to watch this position against. Target
   // defaults from the recommendation's own exit rule (already shown as
   // descriptive text on every card, e.g. "Exit at 65% of max profit") -
@@ -361,6 +423,9 @@ function DecisionForm({
           <>
             {rec.strategy.legs.length > 0 && (
               <div className="weekly-advisor-legs-edit">
+                {economics.legEntryPrices.some((v) => v !== "") && (
+                  <p className="hint">Fill prices/credit/max-profit/max-loss below are estimated from the option chain at analysis time - confirm or correct once the legs actually fill.</p>
+                )}
                 {rec.strategy.legs.map((leg, i) => (
                   <label key={i}>
                     {leg.side.toUpperCase()} {leg.option_type} {leg.strike} - fill price
@@ -370,6 +435,7 @@ function DecisionForm({
                       value={legEntryPrices[i] ?? ""}
                       onChange={(e) => setLegEntryPrices((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
                       placeholder="not filled yet"
+                      title={leg.premium_estimate != null ? "Pre-filled estimate as of analysis time - confirm or correct" : undefined}
                     />
                   </label>
                 ))}

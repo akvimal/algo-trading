@@ -1788,7 +1788,11 @@ function HistoryTab({ active }: { active: boolean }) {
                 <td>{formatDateTime(row.saved_at)}</td>
                 <td className="symbol">{row.symbol}</td>
                 <td>{formatDate(row.as_of)}</td>
-                <td>{actionLabel(row.action, row.payload.strategy.legs.length)}</td>
+                <td>
+                  {legsShapeLabel(tradesByRecommendation.get(row.id)?.legs ?? []) ??
+                    tradesByRecommendation.get(row.id)?.actual_strategy ??
+                    actionLabel(row.action, row.payload.strategy.legs.length)}
+                </td>
                 <td>
                   {row.decision ? (
                     <span className={`badge-mini ${DECISION_BADGE[row.decision]}`} title={row.decision_comments ?? ""}>
@@ -1808,6 +1812,23 @@ function HistoryTab({ active }: { active: boolean }) {
               {expandedId === row.id && (
                 <tr>
                   <td colSpan={6}>
+                    {/* RecommendationCard's own "Leg detail" always shows the
+                    frozen, originally-suggested legs (row.payload) - once a
+                    trade is journaled its legs can diverge (dropped legs,
+                    changed strikes), so show the real, actually-taken legs
+                    separately rather than let the card imply they still
+                    match. */}
+                    {tradesByRecommendation.get(row.id)?.legs && tradesByRecommendation.get(row.id)!.legs!.length > 0 && (
+                      <div className="weekly-advisor-technicals">
+                        <span className="muted">Actually taken:</span>
+                        {tradesByRecommendation.get(row.id)!.legs!.map((leg, i) => (
+                          <span key={i}>
+                            {leg.side.toUpperCase()} {leg.option_type} {leg.strike}
+                            {leg.entry_price != null ? ` @ ${leg.entry_price}` : " (not filled yet)"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <RecommendationCard
                       rec={row.payload}
                       footer={

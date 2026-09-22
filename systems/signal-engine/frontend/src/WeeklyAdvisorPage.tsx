@@ -346,6 +346,14 @@ function DecisionForm({
   // freely overridable (e.g. picking a more liquid strike than the exact
   // one anchored). Parallel array, same convention as legEntryPrices.
   const [legStrikes, setLegStrikes] = useState<string[]>(() => rec.strategy.legs.map((leg) => String(leg.strike)));
+  // Editable option type per leg - defaults to whatever the engine
+  // recommended (PE/CE), freely overridable. E.g. a bullish sell_otm_put
+  // recommendation can be manually flipped to a sell_otm_call if that's
+  // what you actually want to trade instead - purely a manual escape
+  // hatch, same category as legStrikes/legIncluded; the engine's own
+  // bias-to-strategy mapping (see strategy_selector.py) is unchanged.
+  // Parallel array, same convention as legStrikes.
+  const [legOptionTypes, setLegOptionTypes] = useState<("CE" | "PE")[]>(() => rec.strategy.legs.map((leg) => leg.option_type));
   // The real, live option chain for this symbol/expiry - lets the strike
   // field below be an actual pick-a-strike dropdown (only strikes really
   // tradeable on the exchange, each showing its own live price) instead of
@@ -385,13 +393,15 @@ function DecisionForm({
   // aggregate rather than guess when any included leg has no premium at
   // all, so a freely-typed, not-yet-priced strike correctly clears the
   // stale old numbers instead of leaving them stale.
-  function recomputeEconomics(nextLegIncluded: boolean[], nextStrikes: string[], nextPrices: string[]) {
+  function recomputeEconomics(nextLegIncluded: boolean[], nextStrikes: string[], nextPrices: string[], nextOptionTypes: ("CE" | "PE")[]) {
     const legsForCalc = rec.strategy.legs
       .map((leg, j) => {
         if (!nextLegIncluded[j]) return null;
         const strike = Number(nextStrikes[j]) || leg.strike;
-        const premium = strike !== leg.strike ? (nextPrices[j] ? Number(nextPrices[j]) : null) : leg.premium_estimate;
-        return { ...leg, strike, premium_estimate: premium };
+        const optionType = nextOptionTypes[j];
+        const touched = strike !== leg.strike || optionType !== leg.option_type;
+        const premium = touched ? (nextPrices[j] ? Number(nextPrices[j]) : null) : leg.premium_estimate;
+        return { ...leg, strike, option_type: optionType, premium_estimate: premium };
       })
       .filter((l): l is WeeklyRecommendation["strategy"]["legs"][number] => l != null);
     const recomputed = estimateTradeEconomics(legsForCalc);
@@ -403,7 +413,7 @@ function DecisionForm({
   function toggleLeg(i: number) {
     const next = legIncluded.map((v, j) => (j === i ? !v : v));
     setLegIncluded(next);
-    recomputeEconomics(next, legStrikes, legEntryPrices);
+    recomputeEconomics(next, legStrikes, legEntryPrices, legOptionTypes);
   }
 
   // Free-text fallback only (no chain data available for this leg) - a
@@ -412,14 +422,14 @@ function DecisionForm({
   // different strike) and any previously fetched security_id is dropped.
   function handleStrikeChange(i: number, value: string) {
     const nextStrikes = legStrikes.map((v, j) => (j === i ? value : v));
-    const changed = Number(value) !== rec.strategy.legs[i].strike;
+    const changed = Number(value) !== rec.strategy.legs[i].strike || legOptionTypes[i] !== rec.strategy.legs[i].option_type;
     const nextPrices = changed ? legEntryPrices.map((v, j) => (j === i ? "" : v)) : legEntryPrices;
     setLegStrikes(nextStrikes);
     if (changed) {
       setLegEntryPrices(nextPrices);
       setLegFetchedSecurityIds((prev) => prev.map((v, j) => (j === i ? null : v)));
     }
-    recomputeEconomics(legIncluded, nextStrikes, nextPrices);
+    recomputeEconomics(legIncluded, nextStrikes, nextPrices, legOptionTypes);
   }
 
   // The pick-a-strike dropdown path - a REAL, chain-verified strike, so
@@ -431,7 +441,24 @@ function DecisionForm({
     setLegStrikes(nextStrikes);
     setLegEntryPrices(nextPrices);
     setLegFetchedSecurityIds((prev) => prev.map((v, j) => (j === i ? entry.security_id : v)));
-    recomputeEconomics(legIncluded, nextStrikes, nextPrices);
+    recomputeEconomics(legIncluded, nextStrikes, nextPrices, legOptionTypes);
+  }
+
+  // Manual CE/PE override - e.g. flip a bullish recommendation's SELL PE
+  // to SELL CE if that's what you actually want to trade (see this
+  // feature's own design note above legOptionTypes). The old strike
+  // number carries over as a starting point (the dropdown re-populates
+  // for the new side and may or may not have a match at that same
+  // number), but price/security_id can't - a strike on the other side is
+  // a completely different contract, not just a different quote for the
+  // same one.
+  function handleOptionTypeChange(i: number, value: "CE" | "PE") {
+    const nextOptionTypes = legOptionTypes.map((v, j) => (j === i ? value : v));
+    const nextPrices = legEntryPrices.map((v, j) => (j === i ? "" : v));
+    setLegOptionTypes(nextOptionTypes);
+    setLegEntryPrices(nextPrices);
+    setLegFetchedSecurityIds((prev) => prev.map((v, j) => (j === i ? null : v)));
+    recomputeEconomics(legIncluded, legStrikes, nextPrices, nextOptionTypes);
   }
 
   // Single source of truth combining inclusion + any strike edit, reused
@@ -445,16 +472,21 @@ function DecisionForm({
   const effectiveLegs = rec.strategy.legs
     .map((leg, i) => {
       const strike = legStrikes[i] ? Number(legStrikes[i]) : leg.strike;
-      const strikeChanged = strike !== leg.strike;
+      const optionType = legOptionTypes[i];
+      // A different strike OR a flipped option type both mean "not the
+      // exact contract the recommendation anchored" - same downstream
+      // handling either way (no carried-over security_id/premium; margin
+      // check needs a freshly chain-verified pick).
+      const contractChanged = strike !== leg.strike || optionType !== leg.option_type;
       return {
         included: legIncluded[i],
-        option_type: leg.option_type,
+        option_type: optionType,
         side: leg.side,
         strike,
-        strikeChanged,
-        security_id: strikeChanged ? legFetchedSecurityIds[i] : leg.security_id,
+        strikeChanged: contractChanged,
+        security_id: contractChanged ? legFetchedSecurityIds[i] : leg.security_id,
         entryPrice: legEntryPrices[i] ? Number(legEntryPrices[i]) : null,
-        premiumEstimate: strikeChanged ? null : leg.premium_estimate,
+        premiumEstimate: contractChanged ? null : leg.premium_estimate,
       };
     })
     .filter((leg) => leg.included);
@@ -670,15 +702,27 @@ function DecisionForm({
                   <p className="hint">Fill prices/credit/max-profit/max-loss below are estimated from the option chain at analysis time - confirm or correct once the legs actually fill.</p>
                 )}
                 {rec.strategy.legs.map((leg, i) => {
-                  const strikeChanged = legStrikes[i] !== "" && Number(legStrikes[i]) !== leg.strike;
-                  // Real, chain-verified strikes for this leg's own option_type
-                  // - sorted so the dropdown reads low-to-high, same as the
-                  // exchange's own strike ladder.
-                  const chainOptions = (chainStrikes ?? []).filter((s) => s.option_type === leg.option_type).sort((a, b) => a.strike - b.strike);
+                  const contractChanged =
+                    (legStrikes[i] !== "" && Number(legStrikes[i]) !== leg.strike) || legOptionTypes[i] !== leg.option_type;
+                  // Real, chain-verified strikes for this leg's CURRENT
+                  // option_type - re-filters against the CE/PE toggle below,
+                  // not the originally recommended type, so flipping PE->CE
+                  // immediately offers real CE strikes instead of stale PE
+                  // ones (or worse, an empty list because none matched).
+                  const chainOptions = (chainStrikes ?? []).filter((s) => s.option_type === legOptionTypes[i]).sort((a, b) => a.strike - b.strike);
                   return (
                     <label key={i} className={legIncluded[i] ? "" : "muted"}>
                       <input type="checkbox" checked={legIncluded[i]} onChange={() => toggleLeg(i)} title="Include this leg in the journaled trade" />{" "}
-                      {leg.side.toUpperCase()} {leg.option_type}{" "}
+                      {leg.side.toUpperCase()}{" "}
+                      <select
+                        value={legOptionTypes[i]}
+                        onChange={(e) => handleOptionTypeChange(i, e.target.value as "CE" | "PE")}
+                        disabled={!legIncluded[i]}
+                        title={`Recommended ${leg.option_type} - override to trade the other side instead`}
+                      >
+                        <option value="CE">CE</option>
+                        <option value="PE">PE</option>
+                      </select>{" "}
                       {chainOptions.length > 0 ? (
                         <select
                           value={legStrikes[i] ?? ""}
@@ -718,8 +762,10 @@ function DecisionForm({
                         disabled={!legIncluded[i]}
                         title={leg.premium_estimate != null ? "Pre-filled estimate as of analysis time - confirm or correct" : undefined}
                       />
-                      {strikeChanged && !legEntryPrices[i] && (
-                        <span className="hint">strike changed from {leg.strike} with no known price for it - enter the real fill price manually</span>
+                      {contractChanged && !legEntryPrices[i] && (
+                        <span className="hint">
+                          changed from {leg.option_type} {leg.strike} with no known price for it - enter the real fill price manually
+                        </span>
                       )}
                     </label>
                   );

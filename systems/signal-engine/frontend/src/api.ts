@@ -2151,14 +2151,30 @@ export async function setWeeklyAdvisorDecision(recommendationId: string, payload
   return asJson(res, "PUT /weekly-advisor/recommendations/{id}/decision");
 }
 
-export type WeeklyAdvisorTradeStatus = "open" | "closed";
+// 'expired': this trade's expiry_date has passed but nobody's closed it
+// yet - flagged for review rather than auto-closed with a guessed P&L
+// (see backend journal.py's TradeOut.status docstring). Closing still
+// works on it exactly like an 'open' trade - not a locked/terminal state.
+export type WeeklyAdvisorTradeStatus = "open" | "expired" | "closed";
 
 // Per-leg entry data - independent of the recommendation's own read-only
 // WeeklyAdvisorLeg (no quantity/entry_price, since that's a stateless
 // plan). entry_price starts null at creation (not known until the leg
 // actually fills, whether that's the same session or days later) and is
-// overwritten via updateWeeklyAdvisorTradeEntry once it does.
-export type WeeklyAdvisorTradeLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; quantity: number | null; entry_price: number | null };
+// overwritten via updateWeeklyAdvisorTradeEntry once it does. security_id/
+// current_price are written by the scheduled leg-price refresh job
+// (app/scheduler.py's _refresh_weekly_advisor_leg_prices) - current_price
+// is a live mark, not the entry fill; both null until the first refresh
+// tick after this trade opened.
+export type WeeklyAdvisorTradeLeg = {
+  option_type: "CE" | "PE";
+  strike: number;
+  side: "sell" | "buy";
+  quantity: number | null;
+  entry_price: number | null;
+  security_id: string | null;
+  current_price: number | null;
+};
 
 export type WeeklyAdvisorTrade = {
   id: string;
@@ -2185,7 +2201,27 @@ export type WeeklyAdvisorTrade = {
   legs: WeeklyAdvisorTradeLeg[] | null;
   target_pct_of_max_profit: number | null;
   stop_loss_pct_of_max_loss: number | null;
+  // Trade lifecycle tracking - expiry_date is this trade's actual expiry
+  // (persisted at creation); prices_updated_at is when legs[].current_price
+  // was last refreshed. Both null for a trade journaled before this
+  // feature existed, or with no legs at all.
+  expiry_date: string | null;
+  prices_updated_at: string | null;
 };
+
+// Mark-to-market P&L from each leg's current_price vs. entry_price - null
+// (not a guess) unless every leg has both and the trade is still open.
+// Sign: a sell leg profits as price falls, a buy leg as it rises - same
+// convention the backend's own unrealized_pnl (journal.py) uses.
+export function weeklyAdvisorUnrealizedPnl(trade: WeeklyAdvisorTrade): number | null {
+  if (trade.status === "closed" || !trade.legs || trade.legs.length === 0) return null;
+  let total = 0;
+  for (const leg of trade.legs) {
+    if (leg.entry_price == null || leg.current_price == null) return null;
+    total += (leg.side === "sell" ? 1 : -1) * (leg.entry_price - leg.current_price);
+  }
+  return Math.round(total * (trade.quantity ?? 1) * 100) / 100;
+}
 
 export type WeeklyAdvisorTradeCreate = {
   quantity?: number;
@@ -2265,6 +2301,7 @@ export async function closeWeeklyAdvisorTrade(tradeId: string, payload: WeeklyAd
 
 export type WeeklyAdvisorPerformanceSummary = {
   open_count: number;
+  expired_count: number;
   closed_count: number;
   win_count: number;
   loss_count: number;

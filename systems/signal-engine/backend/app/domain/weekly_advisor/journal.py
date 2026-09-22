@@ -34,6 +34,18 @@ class TradeLeg(BaseModel):
     side: Literal["sell", "buy"]
     quantity: Optional[float] = Field(default=None, gt=0)
     entry_price: Optional[float] = None
+    # Dhan security ID, carried over from the recommendation's own
+    # StrategyLeg.security_id at creation time (see route's _default_legs)
+    # - needed by app/scheduler.py's _refresh_weekly_advisor_leg_prices to
+    # look this leg up in a fresh option-chain fetch. None for a trade
+    # journaled before this field existed, or whose recommendation had no
+    # chain data that cycle - such a leg simply never gets a live price.
+    security_id: Optional[str] = None
+    # Last price this leg fetched at, written by the scheduled refresh job
+    # above - a live mark, not the entry_price. None until the first
+    # refresh tick after this trade opened. See TradeOut.prices_updated_at
+    # for when this was last written.
+    current_price: Optional[float] = None
 
 
 class SaveRecommendationRequest(BaseModel):
@@ -150,7 +162,12 @@ class TradeOut(BaseModel):
     recommendation_id: str
     symbol: str
     action: str
-    status: Literal["open", "closed"]
+    # 'expired': this trade's expiry_date has passed but nobody has closed
+    # it yet - flagged for review rather than auto-closed with a guessed
+    # P&L (see app/scheduler.py's _expire_weekly_advisor_trades docstring).
+    # PUT .../trades/{id}/close still works on an expired trade exactly
+    # like an open one; it isn't a locked or terminal state.
+    status: Literal["open", "expired", "closed"]
     quantity: Optional[float]
     entry_credit: Optional[float]
     entry_notes: Optional[str]
@@ -170,10 +187,40 @@ class TradeOut(BaseModel):
     legs: Optional[list[TradeLeg]] = None
     target_pct_of_max_profit: Optional[float] = None
     stop_loss_pct_of_max_loss: Optional[float] = None
+    # Trade lifecycle tracking (migrations/010) - expiry_date is this
+    # trade's actual expiry (persisted at creation, from the
+    # recommendation's own entry_window.latest); prices_updated_at is when
+    # `legs`' own current_price fields were last refreshed. Both None for
+    # a trade journaled before this feature, or one whose recommendation
+    # carried no legs at all (avoid_new_entry/close_existing).
+    expiry_date: Optional[date] = None
+    prices_updated_at: Optional[datetime] = None
+
+
+def unrealized_pnl(trade: TradeOut) -> Optional[float]:
+    """Mark-to-market P&L from each leg's current_price vs. entry_price -
+    None (not a guess) unless every leg has BOTH, since a partial mark
+    would understate/overstate the true position. Sign convention matches
+    entry_credit's own: a sell leg profits as its price falls, a buy leg
+    profits as its price rises - same "sum of (sell ? +1 : -1) * premium"
+    shape estimateTradeEconomics.ts already uses for entry_credit, applied
+    to (entry - current) instead of the raw premium so it reads as a P&L,
+    not a second credit figure."""
+    if trade.status == "closed" or not trade.legs:
+        return None
+    deltas = []
+    for leg in trade.legs:
+        if leg.entry_price is None or leg.current_price is None:
+            return None
+        sign = 1 if leg.side == "sell" else -1
+        deltas.append(sign * (leg.entry_price - leg.current_price))
+    quantity = trade.quantity or 1
+    return round(sum(deltas) * quantity, 2)
 
 
 class PerformanceSummary(BaseModel):
     open_count: int
+    expired_count: int
     closed_count: int
     win_count: int
     loss_count: int
@@ -188,8 +235,12 @@ def compute_performance_summary(trades: list[TradeOut]) -> PerformanceSummary:
     Session, same "pure core, thin route" split the rest of this backend
     uses. Only trades with a non-null realized_pnl count toward win/loss -
     a closed trade the user never entered a P&L for is excluded from the
-    win-rate math rather than silently counted as a loss."""
+    win-rate math rather than silently counted as a loss. 'expired' trades
+    are counted separately (expired_count) - not open, not yet closed, a
+    distinct "needs review" bucket - so they neither inflate open_count
+    (they're not still live) nor get silently ignored."""
     open_count = sum(1 for t in trades if t.status == "open")
+    expired_count = sum(1 for t in trades if t.status == "expired")
     scored = [t for t in trades if t.status == "closed" and t.realized_pnl is not None]
     closed_count = sum(1 for t in trades if t.status == "closed")
     win_count = sum(1 for t in scored if t.realized_pnl > 0)
@@ -203,6 +254,7 @@ def compute_performance_summary(trades: list[TradeOut]) -> PerformanceSummary:
 
     return PerformanceSummary(
         open_count=open_count,
+        expired_count=expired_count,
         closed_count=closed_count,
         win_count=win_count,
         loss_count=loss_count,

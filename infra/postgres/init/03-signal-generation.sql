@@ -494,7 +494,7 @@ CREATE INDEX IF NOT EXISTS idx_weekly_advisor_recommendations_symbol ON signal_g
 CREATE TABLE IF NOT EXISTS signal_generation.weekly_advisor_trades (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     recommendation_id UUID NOT NULL REFERENCES signal_generation.weekly_advisor_recommendations (id) ON DELETE CASCADE,
-    status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    status            TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'expired', 'closed')),
     quantity          NUMERIC,
     entry_credit      NUMERIC,
     entry_notes       TEXT,
@@ -567,6 +567,19 @@ ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS act
 ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS legs JSONB;
 ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS target_pct_of_max_profit NUMERIC;
 ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS stop_loss_pct_of_max_loss NUMERIC;
+
+-- Trade lifecycle tracking (2026-09-22, see migrations/010 and
+-- app/scheduler.py's _refresh_weekly_advisor_leg_prices/
+-- _expire_weekly_advisor_trades) - expiry_date is the trade's actual
+-- expiry, persisted directly rather than reconstructed from taken_at +
+-- days_to_expiry_at_entry, so a scheduled job can gate on it directly.
+-- prices_updated_at is when `legs` was last refreshed with each leg's own
+-- current_price (a sibling field added to each legs[] entry at write
+-- time, not a new column). status widens to add 'expired' - a trade past
+-- its expiry_date is flagged for review, not silently auto-closed with a
+-- guessed P&L (see that job's own docstring).
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS expiry_date DATE;
+ALTER TABLE signal_generation.weekly_advisor_trades ADD COLUMN IF NOT EXISTS prices_updated_at TIMESTAMPTZ;
 
 -- Weekly Advisor fundamentals (2026-09-14, app/domain/weekly_advisor/
 -- screener_fetch.py) - a long-lived cache of one symbol's screener.in

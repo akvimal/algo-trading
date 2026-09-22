@@ -243,6 +243,16 @@ class WeeklyAdvisorTrade(Base):
     legs = Column(JSONB)
     target_pct_of_max_profit = Column(Numeric)
     stop_loss_pct_of_max_loss = Column(Numeric)
+    # Trade lifecycle tracking (migrations/010) - expiry_date persisted
+    # directly (from the recommendation's own entry_window.latest, known at
+    # creation time) so the auto-expiry job can gate on a real date rather
+    # than reconstructing one from taken_at + days_to_expiry_at_entry.
+    # prices_updated_at is when `legs` was last refreshed with each leg's
+    # own current_price (a sibling field written into each legs[] entry,
+    # not a separate column) - see app/scheduler.py's
+    # _refresh_weekly_advisor_leg_prices/_expire_weekly_advisor_trades.
+    expiry_date = Column(Date)
+    prices_updated_at = Column(TIMESTAMP(timezone=True))
 
 
 class WeeklyAdvisorFundamentals(Base):

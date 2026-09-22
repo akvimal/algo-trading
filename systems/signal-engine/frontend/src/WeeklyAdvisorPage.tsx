@@ -17,6 +17,7 @@ import {
   updateWatchlist,
   updateWeeklyAdvisorSettings,
   updateWeeklyAdvisorTradeEntry,
+  weeklyAdvisorUnrealizedPnl,
   type SavedWeeklyRecommendation,
   type Watchlist,
   type WeeklyAdvisorDecision,
@@ -374,6 +375,11 @@ function DecisionForm({
                 side: leg.side,
                 quantity: quantity ? Number(quantity) : null,
                 entry_price: legEntryPrices[i] ? Number(legEntryPrices[i]) : null,
+                // Carried over from the recommendation's own StrategyLeg so
+                // the scheduled leg-price refresh job can look this leg up
+                // later - current_price starts unset, written by that job.
+                security_id: leg.security_id,
+                current_price: null,
               }))
             : undefined;
         trade = await createWeeklyAdvisorTrade(recommendationId, {
@@ -691,9 +697,32 @@ function EditTradeForm({ trade, onDone, onCancel }: { trade: WeeklyAdvisorTrade;
   );
 }
 
-function CloseTradeForm({ tradeId, onDone }: { tradeId: string; onDone: () => void }) {
-  const [exitDebit, setExitDebit] = useState("");
-  const [realizedPnl, setRealizedPnl] = useState("");
+// Suggested exit_debit/realized_pnl from each leg's last-tracked
+// current_price (the scheduled leg-refresh job, see WeeklyAdvisorTrade's
+// own prices_updated_at) - same "sum of (sell ? +1 : -1) * price" shape
+// estimateTradeEconomics uses for entry_credit, applied to current_price
+// instead of premium_estimate: closing a sell leg costs its current price
+// (buy it back), closing a buy leg pays its current price (sell it) - net
+// debit to close is exactly that same signed sum. Blank when any leg is
+// missing a current_price rather than guessing off a partial set, same
+// convention as the entry-side pre-fill.
+function estimateCloseOut(trade: WeeklyAdvisorTrade): { exitDebit: string; realizedPnl: string } {
+  if (!trade.legs || trade.legs.length === 0 || trade.legs.some((leg) => leg.current_price == null)) {
+    return { exitDebit: "", realizedPnl: "" };
+  }
+  const exitDebit = trade.legs.reduce((sum, leg) => sum + (leg.side === "sell" ? 1 : -1) * (leg.current_price ?? 0), 0);
+  const quantity = trade.quantity ?? 1;
+  const realizedPnl = trade.entry_credit != null ? (trade.entry_credit - exitDebit) * quantity : null;
+  return {
+    exitDebit: String(round2(exitDebit)),
+    realizedPnl: realizedPnl != null ? String(round2(realizedPnl)) : "",
+  };
+}
+
+function CloseTradeForm({ trade, onDone }: { trade: WeeklyAdvisorTrade; onDone: () => void }) {
+  const [suggested] = useState(() => estimateCloseOut(trade));
+  const [exitDebit, setExitDebit] = useState(suggested.exitDebit);
+  const [realizedPnl, setRealizedPnl] = useState(suggested.realizedPnl);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -703,7 +732,7 @@ function CloseTradeForm({ tradeId, onDone }: { tradeId: string; onDone: () => vo
     setSaving(true);
     setError(null);
     try {
-      await closeWeeklyAdvisorTrade(tradeId, {
+      await closeWeeklyAdvisorTrade(trade.id, {
         exit_debit: exitDebit ? Number(exitDebit) : undefined,
         realized_pnl: realizedPnl ? Number(realizedPnl) : undefined,
         exit_notes: notes || undefined,
@@ -719,6 +748,12 @@ function CloseTradeForm({ tradeId, onDone }: { tradeId: string; onDone: () => vo
   return (
     <form className="weekly-advisor-journal-form" onSubmit={handleSubmit}>
       {error && <p className="error">{error}</p>}
+      {trade.status === "expired" && (
+        <p className="hint pnl-negative">This trade's expiry has passed - review the numbers below before confirming.</p>
+      )}
+      {suggested.exitDebit && (
+        <p className="hint">Debit/P&amp;L below are estimated from each leg's last tracked price ({trade.prices_updated_at ? formatDateTime(trade.prices_updated_at) : "unknown"}) - confirm or correct.</p>
+      )}
       <label>
         Debit paid to close
         <input type="number" step="any" value={exitDebit} onChange={(e) => setExitDebit(e.target.value)} />
@@ -1570,7 +1605,7 @@ function HistoryTab({ active }: { active: boolean }) {
   );
 }
 
-const STATUS_BADGE: Record<WeeklyAdvisorTradeStatus, string> = { open: "badge-mini-buy", closed: "badge-mini-muted" };
+const STATUS_BADGE: Record<WeeklyAdvisorTradeStatus, string> = { open: "badge-mini-buy", expired: "badge-mini-sell", closed: "badge-mini-muted" };
 
 function PerformanceTab() {
   const [summary, setSummary] = useState<WeeklyAdvisorPerformanceSummary | null>(null);
@@ -1611,6 +1646,9 @@ function PerformanceTab() {
       {summary && (
         <div className="weekly-advisor-perf-summary">
           <span>Open <strong>{summary.open_count}</strong></span>
+          {summary.expired_count > 0 && (
+            <span className="pnl-negative">Expired - needs review <strong>{summary.expired_count}</strong></span>
+          )}
           <span>Closed <strong>{summary.closed_count}</strong></span>
           <span>Win rate <strong>{summary.win_rate != null ? `${Math.round(summary.win_rate * 100)}%` : "-"}</strong></span>
           <span>
@@ -1652,13 +1690,26 @@ function PerformanceTab() {
                 <td className="num">{t.quantity ?? "-"}</td>
                 <td className="num">{t.entry_credit ?? "-"}</td>
                 <td className={`num ${t.realized_pnl != null ? (t.realized_pnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
-                  {t.realized_pnl ?? "-"}
+                  {t.status === "closed" ? (
+                    t.realized_pnl ?? "-"
+                  ) : (
+                    (() => {
+                      const unrealized = weeklyAdvisorUnrealizedPnl(t);
+                      return unrealized != null ? (
+                        <span className={unrealized >= 0 ? "pnl-positive" : "pnl-negative"} title="Unrealized - last leg refresh">
+                          {unrealized} (live)
+                        </span>
+                      ) : (
+                        "-"
+                      );
+                    })()
+                  )}
                 </td>
                 <td>
                   <button type="button" className="secondary tiny" onClick={() => setDetailsId(detailsId === t.id ? null : t.id)}>
                     {detailsId === t.id ? "Hide" : "Details"}
                   </button>{" "}
-                  {t.status === "open" && (
+                  {(t.status === "open" || t.status === "expired") && (
                     <button type="button" className="secondary tiny" onClick={() => setClosingId(closingId === t.id ? null : t.id)}>
                       {closingId === t.id ? "Cancel" : "Close"}
                     </button>
@@ -1679,6 +1730,8 @@ function PerformanceTab() {
                       <span>Target {t.target_pct_of_max_profit != null ? `${t.target_pct_of_max_profit}% of max profit` : "-"}</span>
                       <span>Stop-loss {t.stop_loss_pct_of_max_loss != null ? `${t.stop_loss_pct_of_max_loss}% of max loss` : "-"}</span>
                       {t.exit_debit != null && <span>Debit paid to close {t.exit_debit}</span>}
+                      {t.expiry_date && <span>Expiry {formatDate(t.expiry_date)}</span>}
+                      {t.prices_updated_at && <span className="muted">Prices as of {formatDateTime(t.prices_updated_at)}</span>}
                     </div>
                     {t.legs && t.legs.length > 0 && (
                       <div className="weekly-advisor-technicals">
@@ -1686,6 +1739,7 @@ function PerformanceTab() {
                           <span key={i}>
                             {leg.side.toUpperCase()} {leg.option_type} {leg.strike}
                             {leg.entry_price != null ? ` @ ${leg.entry_price}` : " (not filled yet)"}
+                            {leg.current_price != null && ` -> now ${leg.current_price}`}
                           </span>
                         ))}
                       </div>
@@ -1703,7 +1757,7 @@ function PerformanceTab() {
                 <tr>
                   <td colSpan={9}>
                     <CloseTradeForm
-                      tradeId={t.id}
+                      trade={t}
                       onDone={() => {
                         setClosingId(null);
                         load();

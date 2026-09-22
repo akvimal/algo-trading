@@ -167,6 +167,7 @@ def _to_trade_out(row: db_models.WeeklyAdvisorTrade, rec: db_models.WeeklyAdviso
         actual_bias=row.actual_bias, actual_strategy=row.actual_strategy,
         legs=[TradeLeg.model_validate(leg) for leg in row.legs] if row.legs else None,
         target_pct_of_max_profit=row.target_pct_of_max_profit, stop_loss_pct_of_max_loss=row.stop_loss_pct_of_max_loss,
+        expiry_date=row.expiry_date, prices_updated_at=row.prices_updated_at,
     )
 
 
@@ -176,11 +177,17 @@ def _default_legs(rec: db_models.WeeklyAdvisorRecommendation, quantity: Optional
     trader isn't retyping strikes the system already produced. entry_price
     starts unset - true at creation time regardless of whether this is
     logged before or during the session, since even a same-day fill price
-    isn't known until the broker actually confirms it."""
+    isn't known until the broker actually confirms it. security_id is
+    carried over too (StrategyLeg.security_id, when the recommendation's
+    own chain fetch had one) - needed for the scheduled leg-price refresh
+    job to look this leg up in a fresh chain fetch later."""
     legs = rec.payload.get("strategy", {}).get("legs") or []
     if not legs:
         return None
-    return [TradeLeg(option_type=leg["option_type"], strike=leg["strike"], side=leg["side"], quantity=quantity) for leg in legs]
+    return [
+        TradeLeg(option_type=leg["option_type"], strike=leg["strike"], side=leg["side"], quantity=quantity, security_id=leg.get("security_id"))
+        for leg in legs
+    ]
 
 
 def _default_target_pct(rec: db_models.WeeklyAdvisorRecommendation) -> Optional[float]:
@@ -262,6 +269,19 @@ def _days_to_expiry_at_entry(rec: db_models.WeeklyAdvisorRecommendation) -> Opti
         return None
 
 
+def _expiry_date(rec: db_models.WeeklyAdvisorRecommendation) -> Optional[date]:
+    """The actual expiry date itself, persisted onto the trade row so
+    app/scheduler.py's _expire_weekly_advisor_trades can gate on it
+    directly - _days_to_expiry_at_entry above only stores the derived
+    day-count, fine for display but not something a scheduled job should
+    reconstruct a real date from (taken_at + a stored offset) when the
+    real date was already known at creation time."""
+    try:
+        return date.fromisoformat(rec.payload["strategy"]["entry_window"]["latest"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 @router.post("/weekly-advisor/recommendations/{recommendation_id}/trades", response_model=TradeOut, status_code=201)
 def create_trade(recommendation_id: str, payload: TradeCreate, db: Session = Depends(get_db)):
     """"Select/execute" a saved recommendation - see app/domain/weekly_advisor/
@@ -292,6 +312,7 @@ def create_trade(recommendation_id: str, payload: TradeCreate, db: Session = Dep
         actual_bias=payload.actual_bias, actual_strategy=payload.actual_strategy,
         legs=[leg.model_dump(mode="json") for leg in legs] if legs else None,
         target_pct_of_max_profit=target_pct, stop_loss_pct_of_max_loss=payload.stop_loss_pct_of_max_loss,
+        expiry_date=_expiry_date(rec),
     )
     db.add(row)
     db.commit()

@@ -4243,9 +4243,9 @@ export function LiveChartPanel({
             {(oi.total_call_oi_change_5m != null || oi.total_call_oi_change_15m != null) && (
               <span className="live-chart-oi-delta">
                 {" "}
-                <OiDelta change={oi.total_call_oi_change_5m} total={oi.total_call_oi} />
-                /5m <OiDelta change={oi.total_call_oi_change_15m} total={oi.total_call_oi} />
-                /15m
+                <OiDelta change={oi.total_call_oi_change_15m} total={oi.total_call_oi} />
+                /15m <OiDelta change={oi.total_call_oi_change_5m} total={oi.total_call_oi} />
+                /5m
               </span>
             )}
           </span>
@@ -4254,9 +4254,9 @@ export function LiveChartPanel({
             {(oi.total_put_oi_change_5m != null || oi.total_put_oi_change_15m != null) && (
               <span className="live-chart-oi-delta">
                 {" "}
-                <OiDelta change={oi.total_put_oi_change_5m} total={oi.total_put_oi} />
-                /5m <OiDelta change={oi.total_put_oi_change_15m} total={oi.total_put_oi} />
-                /15m
+                <OiDelta change={oi.total_put_oi_change_15m} total={oi.total_put_oi} />
+                /15m <OiDelta change={oi.total_put_oi_change_5m} total={oi.total_put_oi} />
+                /5m
               </span>
             )}
           </span>

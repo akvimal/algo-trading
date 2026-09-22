@@ -2140,6 +2140,15 @@ export async function fetchWeeklyAdvisorHistory(symbol?: string, limit = 50): Pr
   return asJson(res, "GET /weekly-advisor/recommendations/history");
 }
 
+export async function deleteWeeklyAdvisorRecommendation(recommendationId: string): Promise<void> {
+  // ON DELETE CASCADE server-side - a journaled trade against this
+  // recommendation, if any, is removed with it automatically.
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`DELETE /weekly-advisor/recommendations/{id} failed: ${await extractErrorDetail(res)}`);
+  }
+}
+
 export type WeeklyAdvisorDecisionSet = { decision: WeeklyAdvisorDecision; confidence?: number; comments?: string };
 
 export async function setWeeklyAdvisorDecision(recommendationId: string, payload: WeeklyAdvisorDecisionSet): Promise<SavedWeeklyRecommendation> {
@@ -2330,6 +2339,15 @@ export async function closeWeeklyAdvisorTrade(tradeId: string, payload: WeeklyAd
     body: JSON.stringify(payload),
   });
   return asJson(res, "PUT /weekly-advisor/trades/{id}/close");
+}
+
+export async function deleteWeeklyAdvisorTrade(tradeId: string): Promise<void> {
+  // Clears just the Performance entry - the recommendation it was
+  // journaled against (and the History row for it) is untouched.
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}`, { method: "DELETE" });
+  if (!res.ok) {
+    throw new Error(`DELETE /weekly-advisor/trades/{id} failed: ${await extractErrorDetail(res)}`);
+  }
 }
 
 export type WeeklyAdvisorPerformanceSummary = {

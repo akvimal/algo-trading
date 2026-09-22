@@ -753,6 +753,18 @@ button.tiny {
   border-radius: 4px;
 }
 
+/* Destructive action (delete a History/Performance row) - same idea as
+   .icon-btn.danger, applied to a plain secondary.tiny button instead. */
+button.secondary.danger {
+  color: var(--sell);
+  border-color: color-mix(in srgb, var(--sell) 45%, var(--border));
+}
+
+button.secondary.danger:hover {
+  background: color-mix(in srgb, var(--sell) 12%, transparent);
+  border-color: var(--sell);
+}
+
 tbody tr {
   cursor: pointer;
 }

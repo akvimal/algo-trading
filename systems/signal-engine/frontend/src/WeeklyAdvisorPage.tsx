@@ -5,6 +5,8 @@ import {
   closeWeeklyAdvisorTrade,
   createWatchlist,
   createWeeklyAdvisorTrade,
+  deleteWeeklyAdvisorRecommendation,
+  deleteWeeklyAdvisorTrade,
   fetchWatchlists,
   fetchWeeklyAdvisorHistory,
   fetchWeeklyAdvisorLotSize,
@@ -1727,6 +1729,28 @@ function HistoryTab({ active }: { active: boolean }) {
   const [tradesByRecommendation, setTradesByRecommendation] = useState<Map<string, WeeklyAdvisorTrade>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function handleDelete(row: SavedWeeklyRecommendation) {
+    const hasTrade = tradesByRecommendation.has(row.id);
+    const confirmed = window.confirm(
+      hasTrade
+        ? `Delete this ${row.symbol} recommendation? Its journaled trade (Performance tab) will be deleted with it. This cannot be undone.`
+        : `Delete this ${row.symbol} recommendation? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    setDeletingId(row.id);
+    setError(null);
+    try {
+      await deleteWeeklyAdvisorRecommendation(row.id);
+      if (expandedId === row.id) setExpandedId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete");
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -1806,6 +1830,19 @@ function HistoryTab({ active }: { active: boolean }) {
                 <td>
                   <button type="button" className="secondary tiny" onClick={() => setExpandedId(expandedId === row.id ? null : row.id)}>
                     {expandedId === row.id ? "Hide" : "Details"}
+                  </button>{" "}
+                  <button
+                    type="button"
+                    className="secondary tiny danger"
+                    onClick={() => handleDelete(row)}
+                    disabled={deletingId === row.id}
+                    title={
+                      tradesByRecommendation.has(row.id)
+                        ? "Delete this recommendation and its journaled trade"
+                        : "Delete this recommendation"
+                    }
+                  >
+                    {deletingId === row.id ? "Deleting..." : "Delete"}
                   </button>
                 </td>
               </tr>
@@ -1878,6 +1915,7 @@ function PerformanceTab() {
   const [trades, setTrades] = useState<WeeklyAdvisorTrade[]>([]);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [detailsId, setDetailsId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1892,6 +1930,21 @@ function PerformanceTab() {
       setError(err instanceof Error ? err.message : "Failed to load performance");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDelete(t: WeeklyAdvisorTrade) {
+    if (!window.confirm(`Delete this ${t.symbol} journal entry? This only clears Performance - the History row it was journaled from stays. This cannot be undone.`)) return;
+    setDeletingId(t.id);
+    setError(null);
+    try {
+      await deleteWeeklyAdvisorTrade(t.id);
+      if (detailsId === t.id) setDetailsId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -1979,7 +2032,16 @@ function PerformanceTab() {
                     <button type="button" className="secondary tiny" onClick={() => setClosingId(closingId === t.id ? null : t.id)}>
                       {closingId === t.id ? "Cancel" : "Close"}
                     </button>
-                  )}
+                  )}{" "}
+                  <button
+                    type="button"
+                    className="secondary tiny danger"
+                    onClick={() => handleDelete(t)}
+                    disabled={deletingId === t.id}
+                    title="Delete this journal entry (does not touch its History row)"
+                  >
+                    {deletingId === t.id ? "Deleting..." : "Delete"}
+                  </button>
                 </td>
               </tr>
               {detailsId === t.id && (

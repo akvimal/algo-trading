@@ -2,6 +2,7 @@
 failure (one symbol's pipeline raising) must be skipped, not fatal to the
 rest of the batch."""
 import time
+import uuid
 from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
@@ -291,3 +292,89 @@ def test_get_option_chain_strikes_502s_on_fetch_failure(monkeypatch):
     resp = client.get("/weekly-advisor/option-chain-strikes", params={"symbol": "HDFCBANK", "expiry": "2026-09-25"})
 
     assert resp.status_code == 502
+
+
+# --- DELETE /weekly-advisor/recommendations/{id} and /weekly-advisor/trades/{id} ---
+# A fake Session (not a real DB) so these stay fast/isolated like the rest of
+# this file - db.get/delete/commit are the only calls either route makes.
+
+
+class _FakeRow:
+    def __init__(self, row_id):
+        self.id = row_id
+
+
+class _FakeSession:
+    def __init__(self, rows_by_model=None):
+        self._rows_by_model = rows_by_model or {}
+        self.deleted = []
+        self.committed = False
+
+    def get(self, model, row_id):
+        return self._rows_by_model.get(model, {}).get(row_id)
+
+    def delete(self, row):
+        self.deleted.append(row)
+
+    def commit(self):
+        self.committed = True
+
+
+def _override_db(fake_db):
+    app.dependency_overrides[route.get_db] = lambda: fake_db
+
+
+def _clear_db_override():
+    app.dependency_overrides.pop(route.get_db, None)
+
+
+def test_delete_saved_recommendation_deletes_and_returns_204():
+    rec_id = uuid.uuid4()
+    row = _FakeRow(rec_id)
+    fake_db = _FakeSession({route.db_models.WeeklyAdvisorRecommendation: {rec_id: row}})
+    _override_db(fake_db)
+    try:
+        resp = client.delete(f"/weekly-advisor/recommendations/{rec_id}")
+    finally:
+        _clear_db_override()
+
+    assert resp.status_code == 204
+    # ON DELETE CASCADE (infra/postgres/init/03-signal-generation.sql) takes
+    # any journaled trade with it at the DB level - nothing extra to do here.
+    assert fake_db.deleted == [row]
+    assert fake_db.committed
+
+
+def test_delete_saved_recommendation_404s_when_missing():
+    _override_db(_FakeSession())
+    try:
+        resp = client.delete(f"/weekly-advisor/recommendations/{uuid.uuid4()}")
+    finally:
+        _clear_db_override()
+
+    assert resp.status_code == 404
+
+
+def test_delete_trade_deletes_and_returns_204():
+    trade_id = uuid.uuid4()
+    row = _FakeRow(trade_id)
+    fake_db = _FakeSession({route.db_models.WeeklyAdvisorTrade: {trade_id: row}})
+    _override_db(fake_db)
+    try:
+        resp = client.delete(f"/weekly-advisor/trades/{trade_id}")
+    finally:
+        _clear_db_override()
+
+    assert resp.status_code == 204
+    assert fake_db.deleted == [row]
+    assert fake_db.committed
+
+
+def test_delete_trade_404s_when_missing():
+    _override_db(_FakeSession())
+    try:
+        resp = client.delete(f"/weekly-advisor/trades/{uuid.uuid4()}")
+    finally:
+        _clear_db_override()
+
+    assert resp.status_code == 404

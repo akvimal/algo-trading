@@ -286,6 +286,21 @@ def get_saved_recommendation(recommendation_id: str, db: Session = Depends(get_d
     return _to_saved_out(row)
 
 
+@router.delete("/weekly-advisor/recommendations/{recommendation_id}", status_code=204)
+def delete_saved_recommendation(recommendation_id: str, db: Session = Depends(get_db)):
+    """Clears one History row. ON DELETE CASCADE (see infra/postgres/init/
+    03-signal-generation.sql) takes the recommendation's own journaled
+    trade with it, if any - a trade has nothing left to reference once its
+    recommendation snapshot is gone, so this deliberately does NOT require
+    the caller to delete the trade first."""
+    row = db.get(db_models.WeeklyAdvisorRecommendation, _parse_uuid(recommendation_id, "recommendation"))
+    if row is None:
+        raise HTTPException(status_code=404, detail="recommendation not found")
+    db.delete(row)
+    db.commit()
+    return Response(status_code=204)
+
+
 @router.put("/weekly-advisor/recommendations/{recommendation_id}/decision", response_model=SavedRecommendationOut)
 def set_recommendation_decision(recommendation_id: str, payload: DecisionSet, db: Session = Depends(get_db)):
     """A lightweight "did you act on this" note - independent of whether a
@@ -429,6 +444,21 @@ def close_trade(trade_id: str, payload: TradeClose, db: Session = Depends(get_db
 
     rec = db.get(db_models.WeeklyAdvisorRecommendation, row.recommendation_id)
     return _to_trade_out(row, rec)
+
+
+@router.delete("/weekly-advisor/trades/{trade_id}", status_code=204)
+def delete_trade(trade_id: str, db: Session = Depends(get_db)):
+    """Clears one Performance row without touching its recommendation - the
+    History entry (and the ability to re-decide/re-journal it) stays put.
+    No status guard: an open trade can be deleted same as a closed one -
+    unlike /entry and /close, "I logged this by mistake" isn't a lifecycle
+    transition that should be blocked."""
+    row = db.get(db_models.WeeklyAdvisorTrade, _parse_uuid(trade_id, "trade"))
+    if row is None:
+        raise HTTPException(status_code=404, detail="trade not found")
+    db.delete(row)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/weekly-advisor/performance/summary", response_model=PerformanceSummary)

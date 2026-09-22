@@ -18,3 +18,7 @@ redis==5.0.4
 # Long-history (>90 day) daily/weekly OHLCV for NSE equities/indices, where
 # Dhan's own history endpoint is capped - see app/providers/yahoo.py.
 yfinance==1.7.0
+# Already an implicit yfinance dependency (its own DataFrame return type) -
+# pinned explicitly now that yahoo.py's own retry helper imports it
+# directly (pd.DataFrame()), not just consuming what yfinance hands back.
+pandas==3.0.5

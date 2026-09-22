@@ -11,21 +11,63 @@ have no Yahoo equivalent worth adding here.
 """
 from __future__ import annotations
 
+import logging
+import time
 from datetime import date, timedelta
 
+import pandas as pd
 import yfinance as yf
 
 from app.domain.models import Candle
 
+logger = logging.getLogger(__name__)
+
 PROVIDER_NAME = "yahoo"
 
 _YF_INTERVAL = {"daily": "1d", "weekly": "1wk"}
+
+# yfinance's own curl_cffi-based session occasionally fails to resolve or
+# connect to Yahoo's endpoint under load - confirmed live 2026-09-22: a
+# 209-symbol weekly_advisor batch produced both "Could not resolve host"
+# and "Could not connect" curl errors for a scattered subset of symbols,
+# including rock-solid large caps (INFY, DMART, HCLTECH) that plainly have
+# real data - a transient network hiccup under concurrent load, not a
+# genuine data gap, and every one of them succeeded on a bare retry
+# minutes later. yfinance swallows the real exception internally and logs
+# its own misleading "possibly delisted" line, returning an EMPTY
+# DataFrame rather than raising - so retrying on an empty result matters
+# here just as much as retrying a raised exception. Same "retry the whole
+# operation a few times, fixed delay" shape as pipeline.py's own
+# _fetch_expiry_and_chain_with_retry for Dhan's option-chain throttle,
+# tuned smaller since this is about clearing a connection hiccup, not
+# waiting out a rate limit.
+_HISTORY_RETRY_ATTEMPTS = 3
+_HISTORY_RETRY_SLEEP_SECONDS = 2.0
 
 
 def _to_yahoo_symbol(exchange: str, symbol: str) -> str:
     if exchange != "NSE":
         raise ValueError(f"Yahoo Finance history is only wired for NSE, got exchange={exchange!r}")
     return f"{symbol}.NS"
+
+
+def _fetch_history_with_retry(yahoo_symbol: str, start: date, end: date, yf_interval: str) -> pd.DataFrame:
+    last_exc: Exception | None = None
+    for attempt in range(_HISTORY_RETRY_ATTEMPTS):
+        try:
+            df = yf.Ticker(yahoo_symbol).history(start=start, end=end, interval=yf_interval)
+            if not df.empty:
+                return df
+        except Exception as exc:  # yfinance/curl_cffi can raise directly too, not just return empty
+            last_exc = exc
+        if attempt < _HISTORY_RETRY_ATTEMPTS - 1:
+            time.sleep(_HISTORY_RETRY_SLEEP_SECONDS)
+    if last_exc is not None:
+        logger.warning(
+            "Yahoo history fetch for %s failed on every one of %d attempts, last error: %s",
+            yahoo_symbol, _HISTORY_RETRY_ATTEMPTS, last_exc,
+        )
+    return pd.DataFrame()  # empty - let the caller's own empty-check raise its existing, clearer ValueError
 
 
 def get_candle_history(exchange: str, symbol: str, interval: str, from_date: date, to_date: date) -> list[Candle]:
@@ -42,7 +84,7 @@ def get_candle_history(exchange: str, symbol: str, interval: str, from_date: dat
         raise ValueError(f"Yahoo history only supports interval in {sorted(_YF_INTERVAL)}, got {interval!r}")
 
     yahoo_symbol = _to_yahoo_symbol(exchange, symbol)
-    df = yf.Ticker(yahoo_symbol).history(start=from_date, end=to_date + timedelta(days=1), interval=yf_interval)
+    df = _fetch_history_with_retry(yahoo_symbol, from_date, to_date + timedelta(days=1), yf_interval)
     if df.empty:
         raise ValueError(f"no Yahoo Finance data for '{symbol}' ({yahoo_symbol}) - unknown symbol or no data in range")
     # Yahoo's own history has NaN OHLC rows for some NSE symbols with messy

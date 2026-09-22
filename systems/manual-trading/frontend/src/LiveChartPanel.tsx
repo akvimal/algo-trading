@@ -4273,14 +4273,6 @@ export function LiveChartPanel({
                     title={res.map((l) => `R${l.rank} ${l.strike} · ${fmtOiCount(l.oi, oiIsCrypto)} call OI`).join("  ")}
                   >
                     R <b>{res.map((l) => l.strike).join(" · ")}</b>
-                    {oi.total_call_buildup && (
-                      <span
-                        className={`oi-buildup-badge ${BUILDUP_META[oi.total_call_buildup].cls}`}
-                        title={`Call OI: ${BUILDUP_META[oi.total_call_buildup].label}`}
-                      >
-                        {BUILDUP_META[oi.total_call_buildup].icon} CE {OI_BUILDUP_LABEL[oi.total_call_buildup]}
-                      </span>
-                    )}
                   </span>
                 )}
                 {sup.length > 0 && (
@@ -4289,6 +4281,18 @@ export function LiveChartPanel({
                     title={sup.map((l) => `S${l.rank} ${l.strike} · ${fmtOiCount(l.oi, oiIsCrypto)} put OI`).join("  ")}
                   >
                     S <b>{sup.map((l) => l.strike).join(" · ")}</b>
+                  </span>
+                )}
+                {(oi.total_call_buildup || oi.total_put_buildup) && (
+                  <span className="live-chart-oi-buildup-group">
+                    {oi.total_call_buildup && (
+                      <span
+                        className={`oi-buildup-badge ${BUILDUP_META[oi.total_call_buildup].cls}`}
+                        title={`Call OI: ${BUILDUP_META[oi.total_call_buildup].label}`}
+                      >
+                        {BUILDUP_META[oi.total_call_buildup].icon} CE {OI_BUILDUP_LABEL[oi.total_call_buildup]}
+                      </span>
+                    )}
                     {oi.total_put_buildup && (
                       <span
                         className={`oi-buildup-badge ${BUILDUP_META[oi.total_put_buildup].cls}`}

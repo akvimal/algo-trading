@@ -4682,14 +4682,16 @@ button.btn-exit {
   color: var(--text-dim);
 }
 
+.live-chart-oi-buildup-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 /* .oi-buildup-badge (shared with OiSummaryPage) already carries the
-   icon+colour; just make sure it sits inline cleanly in the strip. Nested
-   directly inside .live-chart-oi-sr-r/-s (paired with its matching R/S
-   level, 2026-09-21) rather than a separate standalone group, so it needs
-   its own left margin to not crowd the strike value right before it. */
+   icon+colour; just make sure it sits inline cleanly in the strip. */
 .live-chart-oi-strip .oi-buildup-badge {
   font-size: 0.72rem;
-  margin-left: 0.35rem;
 }
 
 .live-chart-oi-sr b {

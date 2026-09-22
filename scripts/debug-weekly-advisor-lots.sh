@@ -73,4 +73,32 @@ echo "--- market-data-backend ---"
 docker compose logs market-data-backend --tail=200 2>&1 | grep -i "lot-size\|dhan\|error\|exception\|traceback" | tail -20 || echo "(none found)"
 
 echo
+echo "=========================================="
+echo "5. Force a fresh NSE instrument-master sync and check for the"
+echo "   security_id found in step 1 - tells us whether this is a"
+echo "   broad sync failure or just one contract missing"
+echo "=========================================="
+docker compose exec -T signal-engine-backend python3 -c "
+import json, urllib.request
+d = json.load(urllib.request.urlopen('http://localhost:8000/weekly-advisor/recommendations?symbols=$SYMBOL'))
+legs = d['recommendations'][0]['strategy']['legs'] if d['recommendations'] else []
+sec_id = next((l.get('security_id') for l in legs if l.get('security_id')), None)
+print(sec_id or '')
+" > /tmp/_debug_sec_id.txt 2>&1
+SEC_ID_FOUND="$(tail -n1 /tmp/_debug_sec_id.txt)"
+rm -f /tmp/_debug_sec_id.txt
+if [ -z "$SEC_ID_FOUND" ]; then
+    echo "No security_id available from step 1 to check against a fresh sync."
+else
+    echo "Checking for security_id: $SEC_ID_FOUND"
+    docker compose exec -T market-data-backend python3 -c "
+from app.providers.router import _dhan_nse
+_dhan_nse.sync_instruments()
+print('symbols synced:', len(_dhan_nse._symbol_to_security_id))
+print('has $SEC_ID_FOUND:', '$SEC_ID_FOUND' in _dhan_nse._security_id_to_symbol)
+print('symbol for $SEC_ID_FOUND:', _dhan_nse._security_id_to_symbol.get('$SEC_ID_FOUND'))
+" 2>&1
+fi
+
+echo
 echo "Done - paste all of the above back to Claude."

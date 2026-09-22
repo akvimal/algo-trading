@@ -55,6 +55,13 @@ services:
     build:
       context: ./systems/signal-engine/backend
     restart: unless-stopped
+    sysctls:
+      # Same fix as market-data-backend's own sysctls comment (see there) -
+      # this service independently makes external calls too (OpenRouter for
+      # screener_fetch.py's vision read, Playwright's Chromium for the same
+      # screenshot capture) that could hit the identical broken-IPv6-route
+      # issue.
+      - net.ipv6.conf.all.disable_ipv6=1
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       GENERATION_DATABASE_SCHEMA: signal_generation
@@ -125,6 +132,17 @@ services:
     build:
       context: ./systems/market-data/backend
     restart: unless-stopped
+    sysctls:
+      # This container's network occasionally gets a route where external
+      # domains (Dhan, Yahoo Finance) resolve real IPv6 addresses but have
+      # no actual IPv6 route out ("Network is unreachable") - confirmed
+      # live 2026-09-22, hit both `requests` (Dhan) and yfinance's
+      # curl_cffi client (Yahoo), two different HTTP stacks, so a single
+      # per-library Python patch (app/providers/dhan.py's IPv4-preference
+      # getaddrinfo patch) doesn't cover both. Disabling IPv6 in this
+      # container's own network namespace fixes it uniformly for every
+      # library at once, same intent as that patch, applied one level down.
+      - net.ipv6.conf.all.disable_ipv6=1
     environment:
       # market-data's first-ever DB dependency - sentiment_history only
       # (app/config.py's own comment) - everything else here stays

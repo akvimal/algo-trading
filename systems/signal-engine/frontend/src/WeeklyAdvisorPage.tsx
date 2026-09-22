@@ -305,7 +305,10 @@ function DecisionForm({
   // a leg doesn't remove it from that array, just excludes it from what
   // gets submitted (so a re-check restores whatever was already typed).
   const [legIncluded, setLegIncluded] = useState<boolean[]>(() => rec.strategy.legs.map(() => true));
-  const includedLegs = rec.strategy.legs.filter((_, i) => legIncluded[i]);
+  // Editable strike per leg - defaults to whatever the engine recommended,
+  // freely overridable (e.g. picking a more liquid strike than the exact
+  // one anchored). Parallel array, same convention as legEntryPrices.
+  const [legStrikes, setLegStrikes] = useState<string[]>(() => rec.strategy.legs.map((leg) => String(leg.strike)));
 
   function toggleLeg(i: number) {
     const next = legIncluded.map((v, j) => (j === i ? !v : v));
@@ -321,6 +324,44 @@ function DecisionForm({
     setMaxProfit(recomputed.maxProfit);
     setMaxLoss(recomputed.maxLoss);
   }
+
+  function handleStrikeChange(i: number, value: string) {
+    setLegStrikes((prev) => prev.map((v, j) => (j === i ? value : v)));
+    // A different strike means the recommendation's own premium_estimate/
+    // security_id no longer describe this leg at all (they're for the
+    // ORIGINAL strike's specific contract) - clearing the fill price
+    // forces an honest re-entry rather than silently keeping a number that
+    // was never quoted for this strike. security_id itself is nulled out
+    // at the effectiveLegs level below (not here), since that's also where
+    // "changed back to the original value" un-nulls it again.
+    if (Number(value) !== rec.strategy.legs[i].strike) {
+      setLegEntryPrices((prev) => prev.map((v, j) => (j === i ? "" : v)));
+    }
+  }
+
+  // Single source of truth combining inclusion + any strike edit, reused
+  // everywhere a leg's real, current identity matters (Check margin, the
+  // actual trade payload) - a strike edit invalidates that leg's own
+  // security_id (it's a different, unknown-to-us contract now), so margin
+  // checking and the live leg-price refresh job correctly stop applying to
+  // it rather than silently treating the new strike as if it were the one
+  // Dhan's ID actually points to.
+  const effectiveLegs = rec.strategy.legs
+    .map((leg, i) => {
+      const strike = legStrikes[i] ? Number(legStrikes[i]) : leg.strike;
+      const strikeChanged = strike !== leg.strike;
+      return {
+        included: legIncluded[i],
+        option_type: leg.option_type,
+        side: leg.side,
+        strike,
+        strikeChanged,
+        security_id: strikeChanged ? null : leg.security_id,
+        entryPrice: legEntryPrices[i] ? Number(legEntryPrices[i]) : null,
+        premiumEstimate: strikeChanged ? null : leg.premium_estimate,
+      };
+    })
+    .filter((leg) => leg.included);
   // Real, current lot size (any leg's security_id resolves it - every leg
   // of one recommendation shares the same underlying) - defaults Qty to a
   // valid value instead of leaving it blank, so "Check margin" doesn't
@@ -358,11 +399,13 @@ function DecisionForm({
   // DhanProvider.get_combo_margin, confirmed live 2026-09-22), separate
   // from the pure-arithmetic economics above since it needs a real
   // quantity first (margin scales with it) and a real network call, not
-  // something to fire automatically on every keystroke. Every leg needs a
-  // security_id to check margin at all - missing on any leg (e.g. a chain
-  // miss that cycle) disables the button rather than sending a partial,
-  // guaranteed-to-fail request.
-  const canCheckMargin = includedLegs.length > 0 && includedLegs.every((leg) => leg.security_id != null);
+  // something to fire automatically on every keystroke. Every included leg
+  // needs a security_id to check margin at all - missing on any leg (a
+  // chain miss that cycle, OR the leg's strike was edited away from the
+  // recommended one, since that's a different, unknown-to-us contract now)
+  // disables the button rather than sending a partial, guaranteed-to-fail
+  // request.
+  const canCheckMargin = effectiveLegs.length > 0 && effectiveLegs.every((leg) => leg.security_id != null);
   const [marginChecking, setMarginChecking] = useState(false);
   const [marginResult, setMarginResult] = useState<Record<string, number | string> | null>(null);
   const [marginError, setMarginError] = useState<string | null>(null);
@@ -372,13 +415,9 @@ function DecisionForm({
     setMarginError(null);
     setMarginResult(null);
     try {
-      const legs = rec.strategy.legs
-        .map((leg, i) =>
-          legIncluded[i]
-            ? { security_id: leg.security_id as string, side: leg.side, price: legEntryPrices[i] ? Number(legEntryPrices[i]) : (leg.premium_estimate ?? 0) }
-            : null,
-        )
-        .filter((leg): leg is WeeklyAdvisorMarginCheckLeg => leg != null);
+      const legs: WeeklyAdvisorMarginCheckLeg[] = effectiveLegs
+        .filter((leg) => leg.security_id != null)
+        .map((leg) => ({ security_id: leg.security_id as string, side: leg.side, price: leg.entryPrice ?? leg.premiumEstimate ?? 0 }));
       const { raw } = await checkWeeklyAdvisorMargin(legs, Number(quantity));
       setMarginResult(raw);
       const total = raw.totalMargin;
@@ -422,29 +461,29 @@ function DecisionForm({
       });
       let trade: WeeklyAdvisorTrade | null = null;
       if (decision === "execute" && !alreadyTaken) {
-        // Only the legs still checked below - lets e.g. a recommended
-        // 4-leg iron condor be journaled as just its 2-leg call side (a
-        // bear call spread) when that's what was actually traded instead.
+        // Only the legs still checked, at whatever strike each one was
+        // left at - lets e.g. a recommended 4-leg iron condor be journaled
+        // as just its 2-leg call side (a bear call spread), or a strike
+        // other than the one anchored, when that's what was actually
+        // traded instead. security_id is already null on effectiveLegs for
+        // any edited strike (see its own comment) - never the recommended
+        // contract's real ID misapplied to a strike it doesn't describe.
         const legs: WeeklyAdvisorTradeLeg[] | undefined =
-          includedLegs.length > 0
-            ? rec.strategy.legs
-                .map((leg, i): WeeklyAdvisorTradeLeg | null =>
-                  legIncluded[i]
-                    ? {
-                        option_type: leg.option_type,
-                        strike: leg.strike,
-                        side: leg.side,
-                        quantity: quantity ? Number(quantity) : null,
-                        entry_price: legEntryPrices[i] ? Number(legEntryPrices[i]) : null,
-                        // Carried over from the recommendation's own StrategyLeg so
-                        // the scheduled leg-price refresh job can look this leg up
-                        // later - current_price starts unset, written by that job.
-                        security_id: leg.security_id,
-                        current_price: null,
-                      }
-                    : null,
-                )
-                .filter((leg): leg is WeeklyAdvisorTradeLeg => leg != null)
+          effectiveLegs.length > 0
+            ? effectiveLegs.map(
+                (leg): WeeklyAdvisorTradeLeg => ({
+                  option_type: leg.option_type,
+                  strike: leg.strike,
+                  side: leg.side,
+                  quantity: quantity ? Number(quantity) : null,
+                  entry_price: leg.entryPrice,
+                  // Carried over from the recommendation's own StrategyLeg so
+                  // the scheduled leg-price refresh job can look this leg up
+                  // later - current_price starts unset, written by that job.
+                  security_id: leg.security_id,
+                  current_price: null,
+                }),
+              )
             : undefined;
         trade = await createWeeklyAdvisorTrade(recommendationId, {
           quantity: quantity ? Number(quantity) : undefined,
@@ -534,22 +573,40 @@ function DecisionForm({
                 {economics.legEntryPrices.some((v) => v !== "") && (
                   <p className="hint">Fill prices/credit/max-profit/max-loss below are estimated from the option chain at analysis time - confirm or correct once the legs actually fill.</p>
                 )}
-                {rec.strategy.legs.map((leg, i) => (
-                  <label key={i} className={legIncluded[i] ? "" : "muted"}>
-                    <input type="checkbox" checked={legIncluded[i]} onChange={() => toggleLeg(i)} title="Include this leg in the journaled trade" />{" "}
-                    {leg.side.toUpperCase()} {leg.option_type} {leg.strike} - fill price
-                    <input
-                      type="number"
-                      step="any"
-                      value={legEntryPrices[i] ?? ""}
-                      onChange={(e) => setLegEntryPrices((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
-                      placeholder="not filled yet"
-                      disabled={!legIncluded[i]}
-                      title={leg.premium_estimate != null ? "Pre-filled estimate as of analysis time - confirm or correct" : undefined}
-                    />
-                  </label>
-                ))}
-                {includedLegs.length === 0 && <p className="hint error">Select at least one leg to journal a trade.</p>}
+                {rec.strategy.legs.map((leg, i) => {
+                  const strikeChanged = legStrikes[i] !== "" && Number(legStrikes[i]) !== leg.strike;
+                  return (
+                    <label key={i} className={legIncluded[i] ? "" : "muted"}>
+                      <input type="checkbox" checked={legIncluded[i]} onChange={() => toggleLeg(i)} title="Include this leg in the journaled trade" />{" "}
+                      {leg.side.toUpperCase()} {leg.option_type}{" "}
+                      <input
+                        type="number"
+                        step="any"
+                        value={legStrikes[i] ?? ""}
+                        onChange={(e) => handleStrikeChange(i, e.target.value)}
+                        disabled={!legIncluded[i]}
+                        className="weekly-advisor-strike-input"
+                        title={`Recommended strike ${leg.strike} - editable if you want a different one`}
+                      />{" "}
+                      - fill price
+                      <input
+                        type="number"
+                        step="any"
+                        value={legEntryPrices[i] ?? ""}
+                        onChange={(e) => setLegEntryPrices((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))}
+                        placeholder="not filled yet"
+                        disabled={!legIncluded[i]}
+                        title={leg.premium_estimate != null ? "Pre-filled estimate as of analysis time - confirm or correct" : undefined}
+                      />
+                      {strikeChanged && (
+                        <span className="hint">
+                          strike changed from {leg.strike} - fill price/credit/max profit-loss above no longer reflect this leg, re-check them
+                        </span>
+                      )}
+                    </label>
+                  );
+                })}
+                {effectiveLegs.length === 0 && <p className="hint error">Select at least one leg to journal a trade.</p>}
               </div>
             )}
             <label>
@@ -642,7 +699,7 @@ function DecisionForm({
           {capturingTrade ? "Comments / entry notes" : "Comments"}
           <textarea value={comments} onChange={(e) => setComments(e.target.value)} placeholder="optional" rows={3} />
         </label>
-        <button type="submit" className="secondary" disabled={saving || (capturingTrade && rec.strategy.legs.length > 0 && includedLegs.length === 0)}>
+        <button type="submit" className="secondary" disabled={saving || (capturingTrade && rec.strategy.legs.length > 0 && effectiveLegs.length === 0)}>
           {saving ? "Saving..." : capturingTrade ? "Log decision & mark as taken" : "Log decision"}
         </button>
         <button type="button" className="secondary tiny" onClick={onCancel} disabled={saving}>

@@ -2729,6 +2729,10 @@ button.btn-exit {
   flex-basis: 100%;
 }
 
+.weekly-advisor-strike-input {
+  width: 4.5rem;
+}
+
 .weekly-advisor-trade-readonly {
   margin: 0.3rem 0;
 }

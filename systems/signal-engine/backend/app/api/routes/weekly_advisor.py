@@ -140,6 +140,21 @@ def check_margin(payload: MarginCheckRequest):
     return MarginCheckResponse(raw=raw)
 
 
+@router.get("/weekly-advisor/lot-size")
+def get_lot_size(security_id: str):
+    """Real, current lot size for one option contract - lets the decision
+    form suggest/default a valid Qty before the user ever hits Check
+    margin, instead of only finding out via a 502 that quantity=1 isn't a
+    real lot multiple (confirmed live 2026-09-22 - see market-data's
+    DhanProvider.get_lot_size_for_security_id docstring). 404s the same
+    way that lookup does when the ID doesn't resolve - not every
+    fatal, just "no suggestion this time."""
+    lot_size = market_data_client.get_lot_size_for_security_id(security_id)
+    if lot_size is None:
+        raise HTTPException(status_code=404, detail=f"no lot size found for security_id '{security_id}'")
+    return {"lot_size": lot_size}
+
+
 def _parse_uuid(value: str, what: str) -> uuid.UUID:
     try:
         return uuid.UUID(value)

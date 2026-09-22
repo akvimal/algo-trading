@@ -2265,6 +2265,21 @@ export async function checkWeeklyAdvisorMargin(legs: WeeklyAdvisorMarginCheckLeg
   return asJson(res, "POST /weekly-advisor/margin");
 }
 
+// GET /weekly-advisor/lot-size - the real, current lot size for one
+// option contract (any leg's security_id - every leg of one
+// recommendation shares the same underlying, so one lookup covers the
+// whole trade). Lets the decision form suggest/default a valid Qty
+// instead of only finding out via a 502 from Check margin that quantity=1
+// isn't a real lot multiple (confirmed live 2026-09-22). Returns null
+// (not throws) on a 404 - "no suggestion this time" degrades gracefully,
+// same convention this file's other best-effort lookups use.
+export async function fetchWeeklyAdvisorLotSize(securityId: string): Promise<number | null> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/lot-size?security_id=${encodeURIComponent(securityId)}`);
+  if (res.status === 404) return null;
+  const { lot_size } = await asJson<{ lot_size: number }>(res, "GET /weekly-advisor/lot-size");
+  return lot_size;
+}
+
 // PUT .../trades/{id}/entry - overwrite provisional entry data (planned
 // off-session) with the real thing once the legs actually fill. Merge-style
 // like the decision endpoint: only fields present in the payload change.

@@ -195,3 +195,23 @@ def test_check_margin_rejects_empty_legs():
     resp = client.post("/weekly-advisor/margin", json={"legs": [], "quantity": 500})
 
     assert resp.status_code == 422
+
+
+# --- GET /weekly-advisor/lot-size ---
+
+
+def test_get_lot_size_returns_the_resolved_value(monkeypatch):
+    monkeypatch.setattr(route.market_data_client, "get_lot_size_for_security_id", lambda security_id, exchange="NSE": 500)
+
+    resp = client.get("/weekly-advisor/lot-size", params={"security_id": "106369"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"lot_size": 500}
+
+
+def test_get_lot_size_404s_when_unresolvable(monkeypatch):
+    monkeypatch.setattr(route.market_data_client, "get_lot_size_for_security_id", lambda security_id, exchange="NSE": None)
+
+    resp = client.get("/weekly-advisor/lot-size", params={"security_id": "999999"})
+
+    assert resp.status_code == 404

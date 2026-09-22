@@ -7,6 +7,7 @@ import {
   createWeeklyAdvisorTrade,
   fetchWatchlists,
   fetchWeeklyAdvisorHistory,
+  fetchWeeklyAdvisorLotSize,
   fetchWeeklyAdvisorPerformance,
   fetchWeeklyAdvisorRecommendations,
   fetchWeeklyAdvisorSettings,
@@ -295,6 +296,33 @@ function DecisionForm({
   // correct later, but captured up front too now, since a trade is often
   // journaled the moment it's actually filled (not always off-session).
   const [legEntryPrices, setLegEntryPrices] = useState<string[]>(economics.legEntryPrices);
+  // Real, current lot size (any leg's security_id resolves it - every leg
+  // of one recommendation shares the same underlying) - defaults Qty to a
+  // valid value instead of leaving it blank, so "Check margin" doesn't
+  // fail with a 502 the user has no way to interpret (confirmed live
+  // 2026-09-22: Dhan's margin calculator rejects any quantity that isn't
+  // an exact multiple of the real lot size, with no hint what that number
+  // is). Still freely editable - a user pyramiding multiple lots, or
+  // sizing down, types over it same as any other suggested default here.
+  const [lotSize, setLotSize] = useState<number | null>(null);
+  useEffect(() => {
+    const legWithId = rec.strategy.legs.find((leg) => leg.security_id != null);
+    if (!legWithId?.security_id) return;
+    let cancelled = false;
+    fetchWeeklyAdvisorLotSize(legWithId.security_id)
+      .then((size) => {
+        if (cancelled || size == null) return;
+        setLotSize(size);
+        setQuantity((prev) => (prev ? prev : String(size)));
+      })
+      .catch(() => {
+        // No suggestion this time - Qty just stays whatever the user types.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // The close-out thresholds to watch this position against. Target
   // defaults from the recommendation's own exit rule (already shown as
   // descriptive text on every card, e.g. "Exit at 65% of max profit") -
@@ -506,6 +534,7 @@ function DecisionForm({
             <label>
               Qty/lots
               <input type="number" min="0" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+              {lotSize != null && <span className="hint">1 lot = {lotSize} - Dhan's margin calculator needs an exact multiple of this.</span>}
             </label>
             <label>
               Credit received

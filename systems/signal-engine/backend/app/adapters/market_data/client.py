@@ -232,6 +232,27 @@ def get_option_chain(exchange: str, symbol: str, expiry: str) -> Optional[dict]:
     return resp.json()
 
 
+def get_lot_size_for_security_id(security_id: str, exchange: str = "NSE") -> Optional[int]:
+    """Real, current lot size for one specific option/future contract -
+    market-data's GET /dhan/lot-size (DhanProvider.
+    get_lot_size_for_security_id, confirmed live 2026-09-22 - the "Check
+    margin" 502 that surfaced the need for this: Dhan's margin calculator
+    rejects any quantity that isn't an exact multiple of the real lot
+    size, with no hint in the error about what that number actually is).
+    None (not raised) on a 404 - an unresolvable security_id degrades to
+    "no suggestion available," same as every other best-effort lookup
+    this client makes."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}/dhan/lot-size",
+        params={"security_id": security_id, "exchange": exchange},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()["lot_size"]
+
+
 def get_combo_margin(legs: list[dict], exchange: str = "NSE") -> dict:
     """Real Dhan margin for a multi-leg spread/condor - market-data's POST
     /dhan/margin/combo (DhanProvider.get_combo_margin, confirmed live

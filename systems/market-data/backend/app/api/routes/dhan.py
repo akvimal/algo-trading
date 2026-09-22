@@ -123,6 +123,21 @@ def subscribe_feed(payload: FeedSubscribeRequest):
 # ---------------------------------------------------------------------------
 
 
+@router.get("/dhan/lot-size")
+def get_lot_size_for_contract(security_id: str, exchange: str = "NSE"):
+    """The real, current lot size for one specific contract (e.g. an
+    option chain leg's own security_id) - see DhanProvider.
+    get_lot_size_for_security_id's own docstring for why this is NOT the
+    same thing as get_lot_size(symbol). Read-only, platform-default
+    credential, same category as the margin-calculator route above -
+    resolving a lot size touches no order/account state at all."""
+    provider = _dhan_provider_for(exchange)
+    lot_size = provider.get_lot_size_for_security_id(security_id)
+    if lot_size is None:
+        raise HTTPException(status_code=404, detail=f"no lot size found for security_id '{security_id}' on {exchange}")
+    return {"lot_size": lot_size}
+
+
 @router.post("/dhan/margin/combo", response_model=MarginResponse)
 def get_combo_margin(payload: ComboMarginRequest, exchange: str = "NSE"):
     provider = _dhan_provider_for(exchange)

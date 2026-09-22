@@ -132,3 +132,22 @@ def test_get_combo_margin_nets_well_below_the_sum_of_standalone_legs(monkeypatch
 
     standalone_sum = 118794.75 + 4100.0  # confirmed live single-leg totals for the same two legs
     assert result["totalMargin"] < standalone_sum / 2  # real netting, not a coincidence
+
+
+# --- get_lot_size_for_security_id: real per-contract lot size, NOT get_lot_size(symbol)'s underlying-scoped one ---
+
+
+def test_get_lot_size_for_security_id_resolves_via_the_reverse_symbol_map():
+    provider = _provider()
+    provider._security_id_to_symbol = {"106369": "RELIANCE-29Sep2026-1270-PE"}
+    provider._symbol_to_lot_size = {"RELIANCE-29Sep2026-1270-PE": 500}
+
+    assert provider.get_lot_size_for_security_id("106369") == 500
+
+
+def test_get_lot_size_for_security_id_returns_none_for_an_unknown_id():
+    provider = _provider()
+    provider._security_id_to_symbol = {"106369": "RELIANCE-29Sep2026-1270-PE"}
+    provider._symbol_to_lot_size = {"RELIANCE-29Sep2026-1270-PE": 500}
+
+    assert provider.get_lot_size_for_security_id("999999") is None

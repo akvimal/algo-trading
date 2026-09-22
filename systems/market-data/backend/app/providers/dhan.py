@@ -1011,6 +1011,28 @@ class DhanProvider(QuoteProvider):
             return None
         return self._symbol_to_lot_size.get(symbol, 1)
 
+    def get_lot_size_for_security_id(self, security_id: str) -> Optional[int]:
+        """The real, current lot size for a SPECIFIC contract, looked up
+        by its own Dhan security_id (e.g. an option chain leg's own ID -
+        weekly_advisor's own StrategyLeg.security_id) - NOT get_lot_size
+        above, which is keyed by underlying/equity symbol and returns that
+        equity's own lot concept (1 for a bare stock symbol - equities
+        have no lot size), the wrong scope for "what quantity does Dhan's
+        margin calculator require for this option contract" (confirmed
+        live 2026-09-22: Dhan's margin calculator rejects a quantity that
+        isn't an exact multiple of the real lot size with the exact same
+        generic 400 as a malformed request - see get_margin's own
+        docstring). Resolves via the same instrument-sync data already
+        used elsewhere (_security_id_to_symbol -> _symbol_to_lot_size),
+        confirmed live to correctly round-trip a real option chain leg's
+        security_id back to its own current lot size."""
+        if not self._security_id_to_symbol:
+            self.sync_instruments()
+        symbol = self._security_id_to_symbol.get(security_id)
+        if symbol is None:
+            return None
+        return self._symbol_to_lot_size.get(symbol)
+
     def _cached_quote(self, symbol: str) -> Optional[float]:
         with self._quote_cache_lock:
             cached = self._quote_cache.get(symbol)

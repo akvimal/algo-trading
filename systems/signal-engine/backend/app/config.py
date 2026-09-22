@@ -95,6 +95,17 @@ class Settings(BaseSettings):
     # always fetches regardless of this TTL.
     weekly_advisor_fundamentals_cache_days: int = 90
 
+    # Whether strategy_selector.py adds a protective wing leg (bull put/
+    # bear call spread for a directional bias, iron condor for a
+    # ranging/neutral one) or leaves the position naked (sell_otm_put/
+    # sell_otm_call, short strangle) - see PUT /weekly-advisor/settings.
+    # True (the long-standing behavior here, previously hardcoded with no
+    # way to turn it off) means every recommendation is defined-risk:
+    # 2 legs for a directional bias, 4 legs for ranging/neutral. False
+    # trades defined risk for more upfront credit: 1 leg directional,
+    # 2 legs ranging/neutral.
+    weekly_advisor_defined_risk: bool = True
+
     # BYO OpenRouter key (2026-09-16, app/adapters/accounts_client.py) -
     # lets a fundamentals request use the calling user's own OpenRouter
     # key (falls back to openrouter_api_key above when absent/unreachable)

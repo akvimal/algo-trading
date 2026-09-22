@@ -416,23 +416,39 @@ class WeeklyAdvisorSettings(BaseModel):
     # screener.in screenshot to - see app/config.py's own comment for why
     # this is a separate setting from market-data's (text-only) one.
     openrouter_vision_model: str
+    # strategy_selector.py's own toggle (app/config.py's own comment has
+    # the full behavior table) - True: every recommendation is defined-risk
+    # (2 legs for a directional bias, 4 for ranging/neutral). False: naked
+    # (1 leg directional, 2 ranging/neutral), more upfront credit, no cap
+    # on the downside. Previously hardcoded True with no way to change it.
+    defined_risk: bool
 
 
 @router.get("/weekly-advisor/settings", response_model=WeeklyAdvisorSettings)
 def get_weekly_advisor_settings():
-    return WeeklyAdvisorSettings(openrouter_vision_model=settings.openrouter_vision_model)
+    return WeeklyAdvisorSettings(
+        openrouter_vision_model=settings.openrouter_vision_model,
+        defined_risk=settings.weekly_advisor_defined_risk,
+    )
 
 
 @router.put("/weekly-advisor/settings", response_model=WeeklyAdvisorSettings)
 def update_weekly_advisor_settings(payload: WeeklyAdvisorSettings):
     """In-memory only, like market-data's own PUT /settings - takes effect
-    on the very next fundamentals read, no restart needed, but reverts to
-    OPENROUTER_VISION_MODEL from .env on one. Only affects future reads;
-    already-cached weekly_advisor_fundamentals rows (see
-    weekly_advisor_fundamentals_cache_days) keep whatever model produced
-    them until their own TTL expires and they're re-fetched."""
+    on the very next run_symbol() call, no restart needed, but reverts to
+    .env (OPENROUTER_VISION_MODEL / WEEKLY_ADVISOR_DEFINED_RISK) on one.
+    Only affects future reads/recommendations; already-cached
+    weekly_advisor_fundamentals rows (see weekly_advisor_fundamentals_
+    cache_days) keep whatever model produced them until their own TTL
+    expires and they're re-fetched, and already-saved recommendations
+    (weekly_advisor_recommendations, a frozen snapshot by design) never
+    change regardless of this setting."""
     model = payload.openrouter_vision_model.strip()
     if not model:
         raise HTTPException(status_code=422, detail="openrouter_vision_model must not be blank")
     settings.openrouter_vision_model = model
-    return WeeklyAdvisorSettings(openrouter_vision_model=settings.openrouter_vision_model)
+    settings.weekly_advisor_defined_risk = payload.defined_risk
+    return WeeklyAdvisorSettings(
+        openrouter_vision_model=settings.openrouter_vision_model,
+        defined_risk=settings.weekly_advisor_defined_risk,
+    )

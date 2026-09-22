@@ -215,3 +215,33 @@ def test_get_lot_size_404s_when_unresolvable(monkeypatch):
     resp = client.get("/weekly-advisor/lot-size", params={"security_id": "999999"})
 
     assert resp.status_code == 404
+
+
+# --- GET/PUT /weekly-advisor/settings: openrouter_vision_model + defined_risk ---
+
+
+def test_get_settings_reflects_current_config(monkeypatch):
+    monkeypatch.setattr(route.settings, "openrouter_vision_model", "google/gemini-2.5-flash-lite")
+    monkeypatch.setattr(route.settings, "weekly_advisor_defined_risk", True)
+
+    resp = client.get("/weekly-advisor/settings")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"openrouter_vision_model": "google/gemini-2.5-flash-lite", "defined_risk": True}
+
+
+def test_put_settings_updates_both_fields(monkeypatch):
+    monkeypatch.setattr(route.settings, "openrouter_vision_model", "google/gemini-2.5-flash-lite")
+    monkeypatch.setattr(route.settings, "weekly_advisor_defined_risk", True)
+
+    resp = client.put("/weekly-advisor/settings", json={"openrouter_vision_model": "some/other-model", "defined_risk": False})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"openrouter_vision_model": "some/other-model", "defined_risk": False}
+    assert route.settings.weekly_advisor_defined_risk is False
+
+
+def test_put_settings_rejects_blank_model():
+    resp = client.put("/weekly-advisor/settings", json={"openrouter_vision_model": "  ", "defined_risk": True})
+
+    assert resp.status_code == 422

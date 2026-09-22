@@ -250,3 +250,38 @@ def test_oi_concentration_anchors_a_strike_when_no_order_block_available():
     # RELIANCE run hit exactly this drift - the OI branch picked the
     # strike but the old text unconditionally said "nearest support").
     assert "OI" in sell_leg.basis
+
+
+# --- neutral-bias (not ranging) fallback must respect defined_risk, same as every other branch ---
+
+
+def test_neutral_bias_fallback_builds_iron_condor_when_defined_risk():
+    close = 1000.0
+    regime = RegimeAssessment(bias="neutral", trend_strength="trending", confidence=0.5, reasons=[])
+    snapshot = _snapshot(close)
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+        defined_risk=True,
+    )
+
+    assert rec.action == "iron_condor"
+    assert len(rec.legs) == 4
+    assert sum(1 for leg in rec.legs if leg.side == "buy") == 2
+
+
+def test_neutral_bias_fallback_builds_short_strangle_when_not_defined_risk():
+    close = 1000.0
+    regime = RegimeAssessment(bias="neutral", trend_strength="trending", confidence=0.5, reasons=[])
+    snapshot = _snapshot(close)
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+        defined_risk=False,
+    )
+
+    assert rec.action == "short_strangle"
+    assert len(rec.legs) == 2
+    assert all(leg.side == "sell" for leg in rec.legs)

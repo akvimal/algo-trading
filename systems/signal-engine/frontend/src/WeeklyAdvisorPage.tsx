@@ -1809,6 +1809,8 @@ function PerformanceTab() {
 function SettingsTab() {
   const [current, setCurrent] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [currentDefinedRisk, setCurrentDefinedRisk] = useState<boolean | null>(null);
+  const [definedRiskDraft, setDefinedRiskDraft] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -1817,22 +1819,31 @@ function SettingsTab() {
       .then((s) => {
         setCurrent(s.openrouter_vision_model);
         setDraft(s.openrouter_vision_model);
+        setCurrentDefinedRisk(s.defined_risk);
+        setDefinedRiskDraft(s.defined_risk);
       })
       .catch(() => {
         // Same "don't block the rest of the tab" reasoning as elsewhere.
       });
   }, []);
 
+  const dirty = (draft.trim() !== current && draft.trim() !== "") || definedRiskDraft !== currentDefinedRisk;
+
   async function handleSave() {
-    const trimmed = draft.trim();
+    // Falls back to the last-known-good model if the field was left blank
+    // (e.g. the user only meant to toggle defined-risk below) rather than
+    // silently no-op'ing the whole save.
+    const trimmed = draft.trim() || current || "";
     if (!trimmed) return;
     setSaving(true);
     setMessage(null);
     try {
-      const updated = await updateWeeklyAdvisorSettings(trimmed);
+      const updated = await updateWeeklyAdvisorSettings(trimmed, definedRiskDraft);
       setCurrent(updated.openrouter_vision_model);
       setDraft(updated.openrouter_vision_model);
-      setMessage("Saved - takes effect on the next fundamentals fetch.");
+      setCurrentDefinedRisk(updated.defined_risk);
+      setDefinedRiskDraft(updated.defined_risk);
+      setMessage("Saved - the model takes effect on the next fundamentals fetch, the strategy shape on the next recommendation run.");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -1841,29 +1852,45 @@ function SettingsTab() {
   }
 
   return (
-    <div className="panel weekly-advisor-card">
-      <h3>Fundamentals AI model</h3>
-      <p className="subtitle">
-        OpenRouter model slug (see openrouter.ai/models) used to read each symbol's screener.in screenshot - must
-        support image input. No restart needed, but reverts to .env's OPENROUTER_VISION_MODEL on one. Already-cached
-        fundamentals (see weekly_advisor_fundamentals_cache_days, default 90d) keep whatever model produced them
-        until their own cache expires.
-      </p>
-      <div className="settings-row">
-        <input
-          type="text"
-          autoComplete="off"
-          placeholder="e.g. anthropic/claude-haiku-4.5"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button type="button" onClick={handleSave} disabled={saving || !draft.trim() || draft.trim() === current}>
-          {saving ? "Saving..." : "Save"}
-        </button>
+    <>
+      <div className="panel weekly-advisor-card">
+        <h3>Fundamentals AI model</h3>
+        <p className="subtitle">
+          OpenRouter model slug (see openrouter.ai/models) used to read each symbol's screener.in screenshot - must
+          support image input. No restart needed, but reverts to .env's OPENROUTER_VISION_MODEL on one. Already-cached
+          fundamentals (see weekly_advisor_fundamentals_cache_days, default 90d) keep whatever model produced them
+          until their own cache expires.
+        </p>
+        <div className="settings-row">
+          <input
+            type="text"
+            autoComplete="off"
+            placeholder="e.g. anthropic/claude-haiku-4.5"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+          />
+        </div>
+        {current && <p className="hint">Currently: {current}</p>}
       </div>
+      <div className="panel weekly-advisor-card">
+        <h3>Strategy shape</h3>
+        <p className="subtitle">
+          Whether every recommendation adds a protective wing leg (defined-risk) or leaves the position naked. With
+          this on: a directional bias (bullish/bearish) gets a 2-leg bull-put/bear-call spread, and a ranging or
+          neutral read gets a 4-leg iron condor. With it off: a directional bias gets a bare 1-leg sell, and
+          ranging/neutral gets a 2-leg short strangle - more upfront credit, no cap on the downside.
+        </p>
+        <label className="settings-row">
+          <input type="checkbox" checked={definedRiskDraft} onChange={(e) => setDefinedRiskDraft(e.target.checked)} />
+          Defined-risk strategies (add protective wings)
+        </label>
+        {currentDefinedRisk != null && <p className="hint">Currently: {currentDefinedRisk ? "on" : "off"}</p>}
+      </div>
+      <button type="button" onClick={handleSave} disabled={saving || !dirty}>
+        {saving ? "Saving..." : "Save settings"}
+      </button>
       {message && <p className="hint">{message}</p>}
-      {current && <p className="hint">Currently: {current}</p>}
-    </div>
+    </>
   );
 }
 

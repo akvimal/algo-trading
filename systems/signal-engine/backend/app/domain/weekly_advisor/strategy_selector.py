@@ -374,11 +374,24 @@ def select_strategy(
         return StrategyRecommendation(action="sell_otm_call", legs=legs, entry_window=entry_window, exit_rule=exit_rule)
 
     # neutral bias, not ranging by ADX (e.g. votes cancelled out) -- default to the
-    # defined-risk non-directional play rather than guessing a side
+    # non-directional play rather than guessing a side. Mirrors the ranging
+    # branch above exactly (defined_risk decides 4-leg iron_condor vs.
+    # 2-leg short_strangle) - this branch used to hardcode short_strangle
+    # regardless of defined_risk, the one place that ignored it (confirmed
+    # 2026-09-22: every OTHER branch already respected defined_risk, this
+    # was the sole inconsistency).
     put_k, _put_source = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
     call_k, _call_source = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
     legs = [
         StrategyLeg(option_type="PE", strike=put_k, side="sell", basis="neutral bias fallback -- treat as range"),
         StrategyLeg(option_type="CE", strike=call_k, side="sell", basis="neutral bias fallback -- treat as range"),
     ]
-    return StrategyRecommendation(action="short_strangle", legs=legs, entry_window=entry_window, exit_rule=exit_rule)
+    if defined_risk:
+        legs.append(StrategyLeg(option_type="PE", strike=_wing_put_strike(put_k, atr14, strike_interval, wing_atr_multiple), side="buy",
+                                 basis="protective wing, caps downside on the short put"))
+        legs.append(StrategyLeg(option_type="CE", strike=_wing_call_strike(call_k, atr14, strike_interval, wing_atr_multiple), side="buy",
+                                 basis="protective wing, caps downside on the short call"))
+        action = "iron_condor"
+    else:
+        action = "short_strangle"
+    return StrategyRecommendation(action=action, legs=legs, entry_window=entry_window, exit_rule=exit_rule)

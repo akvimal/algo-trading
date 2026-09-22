@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app.adapters.market_data import client as market_data_client
+from app.config import settings
 
 from . import indicators as ind
 from . import oi_classifier
@@ -367,6 +368,11 @@ def run_symbol(symbol: str, as_of: Optional[date] = None, openrouter_api_key: Op
         # just informing the bias (see strategy_selector.py's own docstrings
         # on _unmitigated_block_anchor/_best_oi_strike).
         order_blocks=order_blocks, daily_order_blocks=daily_order_blocks, oi=oi_snap,
+        # PUT /weekly-advisor/settings' own toggle (app/config.py's
+        # weekly_advisor_defined_risk) - previously hardcoded True with no
+        # way to change it; select_strategy's own default stays True too,
+        # so this is a no-op until someone actually flips the setting.
+        defined_risk=settings.weekly_advisor_defined_risk,
     )
     leg_market_data = _leg_market_data(chain_strikes)
     for leg in recommendation.legs:

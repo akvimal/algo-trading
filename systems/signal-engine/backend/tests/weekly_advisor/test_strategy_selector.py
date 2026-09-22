@@ -11,10 +11,20 @@ this module against real NSE data:
    anchor a strike at all - confirmed live 2026-09-12 against MAHABANK
    (nearest support 5.4xATR below spot -> a ~35% OTM put) and TITAN
    (5.7xATR -> ~22% OTM) - both fall back to the plain ATR target instead.
+4. An unmitigated, in-range order block may TIGHTEN a strike closer to
+   spot than the plain ATR target (more premium) - the old zone-only logic
+   could only ever push a strike FARTHER out, never closer, since it took
+   the more conservative of the two candidates unconditionally.
+5. A mitigated or too-distant order block is ignored, same as a stale zone.
+6. Low ATR% or low average daily traded value screens a symbol out
+   entirely (avoid_new_entry) - no anchor can manufacture premium a
+   genuinely quiet/thin stock doesn't have.
+7. OI concentration can anchor a strike when no order block is available.
 """
 from datetime import date, timedelta
 
-from app.domain.weekly_advisor.contracts import RegimeAssessment, TechnicalSnapshot, Zone
+from app.domain.weekly_advisor.contracts import OISnapshot, RegimeAssessment, StrikeOI, TechnicalSnapshot, Zone
+from app.domain.weekly_advisor.regime_engine import OrderBlockZone
 from app.domain.weekly_advisor.strategy_selector import _nearest_zone, _zone_within_range, select_strategy
 
 FAR_EXPIRY = date(2026, 1, 1) + timedelta(days=30)
@@ -26,7 +36,11 @@ def _snapshot(close: float, support_zones=None, resistance_zones=None) -> Techni
         timeframe="weekly", close=close, ema20=close, ema50=close,
         adx14=15.0, adx14_slope="flat", atr14=close * 0.03,
         support_zones=support_zones or [], resistance_zones=resistance_zones or [],
-        volume=1.0, volume_sma20=1.0, volume_confirmed=True,
+        # Comfortably clears MIN_AVG_DAILY_TRADED_VALUE regardless of `close`
+        # - these fixtures are testing zone/strike anchoring, not the
+        # volatility/liquidity screen, so volume here is a plain "not the
+        # thing under test" placeholder, just no longer a degenerate one.
+        volume=2_000_000.0, volume_sma20=2_000_000.0, volume_confirmed=True,
     )
 
 
@@ -82,7 +96,7 @@ def test_far_zone_beyond_cap_is_ignored_in_favor_of_pure_atr_target():
         timeframe="weekly", close=close, ema20=close, ema50=close,
         adx14=25.0, adx14_slope="rising", atr14=atr14,
         support_zones=[support], resistance_zones=[],
-        volume=1.0, volume_sma20=1.0, volume_confirmed=True,
+        volume=2_000_000.0, volume_sma20=2_000_000.0, volume_confirmed=True,
     )
 
     rec = select_strategy(
@@ -95,3 +109,139 @@ def test_far_zone_beyond_cap_is_ignored_in_favor_of_pure_atr_target():
     assert sell_leg.strike == 78.0  # floor(atr_target) at strike_interval=1.0 - the plain ATR target, not the stale zone
     assert sell_leg.strike > support.low  # the stale zone must NOT have anchored this strike
     assert "no zone" in sell_leg.basis
+
+
+def test_unmitigated_order_block_tightens_a_bullish_put_strike():
+    # _snapshot's atr14 = close*0.03 = 30, atr_multiple=1.0 (default) ->
+    # atr_target=970, min_safety_target = 1000 - 0.5*30 = 985. A demand
+    # block whose near edge sits at 985 is right at (inside) that band, so
+    # it should be used as-is - tighter (closer to spot, more premium)
+    # than the plain 970 ATR target the old zone-only logic would have
+    # produced (a real, closer zone could never win before this change -
+    # only a farther one could ever move the strike, and only for the worse).
+    close = 1000.0
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+    demand_block = OrderBlockZone(kind="demand", proximal=985.0, distal=970.0, mitigated=False)
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block],
+    )
+
+    sell_leg = next(leg for leg in rec.legs if leg.side == "sell")
+    assert sell_leg.strike == 985.0
+    assert sell_leg.strike > 970.0  # tighter than the plain ATR target
+    assert sell_leg.strike <= 985.0  # never tighter than the safety floor
+    assert "order block" in sell_leg.basis
+
+
+def test_mitigated_order_block_is_ignored_in_favor_of_plain_atr_target():
+    close = 1000.0
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+    demand_block = OrderBlockZone(kind="demand", proximal=985.0, distal=970.0, mitigated=True)
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block],
+    )
+
+    sell_leg = next(leg for leg in rec.legs if leg.side == "sell")
+    assert sell_leg.strike == 970.0  # plain ATR target (close - atr_multiple*atr14, atr14=close*0.03) - the mitigated block must not anchor anything
+
+
+def test_order_block_beyond_max_zone_distance_is_ignored():
+    close = 1000.0
+    atr14 = close * 0.03  # 30.0, matching _snapshot's own atr14
+    # 2.5xATR cap = 75 - a block 200 below spot is well beyond it.
+    demand_block = OrderBlockZone(kind="demand", proximal=800.0, distal=790.0, mitigated=False)
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block],
+    )
+
+    sell_leg = next(leg for leg in rec.legs if leg.side == "sell")
+    assert sell_leg.strike == close - atr14  # plain ATR target, block discarded as too far
+
+
+def test_low_atr_pct_screens_the_symbol_out_entirely():
+    # atr14/close = 0.3% - well under MIN_ATR_PCT_OF_CLOSE (1.5%).
+    close = 1000.0
+    snapshot = TechnicalSnapshot(
+        timeframe="weekly", close=close, ema20=close, ema50=close,
+        adx14=15.0, adx14_slope="flat", atr14=3.0,
+        support_zones=[], resistance_zones=[],
+        volume=2_000_000.0, volume_sma20=2_000_000.0, volume_confirmed=True,
+    )
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+    )
+
+    assert rec.action == "avoid_new_entry"
+    assert rec.legs == []
+
+
+def test_low_average_daily_traded_value_screens_the_symbol_out_entirely():
+    # volume_sma20 * close = 1000 * 1000 = Rs 10 lakh/day - well under
+    # MIN_AVG_DAILY_TRADED_VALUE (Rs 5 crore/day).
+    close = 1000.0
+    snapshot = TechnicalSnapshot(
+        timeframe="weekly", close=close, ema20=close, ema50=close,
+        adx14=15.0, adx14_slope="flat", atr14=close * 0.03,
+        support_zones=[], resistance_zones=[],
+        volume=1000.0, volume_sma20=1000.0, volume_confirmed=True,
+    )
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+    )
+
+    assert rec.action == "avoid_new_entry"
+    assert rec.legs == []
+
+
+def test_oi_concentration_anchors_a_strike_when_no_order_block_available():
+    # close=1000, atr14=20 (_snapshot's own atr14=close*0.03=30 - use a
+    # custom snapshot here so the band math matches the earlier order-block
+    # tests exactly: atr_target=980, min_safety_target=990). The PE strike
+    # with the most OI inside that band (985) should win over the plain
+    # ATR target, same as a validated order block would - "the system can
+    # also use OI data to determine best return legs."
+    close = 1000.0
+    atr14 = 20.0
+    snapshot = TechnicalSnapshot(
+        timeframe="weekly", close=close, ema20=close, ema50=close,
+        adx14=15.0, adx14_slope="flat", atr14=atr14,
+        support_zones=[], resistance_zones=[],
+        volume=2_000_000.0, volume_sma20=2_000_000.0, volume_confirmed=True,
+    )
+    oi = OISnapshot(
+        available=True,
+        by_strike=[
+            StrikeOI(strike=980.0, option_type="PE", oi=100.0, oi_change=10.0, buildup="long_buildup"),
+            StrikeOI(strike=985.0, option_type="PE", oi=99999.0, oi_change=10.0, buildup="long_buildup"),
+            StrikeOI(strike=990.0, option_type="PE", oi=500.0, oi_change=10.0, buildup="long_buildup"),
+        ],
+    )
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=FAR_EXPIRY, as_of=AS_OF, strike_interval=5.0,
+        oi=oi,
+    )
+
+    sell_leg = next(leg for leg in rec.legs if leg.side == "sell")
+    assert sell_leg.strike == 985.0

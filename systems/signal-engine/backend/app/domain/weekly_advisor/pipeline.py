@@ -318,6 +318,11 @@ def run_symbol(symbol: str, as_of: Optional[date] = None, openrouter_api_key: Op
     recommendation = strat.select_strategy(
         regime=assessment, technical=weekly_snap, corporate_event=None,
         expiry_date=expiry_date, as_of=as_of, strike_interval=strike_interval,
+        # Same order_blocks/daily_order_blocks/oi_snap already fetched above
+        # for the regime vote - now also anchoring strike selection, not
+        # just informing the bias (see strategy_selector.py's own docstrings
+        # on _unmitigated_block_anchor/_best_oi_strike).
+        order_blocks=order_blocks, daily_order_blocks=daily_order_blocks, oi=oi_snap,
     )
 
     return WeeklyRecommendation(

@@ -77,7 +77,7 @@ function SignalIndicator({ direction }: { direction: WeeklyAdvisorSignal["direct
   return <span className="weekly-advisor-signal-dot neutral">–</span>;
 }
 
-const ACTION_LABELS: Record<WeeklyRecommendation["strategy"]["action"], string> = {
+const BASE_ACTION_LABELS: Record<WeeklyRecommendation["strategy"]["action"], string> = {
   sell_otm_put: "Sell OTM Put",
   sell_otm_call: "Sell OTM Call",
   short_strangle: "Short Strangle",
@@ -85,6 +85,23 @@ const ACTION_LABELS: Record<WeeklyRecommendation["strategy"]["action"], string> 
   avoid_new_entry: "Avoid new entry",
   close_existing: "Close existing",
 };
+
+// sell_otm_put/sell_otm_call with more than one leg means select_strategy's
+// own defined_risk=True default (the only mode pipeline.py ever calls it
+// in - it never passes defined_risk=False) added a protective further-OTM
+// wing, which makes this structurally a bull put / bear call spread, not
+// a naked single-leg sale - but the engine's own StrategyAction enum has
+// no separate value for that shape (see docs/architecture.md's Weekly
+// Advisor writeup, "strikes anchored to order blocks" issue's Finding 1).
+// Label from the actual leg count rather than the bare action string, so
+// what's shown matches what's actually being recommended - avoids a
+// contract/schema change (the action string itself is unchanged) while
+// fixing the misleading display.
+function actionLabel(action: WeeklyRecommendation["strategy"]["action"], legCount: number): string {
+  if (action === "sell_otm_put" && legCount > 1) return "Bull Put Spread";
+  if (action === "sell_otm_call" && legCount > 1) return "Bear Call Spread";
+  return BASE_ACTION_LABELS[action];
+}
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -151,12 +168,19 @@ const OPTION_STRATEGIES_BY_BIAS: Record<WeeklyRecommendation["regime"]["bias"], 
 // named strategy above - used only to mark that entry "(recommended)" and
 // to default the dropdown's initial selection; every other entry in
 // OPTION_STRATEGIES_BY_BIAS is still freely selectable regardless.
-const RECOMMENDED_STRATEGY_LABEL: Partial<Record<WeeklyRecommendation["strategy"]["action"], string>> = {
-  sell_otm_put: "Sell Put",
-  sell_otm_call: "Sell Call",
-  short_strangle: "Short Strangle",
-  iron_condor: "Short Iron Condor",
-};
+// sell_otm_put/sell_otm_call resolve to the spread name rather than the
+// naked-sell name once a wing leg is actually present (legCount > 1) -
+// same leg-count-aware logic as actionLabel above, and "Bull Put Spread"/
+// "Bear Call Spread" are already real entries in OPTION_STRATEGIES_BY_BIAS,
+// so this was previously defaulting the dropdown to the WRONG entry
+// whenever defined_risk's wing leg was present (which is always, today).
+function recommendedStrategyLabel(action: WeeklyRecommendation["strategy"]["action"], legCount: number): string | undefined {
+  if (action === "sell_otm_put") return legCount > 1 ? "Bull Put Spread" : "Sell Put";
+  if (action === "sell_otm_call") return legCount > 1 ? "Bear Call Spread" : "Sell Call";
+  if (action === "short_strangle") return "Short Strangle";
+  if (action === "iron_condor") return "Short Iron Condor";
+  return undefined;
+}
 
 function DecisionForm({
   rec,
@@ -217,7 +241,7 @@ function DecisionForm({
   // actually traded is often not exactly what the system recommended.
   const [actualBias, setActualBias] = useState<WeeklyRecommendation["regime"]["bias"]>(rec.regime.bias);
   const [actualStrategy, setActualStrategy] = useState<string>(() => {
-    const recommendedLabel = RECOMMENDED_STRATEGY_LABEL[rec.strategy.action];
+    const recommendedLabel = recommendedStrategyLabel(rec.strategy.action, rec.strategy.legs.length);
     return recommendedLabel && OPTION_STRATEGIES_BY_BIAS[rec.regime.bias].includes(recommendedLabel)
       ? recommendedLabel
       : OPTION_STRATEGIES_BY_BIAS[rec.regime.bias][0];
@@ -368,7 +392,7 @@ function DecisionForm({
                 {OPTION_STRATEGIES_BY_BIAS[actualBias].map((label) => (
                   <option key={label} value={label}>
                     {label}
-                    {label === RECOMMENDED_STRATEGY_LABEL[rec.strategy.action] ? " (recommended)" : ""}
+                    {label === recommendedStrategyLabel(rec.strategy.action, rec.strategy.legs.length) ? " (recommended)" : ""}
                   </option>
                 ))}
               </select>
@@ -842,7 +866,7 @@ function RecommendationCard({ rec, footer }: { rec: WeeklyRecommendation; footer
 
       <div className="weekly-advisor-action-row">
         <span className={`badge-mini ${noNewEntry ? "badge-mini-sell" : "badge-mini-buy"}`}>
-          {ACTION_LABELS[rec.strategy.action]}
+          {actionLabel(rec.strategy.action, rec.strategy.legs.length)}
         </span>
         {legsSummary && <span className="weekly-advisor-legs-summary muted">{legsSummary}</span>}
         {rec.strategy.legs.length > 0 && (
@@ -1367,7 +1391,7 @@ function HistoryTab({ active }: { active: boolean }) {
                 <td>{formatDateTime(row.saved_at)}</td>
                 <td className="symbol">{row.symbol}</td>
                 <td>{formatDate(row.as_of)}</td>
-                <td>{ACTION_LABELS[row.action]}</td>
+                <td>{actionLabel(row.action, row.payload.strategy.legs.length)}</td>
                 <td>
                   {row.decision ? (
                     <span className={`badge-mini ${DECISION_BADGE[row.decision]}`} title={row.decision_comments ?? ""}>
@@ -1503,7 +1527,7 @@ function PerformanceTab() {
               <tr>
                 <td>{formatDateTime(t.taken_at)}</td>
                 <td className="symbol">{t.symbol}</td>
-                <td>{ACTION_LABELS[t.action]}</td>
+                <td>{actionLabel(t.action, t.legs?.length ?? 0)}</td>
                 <td>
                   <span className={`badge-mini ${STATUS_BADGE[t.status]}`}>{t.status}</span>
                 </td>

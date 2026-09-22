@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     # (e.g. for A/B'ing an open model against Claude Haiku on one leg
     # without touching the other).
     openrouter_api_key: str = ""
-    openrouter_vision_model: str = "anthropic/claude-haiku-4.5"
+    openrouter_vision_model: str = "google/gemini-2.5-flash-lite"
     # How long a captured screenshot + AI fundamentals read is trusted
     # before the next request re-fetches - screener.in's own content only
     # moves on a new quarterly result/corporate action, so re-scraping

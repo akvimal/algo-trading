@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     # get_news() falls back to plain unscored headlines rather than
     # failing the whole tab (see that module's _analyze_via_ai).
     openrouter_api_key: str = ""
-    openrouter_model: str = "anthropic/claude-haiku-4.5"
+    openrouter_model: str = "google/gemini-2.5-flash-lite"
 
     # Live LTP push layer (2026-09-16, Phase 1 of the SaaS scaling work -
     # see docs/architecture.md) - the shared quote cache + pub/sub channel

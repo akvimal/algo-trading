@@ -155,7 +155,15 @@ def _best_oi_strike(oi: OISnapshot | None, option_type: str, low: float, high: f
 def _put_strike(
     support: Zone | None, close: float, atr14: float, strike_interval: float, atr_multiple: float,
     order_block_anchor: float | None = None, oi: OISnapshot | None = None,
-) -> float:
+) -> tuple[float, str]:
+    """Returns (strike, source) - source is one of "order_block"/"oi"/
+    "zone"/"atr", whichever branch actually produced the strike, so the
+    caller's basis text always describes what really anchored it (not a
+    separately-guessed label that can drift from this function's own
+    decision - confirmed live 2026-09-22: a real RELIANCE run picked 1200
+    from the OI branch while a stale duplicate label logic elsewhere still
+    said "nearest support", a real user-visible bug this return value
+    exists to prevent)."""
     atr_target = close - atr_multiple * atr14
     min_safety_target = close - atr_multiple * MIN_SAFETY_ATR_MULTIPLE_FRACTION * atr14
     if order_block_anchor is not None:
@@ -165,32 +173,42 @@ def _put_strike(
         # than the old always-conservative pick), pulled back to whichever
         # bound it overshoots otherwise.
         raw = min(max(order_block_anchor, atr_target), min_safety_target)
+        source = "order_block"
     else:
         best_oi = _best_oi_strike(oi, "PE", low=atr_target, high=min_safety_target)
         if best_oi is not None:
             raw = best_oi
+            source = "oi"
+        elif support is not None:
+            raw = min(atr_target, support.low)  # unchanged fallback - the lower (safer) of the two constraints
+            source = "zone"
         else:
-            zone_target = support.low if support else atr_target
-            raw = min(atr_target, zone_target)  # unchanged fallback - the lower (safer) of the two constraints
-    return round_to_strike(raw, strike_interval, "down")
+            raw = atr_target
+            source = "atr"
+    return round_to_strike(raw, strike_interval, "down"), source
 
 
 def _call_strike(
     resistance: Zone | None, close: float, atr14: float, strike_interval: float, atr_multiple: float,
     order_block_anchor: float | None = None, oi: OISnapshot | None = None,
-) -> float:
+) -> tuple[float, str]:
     atr_target = close + atr_multiple * atr14
     min_safety_target = close + atr_multiple * MIN_SAFETY_ATR_MULTIPLE_FRACTION * atr14
     if order_block_anchor is not None:
         raw = max(min(order_block_anchor, atr_target), min_safety_target)
+        source = "order_block"
     else:
         best_oi = _best_oi_strike(oi, "CE", low=atr_target, high=min_safety_target)
         if best_oi is not None:
             raw = best_oi
+            source = "oi"
+        elif resistance is not None:
+            raw = max(atr_target, resistance.high)
+            source = "zone"
         else:
-            zone_target = resistance.high if resistance else atr_target
-            raw = max(atr_target, zone_target)
-    return round_to_strike(raw, strike_interval, "up")
+            raw = atr_target
+            source = "atr"
+    return round_to_strike(raw, strike_interval, "up"), source
 
 
 def _wing_put_strike(main_strike: float, atr14: float, strike_interval: float, extra_atr_multiple: float) -> float:
@@ -294,26 +312,34 @@ def select_strategy(
     # independent ATR target from spot - see _wing_put_strike/_wing_call_strike.
     wing_atr_multiple = atr_multiple * 0.5
 
-    def _put_basis() -> str:
-        if put_order_block_anchor is not None:
+    def _put_basis(source: str) -> str:
+        # Text driven by the SAME `source` _put_strike itself returned,
+        # never re-derived independently - the two can't drift apart the
+        # way a separately-guessed label could (see _put_strike's own
+        # docstring for the real bug this replaced).
+        if source == "order_block":
             return f"unmitigated demand order block ~{put_order_block_anchor:.2f}"
-        if support:
+        if source == "oi":
+            return "nearest strike with the heaviest put OI in a safe range"
+        if source == "zone":
             return f"nearest support {support.low}-{support.high} / {atr_multiple}xATR"
         return f"{atr_multiple}xATR below spot, no zone available"
 
-    def _call_basis() -> str:
-        if call_order_block_anchor is not None:
+    def _call_basis(source: str) -> str:
+        if source == "order_block":
             return f"unmitigated supply order block ~{call_order_block_anchor:.2f}"
-        if resistance:
+        if source == "oi":
+            return "nearest strike with the heaviest call OI in a safe range"
+        if source == "zone":
             return f"nearest resistance {resistance.low}-{resistance.high} / {atr_multiple}xATR"
         return f"{atr_multiple}xATR above spot, no zone available"
 
     if regime.trend_strength == "ranging":
-        put_k = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
-        call_k = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
+        put_k, put_source = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
+        call_k, call_source = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
         legs = [
-            StrategyLeg(option_type="PE", strike=put_k, side="sell", basis=_put_basis()),
-            StrategyLeg(option_type="CE", strike=call_k, side="sell", basis=_call_basis()),
+            StrategyLeg(option_type="PE", strike=put_k, side="sell", basis=_put_basis(put_source)),
+            StrategyLeg(option_type="CE", strike=call_k, side="sell", basis=_call_basis(call_source)),
         ]
         if defined_risk:
             legs.append(StrategyLeg(option_type="PE", strike=_wing_put_strike(put_k, atr14, strike_interval, wing_atr_multiple), side="buy",
@@ -326,9 +352,9 @@ def select_strategy(
         return StrategyRecommendation(action=action, legs=legs, entry_window=entry_window, exit_rule=exit_rule)
 
     if regime.bias == "bullish":
-        put_k = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
+        put_k, put_source = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
         legs = [StrategyLeg(option_type="PE", strike=put_k, side="sell",
-                             basis=_put_basis()
+                             basis=_put_basis(put_source)
                                    + f", >= {atr_multiple}xATR ({atr14:.1f}) below spot {close:.2f}"
                                    + ("" if regime.trend_strength == "trending" else " -- decelerating trend, size down vs. a full-conviction entry"))]
         if defined_risk:
@@ -337,9 +363,9 @@ def select_strategy(
         return StrategyRecommendation(action="sell_otm_put", legs=legs, entry_window=entry_window, exit_rule=exit_rule)
 
     if regime.bias == "bearish":
-        call_k = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
+        call_k, call_source = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
         legs = [StrategyLeg(option_type="CE", strike=call_k, side="sell",
-                             basis=_call_basis()
+                             basis=_call_basis(call_source)
                                    + f", >= {atr_multiple}xATR ({atr14:.1f}) above spot {close:.2f}"
                                    + ("" if regime.trend_strength == "trending" else " -- decelerating trend, size down vs. a full-conviction entry"))]
         if defined_risk:
@@ -349,8 +375,8 @@ def select_strategy(
 
     # neutral bias, not ranging by ADX (e.g. votes cancelled out) -- default to the
     # defined-risk non-directional play rather than guessing a side
-    put_k = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
-    call_k = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
+    put_k, _put_source = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
+    call_k, _call_source = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
     legs = [
         StrategyLeg(option_type="PE", strike=put_k, side="sell", basis="neutral bias fallback -- treat as range"),
         StrategyLeg(option_type="CE", strike=call_k, side="sell", basis="neutral bias fallback -- treat as range"),

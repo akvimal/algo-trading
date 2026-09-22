@@ -245,3 +245,8 @@ def test_oi_concentration_anchors_a_strike_when_no_order_block_available():
 
     sell_leg = next(leg for leg in rec.legs if leg.side == "sell")
     assert sell_leg.strike == 985.0
+    # basis must actually say OI, not a stale "nearest support" label from
+    # a separately-guessed text (confirmed live 2026-09-22: a real
+    # RELIANCE run hit exactly this drift - the OI branch picked the
+    # strike but the old text unconditionally said "nearest support").
+    assert "OI" in sell_leg.basis

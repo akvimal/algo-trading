@@ -23,12 +23,14 @@ from app.adapters.accounts_client import get_user_dhan_credentials_strict
 from app.auth import require_user_id
 from app.config import settings
 from app.domain.models import (
+    ComboMarginRequest,
     DhanCredentialsUpdate,
     DhanOrderUpdatePostback,
     FeedSubscribeRequest,
     FundsResponse,
     InternalModifyOrderRequest,
     InternalPlaceOrderRequest,
+    MarginResponse,
     ModifyOrderRequest,
     OrderBookResponse,
     OrderResponse,
@@ -104,6 +106,42 @@ def subscribe_feed(payload: FeedSubscribeRequest):
             status_code=404, detail=f"could not resolve '{payload.symbol}' on exchange '{payload.exchange}' for the live feed"
         )
     return feed_status()
+
+
+# ---------------------------------------------------------------------------
+# Margin Calculator - read-only "what if" lookups, platform-default
+# credential, no login required (same category as this service's other
+# read-only quote/option-chain routes, e.g. options.py) - UNLIKE every
+# route in the "Live-broker-adapter" section below, this never places or
+# touches a real order, so it doesn't need a specific authenticated user's
+# own BYO credentials. weekly_advisor's paper-trading journal (signal-
+# engine, app/domain/weekly_advisor/journal.py's funds_needed/margin_needed
+# fields) is the first caller - it has no per-user Dhan credential of its
+# own to thread through, same as its option-chain/LTP reads. See
+# DhanProvider.get_margin/get_combo_margin's own docstrings for the
+# confirmed-live request/response shapes and the quantity/lot-size gotcha.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/dhan/margin/combo", response_model=MarginResponse)
+def get_combo_margin(payload: ComboMarginRequest, exchange: str = "NSE"):
+    provider = _dhan_provider_for(exchange)
+    try:
+        raw = provider.get_combo_margin([
+            {
+                "security_id": leg.security_id,
+                "exchange_segment": leg.exchange_segment,
+                "transaction_type": leg.transaction_type,
+                "quantity": leg.quantity,
+                "product_type": leg.product_type,
+                "price": leg.price,
+                "trigger_price": leg.trigger_price,
+            }
+            for leg in payload.legs
+        ])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return MarginResponse(raw=raw)
 
 
 # ---------------------------------------------------------------------------

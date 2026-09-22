@@ -90,8 +90,15 @@ ROLLING_OPTION_URL = "https://api.dhan.co/v2/charts/rollingoption"
 # through this platform (see docs/architecture.md's "live broker
 # adapter" roadmap item). CONFIRM every field name/response shape against
 # a live Dhan sandbox call before this is ever pointed at a real account.
+# The two margin-calculator methods below are the ONE exception in this
+# family - CONFIRMED live 2026-09-22 (real RELIANCE F&O legs, both single
+# and combo), see get_margin/get_combo_margin's own docstrings for the
+# real request/response shapes and the quantity/lot-size gotcha found
+# doing so.
 ORDERS_URL = "https://api.dhan.co/v2/orders"
 FUNDS_URL = "https://api.dhan.co/v2/fundlimit"
+MARGIN_CALCULATOR_URL = "https://api.dhan.co/v2/margincalculator"
+MARGIN_CALCULATOR_MULTI_URL = "https://api.dhan.co/v2/margincalculator/multi"
 
 # Dhan's charts/intraday only *natively* supports these interval values
 # (minutes) - notably 25, not 30, and no daily granularity at all
@@ -2001,4 +2008,115 @@ class DhanProvider(QuoteProvider):
 
         resp = requests.get(FUNDS_URL, headers=self._order_headers(access_token, client_id), timeout=15)
         self._raise_for_order_response(resp, "funds")
+        return resp.json()
+
+    def get_margin(
+        self,
+        security_id: str,
+        exchange_segment: str,
+        transaction_type: str,
+        quantity: int,
+        product_type: str,
+        price: float,
+        trigger_price: Optional[float] = None,
+        credentials: Optional["DhanCredentials"] = None,
+    ) -> dict:
+        """Dhan's Margin Calculator (single order) - a read-only "what if"
+        call, never places anything (unlike place_order/etc. above - safe
+        to call freely within its own rate limit, no order book side
+        effect). CONFIRMED live 2026-09-22 (real RELIANCE F&O put, both
+        BUY and SELL) - request/response shape below is real, not
+        best-effort. Response: {totalMargin, spanMargin, exposureMargin,
+        availableBalance, variableMargin, insufficientBalance, brokerage,
+        leverage}.
+
+        `security_id`/`exchange_segment` are Dhan's own values (e.g. an
+        option chain leg's own security_id), not resolved from a bare
+        symbol here - the caller already has these from wherever it found
+        the strikes it wants margin for.
+
+        CRITICAL, confirmed live the hard way: `quantity` MUST be an exact
+        multiple of the contract's REAL, CURRENT exchange lot size (e.g.
+        500 for a RELIANCE option that day, not 250 or 1) - Dhan does not
+        return a lot-size-specific error for a wrong value, it returns the
+        exact same generic 400 `{"errorCode":"DH-905","errorMessage":
+        "Missing required fields, bad values for parameters etc."}` as a
+        genuinely malformed request, making a lot-size mistake here
+        indistinguishable from any other bad input without already knowing
+        to suspect it. This provider's own get_lot_size(symbol) is NOT the
+        right source for this - it's keyed by underlying/equity symbol
+        (returns 1 for a bare "RELIANCE", the equity's own lot concept,
+        not its options' current lot size) - the caller must resolve the
+        real per-contract lot size before calling this."""
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "margin-calculator")
+
+        body: dict = {
+            "dhanClientId": client_id,
+            "exchangeSegment": exchange_segment,
+            "transactionType": transaction_type,
+            "quantity": quantity,
+            "productType": product_type,
+            "securityId": security_id,
+            "price": price,
+        }
+        if trigger_price is not None:
+            body["triggerPrice"] = trigger_price
+        resp = requests.post(MARGIN_CALCULATOR_URL, headers=self._order_headers(access_token, client_id), json=body, timeout=15)
+        self._raise_for_order_response(resp, "margin-calculator")
+        return resp.json()
+
+    def get_combo_margin(self, legs: list[dict], credentials: Optional["DhanCredentials"] = None) -> dict:
+        """Dhan's Margin Calculator (multi-leg/combo). CONFIRMED live
+        2026-09-22 against a real RELIANCE bull-put-spread (sell a near
+        strike PE, buy a further OTM PE, both at that day's real 500-share
+        lot): it DOES net margin across the offsetting legs, substantially
+        - combo totalMargin came back at ~1/3 of the two legs' summed
+        standalone margin (Rs 40,760 combined vs. Rs 118,795 + Rs 4,100
+        summed separately) - this is a real, worthwhile call for a
+        defined-risk spread, not just a convenience wrapper around two
+        single-order calls.
+
+        Response shape is DIFFERENT from get_margin's single-order
+        response, not just a repeat of the same fields - confirmed keys:
+        {clientId, totalMargin, spanMargin, exposure (not
+        "exposureMargin"), equityMargin, foMargin, commodity, currency,
+        hedgeBenefit, userFundLimit, insufficientFund}. `hedgeBenefit` read
+        0.0 in the confirmed call above despite the clear margin reduction
+        from netting - it likely reflects netting against REAL existing
+        broker positions/orders (this account had none in this contract),
+        not netting across the legs within this same request - don't treat
+        it as "0 = no benefit happened."
+
+        Body shape: {"dhanClientId": ..., "scripList": [...]} - NOT
+        "scripts" despite that key appearing in some Dhan doc renders;
+        "scripList" is what the live API actually accepts, confirmed by
+        the exact error `{"errorCode":"DH-905","errorMessage":"scripList
+        is required "}` when "scripts" was sent instead. Same quantity/
+        lot-size requirement as get_margin - see that method's own
+        docstring, doubly important here since it now applies per leg.
+
+        `legs`: list of dicts shaped like get_margin's own params
+        (security_id, exchange_segment, transaction_type, quantity,
+        product_type, price, optional trigger_price)."""
+        access_token, client_id = self._order_credentials(credentials)
+        self._throttle(_order_throttle_lock, _last_order_call_at, credentials.throttle_key if credentials else None, MIN_ORDER_CALL_INTERVAL_SECONDS, "margin-calculator-multi")
+
+        scrip_list = []
+        for leg in legs:
+            entry: dict = {
+                "exchangeSegment": leg["exchange_segment"],
+                "transactionType": leg["transaction_type"],
+                "quantity": leg["quantity"],
+                "productType": leg["product_type"],
+                "securityId": leg["security_id"],
+                "price": leg["price"],
+            }
+            if leg.get("trigger_price") is not None:
+                entry["triggerPrice"] = leg["trigger_price"]
+            scrip_list.append(entry)
+
+        body = {"dhanClientId": client_id, "scripList": scrip_list}
+        resp = requests.post(MARGIN_CALCULATOR_MULTI_URL, headers=self._order_headers(access_token, client_id), json=body, timeout=15)
+        self._raise_for_order_response(resp, "margin-calculator-multi")
         return resp.json()

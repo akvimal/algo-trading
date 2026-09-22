@@ -139,6 +139,13 @@ class StrategyLeg(BaseModel):
     # Weekly Advisor decision-log form's fill-price/credit/max-profit/
     # max-loss pre-fill (WeeklyAdvisorPage.tsx's DecisionForm).
     premium_estimate: Optional[float] = None
+    # This leg's Dhan security ID, same chain fetch/attachment point as
+    # premium_estimate above - needed to call market-data's POST
+    # /dhan/margin/combo (DhanProvider.get_combo_margin) for a real margin
+    # estimate, since that call needs Dhan's own per-contract ID, not a
+    # bare strike/option_type. None under the same conditions
+    # premium_estimate is.
+    security_id: Optional[str] = None
 
 
 class EntryWindow(BaseModel):

@@ -230,3 +230,25 @@ def get_option_chain(exchange: str, symbol: str, expiry: str) -> Optional[dict]:
         return None
     resp.raise_for_status()
     return resp.json()
+
+
+def get_combo_margin(legs: list[dict], exchange: str = "NSE") -> dict:
+    """Real Dhan margin for a multi-leg spread/condor - market-data's POST
+    /dhan/margin/combo (DhanProvider.get_combo_margin, confirmed live
+    2026-09-22, see that method's own docstring for the real response
+    shape and the quantity/lot-size requirement). `legs`: list of dicts
+    with security_id/exchange_segment/transaction_type/quantity/
+    product_type/price/optional trigger_price - weekly_advisor's own
+    StrategyLeg.security_id/premium_estimate are the source for the first
+    two of those per leg. Raises (never returns a guessed number) on any
+    failure - the caller decides what "couldn't get a margin estimate"
+    means for its own UI, same as every other market-data call here that
+    doesn't have a sane fallback value."""
+    resp = requests.post(
+        f"{settings.market_data_base_url}/dhan/margin/combo",
+        params={"exchange": exchange},
+        json={"legs": legs},
+        timeout=settings.market_data_timeout_seconds,
+    )
+    resp.raise_for_status()
+    return resp.json()["raw"]

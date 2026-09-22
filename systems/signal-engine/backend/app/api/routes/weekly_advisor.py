@@ -12,11 +12,14 @@ from sqlalchemy.orm import Session
 from app.adapters import accounts_client
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.adapters.market_data import client as market_data_client
 from app.auth import get_optional_user_id
 from app.config import settings
 from app.domain.weekly_advisor.contracts import WeeklyRecommendation
 from app.domain.weekly_advisor.journal import (
     DecisionSet,
+    MarginCheckRequest,
+    MarginCheckResponse,
     PerformanceSummary,
     SavedRecommendationOut,
     SaveRecommendationRequest,
@@ -105,6 +108,36 @@ def get_fundamentals_screenshot(symbol: str):
     if screenshot is None:
         raise HTTPException(status_code=404, detail="no cached screener.in screenshot for this symbol yet")
     return Response(content=screenshot, media_type="image/png")
+
+
+@router.post("/weekly-advisor/margin", response_model=MarginCheckResponse)
+def check_margin(payload: MarginCheckRequest):
+    """Real Dhan margin for a set of legs + a quantity - the decision
+    form's "Check margin" action (WeeklyAdvisorPage.tsx), not part of
+    creating/logging a trade itself (journal.py's own "not execution
+    integration" still holds - this is a read-only lookup, nothing is
+    placed or saved by this call). `productType="MARGIN"`, not
+    "INTRADAY" - weekly_advisor's positions are meant to be held across
+    days until expiry, not squared off same-day, and Dhan's margin
+    calculator returns different (INTRADAY is typically cheaper/leveraged)
+    figures for the two - see market-data's DhanProvider.get_combo_margin
+    docstring for the confirmed request/response shapes."""
+    legs = [
+        {
+            "security_id": leg.security_id,
+            "exchange_segment": "NSE_FNO",
+            "transaction_type": "SELL" if leg.side == "sell" else "BUY",
+            "quantity": int(payload.quantity),
+            "product_type": "MARGIN",
+            "price": leg.price,
+        }
+        for leg in payload.legs
+    ]
+    try:
+        raw = market_data_client.get_combo_margin(legs)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"could not get a margin estimate: {exc}") from exc
+    return MarginCheckResponse(raw=raw)
 
 
 def _parse_uuid(value: str, what: str) -> uuid.UUID:

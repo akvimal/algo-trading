@@ -604,6 +604,41 @@ class FundsResponse(BaseModel):
     raw: dict
 
 
+class ComboMarginLeg(BaseModel):
+    """One leg of a POST /dhan/margin/combo request - shaped like
+    DhanProvider.get_margin's own params. `security_id`/`exchange_segment`
+    are Dhan's own values (e.g. an option chain leg's own security_id, and
+    "NSE_FNO" for an option/future), not resolved from a bare symbol here -
+    the caller (weekly_advisor) already has these from the same option-
+    chain fetch it used to pick the strikes. See DhanProvider.get_margin's
+    own docstring for the quantity/lot-size requirement - a wrong quantity
+    here fails with the same generic Dhan error as a genuinely malformed
+    request."""
+
+    security_id: str
+    exchange_segment: str
+    transaction_type: Literal["BUY", "SELL"]
+    quantity: int = Field(gt=0)
+    product_type: str
+    price: float
+    trigger_price: Optional[float] = None
+
+
+class ComboMarginRequest(BaseModel):
+    legs: list[ComboMarginLeg] = Field(min_length=1)
+
+
+class MarginResponse(BaseModel):
+    """Deliberately a thin, permissive passthrough of Dhan's own raw
+    response rather than a strict field-by-field mirror - the single-order
+    and multi-leg/combo endpoints return DIFFERENT shapes (confirmed live
+    2026-09-22, see DhanProvider.get_margin/get_combo_margin's own
+    docstrings), so one strict model wouldn't fit both anyway. Caller
+    reads `raw` for whatever Dhan actually sent back."""
+
+    raw: dict
+
+
 class DhanOrderUpdatePostback(BaseModel):
     """POST /dhan/order-update/{secret} body - Dhan's own postback shape
     isn't documented/confirmed live yet (see config.py's own comment on

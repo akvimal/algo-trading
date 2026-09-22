@@ -2045,7 +2045,11 @@ export type WeeklyAdvisorRegime = {
 // - an estimate as of the recommendation's `as_of` run, never a live quote
 // or a real fill. null whenever no chain was reachable that cycle, or this
 // exact strike wasn't listed.
-export type WeeklyAdvisorLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; basis: string; premium_estimate: number | null };
+// security_id: this leg's Dhan security ID, from the same option-chain
+// fetch as premium_estimate - needed to call checkWeeklyAdvisorMargin
+// (Dhan's margin calculator needs its own per-contract ID, not a bare
+// strike/option_type). null under the same conditions premium_estimate is.
+export type WeeklyAdvisorLeg = { option_type: "CE" | "PE"; strike: number; side: "sell" | "buy"; basis: string; premium_estimate: number | null; security_id: string | null };
 
 // A screener.in screenshot read (app/domain/weekly_advisor/screener_fetch.py)
 // - available=false when nothing's been captured/analyzed for this symbol
@@ -2206,6 +2210,23 @@ export async function createWeeklyAdvisorTrade(recommendationId: string, payload
     body: JSON.stringify(payload),
   });
   return asJson(res, "POST /weekly-advisor/recommendations/{id}/trades");
+}
+
+// POST /weekly-advisor/margin - real Dhan margin for a set of legs +
+// quantity (see backend journal.py's MarginCheckRequest/Response and
+// market-data's DhanProvider.get_combo_margin, confirmed live 2026-09-22).
+// Read-only lookup, not part of creating/logging a trade - the decision
+// form's own "Check margin" button, called once a quantity is entered
+// (margin scales with it, so there's nothing sane to show before that).
+export type WeeklyAdvisorMarginCheckLeg = { security_id: string; side: "sell" | "buy"; price: number };
+
+export async function checkWeeklyAdvisorMargin(legs: WeeklyAdvisorMarginCheckLeg[], quantity: number): Promise<{ raw: Record<string, number | string> }> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/margin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ legs, quantity }),
+  });
+  return asJson(res, "POST /weekly-advisor/margin");
 }
 
 // PUT .../trades/{id}/entry - overwrite provisional entry data (planned

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 
 import {
+  checkWeeklyAdvisorMargin,
   closeWeeklyAdvisorTrade,
   createWatchlist,
   createWeeklyAdvisorTrade,
@@ -299,6 +300,39 @@ function DecisionForm({
   // stop-loss has no engine default at all, it's set by the trader.
   const [targetPct, setTargetPct] = useState(() => String(Math.round(rec.strategy.exit_rule.target_pct_of_max_profit * 100)));
   const [stopLossPct, setStopLossPct] = useState("");
+  // "Check margin" - a real Dhan margin-calculator lookup (market-data's
+  // DhanProvider.get_combo_margin, confirmed live 2026-09-22), separate
+  // from the pure-arithmetic economics above since it needs a real
+  // quantity first (margin scales with it) and a real network call, not
+  // something to fire automatically on every keystroke. Every leg needs a
+  // security_id to check margin at all - missing on any leg (e.g. a chain
+  // miss that cycle) disables the button rather than sending a partial,
+  // guaranteed-to-fail request.
+  const canCheckMargin = rec.strategy.legs.length > 0 && rec.strategy.legs.every((leg) => leg.security_id != null);
+  const [marginChecking, setMarginChecking] = useState(false);
+  const [marginResult, setMarginResult] = useState<Record<string, number | string> | null>(null);
+  const [marginError, setMarginError] = useState<string | null>(null);
+
+  async function handleCheckMargin() {
+    setMarginChecking(true);
+    setMarginError(null);
+    setMarginResult(null);
+    try {
+      const legs = rec.strategy.legs.map((leg, i) => ({
+        security_id: leg.security_id as string,
+        side: leg.side,
+        price: legEntryPrices[i] ? Number(legEntryPrices[i]) : (leg.premium_estimate ?? 0),
+      }));
+      const { raw } = await checkWeeklyAdvisorMargin(legs, Number(quantity));
+      setMarginResult(raw);
+      const total = raw.totalMargin;
+      if (typeof total === "number") setMarginNeeded(String(total));
+    } catch (err) {
+      setMarginError(err instanceof Error ? err.message : "Could not get a margin estimate");
+    } finally {
+      setMarginChecking(false);
+    }
+  }
   // Pre-filled from the recommendation, but freely editable - what you
   // actually traded is often not exactly what the system recommended.
   const [actualBias, setActualBias] = useState<WeeklyRecommendation["regime"]["bias"]>(rec.regime.bias);
@@ -477,7 +511,24 @@ function DecisionForm({
             </label>
             <label>
               Margin needed
-              <input type="number" step="any" value={marginNeeded} onChange={(e) => setMarginNeeded(e.target.value)} placeholder="from broker" />
+              <span className="weekly-advisor-margin-check">
+                <input type="number" step="any" value={marginNeeded} onChange={(e) => setMarginNeeded(e.target.value)} placeholder="from broker, or Check margin ->" />
+                {canCheckMargin && (
+                  <button
+                    type="button"
+                    className="secondary tiny"
+                    disabled={marginChecking || !quantity || Number(quantity) <= 0}
+                    onClick={handleCheckMargin}
+                    title="Real Dhan margin lookup for these legs at this quantity - quantity must be a valid lot-size multiple"
+                  >
+                    {marginChecking ? "Checking..." : "Check margin"}
+                  </button>
+                )}
+              </span>
+              {marginError && <span className="hint error">{marginError} - check quantity is a valid lot-size multiple for this contract.</span>}
+              {marginResult && typeof marginResult.totalMargin === "number" && (
+                <span className="hint">Dhan: total margin ~{marginResult.totalMargin.toLocaleString()} for qty {quantity} - pre-filled above, still editable.</span>
+              )}
             </label>
             <label>
               POP %

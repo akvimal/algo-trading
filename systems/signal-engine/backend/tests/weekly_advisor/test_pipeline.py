@@ -282,16 +282,23 @@ def test_run_symbol_surfaces_the_order_block_vote_in_regime_reasons(monkeypatch)
 # --- _fetch_oi: a real buildup read from the SAME chain fetch used for strike interval -------
 
 
-def _chain_strike(strike, ce_oi=None, ce_prev_oi=None, pe_oi=None, pe_prev_oi=None, ce_last_price=None, pe_last_price=None):
+def _chain_strike(
+    strike, ce_oi=None, ce_prev_oi=None, pe_oi=None, pe_prev_oi=None,
+    ce_last_price=None, pe_last_price=None, ce_security_id=None, pe_security_id=None,
+):
     row = {"strike": strike}
     if ce_oi is not None:
         row["ce"] = {"oi": ce_oi, "previous_oi": ce_prev_oi}
         if ce_last_price is not None:
             row["ce"]["last_price"] = ce_last_price
+        if ce_security_id is not None:
+            row["ce"]["security_id"] = ce_security_id
     if pe_oi is not None:
         row["pe"] = {"oi": pe_oi, "previous_oi": pe_prev_oi}
         if pe_last_price is not None:
             row["pe"]["last_price"] = pe_last_price
+        if pe_security_id is not None:
+            row["pe"]["security_id"] = pe_security_id
     return row
 
 
@@ -390,27 +397,41 @@ def test_run_symbol_surfaces_the_fundamental_vote_in_regime_reasons(monkeypatch)
     assert any("screener.in fundamentals read bullish" in r for r in rec.regime.reasons)
 
 
-# --- _leg_premiums / StrategyLeg.premium_estimate: same chain fetch, one more field ---------
+# --- _leg_market_data / StrategyLeg.premium_estimate+security_id: same chain fetch, more fields ---
 
 
-def test_leg_premiums_extracts_last_price_per_strike_and_option_type():
+def test_leg_market_data_extracts_last_price_and_security_id_per_strike_and_option_type():
     chain_strikes = [
-        _chain_strike(2000.0, ce_oi=100, ce_prev_oi=90, ce_last_price=12.5, pe_oi=100, pe_prev_oi=90, pe_last_price=8.25),
+        _chain_strike(
+            2000.0, ce_oi=100, ce_prev_oi=90, ce_last_price=12.5, ce_security_id="111",
+            pe_oi=100, pe_prev_oi=90, pe_last_price=8.25, pe_security_id="112",
+        ),
     ]
 
-    prices = pipeline._leg_premiums(chain_strikes)
+    data = pipeline._leg_market_data(chain_strikes)
 
-    assert prices == {(2000.0, "CE"): 12.5, (2000.0, "PE"): 8.25}
+    assert data == {
+        (2000.0, "CE"): pipeline._LegMarketData(premium=12.5, security_id="111"),
+        (2000.0, "PE"): pipeline._LegMarketData(premium=8.25, security_id="112"),
+    }
 
 
-def test_leg_premiums_skips_a_leg_with_no_last_price():
+def test_leg_market_data_security_id_is_none_when_the_chain_doesnt_carry_one():
+    chain_strikes = [_chain_strike(2000.0, ce_oi=100, ce_prev_oi=90, ce_last_price=12.5)]  # no ce_security_id
+
+    data = pipeline._leg_market_data(chain_strikes)
+
+    assert data == {(2000.0, "CE"): pipeline._LegMarketData(premium=12.5, security_id=None)}
+
+
+def test_leg_market_data_skips_a_leg_with_no_last_price():
     chain_strikes = [_chain_strike(2000.0, ce_oi=100, ce_prev_oi=90)]  # no ce_last_price
 
-    assert pipeline._leg_premiums(chain_strikes) == {}
+    assert pipeline._leg_market_data(chain_strikes) == {}
 
 
-def test_leg_premiums_empty_for_no_chain():
-    assert pipeline._leg_premiums(None) == {}
+def test_leg_market_data_empty_for_no_chain():
+    assert pipeline._leg_market_data(None) == {}
 
 
 def test_run_symbol_attaches_premium_estimate_onto_recommendation_legs(monkeypatch):
@@ -425,8 +446,8 @@ def test_run_symbol_attaches_premium_estimate_onto_recommendation_legs(monkeypat
         "get_option_chain",
         lambda exchange, symbol, expiry: {
             "strikes": [
-                _chain_strike(2000.0, ce_oi=1500, ce_prev_oi=1000, ce_last_price=15.0, pe_oi=1500, pe_prev_oi=1000, pe_last_price=45.0),
-                _chain_strike(2050.0, ce_oi=1500, ce_prev_oi=1000, ce_last_price=10.0, pe_oi=1500, pe_prev_oi=1000, pe_last_price=60.0),
+                _chain_strike(2000.0, ce_oi=1500, ce_prev_oi=1000, ce_last_price=15.0, ce_security_id="201", pe_oi=1500, pe_prev_oi=1000, pe_last_price=45.0, pe_security_id="202"),
+                _chain_strike(2050.0, ce_oi=1500, ce_prev_oi=1000, ce_last_price=10.0, ce_security_id="203", pe_oi=1500, pe_prev_oi=1000, pe_last_price=60.0, pe_security_id="204"),
             ]
         },
     )
@@ -434,12 +455,16 @@ def test_run_symbol_attaches_premium_estimate_onto_recommendation_legs(monkeypat
 
     rec = pipeline.run_symbol("TESTSYM", as_of=date(2026, 6, 1))
 
-    # Every leg either got a real premium from the chain, or None when its
-    # exact rounded strike wasn't one of the fixture's two listed strikes -
-    # never a raise, never silently skipped from the leg list itself.
+    # Every leg either got a real premium/security_id from the chain, or
+    # both None when its exact rounded strike wasn't one of the fixture's
+    # two listed strikes - never a raise, never silently skipped from the
+    # leg list itself, and never premium without security_id or vice versa
+    # (both come from the same _leg_market_data lookup).
     assert len(rec.strategy.legs) > 0
     for leg in rec.strategy.legs:
         assert leg.premium_estimate is None or isinstance(leg.premium_estimate, float)
+        assert leg.security_id is None or isinstance(leg.security_id, str)
+        assert (leg.premium_estimate is None) == (leg.security_id is None)
 
 
 def test_run_symbol_fundamentals_unavailable_when_screener_fetch_returns_none(monkeypatch):

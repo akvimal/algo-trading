@@ -140,3 +140,58 @@ def test_default_target_pct_returns_none_on_malformed_payload():
         payload = {"strategy": {}}
 
     assert route._default_target_pct(_FakeRow()) is None
+
+
+# --- POST /weekly-advisor/margin: real Dhan combo margin, mocked at the market_data_client boundary ---
+
+
+def test_check_margin_maps_legs_and_returns_the_raw_dhan_response(monkeypatch):
+    captured = {}
+
+    def fake_get_combo_margin(legs, exchange="NSE"):
+        captured["legs"] = legs
+        captured["exchange"] = exchange
+        return {"totalMargin": 40759.5, "spanMargin": 14830.0}
+
+    monkeypatch.setattr(route.market_data_client, "get_combo_margin", fake_get_combo_margin)
+
+    resp = client.post(
+        "/weekly-advisor/margin",
+        json={
+            "legs": [
+                {"security_id": "106369", "side": "sell", "price": 25.7},
+                {"security_id": "144391", "side": "buy", "price": 8.2},
+            ],
+            "quantity": 500,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"raw": {"totalMargin": 40759.5, "spanMargin": 14830.0}}
+    # productType="MARGIN" (not "INTRADAY") - a held-to-expiry position,
+    # not a same-day square-off one - see the route's own docstring.
+    assert captured["legs"] == [
+        {"security_id": "106369", "exchange_segment": "NSE_FNO", "transaction_type": "SELL", "quantity": 500, "product_type": "MARGIN", "price": 25.7},
+        {"security_id": "144391", "exchange_segment": "NSE_FNO", "transaction_type": "BUY", "quantity": 500, "product_type": "MARGIN", "price": 8.2},
+    ]
+
+
+def test_check_margin_returns_502_when_market_data_call_fails(monkeypatch):
+    def fake_get_combo_margin(legs, exchange="NSE"):
+        raise RuntimeError("Dhan API error (400): bad quantity")
+
+    monkeypatch.setattr(route.market_data_client, "get_combo_margin", fake_get_combo_margin)
+
+    resp = client.post(
+        "/weekly-advisor/margin",
+        json={"legs": [{"security_id": "1", "side": "sell", "price": 10.0}], "quantity": 500},
+    )
+
+    assert resp.status_code == 502
+    assert "bad quantity" in resp.json()["detail"]
+
+
+def test_check_margin_rejects_empty_legs():
+    resp = client.post("/weekly-advisor/margin", json={"legs": [], "quantity": 500})
+
+    assert resp.status_code == 422

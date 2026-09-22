@@ -20,6 +20,7 @@ e.g. the dev Dhan token being expired at the time this was built.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -218,18 +219,29 @@ def _fetch_oi(chain_strikes: Optional[list[dict]], price_change: float, spot: fl
         return OISnapshot(available=False)
 
 
-def _leg_premiums(chain_strikes: Optional[list[dict]]) -> dict[tuple[float, str], float]:
-    """(strike, option_type) -> last_price, from the SAME option-chain
-    fetch _fetch_oi already reads oi/previous_oi off of - one more field
-    off a dict this pipeline already has in hand, not a second chain call.
-    Rounded to 2dp on the key so a strike that's gone through
-    strategy_selector.round_to_strike's own floating-point arithmetic still
-    finds its match. Backs StrategyLeg.premium_estimate (see that field's
-    own docstring) - never raises, an unparseable leg is just skipped, same
-    graceful-degradation convention as _fetch_oi itself."""
-    prices: dict[tuple[float, str], float] = {}
+@dataclass
+class _LegMarketData:
+    premium: float
+    # Dhan's own per-contract ID for this exact leg, when the chain dict
+    # carried one - not every caller of this pipeline's own chain fetch
+    # populates it (see market-data's OptionLegQuote.security_id), so this
+    # stays optional rather than widening _fetch_oi's own required fields.
+    security_id: Optional[str] = None
+
+
+def _leg_market_data(chain_strikes: Optional[list[dict]]) -> dict[tuple[float, str], _LegMarketData]:
+    """(strike, option_type) -> last_price + security_id, from the SAME
+    option-chain fetch _fetch_oi already reads oi/previous_oi off of - a
+    couple more fields off a dict this pipeline already has in hand, not a
+    second chain call. Rounded to 2dp on the key so a strike that's gone
+    through strategy_selector.round_to_strike's own floating-point
+    arithmetic still finds its match. Backs StrategyLeg.premium_estimate/
+    security_id (see those fields' own docstrings) - never raises, an
+    unparseable leg is just skipped, same graceful-degradation convention
+    as _fetch_oi itself."""
+    data: dict[tuple[float, str], _LegMarketData] = {}
     if not chain_strikes:
-        return prices
+        return data
     for s in chain_strikes:
         try:
             strike = round(float(s["strike"]), 2)
@@ -240,10 +252,14 @@ def _leg_premiums(chain_strikes: Optional[list[dict]]) -> dict[tuple[float, str]
             if not leg or leg.get("last_price") is None:
                 continue
             try:
-                prices[(strike, option_type)] = float(leg["last_price"])
+                premium = float(leg["last_price"])
             except (TypeError, ValueError):
                 continue
-    return prices
+            security_id = leg.get("security_id")
+            data[(strike, option_type)] = _LegMarketData(
+                premium=premium, security_id=str(security_id) if security_id is not None else None,
+            )
+    return data
 
 
 def _naive_monthly_expiry(as_of: date) -> date:
@@ -352,9 +368,12 @@ def run_symbol(symbol: str, as_of: Optional[date] = None, openrouter_api_key: Op
         # on _unmitigated_block_anchor/_best_oi_strike).
         order_blocks=order_blocks, daily_order_blocks=daily_order_blocks, oi=oi_snap,
     )
-    leg_premiums = _leg_premiums(chain_strikes)
+    leg_market_data = _leg_market_data(chain_strikes)
     for leg in recommendation.legs:
-        leg.premium_estimate = leg_premiums.get((round(leg.strike, 2), leg.option_type))
+        data = leg_market_data.get((round(leg.strike, 2), leg.option_type))
+        if data is not None:
+            leg.premium_estimate = data.premium
+            leg.security_id = data.security_id
 
     return WeeklyRecommendation(
         symbol=symbol,

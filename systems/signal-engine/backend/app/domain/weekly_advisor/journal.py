@@ -210,3 +210,32 @@ def compute_performance_summary(trades: list[TradeOut]) -> PerformanceSummary:
         total_realized_pnl=round(total_pnl, 2),
         by_symbol={k: round(v, 2) for k, v in by_symbol.items()},
     )
+
+
+class MarginCheckLeg(BaseModel):
+    """One leg for POST /weekly-advisor/margin - security_id/price come
+    from the recommendation's own StrategyLeg.security_id/premium_estimate
+    (or the user's own edited fill price, same field the decision form's
+    "fill price" input already captures) - this route is a read-only Dhan
+    margin-calculator lookup, not an order, so "not execution integration"
+    (this module's own docstring) still holds: nothing is placed, nothing
+    is journaled by this call alone."""
+
+    security_id: str
+    side: Literal["sell", "buy"]
+    price: float
+
+
+class MarginCheckRequest(BaseModel):
+    legs: list[MarginCheckLeg] = Field(min_length=1)
+    quantity: float = Field(gt=0)
+
+
+class MarginCheckResponse(BaseModel):
+    """Deliberately a thin passthrough of Dhan's own raw combo-margin
+    response (see market-data's DhanProvider.get_combo_margin, confirmed
+    live 2026-09-22) rather than a strict mirror - real confirmed keys:
+    totalMargin, spanMargin, exposure, equityMargin, foMargin, commodity,
+    currency, hedgeBenefit, userFundLimit, insufficientFund, clientId."""
+
+    raw: dict

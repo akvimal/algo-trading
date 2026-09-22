@@ -2280,6 +2280,24 @@ export async function fetchWeeklyAdvisorLotSize(securityId: string): Promise<num
   return lot_size;
 }
 
+// GET /weekly-advisor/option-chain-strikes - every strike's real, live
+// last_price + security_id for a symbol/expiry, straight from the same
+// option-chain fetch pipeline.py's own run_symbol already makes. Backs
+// the decision form's pick-a-strike dropdown (a real, currently tradeable
+// strike, not a free-text number that might not even exist on the
+// exchange) and lets picking a different strike than recommended still
+// carry a real security_id/live price, not an "unknown contract" gap.
+// Returns [] (not throws) on a 404 - "nothing to offer this time"
+// degrades to the free-text fallback, same convention this file's other
+// best-effort lookups use.
+export type WeeklyAdvisorOptionChainStrike = { strike: number; option_type: "CE" | "PE"; last_price: number; security_id: string | null };
+
+export async function fetchWeeklyAdvisorOptionChainStrikes(symbol: string, expiry: string): Promise<WeeklyAdvisorOptionChainStrike[]> {
+  const res = await fetch(`${API_BASE_URL}/weekly-advisor/option-chain-strikes?symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
+  if (res.status === 404) return [];
+  return asJson(res, "GET /weekly-advisor/option-chain-strikes");
+}
+
 // PUT .../trades/{id}/entry - overwrite provisional entry data (planned
 // off-session) with the real thing once the legs actually fill. Merge-style
 // like the decision endpoint: only fields present in the payload change.

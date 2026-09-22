@@ -8,6 +8,7 @@ import {
   fetchWatchlists,
   fetchWeeklyAdvisorHistory,
   fetchWeeklyAdvisorLotSize,
+  fetchWeeklyAdvisorOptionChainStrikes,
   fetchWeeklyAdvisorPerformance,
   fetchWeeklyAdvisorRecommendations,
   fetchWeeklyAdvisorSettings,
@@ -28,6 +29,7 @@ import {
   type WeeklyAdvisorSkipped,
   type WeeklyAdvisorTrade,
   type WeeklyAdvisorMarginCheckLeg,
+  type WeeklyAdvisorOptionChainStrike,
   type WeeklyAdvisorTradeLeg,
   type WeeklyAdvisorTradeStatus,
   type WeeklyRecommendation,
@@ -105,6 +107,39 @@ function actionLabel(action: WeeklyRecommendation["strategy"]["action"], legCoun
   if (action === "sell_otm_put" && legCount > 1) return "Bull Put Spread";
   if (action === "sell_otm_call" && legCount > 1) return "Bear Call Spread";
   return BASE_ACTION_LABELS[action];
+}
+
+// A JOURNALED TRADE's own legs can differ from the recommendation's -
+// dropping legs (WeeklyAdvisorPage.tsx's own effectiveLegs, e.g. trading
+// only the call side of a recommended iron condor) makes the
+// recommendation's frozen action ("iron_condor") describe a shape that
+// isn't what was actually traded anymore. actionLabel above is right for
+// showing the RECOMMENDATION as it was made (Run/History tabs' own
+// recommendation cards - never edited after the fact) but wrong for
+// showing what a TRADE actually is once its own legs can diverge -
+// derives the label straight from the trade's own legs instead of
+// trusting its stored `action` at all. null on a shape this engine
+// doesn't have a name for (e.g. only buy legs) - the caller falls back to
+// actionLabel/actual_strategy rather than this guessing.
+function legsShapeLabel(legs: { option_type: "CE" | "PE"; side: "sell" | "buy" }[]): string | null {
+  if (legs.length === 0) return null;
+  const ce = legs.filter((l) => l.option_type === "CE");
+  const pe = legs.filter((l) => l.option_type === "PE");
+  const ceSell = ce.some((l) => l.side === "sell");
+  const ceBuy = ce.some((l) => l.side === "buy");
+  const peSell = pe.some((l) => l.side === "sell");
+  const peBuy = pe.some((l) => l.side === "buy");
+
+  if (ce.length > 0 && pe.length > 0 && ceSell && peSell) {
+    return ceBuy && peBuy ? "Iron Condor" : "Short Strangle";
+  }
+  if (ce.length > 0 && pe.length === 0 && ceSell) {
+    return ceBuy ? "Bear Call Spread" : "Sell Call";
+  }
+  if (pe.length > 0 && ce.length === 0 && peSell) {
+    return peBuy ? "Bull Put Spread" : "Sell Put";
+  }
+  return null;
 }
 
 function formatDate(iso: string): string {
@@ -309,43 +344,102 @@ function DecisionForm({
   // freely overridable (e.g. picking a more liquid strike than the exact
   // one anchored). Parallel array, same convention as legEntryPrices.
   const [legStrikes, setLegStrikes] = useState<string[]>(() => rec.strategy.legs.map((leg) => String(leg.strike)));
+  // The real, live option chain for this symbol/expiry - lets the strike
+  // field below be an actual pick-a-strike dropdown (only strikes really
+  // tradeable on the exchange, each showing its own live price) instead of
+  // a free-text number that might not even exist. null while loading or on
+  // a fetch failure - each leg's own UI falls back to a free-text input in
+  // that case (a real number, just not chain-verified). Fetched once on
+  // mount, not re-polled - same "on-demand, no polling" convention this
+  // whole tab already uses.
+  const [chainStrikes, setChainStrikes] = useState<WeeklyAdvisorOptionChainStrike[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchWeeklyAdvisorOptionChainStrikes(rec.symbol, rec.strategy.entry_window.latest)
+      .then((strikes) => {
+        if (!cancelled) setChainStrikes(strikes);
+      })
+      .catch(() => {
+        // Falls back to free-text per-leg strike entry - see chainStrikes' own comment.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Real security_id for a leg whose strike was picked from the dropdown
+  // above (chain-verified, so we actually know its contract) - separate
+  // from legStrikes/legEntryPrices below since a strike typed into the
+  // free-text fallback has no known security_id at all (see
+  // effectiveLegs' own comment on the distinction).
+  const [legFetchedSecurityIds, setLegFetchedSecurityIds] = useState<(string | null)[]>(() => rec.strategy.legs.map(() => null));
 
-  function toggleLeg(i: number) {
-    const next = legIncluded.map((v, j) => (j === i ? !v : v));
-    setLegIncluded(next);
-    // Credit/max-profit/max-loss are aggregate figures across whichever
-    // legs are actually in the trade now - dropping a leg invalidates the
-    // old suggestion (computed for the full set), so re-derive it the same
-    // way the initial mount-time value was computed, from the newly
-    // included subset's own premium_estimate. Per-leg fill prices are left
-    // alone - toggling doesn't touch anything the user's already typed.
-    const recomputed = estimateTradeEconomics(rec.strategy.legs.filter((_, j) => next[j]));
+  // Aggregate credit/max-profit/max-loss for whichever legs are currently
+  // included, using each one's own best-known premium: the original
+  // recommendation's premium_estimate for an untouched strike, or whatever
+  // price is currently in legEntryPrices for one that's been changed (a
+  // real live quote if picked from the dropdown, blank/unknown if typed
+  // freely) - estimateTradeEconomics itself already blanks the whole
+  // aggregate rather than guess when any included leg has no premium at
+  // all, so a freely-typed, not-yet-priced strike correctly clears the
+  // stale old numbers instead of leaving them stale.
+  function recomputeEconomics(nextLegIncluded: boolean[], nextStrikes: string[], nextPrices: string[]) {
+    const legsForCalc = rec.strategy.legs
+      .map((leg, j) => {
+        if (!nextLegIncluded[j]) return null;
+        const strike = Number(nextStrikes[j]) || leg.strike;
+        const premium = strike !== leg.strike ? (nextPrices[j] ? Number(nextPrices[j]) : null) : leg.premium_estimate;
+        return { ...leg, strike, premium_estimate: premium };
+      })
+      .filter((l): l is WeeklyRecommendation["strategy"]["legs"][number] => l != null);
+    const recomputed = estimateTradeEconomics(legsForCalc);
     setEntryCredit(recomputed.entryCredit);
     setMaxProfit(recomputed.maxProfit);
     setMaxLoss(recomputed.maxLoss);
   }
 
+  function toggleLeg(i: number) {
+    const next = legIncluded.map((v, j) => (j === i ? !v : v));
+    setLegIncluded(next);
+    recomputeEconomics(next, legStrikes, legEntryPrices);
+  }
+
+  // Free-text fallback only (no chain data available for this leg) - a
+  // typed strike has no known premium, so the fill price clears (forcing
+  // an honest re-entry rather than keeping a number quoted for a
+  // different strike) and any previously fetched security_id is dropped.
   function handleStrikeChange(i: number, value: string) {
-    setLegStrikes((prev) => prev.map((v, j) => (j === i ? value : v)));
-    // A different strike means the recommendation's own premium_estimate/
-    // security_id no longer describe this leg at all (they're for the
-    // ORIGINAL strike's specific contract) - clearing the fill price
-    // forces an honest re-entry rather than silently keeping a number that
-    // was never quoted for this strike. security_id itself is nulled out
-    // at the effectiveLegs level below (not here), since that's also where
-    // "changed back to the original value" un-nulls it again.
-    if (Number(value) !== rec.strategy.legs[i].strike) {
-      setLegEntryPrices((prev) => prev.map((v, j) => (j === i ? "" : v)));
+    const nextStrikes = legStrikes.map((v, j) => (j === i ? value : v));
+    const changed = Number(value) !== rec.strategy.legs[i].strike;
+    const nextPrices = changed ? legEntryPrices.map((v, j) => (j === i ? "" : v)) : legEntryPrices;
+    setLegStrikes(nextStrikes);
+    if (changed) {
+      setLegEntryPrices(nextPrices);
+      setLegFetchedSecurityIds((prev) => prev.map((v, j) => (j === i ? null : v)));
     }
+    recomputeEconomics(legIncluded, nextStrikes, nextPrices);
+  }
+
+  // The pick-a-strike dropdown path - a REAL, chain-verified strike, so
+  // unlike the free-text fallback we already know its live price and its
+  // actual security_id (no "unknown contract" gap at all).
+  function handleStrikeSelect(i: number, entry: WeeklyAdvisorOptionChainStrike) {
+    const nextStrikes = legStrikes.map((v, j) => (j === i ? String(entry.strike) : v));
+    const nextPrices = legEntryPrices.map((v, j) => (j === i ? String(entry.last_price) : v));
+    setLegStrikes(nextStrikes);
+    setLegEntryPrices(nextPrices);
+    setLegFetchedSecurityIds((prev) => prev.map((v, j) => (j === i ? entry.security_id : v)));
+    recomputeEconomics(legIncluded, nextStrikes, nextPrices);
   }
 
   // Single source of truth combining inclusion + any strike edit, reused
   // everywhere a leg's real, current identity matters (Check margin, the
-  // actual trade payload) - a strike edit invalidates that leg's own
-  // security_id (it's a different, unknown-to-us contract now), so margin
-  // checking and the live leg-price refresh job correctly stop applying to
-  // it rather than silently treating the new strike as if it were the one
-  // Dhan's ID actually points to.
+  // actual trade payload). A strike picked from the chain-verified
+  // dropdown keeps a real security_id (legFetchedSecurityIds); one typed
+  // into the free-text fallback has none - it's a different, unknown-to-us
+  // contract - so margin checking and the live leg-price refresh job
+  // correctly stop applying to it rather than treating the new strike as
+  // if it were the one Dhan's original recommended-strike ID points to.
   const effectiveLegs = rec.strategy.legs
     .map((leg, i) => {
       const strike = legStrikes[i] ? Number(legStrikes[i]) : leg.strike;
@@ -356,7 +450,7 @@ function DecisionForm({
         side: leg.side,
         strike,
         strikeChanged,
-        security_id: strikeChanged ? null : leg.security_id,
+        security_id: strikeChanged ? legFetchedSecurityIds[i] : leg.security_id,
         entryPrice: legEntryPrices[i] ? Number(legEntryPrices[i]) : null,
         premiumEstimate: strikeChanged ? null : leg.premium_estimate,
       };
@@ -575,19 +669,43 @@ function DecisionForm({
                 )}
                 {rec.strategy.legs.map((leg, i) => {
                   const strikeChanged = legStrikes[i] !== "" && Number(legStrikes[i]) !== leg.strike;
+                  // Real, chain-verified strikes for this leg's own option_type
+                  // - sorted so the dropdown reads low-to-high, same as the
+                  // exchange's own strike ladder.
+                  const chainOptions = (chainStrikes ?? []).filter((s) => s.option_type === leg.option_type).sort((a, b) => a.strike - b.strike);
                   return (
                     <label key={i} className={legIncluded[i] ? "" : "muted"}>
                       <input type="checkbox" checked={legIncluded[i]} onChange={() => toggleLeg(i)} title="Include this leg in the journaled trade" />{" "}
                       {leg.side.toUpperCase()} {leg.option_type}{" "}
-                      <input
-                        type="number"
-                        step="any"
-                        value={legStrikes[i] ?? ""}
-                        onChange={(e) => handleStrikeChange(i, e.target.value)}
-                        disabled={!legIncluded[i]}
-                        className="weekly-advisor-strike-input"
-                        title={`Recommended strike ${leg.strike} - editable if you want a different one`}
-                      />{" "}
+                      {chainOptions.length > 0 ? (
+                        <select
+                          value={legStrikes[i] ?? ""}
+                          onChange={(e) => {
+                            const entry = chainOptions.find((o) => String(o.strike) === e.target.value);
+                            if (entry) handleStrikeSelect(i, entry);
+                          }}
+                          disabled={!legIncluded[i]}
+                          title={`Recommended strike ${leg.strike} - pick any real, currently tradeable strike`}
+                        >
+                          {/* The recommended strike may not be an exact chain match once rounded - keep it selectable even if absent from chainOptions. */}
+                          {!chainOptions.some((o) => String(o.strike) === legStrikes[i]) && <option value={legStrikes[i]}>{legStrikes[i]} (recommended)</option>}
+                          {chainOptions.map((o) => (
+                            <option key={o.strike} value={String(o.strike)}>
+                              {o.strike} (₹{o.last_price})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="number"
+                          step="any"
+                          value={legStrikes[i] ?? ""}
+                          onChange={(e) => handleStrikeChange(i, e.target.value)}
+                          disabled={!legIncluded[i]}
+                          className="weekly-advisor-strike-input"
+                          title={`Recommended strike ${leg.strike} - editable, but no live chain data to pick from right now`}
+                        />
+                      )}{" "}
                       - fill price
                       <input
                         type="number"
@@ -598,10 +716,8 @@ function DecisionForm({
                         disabled={!legIncluded[i]}
                         title={leg.premium_estimate != null ? "Pre-filled estimate as of analysis time - confirm or correct" : undefined}
                       />
-                      {strikeChanged && (
-                        <span className="hint">
-                          strike changed from {leg.strike} - fill price/credit/max profit-loss above no longer reflect this leg, re-check them
-                        </span>
+                      {strikeChanged && !legEntryPrices[i] && (
+                        <span className="hint">strike changed from {leg.strike} with no known price for it - enter the real fill price manually</span>
                       )}
                     </label>
                   );
@@ -1811,7 +1927,7 @@ function PerformanceTab() {
               <tr>
                 <td>{formatDateTime(t.taken_at)}</td>
                 <td className="symbol">{t.symbol}</td>
-                <td>{actionLabel(t.action, t.legs?.length ?? 0)}</td>
+                <td>{legsShapeLabel(t.legs ?? []) ?? t.actual_strategy ?? actionLabel(t.action, t.legs?.length ?? 0)}</td>
                 <td>
                   <span className={`badge-mini ${STATUS_BADGE[t.status]}`}>{t.status}</span>
                 </td>

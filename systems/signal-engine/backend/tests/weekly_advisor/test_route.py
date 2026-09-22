@@ -245,3 +245,49 @@ def test_put_settings_rejects_blank_model():
     resp = client.put("/weekly-advisor/settings", json={"openrouter_vision_model": "  ", "defined_risk": True})
 
     assert resp.status_code == 422
+
+
+# --- GET /weekly-advisor/option-chain-strikes: real, live strikes for a pick-a-strike dropdown ---
+
+
+def test_get_option_chain_strikes_returns_every_leg_sorted(monkeypatch):
+    monkeypatch.setattr(
+        route.market_data_client,
+        "get_option_chain",
+        lambda exchange, symbol, expiry: {
+            "strikes": [
+                {"strike": 700.0, "ce": {"oi": 1, "previous_oi": 1, "last_price": 12.5, "security_id": "1"}, "pe": {"oi": 1, "previous_oi": 1, "last_price": 1.7, "security_id": "2"}},
+                {"strike": 680.0, "ce": {"oi": 1, "previous_oi": 1, "last_price": 15.0, "security_id": "3"}, "pe": {"oi": 1, "previous_oi": 1, "last_price": 0.45, "security_id": "4"}},
+            ]
+        },
+    )
+
+    resp = client.get("/weekly-advisor/option-chain-strikes", params={"symbol": "HDFCBANK", "expiry": "2026-09-25"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == [
+        {"strike": 680.0, "option_type": "CE", "last_price": 15.0, "security_id": "3"},
+        {"strike": 680.0, "option_type": "PE", "last_price": 0.45, "security_id": "4"},
+        {"strike": 700.0, "option_type": "CE", "last_price": 12.5, "security_id": "1"},
+        {"strike": 700.0, "option_type": "PE", "last_price": 1.7, "security_id": "2"},
+    ]
+
+
+def test_get_option_chain_strikes_404s_on_no_chain(monkeypatch):
+    monkeypatch.setattr(route.market_data_client, "get_option_chain", lambda exchange, symbol, expiry: None)
+
+    resp = client.get("/weekly-advisor/option-chain-strikes", params={"symbol": "HDFCBANK", "expiry": "2026-09-25"})
+
+    assert resp.status_code == 404
+
+
+def test_get_option_chain_strikes_502s_on_fetch_failure(monkeypatch):
+    def _raise(exchange, symbol, expiry):
+        raise RuntimeError("Dhan option-chain queue is backed up")
+
+    monkeypatch.setattr(route.market_data_client, "get_option_chain", _raise)
+
+    resp = client.get("/weekly-advisor/option-chain-strikes", params={"symbol": "HDFCBANK", "expiry": "2026-09-25"})
+
+    assert resp.status_code == 502

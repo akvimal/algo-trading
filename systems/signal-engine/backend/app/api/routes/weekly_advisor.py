@@ -30,7 +30,7 @@ from app.domain.weekly_advisor.journal import (
     TradeOut,
     compute_performance_summary,
 )
-from app.domain.weekly_advisor.pipeline import run_symbol
+from app.domain.weekly_advisor.pipeline import EXCHANGE, _leg_market_data, run_symbol
 from app.domain.weekly_advisor.screener_fetch import get_cached_screenshot
 
 logger = logging.getLogger(__name__)
@@ -153,6 +153,39 @@ def get_lot_size(security_id: str):
     if lot_size is None:
         raise HTTPException(status_code=404, detail=f"no lot size found for security_id '{security_id}'")
     return {"lot_size": lot_size}
+
+
+class OptionChainStrikeQuote(BaseModel):
+    strike: float
+    option_type: str
+    last_price: float
+    security_id: Optional[str] = None
+
+
+@router.get("/weekly-advisor/option-chain-strikes", response_model=list[OptionChainStrikeQuote])
+def get_option_chain_strikes(symbol: str, expiry: str):
+    """Every strike's real, live last_price + security_id for `symbol` at
+    `expiry` - lets the decision form offer an actual pick-a-strike dropdown
+    (backed by real, currently tradeable strikes) instead of a free-text
+    number a user could type that isn't even a real strike on the exchange.
+    Same option-chain fetch pipeline.py's own run_symbol already makes
+    (market_data_client.get_option_chain) and the same _leg_market_data
+    extraction the scheduled leg-price refresh job (app/scheduler.py) and
+    _leg_premiums-successor already use - reused here, not a new fetch
+    mechanism. Empty list (not 404) when the chain itself is reachable but
+    happens to have no CE/PE legs - a plain "nothing to offer" rather than
+    an error, same convention _fetch_oi's own graceful degradation uses."""
+    try:
+        chain = market_data_client.get_option_chain(EXCHANGE, symbol.strip().upper(), expiry)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"could not fetch option chain: {exc}") from exc
+    if not chain:
+        raise HTTPException(status_code=404, detail=f"no option chain for '{symbol}' at expiry {expiry}")
+    leg_data = _leg_market_data(chain.get("strikes"))
+    return [
+        OptionChainStrikeQuote(strike=strike, option_type=option_type, last_price=data.premium, security_id=data.security_id)
+        for (strike, option_type), data in sorted(leg_data.items())
+    ]
 
 
 def _parse_uuid(value: str, what: str) -> uuid.UUID:

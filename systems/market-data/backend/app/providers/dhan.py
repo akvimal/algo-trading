@@ -39,6 +39,7 @@ import io
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -65,6 +66,33 @@ from app.domain.moneyness import classify_moneyness, infer_strike_step
 from app.providers.base import QuoteProvider
 
 logger = logging.getLogger(__name__)
+
+# Process-wide, not Dhan-specific - patches the stdlib socket module every
+# `requests` call in this whole process resolves through, regardless of
+# which provider makes it. Confirmed live 2026-09-22: this container's
+# Docker network handed it a route where images.dhan.co/api.dhan.co both
+# resolve real IPv6 addresses but have no actual IPv6 route out ("Network
+# is unreachable", not a timeout - an immediate OS-level routing failure),
+# while the same host's IPv4 addresses (also returned by the same DNS
+# query) connect instantly. Python's default getaddrinfo ordering tried
+# the IPv6 result first and never fell back cleanly. Put here (not
+# app/main.py) because this file is where the outage first surfaced and
+# is imported early enough (via router.py's provider registry) to patch
+# this before any real external call happens - but the effect covers
+# every outbound HTTPS call in this service (Delta, OpenRouter, Telegram
+# included), not just Dhan's.
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_preferred_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if family == 0:
+        ipv4_only = _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+        if ipv4_only:
+            return ipv4_only
+    return _orig_getaddrinfo(host, port, family, type, proto, flags)
+
+
+socket.getaddrinfo = _ipv4_preferred_getaddrinfo
 
 INSTRUMENT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 LTP_URL = "https://api.dhan.co/v2/marketfeed/ltp"

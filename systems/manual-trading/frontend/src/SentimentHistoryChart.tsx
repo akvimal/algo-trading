@@ -524,8 +524,8 @@ export function SentimentHistoryChart({ symbol }: { symbol: string }) {
           )}
           {(hovered.atm_call_buildup || hovered.atm_put_buildup) && (
             <div className="sentiment-history-tooltip-buildup">
-              <span>Call {buildupBadge(hovered.atm_call_buildup)}</span>
-              <span>Put {buildupBadge(hovered.atm_put_buildup)}</span>
+              <span>Call {buildupBadge(hovered.atm_call_buildup, "CE")}</span>
+              <span>Put {buildupBadge(hovered.atm_put_buildup, "PE")}</span>
             </div>
           )}
         </div>

@@ -175,11 +175,36 @@ export const BUILDUP_META: Record<OiBuildup, { icon: string; short: string; labe
   long_unwinding: { icon: "▽", short: "LU", label: "Long Unwinding — price down, OI down (longs exiting)", cls: "oi-buildup-long-unwinding" },
 };
 
-export function buildupBadge(b: OiBuildup | null) {
+// Being long a CALL is bullish but being long a PUT is bearish, so the
+// same 4 labels above flip which side (buyer vs. writer) is "good news"
+// depending on option_type - a PE long_buildup (fresh PUT buying) is
+// bearish, not bullish, even though the label text is identical to a CE
+// long_buildup (fresh CALL buying, genuinely bullish). BUILDUP_META.cls
+// alone is only correct for CE; this maps a PE's label to whichever OTHER
+// label carries the matching sentiment+strength color (long_buildup's
+// strong-green <-> short_buildup's strong-red, short_covering's dim-green
+// <-> long_unwinding's dim-red), so the badge's COLOR reflects real
+// bullish/bearish sentiment while its TEXT still literally describes what
+// happened (still says "Long Buildup", still means fresh buying).
+// Deliberately only applied where the classification is per-LEG (that
+// option's own premium vs its own OI - see OptionOiLeg.buildup's
+// docstring) - the chain-wide total_call_buildup/total_put_buildup badges
+// are classified against the shared underlying spot move instead, where
+// this inversion does NOT apply (see their own call sites below).
+const PE_SENTIMENT_MIRROR: Record<OiBuildup, OiBuildup> = {
+  long_buildup: "short_buildup",
+  short_buildup: "long_buildup",
+  short_covering: "long_unwinding",
+  long_unwinding: "short_covering",
+};
+
+export function buildupBadge(b: OiBuildup | null, optionType: "CE" | "PE" = "CE") {
   if (!b) return <span className="muted">-</span>;
   const m = BUILDUP_META[b];
+  const cls = BUILDUP_META[optionType === "PE" ? PE_SENTIMENT_MIRROR[b] : b].cls;
+  const title = optionType === "PE" ? `${m.label} (bearish/bullish read is inverted for puts vs. this same label on a call)` : m.label;
   return (
-    <span className={`oi-buildup-badge ${m.cls}`} title={m.label}>
+    <span className={`oi-buildup-badge ${cls}`} title={title}>
       {m.icon} {m.short}
     </span>
   );
@@ -377,7 +402,7 @@ export default function OiSummaryPage() {
     return () => clearInterval(id);
   }, []);
 
-  function renderLegCells(leg: OiSummaryLeg | null, itmClass: string, keyPrefix: string) {
+  function renderLegCells(leg: OiSummaryLeg | null, itmClass: string, keyPrefix: string, optionType: "CE" | "PE") {
     const cells = [<td key={`${keyPrefix}-oi`} className={itmClass}>{leg ? fmtOi(leg.oi, isCrypto) : "-"}</td>];
     if (visibleColumns.oiChange5m) {
       cells.push(
@@ -424,7 +449,7 @@ export default function OiSummaryPage() {
     if (visibleColumns.trend) {
       cells.push(
         <td key={`${keyPrefix}-tr`} className={itmClass}>
-          {leg ? buildupBadge(leg.buildup) : "-"}
+          {leg ? buildupBadge(leg.buildup, optionType) : "-"}
         </td>,
       );
     }
@@ -648,7 +673,8 @@ export default function OiSummaryPage() {
             </div>
             <p className="muted oi-summary-legend-caption">
               LB Long Buildup · SB Short Buildup · SC Short Covering · LU Long Unwinding (15m OI vs. premium change) · ITM
-              strikes shaded
+              strikes shaded · colors above are for the Call side - a Put's own badge is colored by the OPPOSITE
+              sentiment (long a put is bearish, not bullish), same label text either side
             </p>
             <div className="oi-column-toggle-row">
               <span className="muted oi-column-toggle-label">Columns</span>
@@ -700,12 +726,12 @@ export default function OiSummaryPage() {
                     const putItm = row.put?.moneyness === "ITM" ? " oi-itm-cell" : "";
                     return (
                       <tr key={row.strike} className={isAtm ? "selected-row" : ""}>
-                        {renderLegCells(row.call, callItm, `${row.strike}-call`)}
+                        {renderLegCells(row.call, callItm, `${row.strike}-call`, "CE")}
                         <td className="oi-summary-strike">
                           {row.strike}
                           {isAtm ? " (ATM)" : ""}
                         </td>
-                        {renderLegCells(row.put, putItm, `${row.strike}-put`)}
+                        {renderLegCells(row.put, putItm, `${row.strike}-put`, "PE")}
                       </tr>
                     );
                   })}

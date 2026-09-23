@@ -23,9 +23,15 @@ this module against real NSE data:
 """
 from datetime import date, timedelta
 
-from app.domain.weekly_advisor.contracts import OISnapshot, RegimeAssessment, StrikeOI, TechnicalSnapshot, Zone
+from app.domain.weekly_advisor.contracts import OISnapshot, RegimeAssessment, StrategyLeg, StrikeOI, TechnicalSnapshot, Zone
 from app.domain.weekly_advisor.regime_engine import OrderBlockZone
-from app.domain.weekly_advisor.strategy_selector import _nearest_zone, _zone_within_range, select_strategy
+from app.domain.weekly_advisor.strategy_selector import (
+    MIN_STRIKE_OI_NEAR_EXPIRY,
+    _nearest_zone,
+    _sell_legs_liquid_enough,
+    _zone_within_range,
+    select_strategy,
+)
 
 FAR_EXPIRY = date(2026, 1, 1) + timedelta(days=30)
 AS_OF = date(2026, 1, 1)
@@ -285,3 +291,124 @@ def test_neutral_bias_fallback_builds_short_strangle_when_not_defined_risk():
     assert rec.action == "short_strangle"
     assert len(rec.legs) == 2
     assert all(leg.side == "sell" for leg in rec.legs)
+
+
+# --- near-expiry gating: hard cutoff below 2 days, liquidity-gated between 2-7 ---
+
+
+def test_inside_hard_cutoff_always_blocks_new_entry_even_with_ample_liquidity():
+    # 1 day to expiry - below MIN_DAYS_TO_EXPIRY_HARD_CUTOFF (2). Must be
+    # close_existing unconditionally, even though the OI snapshot below
+    # would easily clear the liquidity gate if it were consulted at all.
+    close = 1000.0
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+    demand_block = OrderBlockZone(kind="demand", proximal=985.0, distal=970.0, mitigated=False)
+    oi = OISnapshot(available=True, by_strike=[StrikeOI(strike=985.0, option_type="PE", oi=99999.0, oi_change=10.0, buildup="long_buildup")])
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=AS_OF + timedelta(days=1), as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block], oi=oi,
+    )
+
+    assert rec.action == "close_existing"
+    assert rec.legs == []
+
+
+def test_caution_window_allows_entry_when_sell_strike_clears_liquidity_gate():
+    # 5 days to expiry - inside the 2-7 day caution window. Same
+    # order-block-anchored bullish setup as
+    # test_unmitigated_order_block_tightens_a_bullish_put_strike (sell PE
+    # strike lands at 985.0), now with real OI at that exact strike -
+    # should go through as a normal sell_otm_put, not get downgraded.
+    close = 1000.0
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+    demand_block = OrderBlockZone(kind="demand", proximal=985.0, distal=970.0, mitigated=False)
+    oi = OISnapshot(available=True, by_strike=[StrikeOI(strike=985.0, option_type="PE", oi=float(MIN_STRIKE_OI_NEAR_EXPIRY), oi_change=10.0, buildup="long_buildup")])
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=AS_OF + timedelta(days=5), as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block], oi=oi,
+    )
+
+    assert rec.action == "sell_otm_put"
+    sell_leg = next(leg for leg in rec.legs if leg.side == "sell")
+    assert sell_leg.strike == 985.0
+
+
+def test_caution_window_downgrades_to_close_existing_when_sell_strike_is_illiquid():
+    # Same setup as above, but the OI snapshot at the actual sell strike
+    # (985.0) is below MIN_STRIKE_OI_NEAR_EXPIRY - the position couldn't be
+    # exited early with confidence, so the whole recommendation downgrades
+    # to close_existing (empty legs) instead of handing back an
+    # unexitable near-expiry short.
+    close = 1000.0
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+    demand_block = OrderBlockZone(kind="demand", proximal=985.0, distal=970.0, mitigated=False)
+    oi = OISnapshot(available=True, by_strike=[StrikeOI(strike=985.0, option_type="PE", oi=MIN_STRIKE_OI_NEAR_EXPIRY - 1.0, oi_change=10.0, buildup="long_buildup")])
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=AS_OF + timedelta(days=5), as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block], oi=oi,
+    )
+
+    assert rec.action == "close_existing"
+    assert rec.legs == []
+
+
+def test_caution_window_downgrades_to_close_existing_when_no_oi_data_available():
+    # No OI snapshot at all inside the caution window - fails safe as
+    # "not liquid enough" rather than assuming a strike is exitable with no
+    # actual data behind that assumption.
+    close = 1000.0
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+    demand_block = OrderBlockZone(kind="demand", proximal=985.0, distal=970.0, mitigated=False)
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=AS_OF + timedelta(days=5), as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block],
+    )
+
+    assert rec.action == "close_existing"
+    assert rec.legs == []
+
+
+def test_at_or_past_seven_days_ignores_liquidity_entirely():
+    # Exactly at MIN_DAYS_TO_EXPIRY_FOR_NEW_ENTRY (7) - the liquidity gate
+    # no longer applies at all, so a real strategy comes back even with no
+    # OI data (same "far expiry" behavior every other test in this file
+    # already relies on via FAR_EXPIRY, made explicit here at the boundary).
+    close = 1000.0
+    regime = RegimeAssessment(bias="bullish", trend_strength="trending", confidence=0.8, reasons=[])
+    snapshot = _snapshot(close)
+    demand_block = OrderBlockZone(kind="demand", proximal=985.0, distal=970.0, mitigated=False)
+
+    rec = select_strategy(
+        regime=regime, technical=snapshot, corporate_event=None,
+        expiry_date=AS_OF + timedelta(days=7), as_of=AS_OF, strike_interval=5.0,
+        order_blocks=[demand_block],
+    )
+
+    assert rec.action == "sell_otm_put"
+    sell_leg = next(leg for leg in rec.legs if leg.side == "sell")
+    assert sell_leg.strike == 985.0
+
+
+def test_sell_legs_liquid_enough_ignores_buy_only_wing_legs():
+    # A pure protective wing (buy side) carries no assignment/gamma risk of
+    # its own - a leg list with no sell legs at all should never be gated.
+    legs = [StrategyLeg(option_type="PE", strike=980.0, side="buy", basis="wing")]
+    assert _sell_legs_liquid_enough(legs, oi=None) is True
+
+
+def test_sell_legs_liquid_enough_fails_safe_when_oi_unavailable():
+    legs = [StrategyLeg(option_type="PE", strike=985.0, side="sell", basis="short")]
+    assert _sell_legs_liquid_enough(legs, oi=None) is False
+    assert _sell_legs_liquid_enough(legs, oi=OISnapshot(available=False)) is False

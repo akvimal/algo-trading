@@ -1,8 +1,13 @@
 """Deterministic strategy + strike selection from a RegimeAssessment.
 
 Encodes the rest of the ABB-session reasoning:
-  - never open new premium-selling positions inside 7 days of expiry
-    (the gamma/assignment-risk conclusion)
+  - never open new premium-selling positions inside 2 days of expiry, no
+    exceptions (the gamma/assignment-risk conclusion's hard floor)
+  - between 2 and 7 days, a new entry is still allowed but only when every
+    sell leg's own strike clears a real-OI liquidity gate (revised
+    2026-09-23 - the old flat 7-day cutoff was blocking every near-expiry
+    trade regardless of how liquid/exitable the actual strike was, missing
+    otherwise-fine setups; see _sell_legs_liquid_enough)
   - a corporate results date inside the decision window is a hard block on
     new entries, not just a caveat
   - strike distance is anchored to the nearest technical zone AND a minimum
@@ -28,9 +33,45 @@ from .contracts import (
 )
 from .regime_engine import OrderBlockZone
 
+# Below this, a new entry is blocked unconditionally - no liquidity reading
+# is trusted to justify the gamma/assignment risk of opening a fresh short
+# this close to expiry. This is the one day-count check nothing can bypass.
+MIN_DAYS_TO_EXPIRY_HARD_CUTOFF = 2
+# The outer edge of the "near-expiry caution window" (MIN_DAYS_TO_EXPIRY_
+# HARD_CUTOFF <= days_to_expiry < this) - a new entry is still allowed in
+# that window, but only once _sell_legs_liquid_enough confirms the actual
+# strike(s) being sold have enough real OI to exit early if needed. At or
+# past this many days out, no liquidity check applies at all.
 MIN_DAYS_TO_EXPIRY_FOR_NEW_ENTRY = 7
+# Minimum open interest a sell leg's own strike must carry, inside the
+# caution window above, to treat that strike as exitable rather than a
+# trap. Not derived from backtested data - a reasonable starting point,
+# tune freely (same convention as MIN_ATR_PCT_OF_CLOSE/MIN_AVG_DAILY_
+# TRADED_VALUE below).
+MIN_STRIKE_OI_NEAR_EXPIRY = 500
 DEFAULT_ATR_MULTIPLE = 1.0
 DEFAULT_EXIT_RULE = ExitRule(target_pct_of_max_profit=0.65, hard_exit_days_before_expiry=5)
+
+
+def _sell_legs_liquid_enough(legs: list[StrategyLeg], oi: OISnapshot | None) -> bool:
+    """Gates a near-expiry entry (see MIN_DAYS_TO_EXPIRY_FOR_NEW_ENTRY's own
+    comment) on real, current open interest at every leg actually being
+    SOLD - a bought protective wing carries no assignment/gamma risk of its
+    own, so it's never checked here. No OI data this cycle (oi is None or
+    oi.available is False) fails safe as "not liquid enough" - the whole
+    point of this gate is confidence that the position can be exited early,
+    which an unknown OI reading can't provide. A strike missing from
+    oi.by_strike (e.g. genuinely zero recorded OI, or classify_buildup
+    didn't produce a buildup label for it - see _fetch_oi's own filter)
+    reads as 0 OI, same "absence means insufficient" default."""
+    sell_legs = [leg for leg in legs if leg.side == "sell"]
+    if not sell_legs:
+        return True
+    if oi is None or not oi.available:
+        return False
+    oi_by_strike = {(round(row.strike, 2), row.option_type): row.oi for row in oi.by_strike}
+    return all(oi_by_strike.get((round(leg.strike, 2), leg.option_type), 0) >= MIN_STRIKE_OI_NEAR_EXPIRY for leg in sell_legs)
+
 
 # Below either, a symbol reads as too quiet to be worth a weekly premium-
 # selling trade - tightening strike anchoring (below) doesn't manufacture
@@ -251,6 +292,24 @@ def _zone_within_range(zone_price: float, close: float, atr14: float, atr_multip
     return abs(close - zone_price) <= _MAX_ZONE_DISTANCE_ATR_MULTIPLE * atr_multiple * atr14
 
 
+def _gate_near_expiry_liquidity(
+    recommendation: StrategyRecommendation, days_to_expiry: int, oi: OISnapshot | None,
+    entry_window: EntryWindow, exit_rule: ExitRule,
+) -> StrategyRecommendation:
+    """Applied to every real (non-empty-legs) recommendation before
+    select_strategy returns it - a no-op at or past MIN_DAYS_TO_EXPIRY_
+    FOR_NEW_ENTRY days out, otherwise downgrades to close_existing (empty
+    legs) unless _sell_legs_liquid_enough clears the strike(s) actually
+    being sold. days_to_expiry has already passed the MIN_DAYS_TO_EXPIRY_
+    HARD_CUTOFF check by the time this runs (select_strategy's own early
+    return), so this only ever sees the 2-7 day caution window or wider."""
+    if days_to_expiry >= MIN_DAYS_TO_EXPIRY_FOR_NEW_ENTRY:
+        return recommendation
+    if _sell_legs_liquid_enough(recommendation.legs, oi):
+        return recommendation
+    return StrategyRecommendation(action="close_existing", legs=[], entry_window=entry_window, exit_rule=exit_rule)
+
+
 def select_strategy(
     regime: RegimeAssessment,
     technical: TechnicalSnapshot,
@@ -273,7 +332,7 @@ def select_strategy(
             action="avoid_new_entry", legs=[], entry_window=entry_window, exit_rule=exit_rule,
         )
 
-    if days_to_expiry < MIN_DAYS_TO_EXPIRY_FOR_NEW_ENTRY:
+    if days_to_expiry < MIN_DAYS_TO_EXPIRY_HARD_CUTOFF:
         return StrategyRecommendation(
             action="close_existing", legs=[], entry_window=entry_window, exit_rule=exit_rule,
         )
@@ -349,7 +408,10 @@ def select_strategy(
             action = "iron_condor"
         else:
             action = "short_strangle"
-        return StrategyRecommendation(action=action, legs=legs, entry_window=entry_window, exit_rule=exit_rule)
+        return _gate_near_expiry_liquidity(
+            StrategyRecommendation(action=action, legs=legs, entry_window=entry_window, exit_rule=exit_rule),
+            days_to_expiry, oi, entry_window, exit_rule,
+        )
 
     if regime.bias == "bullish":
         put_k, put_source = _put_strike(support, close, atr14, strike_interval, atr_multiple, put_order_block_anchor, oi)
@@ -360,7 +422,10 @@ def select_strategy(
         if defined_risk:
             legs.append(StrategyLeg(option_type="PE", strike=_wing_put_strike(put_k, atr14, strike_interval, wing_atr_multiple), side="buy",
                                      basis="protective wing"))
-        return StrategyRecommendation(action="sell_otm_put", legs=legs, entry_window=entry_window, exit_rule=exit_rule)
+        return _gate_near_expiry_liquidity(
+            StrategyRecommendation(action="sell_otm_put", legs=legs, entry_window=entry_window, exit_rule=exit_rule),
+            days_to_expiry, oi, entry_window, exit_rule,
+        )
 
     if regime.bias == "bearish":
         call_k, call_source = _call_strike(resistance, close, atr14, strike_interval, atr_multiple, call_order_block_anchor, oi)
@@ -371,7 +436,10 @@ def select_strategy(
         if defined_risk:
             legs.append(StrategyLeg(option_type="CE", strike=_wing_call_strike(call_k, atr14, strike_interval, wing_atr_multiple), side="buy",
                                      basis="protective wing"))
-        return StrategyRecommendation(action="sell_otm_call", legs=legs, entry_window=entry_window, exit_rule=exit_rule)
+        return _gate_near_expiry_liquidity(
+            StrategyRecommendation(action="sell_otm_call", legs=legs, entry_window=entry_window, exit_rule=exit_rule),
+            days_to_expiry, oi, entry_window, exit_rule,
+        )
 
     # neutral bias, not ranging by ADX (e.g. votes cancelled out) -- default to the
     # non-directional play rather than guessing a side. Mirrors the ranging
@@ -394,4 +462,7 @@ def select_strategy(
         action = "iron_condor"
     else:
         action = "short_strangle"
-    return StrategyRecommendation(action=action, legs=legs, entry_window=entry_window, exit_rule=exit_rule)
+    return _gate_near_expiry_liquidity(
+        StrategyRecommendation(action=action, legs=legs, entry_window=entry_window, exit_rule=exit_rule),
+        days_to_expiry, oi, entry_window, exit_rule,
+    )

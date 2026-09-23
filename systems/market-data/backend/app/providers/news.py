@@ -71,10 +71,18 @@ SUPPORTED_UNDERLYINGS = set(_KEYWORDS)
 # to avoid re-polling the RSS feeds and re-running the OpenRouter analysis
 # on every page view. One combined fetch per bucket (2 feeds each) covers
 # every underlying sharing that bucket; the AI call still runs once per
-# underlying per refresh, so cost is ~7 OpenRouter calls per full cycle
-# (worst case ~336/day at this TTL - still well under a dollar/day at
-# Haiku pricing, see app/config.py's openrouter_model).
-_NEWS_TTL_SECONDS = 30 * 60
+# underlying per refresh IF that underlying's matched article set actually
+# changed since last time (see _last_fingerprint/_refresh_bucket - an
+# unchanged RSS feed just extends the existing digest's freshness instead
+# of spending another OpenRouter call), so real-world cost tracks how often
+# new articles actually get published, not this TTL. Lowered 30m -> 15m
+# 2026-09-23 (news was reading as stale/late in the Live Chart's News tab) -
+# worst case (every underlying gets a genuinely new article every single
+# cycle, which the fingerprint check would never actually let happen in
+# practice) is ~7 OpenRouter calls/cycle * 96 cycles/day = ~672/day, still
+# well under a dollar/day at this feature's own openrouter_model default
+# (app/config.py - a cheap Gemini Flash Lite tier, not Haiku).
+_NEWS_TTL_SECONDS = 15 * 60
 
 # How many of the freshest matched articles to actually hand to the AI -
 # caps prompt size/cost regardless of how many the feeds turned up.

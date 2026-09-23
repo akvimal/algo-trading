@@ -4662,6 +4662,26 @@ button.btn-exit {
   font-size: 0.92rem;
 }
 
+/* Volume PCR reads a different bullish/bearish bucket than the OI PCR
+   right before it - today's flow may be shifting sentiment ahead of the
+   standing OI. */
+.live-chart-oi-pcr-diverging {
+  color: #e8a83e;
+}
+
+.live-chart-oi-pcr-diverging b {
+  color: #e8a83e;
+}
+
+/* How much faster one side's OI is building than the other's, within
+   whichever bullish/bearish bucket the buildup badges next to it already
+   show (see flowSkew's own comment - CE/PE buildup can never disagree on
+   that bucket, so this fills in the conviction-strength gap they leave). */
+.live-chart-oi-flow-skew {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
 .live-chart-oi-delta {
   color: color-mix(in srgb, var(--text-dim) 80%, transparent);
 }

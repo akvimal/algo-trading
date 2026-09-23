@@ -128,7 +128,7 @@ function fmtIv(n: number | null, isCrypto = false): string {
   return n == null ? "-" : `${(isCrypto ? n * 100 : n).toFixed(2)}%`;
 }
 
-function fmtPcr(n: number | null): string {
+export function fmtPcr(n: number | null): string {
   return n == null ? "-" : n.toFixed(2);
 }
 
@@ -140,7 +140,9 @@ function fmtPcr(n: number | null): string {
 // chain (summary.strikes - not the ATM-windowed visibleStrikes) rather
 // than a new backend field, mirroring oi_summary.py's own pcr formula
 // exactly (null, not Infinity/NaN, when call volume is 0).
-function volumePcr(strikes: OiSummaryStrike[]): number | null {
+// Exported so LiveChartPanel's OI strip can show the same divergence-vs-OI-PCR
+// read the confluence panel already leans on, without a second, drifting copy.
+export function volumePcr(strikes: OiSummaryStrike[]): number | null {
   let callVolume = 0;
   let putVolume = 0;
   for (const s of strikes) {

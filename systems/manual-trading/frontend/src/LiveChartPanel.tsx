@@ -25,7 +25,7 @@ import { TrashIcon } from "./Icons";
 import { fmtQty } from "./manualOrder";
 import { computeSupertrend } from "./supertrend";
 import { useQuoteSocket } from "./useQuoteSocket";
-import { BUILDUP_META } from "./OiSummaryPage";
+import { BUILDUP_META, fmtPcr, volumePcr } from "./OiSummaryPage";
 import {
   type Candle,
   type ChartStructure,
@@ -1224,6 +1224,25 @@ function OiDelta({ change, total }: { change: number | null; total: number }) {
   );
 }
 
+// How lopsided this cycle's OI flow is between calls and puts, in
+// percentage points of each side's own total - e.g. call OI +0.6% and put
+// OI +1.5% over the same 5m window nets to "+0.9pp PE-led". CE/PE buildup
+// badges are both classified against the SAME shared spot move (see
+// total_call_buildup/total_put_buildup's own docstring), so they can never
+// actually disagree on bullish-vs-bearish bucket - this fills the gap they
+// leave: even when both land in the same bucket, one side can still be
+// building conviction far faster than the other, which the discrete
+// 4-state badges alone can't show. Same 5m window those badges themselves
+// use (not 15m), so this never describes a different moment than they do.
+function flowSkew(
+  callOiChange5m: number | null, callOiTotal: number, putOiChange5m: number | null, putOiTotal: number,
+): { pct: number; leader: "CE" | "PE" } | null {
+  if (callOiChange5m == null || putOiChange5m == null || callOiTotal <= 0 || putOiTotal <= 0) return null;
+  const gap = (putOiChange5m / putOiTotal) * 100 - (callOiChange5m / callOiTotal) * 100;
+  if (gap === 0) return null;
+  return { pct: Math.abs(gap), leader: gap > 0 ? "PE" : "CE" };
+}
+
 // OI-derived support / resistance. Resistance = the biggest call-OI
 // strikes AT OR ABOVE spot (call writers defend them - a big call-OI
 // strike *below* spot is already breached, not resistance); support = the
@@ -1977,6 +1996,17 @@ function toChartTrades(
 }
 
 type Status = "loading" | "ready" | "error";
+
+// Same >=1.15 bullish / <=0.85 bearish / else neutral thresholds the trade
+// panel's oiBias below already used inline - factored out so the new
+// volume-vs-OI PCR divergence check (the OI strip) buckets PCR the exact
+// same way, rather than a second, silently-driftable copy of the numbers.
+function classifyPcr(pcr: number | null): "bullish" | "bearish" | "neutral" | null {
+  if (pcr == null) return null;
+  if (pcr >= 1.15) return "bullish";
+  if (pcr <= 0.85) return "bearish";
+  return "neutral";
+}
 
 export type IntervalTrend = { trend: "up" | "down" | "range" | null; interval: string };
 
@@ -3118,8 +3148,7 @@ export function LiveChartPanel({
   // --- Lift regime + a coarse PCR-based OI lean up for the trade panel's
   // pre-trade confluence readout. ---
   useEffect(() => {
-    const oiBias: ChartContext["oiBias"] =
-      oi?.pcr == null ? null : oi.pcr >= 1.15 ? "bullish" : oi.pcr <= 0.85 ? "bearish" : "neutral";
+    const oiBias: ChartContext["oiBias"] = classifyPcr(oi?.pcr ?? null);
     onContextChangeRef.current?.({ regime, oiBias });
   }, [regime, oi]);
 
@@ -4238,6 +4267,32 @@ export function LiveChartPanel({
           <span className="live-chart-oi-pcr">
             PCR <b>{oi.pcr != null ? oi.pcr.toFixed(2) : "–"}</b>
           </span>
+          {(() => {
+            // Volume PCR = today's actual trading (flow), vs. the OI PCR
+            // above = standing positions built up over any number of prior
+            // days - the two can legitimately read differently, and a
+            // disagreement between them (flow already turning one way while
+            // standing OI hasn't caught up yet) is itself a signal the OI
+            // PCR alone can't show. Computed client-side from the same
+            // already-fetched chain (see volumePcr's own docstring).
+            const volPcrValue = volumePcr(oi.strikes);
+            const oiBucket = classifyPcr(oi.pcr);
+            const volBucket = classifyPcr(volPcrValue);
+            const diverging = oiBucket != null && volBucket != null && oiBucket !== volBucket;
+            return (
+              <span
+                className={`live-chart-oi-pcr${diverging ? " live-chart-oi-pcr-diverging" : ""}`}
+                title={
+                  diverging
+                    ? `Volume PCR (today's trading) reads ${volBucket} while OI PCR (standing positions) reads ${oiBucket} - today's flow may be shifting sentiment before it shows up in built-up OI`
+                    : "Put volume / call volume - today's actual trading activity, vs. the OI PCR's standing positions"
+                }
+              >
+                Vol PCR <b>{fmtPcr(volPcrValue)}</b>
+                {diverging ? " ⇄" : ""}
+              </span>
+            );
+          })()}
           <span>
             CE OI {fmtOiCount(oi.total_call_oi, oi.underlying_exchange === "CRYPTO")}
             {(oi.total_call_oi_change_5m != null || oi.total_call_oi_change_15m != null) && (
@@ -4303,6 +4358,19 @@ export function LiveChartPanel({
                     )}
                   </span>
                 )}
+                {(() => {
+                  const skew = flowSkew(oi.total_call_oi_change_5m, oi.total_call_oi, oi.total_put_oi_change_5m, oi.total_put_oi);
+                  return (
+                    skew && (
+                      <span
+                        className="live-chart-oi-flow-skew"
+                        title={`Put OI is moving ${skew.leader === "PE" ? "faster" : "slower"} than call OI this 5m window (${skew.pct.toFixed(1)} percentage-point gap) - a lopsided-vs-balanced read within whichever bullish/bearish bucket the badges above already show, since CE/PE buildup can never disagree on bucket`}
+                      >
+                        Δ{skew.pct.toFixed(1)}pp {skew.leader}-led
+                      </span>
+                    )
+                  );
+                })()}
               </>
             );
           })()}

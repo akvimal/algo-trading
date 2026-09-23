@@ -220,6 +220,16 @@
   .notif-history-item:hover {
     background: var(--surface-raised, #1a1f27);
   }
+  /* Same symbol+type as the row directly above it (see notifEntryKey) -
+     dimmed so a chattery symbol reads as "still chattering" at a glance
+     instead of crowding out other symbols' events at full visual weight.
+     Full opacity on hover so it's still easy to inspect one directly. */
+  .notif-history-item.notif-repeat {
+    opacity: 0.55;
+  }
+  .notif-history-item.notif-repeat:hover {
+    opacity: 1;
+  }
   .notif-history-title {
     color: var(--text);
     font-weight: 600;
@@ -773,6 +783,20 @@
         item.appendChild(span);
       }
 
+      // Same symbol + same entry type as the row directly above it (more
+      // recent, since history is newest-first) - a chattery symbol
+      // flip-flopping every few minutes would otherwise fill most of the
+      // visible NOTIF_HISTORY_SHOW slots at full visual weight, crowding
+      // out other symbols' events. `entry.symbol` covers every entry
+      // written by the current (structured) push functions; a legacy
+      // signal entry (pre-redesign, no `.symbol` field) falls back to its
+      // own `.tag` (the signal_id, not the symbol) - a harmless miss, not a
+      // false match, and only relevant until those age out of
+      // NOTIF_HISTORY_KEEP on their own.
+      function notifEntryKey(entry) {
+        return `${entry.type}:${entry.symbol ?? entry.tag}`;
+      }
+
       function renderNotifHistory() {
         notifHistoryEl.innerHTML = "";
         const shown = notifHistory.slice(0, NOTIF_HISTORY_SHOW);
@@ -783,10 +807,13 @@
           notifHistoryEl.appendChild(empty);
           return;
         }
+        let prevKey = null;
         for (const entry of shown) {
           const item = document.createElement("button");
           item.type = "button";
-          item.className = "notif-history-item";
+          const key = notifEntryKey(entry);
+          item.className = `notif-history-item${key === prevKey ? " notif-repeat" : ""}`;
+          prevKey = key;
           item.onclick = () => jumpToNotifEntry(entry);
 
           if (entry.type === "sentiment" && entry.direction) {

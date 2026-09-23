@@ -225,6 +225,27 @@
     font-weight: 600;
     font-size: 0.78rem;
   }
+  /* Colored by the entry's resulting sentiment direction / BUY-SELL action
+     - same --buy/--sell/--text-dim variables used everywhere else in this
+     app, not a new palette. */
+  .notif-history-title.notif-bullish {
+    color: var(--buy);
+  }
+  .notif-history-title.notif-bearish {
+    color: var(--sell);
+  }
+  .notif-history-title.notif-neutral {
+    color: var(--text-dim);
+  }
+  /* A real direction flip (e.g. Bearish -> Bullish, or either -> Neutral)
+     stands out from a routine same-direction strength wobble (e.g. Bearish
+     Strong -> Mild), which is the more common, less actionable event. */
+  .notif-history-title.notif-flip {
+    font-weight: 700;
+  }
+  .notif-history-title.notif-steady {
+    font-weight: 500;
+  }
   .notif-history-body {
     color: var(--text-dim);
     font-size: 0.74rem;
@@ -732,6 +753,26 @@
         closeNotifMenu();
       }
 
+      // icon + color class for a sentiment direction - ▲/▼ match the same
+      // glyph vocabulary the OI buildup badges elsewhere in this app
+      // already use, rather than inventing a new one.
+      function directionMeta(direction) {
+        if (direction === "bullish") return { icon: "▲", cls: "notif-bullish" };
+        if (direction === "bearish") return { icon: "▼", cls: "notif-bearish" };
+        return { icon: "–", cls: "notif-neutral" };
+      }
+
+      function actionMeta(action) {
+        return action === "BUY" ? { icon: "▲", cls: "notif-bullish" } : { icon: "▼", cls: "notif-bearish" };
+      }
+
+      function appendLine(item, text, cls) {
+        const span = document.createElement("span");
+        span.className = cls;
+        span.textContent = text;
+        item.appendChild(span);
+      }
+
       function renderNotifHistory() {
         notifHistoryEl.innerHTML = "";
         const shown = notifHistory.slice(0, NOTIF_HISTORY_SHOW);
@@ -748,20 +789,39 @@
           item.className = "notif-history-item";
           item.onclick = () => jumpToNotifEntry(entry);
 
-          const title = document.createElement("span");
-          title.className = "notif-history-title";
-          title.textContent = entry.title;
-          item.appendChild(title);
-
-          const body = document.createElement("span");
-          body.className = "notif-history-body";
-          body.textContent = entry.body;
-          item.appendChild(body);
-
-          const time = document.createElement("span");
-          time.className = "notif-history-time";
-          time.textContent = relTime(entry.at);
-          item.appendChild(time);
+          if (entry.type === "sentiment" && entry.direction) {
+            // One line carries the full before -> after transition (colored/
+            // iconed by the RESULTING direction) instead of splitting it
+            // across a bold title + a separate "was X" line - strictly more
+            // information (both states, not just the new one) in fewer
+            // words. A real direction flip is bolded; a same-direction
+            // strength wobble (e.g. Bearish Strong -> Mild) is not, so a
+            // flip stands out from routine noise at a glance.
+            const meta = directionMeta(entry.direction);
+            const flipped = entry.prevDirection !== entry.direction;
+            appendLine(
+              item,
+              `${meta.icon} ${entry.symbol}   ${sentimentLabel(entry.prevDirection, entry.prevStrength)} → ${sentimentLabel(entry.direction, entry.strength)}`,
+              `notif-history-title ${meta.cls} ${flipped ? "notif-flip" : "notif-steady"}`,
+            );
+            appendLine(item, `${entry.exchange} · ${relTime(entry.at)}`, "notif-history-time");
+          } else if (entry.type === "signal" && entry.action) {
+            const meta = actionMeta(entry.action);
+            appendLine(item, `${meta.icon} ${entry.action} ${entry.symbol}`, `notif-history-title ${meta.cls}`);
+            appendLine(
+              item,
+              `${entry.strategyName} · ${entry.exchange} @ ${entry.price}${entry.status ? ` · ${entry.status}` : ""}`,
+              "notif-history-body",
+            );
+            appendLine(item, relTime(entry.at), "notif-history-time");
+          } else {
+            // Legacy shape (pre-redesign entries already sitting in
+            // localStorage, plain title/body strings) - plain uncoloured
+            // fallback until they age out of NOTIF_HISTORY_KEEP on their own.
+            appendLine(item, entry.title, "notif-history-title");
+            appendLine(item, entry.body, "notif-history-body");
+            appendLine(item, relTime(entry.at), "notif-history-time");
+          }
 
           notifHistoryEl.appendChild(item);
         }
@@ -818,7 +878,21 @@
         const n = new Notification(title, { body, tag: s.signal_id });
         n.onclick = () => window.focus();
         playSoundIfEnabled(SIGNAL_TUNE_HZ);
-        pushNotifHistory({ type: "signal", title, body, at: Date.now(), tag: s.signal_id });
+        // Structured fields (not just the pre-rendered title/body above) so
+        // renderNotifHistory can color/icon this by BUY/SELL instead of
+        // parsing plain text back out - see the history-item redesign notes
+        // there.
+        pushNotifHistory({
+          type: "signal",
+          action: s.action,
+          symbol: s.symbol,
+          strategyName,
+          exchange: s.exchange,
+          price: s.price,
+          status: s.status ?? null,
+          at: Date.now(),
+          tag: s.signal_id,
+        });
       }
 
       function playSoundIfEnabled(frequencies) {
@@ -840,13 +914,28 @@
         return `${direction === "bullish" ? "Bullish" : "Bearish"} (${SENTIMENT_STRENGTH_LABEL[strength]})`;
       }
 
-      function notifyOfSentimentChange(symbol, exchange, prevLabel, nextLabel) {
+      function notifyOfSentimentChange(symbol, exchange, prev, current) {
+        const prevLabel = sentimentLabel(prev.direction, prev.strength);
+        const nextLabel = sentimentLabel(current.direction, current.strength);
         const title = `${symbol} sentiment: ${nextLabel}`;
         const body = `${exchange} · was ${prevLabel}`;
         const n = new Notification(title, { body, tag: `sentiment-${symbol}` });
         n.onclick = () => window.focus();
         playSoundIfEnabled(SENTIMENT_TUNE_HZ);
-        pushNotifHistory({ type: "sentiment", title, body, at: Date.now(), tag: symbol });
+        // Structured direction/strength (both before and after), not just
+        // the pre-rendered title/body above - see the history-item redesign
+        // notes in renderNotifHistory.
+        pushNotifHistory({
+          type: "sentiment",
+          symbol,
+          exchange,
+          prevDirection: prev.direction,
+          prevStrength: prev.strength,
+          direction: current.direction,
+          strength: current.strength,
+          at: Date.now(),
+          tag: symbol,
+        });
       }
 
       async function pollStrategyNames() {
@@ -911,12 +1000,7 @@
           for (const [symbol, current] of next) {
             const prev = prevSentiment.get(symbol);
             if (prev && (prev.direction !== current.direction || prev.strength !== current.strength)) {
-              notifyOfSentimentChange(
-                symbol,
-                current.exchange,
-                sentimentLabel(prev.direction, prev.strength),
-                sentimentLabel(current.direction, current.strength),
-              );
+              notifyOfSentimentChange(symbol, current.exchange, prev, current);
             }
           }
           prevSentiment = next;

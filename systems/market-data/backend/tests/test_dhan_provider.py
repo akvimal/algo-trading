@@ -29,6 +29,21 @@ def test_sync_instruments_filters_to_nse_cash_equity():
     assert provider._symbol_to_security_id == {"RELIANCE": "2885"}
 
 
+TWO_EQUITY_CSV = FAKE_CSV + "NSE,E,11536,EQUITY,0,TCS,1.0,Tata Consultancy,,,,10.0000,NA,ES,EQ,TCS LTD\n"
+
+
+@responses.activate
+def test_list_nse_equities_returns_only_nse_eq_symbols_sorted():
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=TWO_EQUITY_CSV, status=200)
+
+    provider = DhanProvider()
+
+    # Sorted, and excludes the fixture's own OPTSTK/BSE rows (neither
+    # matches this provider's single NSE_EQ config anyway - see
+    # test_sync_instruments_filters_to_nse_cash_equity above).
+    assert provider.list_nse_equities() == ["RELIANCE", "TCS"]
+
+
 @responses.activate
 def test_get_ltp_success(monkeypatch):
     monkeypatch.setattr(settings, "dhan_client_id", "test-client")

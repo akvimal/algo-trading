@@ -10,7 +10,7 @@ this system, otherwise in-memory-cache-only by design, now has one.
 
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Column, Float, Integer, Numeric, Text, func
+from sqlalchemy import BigInteger, Boolean, Column, Date, Float, Integer, Numeric, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -67,6 +67,76 @@ class PriceAlert(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_triggered_at = Column(TIMESTAMP(timezone=True))
     trigger_count = Column(Integer, nullable=False, default=0)
+
+
+class OiEodSnapshot(Base):
+    """One row per (symbol, snapshot_date) - the EOD OI-buildup screener's
+    own persisted history, written once per trading day by
+    app/scheduler.py's _record_oi_eod_snapshot (see docs/architecture.md's
+    OI-by-strike-history idea - this is the per-SYMBOL-total version of
+    that idea, not per-strike). Exists specifically because Dhan's option-
+    chain API has no historical-OI endpoint at all - this table IS the
+    history, built up one EOD snapshot at a time going forward; nothing
+    before this feature shipped can ever be backfilled.
+
+    call_oi_change_pct/put_oi_change_pct/price_change_pct/call_buildup/
+    put_buildup are all computed against the PREVIOUS row for this same
+    symbol (whatever that job found queryable at write time) - see
+    app/domain/oi_buildup.py. total_call_oi/total_put_oi/spot_price are
+    also what the NEXT day's job diffs against, so this table is its own
+    day-over-day reference (unlike DhanProvider's in-memory OI history,
+    which resets on every restart)."""
+
+    __tablename__ = "oi_eod_snapshot"
+    __table_args__ = (UniqueConstraint("symbol", "snapshot_date"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    snapshot_date = Column(Date, nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    spot_price = Column(Float)
+    total_call_oi = Column(BigInteger, nullable=False)
+    total_put_oi = Column(BigInteger, nullable=False)
+    pcr = Column(Float)
+    call_oi_change_pct = Column(Float)
+    put_oi_change_pct = Column(Float)
+    price_change_pct = Column(Float)
+    call_buildup = Column(Text)
+    put_buildup = Column(Text)
+
+
+class EquityScreenerSnapshot(Base):
+    """One row per (symbol, snapshot_date) - the EOD momentum/trend +
+    52-week-proximity screener (see app/scheduler.py's
+    _record_equity_screener_snapshot + app/domain/equity_screener.py).
+    Unlike OiEodSnapshot above, every metric here is recomputed fresh
+    each day from a trailing window fetched straight off Dhan's own
+    charts/historical endpoint (real multi-year daily bars, no chunking
+    needed) - this table only persists the DERIVED read, not raw OHLCV,
+    since Dhan itself already holds the history."""
+
+    __tablename__ = "equity_screener_snapshot"
+    __table_args__ = (UniqueConstraint("symbol", "snapshot_date"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    snapshot_date = Column(Date, nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    close = Column(Float, nullable=False)
+    pct_change_5d = Column(Float)
+    pct_change_20d = Column(Float)
+    adx = Column(Float)
+    # trending_up/trending_down/ranging/transitional - app/domain/regime.py's
+    # own Regime literal.
+    regime = Column(Text)
+    high_52w = Column(Float)
+    low_52w = Column(Float)
+    pct_from_52w_high = Column(Float)
+    pct_from_52w_low = Column(Float)
+    # near_52w_high/near_52w_low or NULL (mid-range/not enough history).
+    proximity = Column(Text)
 
 
 class NewsHistory(Base):

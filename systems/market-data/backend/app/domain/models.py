@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -723,3 +723,113 @@ class PriceAlertOut(BaseModel):
     created_at: datetime
     last_triggered_at: Optional[datetime] = None
     trigger_count: int
+
+
+class OiEodSnapshotHistoryPoint(BaseModel):
+    """One earlier day's totals for the sparkline on GET /oi-buildup - a
+    trimmed view of market_data.oi_eod_snapshot (no PCR/buildup/changes,
+    just enough to plot a trend line)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    snapshot_date: date
+    total_call_oi: int
+    total_put_oi: int
+    spot_price: Optional[float] = None
+
+
+class OiEodSnapshotOut(BaseModel):
+    """One NSE F&O stock's most recent EOD OI snapshot, for GET
+    /oi-buildup's all-stocks screener - see app/domain/oi_buildup.py and
+    app/scheduler.py's _record_oi_eod_snapshot (the job that writes
+    market_data.oi_eod_snapshot, once per trading day, after close).
+
+    call_oi_change_pct/put_oi_change_pct/price_change_pct and
+    call_buildup/put_buildup are all day-over-day (this snapshot vs. the
+    PREVIOUS trading day's own row for this symbol) - None on a symbol's
+    very first snapshot day, since there's nothing yet to diff against.
+    Two separate buildup badges, not one merged verdict - same "a rising
+    call OI and a rising put OI mean different things" reasoning as
+    app/domain/sentiment.py's _atm_buildups and build_oi_summary's own
+    chain-wide total_call_buildup/total_put_buildup.
+
+    history is oldest-first, capped to whatever the request asked for
+    (see get_oi_buildup's own `history_days` param) - the sparkline's data
+    series, INCLUDING this row's own date as its last point so the line
+    doesn't visually stop one day short."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    symbol: str
+    exchange: str
+    snapshot_date: date
+    spot_price: Optional[float] = None
+    total_call_oi: int
+    total_put_oi: int
+    pcr: Optional[float] = None
+    call_oi_change_pct: Optional[float] = None
+    put_oi_change_pct: Optional[float] = None
+    price_change_pct: Optional[float] = None
+    call_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
+    put_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
+    history: list[OiEodSnapshotHistoryPoint] = Field(default_factory=list)
+
+
+class OiBuildupScreenerOut(BaseModel):
+    """GET /oi-buildup's full response - every NSE F&O stock's latest EOD
+    snapshot, plus which trading day that is (all rows share the same
+    snapshot_date - the most recent date app/scheduler.py's
+    _record_oi_eod_snapshot successfully ran for)."""
+
+    snapshot_date: date
+    rows: list[OiEodSnapshotOut]
+
+
+class EquityScreenerHistoryPoint(BaseModel):
+    """One earlier day's close for the sparkline on GET /equity-screener -
+    a trimmed view of market_data.equity_screener_snapshot, same shape as
+    OiEodSnapshotHistoryPoint above."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    snapshot_date: date
+    close: float
+
+
+class EquityScreenerRowOut(BaseModel):
+    """One NSE equity's most recent EOD momentum/trend + 52-week-proximity
+    read, for GET /equity-screener's all-equities screener - see
+    app/domain/equity_screener.py and app/scheduler.py's
+    _record_equity_screener_snapshot (the job that writes
+    market_data.equity_screener_snapshot, once per trading day). Unlike
+    OiEodSnapshotOut, every field here is recomputed fresh each day from
+    a trailing window of real Dhan daily bars, not diffed against
+    yesterday's own row - so nothing here is ever None just because
+    "there's no previous day yet" (only high_52w/low_52w/pct_from_52w_*/
+    proximity can be None, and only for a symbol with under
+    MIN_BARS_FOR_52W_PROXIMITY days of real trading history)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    symbol: str
+    exchange: str
+    snapshot_date: date
+    close: float
+    pct_change_5d: Optional[float] = None
+    pct_change_20d: Optional[float] = None
+    adx: Optional[float] = None
+    regime: Optional[Literal["trending_up", "trending_down", "ranging", "transitional"]] = None
+    high_52w: Optional[float] = None
+    low_52w: Optional[float] = None
+    pct_from_52w_high: Optional[float] = None
+    pct_from_52w_low: Optional[float] = None
+    proximity: Optional[Literal["near_52w_high", "near_52w_low"]] = None
+    history: list[EquityScreenerHistoryPoint] = Field(default_factory=list)
+
+
+class EquityScreenerOut(BaseModel):
+    """GET /equity-screener's full response - every NSE equity's latest
+    EOD read, plus which trading day that is."""
+
+    snapshot_date: date
+    rows: list[EquityScreenerRowOut]

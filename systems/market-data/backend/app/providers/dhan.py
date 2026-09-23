@@ -753,6 +753,14 @@ class DhanProvider(QuoteProvider):
         # sorted by expiry ascending - only populated for configs that
         # set underlying_of.
         self._underlying_to_contracts: dict[str, list[ContractInfo]] = {}
+        # Every distinct underlying with at least one NSE_OPTSTK row this
+        # sync - i.e. the real "NSE F&O stocks" universe (~150-200 names),
+        # derived from Dhan's own instrument master rather than a hand-
+        # maintained list (none existed anywhere in this codebase before
+        # app/scheduler.py's _record_oi_eod_snapshot needed one - see
+        # list_fno_stock_underlyings). Empty on the MCX instance (no
+        # NSE_OPTSTK config there).
+        self._optstk_underlyings: set[str] = set()
         self._last_synced_at: Optional[datetime] = None
         # Rate-limit throttle CLOCKS (lock + last-call timestamps) are
         # module-level now, shared by every DhanProvider instance - see
@@ -854,6 +862,7 @@ class DhanProvider(QuoteProvider):
         symbol_to_config: dict[str, SegmentConfig] = {}
         symbol_to_lot: dict[str, int] = {}
         underlying_to_contracts: dict[str, list[ContractInfo]] = {}
+        optstk_underlyings: set[str] = set()
 
         reader = csv.DictReader(io.StringIO(resp.text))
         for row in reader:
@@ -889,6 +898,18 @@ class DhanProvider(QuoteProvider):
                         lot_size = override
                 symbol_to_lot[symbol] = lot_size
 
+                if config is NSE_OPTSTK:
+                    # NSE_OPTSTK.underlying_of is deliberately unset (see
+                    # its own SegmentConfig comment - execution never needs
+                    # active-contract rollover for options), so this is a
+                    # separate derivation, not underlying_to_contracts
+                    # below. Same _underlying_from_trading_symbol helper
+                    # (options only encode month+year, but the underlying
+                    # name prefix - what this needs - is never ambiguous).
+                    optstk_underlying = _underlying_from_trading_symbol(row)
+                    if optstk_underlying:
+                        optstk_underlyings.add(optstk_underlying)
+
                 if config.underlying_of is not None:
                     underlying = config.underlying_of(row)
                     expiry_raw = (row.get("SEM_EXPIRY_DATE") or "").split(" ")[0]
@@ -912,6 +933,7 @@ class DhanProvider(QuoteProvider):
             self._symbol_to_lot_size = symbol_to_lot
             self._security_id_to_symbol = security_id_to_symbol
             self._underlying_to_contracts = underlying_to_contracts
+            self._optstk_underlyings = optstk_underlyings
             self._last_synced_at = datetime.now(timezone.utc)
 
         logger.info("Dhan instrument master synced (%s): %d symbols", self.name, len(symbol_to_id))
@@ -986,6 +1008,33 @@ class DhanProvider(QuoteProvider):
             }
             for c in active
         ]
+
+    def list_nse_equities(self) -> list[str]:
+        """Every plain NSE cash-equity symbol (NSE_EQ rows - ~2000 as of
+        2026-09, the FULL listed-equity universe, not just the ~200 with
+        options) this instance's most recent instrument sync saw, sorted.
+        Backs app/scheduler.py's _record_equity_screener_snapshot. Unlike
+        list_fno_stock_underlyings below, no per-row derivation is needed -
+        an NSE_EQ row's own SEM_TRADING_SYMBOL already IS the plain
+        underlying name (no day/strike/expiry encoding to strip), so this
+        is just a filter over the symbol table sync_instruments() already
+        built for every other purpose."""
+        if not self._symbol_to_security_id:
+            self.sync_instruments()
+        return sorted(symbol for symbol, config in self._symbol_to_config.items() if config is NSE_EQ)
+
+    def list_fno_stock_underlyings(self) -> list[str]:
+        """Every NSE stock with a live NSE_OPTSTK row this instance's most
+        recent instrument sync saw - i.e. the real "NSE F&O stocks"
+        universe (~150-200 names as of 2026-09), sorted. Backs
+        app/scheduler.py's _record_oi_eod_snapshot - previously no such
+        list existed anywhere in this codebase (every other F&O symbol
+        list here, e.g. SENTIMENT_UNDERLYINGS, is a small hand-picked
+        watchlist, not a scan of the real universe). Empty on the MCX
+        instance (no NSE_OPTSTK config there) or before the first sync."""
+        if not self._symbol_to_security_id:
+            self.sync_instruments()
+        return sorted(self._optstk_underlyings)
 
     def resolve_underlying(self, underlying: str) -> Optional[ResolvedUnderlying]:
         """chart_symbol/chart_exchange = what to fetch candles for and

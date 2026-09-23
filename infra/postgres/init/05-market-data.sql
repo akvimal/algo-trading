@@ -92,3 +92,85 @@ CREATE TABLE IF NOT EXISTS market_data.news_history (
 
 CREATE INDEX IF NOT EXISTS idx_news_history_underlying_time
     ON market_data.news_history (underlying, recorded_at DESC);
+
+-- One row per (symbol, snapshot_date) - the EOD OI-buildup screener's own
+-- persisted history (see app/scheduler.py's _record_oi_eod_snapshot +
+-- app/domain/oi_buildup.py). Dhan's option-chain API has no historical-OI
+-- endpoint at all - this table IS the history, one EOD snapshot per NSE
+-- F&O stock per trading day, built up going forward only (nothing before
+-- this feature shipped can be backfilled). call_oi_change_pct/
+-- put_oi_change_pct/price_change_pct/call_buildup/put_buildup are all
+-- computed against the PREVIOUS row for that same symbol at write time -
+-- this table is its own day-over-day reference, unlike DhanProvider's
+-- in-memory OI history (resets on every backend restart). Kept
+-- indefinitely (no retention job), same as sentiment_history/news_history
+-- above.
+CREATE TABLE IF NOT EXISTS market_data.oi_eod_snapshot (
+    id                 BIGSERIAL PRIMARY KEY,
+    snapshot_date      DATE NOT NULL,
+    exchange           TEXT NOT NULL,
+    symbol             TEXT NOT NULL,
+    recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    spot_price         DOUBLE PRECISION,
+    total_call_oi      BIGINT NOT NULL,
+    total_put_oi       BIGINT NOT NULL,
+    pcr                DOUBLE PRECISION,
+    call_oi_change_pct DOUBLE PRECISION,
+    put_oi_change_pct  DOUBLE PRECISION,
+    price_change_pct   DOUBLE PRECISION,
+    -- long_buildup/short_buildup/short_covering/long_unwinding or NULL -
+    -- see app/domain/oi_summary.py's _classify_buildup for the mapping.
+    -- Two separate columns, deliberately not merged into one - same
+    -- reasoning as sentiment_history's atm_call_buildup/atm_put_buildup.
+    call_buildup       TEXT,
+    put_buildup        TEXT,
+    UNIQUE (symbol, snapshot_date)
+);
+
+-- GET /oi-buildup's two access patterns: "every symbol's latest date"
+-- (idx on snapshot_date alone, via the UNIQUE constraint's own implicit
+-- btree covering symbol+date already handles symbol-scoped lookups) and
+-- "one symbol's last N days for its sparkline".
+CREATE INDEX IF NOT EXISTS idx_oi_eod_snapshot_symbol_date
+    ON market_data.oi_eod_snapshot (symbol, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_oi_eod_snapshot_date
+    ON market_data.oi_eod_snapshot (snapshot_date);
+
+-- One row per (symbol, snapshot_date) - the EOD momentum/trend +
+-- 52-week-proximity equity screener (see app/scheduler.py's
+-- _record_equity_screener_snapshot + app/domain/equity_screener.py).
+-- Unlike oi_eod_snapshot above, every metric here is recomputed fresh
+-- each day from a trailing window fetched straight off Dhan's own
+-- charts/historical endpoint (real multi-year daily bars, one request
+-- per symbol, no chunking needed) - only the DERIVED read is persisted
+-- here, not raw OHLCV, since Dhan itself already holds that history.
+-- Covers ALL NSE-listed equities (~2000), not just the F&O subset
+-- oi_eod_snapshot is scoped to.
+CREATE TABLE IF NOT EXISTS market_data.equity_screener_snapshot (
+    id                 BIGSERIAL PRIMARY KEY,
+    snapshot_date      DATE NOT NULL,
+    exchange           TEXT NOT NULL,
+    symbol             TEXT NOT NULL,
+    recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    close              DOUBLE PRECISION NOT NULL,
+    pct_change_5d      DOUBLE PRECISION,
+    pct_change_20d     DOUBLE PRECISION,
+    adx                DOUBLE PRECISION,
+    -- trending_up/trending_down/ranging/transitional - see
+    -- app/domain/regime.py's Regime literal (the same read backing the
+    -- Live Chart's own regime badge).
+    regime             TEXT,
+    high_52w           DOUBLE PRECISION,
+    low_52w            DOUBLE PRECISION,
+    pct_from_52w_high  DOUBLE PRECISION,
+    pct_from_52w_low   DOUBLE PRECISION,
+    -- near_52w_high/near_52w_low or NULL (mid-range, or not enough
+    -- history yet - see MIN_BARS_FOR_52W_PROXIMITY).
+    proximity          TEXT,
+    UNIQUE (symbol, snapshot_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_equity_screener_snapshot_symbol_date
+    ON market_data.equity_screener_snapshot (symbol, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_equity_screener_snapshot_date
+    ON market_data.equity_screener_snapshot (snapshot_date);

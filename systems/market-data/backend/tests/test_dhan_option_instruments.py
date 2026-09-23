@@ -76,6 +76,17 @@ def test_nse_optstk_config_syncs_only_optstk_rows():
 
 
 @responses.activate
+def test_list_fno_stock_underlyings_derives_underlying_from_optstk_rows():
+    responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=FAKE_OPTION_CSV, status=200)
+
+    # NSE_OPTIDX/MCX_OPTFUT rows must NOT contribute - this is specifically
+    # the OPTSTK (stock, not index/commodity) universe.
+    provider = DhanProvider([NSE_OPTSTK, NSE_OPTIDX, NSE_EQ], name="dhan-nse")
+
+    assert provider.list_fno_stock_underlyings() == ["RELIANCE"]
+
+
+@responses.activate
 def test_nse_optidx_config_syncs_only_optidx_rows():
     responses.add(responses.GET, INSTRUMENT_MASTER_URL, body=FAKE_OPTION_CSV, status=200)
 

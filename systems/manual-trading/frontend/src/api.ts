@@ -1162,6 +1162,109 @@ export async function fetchSentimentHistory(symbol: string, date?: string): Prom
   return asJson(res, "GET /options/sentiment-history");
 }
 
+// One earlier day's totals for a screener row's sparkline - see
+// OiBuildupRow.history below.
+export type OiBuildupHistoryPoint = {
+  snapshot_date: string; // "YYYY-MM-DD"
+  total_call_oi: number;
+  total_put_oi: number;
+  spot_price: number | null;
+};
+
+// GET /oi-buildup's per-symbol row - one NSE F&O stock's most recent EOD
+// OI snapshot (market_data.oi_eod_snapshot, written once per trading day
+// by market-data's own _record_oi_eod_snapshot job - Dhan's option-chain
+// API has no historical-OI endpoint at all, so that table IS the history,
+// built up one EOD snapshot at a time). The *_change_pct/buildup fields
+// are day-over-day (this snapshot vs. the PREVIOUS trading day's own row
+// for this symbol) - null on a symbol's very first snapshot day. Two
+// separate buildup badges (call-side/put-side), same "a rising call OI
+// and a rising put OI mean different things" reasoning as OiSummary's own
+// total_call_buildup/total_put_buildup.
+export type OiBuildupRow = {
+  symbol: string;
+  exchange: string;
+  snapshot_date: string;
+  spot_price: number | null;
+  total_call_oi: number;
+  total_put_oi: number;
+  pcr: number | null;
+  call_oi_change_pct: number | null;
+  put_oi_change_pct: number | null;
+  price_change_pct: number | null;
+  call_buildup: OiBuildup | null;
+  put_buildup: OiBuildup | null;
+  // Oldest-first, including this row's own date as the last point.
+  history: OiBuildupHistoryPoint[];
+};
+
+export type OiBuildupScreener = {
+  snapshot_date: string;
+  rows: OiBuildupRow[];
+};
+
+export async function fetchOiBuildup(historyDays = 10): Promise<OiBuildupScreener> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/oi-buildup?${new URLSearchParams({ history_days: String(historyDays) })}`);
+  return asJson(res, "GET /oi-buildup");
+}
+
+// One earlier day's close for a screener row's sparkline - see
+// EquityScreenerRow.history below.
+export type EquityScreenerHistoryPoint = {
+  snapshot_date: string; // "YYYY-MM-DD"
+  close: number;
+};
+
+// Named RegimeLabel (not MarketRegime) to avoid colliding with GET
+// /regime's own MarketRegime object type below ({regime, adx,
+// atr_percentile, trend, advice}) - this is just that response's own
+// `regime` field's literal union, reused here since
+// _record_equity_screener_snapshot's `regime` column is built from the
+// exact same app/domain/regime.py classification.
+export type RegimeLabel = "trending_up" | "trending_down" | "ranging" | "transitional";
+export type EquityProximity = "near_52w_high" | "near_52w_low";
+
+// GET /equity-screener's per-symbol row - one NSE-listed equity's most
+// recent EOD momentum/trend + 52-week-proximity read
+// (market_data.equity_screener_snapshot, written once per trading day by
+// market-data's own _record_equity_screener_snapshot job). Unlike
+// OiBuildupRow, every field here (except high_52w/low_52w/pct_from_52w_*/
+// proximity) is recomputed fresh each day from a trailing window of real
+// Dhan daily bars, not diffed against yesterday's own row - so it's never
+// null just because "no previous snapshot yet". regime reuses GET
+// /regime's own vocabulary (app/domain/regime.py) - the same ADX+structure
+// read backing the Live Chart's regime badge, just run in a daily batch
+// across every NSE equity instead of on demand for one symbol.
+export type EquityScreenerRow = {
+  symbol: string;
+  exchange: string;
+  snapshot_date: string;
+  close: number;
+  pct_change_5d: number | null;
+  pct_change_20d: number | null;
+  adx: number | null;
+  regime: RegimeLabel | null;
+  high_52w: number | null;
+  low_52w: number | null;
+  pct_from_52w_high: number | null;
+  pct_from_52w_low: number | null;
+  // null = mid-range, or under equity_screener.py's own
+  // MIN_BARS_FOR_52W_PROXIMITY floor (not enough real history yet).
+  proximity: EquityProximity | null;
+  // Oldest-first, including this row's own date as the last point.
+  history: EquityScreenerHistoryPoint[];
+};
+
+export type EquityScreener = {
+  snapshot_date: string;
+  rows: EquityScreenerRow[];
+};
+
+export async function fetchEquityScreener(historyDays = 10): Promise<EquityScreener> {
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/equity-screener?${new URLSearchParams({ history_days: String(historyDays) })}`);
+  return asJson(res, "GET /equity-screener");
+}
+
 // One completed OHLCV bar, mirrors market-data's app/domain/models.py
 // Candle. `timestamp` is a timezone-aware ISO-8601 string (the bar's
 // START time) - both providers emit it via datetime.fromtimestamp(..,

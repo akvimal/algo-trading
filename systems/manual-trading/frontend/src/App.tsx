@@ -13,6 +13,14 @@ const PriceAlertsPage = lazy(() => import("./PriceAlertsPage"));
 // Discipline score + the trend/sizing breakdowns split out of Performance
 // 2026-09-05 - same lazy-load reasoning.
 const DisciplinePage = lazy(() => import("./DisciplinePage"));
+// EOD OI-buildup screener across every NSE F&O stock (2026-09-23) - same
+// lazy-load reasoning; its own fetch only ever runs once this tab is
+// actually opened.
+const OiBuildupPage = lazy(() => import("./OiBuildupPage"));
+// EOD momentum/trend + 52-week-proximity screener across every NSE
+// equity (2026-09-23, sibling of OiBuildupPage above) - same lazy-load
+// reasoning.
+const EquityScreenerPage = lazy(() => import("./EquityScreenerPage"));
 // Setup Field Guide - a static reference page for the Setup dropdown's 11
 // tags, opened in a new tab from wherever that dropdown appears (never a
 // shell nav entry - it's reference material, not a page you'd navigate to
@@ -49,6 +57,14 @@ export default function App() {
       <main>
         {tab === "oi" ? (
           <OiSummaryPage />
+        ) : tab === "oi-buildup" ? (
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            <OiBuildupPage />
+          </Suspense>
+        ) : tab === "equity-screener" ? (
+          <Suspense fallback={<p className="muted">Loading…</p>}>
+            <EquityScreenerPage />
+          </Suspense>
         ) : tab === "performance" ? (
           <Suspense fallback={<p className="muted">Loading…</p>}>
             <ManualStatsPage />

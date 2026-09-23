@@ -5140,3 +5140,11 @@ button.btn-exit {
 .setup-card-row-head .ctp-tabs {
   margin: 0;
 }
+
+/* OI Buildup screener (OiBuildupPage.tsx) - the two per-row action icons
+   (OI chain / Intraday chart, both open a new browser tab) side by side
+   in the grid's last column. */
+.oi-buildup-links {
+  display: flex;
+  gap: 0.35rem;
+}

@@ -20,6 +20,24 @@ class Settings(BaseSettings):
     # Scheduled instrument-master resync, before market open.
     instrument_sync_hour: int = 8
     instrument_sync_minute: int = 0
+    # OI-buildup EOD screener (see app/scheduler.py's _record_oi_eod_snapshot)
+    # - once daily, shortly after NSE's 15:30 close (comfortably past it, so
+    # the day's OI has settled) rather than a 5m/15m cadence like
+    # sentiment_history above: this scans EVERY NSE F&O stock (~150-200,
+    # vs. sentiment_history's fixed 6), so it deliberately runs once, not
+    # continuously.
+    oi_eod_snapshot_hour: int = 15
+    oi_eod_snapshot_minute: int = 40
+    # EOD equity screener (momentum/trend + 52-week proximity, see
+    # app/scheduler.py's _record_equity_screener_snapshot) - sequenced
+    # AFTER the OI snapshot job above (15:40) rather than at the same
+    # time, so the two don't compete for Dhan's shared rate-limit budget
+    # at once. Covers ALL NSE equities (~2000, vs. the OI job's ~210
+    # F&O-only stocks) - a full sweep takes ~65-70 minutes at Dhan's 2s/
+    # call candle throttle, comfortably finishing well before the next
+    # trading day.
+    equity_screener_snapshot_hour: int = 16
+    equity_screener_snapshot_minute: int = 0
 
     dhan_client_id: str = ""
     dhan_access_token: str = ""

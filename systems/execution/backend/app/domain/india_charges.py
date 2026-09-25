@@ -5,33 +5,40 @@ who nets +Rs 300 on gross can be net negative once the charges are paid. Crypto
 already simulates Delta's fees (delta_fees.py); NSE/MCX had none. This computes
 the round-trip charges for one position (or one option group) from its legs.
 
-RATES ARE DATA, NOT LAW. The table below is the schedule as best known in early
-2026 and is NOT verified against the current exchange, SEBI or broker circulars.
-F&O STT in particular was raised in Oct 2024 (options 0.1% of premium on sell,
-futures 0.02% on sell) and may have changed since. Check every figure against
-the current circulars before anyone relies on these numbers, and bump
-SCHEDULE_VERSION when you edit them. The breakdown stored on each closed
-position records the version it was computed under, so old trades stay
+RATES ARE DATA, NOT LAW. They were checked on 2026-09-25 against Zerodha's
+published charges table, Zerodha's bulletin on the STT revision, and Dhan's pricing
+page (Dhan is the platform's broker). That is a SECONDARY source for the statutory
+parts (STT/CTT, exchange, SEBI, stamp duty): compare against the NSE/MCX/SEBI
+circulars before anyone relies on the numbers for anything but paper P&L. The big
+change that caught the previous table out: STT on F&O was raised on 1 April 2026
+(futures 0.02% -> 0.05% on sell, options 0.10% -> 0.15% on the premium on sell).
+These rates are "as of today": a trade that closed before a rate change was charged
+under the older schedule in real life, and paper trades are always priced at the
+current one. Bump SCHEDULE_VERSION when you edit them. The breakdown stored on each
+closed position records the version it was computed under, so old trades stay
 explainable after a rate change.
 
 Per leg (one leg = one executed order), on that leg's turnover (price x qty):
-  brokerage  min(flat cap, pct of turnover) per order (options: flat only;
-             equity delivery: none)
+  brokerage  Dhan's model: equity intraday min(Rs 20, 0.03% of turnover) per order;
+             futures and options (NSE and MCX) a flat Rs 20 per order; equity
+             delivery none
   STT / CTT  on the buy and/or sell side, by kind
   exchange   transaction charge, both sides
   SEBI       turnover fee, both sides
   stamp duty buy side only
-  GST        18% of (brokerage + exchange + SEBI)
-Not modelled: DP charges on delivery sells, IPFT, the exact per-exchange
-rounding, and partial-close order counting (each partially closed piece is
-charged as its own round trip, so a partial close slightly overstates the flat
-brokerage).
+  DP         equity delivery SELL only: Rs 12.50 per instruction (Dhan)
+  GST        18% of (brokerage + exchange + SEBI + DP)
+Not modelled: IPFT, the exact per-exchange rounding, agricultural MCX contracts
+(SEBI fee Rs 1/crore instead of Rs 10/crore), option exercise STT (a paper position
+is always closed by a trade), currency derivatives, and partial-close order
+counting (each partially closed piece is charged as its own round trip, so a
+partial close slightly overstates the flat brokerage and DP charge).
 """
 
 from dataclasses import dataclass
 from typing import Optional
 
-SCHEDULE_VERSION = "2026-09-25"
+SCHEDULE_VERSION = "2026-09-25.1"
 
 GST_RATE = 0.18
 
@@ -52,15 +59,16 @@ class Rates:
     exchange: float  # transaction charge fraction, both sides
     sebi: float  # SEBI turnover fee fraction, both sides
     stamp_buy: float  # stamp duty fraction, buy side
+    dp_sell: float = 0.0  # rupees per delivery SELL instruction (a depository charge)
 
 
-# Fractions of turnover (0.0003 = 0.03%). See the module docstring: UNVERIFIED.
+# Fractions of turnover (0.0003 = 0.03%). Checked 2026-09-25, see the module docstring.
 RATES: dict[str, Rates] = {
-    NSE_EQUITY_INTRADAY: Rates(0.0003, 20.0, 0.0, 0.00025, 0.0000297, 0.000001, 0.00003),
-    NSE_EQUITY_DELIVERY: Rates(None, 0.0, 0.001, 0.001, 0.0000297, 0.000001, 0.00015),
-    NSE_FUTURES: Rates(0.0003, 20.0, 0.0, 0.0002, 0.0000183, 0.000001, 0.00002),
-    NSE_OPTIONS: Rates(None, 20.0, 0.0, 0.001, 0.0003503, 0.000001, 0.00003),
-    MCX_FUTURES: Rates(0.0003, 20.0, 0.0, 0.0001, 0.000021, 0.000001, 0.00002),
+    NSE_EQUITY_INTRADAY: Rates(0.0003, 20.0, 0.0, 0.00025, 0.0000307, 0.000001, 0.00003),
+    NSE_EQUITY_DELIVERY: Rates(None, 0.0, 0.001, 0.001, 0.0000307, 0.000001, 0.00015, dp_sell=12.5),
+    NSE_FUTURES: Rates(None, 20.0, 0.0, 0.0005, 0.0000183, 0.000001, 0.00002),
+    NSE_OPTIONS: Rates(None, 20.0, 0.0, 0.0015, 0.0003553, 0.000001, 0.00003),
+    MCX_FUTURES: Rates(None, 20.0, 0.0, 0.0001, 0.000021, 0.000001, 0.00002),
     MCX_OPTIONS: Rates(None, 20.0, 0.0, 0.0005, 0.000418, 0.000001, 0.00003),
 }
 
@@ -73,10 +81,11 @@ class Breakdown:
     sebi: float = 0.0
     stamp: float = 0.0
     gst: float = 0.0
+    dp: float = 0.0  # depository charge (delivery sells)
 
     @property
     def total(self) -> float:
-        return self.brokerage + self.tax + self.exchange + self.sebi + self.stamp + self.gst
+        return self.brokerage + self.tax + self.exchange + self.sebi + self.stamp + self.gst + self.dp
 
     def __add__(self, other: "Breakdown") -> "Breakdown":
         return Breakdown(
@@ -86,6 +95,7 @@ class Breakdown:
             self.sebi + other.sebi,
             self.stamp + other.stamp,
             self.gst + other.gst,
+            self.dp + other.dp,
         )
 
     def as_dict(self) -> dict:
@@ -97,6 +107,7 @@ class Breakdown:
             "sebi": round(self.sebi, 2),
             "stamp": round(self.stamp, 2),
             "gst": round(self.gst, 2),
+            "dp": round(self.dp, 2),
             "total": round(self.total, 2),
             "schedule": SCHEDULE_VERSION,
         }
@@ -135,8 +146,9 @@ def leg_charges(kind: str, side: str, turnover: float) -> Breakdown:
     exchange = turnover * r.exchange
     sebi = turnover * r.sebi
     stamp = turnover * r.stamp_buy if side == "BUY" else 0.0
-    gst = GST_RATE * (brokerage + exchange + sebi)
-    return Breakdown(brokerage, tax, exchange, sebi, stamp, gst)
+    dp = r.dp_sell if side == "SELL" else 0.0
+    gst = GST_RATE * (brokerage + exchange + sebi + dp)
+    return Breakdown(brokerage, tax, exchange, sebi, stamp, gst, dp)
 
 
 def _opposite(side: str) -> str:

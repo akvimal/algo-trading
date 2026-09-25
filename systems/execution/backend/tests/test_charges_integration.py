@@ -49,7 +49,7 @@ def test_a_nse_position_is_netted_of_its_charges_and_the_balance_gets_the_net():
 def test_a_short_position_is_charged_with_the_sell_as_its_opening_leg():
     pos = position(action="SELL", instrument_type="future", entry_price=100.0, exit_price=95.0, quantity=1000)
     pm._apply_realized_pnl(pos, account(), 5000.0, None)
-    assert pos.charges > 0 and pos.charges_detail["tax"] == pytest.approx(100.0 * 1000 * 0.0002, abs=0.01)
+    assert pos.charges > 0 and pos.charges_detail["tax"] == pytest.approx(100.0 * 1000 * 0.0005, abs=0.01)
 
 
 def test_mcx_positions_use_the_mcx_schedule():

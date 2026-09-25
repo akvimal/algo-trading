@@ -1825,6 +1825,19 @@ def open_manual_position(
         db.commit()
         return row
 
+    # Per-account risk guard (accounts.require_stop_loss - off for accounts
+    # that predate it, on for new ones). A stop given as a price OR as a
+    # method both count; only "no stop at all" is refused. Spot/future only:
+    # option groups take their stop after entry (open_manual_option_group).
+    if account.require_stop_loss and stop_loss_price is None and stop_loss_method is None:
+        row = _reject_manual(
+            db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
+            "a stop-loss is required by your account settings - set a stop-loss price or method, "
+            "or turn off 'Require a stop-loss' for this account",
+        )
+        db.commit()
+        return row
+
     now = datetime.now(dt_timezone.utc)
     if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
         row = _reject_manual(

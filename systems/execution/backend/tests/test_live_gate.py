@@ -137,6 +137,7 @@ def account_row(**over):
         live_trading_enabled=False,
         live_trading_consent_at=None,
         live_trading_consent_version=None,
+        require_stop_loss=False,
         max_order_value=None,
         max_daily_loss=None,
         default_interval=None,

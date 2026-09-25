@@ -112,6 +112,7 @@ def _to_out(db: Session, row: db_models.Account) -> dict:
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "live_trading_enabled": row.live_trading_enabled,
         "live_trading_consent_at": row.live_trading_consent_at.isoformat() if row.live_trading_consent_at is not None else None,
+        "require_stop_loss": bool(row.require_stop_loss),
         "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
         "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
         # A user's own declared execution timeframe for this segment + its
@@ -176,6 +177,8 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
     # Real-money order placement goes through the live-trading gate
     # (app/domain/live_gate.py): consent, caps and broker credentials.
     _apply_live_fields(row, update, segment=segment.upper(), token=user.token, check_credentials=True)
+    if update.require_stop_loss is not None:
+        row.require_stop_loss = update.require_stop_loss
     if "default_interval" in update.model_fields_set:
         row.default_interval = update.default_interval
     if "default_higher_interval" in update.model_fields_set:

@@ -278,6 +278,9 @@ class AccountUpdate(BaseModel):
     # Must be true on the request that turns live trading ON (recorded with a
     # timestamp - see app/domain/live_gate.py). Ignored otherwise.
     live_trading_consent: Optional[bool] = None
+    # Personal risk guard: refuse a spot/future manual order with no stop-loss.
+    # A plain bool toggle (None = leave unchanged).
+    require_stop_loss: Optional[bool] = None
     # NULL is meaningful here too (clears a previously-set default, rather
     # than "leave unchanged") - same model_fields_set-distinguished pattern
     # square_off_time above already uses.

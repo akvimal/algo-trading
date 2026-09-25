@@ -985,3 +985,9 @@ ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS live_trading_consent_at 
 ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS live_trading_consent_version TEXT;
 ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_consent_at TIMESTAMPTZ;
 ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_consent_version TEXT;
+
+-- Per-account require-stop-loss switch (2026-09-25). Existing rows (incl. the seeded
+-- platform accounts above) get false; the default then flips to true for every account
+-- created afterwards. See migrations/016-require-stop-loss.sql.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS require_stop_loss BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.accounts ALTER COLUMN require_stop_loss SET DEFAULT true;

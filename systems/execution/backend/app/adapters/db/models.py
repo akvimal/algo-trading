@@ -6,7 +6,7 @@ update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -91,6 +91,11 @@ class Account(Base):
     # re-enable.
     live_trading_consent_at = Column(TIMESTAMP(timezone=True), nullable=True)
     live_trading_consent_version = Column(Text, nullable=True)
+    # Refuse a spot/future manual order that has no stop-loss (see
+    # position_manager.open_manual_position). Existing accounts were added
+    # with this OFF (migration 016); accounts created from now on default to
+    # ON. Option groups take their stop after entry, so they are not covered.
+    require_stop_loss = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
     # A user's own declared execution timeframe for this segment

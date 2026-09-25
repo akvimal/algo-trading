@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plans and billing</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.mu{color:var(--mu)}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{height:40px;padding:0 16px;border-radius:10px;border:1px solid var(--line);background:var(--s2);font-size:14px;font-weight:600;width:100%}
+.btn.pri{background:var(--ac);border-color:var(--ac);color:#08111f}
+.seg{display:inline-flex;background:var(--s1);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{height:32px;padding:0 16px;border:0;border-radius:7px;background:transparent;color:var(--mu);font-size:13px;font-weight:500}
+.seg button.on{background:#26344a;color:#fff}
+</style>
+</helmet>
+<div style="width: 1440px; height: 820px; overflow: hidden; background: var(--bg); display: flex; flex-direction: column">
+  <header style="display: flex; align-items: center; gap: 12px; height: 64px; padding: 0 40px; border-bottom: 1px solid var(--line)">
+    <div style="width: 28px; height: 28px; border-radius: 8px; background: #6aa9ff; display: flex; align-items: center; justify-content: center">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#08111f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/></svg>
+    </div>
+    <div style="font-weight: 600; font-size: 15px">Algo Trading</div>
+    <div style="flex-grow: 1"></div>
+    <span class="chip warn">Illustrative pricing</span>
+    <span class="lbl" style="margin-left: 12px">Settings / Billing</span>
+  </header>
+
+  <div style="padding: 36px 80px 0; text-align: center">
+    <h1 style="margin: 0; font-size: 32px; font-weight: 600; line-height: 1.2">Start free. Go deeper when you are ready.</h1>
+    <p class="mu" style="margin: 10px auto 0; max-width: 620px; font-size: 15px; line-height: 1.5">Paper trading, the journal and the discipline score are free forever. Paid plans add live data and automation.</p>
+    <div class="seg" style="margin-top: 20px"><button class="on">Monthly</button><button>Annual · save [X]%</button></div>
+  </div>
+
+  <div style="display: flex; gap: 20px; padding: 28px 80px 0; align-items: stretch">
+    <sc-for list="{{plans}}" as="p" hint-placeholder-count="4">
+      <section style="flex: 1; min-width: 0; padding: 22px 20px 20px; border-radius: 14px; display: flex; flex-direction: column; background: {{p.bg}}; border: 1px solid {{p.border}}">
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 24px">
+          <div style="font-size: 16px; font-weight: 600">{{p.name}}</div>
+          <sc-if value="{{p.popular}}" hint-placeholder-val="{{ false }}"><span class="chip" style="background: #16304f; border-color: #3d6ba3; color: #cfe3ff">Most popular</span></sc-if>
+        </div>
+        <div class="lbl" style="margin-top: 4px; min-height: 34px; line-height: 1.4">{{p.tag}}</div>
+        <div style="margin-top: 12px"><span class="num" style="font-size: 30px; font-weight: 500">{{p.price}}</span><span class="mu"> {{p.per}}</span></div>
+        <button class="btn {{p.btnCls}}" style="margin-top: 14px">{{p.cta}}</button>
+        <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 9px">
+          <sc-for list="{{p.features}}" as="f" hint-placeholder-count="5">
+            <div style="display: flex; gap: 9px; font-size: 13px; line-height: 1.4">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4fd3a8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px"><path d="M5 12l5 5 9-10"/></svg>
+              <span>{{f}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+    </sc-for>
+  </div>
+
+  <div style="margin: 20px 80px 0; padding: 12px 16px; border-radius: 10px; background: var(--s1); border: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 24px">
+    <div style="font-size: 13px"><b>On every plan:</b> risk limits, stop-loss enforcement, the trade journal and the discipline score are never paywalled.</div>
+    <div class="lbl" style="text-align: right; max-width: 420px">Tools and paper trading are for education. Nothing here is investment advice.</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":820}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const plain = { bg: '#151b23', border: '#2a3442', popular: false, btnCls: '' };
+    return {
+      plans: [
+        Object.assign({}, plain, {
+          name: 'Free', tag: 'Learn the process with virtual capital.', price: '₹0', per: 'forever', cta: 'Start free',
+          features: ['Paper account with realistic fills', 'EOD screeners: OI Buildup and Equity', 'Trade journal and discipline score', '3 price alerts', 'Guided lessons and trade ticket']
+        }),
+        { bg: '#10233a', border: '#3d6ba3', popular: true, btnCls: 'pri',
+          name: 'Trader', tag: 'Live data for active intraday and swing traders.', price: '₹[X]', per: '/ month', cta: 'Choose Trader',
+          features: ['Everything in Free', 'Live chart with SMC structure', 'Live OI and sentiment badges', 'Unlimited alerts with Telegram', 'Weekly Options Advisor', 'Performance breakdowns'] },
+        Object.assign({}, plain, {
+          name: 'Pro', tag: 'Automation, backtesting and live execution.', price: '₹[Y]', per: '/ month', cta: 'Choose Pro',
+          features: ['Everything in Trader', 'Strategies, rules and backtests', 'Multiple paper accounts', 'Chartink and webhook signals', 'AI news digest (your own key)', 'Live broker orders after the graduation gate']
+        }),
+        Object.assign({}, plain, {
+          name: 'Educator', tag: 'For mentors and trading communities.', price: '₹[Z]', per: '/ seat', cta: 'Talk to us',
+          features: ['Everything in Pro', 'Mentor dashboard', 'Student paper accounts', 'Discipline and journal reports', 'Assignments and cohorts']
+        })
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

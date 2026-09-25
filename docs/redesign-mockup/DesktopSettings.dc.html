@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings - Risk, broker and billing</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.dn{color:var(--dn)}.mu{color:var(--mu)}
+.card{background:var(--s1);border:1px solid var(--line);border-radius:12px}
+.h{font-size:13px;font-weight:600;letter-spacing:.01em}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.up{background:#0f2a24;border-color:#1d4a3e}.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--line);background:var(--s2);font-size:13px;font-weight:500}
+.btn.pri{background:var(--ac);border-color:var(--ac);color:#08111f;font-weight:600}
+.btn.off{opacity:.45;cursor:not-allowed}
+.nav{display:flex;align-items:center;height:40px;padding:0 12px;border-radius:8px;border:0;background:transparent;color:#b3bfcd;font-size:14px;font-weight:500;text-align:left;width:100%}
+.nav.on{background:#1a2b44;color:#dbe9ff;font-weight:600}
+input{font:inherit;width:100%;height:38px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--tx);padding:0 10px}
+.row{display:flex;align-items:center;gap:16px;padding:12px 0;border-top:1px solid var(--line)}
+.tog{width:38px;height:22px;border-radius:11px;background:#26344a;position:relative;flex-shrink:0}
+.tog.on{background:#3d6ba3}
+.tog i{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#e9eef5}
+.tog.on i{left:19px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: var(--bg)">
+  <dc-import name="Sidebar" active="settings" mode="pro" hint-size="232px,900px"></dc-import>
+
+  <main style="flex-grow: 1; min-width: 0; padding: 20px 28px 24px; display: flex; flex-direction: column; gap: 16px">
+    <header style="display: flex; align-items: center; gap: 20px; height: 48px">
+      <div>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; line-height: 1.2">Settings</h1>
+        <div class="lbl">Risk limits, live trading and billing</div>
+      </div>
+      <div style="flex-grow: 1"></div>
+      <span class="chip warn">Illustrative data</span>
+    </header>
+
+    <div style="display: flex; gap: 16px; flex-grow: 1; min-height: 0">
+      <nav class="card" style="width: 230px; padding: 10px; display: flex; flex-direction: column; gap: 2px; align-self: flex-start">
+        <button class="nav {{ui.riskCls}}" onClick="{{ui.goRisk}}">Risk limits</button>
+        <button class="nav {{ui.brokerCls}}" onClick="{{ui.goBroker}}">Live trading and broker</button>
+        <button class="nav {{ui.billCls}}" onClick="{{ui.goBill}}">Plan and billing</button>
+      </nav>
+
+      <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+
+        <sc-if value="{{ui.isRisk}}" hint-placeholder-val="{{ false }}">
+          <section class="card" style="padding: 16px 18px">
+            <div class="h" style="font-size: 15px">Risk limits</div>
+            <div class="lbl" style="margin-top: 4px">These apply to paper and live orders. The ticket enforces them before an order is placed.</div>
+            <div style="margin-top: 8px">
+              <sc-for list="{{riskRows}}" as="r" hint-placeholder-count="6">
+                <div class="row">
+                  <div style="flex-grow: 1"><div style="font-size: 14px; font-weight: 500">{{r.name}}</div><div class="lbl" style="margin-top: 2px">{{r.hint}}</div></div>
+                  <div class="num" style="width: 140px; height: 38px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); display: flex; align-items: center; justify-content: flex-end; padding: 0 12px">{{r.value}}</div>
+                </div>
+              </sc-for>
+              <div class="row">
+                <div style="flex-grow: 1"><div style="font-size: 14px; font-weight: 500">Require a stop-loss on every order</div><div class="lbl" style="margin-top: 2px">Always on. It cannot be turned off.</div></div>
+                <div class="tog on" aria-label="Always on"><i></i></div>
+              </div>
+              <div class="row">
+                <div style="flex-grow: 1"><div style="font-size: 14px; font-weight: 500">Square off intraday positions at 15:15</div><div class="lbl" style="margin-top: 2px">Applies to NSE. Crypto trades round the clock and is not squared off.</div></div>
+                <div class="tog on"><i></i></div>
+              </div>
+            </div>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ui.isBroker}}" hint-placeholder-val="{{ true }}">
+          <sc-if value="{{ui.locked}}" hint-placeholder-val="{{ true }}">
+            <section class="card" style="padding: 18px; background: #10233a; border-color: #244468">
+              <div style="display: flex; align-items: center; justify-content: space-between">
+                <div style="font-size: 16px; font-weight: 600">Live trading is locked</div><span class="chip warn">3 of 5 met</span>
+              </div>
+              <div class="lbl" style="color: #a9c4e6; margin-top: 4px; line-height: 1.5">Live orders unlock once your paper results show a repeatable process. This protects you while you are still learning the platform.</div>
+              <div style="margin-top: 12px">
+                <sc-for list="{{gate}}" as="g" hint-placeholder-count="5">
+                  <div style="display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid #244468">
+                    <span class="chip {{g.cls}}" style="width: 22px; padding: 0; justify-content: center">{{g.mark}}</span>
+                    <div style="flex-grow: 1; font-size: 13px">{{g.text}}</div>
+                    <div class="num" style="font-size: 12px; font-weight: 500">{{g.value}}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px dashed #3d6ba3">
+                <button class="btn" onClick="{{ui.markReady}}">Prototype: mark all requirements met</button>
+                <div class="lbl" style="color: #a9c4e6">Skips ahead so you can see the next steps.</div>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ui.showConnect}}" hint-placeholder-val="{{ false }}">
+            <section class="card" style="padding: 18px">
+              <div style="display: flex; align-items: center; gap: 10px">
+                <span class="chip up">All 5 requirements met</span>
+                <div style="font-size: 16px; font-weight: 600">Connect your broker</div>
+              </div>
+              <div class="lbl" style="margin-top: 6px; line-height: 1.5">Orders go to your own broker account. Keys are stored encrypted and used only for your orders.</div>
+              <div style="display: flex; gap: 12px; margin-top: 14px">
+                <label style="flex: 0 0 200px"><div class="lbl" style="margin-bottom: 4px">Broker</div><input value="Dhan"></label>
+                <label style="flex: 1"><div class="lbl" style="margin-bottom: 4px">Client ID</div><input class="num" value="1101••••15"></label>
+                <label style="flex: 1.4"><div class="lbl" style="margin-bottom: 4px">Access token</div><input class="num" value="••••••••••••••••••••••"></label>
+              </div>
+              <div style="display: flex; gap: 10px; margin-top: 14px">
+                <button class="btn">Test connection</button>
+                <button class="btn pri" onClick="{{ui.connect}}">Connect broker</button>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ui.showEnable}}" hint-placeholder-val="{{ false }}">
+            <section class="card" style="padding: 18px">
+              <div style="display: flex; align-items: center; gap: 10px">
+                <span class="chip up">Broker connected</span>
+                <div class="lbl">Dhan · client 1101••••15</div>
+              </div>
+              <div style="font-size: 16px; font-weight: 600; margin-top: 12px">Turn on live trading</div>
+              <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px">
+                <div style="display: flex; gap: 9px; font-size: 13px; line-height: 1.5"><span style="width: 6px; height: 6px; border-radius: 50%; background: var(--ac); margin-top: 8px; flex-shrink: 0"></span>Live orders use real money and are capped by your risk limits.</div>
+                <div style="display: flex; gap: 9px; font-size: 13px; line-height: 1.5"><span style="width: 6px; height: 6px; border-radius: 50%; background: var(--ac); margin-top: 8px; flex-shrink: 0"></span>The ticket shows LIVE in red on every order, so paper and live are never confused.</div>
+                <div style="display: flex; gap: 9px; font-size: 13px; line-height: 1.5"><span style="width: 6px; height: 6px; border-radius: 50%; background: var(--ac); margin-top: 8px; flex-shrink: 0"></span>You can switch back to paper at any time.</div>
+              </div>
+              <div class="row" style="margin-top: 12px">
+                <button class="{{ui.ackCls}}" onClick="{{ui.toggleAck}}" aria-label="I understand live orders use real money" style="border: 0; padding: 0"><i></i></button>
+                <div style="font-size: 14px">I understand live orders use real money.</div>
+              </div>
+              <button class="btn pri {{ui.enableOff}}" style="margin-top: 8px; height: 42px" onClick="{{ui.enableLive}}">Enable live trading</button>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ui.isLive}}" hint-placeholder-val="{{ false }}">
+            <section class="card" style="padding: 18px; background: #331a14; border-color: #5a2c20">
+              <div style="display: flex; align-items: center; gap: 10px">
+                <span class="chip" style="background: #ff8b6e; color: #1a0d09; border-color: #ff8b6e">LIVE</span>
+                <div style="font-size: 16px; font-weight: 600">Live trading is on</div>
+              </div>
+              <div class="lbl" style="color: #f0c3b6; margin-top: 8px; line-height: 1.5">Orders now go to Dhan. Your daily loss limit of ₹5,000 and max margin of 30% still apply.</div>
+              <button class="btn" style="margin-top: 14px" onClick="{{ui.backToPaper}}">Switch back to paper</button>
+            </section>
+          </sc-if>
+        </sc-if>
+
+        <sc-if value="{{ui.isBill}}" hint-placeholder-val="{{ false }}">
+          <section class="card" style="padding: 18px">
+            <div style="display: flex; align-items: center; justify-content: space-between">
+              <div><div style="font-size: 16px; font-weight: 600">Trader plan</div><div class="lbl" style="margin-top: 2px">Billed monthly · renews on the 14th</div></div>
+              <a href="Plans.dc.html" class="btn pri" style="display: inline-flex; align-items: center; text-decoration: none">Change plan</a>
+            </div>
+            <div style="margin-top: 14px">
+              <sc-for list="{{usage}}" as="u" hint-placeholder-count="3">
+                <div class="row">
+                  <div style="flex-grow: 1; font-size: 14px">{{u.name}}</div>
+                  <div class="num lbl">{{u.value}}</div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+          <section class="card" style="padding: 18px">
+            <div class="h">Payment method</div>
+            <div class="lbl" style="margin-top: 6px">Card ending 4242 · [PAYMENT DETAILS]</div>
+          </section>
+        </sc-if>
+
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = Object.assign({ sec: 'broker', ready: false, conn: false, ack: false, live: false }, this.state || {});
+    const S = (o) => () => this.setState(o);
+    const showEnable = st.ready && st.conn && !st.live;
+    const ui = {
+      riskCls: st.sec === 'risk' ? 'on' : '', brokerCls: st.sec === 'broker' ? 'on' : '', billCls: st.sec === 'bill' ? 'on' : '',
+      goRisk: S({ sec: 'risk' }), goBroker: S({ sec: 'broker' }), goBill: S({ sec: 'bill' }),
+      isRisk: st.sec === 'risk', isBroker: st.sec === 'broker', isBill: st.sec === 'bill',
+      locked: !st.ready, markReady: S({ ready: true }),
+      showConnect: st.ready && !st.conn && !st.live, connect: S({ conn: true }),
+      showEnable: showEnable,
+      ackCls: 'tog' + (st.ack ? ' on' : ''), toggleAck: () => this.setState({ ack: !st.ack }),
+      enableOff: st.ack ? '' : 'off', enableLive: () => { if (st.ack) this.setState({ live: true }); },
+      isLive: st.live, backToPaper: S({ live: false, ack: false })
+    };
+    return {
+      ui: ui,
+      gate: [
+        { mark: '!', cls: 'warn', text: 'Trades completed', value: '22 / 30' },
+        { mark: '✓', cls: 'up', text: 'Positive expectancy', value: '+0.42R' },
+        { mark: '✓', cls: 'up', text: 'Discipline score at least 70', value: '78' },
+        { mark: '✓', cls: 'up', text: 'Max drawdown under 10%', value: '6.2%' },
+        { mark: '!', cls: 'warn', text: 'Every trade journaled', value: '19 / 22' }
+      ],
+      riskRows: [
+        { name: 'Daily loss limit', hint: 'New orders are blocked once losses reach this amount.', value: '₹5,000' },
+        { name: 'Risk per trade', hint: 'Sets the auto size on the ticket.', value: '1.0%' },
+        { name: 'Minimum reward to risk', hint: 'The ticket warns below this ratio.', value: '2.0' },
+        { name: 'Maximum margin used', hint: 'Applies to short options and futures.', value: '30%' },
+        { name: 'Maximum open positions', hint: 'Counts each option spread as one.', value: '5' }
+      ],
+      usage: [
+        { name: 'Price alerts', value: 'Unlimited' },
+        { name: 'Paper accounts', value: '1 of 1' },
+        { name: 'Live chart and OI feeds', value: 'Included' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

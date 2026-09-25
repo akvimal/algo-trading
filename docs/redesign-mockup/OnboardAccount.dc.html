@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First run - Step 2, paper account</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.mu{color:var(--mu)}.up{color:var(--up)}
+.lbl{font-size:12px;color:var(--mu)}
+.card{background:var(--s1);border:1px solid var(--line);border-radius:12px}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}.chip.up{background:#0f2a24;border-color:#1d4a3e}
+button{font:inherit;color:inherit;cursor:pointer}
+.cap{flex:1;padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--s1);text-align:left}
+.cap.on{background:#16304f;border-color:#3d6ba3}
+.tog{width:38px;height:22px;border-radius:11px;background:#26344a;position:relative;flex-shrink:0;border:0;padding:0}
+.tog.on{background:#3d6ba3}
+.tog i{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#e9eef5}
+.tog.on i{left:19px}
+.cta{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 26px;border-radius:10px;background:var(--ac);color:#08111f;font-size:15px;font-weight:600;text-decoration:none}
+.ghost{display:inline-flex;align-items:center;height:46px;padding:0 18px;border-radius:10px;color:var(--mu);font-size:14px;font-weight:500;text-decoration:none}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg)">
+  <header style="height: 72px; padding: 0 40px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #232d3a; background: #0a0f15">
+    <div style="width: 28px; height: 28px; border-radius: 8px; background: #6aa9ff; display: flex; align-items: center; justify-content: center">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#08111f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/></svg>
+    </div>
+    <div style="font-weight: 600; font-size: 15px">Algo Trading</div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 10px">
+      <span class="mu" style="display: flex; align-items: center; gap: 8px; font-size: 13px"><span style="width: 24px; height: 24px; border-radius: 50%; background: #0f2a24; border: 1px solid #1d4a3e; display: flex; align-items: center; justify-content: center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4fd3a8" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></span>Experience</span>
+      <span style="width: 32px; height: 1px; background: var(--line)"></span>
+      <span style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600"><span style="width: 24px; height: 24px; border-radius: 50%; background: var(--ac); color: #08111f; display: flex; align-items: center; justify-content: center; font-size: 12px">2</span>Paper account</span>
+      <span style="width: 32px; height: 1px; background: var(--line)"></span>
+      <span class="mu" style="display: flex; align-items: center; gap: 8px; font-size: 13px"><span style="width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid #4a5a70; display: flex; align-items: center; justify-content: center; font-size: 12px">3</span>First trade</span>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <span class="chip warn">Illustrative screen</span>
+  </header>
+
+  <main style="flex-grow: 1; display: flex; justify-content: center; padding: 40px 0 0">
+    <div style="width: 1040px">
+      <div class="lbl">Step 2 of 3</div>
+      <h1 style="margin: 4px 0 0; font-size: 30px; font-weight: 600">Set up your paper account</h1>
+      <p class="mu" style="margin: 8px 0 0; font-size: 15px">Virtual money, real market prices, realistic costs.</p>
+
+      <div style="display: flex; gap: 24px; margin-top: 24px">
+        <div style="flex: 1; min-width: 0">
+          <div style="font-size: 14px; font-weight: 600">Starting capital</div>
+          <div style="display: flex; gap: 10px; margin-top: 10px">
+            <sc-for list="{{ui.caps}}" as="c" hint-placeholder-count="3">
+              <button class="cap {{c.cls}}" onClick="{{c.pick}}">
+                <div class="num" style="font-size: 18px; font-weight: 500">{{c.label}}</div>
+                <div class="lbl" style="margin-top: 2px">{{c.note}}</div>
+              </button>
+            </sc-for>
+          </div>
+          <div class="lbl" style="margin-top: 8px">It is virtual. You can reset it any time in Settings.</div>
+
+          <div style="font-size: 14px; font-weight: 600; margin-top: 24px">Markets you want to practice</div>
+          <div class="card" style="margin-top: 10px; padding: 2px 16px">
+            <sc-for list="{{ui.markets}}" as="m" hint-placeholder-count="3">
+              <div style="display: flex; align-items: center; gap: 14px; min-height: 60px; border-top: 1px solid {{m.line}}">
+                <div style="flex-grow: 1"><div style="font-size: 14px; font-weight: 500">{{m.name}}</div><div class="lbl" style="margin-top: 2px">{{m.note}}</div></div>
+                <button class="{{m.togCls}}" onClick="{{m.flip}}" aria-label="Include this market"><i></i></button>
+              </div>
+            </sc-for>
+          </div>
+
+          <div class="card" style="margin-top: 16px; padding: 14px 16px; display: flex; align-items: center; gap: 14px">
+            <div style="flex-grow: 1"><div style="font-size: 14px; font-weight: 500">Realistic costs</div><div class="lbl" style="margin-top: 2px; line-height: 1.5">0.05% slippage per fill, plus brokerage, STT, exchange fees and GST.</div></div>
+            <span class="chip up">Always on</span>
+          </div>
+        </div>
+
+        <aside class="card" style="width: 340px; padding: 18px; align-self: flex-start; background: #10233a; border-color: #244468">
+          <div style="font-size: 15px; font-weight: 600">Your starting rules</div>
+          <div class="lbl" style="color: #a9c4e6; margin-top: 4px; line-height: 1.5">Set from your capital. The trade ticket will use them from the first order.</div>
+          <div style="margin-top: 12px">
+            <sc-for list="{{ui.rules}}" as="r" hint-placeholder-count="5">
+              <div style="display: flex; justify-content: space-between; align-items: baseline; padding: 10px 0; border-top: 1px solid #244468">
+                <div style="font-size: 13px">{{r.k}}</div>
+                <div class="num" style="font-weight: 500">{{r.v}}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div class="lbl" style="color: #a9c4e6; margin-top: 8px">You can change every one of these later.</div>
+        </aside>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 26px">
+        <a class="ghost" href="OnboardMode.dc.html">Back</a>
+        <a class="cta" href="OnboardFirstTrade.dc.html">Create paper account</a>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = Object.assign({ cap: 1000000, mk: { nse: true, mcx: false, crypto: false } }, this.state || {});
+    const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+    const caps = [[100000, 'A small start'], [500000, 'A middle size'], [1000000, 'Recommended']];
+    const mk = [
+      ['nse', 'NSE equity and options', 'Stocks, index futures and options'],
+      ['mcx', 'MCX commodities', 'Crude oil, gold and other futures'],
+      ['crypto', 'Crypto', 'Trades 24 hours a day']
+    ];
+    return {
+      ui: {
+        caps: caps.map((c) => ({ label: inr(c[0]), note: c[1], cls: st.cap === c[0] ? 'on' : '', pick: () => this.setState({ cap: c[0] }) })),
+        markets: mk.map((m, i) => ({ name: m[1], note: m[2], line: i === 0 ? 'transparent' : '#2a3442',
+          togCls: 'tog' + (st.mk[m[0]] ? ' on' : ''),
+          flip: () => { const n = Object.assign({}, st.mk); n[m[0]] = !st.mk[m[0]]; this.setState({ mk: n }); } })),
+        rules: [
+          { k: 'Starting capital', v: inr(st.cap) },
+          { k: 'Risk per trade (1%)', v: inr(st.cap * 0.01) },
+          { k: 'Daily loss limit (0.5%)', v: inr(st.cap * 0.005) },
+          { k: 'Minimum reward to risk', v: '2 : 1' },
+          { k: 'Stop-loss on every order', v: 'Required' }
+        ]
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

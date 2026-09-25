@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mobile tab bar</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<nav style="width: 390px; height: 76px; box-sizing: border-box; display: flex; align-items: stretch; background: #0a0f15; border-top: 1px solid #232d3a; font-family: 'IBM Plex Sans', system-ui, sans-serif; padding: 6px 6px 8px">
+  <a href="MobileToday.dc.html" style="{{t.today}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span>Today</span></a>
+  <a href="MobileScan.dc.html" style="{{t.scan}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg><span>Scan</span></a>
+  <a href="MobileTrade.dc.html" style="{{t.trade}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="4" height="8"/><path d="M7 4v4M7 16v4"/><rect x="15" y="5" width="4" height="10"/><path d="M17 2v3M17 15v5"/></svg><span>Trade</span></a>
+  <a href="MobilePortfolio.dc.html" style="{{t.portfolio}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5h6v2"/></svg><span>Portfolio</span></a>
+  <a href="MobileMore.dc.html" style="{{t.more}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg><span>More</span></a>
+</nav>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"active":{"editor":"enum","options":["today","scan","trade","portfolio","more"],"default":"today"},"$preview":{"width":390,"height":76}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const active = this.props.active ?? 'today';
+    const base = 'flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:44px;border-radius:10px;text-decoration:none;font-size:11px;';
+    const on = base + 'color:#dbe9ff;font-weight:600;background:#1a2b44;';
+    const off = base + 'color:#a5b2c3;font-weight:500;';
+    const t = {};
+    ['today','scan','trade','portfolio','more'].forEach((k) => { t[k] = k === active ? on : off; });
+    return { t };
+  }
+}
+</script>
+</body>
+</html>

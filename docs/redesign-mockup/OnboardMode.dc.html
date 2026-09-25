@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First run - Step 1, experience</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.mu{color:var(--mu)}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}.chip.ac{background:#16304f;border-color:#3d6ba3;color:#cfe3ff}
+button{font:inherit;color:inherit;cursor:pointer}
+.opt{display:block;width:100%;text-align:left;padding:16px 18px;border-radius:12px;border:1px solid var(--line);background:var(--s1)}
+.opt.on{background:#16304f;border-color:#3d6ba3}
+.radio{width:18px;height:18px;border-radius:50%;border:2px solid #4a5a70;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.opt.on .radio{border-color:var(--ac)}
+.opt.on .radio i{width:8px;height:8px;border-radius:50%;background:var(--ac)}
+.cta{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 26px;border-radius:10px;background:var(--ac);color:#08111f;font-size:15px;font-weight:600;text-decoration:none}
+.ghost{display:inline-flex;align-items:center;height:46px;padding:0 18px;border-radius:10px;color:var(--mu);font-size:14px;font-weight:500;text-decoration:none}
+.mode{flex:1;padding:16px 18px;border-radius:12px;border:1px solid var(--line);background:var(--s1);text-align:left}
+.mode.on{background:#16304f;border-color:#3d6ba3}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg)">
+  <header style="height: 72px; padding: 0 40px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #232d3a; background: #0a0f15">
+    <div style="width: 28px; height: 28px; border-radius: 8px; background: #6aa9ff; display: flex; align-items: center; justify-content: center">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#08111f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/></svg>
+    </div>
+    <div style="font-weight: 600; font-size: 15px">Algo Trading</div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 10px">
+      <span style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600"><span style="width: 24px; height: 24px; border-radius: 50%; background: var(--ac); color: #08111f; display: flex; align-items: center; justify-content: center; font-size: 12px">1</span>Experience</span>
+      <span style="width: 32px; height: 1px; background: var(--line)"></span>
+      <span class="mu" style="display: flex; align-items: center; gap: 8px; font-size: 13px"><span style="width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid #4a5a70; display: flex; align-items: center; justify-content: center; font-size: 12px">2</span>Paper account</span>
+      <span style="width: 32px; height: 1px; background: var(--line)"></span>
+      <span class="mu" style="display: flex; align-items: center; gap: 8px; font-size: 13px"><span style="width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid #4a5a70; display: flex; align-items: center; justify-content: center; font-size: 12px">3</span>First trade</span>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <span class="chip warn">Illustrative screen</span>
+  </header>
+
+  <main style="flex-grow: 1; display: flex; justify-content: center; padding: 40px 0 0">
+    <div style="width: 880px">
+      <div class="lbl">Step 1 of 3</div>
+      <h1 style="margin: 4px 0 0; font-size: 30px; font-weight: 600">How much have you traded before?</h1>
+      <p class="mu" style="margin: 8px 0 0; font-size: 15px">This only sets your starting view. You can switch at any time in the sidebar.</p>
+
+      <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 24px">
+        <sc-for list="{{ui.exps}}" as="e" hint-placeholder-count="3">
+          <button class="opt {{e.cls}}" onClick="{{e.pick}}">
+            <div style="display: flex; align-items: center; gap: 14px">
+              <span class="radio"><i></i></span>
+              <div style="flex-grow: 1"><div style="font-size: 16px; font-weight: 600">{{e.title}}</div><div class="mu" style="font-size: 13px; margin-top: 2px">{{e.body}}</div></div>
+            </div>
+          </button>
+        </sc-for>
+      </div>
+
+      <div style="margin-top: 26px; display: flex; align-items: center; gap: 10px">
+        <div style="font-size: 15px; font-weight: 600">We suggest</div><span class="chip ac">{{ui.suggest}}</span><div class="lbl">Change it here if you prefer.</div>
+      </div>
+      <div style="display: flex; gap: 14px; margin-top: 12px">
+        <button class="mode {{ui.gCls}}" onClick="{{ui.pickGuided}}">
+          <div style="font-size: 15px; font-weight: 600">Guided</div>
+          <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px; font-size: 13px; line-height: 1.4" class="mu">
+            <span>Plain-English hints next to every number</span><span>A plan-first ticket that walks you through each field</span><span>Clean charts, with overlays off until you ask</span>
+          </div>
+        </button>
+        <button class="mode {{ui.pCls}}" onClick="{{ui.pickPro}}">
+          <div style="font-size: 15px; font-weight: 600">Pro</div>
+          <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px; font-size: 13px; line-height: 1.4" class="mu">
+            <span>Dense dashboards, keyboard shortcuts, one-click orders</span><span>Full structure overlays and multi-timeframe charts</span><span>Strategies, rules and backtests unlocked in the menu</span>
+          </div>
+        </button>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 30px">
+        <a class="ghost" href="SignIn.dc.html">Back</a>
+        <a class="cta" href="OnboardAccount.dc.html">Continue</a>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = Object.assign({ exp: 'new', mode: null }, this.state || {});
+    const suggested = st.exp === 'pro' ? 'pro' : 'guided';
+    const mode = st.mode || suggested;
+    const defs = [
+      ['new', 'I am new to trading', 'I have never placed a trade, or only a few.'],
+      ['some', 'I trade now and then', 'I know the basics and want a better process.'],
+      ['pro', 'I trade regularly', 'I have my own approach and want the tools.']
+    ];
+    return {
+      ui: {
+        exps: defs.map((d) => ({ title: d[1], body: d[2], cls: st.exp === d[0] ? 'on' : '', pick: () => this.setState({ exp: d[0], mode: null }) })),
+        suggest: suggested === 'pro' ? 'Pro' : 'Guided',
+        gCls: mode === 'guided' ? 'on' : '', pCls: mode === 'pro' ? 'on' : '',
+        pickGuided: () => this.setState({ mode: 'guided' }), pickPro: () => this.setState({ mode: 'pro' })
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

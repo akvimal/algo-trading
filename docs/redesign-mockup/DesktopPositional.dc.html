@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Today - Positional (Guided)</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.dn{color:var(--dn)}.mu{color:var(--mu)}
+.card{background:var(--s1);border:1px solid var(--line);border-radius:12px}
+.h{font-size:13px;font-weight:600;letter-spacing:.01em}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.up{background:#0f2a24;border-color:#1d4a3e}.chip.dn{background:#331a14;border-color:#5a2c20}.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--s2);font-size:12px;font-weight:500}
+.btn.pri{background:var(--ac);border-color:var(--ac);color:#08111f;font-weight:600}
+.seg{display:inline-flex;background:var(--s1);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{height:30px;padding:0 16px;border:0;border-radius:7px;background:transparent;color:var(--mu);font-size:13px;font-weight:500}
+.seg button.on{background:#26344a;color:#fff}
+.seg a{display:inline-flex;align-items:center;height:30px;padding:0 16px;border-radius:7px;color:var(--mu);font-size:13px;font-weight:500;text-decoration:none}.seg a.on{background:#26344a;color:#fff}
+table{border-collapse:collapse;width:100%}
+th{font-weight:500;font-size:11px;color:var(--mu);text-align:left;padding:8px 14px;letter-spacing:.05em;text-transform:uppercase}
+td{padding:0 14px;height:44px;border-top:1px solid var(--line)}
+.r{text-align:right}
+input{font:inherit}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: var(--bg)">
+  <dc-import name="Sidebar" active="today" mode="guided" hint-size="232px,900px"></dc-import>
+
+  <main style="flex-grow: 1; min-width: 0; padding: 20px 28px 24px; display: flex; flex-direction: column; gap: 16px">
+    <header style="display: flex; align-items: center; gap: 20px; height: 48px">
+      <div>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; line-height: 1.2">Today</h1>
+        <div class="lbl">Fri 25 Sep · NSE open · 11:42 IST</div>
+      </div>
+      <div class="seg" style="margin-left: 8px">
+        <a href="Main.dc.html">Intraday</a>
+        <a href="DesktopPositional.dc.html" class="on">Positional</a>
+        <a href="DesktopOptions.dc.html">Options</a>
+      </div>
+      <div style="flex-grow: 1"></div>
+      <span class="chip warn">Illustrative data</span>
+      <input aria-label="Search symbol" placeholder="Search symbol  /" style="width: 220px; height: 34px; border-radius: 8px; border: 1px solid var(--line); background: var(--s1); color: var(--tx); padding: 0 12px">
+    </header>
+
+    <section class="card" style="padding: 14px 18px; display: flex; align-items: center; gap: 20px; background: #10233a; border-color: #244468">
+      <div style="min-width: 190px">
+        <div class="h" style="font-size: 14px">Your first week</div>
+        <div class="lbl" style="color: #a9c4e6">1 of 3 steps done</div>
+        <div style="height: 5px; border-radius: 3px; background: #1d3a5c; margin-top: 8px"><div style="width: 33%; height: 5px; border-radius: 3px; background: var(--ac)"></div></div>
+      </div>
+      <div style="display: flex; gap: 12px; flex-grow: 1">
+        <div style="flex: 1; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #0e1d31">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4fd3a8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>
+          <div><div style="font-size: 13px; font-weight: 600">Set up your paper account</div><div class="lbl">₹10,00,000 virtual capital</div></div>
+        </div>
+        <div style="flex: 1; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #16304f; border: 1px solid #3d6ba3">
+          <div style="width: 20px; height: 20px; border-radius: 50%; background: var(--ac); color: #08111f; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center">2</div>
+          <div style="flex-grow: 1"><div style="font-size: 13px; font-weight: 600">Place a planned trade</div><div class="lbl" style="color: #a9c4e6">Entry, stop-loss and target first</div></div>
+          <button class="btn pri">Start</button>
+        </div>
+        <div style="flex: 1; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #0e1d31">
+          <div style="width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid #6f88a8; color: #a9c4e6; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center">3</div>
+          <div><div style="font-size: 13px; font-weight: 600">Write down why</div><div class="lbl" style="color: #a9c4e6">One line in your journal</div></div>
+        </div>
+      </div>
+      <a class="btn" href="Main.dc.html" style="display: inline-flex; align-items: center; text-decoration: none">Switch to Pro</a>
+    </section>
+
+    <section style="display: flex; gap: 16px; height: 356px">
+      <div class="card" style="flex: 1.5; min-width: 0; overflow: hidden">
+        <div style="padding: 12px 14px 4px">
+          <div style="display: flex; justify-content: space-between; align-items: center">
+            <div class="h">Swing candidates</div>
+            <div class="lbl">EOD screener · refreshed 15:40 yesterday</div>
+          </div>
+          <div class="lbl" style="margin-top: 4px; line-height: 1.4">Stocks in an uptrend that are close to their 52-week high. Sorted by trend strength (ADX).</div>
+        </div>
+        <table>
+          <thead><tr><th>Symbol</th><th class="r">Close</th><th class="r">20-day</th><th>Trend</th><th>52-week</th><th></th></tr></thead>
+          <tbody>
+            <sc-for list="{{swing}}" as="r" hint-placeholder-count="5">
+              <tr>
+                <td style="font-weight: 600">{{r.sym}}</td>
+                <td class="r num">{{r.close}}</td>
+                <td class="r num up">{{r.d20}}</td>
+                <td><span class="chip up">Strong</span> <span class="lbl num">ADX {{r.adx}}</span></td>
+                <td><span class="chip">{{r.prox}}</span></td>
+                <td class="r"><button class="btn">Add to plan</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card" style="flex: 1; min-width: 0; padding: 12px 14px; overflow: hidden">
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <div class="h">OI buildup movers</div>
+          <div class="lbl">EOD · vs previous day</div>
+        </div>
+        <div class="lbl" style="margin-top: 4px; line-height: 1.4">Where option traders are adding or exiting positions.</div>
+        <sc-for list="{{oi}}" as="o" hint-placeholder-count="4">
+          <div style="display: flex; align-items: center; gap: 10px; height: 42px; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px">
+            <div style="font-weight: 600; width: 92px">{{o.sym}}</div>
+            <div class="lbl" style="width: 30px">Call</div><span class="chip {{o.cCls}}">{{o.call}}</span>
+            <div class="lbl" style="width: 26px; margin-left: 6px">Put</div><span class="chip {{o.pCls}}">{{o.put}}</span>
+            <div style="flex-grow: 1"></div>
+            <div class="lbl num">PCR {{o.pcr}}</div>
+          </div>
+        </sc-for>
+        <div style="margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--s2); font-size: 12px; line-height: 1.5; color: #c4cedb">
+          <b style="color: var(--tx)">LB</b> long buildup: price up, OI up, new buyers &nbsp;·&nbsp; <b style="color: var(--tx)">SB</b> short buildup: price down, OI up<br>
+          <b style="color: var(--tx)">SC</b> short covering: price up, OI down &nbsp;·&nbsp; <b style="color: var(--tx)">LU</b> long unwinding: price down, OI down
+        </div>
+      </div>
+    </section>
+
+    <section style="display: flex; gap: 16px; flex-grow: 1; min-height: 0">
+      <div class="card" style="flex: 1.5; min-width: 0; overflow: hidden">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px 4px">
+          <div class="h">Positional holdings (paper)</div><div class="lbl">Carried overnight</div>
+        </div>
+        <table>
+          <thead><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Avg</th><th class="r">LTP</th><th class="r">P&amp;L</th><th class="r">Days</th><th class="r">Stop-loss</th></tr></thead>
+          <tbody>
+            <sc-for list="{{holdings}}" as="h" hint-placeholder-count="2">
+              <tr>
+                <td style="font-weight: 600">{{h.sym}}</td>
+                <td class="r num">{{h.qty}}</td>
+                <td class="r num">{{h.avg}}</td>
+                <td class="r num">{{h.ltp}}</td>
+                <td class="r num {{h.cls}}">{{h.pnl}}</td>
+                <td class="r num">{{h.days}}</td>
+                <td class="r num">{{h.sl}}</td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="flex: 1; padding: 12px 14px; overflow: hidden">
+        <div class="h">Learn in 3 minutes</div>
+        <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px">
+          <div style="padding: 10px 12px; border-radius: 10px; background: var(--s2)">
+            <div style="font-size: 13px; font-weight: 600">Why a stop-loss comes before the entry</div>
+            <div class="lbl" style="margin-top: 2px">Position sizing from risk, not from hope</div>
+          </div>
+          <div style="padding: 10px 12px; border-radius: 10px; background: var(--s2)">
+            <div style="font-size: 13px; font-weight: 600">Reading OI buildup without the jargon</div>
+            <div class="lbl" style="margin-top: 2px">What LB, SB, SC and LU tell you</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      swing: [
+        { sym: 'PERSISTENT', close: '6,218.40', d20: '+9.1%', adx: '34', prox: '1.2% below high' },
+        { sym: 'TRENT', close: '7,905.00', d20: '+7.4%', adx: '32', prox: '0.8% below high' },
+        { sym: 'POLYCAB', close: '7,412.15', d20: '+6.2%', adx: '29', prox: '2.1% below high' },
+        { sym: 'BAJFINANCE', close: '1,024.60', d20: '+5.5%', adx: '27', prox: '1.8% below high' },
+        { sym: 'DIVISLAB', close: '6,388.90', d20: '+4.9%', adx: '26', prox: 'At 52-week high' }
+      ],
+      oi: [
+        { sym: 'ABB', call: 'SC', cCls: 'up', put: 'LB', pCls: 'up', pcr: '0.63' },
+        { sym: 'ADANIPORTS', call: 'SB', cCls: 'dn', put: 'LU', pCls: 'dn', pcr: '0.90' },
+        { sym: 'AXISBANK', call: 'LB', cCls: 'up', put: 'SC', pCls: 'up', pcr: '0.71' },
+        { sym: 'ASIANPAINT', call: 'LU', cCls: 'dn', put: 'SB', pCls: 'dn', pcr: '1.12' }
+      ],
+      holdings: [
+        { sym: 'HDFCBANK', qty: '120', avg: '1,682.00', ltp: '1,714.50', pnl: '+₹3,900', cls: 'up', days: '4', sl: '1,640.00' },
+        { sym: 'SUNPHARMA', qty: '60', avg: '1,905.30', ltp: '1,881.00', pnl: '−₹1,458', cls: 'dn', days: '2', sl: '1,850.00' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

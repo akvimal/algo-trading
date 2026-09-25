@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trade - Chart and ticket</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.dn{color:var(--dn)}.mu{color:var(--mu)}
+.card{background:var(--s1);border:1px solid var(--line);border-radius:12px}
+.h{font-size:13px;font-weight:600;letter-spacing:.01em}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.up{background:#0f2a24;border-color:#1d4a3e}.chip.dn{background:#331a14;border-color:#5a2c20}.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}
+.chip.ac{background:#16304f;border-color:#3d6ba3;color:#cfe3ff}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--line);background:var(--s2);font-size:12px;font-weight:500}
+.seg{display:inline-flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{height:28px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--mu);font-size:12px;font-weight:500}
+.seg button.on{background:#26344a;color:#fff}
+.tool{width:34px;height:34px;border-radius:8px;border:0;background:transparent;color:var(--mu);display:flex;align-items:center;justify-content:center}
+.tool.on{background:#26344a;color:#fff}
+input{font:inherit;width:100%;height:38px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--tx);padding:0 10px}
+table{border-collapse:collapse;width:100%}
+th{font-weight:500;font-size:11px;color:var(--mu);text-align:left;padding:6px 14px;letter-spacing:.05em;text-transform:uppercase}
+td{padding:0 14px;height:36px;border-top:1px solid var(--line)}
+.r{text-align:right}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; display: flex; overflow: hidden; background: var(--bg)">
+  <dc-import name="Sidebar" active="trade" mode="pro" hint-size="232px,900px"></dc-import>
+
+  <main style="flex-grow: 1; min-width: 0; padding: 20px 28px 24px; display: flex; flex-direction: column; gap: 14px">
+    <header style="display: flex; align-items: center; gap: 16px; height: 48px">
+      <button style="height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--s1); display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px">BANKNIFTY <span class="mu" style="font-size: 12px">▾</span></button>
+      <div class="num" style="font-size: 22px; font-weight: 500">53,310.00</div>
+      <div class="num dn">▼ −0.12%</div>
+      <div class="seg"><button>1m</button><button>5m</button><button class="on">15m</button><button>1h</button><button>D</button></div>
+      <div style="flex-grow: 1"></div>
+      <span class="chip warn">Illustrative data</span>
+    </header>
+
+    <div style="display: flex; gap: 16px; flex-grow: 1; min-height: 0">
+      <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px">
+        <section class="card" style="height: 548px; display: flex; overflow: hidden">
+          <div style="width: 48px; padding: 8px 7px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px">
+            <button class="tool on" aria-label="Cursor"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 8-6 2-2 6z"/></svg></button>
+            <button class="tool" aria-label="Trend line"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 19L20 5"/><circle cx="4" cy="19" r="1.5"/><circle cx="20" cy="5" r="1.5"/></svg></button>
+            <button class="tool" aria-label="Horizontal level"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12h18"/></svg></button>
+            <button class="tool" aria-label="Zone"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="7" width="16" height="10" rx="1"/></svg></button>
+            <button class="tool" aria-label="Fibonacci"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 5h16M4 10h16M4 15h16M4 20h16"/></svg></button>
+          </div>
+          <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line)">
+              <button class="btn">Structure ▾</button>
+              <span class="chip ac">Order blocks</span>
+              <span class="chip ac">FVG</span>
+              <span class="chip ac">BOS / CHoCH</span>
+              <span class="chip">Detect on 15m</span>
+              <div style="flex-grow: 1"></div>
+              <span class="lbl">Trend</span>
+              <span class="chip up">15m Bullish</span>
+              <span class="chip up">1h Bullish</span>
+            </div>
+            <div style="position: relative; flex-grow: 1">
+              <svg width="690" height="480" viewBox="0 0 690 480" style="position: absolute; left: 0; top: 0">
+                <sc-for list="{{grid}}" as="g" hint-placeholder-count="5">
+                  <line x1="0" y1="{{g.y}}" x2="640" y2="{{g.y}}" stroke="#222c39" stroke-width="1"/>
+                </sc-for>
+                <rect x="{{zoneX}}" y="{{zoneTop}}" width="{{zoneW}}" height="{{zoneH}}" fill="#6aa9ff" fill-opacity="0.16" stroke="#6aa9ff" stroke-opacity="0.5" stroke-width="1"/>
+                <rect x="{{fvgX}}" y="{{fvgTop}}" width="{{fvgW}}" height="{{fvgH}}" fill="#f4c15a" fill-opacity="0.16"/>
+                <line x1="{{bosX}}" y1="{{bosY}}" x2="640" y2="{{bosY}}" stroke="#95a3b5" stroke-width="1" stroke-dasharray="3 4"/>
+                <line x1="0" y1="{{yEntry}}" x2="640" y2="{{yEntry}}" stroke="#6aa9ff" stroke-width="1.25" stroke-dasharray="6 4"/>
+                <line x1="0" y1="{{ySl}}" x2="640" y2="{{ySl}}" stroke="#ff8b6e" stroke-width="1.25" stroke-dasharray="6 4"/>
+                <line x1="0" y1="{{yTgt}}" x2="640" y2="{{yTgt}}" stroke="#4fd3a8" stroke-width="1.25" stroke-dasharray="6 4"/>
+                <sc-for list="{{candles}}" as="c" hint-placeholder-count="40">
+                  <g>
+                    <line x1="{{c.cx}}" y1="{{c.wt}}" x2="{{c.cx}}" y2="{{c.wb}}" stroke="{{c.color}}" stroke-width="1.25"/>
+                    <rect x="{{c.bx}}" y="{{c.bt}}" width="9" height="{{c.bh}}" fill="{{c.color}}"/>
+                  </g>
+                </sc-for>
+                <line x1="640" y1="0" x2="640" y2="480" stroke="#2a3442" stroke-width="1"/>
+              </svg>
+              <sc-for list="{{axis}}" as="a" hint-placeholder-count="5">
+                <div class="lbl num" style="position: absolute; left: 646px; top: {{a.top}}px">{{a.label}}</div>
+              </sc-for>
+              <sc-for list="{{tags}}" as="t" hint-placeholder-count="3">
+                <div class="num" style="position: absolute; left: 644px; top: {{t.top}}px; height: 18px; padding: 0 5px; border-radius: 4px; font-size: 11px; line-height: 18px; font-weight: 500; color: #08111f; background: {{t.color}}">{{t.label}}</div>
+              </sc-for>
+              <div class="lbl" style="position: absolute; left: {{zoneLblX}}px; top: {{zoneLblY}}px; color: #a9c4e6">15m demand block</div>
+              <div class="lbl" style="position: absolute; left: {{bosLblX}}px; top: {{bosLblY}}px">BOS</div>
+              <div class="lbl num" style="position: absolute; left: 14px; bottom: 6px">09:30</div>
+              <div class="lbl num" style="position: absolute; left: 200px; bottom: 6px">11:00</div>
+              <div class="lbl num" style="position: absolute; left: 400px; bottom: 6px">12:30</div>
+              <div class="lbl num" style="position: absolute; left: 590px; bottom: 6px">14:00</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card" style="flex-grow: 1; min-height: 0; overflow: hidden">
+          <div style="display: flex; gap: 6px; padding: 8px 12px 0; border-bottom: 1px solid var(--line)">
+            <button style="height: 32px; padding: 0 12px; border: 0; background: transparent; font-size: 13px; font-weight: 600; border-bottom: 2px solid var(--ac)">Positions <span class="chip" style="margin-left: 4px">3</span></button>
+            <button style="height: 32px; padding: 0 12px; border: 0; background: transparent; font-size: 13px; color: var(--mu)">Orders <span class="chip" style="margin-left: 4px">1</span></button>
+            <button style="height: 32px; padding: 0 12px; border: 0; background: transparent; font-size: 13px; color: var(--mu)">Alerts <span class="chip" style="margin-left: 4px">2</span></button>
+          </div>
+          <table>
+            <thead><tr><th>Symbol</th><th>Side</th><th class="r">Qty</th><th class="r">Entry</th><th class="r">LTP</th><th class="r">P&amp;L</th><th class="r">Stop-loss</th><th class="r">Target</th><th></th></tr></thead>
+            <tbody>
+              <sc-for list="{{positions}}" as="p" hint-placeholder-count="3">
+                <tr>
+                  <td style="font-weight: 600">{{p.sym}}</td>
+                  <td><span class="chip">{{p.side}}</span></td>
+                  <td class="r num">{{p.qty}}</td>
+                  <td class="r num">{{p.entry}}</td>
+                  <td class="r num">{{p.ltp}}</td>
+                  <td class="r num {{p.cls}}">{{p.pnl}}</td>
+                  <td class="r num">{{p.sl}}</td>
+                  <td class="r num">{{p.tgt}}</td>
+                  <td class="r"><button class="btn" style="height: 26px">Square off</button></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <aside style="width: 340px; display: flex; flex-direction: column; gap: 12px">
+        <section class="card" style="padding: 12px 14px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <div class="h" style="font-size: 14px">Paper order</div>
+            <div class="seg" style="width: 132px"><button class="{{ui.buyCls}}" style="flex: 1; {{ui.buyStyle}}" onClick="{{ui.setBuy}}">Buy</button><button class="{{ui.sellCls}}" style="flex: 1; {{ui.sellStyle}}" onClick="{{ui.setSell}}">Sell</button></div>
+          </div>
+          <div class="seg" style="display: flex"><button class="{{ui.mCls}}" style="flex: 1" onClick="{{ui.setMarket}}">Market</button><button class="{{ui.lCls}}" style="flex: 1" onClick="{{ui.setLimit}}">Limit</button><button class="{{ui.sCls}}" style="flex: 1" onClick="{{ui.setStop}}">Stop</button></div>
+          <div style="display: flex; gap: 8px">
+            <label style="flex: 1"><div class="lbl" style="margin-bottom: 3px">{{ui.entryLabel}}</div><input class="num" value="{{ui.entryVal}}" style="{{ui.entryStyle}}"></label>
+            <label style="flex: 1"><div class="lbl" style="margin-bottom: 3px">Stop-loss <span class="dn">required</span></div><input class="num" value="53,090"></label>
+            <label style="flex: 1"><div class="lbl" style="margin-bottom: 3px">Target</div><input class="num" value="53,520"></label>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; background: var(--s2)">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4fd3a8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M8 12l3 3 5-6"/></svg>
+            <div style="flex-grow: 1; font-size: 13px">Size from risk: 1% of capital</div>
+          </div>
+          <div style="display: flex; padding: 8px 10px; border-radius: 8px; background: var(--s2)">
+            <div style="flex: 1"><div class="lbl">Risk</div><div class="num" style="font-weight: 500">₹8,100</div></div>
+            <div style="flex: 1"><div class="lbl">Size</div><div class="num" style="font-weight: 500">90 qty</div></div>
+            <div style="flex: 1"><div class="lbl">R : R</div><div class="num up" style="font-weight: 500">3.8 : 1</div></div>
+          </div>
+        </section>
+
+        <section class="card" style="padding: 12px 14px">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px">
+            <div class="h">Before you place</div><span class="chip warn">4 of 6 favorable</span>
+          </div>
+          <sc-for list="{{checks}}" as="c" hint-placeholder-count="6">
+            <div style="display: flex; align-items: center; gap: 8px; height: 28px; border-top: 1px solid var(--line)">
+              <span class="chip {{c.cls}}" style="width: 22px; padding: 0; justify-content: center">{{c.mark}}</span>
+              <span style="font-size: 13px; flex-grow: 1">{{c.text}}</span>
+              <span class="lbl">{{c.val}}</span>
+            </div>
+          </sc-for>
+        </section>
+
+        <section class="card" style="padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; gap: 8px">
+            <button style="flex: 1; height: 36px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); display: flex; align-items: center; justify-content: space-between; padding: 0 10px; font-size: 13px"><span class="mu">Setup</span><span>Demand retest ▾</span></button>
+            <div style="display: flex; align-items: center; gap: 5px; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg)">
+              <span style="width: 9px; height: 9px; border-radius: 50%; background: var(--ac)"></span><span style="width: 9px; height: 9px; border-radius: 50%; background: var(--ac)"></span><span style="width: 9px; height: 9px; border-radius: 50%; background: var(--ac)"></span><span style="width: 9px; height: 9px; border-radius: 50%; background: #3a4656"></span><span style="width: 9px; height: 9px; border-radius: 50%; background: #3a4656"></span>
+            </div>
+          </div>
+          <input aria-label="Why this trade" placeholder="Why this trade? One line for your journal">
+          <button style="{{ui.btnStyle}}" onClick="{{ui.place}}">{{ui.btnText}}</button>
+          <div class="lbl" style="text-align: center">{{ui.note}}</div>
+        </section>
+      </aside>
+    </div>
+  </main>
+  <sc-if value="{{ui.placed}}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; left: 260px; bottom: 28px; width: 520px; padding: 14px 16px; border-radius: 12px; background: #0f2a24; border: 1px solid #1d4a3e; display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.4)">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4fd3a8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>
+      <div style="flex-grow: 1">
+        <div style="font-weight: 600">Paper order placed</div>
+        <div class="lbl num" style="color: #b7d9cd">{{ui.summary}}</div>
+      </div>
+      <a href="PaperAccount.dc.html" style="color: var(--ac); font-size: 13px; font-weight: 600; text-decoration: none">View</a>
+      <button onClick="{{ui.dismiss}}" style="height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid #1d4a3e; background: transparent; font-size: 12px">Dismiss</button>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = Object.assign({ side: 'buy', kind: 'limit', placed: false }, this.state || {});
+    const buy = st.side === 'buy';
+    const segOn = 'on';
+    const ui = {
+      buyCls: buy ? 'on' : '', sellCls: buy ? '' : 'on',
+      buyStyle: buy ? 'background: #0f2a24; color: #4fd3a8;' : '',
+      sellStyle: buy ? '' : 'background: #331a14; color: #ff8b6e;',
+      setBuy: () => this.setState({ side: 'buy', placed: false }),
+      setSell: () => this.setState({ side: 'sell', placed: false }),
+      mCls: st.kind === 'market' ? segOn : '', lCls: st.kind === 'limit' ? segOn : '', sCls: st.kind === 'stop' ? segOn : '',
+      setMarket: () => this.setState({ kind: 'market', placed: false }),
+      setLimit: () => this.setState({ kind: 'limit', placed: false }),
+      setStop: () => this.setState({ kind: 'stop', placed: false }),
+      entryLabel: st.kind === 'market' ? 'Entry (at market)' : st.kind === 'stop' ? 'Trigger' : 'Entry',
+      entryVal: st.kind === 'market' ? '53,310' : '53,180',
+      entryStyle: st.kind === 'market' ? 'opacity: 0.55;' : '',
+      btnText: st.placed ? 'Placed. Place another' : (buy ? 'Place paper buy' : 'Place paper sell'),
+      btnStyle: 'height: 46px; border-radius: 10px; border: 0; font-size: 15px; font-weight: 600; cursor: pointer; color: #08111f; background: ' + (buy ? '#6aa9ff' : '#ff8b6e') + ';',
+      note: st.kind === 'market' ? 'Fills now at 53,310 · slippage and charges applied' : 'Fills when price reaches ' + (st.kind === 'stop' ? 'the trigger' : '53,180') + ' · slippage and charges applied',
+      place: () => this.setState({ placed: true }),
+      dismiss: () => this.setState({ placed: false }),
+      placed: st.placed,
+      summary: st.kind.toUpperCase() + ' ' + (buy ? 'BUY' : 'SELL') + ' BANKNIFTY · 90 qty · ' + (st.kind === 'market' ? '53,310' : '53,180') + ' · SL 53,090 · Target 53,520'
+    };
+    const lo = 53020, hi = 53580, top = 16, bot = 456;
+    const y = (p) => Math.round(top + (hi - p) / (hi - lo) * (bot - top));
+    const anchors = [[0, 53500], [14, 53180], [17, 53130], [19, 53200], [26, 53400], [30, 53340], [36, 53430], [39, 53310]];
+    const base = (i) => {
+      for (let k = 0; k < anchors.length - 1; k++) {
+        const a = anchors[k], b = anchors[k + 1];
+        if (i >= a[0] && i <= b[0]) return a[1] + (b[1] - a[1]) * (i - a[0]) / (b[0] - a[0]);
+      }
+      return anchors[anchors.length - 1][1];
+    };
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const cs = [];
+    let prev = base(0);
+    for (let i = 0; i < 40; i++) {
+      const c = base(i) + (rnd() - 0.5) * 36;
+      const o = prev;
+      const h = Math.max(o, c) + rnd() * 18;
+      const l = Math.min(o, c) - rnd() * 18;
+      cs.push([o, h, l, c]);
+      prev = c;
+    }
+    const candles = cs.map((d, i) => {
+      const bt = y(Math.max(d[0], d[3])), bb = y(Math.min(d[0], d[3]));
+      const cx = 14 + i * 15;
+      return { cx: cx, bx: cx - 4, wt: y(d[1]), wb: y(d[2]), bt: bt, bh: Math.max(2, bb - bt), color: d[3] >= d[0] ? '#4fd3a8' : '#ff8b6e' };
+    });
+    const yEntry = y(53180), ySl = y(53090), yTgt = y(53520);
+    const zx = 14 + 15 * 15;
+    const bosY = y(53410);
+    const fvgTop = y(53290), fvgBot = y(53250);
+    const gridPrices = [53500, 53400, 53300, 53200, 53100];
+    return {
+      ui: ui,
+      candles: candles,
+      grid: gridPrices.map((p) => ({ y: y(p) })),
+      axis: gridPrices.map((p) => ({ top: y(p) - 8, label: p.toLocaleString('en-US') })),
+      yEntry: yEntry, ySl: ySl, yTgt: yTgt,
+      zoneX: zx, zoneW: 640 - zx, zoneTop: yEntry, zoneH: ySl - yEntry,
+      zoneLblX: zx + 8, zoneLblY: yEntry + 22,
+      fvgX: 14 + 21 * 15, fvgW: 640 - (14 + 21 * 15), fvgTop: fvgTop, fvgH: fvgBot - fvgTop,
+      bosX: 14 + 5 * 15, bosY: bosY, bosLblX: 14 + 26 * 15, bosLblY: bosY - 18,
+      tags: [
+        { label: 'T 53,520', top: yTgt - 9, color: '#4fd3a8' },
+        { label: 'E 53,180', top: yEntry - 9, color: '#6aa9ff' },
+        { label: 'SL 53,090', top: ySl - 9, color: '#ff8b6e' }
+      ],
+      positions: [
+        { sym: 'NIFTY 24900 CE', side: 'LONG', qty: '75', entry: '118.40', ltp: '141.20', pnl: '+₹1,710', cls: 'up', sl: '92.00', tgt: '175.00' },
+        { sym: 'RELIANCE', side: 'LONG', qty: '110', entry: '1,412.50', ltp: '1,428.00', pnl: '+₹1,550', cls: 'up', sl: '1,398.00', tgt: '1,455.00' },
+        { sym: 'TATASTEEL', side: 'SHORT', qty: '1,000', entry: '168.40', ltp: '169.60', pnl: '−₹1,200', cls: 'dn', sl: '172.50', tgt: '160.00' }
+      ],
+      checks: [
+        { mark: '✓', cls: 'up', text: 'Structure', val: '15m demand retest' },
+        { mark: '✓', cls: 'up', text: 'Higher timeframe', val: '1h bullish' },
+        { mark: '✓', cls: 'up', text: 'Reward : risk', val: '3.8 (min 2)' },
+        { mark: '✓', cls: 'up', text: 'Loss budget', val: '34% used' },
+        { mark: '!', cls: 'warn', text: 'Regime', val: 'Ranging, ADX 16' },
+        { mark: '!', cls: 'warn', text: 'OI lean', val: 'Neutral' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

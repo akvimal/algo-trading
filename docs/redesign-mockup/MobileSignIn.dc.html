@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mobile - Sign in</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.mu{color:var(--mu)}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:6px;font-size:12px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}
+button{font:inherit;color:inherit;cursor:pointer}
+input{font:inherit;width:100%;height:48px;border-radius:10px;border:1px solid var(--line);background:var(--s1);color:var(--tx);padding:0 14px}
+.seg{display:flex;background:var(--s1);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{flex:1;height:40px;border:0;border-radius:7px;background:transparent;color:var(--mu);font-size:14px;font-weight:500}
+.seg button.on{background:#26344a;color:#fff}
+.cta{display:flex;align-items:center;justify-content:center;height:52px;border-radius:12px;background:var(--ac);color:#08111f;font-size:16px;font-weight:600;text-decoration:none}
+.cta.off{opacity:.45;cursor:not-allowed}
+.box{width:24px;height:24px;border-radius:6px;border:1.5px solid #4a5a70;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0}
+.box.on{background:var(--ac);border-color:var(--ac)}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); padding: 24px 20px">
+  <div style="display: flex; align-items: center; gap: 10px; height: 40px">
+    <div style="width: 30px; height: 30px; border-radius: 9px; background: #6aa9ff; display: flex; align-items: center; justify-content: center">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#08111f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/></svg>
+    </div>
+    <div style="font-weight: 600; font-size: 16px">Algo Trading</div>
+    <div style="flex-grow: 1"></div>
+    <span class="chip warn">Illustrative</span>
+  </div>
+
+  <h1 style="margin: 28px 0 0; font-size: 28px; line-height: 1.2; font-weight: 600">{{ui.title}}</h1>
+  <div class="mu" style="margin-top: 8px; font-size: 15px; line-height: 1.5">{{ui.sub}}</div>
+
+  <div class="seg" style="margin-top: 22px"><button class="{{ui.inCls}}" onClick="{{ui.showIn}}">Sign in</button><button class="{{ui.upCls}}" onClick="{{ui.showUp}}">Create account</button></div>
+
+  <label style="display: block; margin-top: 20px"><div class="lbl" style="margin-bottom: 5px">Email</div><input value="you@example.com"></label>
+  <label style="display: block; margin-top: 14px"><div class="lbl" style="margin-bottom: 5px">Password</div><input type="password" value="••••••••••"></label>
+
+  <sc-if value="{{ui.isUp}}" hint-placeholder-val="{{ false }}">
+    <div style="display: flex; gap: 12px; margin-top: 16px; align-items: flex-start">
+      <button class="{{ui.boxCls}}" onClick="{{ui.toggleAck}}" aria-label="I understand the risks">
+        <sc-if value="{{ui.acked}}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#08111f" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg></sc-if>
+      </button>
+      <div style="font-size: 13px; line-height: 1.5; color: #c4cedb">I understand trading involves risk of loss, and that this is for education, not investment advice.</div>
+    </div>
+  </sc-if>
+  <sc-if value="{{ui.isIn}}" hint-placeholder-val="{{ true }}"><a href="#forgot" style="margin-top: 14px; color: var(--ac); font-size: 14px; text-decoration: none; min-height: 44px; display: inline-flex; align-items: center">Forgot password?</a></sc-if>
+
+  <a class="cta {{ui.ctaOff}}" href="{{ui.goto}}" style="margin-top: 20px">{{ui.cta}}</a>
+
+  <div style="display: flex; align-items: center; gap: 12px; margin: 18px 0"><div style="flex-grow: 1; height: 1px; background: var(--line)"></div><div class="lbl">or</div><div style="flex-grow: 1; height: 1px; background: var(--line)"></div></div>
+  <button style="width: 100%; height: 52px; border-radius: 12px; border: 1px solid var(--line); background: var(--s1); font-size: 15px; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 10px">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M21 12h-9"/></svg>Continue with Google
+  </button>
+
+  <div style="flex-grow: 1"></div>
+  <div class="lbl" style="line-height: 1.5; text-align: center">Paper trading and analytics are educational tools. Nothing here is investment advice.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = Object.assign({ mode: 'up', ack: false }, this.state || {});
+    const up = st.mode === 'up';
+    return {
+      ui: {
+        title: up ? 'Create your account' : 'Welcome back',
+        sub: up ? 'A realistic paper account, in a minute. No card needed.' : 'Sign in to continue.',
+        inCls: up ? '' : 'on', upCls: up ? 'on' : '',
+        showIn: () => this.setState({ mode: 'in' }), showUp: () => this.setState({ mode: 'up' }),
+        isIn: !up, isUp: up,
+        boxCls: 'box' + (st.ack ? ' on' : ''), acked: st.ack, toggleAck: () => this.setState({ ack: !st.ack }),
+        cta: up ? 'Create account' : 'Sign in',
+        ctaOff: up && !st.ack ? 'off' : '',
+        goto: up ? (st.ack ? 'MobileToday.dc.html' : '#needs-acknowledgement') : 'MobileToday.dc.html'
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

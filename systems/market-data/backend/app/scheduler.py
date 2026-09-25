@@ -19,6 +19,18 @@ from app.providers.dhan import renew_access_token
 from app.providers.router import all_providers, get_provider
 
 logger = logging.getLogger(__name__)
+# Nothing in this service configures logging (uvicorn only sets up its own
+# loggers), so a bare logger.info here never reaches `docker compose logs` -
+# only WARNING+ does, via Python's last-resort handler. The EOD jobs' start /
+# summary lines are what tell you a run happened at all, so give THIS logger
+# its own handler rather than turning INFO on for the whole process (every
+# Dhan httpx call would then log too).
+if not logger.handlers and not logging.getLogger().handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 _scheduler = BackgroundScheduler(timezone=settings.timezone)
 
 
@@ -46,6 +58,18 @@ def _retry_when_throttled(fn, *args):
             if "queue is backed up" not in str(e) or attempt == THROTTLE_RETRY_ATTEMPTS - 1:
                 raise
             time.sleep(THROTTLE_RETRY_SLEEP_SECONDS)
+
+
+def _log_eod_summary(job: str, total: int, tally: dict[str, int]) -> None:
+    """One line per EOD batch run: how many symbols it tried and how each
+    ended. A run that wrote nothing (or failed everything) is logged at
+    WARNING so it stands out in `docker compose logs`."""
+    detail = ", ".join(f"{k}={v}" for k, v in tally.items())
+    message = f"scheduled {job}: finished, {tally['written']}/{total} written ({detail})"
+    if tally["written"] == 0:
+        logger.warning("%s - NOTHING WAS WRITTEN", message)
+    else:
+        logger.info(message)
 
 
 def _sync_all() -> None:
@@ -148,6 +172,7 @@ def _record_oi_eod_snapshot() -> None:
     scheduled run instead."""
     now = datetime.now(ZoneInfo(settings.timezone))
     if now.weekday() >= 5:
+        logger.info("scheduled OI EOD snapshot: skipped, weekend")
         return
 
     try:
@@ -157,6 +182,17 @@ def _record_oi_eod_snapshot() -> None:
         logger.exception("scheduled OI EOD snapshot: could not list NSE F&O stocks")
         return
 
+    # Every skip below used to be a bare `continue` with no log line, so a
+    # run that wrote nothing left no trace at all. Tally each outcome and
+    # log one summary at the end (see _log_eod_summary).
+    if not symbols:
+        logger.warning(
+            "scheduled OI EOD snapshot: 0 NSE F&O stocks listed (instrument master not loaded?) - nothing to do"
+        )
+        return
+    logger.info("scheduled OI EOD snapshot: starting, %d symbols", len(symbols))
+    tally = {"written": 0, "unresolved": 0, "no_expiry": 0, "no_chain": 0, "failed": 0}
+
     today = now.date()
     db = SessionLocal()
     try:
@@ -164,13 +200,16 @@ def _record_oi_eod_snapshot() -> None:
             try:
                 resolved = provider.resolve_underlying(symbol)
                 if resolved is None:
+                    tally["unresolved"] += 1
                     continue
                 expiries = _retry_when_throttled(provider.get_expiry_list, resolved.chart_symbol)
                 if not expiries:
+                    tally["no_expiry"] += 1
                     continue
                 expiry = sorted(expiries)[0]  # nearest - same convention as sentiment_fetch.py
                 chain = _retry_when_throttled(provider.get_option_chain, resolved.chart_symbol, expiry)
                 if chain is None:
+                    tally["no_chain"] += 1
                     continue
 
                 total_call_oi = sum(row.ce.oi for row in chain.strikes if row.ce is not None)
@@ -213,11 +252,14 @@ def _record_oi_eod_snapshot() -> None:
                 row.call_buildup = result.call_buildup
                 row.put_buildup = result.put_buildup
                 db.commit()
+                tally["written"] += 1
             except Exception:
+                tally["failed"] += 1
                 logger.exception("scheduled OI EOD snapshot failed for %s", symbol)
                 db.rollback()
     finally:
         db.close()
+    _log_eod_summary("OI EOD snapshot", len(symbols), tally)
 
 
 def _record_equity_screener_snapshot() -> None:

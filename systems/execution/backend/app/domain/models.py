@@ -191,6 +191,66 @@ class EquityStatsOut(BaseModel):
     points: int
 
 
+class DisciplineComponentOut(BaseModel):
+    rate: Optional[float] = None  # 0-1; None = no data for this dimension in the window
+    trades: int = 0
+
+
+class DisciplinePlanReviewOut(DisciplineComponentOut):
+    before_rate: Optional[float] = None
+    after_rate: Optional[float] = None
+
+
+class DisciplineOutcomeOut(DisciplineComponentOut):
+    win_rate: Optional[float] = None  # 0-1
+    avg_r: Optional[float] = None
+
+
+class DisciplineOut(BaseModel):
+    """Server-side port of the frontend's discipline score (discipline.ts): four
+    weighted components over a rolling window of the last `window_days` days with a
+    trade. `score` is None below 5 trades in the window."""
+
+    score: Optional[int] = None
+    window_days: int
+    window_start: Optional[str] = None
+    trade_count: int
+    planned: DisciplineComponentOut
+    plan_adherence: DisciplineComponentOut
+    plan_review: DisciplinePlanReviewOut
+    outcome: DisciplineOutcomeOut
+
+
+class PerformanceStatsOut(BaseModel):
+    trades: int
+    wins: int
+    losses: int
+    breakeven: int
+    win_rate_pct: Optional[float] = None
+    total_pnl: float  # net of charges and slippage where the account applied them
+    gross_pnl: float  # before those costs
+    total_charges: float
+    total_slippage: float
+    avg_pnl: Optional[float] = None
+    avg_win: Optional[float] = None
+    avg_loss: Optional[float] = None
+    profit_factor: Optional[float] = None  # None when there are no losses
+    avg_r: Optional[float] = None
+    best_trade: Optional[float] = None
+    worst_trade: Optional[float] = None
+    max_consecutive_losses: int
+
+
+class PerformanceOut(BaseModel):
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    scope: Literal["epoch", "all"]
+    # The IST date the counted trades start from (the latest reset marker) when scope='epoch'.
+    since: Optional[date] = None
+    performance: Optional[PerformanceStatsOut] = None
+    discipline: DisciplineOut
+    equity: Optional[EquityStatsOut] = None
+
+
 class EquityHistoryOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     days: int

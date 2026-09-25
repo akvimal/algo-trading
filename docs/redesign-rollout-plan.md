@@ -79,7 +79,7 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 - Server-enforced graduation gate: reject the live toggle unless the track record is met, broker credentials are present, consent is recorded, and daily-loss and order-size caps are set.
 - Keep one account per segment. Named multiple accounts need a schema change and can wait for Phase 4.
 
-**Phase 2: one responsive app (about 8 weeks).** New web app with a router, shared design tokens and components, one login (no postMessage broker). Port in this order, keeping legacy tabs working until replaced: shell, Today and Scan; Portfolio and Review; Trade (wrap `LiveChartPanel` first, refactor later); Settings. Build mobile-first with a PWA manifest. Extract what is needed from `WorkspacePage.tsx`, then delete it.
+**Phase 2: one responsive app (about 8 weeks).** New web app in `systems/web/frontend` (see "Where the new frontend lives") with a router, shared design tokens and components, one login (no postMessage broker). Port in this order, keeping legacy tabs working until replaced: shell, Today and Scan; Portfolio and Review; Trade (wrap `LiveChartPanel` first, refactor later); Settings. Build mobile-first with a PWA manifest. Extract what is needed from `WorkspacePage.tsx`, then delete it.
 
 **Phase 3: onboarding, plans and messaging (about 4 weeks).** Plan claim in the JWT (stateless, like `is_admin`, stale until re-login) plus backend entitlement checks. Razorpay or Stripe. Email sending (verification, reset, receipts). Onboarding flow. Per-user Telegram, a server-side notification inbox, web push.
 
@@ -88,6 +88,24 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 **Phase 4: depth (about 6 weeks).** Options view with an approximate margin model and credit spreads (blocked on the margin/max-loss model, see "Open questions: credit spreads"), Automate with tenancy and a plain-English rule summary, mobile Positional and Options views, named multiple paper accounts, Educator plan.
 
 **Phase 5: scale and launch hardening (about 4 weeks).** Dhan capacity, multi-worker market-data, load test at 100+ users, monitoring and backups, privacy policy and legal review.
+
+## Where the new frontend lives (decided 2026-09-25)
+
+**In this repo, as a new frontend-only system: `systems/web/frontend`.** Not a separate project. It follows the precedent of `systems/manual-trading` (a frontend with no backend of its own, talking to the backends over HTTP only), so the "no imports between `systems/*`" rule is unaffected. Deploy it as a new docker-compose service behind Caddy, next to the existing shell.
+
+Why in-repo:
+- Phase 0 and 1 change API shapes and the screens that use them (server-side risk enforcement, graduation gate, equity history, pending orders). One repo means one commit and one review per change, instead of coordinating two releases.
+- API types are hand-mirrored today, with no codegen, and `contract-guardian` only watches this repo. A split would raise drift risk for a solo developer.
+- The gradual migration needs the new app beside the old iframe shell, behind the same Caddy setup and sharing the same login, until every screen is ported. One compose file and one deploy make that simple.
+- `CLAUDE.md`, `docs/architecture.md`, this plan, the mockup source and the main/dev/prod workflow already live here.
+
+Two things to do from day one so the in-repo choice pays off:
+1. Generate TypeScript types from each FastAPI service's OpenAPI schema (for example `openapi-typescript`) so the frontend cannot silently drift from the backends.
+2. Keep design tokens and shared components inside the new app (`docs/redesign-mockup/README.md` lists the tokens), not copied per screen as the four current frontends do.
+
+When a separate project would make sense instead:
+- A marketing site (landing, pricing, legal pages): small, static, its own release cadence. Fine as a separate project.
+- If a frontend contractor joins or the app is open-sourced: split the new app out then. Starting in-repo does not prevent that.
 
 ## What breaks first at 100+ users
 

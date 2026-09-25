@@ -18,7 +18,8 @@ server-side figures (app/domain/performance.py, equity_history.py):
 The current curve starts at the latest reset, so a reset restarts the clock
 rather than hiding earlier results. Every threshold is a setting (see
 app/config.py, TRACK_RECORD_*); the defaults are product judgments, not
-measurements, and should be tuned. The gate is off unless
+measurements (confirmed as the starting values by the owner on 2026-09-25) and
+should be retuned once real users' records show what is achievable. The gate is off unless
 REQUIRE_PAPER_TRACK_RECORD=true.
 
 Applies to a user's OWN segment account on the off -> on transition (see

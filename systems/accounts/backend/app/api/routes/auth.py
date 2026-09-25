@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models
 from app.adapters.db.session import get_db
 from app.auth import get_current_user
+from app.rate_limit import check_and_record_signup, check_login_allowed, client_ip, record_login_failure, record_login_success
 from app.domain.models import LoginRequest, SignupRequest, TokenResponse, UserOut
 from app.domain.security import create_access_token, hash_password, verify_password
 
@@ -16,7 +17,8 @@ def _normalize_email(email: str) -> str:
 
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def signup(payload: SignupRequest, db: Session = Depends(get_db)):
+def signup(payload: SignupRequest, request: Request, db: Session = Depends(get_db)):
+    check_and_record_signup(client_ip(request))
     email = _normalize_email(payload.email)
     # Bootstraps the platform's first admin - the very first account ever
     # created (across the whole table, not per-request) gets is_admin=True
@@ -45,11 +47,17 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     email = _normalize_email(payload.email)
+    ip = client_ip(request)
+    # Refuse before touching the password check once an email or IP has too
+    # many recent failures (app/rate_limit.py).
+    check_login_allowed(email, ip)
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
+        record_login_failure(email, ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid email or password")
+    record_login_success(email)
     return TokenResponse(access_token=create_access_token(str(user.id), user.email, user.is_admin))
 
 

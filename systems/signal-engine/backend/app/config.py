@@ -128,5 +128,13 @@ class Settings(BaseSettings):
     internal_service_secret: str = "change-me-in-production"
     accounts_base_url: str = "http://accounts-backend:8000"
 
+    # Browser origins allowed by CORS, comma-separated. "*" (the default) is
+    # for local dev only; docker-compose.prod.yml sets the real origins. See
+    # app/secure_config.py.
+    cors_allow_origins: str = "*"
+    # When true the service refuses to start with placeholder secrets or
+    # wildcard CORS (set by docker-compose.prod.yml). Off by default.
+    require_secure_config: bool = False
+
 
 settings = Settings()

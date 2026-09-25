@@ -3,6 +3,7 @@ import logging
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.secure_config import cors_origins, enforce_secure_config
 from app.api.routes import accounts, checklist, health, internal, option_groups, positions, trade_images
 from app.api.routes import settings as settings_routes
 from app.auth import get_current_user
@@ -11,11 +12,15 @@ from app.scheduler import start_scheduler
 
 logging.basicConfig(level=logging.INFO)
 
+# Refuses to start with placeholder secrets / wildcard CORS when
+# REQUIRE_SECURE_CONFIG=true (see app/secure_config.py).
+enforce_secure_config()
+
 app = FastAPI(title="execution")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

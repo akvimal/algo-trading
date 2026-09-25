@@ -79,5 +79,13 @@ class Settings(BaseSettings):
     broker_order_reconciliation_poll_seconds: int = 30
     broker_order_submit_timeout_seconds: int = 60
 
+    # Browser origins allowed by CORS, comma-separated. "*" (the default) is
+    # for local dev only; docker-compose.prod.yml sets the real origins. See
+    # app/secure_config.py.
+    cors_allow_origins: str = "*"
+    # When true the service refuses to start with placeholder secrets or
+    # wildcard CORS (set by docker-compose.prod.yml). Off by default.
+    require_secure_config: bool = False
+
 
 settings = Settings()

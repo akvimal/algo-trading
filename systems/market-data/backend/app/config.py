@@ -152,5 +152,13 @@ class Settings(BaseSettings):
     # time actually depending on it.
     redis_url: str = "redis://localhost:6379/0"
 
+    # Browser origins allowed by CORS, comma-separated. "*" (the default) is
+    # for local dev only; docker-compose.prod.yml sets the real origins. See
+    # app/secure_config.py.
+    cors_allow_origins: str = "*"
+    # When true the service refuses to start with placeholder secrets or
+    # wildcard CORS (set by docker-compose.prod.yml). Off by default.
+    require_secure_config: bool = False
+
 
 settings = Settings()

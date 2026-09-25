@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.secure_config import cors_origins, enforce_secure_config
 from app.api.routes import (
     health,
     indicators,
@@ -31,13 +32,17 @@ logging.basicConfig(level=logging.INFO)
 # (webhook intake + resolution) were split across two services coupled by
 # a synchronous HTTP call on every single signal; merging removes that
 # call entirely (see app/domain/processing/resolution/generation_lookup.py).
+# Refuses to start with placeholder secrets / wildcard CORS when
+# REQUIRE_SECURE_CONFIG=true (see app/secure_config.py).
+enforce_secure_config()
+
 app = FastAPI(title="signal-engine")
 
 # Local-dev only: the frontend runs on a different port. Tighten this
 # before deploying anywhere beyond localhost.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

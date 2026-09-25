@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -19,6 +20,32 @@ from app.providers.router import all_providers, get_provider
 
 logger = logging.getLogger(__name__)
 _scheduler = BackgroundScheduler(timezone=settings.timezone)
+
+
+THROTTLE_RETRY_ATTEMPTS = 8
+THROTTLE_RETRY_SLEEP_SECONDS = 5.0
+
+
+def _retry_when_throttled(fn, *args):
+    """Calls fn(*args), waiting out DhanProvider._throttle's "queue is
+    backed up" RuntimeError instead of failing the symbol outright.
+
+    The EOD batch jobs share Dhan's per-endpoint throttle with everything
+    else in this process (browser pollers, the 5-minute sentiment job that
+    fires on the same :40 boundary as the OI job). A failed call reserves
+    no slot and never sleeps, so without this a single brief collision made
+    the loop rip through the ENTIRE ~210/~2000-symbol batch in about a
+    second, every symbol failing while the queue was still backed up - zero
+    rows written for the day. Only that specific error is retried; anything
+    else (bad symbol, auth, HTTP error) propagates to the caller's own
+    per-symbol handling unchanged."""
+    for attempt in range(THROTTLE_RETRY_ATTEMPTS):
+        try:
+            return fn(*args)
+        except RuntimeError as e:
+            if "queue is backed up" not in str(e) or attempt == THROTTLE_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(THROTTLE_RETRY_SLEEP_SECONDS)
 
 
 def _sync_all() -> None:
@@ -138,11 +165,11 @@ def _record_oi_eod_snapshot() -> None:
                 resolved = provider.resolve_underlying(symbol)
                 if resolved is None:
                     continue
-                expiries = provider.get_expiry_list(resolved.chart_symbol)
+                expiries = _retry_when_throttled(provider.get_expiry_list, resolved.chart_symbol)
                 if not expiries:
                     continue
                 expiry = sorted(expiries)[0]  # nearest - same convention as sentiment_fetch.py
-                chain = provider.get_option_chain(resolved.chart_symbol, expiry)
+                chain = _retry_when_throttled(provider.get_option_chain, resolved.chart_symbol, expiry)
                 if chain is None:
                     continue
 
@@ -228,7 +255,7 @@ def _record_equity_screener_snapshot() -> None:
     try:
         for symbol in symbols:
             try:
-                candles = provider.get_candle_history(symbol, "daily", from_date, today)
+                candles = _retry_when_throttled(provider.get_candle_history, symbol, "daily", from_date, today)
                 result = compute_equity_screener_row(candles)
                 if result is None:
                     continue  # not enough history yet - see equity_screener.py's own MIN_BARS floor

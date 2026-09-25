@@ -73,3 +73,12 @@ def get_caller(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_be
             headers={"WWW-Authenticate": "Bearer"},
         )
     return Caller(user_id=user_id, is_admin=is_admin, enforced=settings.require_auth)
+
+
+def get_admin_caller(caller: Caller = Depends(get_caller)) -> Caller:
+    """For settings that change the whole platform (not one user's data):
+    when ownership is enforced, only an admin may call. With the flag off
+    everyone may, exactly as before."""
+    if caller.enforced and not caller.is_admin:
+        raise HTTPException(status_code=403, detail="admin only")
+    return caller

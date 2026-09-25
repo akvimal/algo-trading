@@ -13,7 +13,7 @@ from app.adapters import accounts_client
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.market_data import client as market_data_client
-from app.auth import get_optional_user_id
+from app.auth import Caller, get_admin_caller, get_caller
 from app.config import settings
 from app.domain.weekly_advisor.contracts import WeeklyRecommendation
 from app.domain.weekly_advisor.journal import (
@@ -32,6 +32,7 @@ from app.domain.weekly_advisor.journal import (
 )
 from app.domain.weekly_advisor.pipeline import EXCHANGE, _leg_market_data, run_symbol
 from app.domain.weekly_advisor.screener_fetch import get_cached_screenshot
+from app.ownership import apply_scope, get_owned_or_404, owner_for_create
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ _BATCH_CONCURRENCY = 5
 def get_weekly_recommendations(
     symbols: Optional[str] = Query(None, description="comma-separated NSE symbols; defaults to a small starter list"),
     as_of: Optional[date] = None,
-    user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
+    caller: Caller = Depends(get_caller),
 ):
     """On-demand, stateless: builds each symbol's recommendation fresh off
     live NSE OHLCV (via market-data's source=yahoo) - no AI memo yet (see
@@ -77,7 +78,7 @@ def get_weekly_recommendations(
     fundamentals read is still cached/shared per-symbol across every user
     regardless of whose key produced it."""
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else DEFAULT_SYMBOLS
-    openrouter_api_key = accounts_client.get_user_openrouter_key(user_id) if user_id else None
+    openrouter_api_key = accounts_client.get_user_openrouter_key(caller.user_id) if caller.user_id else None
 
     def _run(symbol: str):
         try:
@@ -97,6 +98,10 @@ def get_weekly_recommendations(
 
 @router.get("/weekly-advisor/fundamentals/{symbol}/screenshot")
 def get_fundamentals_screenshot(symbol: str):
+    # Deliberately NOT login-protected: the UI loads this as a plain URL (an
+    # image/link the browser fetches without an Authorization header). It only
+    # serves a cached, public screener.in screenshot by symbol, never triggers
+    # a fetch, and holds no user data.
     """Raw PNG of the cached screener.in screenshot the AI fundamentals
     read (WeeklyRecommendation.fundamentals, see screener_fetch.py) was
     produced from - lets the user visually verify what the AI actually
@@ -111,7 +116,7 @@ def get_fundamentals_screenshot(symbol: str):
 
 
 @router.post("/weekly-advisor/margin", response_model=MarginCheckResponse)
-def check_margin(payload: MarginCheckRequest):
+def check_margin(payload: MarginCheckRequest, caller: Caller = Depends(get_caller)):
     """Real Dhan margin for a set of legs + a quantity - the decision
     form's "Check margin" action (WeeklyAdvisorPage.tsx), not part of
     creating/logging a trade itself (journal.py's own "not execution
@@ -141,7 +146,7 @@ def check_margin(payload: MarginCheckRequest):
 
 
 @router.get("/weekly-advisor/lot-size")
-def get_lot_size(security_id: str):
+def get_lot_size(security_id: str, caller: Caller = Depends(get_caller)):
     """Real, current lot size for one option contract - lets the decision
     form suggest/default a valid Qty before the user ever hits Check
     margin, instead of only finding out via a 502 that quantity=1 isn't a
@@ -163,7 +168,7 @@ class OptionChainStrikeQuote(BaseModel):
 
 
 @router.get("/weekly-advisor/option-chain-strikes", response_model=list[OptionChainStrikeQuote])
-def get_option_chain_strikes(symbol: str, expiry: str):
+def get_option_chain_strikes(symbol: str, expiry: str, caller: Caller = Depends(get_caller)):
     """Every strike's real, live last_price + security_id for `symbol` at
     `expiry` - lets the decision form offer an actual pick-a-strike dropdown
     (backed by real, currently tradeable strikes) instead of a free-text
@@ -193,6 +198,20 @@ def _parse_uuid(value: str, what: str) -> uuid.UUID:
         return uuid.UUID(value)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"{what} not found")
+
+
+def _visible_trade_or_404(db: Session, trade_id: str, caller: Caller) -> db_models.WeeklyAdvisorTrade:
+    """A trade has no owner column of its own: it belongs to whoever owns its
+    recommendation, and someone else's trade is the same 404 as a missing one."""
+    row = db.get(db_models.WeeklyAdvisorTrade, _parse_uuid(trade_id, "trade"))
+    if row is None:
+        raise HTTPException(status_code=404, detail="trade not found")
+    if caller.scope_user_id is not None:
+        try:
+            get_owned_or_404(db, db_models.WeeklyAdvisorRecommendation, row.recommendation_id, caller, "trade not found")
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="trade not found")
+    return row
 
 
 def _to_saved_out(row: db_models.WeeklyAdvisorRecommendation) -> SavedRecommendationOut:
@@ -244,7 +263,7 @@ def _default_target_pct(rec: db_models.WeeklyAdvisorRecommendation) -> Optional[
 
 
 @router.post("/weekly-advisor/recommendations/save", response_model=SavedRecommendationOut, status_code=201)
-def save_recommendation(payload: SaveRecommendationRequest, db: Session = Depends(get_db)):
+def save_recommendation(payload: SaveRecommendationRequest, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Always recomputes via run_symbol server-side rather than trusting a
     client-supplied payload - a saved recommendation is a record that a
     real, reproducible pipeline run produced these numbers, not whatever
@@ -257,7 +276,7 @@ def save_recommendation(payload: SaveRecommendationRequest, db: Session = Depend
 
     row = db_models.WeeklyAdvisorRecommendation(
         symbol=rec.symbol, as_of=rec.as_of.date(), action=rec.strategy.action,
-        payload=rec.model_dump(mode="json"),
+        payload=rec.model_dump(mode="json"), created_by=owner_for_create(caller),
     )
     db.add(row)
     db.commit()
@@ -270,8 +289,9 @@ def list_saved_recommendations(
     symbol: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_caller),
 ):
-    query = db.query(db_models.WeeklyAdvisorRecommendation)
+    query = apply_scope(db.query(db_models.WeeklyAdvisorRecommendation), db_models.WeeklyAdvisorRecommendation, caller)
     if symbol:
         query = query.filter(db_models.WeeklyAdvisorRecommendation.symbol == symbol.strip().upper())
     rows = query.order_by(db_models.WeeklyAdvisorRecommendation.saved_at.desc()).limit(limit).all()
@@ -279,37 +299,31 @@ def list_saved_recommendations(
 
 
 @router.get("/weekly-advisor/recommendations/{recommendation_id}", response_model=SavedRecommendationOut)
-def get_saved_recommendation(recommendation_id: str, db: Session = Depends(get_db)):
-    row = db.get(db_models.WeeklyAdvisorRecommendation, _parse_uuid(recommendation_id, "recommendation"))
-    if row is None:
-        raise HTTPException(status_code=404, detail="recommendation not found")
+def get_saved_recommendation(recommendation_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    row = get_owned_or_404(db, db_models.WeeklyAdvisorRecommendation, _parse_uuid(recommendation_id, "recommendation"), caller, "recommendation not found")
     return _to_saved_out(row)
 
 
 @router.delete("/weekly-advisor/recommendations/{recommendation_id}", status_code=204)
-def delete_saved_recommendation(recommendation_id: str, db: Session = Depends(get_db)):
+def delete_saved_recommendation(recommendation_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Clears one History row. ON DELETE CASCADE (see infra/postgres/init/
     03-signal-generation.sql) takes the recommendation's own journaled
     trade with it, if any - a trade has nothing left to reference once its
     recommendation snapshot is gone, so this deliberately does NOT require
     the caller to delete the trade first."""
-    row = db.get(db_models.WeeklyAdvisorRecommendation, _parse_uuid(recommendation_id, "recommendation"))
-    if row is None:
-        raise HTTPException(status_code=404, detail="recommendation not found")
+    row = get_owned_or_404(db, db_models.WeeklyAdvisorRecommendation, _parse_uuid(recommendation_id, "recommendation"), caller, "recommendation not found")
     db.delete(row)
     db.commit()
     return Response(status_code=204)
 
 
 @router.put("/weekly-advisor/recommendations/{recommendation_id}/decision", response_model=SavedRecommendationOut)
-def set_recommendation_decision(recommendation_id: str, payload: DecisionSet, db: Session = Depends(get_db)):
+def set_recommendation_decision(recommendation_id: str, payload: DecisionSet, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """A lightweight "did you act on this" note - independent of whether a
     trade is ever journaled below. Overwrites any prior decision on this
     recommendation (a working note, not an audit trail - see the table's
     own comment in infra/postgres/init/03-signal-generation.sql)."""
-    row = db.get(db_models.WeeklyAdvisorRecommendation, _parse_uuid(recommendation_id, "recommendation"))
-    if row is None:
-        raise HTTPException(status_code=404, detail="recommendation not found")
+    row = get_owned_or_404(db, db_models.WeeklyAdvisorRecommendation, _parse_uuid(recommendation_id, "recommendation"), caller, "recommendation not found")
 
     row.decision = payload.decision
     row.confidence = payload.confidence
@@ -346,14 +360,12 @@ def _expiry_date(rec: db_models.WeeklyAdvisorRecommendation) -> Optional[date]:
 
 
 @router.post("/weekly-advisor/recommendations/{recommendation_id}/trades", response_model=TradeOut, status_code=201)
-def create_trade(recommendation_id: str, payload: TradeCreate, db: Session = Depends(get_db)):
+def create_trade(recommendation_id: str, payload: TradeCreate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """"Select/execute" a saved recommendation - see app/domain/weekly_advisor/
     journal.py's module docstring for why this is a manual journal entry,
     not a real execution-opened position."""
     rec_id = _parse_uuid(recommendation_id, "recommendation")
-    rec = db.get(db_models.WeeklyAdvisorRecommendation, rec_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail="recommendation not found")
+    rec = get_owned_or_404(db, db_models.WeeklyAdvisorRecommendation, rec_id, caller, "recommendation not found")
 
     existing_open = (
         db.query(db_models.WeeklyAdvisorTrade)
@@ -388,11 +400,14 @@ def list_trades(
     status: Optional[str] = Query(None, pattern="^(open|closed)$"),
     symbol: Optional[str] = None,
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_caller),
 ):
     query = db.query(db_models.WeeklyAdvisorTrade, db_models.WeeklyAdvisorRecommendation).join(
         db_models.WeeklyAdvisorRecommendation,
         db_models.WeeklyAdvisorTrade.recommendation_id == db_models.WeeklyAdvisorRecommendation.id,
     )
+    # A trade belongs to whoever owns its recommendation.
+    query = apply_scope(query, db_models.WeeklyAdvisorRecommendation, caller)
     if status:
         query = query.filter(db_models.WeeklyAdvisorTrade.status == status)
     if symbol:
@@ -402,15 +417,13 @@ def list_trades(
 
 
 @router.put("/weekly-advisor/trades/{trade_id}/entry", response_model=TradeOut)
-def update_trade_entry(trade_id: str, payload: TradeEntryUpdate, db: Session = Depends(get_db)):
+def update_trade_entry(trade_id: str, payload: TradeEntryUpdate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Overwrite provisional entry data with the real thing once the legs
     actually fill - see TradeEntryUpdate's docstring. Merge-style: a field
     left out of the request body is untouched, so a caller can post just
     the one leg price that changed. Refused once a trade is closed - its
     entry is history at that point, and TradeClose already owns exit data."""
-    row = db.get(db_models.WeeklyAdvisorTrade, _parse_uuid(trade_id, "trade"))
-    if row is None:
-        raise HTTPException(status_code=404, detail="trade not found")
+    row = _visible_trade_or_404(db, trade_id, caller)
     if row.status == "closed":
         raise HTTPException(status_code=409, detail="trade is closed - entry data can no longer be edited")
 
@@ -427,10 +440,8 @@ def update_trade_entry(trade_id: str, payload: TradeEntryUpdate, db: Session = D
 
 
 @router.put("/weekly-advisor/trades/{trade_id}/close", response_model=TradeOut)
-def close_trade(trade_id: str, payload: TradeClose, db: Session = Depends(get_db)):
-    row = db.get(db_models.WeeklyAdvisorTrade, _parse_uuid(trade_id, "trade"))
-    if row is None:
-        raise HTTPException(status_code=404, detail="trade not found")
+def close_trade(trade_id: str, payload: TradeClose, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    row = _visible_trade_or_404(db, trade_id, caller)
     if row.status == "closed":
         raise HTTPException(status_code=409, detail="trade is already closed")
 
@@ -447,26 +458,25 @@ def close_trade(trade_id: str, payload: TradeClose, db: Session = Depends(get_db
 
 
 @router.delete("/weekly-advisor/trades/{trade_id}", status_code=204)
-def delete_trade(trade_id: str, db: Session = Depends(get_db)):
+def delete_trade(trade_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Clears one Performance row without touching its recommendation - the
     History entry (and the ability to re-decide/re-journal it) stays put.
     No status guard: an open trade can be deleted same as a closed one -
     unlike /entry and /close, "I logged this by mistake" isn't a lifecycle
     transition that should be blocked."""
-    row = db.get(db_models.WeeklyAdvisorTrade, _parse_uuid(trade_id, "trade"))
-    if row is None:
-        raise HTTPException(status_code=404, detail="trade not found")
+    row = _visible_trade_or_404(db, trade_id, caller)
     db.delete(row)
     db.commit()
     return Response(status_code=204)
 
 
 @router.get("/weekly-advisor/performance/summary", response_model=PerformanceSummary)
-def get_performance_summary(symbol: Optional[str] = None, db: Session = Depends(get_db)):
+def get_performance_summary(symbol: Optional[str] = None, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     query = db.query(db_models.WeeklyAdvisorTrade, db_models.WeeklyAdvisorRecommendation).join(
         db_models.WeeklyAdvisorRecommendation,
         db_models.WeeklyAdvisorTrade.recommendation_id == db_models.WeeklyAdvisorRecommendation.id,
     )
+    query = apply_scope(query, db_models.WeeklyAdvisorRecommendation, caller)
     if symbol:
         query = query.filter(db_models.WeeklyAdvisorRecommendation.symbol == symbol.strip().upper())
     rows = query.all()
@@ -488,7 +498,7 @@ class WeeklyAdvisorSettings(BaseModel):
 
 
 @router.get("/weekly-advisor/settings", response_model=WeeklyAdvisorSettings)
-def get_weekly_advisor_settings():
+def get_weekly_advisor_settings(caller: Caller = Depends(get_caller)):
     return WeeklyAdvisorSettings(
         openrouter_vision_model=settings.openrouter_vision_model,
         defined_risk=settings.weekly_advisor_defined_risk,
@@ -496,7 +506,10 @@ def get_weekly_advisor_settings():
 
 
 @router.put("/weekly-advisor/settings", response_model=WeeklyAdvisorSettings)
-def update_weekly_advisor_settings(payload: WeeklyAdvisorSettings):
+def update_weekly_advisor_settings(payload: WeeklyAdvisorSettings, caller: Caller = Depends(get_admin_caller)):
+    # Admin-only once ownership is enforced: these two values are PROCESS-WIDE
+    # (the AI model the platform pays for, and defined-risk vs naked for every
+    # user's recommendations), not per-user preferences.
     """In-memory only, like market-data's own PUT /settings - takes effect
     on the very next run_symbol() call, no restart needed, but reverts to
     .env (OPENROUTER_VISION_MODEL / WEEKLY_ADVISOR_DEFINED_RISK) on one.

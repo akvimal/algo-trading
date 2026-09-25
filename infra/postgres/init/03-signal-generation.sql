@@ -628,3 +628,10 @@ CREATE TABLE IF NOT EXISTS signal_generation.weekly_advisor_fundamentals (
     ai_model    TEXT,
     analyzed_at TIMESTAMPTZ
 );
+
+-- Per-user ownership for the Weekly Advisor (2026-09-25). Trades inherit their
+-- recommendation's owner; the fundamentals cache stays shared. See
+-- migrations/017-weekly-advisor-ownership.sql and app/ownership.py.
+ALTER TABLE signal_generation.weekly_advisor_recommendations ADD COLUMN IF NOT EXISTS created_by UUID;
+CREATE INDEX IF NOT EXISTS idx_weekly_advisor_recommendations_created_by
+    ON signal_generation.weekly_advisor_recommendations (created_by);

@@ -194,6 +194,9 @@ class WeeklyAdvisorRecommendation(Base):
     __table_args__ = {"schema": SCHEMA}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Ownership (see app/ownership.py): JWT sub of the creator, NULL = platform/legacy.
+    # Trades inherit it through recommendation_id.
+    created_by = Column(UUID(as_uuid=True), nullable=True)
     symbol = Column(Text, nullable=False)
     as_of = Column(Date, nullable=False)
     action = Column(Text, nullable=False)

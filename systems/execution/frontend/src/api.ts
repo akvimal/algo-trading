@@ -403,7 +403,11 @@ export async function updateAccount(
       | "default_interval"
       | "default_higher_interval"
     >
-  >,
+  > & {
+    // Must be true on the request that turns live trading ON; the server
+    // records it with a timestamp (app/domain/live_gate.py).
+    live_trading_consent?: boolean;
+  },
 ): Promise<Account> {
   const res = await authFetch(`${API_BASE}/accounts/${segment}`, {
     method: "PUT",
@@ -465,7 +469,7 @@ export async function updateStrategyAccount(
       StrategyAccount,
       "capital_per_trade" | "risk_per_trade_pct" | "live_trading_user_id" | "live_trading_enabled" | "max_order_value" | "max_daily_loss"
     >
-  >,
+  > & { live_trading_consent?: boolean },
 ): Promise<StrategyAccount> {
   const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
     method: "PUT",

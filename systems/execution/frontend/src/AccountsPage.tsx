@@ -454,8 +454,9 @@ export default function AccountsPage() {
       const confirmed = window.confirm(
         `Turn ON real order placement for your ${segment} account?\n\n` +
           "Every order you place here from now on will be a REAL order sent to Dhan using your own saved " +
-          "credentials, not a paper trade. Make sure your Dhan credentials are saved (Credentials section " +
-          "below) and this is really what you want before confirming.",
+          "credentials, not a paper trade. Turning this on requires a max order value, a max daily loss and " +
+          "saved Dhan credentials (Credentials section below) - the server refuses otherwise. Confirming " +
+          "records your acknowledgement of this risk, with a timestamp.",
       );
       if (!confirmed) return;
     }
@@ -476,6 +477,8 @@ export default function AccountsPage() {
           : {}),
         default_interval: (myDraftDefaultInterval[segment] || null) as Account["default_interval"],
         default_higher_interval: (myDraftDefaultHigherInterval[segment] || null) as Account["default_higher_interval"],
+        // Only sent on the off->on transition, after the confirmation above.
+        ...(turningLiveOn ? { live_trading_consent: true } : {}),
       });
       await refreshMyAccounts();
       setMyJustSavedSegment(segment);
@@ -806,6 +809,8 @@ export default function AccountsPage() {
         live_trading_enabled: draft.liveEnabled,
         max_order_value: draft.maxOrderValue === "" ? null : draft.maxOrderValue,
         max_daily_loss: draft.maxDailyLoss === "" ? null : draft.maxDailyLoss,
+        // Only sent on the off->on transition, after the confirmation above.
+        ...(turningLiveOn ? { live_trading_consent: true } : {}),
       });
       setStrategyAccounts((prev) => prev.map((a) => (a.strategy_id === strategyId ? updated : a)));
       setStrategyAccountMessage(`${strategyName(strategyId)}'s dedicated account saved.`);

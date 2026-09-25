@@ -121,6 +121,10 @@ def _group_to_out(
         # CRYPTO only, null for NSE/MCX groups.
         "open_fee": float(row.open_fee) if row.open_fee is not None else None,
         "close_fee": float(row.close_fee) if row.close_fee is not None else None,
+        # Indian brokerage/STT/exchange/SEBI/stamp/GST netted into pnl at close (NSE/MCX, when the
+        # account has apply_charges): the total and its breakdown + schedule version. None = none applied.
+        "charges": float(row.charges) if row.charges is not None else None,
+        "charges_detail": row.charges_detail,
         # Trade discipline checklist (Manual tab only) - null for every
         # Strategy-driven group, see infra/postgres/init/02-execution.sql's
         # own comment on these 4 columns.

@@ -1017,3 +1017,12 @@ CREATE TABLE IF NOT EXISTS execution.account_equity_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_account_equity_snapshots_user_segment
     ON execution.account_equity_snapshots (user_id, segment, snapshot_date);
+
+-- Indian charges on paper P&L (2026-09-25): per-account switch (existing rows false, new default true)
+-- and per-position/group totals. See migrations/021-india-charges.sql and app/domain/india_charges.py.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS apply_charges BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.accounts ALTER COLUMN apply_charges SET DEFAULT true;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS charges NUMERIC;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS charges_detail JSONB;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS charges NUMERIC;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS charges_detail JSONB;

@@ -312,6 +312,8 @@ class AccountUpdate(BaseModel):
     # Personal risk guard: refuse a spot/future manual order with no stop-loss.
     # A plain bool toggle (None = leave unchanged).
     require_stop_loss: Optional[bool] = None
+    # Net Indian charges (brokerage, STT, ...) into NSE/MCX P&L on close. None = leave unchanged.
+    apply_charges: Optional[bool] = None
     # NULL is meaningful here too (clears a previously-set default, rather
     # than "leave unchanged") - same model_fields_set-distinguished pattern
     # square_off_time above already uses.

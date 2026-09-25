@@ -96,6 +96,9 @@ class Account(Base):
     # with this OFF (migration 016); accounts created from now on default to
     # ON. Option groups take their stop after entry, so they are not covered.
     require_stop_loss = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Nets Indian brokerage/STT/exchange/SEBI/stamp/GST into P&L on close (NSE/MCX) - see
+    # app/domain/india_charges.py and migrations/021-india-charges.sql. Off for pre-existing accounts.
+    apply_charges = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
     # A user's own declared execution timeframe for this segment
@@ -286,6 +289,10 @@ class OptionPositionGroup(Base):
     # 02-execution.sql's own comment on this column group.
     open_fee = Column(Numeric)
     close_fee = Column(Numeric)
+    # Indian charges netted into pnl at close (NSE/MCX, when the account has apply_charges): the
+    # total and the breakdown + schedule version. NULL = none applied. See app/domain/india_charges.py.
+    charges = Column(Numeric)
+    charges_detail = Column(JSONB(none_as_null=True))
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
     exit_reason = Column(Text)
@@ -404,6 +411,10 @@ class Position(Base):
     # infra/postgres/init/02-execution.sql's own comment on this column group.
     open_fee = Column(Numeric)
     close_fee = Column(Numeric)
+    # Indian charges netted into pnl at close (NSE/MCX, when the account has apply_charges): the
+    # total and the breakdown + schedule version. NULL = none applied. See app/domain/india_charges.py.
+    charges = Column(Numeric)
+    charges_detail = Column(JSONB(none_as_null=True))
     # Also reused (not CRYPTO-only) for an NSE MTF positional spot position's
     # own capital posted - see infra/postgres/init/02-execution.sql.
     margin_posted = Column(Numeric)

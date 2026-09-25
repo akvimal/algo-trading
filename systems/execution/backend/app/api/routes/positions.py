@@ -103,6 +103,10 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         # position.
         "open_fee": float(row.open_fee) if row.open_fee is not None else None,
         "close_fee": float(row.close_fee) if row.close_fee is not None else None,
+        # Indian brokerage/STT/exchange/SEBI/stamp/GST netted into pnl at close (NSE/MCX, when the
+        # account has apply_charges): the total and its breakdown + schedule version. None = none applied.
+        "charges": float(row.charges) if row.charges is not None else None,
+        "charges_detail": row.charges_detail,
         "margin_posted": float(row.margin_posted) if row.margin_posted is not None else None,
         "liquidation_price": float(row.liquidation_price) if row.liquidation_price is not None else None,
         # NSE MTF only - null for every other position. See

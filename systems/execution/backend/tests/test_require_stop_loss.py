@@ -107,7 +107,7 @@ def _account_row(**over):
         risk_per_trade_pct=1, min_reward_risk_ratio=4, enforce_risk_based_lots=False, leverage=1,
         leverage_buffer_pct=10, mtf_annual_interest_rate_pct=None, square_off_time=None,
         live_trading_enabled=False, live_trading_consent_at=None, live_trading_consent_version=None,
-        require_stop_loss=False, max_order_value=None, max_daily_loss=None, default_interval=None,
+        require_stop_loss=False, apply_charges=True, max_order_value=None, max_daily_loss=None, default_interval=None,
         default_higher_interval=None, updated_at=datetime.now(timezone.utc),
     )
     for k, v in over.items():

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings as app_settings
+from app.domain.india_charges import kind_for, round_trip_charges
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
 from app.domain.exit_condition import evaluate_exit_condition, exit_condition_warmup
 from app.domain.live_broker import (
@@ -535,6 +536,32 @@ def _net_pnl_with_costs(pos, exit_price: float, raw_pnl: float) -> float:
     return raw_pnl
 
 
+def _apply_position_charges(pos, account) -> float:
+    """Indian charges (brokerage, STT/CTT, exchange, SEBI, stamp, GST) for one
+    closing NSE/MCX Position, recorded on it (charges/charges_detail) and
+    returned so the caller can net them out of the P&L. 0.0, touching nothing,
+    when they do not apply: no account, the account's apply_charges is off,
+    crypto (own fee simulation), an option LEG (its group is charged as a whole
+    by option_position_manager), an option group object (no instrument_type
+    here), or a position with no exit price yet. Called from
+    _apply_realized_pnl, the one place every close credits the balance, so no
+    close path needs to remember it. See app/domain/india_charges.py."""
+    if account is None or not getattr(account, "apply_charges", False):
+        return 0.0
+    if getattr(pos, "option_group_id", None) is not None:
+        return 0.0
+    instrument_type = getattr(pos, "instrument_type", None)
+    if instrument_type is None or pos.exit_price is None:
+        return 0.0
+    kind = kind_for(pos.segment, instrument_type, getattr(pos, "horizon", None))
+    if kind is None:
+        return 0.0
+    breakdown = round_trip_charges(kind, pos.action, float(pos.entry_price), float(pos.exit_price), float(pos.quantity))
+    pos.charges = breakdown.total
+    pos.charges_detail = breakdown.as_dict()
+    return breakdown.total
+
+
 def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] = None) -> None:
     """Sets pos.pnl (always in the position's own native currency - raw
     USD for CRYPTO, INR for NSE/MCX, matching entry_price/exit_price so
@@ -554,6 +581,7 @@ def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] =
     crediting the raw USD figure unconverted, same as this bug's pre-fix
     behavior) rather than leaving a position permanently stuck OPEN over a
     rate that was cleared out from under it after it opened."""
+    pnl -= _apply_position_charges(pos, account)
     pos.pnl = pnl
     if account is None:
         logger.error("no account found for segment %s - position %s closed without a balance update", pos.segment, pos.id)

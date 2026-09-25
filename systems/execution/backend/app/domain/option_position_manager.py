@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.domain.delta_fees import compute_option_trading_fee
+from app.domain.india_charges import group_charges, kind_for
 from app.domain.models import ExecutionSettings, ResolvedOrder
 from app.domain.option_templates import bear_put_spread, bull_call_spread, naked_call, naked_put
 from app.domain.position_manager import (
@@ -128,6 +129,25 @@ def _open_delta_option_fee(
             underlying_notional if underlying_notional is not None else short_premium_amount, short_premium_amount
         )
     return fee
+
+
+def _group_charges(group, account, long_leg, long_cmp, short_leg, short_cmp) -> float:
+    """Indian charges for one closing NSE/MCX option group (the sum of each
+    leg's round trip), recorded on the group and returned so the caller can net
+    them out of combined_pnl. 0.0, touching nothing, when they do not apply (no
+    account, apply_charges off, crypto). See app/domain/india_charges.py."""
+    if account is None or not getattr(account, "apply_charges", False):
+        return 0.0
+    kind = kind_for(group.segment, "option", getattr(group, "horizon", None))
+    if kind is None:
+        return 0.0
+    legs = [(long_leg.action, float(long_leg.entry_price), float(long_cmp), float(long_leg.quantity))]
+    if short_leg is not None:
+        legs.append((short_leg.action, float(short_leg.entry_price), float(short_cmp), float(short_leg.quantity)))
+    breakdown = group_charges(kind, legs)
+    group.charges = breakdown.total
+    group.charges_detail = breakdown.as_dict()
+    return breakdown.total
 
 
 def _close_delta_option_fee(segment: str, spot_price: Optional[float], quantity: float, long_price: float, short_price: float = 0.0) -> Optional[float]:
@@ -1035,6 +1055,7 @@ def _close_group_at_cmp(
     group.exit_time = now
     group.status = "CLOSED"
     group.exit_reason = exit_reason
+    combined_pnl -= _group_charges(group, account, long_leg, long_cmp, short_leg, short_cmp)
     _apply_realized_pnl(group, account, combined_pnl, usdinr_rate)
     return True
 
@@ -1332,9 +1353,9 @@ def _evaluate_option_group_square_off_due(
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = "square_off"
-        _apply_realized_pnl(
-            group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, rates.get(group.user_id)
-        )
+        capital_account = _resolve_capital_account(group, accounts_by_segment, strategy_accounts)
+        combined_pnl -= _group_charges(group, capital_account, long_leg, long_cmp, short_leg, short_cmp)
+        _apply_realized_pnl(group, capital_account, combined_pnl, rates.get(group.user_id))
         closed += 1
 
     return {"closed": closed, "failed": failed, "checked": len(due)}
@@ -1541,9 +1562,9 @@ def _evaluate_option_group_exits(
         group.exit_time = now
         group.status = "CLOSED"
         group.exit_reason = group_reason
-        _apply_realized_pnl(
-            group, _resolve_capital_account(group, accounts_by_segment, strategy_accounts), combined_pnl, rates.get(group.user_id)
-        )
+        capital_account = _resolve_capital_account(group, accounts_by_segment, strategy_accounts)
+        combined_pnl -= _group_charges(group, capital_account, long_leg, long_cmp, short_leg, short_cmp)
+        _apply_realized_pnl(group, capital_account, combined_pnl, rates.get(group.user_id))
 
         if sl_hit or spot_sl_hit:
             closed_stop_loss += 1

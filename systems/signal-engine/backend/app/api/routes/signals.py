@@ -1,20 +1,23 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.adapters.db import models as generation_models
 from app.adapters.db import processing_models as db_models
 from app.adapters.db.session import get_db
+from app.auth import Caller, get_caller
 from app.domain.processing.intake.core import create_signal_from_ingest
 from app.domain.processing.models import SignalIngest
+from app.ownership import get_owned_or_404, visible_strategy_ids
 
 router = APIRouter()
 
 
 @router.get("/signals/counts")
-def signal_counts(db: Session = Depends(get_db)):
+def signal_counts(db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Total signal count per strategy_id, every source/status included -
     the "Total signals" figure on execution's Money page "Performance" tab
     (combined there with execution's own GET /strategies/performance by
@@ -22,16 +25,26 @@ def signal_counts(db: Session = Depends(get_db)):
     Position data, not here). A plain GROUP BY, not filtered to `live`
     strategies or any particular source - a strategy's total signal count
     is meaningful even while draft/paused/backtesting."""
-    rows = (
-        db.query(db_models.Signal.strategy_id, func.count(db_models.Signal.id))
-        .group_by(db_models.Signal.strategy_id)
-        .all()
-    )
+    q = db.query(db_models.Signal.strategy_id, func.count(db_models.Signal.id))
+    visible = visible_strategy_ids(caller)
+    if visible is not None:
+        q = q.filter(db_models.Signal.strategy_id.in_(visible))
+    rows = q.group_by(db_models.Signal.strategy_id).all()
     return [{"strategy_id": str(strategy_id), "total_signals": count} for strategy_id, count in rows]
 
 
 @router.post("/signals", status_code=202)
-def create_signal(signal: SignalIngest, db: Session = Depends(get_db)):
+def create_signal(signal: SignalIngest, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    """Manual signal (the frontend's "Send test signal"). When ownership is
+    enforced, the named strategy must be the caller's own - the provider
+    webhooks (app/api/routes/webhooks.py) do NOT go through this route and
+    stay open, see settings.require_auth."""
+    if caller.scope_user_id is not None:
+        try:
+            strategy_uuid = uuid.UUID(signal.strategy_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        get_owned_or_404(db, generation_models.Strategy, strategy_uuid, caller, "strategy not found")
     return create_signal_from_ingest(db, signal)
 
 
@@ -42,6 +55,7 @@ def list_signals(
     strategy_id: Optional[str] = None,
     signal_id: Optional[str] = None,
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_caller),
 ):
     """source: e.g. 'chartink' - lets other systems' dashboards (signal-generation)
     show provider activity without owning a copy of this data themselves.
@@ -51,6 +65,9 @@ def list_signals(
     q = db.query(db_models.Signal, db_models.ResolvedOrder).outerjoin(
         db_models.ResolvedOrder, db_models.ResolvedOrder.signal_id == db_models.Signal.id
     )
+    visible = visible_strategy_ids(caller)
+    if visible is not None:
+        q = q.filter(db_models.Signal.strategy_id.in_(visible))
     if source:
         q = q.filter(db_models.Signal.source == source)
     if strategy_id:
@@ -84,16 +101,31 @@ def list_signals(
 
 
 @router.delete("/signals")
-def clear_signals(db: Session = Depends(get_db)):
+def clear_signals(db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Wipes all signal-processing data (resolved orders, signals, and
     their raw provider payloads) - a manual reset for testing, not
     something the pipeline itself ever calls. resolved_orders is deleted
     first since it FK-references signals. Strategies in signal-generation
     and positions in execution are untouched - each system only ever
     clears its own schema, see docs/architecture.md."""
-    resolved_orders_deleted = db.query(db_models.ResolvedOrder).delete()
-    signals_deleted = db.query(db_models.Signal).delete()
-    raw_payloads_deleted = db.query(db_models.RawSignalPayload).delete()
+    visible = visible_strategy_ids(caller)
+    if visible is None:
+        resolved_orders_deleted = db.query(db_models.ResolvedOrder).delete()
+        signals_deleted = db.query(db_models.Signal).delete()
+        raw_payloads_deleted = db.query(db_models.RawSignalPayload).delete()
+    else:
+        # A scoped (non-admin) caller only clears their own strategies'
+        # signals. Raw provider payloads carry no strategy link and are a
+        # shared archive, so they are left for an admin's full clear.
+        resolved_orders_deleted = (
+            db.query(db_models.ResolvedOrder)
+            .filter(db_models.ResolvedOrder.strategy_id.in_(visible))
+            .delete(synchronize_session=False)
+        )
+        signals_deleted = (
+            db.query(db_models.Signal).filter(db_models.Signal.strategy_id.in_(visible)).delete(synchronize_session=False)
+        )
+        raw_payloads_deleted = 0
     db.commit()
     return {
         "signals_deleted": signals_deleted,

@@ -18,6 +18,13 @@ import app.api.routes.rules as rules_route
 from app.adapters.market_data.client import ResolvedUnderlying
 from app.domain.generation.rule import RangeBreakoutRuleConfig, RuleBacktestRequest
 from app.domain.generation.rules import CandleClose
+from app.auth import Caller
+
+
+# Auth not enforced (settings.require_auth off): every route sees everything,
+# which is what these pre-ownership tests exercise. See tests/test_ownership.py
+# for the scoped behavior.
+UNRESTRICTED = Caller(user_id=None, is_admin=False, enforced=False)
 
 BASE = datetime(2026, 8, 12, 9, 15)
 RULE = RangeBreakoutRuleConfig(breakout_period=4)
@@ -187,7 +194,7 @@ def test_backtest_rule_dispatches_symbol_list_to_backtest_symbol_list(monkeypatc
     for underlying_type='symbol_list', not _backtest_one_symbol (which
     would otherwise treat the raw comma-separated string as a single,
     unresolvable "symbol")."""
-    monkeypatch.setattr(rules_route, "_load_rule_for_backtest", lambda db, rule_id: FakeSymbolListRule())
+    monkeypatch.setattr(rules_route, "_load_rule_for_backtest", lambda db, rule_id, caller: FakeSymbolListRule())
     monkeypatch.setattr(rules_route, "_resolve_regime_indicators", lambda db, rule_row: [])
     sentinel = {"pooled": True, "called_with": None}
 
@@ -207,7 +214,7 @@ def test_backtest_rule_dispatches_symbol_list_to_backtest_symbol_list(monkeypatc
         lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not dispatch to _backtest_one_symbol")),
     )
 
-    result = rules_route.backtest_rule("rule-2", PAYLOAD, BASE.date(), BASE.date(), db=None)
+    result = rules_route.backtest_rule("rule-2", PAYLOAD, BASE.date(), BASE.date(), db=None, caller=UNRESTRICTED)
 
     assert result is sentinel
     assert sentinel["called_with"] == "GOLDM,CRUDEOIL"

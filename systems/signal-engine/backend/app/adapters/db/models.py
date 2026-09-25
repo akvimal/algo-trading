@@ -29,6 +29,8 @@ class Rule(Base):
     interval = Column(Text, nullable=False)
     rule_config = Column(JSONB(none_as_null=True), nullable=False)
     regime_indicator_ids = Column(JSONB, nullable=False, default=list)
+    # Ownership (see app/ownership.py): JWT sub of the creator, NULL = platform/legacy.
+    created_by = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -43,6 +45,8 @@ class Watchlist(Base):
     __table_args__ = {"schema": SCHEMA}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Ownership (see app/ownership.py): JWT sub of the creator, NULL = platform/legacy.
+    created_by = Column(UUID(as_uuid=True), nullable=True)
     name = Column(Text, nullable=False, unique=True)
     symbols = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -132,6 +136,8 @@ class Indicator(Base):
     __table_args__ = {"schema": SCHEMA}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Ownership (see app/ownership.py): JWT sub of the creator, NULL = platform/legacy.
+    created_by = Column(UUID(as_uuid=True), nullable=True)
     name = Column(Text, nullable=False)
     type = Column(Text, nullable=False)  # 'rsi' today
     params = Column(JSONB, nullable=False)

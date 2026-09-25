@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.auth import Caller, get_caller
 from app.domain.generation.rule import parse_symbol_list
 from app.domain.generation.watchlist import WatchlistCreate, WatchlistOut, WatchlistUpdate
+from app.ownership import apply_scope, get_owned_or_404, owner_for_create
 
 router = APIRouter()
 
@@ -24,8 +26,8 @@ def _to_out(row: db_models.Watchlist) -> WatchlistOut:
 
 
 @router.post("/watchlists", response_model=WatchlistOut, status_code=201)
-def create_watchlist(payload: WatchlistCreate, db: Session = Depends(get_db)):
-    row = db_models.Watchlist(name=payload.name, symbols=payload.symbols)
+def create_watchlist(payload: WatchlistCreate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    row = db_models.Watchlist(name=payload.name, symbols=payload.symbols, created_by=owner_for_create(caller))
     db.add(row)
     try:
         db.commit()
@@ -37,26 +39,24 @@ def create_watchlist(payload: WatchlistCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/watchlists", response_model=list[WatchlistOut])
-def list_watchlists(db: Session = Depends(get_db)):
-    rows = db.query(db_models.Watchlist).order_by(db_models.Watchlist.name).all()
+def list_watchlists(db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    rows = apply_scope(db.query(db_models.Watchlist), db_models.Watchlist, caller).order_by(db_models.Watchlist.name).all()
     return [_to_out(r) for r in rows]
 
 
 @router.get("/watchlists/{watchlist_id}", response_model=WatchlistOut)
-def get_watchlist(watchlist_id: str, db: Session = Depends(get_db)):
+def get_watchlist(watchlist_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     try:
         parsed_id = uuid.UUID(watchlist_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="watchlist not found")
 
-    row = db.get(db_models.Watchlist, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="watchlist not found")
+    row = get_owned_or_404(db, db_models.Watchlist, parsed_id, caller, "watchlist not found")
     return _to_out(row)
 
 
 @router.put("/watchlists/{watchlist_id}", response_model=WatchlistOut)
-def update_watchlist(watchlist_id: str, payload: WatchlistUpdate, db: Session = Depends(get_db)):
+def update_watchlist(watchlist_id: str, payload: WatchlistUpdate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """symbols only - `name` isn't editable after creation, see
     WatchlistUpdate's own docstring (a rename would silently orphan every
     Rule already referencing the old name)."""
@@ -65,9 +65,7 @@ def update_watchlist(watchlist_id: str, payload: WatchlistUpdate, db: Session = 
     except ValueError:
         raise HTTPException(status_code=404, detail="watchlist not found")
 
-    row = db.get(db_models.Watchlist, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="watchlist not found")
+    row = get_owned_or_404(db, db_models.Watchlist, parsed_id, caller, "watchlist not found")
 
     row.symbols = payload.symbols
     db.commit()
@@ -76,7 +74,7 @@ def update_watchlist(watchlist_id: str, payload: WatchlistUpdate, db: Session = 
 
 
 @router.delete("/watchlists/{watchlist_id}", status_code=204)
-def delete_watchlist(watchlist_id: str, db: Session = Depends(get_db)):
+def delete_watchlist(watchlist_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Hard delete, unprotected - no FK from rules.underlying to this table
     (it's a plain name string, same as a 'universe' index key). A Rule
     still referencing this watchlist's name degrades exactly like an
@@ -88,9 +86,7 @@ def delete_watchlist(watchlist_id: str, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=404, detail="watchlist not found")
 
-    row = db.get(db_models.Watchlist, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="watchlist not found")
+    row = get_owned_or_404(db, db_models.Watchlist, parsed_id, caller, "watchlist not found")
 
     db.delete(row)
     db.commit()

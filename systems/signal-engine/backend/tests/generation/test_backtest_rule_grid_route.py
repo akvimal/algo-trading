@@ -15,6 +15,13 @@ from app.adapters.db import models as db_models
 from app.adapters.market_data.client import ResolvedUnderlying
 from app.domain.generation.rule import CrossoverRuleConfig, RuleBacktestGridRequest
 from app.domain.generation.rules import CandleClose
+from app.auth import Caller
+
+
+# Auth not enforced (settings.require_auth off): every route sees everything,
+# which is what these pre-ownership tests exercise. See tests/test_ownership.py
+# for the scoped behavior.
+UNRESTRICTED = Caller(user_id=None, is_admin=False, enforced=False)
 
 INDICATOR_ID = "11111111-1111-1111-1111-111111111111"
 RULE_ID = "22222222-2222-2222-2222-222222222222"
@@ -90,7 +97,7 @@ def test_grid_route_sweeps_stop_loss_indicator_params(monkeypatch):
         stop_loss_indicator_param_grid={"period": [2, 4]},
     )
 
-    result = rules_route.backtest_rule_grid(rule_id=RULE_ID, payload=payload, from_=date(2026, 8, 12), to=date(2026, 8, 12), db=FakeDb())
+    result = rules_route.backtest_rule_grid(rule_id=RULE_ID, payload=payload, from_=date(2026, 8, 12), to=date(2026, 8, 12), db=FakeDb(), caller=UNRESTRICTED)
 
     assert result["combinations_tested"] == 2
     by_period = {row["stop_loss_indicator_params"]["period"]: row for row in result["results"]}
@@ -109,7 +116,7 @@ def test_grid_route_rejects_combined_total_over_max(monkeypatch):
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        rules_route.backtest_rule_grid(rule_id=RULE_ID, payload=payload, from_=date(2026, 8, 12), to=date(2026, 8, 12), db=FakeDb())
+        rules_route.backtest_rule_grid(rule_id=RULE_ID, payload=payload, from_=date(2026, 8, 12), to=date(2026, 8, 12), db=FakeDb(), caller=UNRESTRICTED)
     assert exc_info.value.status_code == 422
     assert "indicator x stop-loss" in exc_info.value.detail
 
@@ -118,7 +125,7 @@ def test_grid_route_without_sl_param_grid_keeps_old_shape(monkeypatch):
     _patch_common(monkeypatch)
     payload = RuleBacktestGridRequest(param_grid={"period": [2, 3]})
 
-    result = rules_route.backtest_rule_grid(rule_id=RULE_ID, payload=payload, from_=date(2026, 8, 12), to=date(2026, 8, 12), db=FakeDb())
+    result = rules_route.backtest_rule_grid(rule_id=RULE_ID, payload=payload, from_=date(2026, 8, 12), to=date(2026, 8, 12), db=FakeDb(), caller=UNRESTRICTED)
 
     assert result["combinations_tested"] == 2
     assert all("stop_loss_indicator_params" not in row for row in result["results"])

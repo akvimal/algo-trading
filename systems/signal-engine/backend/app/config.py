@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
 
+    # Login + per-user ownership on the core routes (strategies, rules,
+    # indicators, watchlists, saved backtests, signals) - see app/auth.py's
+    # get_caller and app/ownership.py. OFF by default while every frontend
+    # and the shell learn to send their token (rollout is "flag, then flip",
+    # docs/redesign-rollout-plan.md Phase 0): with it off, behavior is
+    # exactly as before (open, unscoped), except that a caller who DOES
+    # send a valid token has new rows attributed to them. Turn on with
+    # REQUIRE_AUTH=true once nothing anonymous calls this service any more.
+    # NOT covered either way: /webhook/* and /ingest/raw (providers cannot
+    # send a JWT; a per-strategy webhook secret is a separate change) and
+    # the Weekly Advisor routes (separate change).
+    require_auth: bool = False
+
     # Weekly Advisor fundamentals (app/domain/weekly_advisor/screener_fetch.py)
     # - same OpenRouter account market-data's news.py already uses, but its
     # own model setting (openrouter_vision_model, distinct from that

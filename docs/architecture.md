@@ -1499,6 +1499,14 @@ Phase 0 of `docs/redesign-rollout-plan.md`. Before this, `PUT /accounts/{segment
 
 **Frontend (execution `AccountsPage`)**: after the existing confirm, it sends `live_trading_consent: true` (personal and strategy accounts), and the confirm text now says what the server requires. The server's list of unmet requirements is what the user sees on refusal. Not exercised in a browser (the confirm is a native dialog that blocks browser automation).
 
+## Require-a-stop-loss switch on manual orders (built 2026-09-25)
+
+Phase 0 of `docs/redesign-rollout-plan.md`. A per-account setting, `execution.accounts.require_stop_loss`: when on, `position_manager.open_manual_position` refuses a spot/future manual order that has neither a `stop_loss_price` nor a `stop_loss_method` (recorded as a `REJECTED` position with a reason telling the user how to fix it or turn the setting off, the same convention as every other manual-order gate).
+
+- **Rollout:** existing accounts were added with it OFF (nothing changes for them); accounts created from now on default to ON (the ORM default plus the column default flipped by migration `016-require-stop-loss.sql`), so a new SaaS user is protected from their first order. Editable by the account's owner (`PUT /accounts/{segment}` with `require_stop_loss`, and a checkbox on the Money > Accounts screen). The platform and strategy accounts are not covered.
+- **Not covered:** option groups (`open_manual_option_group`). Their create request has no stop field at all - the stop is set after entry via `PUT /option-groups/{id}/stop-loss` - so there is nothing to check at entry. Also not enforced server-side yet, by decision: minimum reward:risk (still browser-only, "risk managed" mode) and a daily-loss halt for paper trading (`max_daily_loss` still gates live orders only).
+- **Verified:** 9 unit tests (`tests/test_require_stop_loss.py`, broken on purpose to confirm they fail), and a 10-check run against the dev Postgres with a throwaway user. Migration 016 is applied on the dev DB only (all 24 pre-existing accounts stayed off).
+
 ## Leverage buffer: headroom against slippage on a leveraged position (shipped 2026-08-30)
 
 NSE leverage (`execution.accounts.leverage`, both intraday MIS margin and positional MTF - see "Positional spot holding + NSE MTF" / the intraday margin sizing work above) used to scale `effective_capital` by the full leverage multiplier with no headroom at all - e.g. `capital_per_trade`=10,000 at 5x sized a position against the full 50,000 notional. Since sizing runs against the SIGNAL's price, not the actual fill price, a fill that's even slightly worse (real slippage, or - for the automated flow - the gap between signal-received time and order-resolution time) risks a position whose true cost exceeds what the account's leveraged capital can actually cover.

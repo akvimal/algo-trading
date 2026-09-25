@@ -304,6 +304,9 @@ def strategy_row(**over):
         current_balance=200000,
         capital_per_trade=10000,
         risk_per_trade_pct=1,
+        # The acting user owns the account by default: these tests are about the
+        # live-trading rules, not visibility (see test_strategy_account_ownership.py).
+        owner_user_id=ME,
         live_trading_user_id=None,
         live_trading_enabled=False,
         live_trading_consent_at=None,

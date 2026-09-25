@@ -138,6 +138,10 @@ class StrategyAccount(Base):
     live_trading_consent_version = Column(Text, nullable=True)
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
+    # The strategy's creator (from signal-engine, at create time). NULL =
+    # platform/legacy: admins and the named live user only. See
+    # infra/postgres/migrations/018-strategy-account-owner.sql.
+    owner_user_id = Column(UUID(as_uuid=True), nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

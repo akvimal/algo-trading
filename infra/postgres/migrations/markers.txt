@@ -20,3 +20,4 @@
 015-live-trading-consent.sql|execution.accounts|live_trading_consent_at
 016-require-stop-loss.sql|execution.accounts|require_stop_loss
 017-weekly-advisor-ownership.sql|signal_generation.weekly_advisor_recommendations|created_by
+018-strategy-account-owner.sql|execution.strategy_accounts|owner_user_id

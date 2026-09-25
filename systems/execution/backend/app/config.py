@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # credentials before real orders can be enabled for them.
     accounts_base_url: str = "http://accounts-backend:8000"
 
+    # signal-engine, asked (with the caller's own token) whether a user may see
+    # a strategy and who created it - see app/adapters/signal_engine/client.py.
+    # Used when creating a dedicated per-strategy account.
+    signal_engine_base_url: str = "http://signal-engine-backend:8000"
+
     # How often the reconciliation job (scheduler.py) checks for
     # broker_orders rows stuck in SUBMITTING past broker_order_submit_timeout_seconds -
     # a crash between writing that row and recording Dhan's place_order

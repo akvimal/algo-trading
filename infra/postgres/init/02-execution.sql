@@ -991,3 +991,9 @@ ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_co
 -- created afterwards. See migrations/016-require-stop-loss.sql.
 ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS require_stop_loss BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE execution.accounts ALTER COLUMN require_stop_loss SET DEFAULT true;
+
+-- Owner of a dedicated per-strategy account (2026-09-25): the strategy's creator, taken from
+-- signal-engine when the row is created. NULL = platform/legacy (admins and the named live
+-- user only). See migrations/018-strategy-account-owner.sql.
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS owner_user_id UUID;
+CREATE INDEX IF NOT EXISTS idx_strategy_accounts_owner_user_id ON execution.strategy_accounts (owner_user_id);

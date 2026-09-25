@@ -25,3 +25,4 @@
 020-account-equity-snapshots.sql|execution.account_equity_snapshots|
 021-india-charges.sql|execution.accounts|apply_charges
 022-slippage.sql|execution.accounts|slippage_bps
+023-pending-orders.sql|execution.pending_orders|

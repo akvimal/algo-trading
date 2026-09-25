@@ -251,6 +251,59 @@ class PerformanceOut(BaseModel):
     equity: Optional[EquityStatsOut] = None
 
 
+class PendingOrderCreate(BaseModel):
+    """POST /pending-orders - arm a limit order that the SERVER watches, so it works
+    with the tab closed and on a phone. `trigger_price` is a level of the
+    UNDERLYING's own price (for an option order too: legs are resolved at the
+    premium that is live when it fires). The starting side is taken from the live
+    price at arm time, never from the client. Paper accounts only."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str = Field(min_length=1, max_length=64)  # the logical underlying, e.g. NIFTY
+    action: Literal["BUY", "SELL"]
+    strategy: Literal["future", "naked", "spread"] = "future"
+    moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"  # options only
+    trigger_price: float = Field(gt=0)
+    stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    target_price: Optional[float] = Field(default=None, gt=0)
+    quantity: Optional[float] = Field(default=None, gt=0)  # None = risk-size at fill
+    trend_followed: bool = False
+    risk_managed: bool = False
+    setup_tag: Optional[str] = Field(default=None, max_length=64)
+    confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    entry_interval: Optional[str] = Field(default=None, max_length=8)
+    # Minutes until it expires unrecognised; None = the server default (24h). Capped by config.
+    expires_in_minutes: Optional[int] = Field(default=None, ge=1)
+
+
+class PendingOrderOut(BaseModel):
+    id: str
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str
+    action: Literal["BUY", "SELL"]
+    strategy: Literal["future", "naked", "spread"]
+    moneyness: Optional[str] = None
+    trigger_price: float
+    started_above: bool
+    stop_loss_price: Optional[float] = None
+    target_price: Optional[float] = None
+    quantity: Optional[float] = None
+    trend_followed: bool
+    risk_managed: bool
+    setup_tag: Optional[str] = None
+    confidence: Optional[int] = None
+    entry_interval: Optional[str] = None
+    status: Literal["pending", "triggered", "rejected", "failed", "cancelled", "expired"]
+    status_reason: Optional[str] = None
+    expires_at: datetime
+    created_at: Optional[datetime] = None
+    triggered_at: Optional[datetime] = None
+    last_price: Optional[float] = None
+    last_checked_at: Optional[datetime] = None
+    position_id: Optional[str] = None
+    option_group_id: Optional[str] = None
+
+
 class RequirementOut(BaseModel):
     key: str
     label: str

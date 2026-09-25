@@ -513,6 +513,43 @@ class AccountEquitySnapshot(Base):
     taken_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class PendingOrder(Base):
+    """A server-side pending (limit) order: armed now, fired by a scheduler job
+    when the underlying crosses trigger_price. Paper only. See
+    infra/postgres/migrations/023-pending-orders.sql and
+    app/domain/pending_orders.py."""
+
+    __tablename__ = "pending_orders"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    segment = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    action = Column(Text, nullable=False)
+    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread'
+    moneyness = Column(Text)
+    trigger_price = Column(Numeric, nullable=False)
+    started_above = Column(Boolean, nullable=False)
+    stop_loss_price = Column(Numeric)
+    target_price = Column(Numeric)
+    quantity = Column(Numeric)
+    trend_followed = Column(Boolean, nullable=False, default=False)
+    risk_managed = Column(Boolean, nullable=False, default=False)
+    setup_tag = Column(Text)
+    confidence = Column(SmallInteger)
+    entry_interval = Column(Text)
+    status = Column(Text, nullable=False, default="pending")
+    status_reason = Column(Text)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    triggered_at = Column(TIMESTAMP(timezone=True))
+    last_price = Column(Numeric)
+    last_checked_at = Column(TIMESTAMP(timezone=True))
+    position_id = Column(UUID(as_uuid=True))
+    option_group_id = Column(UUID(as_uuid=True))
+
+
 class OptionGroupPnlSnapshot(Base):
     """Combined-premium unrealized-P&L time series for one
     OptionPositionGroup - the group-level counterpart to

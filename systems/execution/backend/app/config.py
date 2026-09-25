@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     # record their own marker).
     equity_snapshot_poll_seconds: int = 300
 
+    # Server-side pending (limit) orders (app/domain/pending_orders.py). How often the
+    # watcher checks armed orders against the underlying's price (0 disables the job),
+    # how long an order lives if the caller gives no expiry, the longest expiry allowed,
+    # and how many a user may have armed at once. Paper accounts only.
+    pending_order_poll_seconds: int = 10
+    pending_order_default_ttl_minutes: int = 1440
+    pending_order_max_ttl_minutes: int = 10080
+    max_pending_orders_per_user: int = 20
+
     # Paper track-record gate on turning live trading ON (app/domain/track_record.py).
     # Off unless REQUIRE_PAPER_TRACK_RECORD=true. The thresholds are product judgments,
     # not measurements - tune them.

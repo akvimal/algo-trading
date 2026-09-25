@@ -1033,3 +1033,38 @@ ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS slippage_bps NUMERIC NOT
 ALTER TABLE execution.accounts ALTER COLUMN slippage_bps SET DEFAULT 5;
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS slippage_cost NUMERIC;
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS slippage_cost NUMERIC;
+
+-- Server-side pending (limit) orders (2026-09-25): paper only, one live per (user, segment, symbol).
+-- See migrations/023-pending-orders.sql and app/domain/pending_orders.py.
+CREATE TABLE IF NOT EXISTS execution.pending_orders (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL,
+    segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    symbol           TEXT NOT NULL,
+    action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread')),
+    moneyness        TEXT CHECK (moneyness IN ('ITM2', 'ITM1', 'ATM', 'OTM1', 'OTM2')),
+    trigger_price    NUMERIC NOT NULL CHECK (trigger_price > 0),
+    started_above    BOOLEAN NOT NULL,
+    stop_loss_price  NUMERIC CHECK (stop_loss_price > 0),
+    target_price     NUMERIC CHECK (target_price > 0),
+    quantity         NUMERIC CHECK (quantity > 0),
+    trend_followed   BOOLEAN NOT NULL DEFAULT false,
+    risk_managed     BOOLEAN NOT NULL DEFAULT false,
+    setup_tag        TEXT,
+    confidence       SMALLINT CHECK (confidence BETWEEN 1 AND 5),
+    entry_interval   TEXT,
+    status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'triggered', 'rejected', 'failed', 'cancelled', 'expired')),
+    status_reason    TEXT,
+    expires_at       TIMESTAMPTZ NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    triggered_at     TIMESTAMPTZ,
+    last_price       NUMERIC,
+    last_checked_at  TIMESTAMPTZ,
+    position_id      UUID,
+    option_group_id  UUID
+);
+CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_orders_one_live_per_symbol
+    ON execution.pending_orders (user_id, segment, symbol) WHERE status = 'pending';

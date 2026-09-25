@@ -23,6 +23,22 @@
 # Never used locally - `make up`/`make test-up` only ever reference the
 # base docker-compose.yml, so this file has zero effect on local dev/test.
 
+# Hardening applied to every backend on the VPS (Phase 0 of
+# docs/redesign-rollout-plan.md): REQUIRE_SECURE_CONFIG makes each service
+# refuse to start while any secret is still a placeholder / under 16 characters
+# or CORS is a wildcard (see systems/*/backend/app/secure_config.py), and
+# CORS_ALLOW_ORIGINS lists the ONLY browser origins allowed to call them: the
+# shell and the four frontends, as Caddy serves them (infra/caddy/Caddyfile).
+# Before deploying, make sure .env holds real values for ACCOUNTS_JWT_SECRET,
+# ACCOUNTS_CREDENTIALS_ENCRYPTION_KEY, INTERNAL_SERVICE_SECRET and
+# DHAN_POSTBACK_SECRET (node scripts/generate-secrets.js --write) - a service
+# with a placeholder will exit on start, by design. Never rotate
+# ACCOUNTS_CREDENTIALS_ENCRYPTION_KEY on a populated DB (saved broker
+# credentials become undecryptable).
+x-secure-backend-env: &secure-backend-env
+  REQUIRE_SECURE_CONFIG: "true"
+  CORS_ALLOW_ORIGINS: "https://${VPS_DOMAIN}:${SHELL_PORT},https://${VPS_DOMAIN}:${SIGNAL_ENGINE_FRONTEND_PORT},https://${VPS_DOMAIN}:${MARKET_DATA_FRONTEND_PORT},https://${VPS_DOMAIN}:${EXECUTION_FRONTEND_PORT},https://${VPS_DOMAIN}:${MANUAL_TRADING_FRONTEND_PORT}"
+
 services:
   # Host-port publish removed - Caddy is the only thing that should own
   # these port numbers on the VPS. BIND_ADDR=127.0.0.1 in docker-compose.yml
@@ -34,16 +50,24 @@ services:
     ports: !reset []
   signal-engine-backend:
     ports: !reset []
+    environment: *secure-backend-env
   market-data-frontend:
     ports: !reset []
   market-data-backend:
     ports: !reset []
+    environment: *secure-backend-env
   execution-frontend:
     ports: !reset []
   execution-backend:
     ports: !reset []
+    environment: *secure-backend-env
   accounts-backend:
     ports: !reset []
+    environment:
+      <<: *secure-backend-env
+      # Behind Caddy the socket peer is the proxy, so the per-IP login/signup
+      # limits must read the real client from X-Forwarded-For (Caddy sets it).
+      TRUST_FORWARDED_FOR: "true"
   manual-trading-frontend:
     ports: !reset []
 

@@ -155,7 +155,7 @@ Merge gate for every phase:
 - Docs are updated and a short manual checklist has been run on the test stack.
 - Each milestone is tagged (`revamp-m1`, ...) so rollback is one command.
 
-**Prerequisite: fix CI first.** `.github/workflows/ci.yml` still targets the removed `signal-generation` and `signal-processing` systems and skips `signal-engine`, `accounts` and three of the frontends. Add the new `systems/web` build to it.
+**Prerequisite: fix CI first. Done 2026-09-25.** `.github/workflows/ci.yml` had targeted the removed `signal-generation` and `signal-processing` systems and skipped `signal-engine`, `accounts` and three of the frontends. It now runs pytest for accounts, execution, market-data and signal-engine, and builds the execution, manual-trading, market-data and signal-engine frontends (every command was run locally first and passes). Still to do: add `systems/web` to the frontend matrix when it exists.
 
 ## What breaks first at 100+ users
 

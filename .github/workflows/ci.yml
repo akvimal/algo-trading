@@ -15,7 +15,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        system: [signal-generation, signal-processing, execution, market-data]
+        # One entry per systems/*/backend. signal-generation and
+        # signal-processing were merged into signal-engine (2026-08-28);
+        # add a new system here when it gets a backend.
+        system: [accounts, execution, market-data, signal-engine]
     defaults:
       run:
         working-directory: systems/${{ matrix.system }}/backend
@@ -37,7 +40,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        system: [signal-generation, signal-processing, execution]
+        # One entry per systems/*/frontend (add systems/web here when it exists).
+        system: [execution, manual-trading, market-data, signal-engine]
     defaults:
       run:
         working-directory: systems/${{ matrix.system }}/frontend

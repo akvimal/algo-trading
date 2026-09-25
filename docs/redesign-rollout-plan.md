@@ -67,7 +67,7 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 
 **Phase 0: make it safe to open the door (about 2 weeks).** Independent of the redesign. Do these before any other user touches the system.
 - signal-engine: require login, add per-user ownership to strategies, rules and watchlists, add a secret to the Chartink webhooks (already listed under "Open questions": webhook auth). **Login and ownership built 2026-09-25, flag `REQUIRE_AUTH` off by default, not yet enabled anywhere** (see `docs/architecture.md`, "signal-engine: login + per-user ownership"). Migration 014 is applied on the dev DB only, and the routes were live-verified there (51/51). The Chartink webhook secret is **deliberately deferred** (2026-09-25). Still to do here: the Weekly Advisor routes and tables, and applying 014 and flipping the flag on the test and real environments.
-- Owner checks on `/accounts/strategy/*` (currently reachable by any logged-in user).
+- Owner checks on `/accounts/strategy/*` (currently reachable by any logged-in user). **Live-settings part done 2026-09-25** as part of the live-trading gate: only the person named as the live user can turn live on for a strategy account, and only they or an admin can change its live settings afterwards. Other edits to strategy accounts are still not ownership-checked.
 - Tighten CORS (wildcard in all four backends), fail startup when secrets are the defaults (`JWT_SECRET`, `CREDENTIALS_ENCRYPTION_KEY`, `INTERNAL_SERVICE_SECRET`), rate-limit auth.
 - Enforce required stop-loss, minimum reward-to-risk and daily loss on the server for paper trading.
 - Fix CI, add a migration tracking table, record a risk acknowledgement at signup.
@@ -76,7 +76,7 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 - Balance and equity history table. NSE/MCX charges model and slippage.
 - Server-side pending orders (limit, stop) so they work with the tab closed and on a phone.
 - Move discipline and performance calculation to the server (the graduation gate cannot trust browser-computed numbers).
-- Server-enforced graduation gate: reject the live toggle unless the track record is met, broker credentials are present, consent is recorded, and daily-loss and order-size caps are set.
+- Server-enforced graduation gate: reject the live toggle unless the track record is met, broker credentials are present, consent is recorded, and daily-loss and order-size caps are set. **The base of this gate is built (2026-09-25, Phase 0): consent, caps, saved broker credentials and kill switch are enforced server-side (see `docs/architecture.md`, "Live-trading gate"). What remains here is the paper track record and discipline requirement.**
 - Keep one account per segment. Named multiple accounts need a schema change and can wait for Phase 4.
 
 **Phase 2: one responsive app (about 8 weeks).** New web app in `systems/web/frontend` (see "Where the new frontend lives") with a router, shared design tokens and components, one login (no postMessage broker). Port in this order, keeping legacy tabs working until replaced: shell, Today and Scan; Portfolio and Review; Trade (wrap `LiveChartPanel` first, refactor later); Settings. Build mobile-first with a PWA manifest. Extract what is needed from `WorkspacePage.tsx`, then delete it.

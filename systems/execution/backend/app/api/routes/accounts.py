@@ -1,19 +1,76 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.adapters.accounts.client import user_has_dhan_credentials
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_ltp_batch
 from app.auth import User, get_current_user, require_admin
+from app.config import settings
+from app.domain.live_gate import CONSENT_VERSION, format_problems, unmet_requirements
 from app.domain.models import AccountUpdate, AdminResetAllConfirm, StrategyAccountCreate, StrategyAccountUpdate
 from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
 
 router = APIRouter()
 
 _SEGMENTS = ("NSE", "MCX", "CRYPTO")
+
+
+def _as_float(v) -> Optional[float]:
+    return float(v) if v is not None else None
+
+
+def _apply_live_fields(
+    row,
+    update,
+    *,
+    segment: str,
+    token: str,
+    check_credentials: bool,
+    extra_transition_problems: Optional[list] = None,
+) -> None:
+    """Applies live_trading_enabled / max_order_value / max_daily_loss to
+    `row` through the live-trading gate (app/domain/live_gate.py), records
+    consent on the off->on transition, and raises a 422 listing EVERYTHING
+    that is unmet. Mutates `row` but never commits, so a rejected request
+    leaves nothing behind (the caller's session is discarded).
+
+    Used by the personal-account and strategy-account routes. The caps are
+    applied first because the gate judges the EFFECTIVE state after this
+    update (so a request that enables live and sets the caps in one go
+    works, and one that blanks the caps on a live account does not)."""
+    was_live = bool(row.live_trading_enabled)
+    will_be_live = was_live if update.live_trading_enabled is None else bool(update.live_trading_enabled)
+    if "max_order_value" in update.model_fields_set:
+        row.max_order_value = update.max_order_value
+    if "max_daily_loss" in update.model_fields_set:
+        row.max_daily_loss = update.max_daily_loss
+
+    if will_be_live:
+        transition = not was_live
+        has_creds = user_has_dhan_credentials(token) if (transition and check_credentials) else True
+        problems = unmet_requirements(
+            segment=segment,
+            max_order_value=_as_float(row.max_order_value),
+            max_daily_loss=_as_float(row.max_daily_loss),
+            kill_switch_on=settings.live_trading_kill_switch,
+            is_transition_to_live=transition,
+            consent_given=bool(update.live_trading_consent),
+            has_broker_credentials=has_creds,
+            check_credentials=check_credentials,
+        )
+        if transition and extra_transition_problems:
+            problems.extend(extra_transition_problems)
+        if problems:
+            raise HTTPException(status_code=422, detail=format_problems(problems))
+        if transition:
+            row.live_trading_consent_at = datetime.now(timezone.utc)
+            row.live_trading_consent_version = CONSENT_VERSION
+    row.live_trading_enabled = will_be_live
 
 
 def _unrealized_pnl(db: Session, open_positions: list) -> float:
@@ -54,6 +111,7 @@ def _to_out(db: Session, row: db_models.Account) -> dict:
         "mtf_annual_interest_rate_pct": float(row.mtf_annual_interest_rate_pct) if row.mtf_annual_interest_rate_pct is not None else None,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "live_trading_enabled": row.live_trading_enabled,
+        "live_trading_consent_at": row.live_trading_consent_at.isoformat() if row.live_trading_consent_at is not None else None,
         "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
         "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
         # A user's own declared execution timeframe for this segment + its
@@ -115,12 +173,9 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
         row.square_off_time = update.square_off_time
-    if update.live_trading_enabled is not None:
-        row.live_trading_enabled = update.live_trading_enabled
-    if "max_order_value" in update.model_fields_set:
-        row.max_order_value = update.max_order_value
-    if "max_daily_loss" in update.model_fields_set:
-        row.max_daily_loss = update.max_daily_loss
+    # Real-money order placement goes through the live-trading gate
+    # (app/domain/live_gate.py): consent, caps and broker credentials.
+    _apply_live_fields(row, update, segment=segment.upper(), token=user.token, check_credentials=True)
     if "default_interval" in update.model_fields_set:
         row.default_interval = update.default_interval
     if "default_higher_interval" in update.model_fields_set:
@@ -177,8 +232,18 @@ def update_platform_account(
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
         row.square_off_time = update.square_off_time
+    # The platform (user_id IS NULL) account can never place real orders: the
+    # automated live path needs a live_trading_user_id, which only a dedicated
+    # strategy account has (see position_manager's capital_account handling),
+    # so enabling the flag here would be misleading at best. Turning it OFF
+    # (or leaving it) is always fine; the caps stay editable.
+    if update.live_trading_enabled:
+        raise HTTPException(
+            status_code=422,
+            detail="the platform account cannot trade live - opt a dedicated strategy account into live trading instead",
+        )
     if update.live_trading_enabled is not None:
-        row.live_trading_enabled = update.live_trading_enabled
+        row.live_trading_enabled = False
     if "max_order_value" in update.model_fields_set:
         row.max_order_value = update.max_order_value
     if "max_daily_loss" in update.model_fields_set:
@@ -307,6 +372,7 @@ def _strategy_account_to_out(db: Session, row: db_models.StrategyAccount) -> dic
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "live_trading_user_id": str(row.live_trading_user_id) if row.live_trading_user_id is not None else None,
         "live_trading_enabled": row.live_trading_enabled,
+        "live_trading_consent_at": row.live_trading_consent_at.isoformat() if row.live_trading_consent_at is not None else None,
         "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
         "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
         "updated_at": row.updated_at.isoformat(),
@@ -351,7 +417,12 @@ def create_strategy_account(strategy_id: str, create: StrategyAccountCreate, db:
 
 
 @router.put("/accounts/strategy/{strategy_id}")
-def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db: Session = Depends(get_db)):
+def update_strategy_account(
+    strategy_id: str,
+    update: StrategyAccountUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Live-broker-adapter P3 item 14 (see docs/architecture.md) -
     live_trading_user_id/live_trading_enabled/max_order_value/
     max_daily_loss are the only way to opt an automated Strategy into
@@ -368,16 +439,30 @@ def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db:
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
         row.risk_per_trade_pct = update.risk_per_trade_pct
+    previous_live_user = row.live_trading_user_id
     if "live_trading_user_id" in update.model_fields_set:
         row.live_trading_user_id = uuid.UUID(update.live_trading_user_id) if update.live_trading_user_id else None
-    if update.live_trading_enabled is not None:
-        row.live_trading_enabled = update.live_trading_enabled
-    if "max_order_value" in update.model_fields_set:
-        row.max_order_value = update.max_order_value
-    if "max_daily_loss" in update.model_fields_set:
-        row.max_daily_loss = update.max_daily_loss
-    if row.live_trading_enabled and row.live_trading_user_id is None:
+    will_be_live = row.live_trading_enabled if update.live_trading_enabled is None else bool(update.live_trading_enabled)
+    turning_on = will_be_live and not row.live_trading_enabled
+    retargeting = row.live_trading_user_id is not None and row.live_trading_user_id != previous_live_user
+    live_edit = will_be_live and any(
+        k in update.model_fields_set for k in ("live_trading_enabled", "live_trading_user_id", "max_order_value", "max_daily_loss")
+    )
+    # Real orders on someone's broker account: only that person (or, for
+    # edits to an ALREADY-live account, an admin) may touch the live settings.
+    # And turning live ON, or pointing it at a different person, must be done
+    # by that person themselves - only they can consent, and only their own
+    # saved broker credentials can be verified from here.
+    if (turning_on or retargeting) and row.live_trading_user_id != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="real orders can only be pointed at your own broker account - the person named as live_trading_user_id must enable live trading themselves",
+        )
+    if live_edit and not turning_on and not user.is_admin and row.live_trading_user_id != user.id:
+        raise HTTPException(status_code=403, detail="only the live trading user or an admin can change live-trading settings on this account")
+    if will_be_live and row.live_trading_user_id is None:
         raise HTTPException(status_code=422, detail="live_trading_enabled requires live_trading_user_id to be set")
+    _apply_live_fields(row, update, segment=row.segment, token=user.token, check_credentials=True)
     db.commit()
     db.refresh(row)
     return _strategy_account_to_out(db, row)

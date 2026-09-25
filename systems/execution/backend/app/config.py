@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # in via its own live_trading_enabled.
     live_trading_kill_switch: bool = False
 
+    # accounts service - only used by the live-trading gate
+    # (app/domain/live_gate.py) to check that a user has saved broker
+    # credentials before real orders can be enabled for them.
+    accounts_base_url: str = "http://accounts-backend:8000"
+
     # How often the reconciliation job (scheduler.py) checks for
     # broker_orders rows stuck in SUBMITTING past broker_order_submit_timeout_seconds -
     # a crash between writing that row and recording Dhan's place_order

@@ -85,6 +85,12 @@ class Account(Base):
     # (alongside LIVE_TRADING_KILL_SWITCH, app/config.py) that must both
     # pass before any real order reaches Dhan for this account.
     live_trading_enabled = Column(Boolean, nullable=False, default=False)
+    # When/what the person acknowledged when last turning live trading ON
+    # (see app/domain/live_gate.py's CONSENT_VERSION). Kept after it is
+    # turned off, as an audit trail; a fresh consent is demanded on every
+    # re-enable.
+    live_trading_consent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    live_trading_consent_version = Column(Text, nullable=True)
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
     # A user's own declared execution timeframe for this segment
@@ -119,6 +125,12 @@ class StrategyAccount(Base):
     # 02-execution.sql's own comment on this column.
     live_trading_user_id = Column(UUID(as_uuid=True), nullable=True)
     live_trading_enabled = Column(Boolean, nullable=False, default=False)
+    # When/what the person acknowledged when last turning live trading ON
+    # (see app/domain/live_gate.py's CONSENT_VERSION). Kept after it is
+    # turned off, as an audit trail; a fresh consent is demanded on every
+    # re-enable.
+    live_trading_consent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    live_trading_consent_version = Column(Text, nullable=True)
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

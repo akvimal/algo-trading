@@ -976,3 +976,12 @@ ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_po
 ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_entry_confidence_check
     CHECK (entry_confidence IS NULL OR entry_confidence BETWEEN 1 AND 5);
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS auto_traded BOOLEAN NOT NULL DEFAULT false;
+
+-- Live-trading gate (2026-09-25, Phase 0 of docs/redesign-rollout-plan.md) - when and
+-- against which disclosure version live trading was last turned ON. Idempotent, same
+-- convention as the other ALTERs here. See migrations/015-live-trading-consent.sql and
+-- app/domain/live_gate.py.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS live_trading_consent_at TIMESTAMPTZ;
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS live_trading_consent_version TEXT;
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_consent_at TIMESTAMPTZ;
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_consent_version TEXT;

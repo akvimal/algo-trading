@@ -275,6 +275,9 @@ class AccountUpdate(BaseModel):
     live_trading_enabled: Optional[bool] = None
     max_order_value: Optional[float] = Field(default=None, gt=0)
     max_daily_loss: Optional[float] = Field(default=None, gt=0)
+    # Must be true on the request that turns live trading ON (recorded with a
+    # timestamp - see app/domain/live_gate.py). Ignored otherwise.
+    live_trading_consent: Optional[bool] = None
     # NULL is meaningful here too (clears a previously-set default, rather
     # than "leave unchanged") - same model_fields_set-distinguished pattern
     # square_off_time above already uses.
@@ -343,6 +346,9 @@ class StrategyAccountUpdate(BaseModel):
     live_trading_enabled: Optional[bool] = None
     max_order_value: Optional[float] = Field(default=None, gt=0)
     max_daily_loss: Optional[float] = Field(default=None, gt=0)
+    # Must be true on the request that turns live trading ON (recorded with a
+    # timestamp - see app/domain/live_gate.py). Ignored otherwise.
+    live_trading_consent: Optional[bool] = None
 
 
 class ChecklistItemOut(BaseModel):

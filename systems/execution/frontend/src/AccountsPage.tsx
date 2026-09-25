@@ -146,6 +146,7 @@ export default function AccountsPage() {
   const [myDraftRisk, setMyDraftRisk] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftRR, setMyDraftRR] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftEnforceLots, setMyDraftEnforceLots] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  const [myDraftRequireSL, setMyDraftRequireSL] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
   const [myDraftCapital, setMyDraftCapital] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftStartingBalance, setMyDraftStartingBalance] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftLeverage, setMyDraftLeverage] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
@@ -316,6 +317,11 @@ export default function AccountsPage() {
         for (const a of data) next[a.segment] = a.enforce_risk_based_lots;
         return next;
       });
+      setMyDraftRequireSL((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.require_stop_loss;
+        return next;
+      });
       setMyDraftCapital((prev) => {
         const next = { ...prev };
         for (const a of data) next[a.segment] = String(a.capital_per_trade);
@@ -468,6 +474,7 @@ export default function AccountsPage() {
         risk_per_trade_pct,
         min_reward_risk_ratio,
         enforce_risk_based_lots: myDraftEnforceLots[segment],
+        require_stop_loss: myDraftRequireSL[segment],
         capital_per_trade,
         ...(leverage !== undefined ? { leverage } : {}),
         ...(leverageBufferPct !== undefined ? { leverage_buffer_pct: leverageBufferPct } : {}),
@@ -502,6 +509,7 @@ export default function AccountsPage() {
     setMyDraftRisk((prev) => ({ ...prev, [segment]: String(account.risk_per_trade_pct) }));
     setMyDraftRR((prev) => ({ ...prev, [segment]: String(account.min_reward_risk_ratio) }));
     setMyDraftEnforceLots((prev) => ({ ...prev, [segment]: account.enforce_risk_based_lots }));
+    setMyDraftRequireSL((prev) => ({ ...prev, [segment]: account.require_stop_loss }));
     setMyDraftCapital((prev) => ({ ...prev, [segment]: String(account.capital_per_trade) }));
     setMyDraftStartingBalance((prev) => ({ ...prev, [segment]: String(account.starting_balance) }));
     setMyDraftLeverage((prev) => ({ ...prev, [segment]: String(account.leverage) }));
@@ -1260,6 +1268,18 @@ export default function AccountsPage() {
                           onChange={(e) => setMyDraftEnforceLots((prev) => ({ ...prev, [seg]: e.target.checked }))}
                         />
                         Enforce risk-based Lot
+                      </label>
+                      <label
+                        className="checkbox-label tiny manual-risk-card-checkbox"
+                        title="Refuses a spot/future manual order that has no stop-loss (price or method). Option orders take their stop after entry, so they are not affected. On by default for new accounts."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={myDraftRequireSL[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftRequireSL((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                        />
+                        Require a stop-loss
                       </label>
                       {seg !== "CRYPTO" && (
                         <div className="manual-risk-card-live">

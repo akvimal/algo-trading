@@ -155,6 +155,9 @@ export type Account = {
   // auto-computes and locks the Lot field from risk_per_trade_pct/
   // capital_per_trade instead of leaving it free-typed.
   enforce_risk_based_lots: boolean;
+  // Refuse a spot/future manual order that has no stop-loss (server-enforced).
+  // Off for accounts that predate the setting, on for new ones.
+  require_stop_loss: boolean;
   // CRYPTO and NSE (both MTF positional spot AND intraday MIS margin, same
   // field for both) - a margin multiplier applied before sizing (Delta
   // Exchange India trades perpetual futures on margin; Dhan's MTF borrows
@@ -394,6 +397,7 @@ export async function updateAccount(
       | "risk_per_trade_pct"
       | "min_reward_risk_ratio"
       | "enforce_risk_based_lots"
+      | "require_stop_loss"
       | "leverage"
       | "leverage_buffer_pct"
       | "square_off_time"

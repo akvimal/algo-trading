@@ -1,7 +1,8 @@
 -- Owner of a dedicated per-strategy account (2026-09-25, Phase 0 of
--- docs/redesign-rollout-plan.md). Until now GET/POST/DELETE /accounts/strategy*
--- needed no login at all, and nothing tied a row to a person, so anyone could
--- create (and thereby re-size) a dedicated account for another user's strategy.
+-- docs/redesign-rollout-plan.md). Until now nothing tied a dedicated account to
+-- a person (a login was required, but not ownership), so any logged-in user could
+-- read, edit or delete anyone's, or create (and thereby re-size) one for another
+-- user's strategy.
 -- owner_user_id is the strategy's creator, taken from signal-engine when the
 -- row is created. NULL = platform/legacy: visible to admins (and to the named
 -- live-trading user) only.

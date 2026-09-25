@@ -1,11 +1,11 @@
 """Ownership of dedicated per-strategy accounts (app/api/routes/accounts.py's
 /accounts/strategy* routes, app/adapters/signal_engine/client.py).
 
-Before this, GET/POST/DELETE needed no login, and anyone could create a
-dedicated account for another user's strategy - which silently changes how
-that strategy's trades are sized. Now: every route needs a login, someone
-else's account is a 404, and creating one is verified with signal-engine using
-the caller's own token.
+Before this, a login was required (app-wide, in app/main.py) but not
+ownership: any logged-in user could read, edit or delete anyone's dedicated
+account, or create one for another user's strategy - which silently changes how
+that strategy's trades are sized. Now: someone else's account is a 404, and
+creating one is verified with signal-engine using the caller's own token.
 
 Plain fakes and direct route-function calls, like the rest of this backend."""
 

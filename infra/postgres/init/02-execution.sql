@@ -997,3 +997,23 @@ ALTER TABLE execution.accounts ALTER COLUMN require_stop_loss SET DEFAULT true;
 -- user only). See migrations/018-strategy-account-owner.sql.
 ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS owner_user_id UUID;
 CREATE INDEX IF NOT EXISTS idx_strategy_accounts_owner_user_id ON execution.strategy_accounts (owner_user_id);
+
+-- Balance and equity history (2026-09-25): one row per account per day, updated in place;
+-- sparse; is_reset_point starts a new curve. See migrations/020-account-equity-snapshots.sql.
+CREATE TABLE IF NOT EXISTS execution.account_equity_snapshots (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id        UUID NOT NULL REFERENCES execution.accounts (id) ON DELETE CASCADE,
+    user_id           UUID,
+    segment           TEXT NOT NULL,
+    snapshot_date     DATE NOT NULL,
+    starting_balance  NUMERIC NOT NULL,
+    balance           NUMERIC NOT NULL,
+    unrealized_pnl    NUMERIC NOT NULL DEFAULT 0,
+    equity            NUMERIC NOT NULL,
+    open_positions    INTEGER NOT NULL DEFAULT 0,
+    is_reset_point    BOOLEAN NOT NULL DEFAULT false,
+    taken_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_account_equity_snapshots_day UNIQUE (account_id, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_account_equity_snapshots_user_segment
+    ON execution.account_equity_snapshots (user_id, segment, snapshot_date);

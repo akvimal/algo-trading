@@ -73,7 +73,7 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 - Fix CI, add a migration tracking table, record a risk acknowledgement at signup. **All three done 2026-09-25:** CI fixed; tracking runner `scripts/migrate.sh` (dev baselined, test and VPS not yet); risk acknowledgement recorded at signup (migration 019, dev only; existing users are not asked, see `docs/architecture.md`, "Risk acknowledgement at signup").
 
 **Phase 1: the paper-account spine (about 5 weeks).**
-- Balance and equity history table. NSE/MCX charges model and slippage.
+- Balance and equity history table. **Built 2026-09-25** (migration 020, dev only; see `docs/architecture.md`, "Balance and equity history"): one row per account per day, reset markers, `GET /equity-history/{segment}` with return and close-of-day drawdown. NSE/MCX charges model and slippage still to do.
 - Server-side pending orders (limit, stop) so they work with the tab closed and on a phone.
 - Move discipline and performance calculation to the server (the graduation gate cannot trust browser-computed numbers).
 - Server-enforced graduation gate: reject the live toggle unless the track record is met, broker credentials are present, consent is recorded, and daily-loss and order-size caps are set. **The base of this gate is built (2026-09-25, Phase 0): consent, caps, saved broker credentials and kill switch are enforced server-side (see `docs/architecture.md`, "Live-trading gate"). What remains here is the paper track record and discipline requirement.**

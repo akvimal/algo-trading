@@ -13,6 +13,7 @@ from app.adapters.quotes.client import get_ltp_batch
 from app.adapters.signal_engine.client import NOT_FOUND, UNAVAILABLE, lookup_strategy
 from app.auth import User, get_current_user, require_admin
 from app.config import settings
+from app.domain.equity_history import record_reset_point
 from app.domain.live_gate import CONSENT_VERSION, format_problems, unmet_requirements
 from app.domain.models import AccountUpdate, AdminResetAllConfirm, StrategyAccountCreate, StrategyAccountUpdate
 from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
@@ -160,6 +161,8 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
     if update.starting_balance is not None:
         row.starting_balance = update.starting_balance
         row.current_balance = update.starting_balance
+        # Re-baselining starts a new equity curve (app/domain/equity_history.py).
+        record_reset_point(db, row)
     if update.capital_per_trade is not None:
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
@@ -323,6 +326,10 @@ def reset_user_accounts_and_trades(
         .filter_by(user_id=target_id)
         .update({db_models.Account.current_balance: db_models.Account.starting_balance}, synchronize_session=False)
     )
+    if target_id is not None:
+        # A reset starts a new equity curve for each of that user's accounts.
+        for reset_account_row in db.query(db_models.Account).filter_by(user_id=target_id).all():
+            record_reset_point(db, reset_account_row)
     strategy_accounts_reset = 0
     if target_id is None:
         strategy_accounts_reset = db.query(db_models.StrategyAccount).update(
@@ -351,6 +358,7 @@ def reset_account(segment: str, user: User = Depends(get_current_user), db: Sess
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
     row.current_balance = row.starting_balance
+    record_reset_point(db, row)
     db.commit()
     db.refresh(row)
     return _to_out(db, row)

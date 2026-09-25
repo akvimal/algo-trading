@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # can run more often than square-off without scanning every position.
     exit_monitor_poll_seconds: int = 30
 
+    # Balance/equity history (app/domain/equity_history.py): how often the
+    # scheduled job samples every user account, and the timezone that decides
+    # which calendar day a sample belongs to. 0 disables the job (resets still
+    # record their own marker).
+    equity_snapshot_poll_seconds: int = 300
+    equity_history_timezone: str = "Asia/Kolkata"
+
     # How often the square-off job checks each OPEN position's own
     # stored square_off_time (copied from its segment's execution.accounts
     # row at open time) against local time. Replaced a single daily

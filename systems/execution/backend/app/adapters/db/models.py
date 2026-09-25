@@ -472,6 +472,29 @@ class PositionPnlSnapshot(Base):
     recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class AccountEquitySnapshot(Base):
+    """One row per account per day (see infra/postgres/migrations/
+    020-account-equity-snapshots.sql for the full design): the day's last
+    recorded balance / unrealized P&L / equity. Sparse; is_reset_point starts
+    a new curve."""
+
+    __tablename__ = "account_equity_snapshots"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.accounts.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=True)
+    segment = Column(Text, nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    starting_balance = Column(Numeric, nullable=False)
+    balance = Column(Numeric, nullable=False)
+    unrealized_pnl = Column(Numeric, nullable=False, default=0)
+    equity = Column(Numeric, nullable=False)
+    open_positions = Column(Integer, nullable=False, default=0)
+    is_reset_point = Column(Boolean, nullable=False, default=False)
+    taken_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class OptionGroupPnlSnapshot(Base):
     """Combined-premium unrealized-P&L time series for one
     OptionPositionGroup - the group-level counterpart to

@@ -22,3 +22,4 @@
 017-weekly-advisor-ownership.sql|signal_generation.weekly_advisor_recommendations|created_by
 018-strategy-account-owner.sql|execution.strategy_accounts|owner_user_id
 019-risk-acknowledgement.sql|accounts.users|risk_acknowledged_at
+020-account-equity-snapshots.sql|execution.account_equity_snapshots|

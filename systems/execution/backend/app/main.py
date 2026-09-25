@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.secure_config import cors_origins, enforce_secure_config
-from app.api.routes import accounts, checklist, health, internal, option_groups, positions, trade_images
+from app.api.routes import accounts, checklist, equity_history, health, internal, option_groups, positions, trade_images
 from app.api.routes import settings as settings_routes
 from app.auth import get_current_user
 from app.consumers.orders_consumer import start_background as start_consumer
@@ -41,6 +41,7 @@ app.include_router(positions.router, dependencies=_auth_dep)
 app.include_router(option_groups.router, dependencies=_auth_dep)
 app.include_router(settings_routes.router, dependencies=_auth_dep)
 app.include_router(accounts.router, dependencies=_auth_dep)
+app.include_router(equity_history.router, dependencies=_auth_dep)
 app.include_router(checklist.router, dependencies=_auth_dep)
 app.include_router(trade_images.router, dependencies=_auth_dep)
 

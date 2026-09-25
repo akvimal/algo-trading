@@ -168,6 +168,37 @@ class ExecutionSettingsUpdate(BaseModel):
 ChartInterval = Literal["1min", "3min", "5min", "15min", "30min", "60min"]
 
 
+class EquityPointOut(BaseModel):
+    snapshot_date: date
+    balance: float
+    unrealized_pnl: float
+    equity: float
+    is_reset_point: bool
+
+
+class EquityStatsOut(BaseModel):
+    """Measured over the CURRENT curve only - from the latest reset marker on
+    (a reset starts a new curve). Close-of-day granularity, so max_drawdown_pct
+    understates intraday swings."""
+
+    since: date
+    baseline: float
+    latest_equity: float
+    return_pct: float
+    peak_equity: float
+    max_drawdown_pct: float
+    days_tracked: int
+    points: int
+
+
+class EquityHistoryOut(BaseModel):
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    days: int
+    # Sparse (a day with nothing open and no balance change has no row): consumers forward-fill.
+    points: list[EquityPointOut]
+    stats: Optional[EquityStatsOut] = None
+
+
 class AccountOut(BaseModel):
     """One row per segment (NSE/MCX/CRYPTO) - see execution.accounts.
     current_balance moves only on realized P&L (square-off/stop-loss/

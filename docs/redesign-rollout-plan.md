@@ -78,6 +78,7 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 - Move discipline and performance calculation to the server (the graduation gate cannot trust browser-computed numbers).
 - Server-enforced graduation gate: reject the live toggle unless the track record is met, broker credentials are present, consent is recorded, and daily-loss and order-size caps are set. **The base of this gate is built (2026-09-25, Phase 0): consent, caps, saved broker credentials and kill switch are enforced server-side (see `docs/architecture.md`, "Live-trading gate"). What remains here is the paper track record and discipline requirement.**
 - Keep one account per segment. Named multiple accounts need a schema change and can wait for Phase 4.
+- **Own-keys data model (decision 1):** live-data routes in market-data (quotes, option chains, candles, the live feed) resolve the caller's own Dhan credential and stop falling back to the platform credential. The platform credential is kept only for the scheduled end-of-day jobs. Ship it behind a flag, default off, and flip it when the new onboarding can collect keys; a user with no keys gets a clear "add your Dhan keys" response, not a shared-budget quote. The BYO credential path already exists (accounts `/credentials`, market-data BYO throttle keys); the work is removing the fallback and covering the routes that never took a credential (the quote WebSocket, the notification poll).
 
 **Phase 2: one responsive app (about 8 weeks).** New web app in `systems/web/frontend` (see "Where the new frontend lives") with a router, shared design tokens and components, one login (no postMessage broker). Port in this order, keeping legacy tabs working until replaced: shell, Today and Scan; Portfolio and Review; Trade (wrap `LiveChartPanel` first, refactor later); Settings. Build mobile-first with a PWA manifest. Extract what is needed from `WorkspacePage.tsx`, then delete it.
 
@@ -163,12 +164,12 @@ Merge gate for every phase:
 2. Single-worker market-data (deliberate, because of the feed) with request threads that sleep in throttles (up to 4 s) and in live-fill waits (up to 8 s).
 3. An unauthenticated notification poll (`GET /signals` every 5 s per open shell tab) and an open quote WebSocket.
 
-## Decisions still needed before resuming
+## Decisions (made 2026-09-25)
 
-1. **Data model:** own Dhan keys required for live data (recommended) versus platform-shared data with heavier limits. Sets the free tier's cost.
-2. **Merge the frontends** with a gradual migration (recommended) versus keeping four apps and paying roughly double for mobile.
-3. **Legal review** of "trade setups" and Weekly Advisor picks before charging (SEBI investment-advice and research rules). Not legal advice; needs a professional.
-4. **Payments:** Razorpay (India-first) or Stripe.
+1. **Data model: users bring their own Dhan keys for live data.** The platform's shared credential serves only shared end-of-day data (the EOD screeners) and never live quotes, option chains or charts for a user. This sets the free tier's cost to near zero and removes the shared rate-limit budget as the first thing to break at 100+ users. Consequences: a Phase 1 backend item (below) makes the live-data routes require the caller's own keys, and onboarding has to walk a beginner through getting Dhan keys, so the empty state before keys are added needs a design (paper trading on delayed or end-of-day data is the obvious fallback to design, not yet decided).
+2. **Frontends: merge into one app, gradually** (Phase 2, `systems/web`, legacy tabs keep working until replaced).
+3. **Legal review: yes.** It must happen before anything is charged for and before trade setups and Weekly Advisor picks are presented to paying users (SEBI investment-advice and research rules). It is a professional's job, not something this repo can do; treat it as a hard gate on the start of Phase 3 billing. The signup risk text is a placeholder until then.
+4. **Payments: Razorpay** (India-first). Phase 3 builds against Razorpay subscriptions and webhooks.
 
 ## How to resume
 

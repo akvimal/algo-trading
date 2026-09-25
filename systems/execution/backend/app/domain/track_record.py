@@ -22,11 +22,16 @@ measurements (confirmed as the starting values by the owner on 2026-09-25) and
 should be retuned once real users' records show what is achievable. The gate is off unless
 REQUIRE_PAPER_TRACK_RECORD=true.
 
-Applies to a user's OWN segment account on the off -> on transition (see
-app/api/routes/accounts.py). NOT applied to the admin platform account or to
-dedicated strategy accounts: an automated strategy's live path has no manual
-paper history of the live user to judge. An account that is already live is not
-re-checked until it is switched off and on again.
+Applies on the off -> on transition of (1) a user's OWN segment account
+(app/api/routes/accounts.py, update_account) and (2) a dedicated STRATEGY account:
+turning on unattended automated live trading requires the LIVE USER (the person whose
+broker account will execute it, who must be the one switching it on) to have earned the
+same manual paper record on that segment. NOT applied to the admin platform account.
+KNOWN GAP for (2): the strategy's OWN paper record is not measured, because strategy
+trades are not costed (strategy accounts have no apply_charges/slippage) and their
+equity is not recorded, so this only proves the person is a demonstrated paper trader,
+not that the strategy is any good. An account that is already live is not re-checked
+until it is switched off and on again.
 """
 
 from dataclasses import dataclass
@@ -109,6 +114,19 @@ def evaluate(
 
 def unmet_messages(requirements: list[Requirement]) -> list[str]:
     return [f"paper track record: {r.label} is {r.actual}, need {r.required}" for r in requirements if not r.met]
+
+
+def evaluate_for_user_segment(db: Session, user_id, segment: str, th: Optional[Thresholds] = None) -> list[Requirement]:
+    """The requirements for one user on one segment. A user with no account for it yet has
+    traded nothing, so every requirement is unmet at zero (an account is created lazily on
+    first use, so its absence just means "no record")."""
+    account = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment).first()
+    if account is None:
+        return evaluate(
+            th or Thresholds.from_settings(), apply_charges=False, slippage_bps=0.0, qualifying_trades=0, days_tracked=0,
+            discipline_score=None, max_drawdown_pct=None, net_pnl=None,
+        )
+    return evaluate_for_account(db, user_id, account, th)
 
 
 def evaluate_for_account(db: Session, user_id, account, th: Optional[Thresholds] = None) -> list[Requirement]:

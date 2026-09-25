@@ -16,7 +16,7 @@ from app.config import settings
 from app.domain.equity_history import record_reset_point
 from app.domain.live_gate import CONSENT_VERSION, LIVE_SEGMENTS, format_problems, unmet_requirements
 from app.domain.models import AccountUpdate, AdminResetAllConfirm, StrategyAccountCreate, StrategyAccountUpdate
-from app.domain.track_record import evaluate_for_account, unmet_messages
+from app.domain.track_record import evaluate_for_account, evaluate_for_user_segment, unmet_messages
 from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
 
 router = APIRouter()
@@ -536,7 +536,15 @@ def update_strategy_account(
         raise HTTPException(status_code=403, detail="only the live trading user or an admin can change live-trading settings on this account")
     if will_be_live and row.live_trading_user_id is None:
         raise HTTPException(status_code=422, detail="live_trading_enabled requires live_trading_user_id to be set")
-    _apply_live_fields(row, update, segment=row.segment, token=user.token, check_credentials=True)
+    # Unattended automated live trading also needs the live user to have earned a paper track
+    # record on this segment (app/domain/track_record.py), when enforced. The caller IS the live
+    # user here (checked above). The strategy's own record is not measured yet: a known gap.
+    track_record_problems = None
+    if settings.require_paper_track_record and turning_on and row.segment in LIVE_SEGMENTS:
+        track_record_problems = unmet_messages(evaluate_for_user_segment(db, user.id, row.segment))
+    _apply_live_fields(
+        row, update, segment=row.segment, token=user.token, check_credentials=True, extra_transition_problems=track_record_problems
+    )
     db.commit()
     db.refresh(row)
     return _strategy_account_to_out(db, row)

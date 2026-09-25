@@ -293,7 +293,7 @@ def test_the_progress_is_reported_and_enforced_reflects_the_flag(monkeypatch):
 
 
 def test_eligible_when_everything_is_met(monkeypatch):
-    monkeypatch.setattr(eligibility_route, "evaluate_for_account", lambda db, uid, acc: ev())
+    monkeypatch.setattr(eligibility_route, "evaluate_for_user_segment", lambda db, uid, seg: ev())
     out = eligibility(FakeDb([good_account()]))
     assert out.eligible is True and all(r.met for r in out.requirements)
 
@@ -308,3 +308,67 @@ def test_the_route_needs_a_login():
 
 def test_live_segments_are_what_the_existing_gate_says():
     assert set(LIVE_SEGMENTS) == {"NSE", "MCX"}
+
+
+# --- strategy accounts: the LIVE USER must have earned the record ---------------------------------------------------------------------------
+
+
+from app.domain.models import StrategyAccountUpdate  # noqa: E402
+from tests.test_live_gate import ME, put_strategy, strategy_enable, strategy_row  # noqa: E402
+
+
+@pytest.fixture
+def strategy_enforced(monkeypatch):
+    monkeypatch.setattr(settings, "require_paper_track_record", True)
+    seen = []
+
+    def fake(db, user_id, segment):
+        seen.append((user_id, segment))
+        return state["reqs"]
+
+    state = {"reqs": ev(qualifying_trades=3, discipline_score=None), "seen": seen}
+    monkeypatch.setattr(accounts_route, "evaluate_for_user_segment", fake)
+    return state
+
+
+def test_turning_on_an_automated_strategy_live_without_the_users_record_is_refused_with_everything_listed(creds, strategy_enforced):
+    row = strategy_row()
+    with pytest.raises(HTTPException) as exc:
+        put_strategy(row, strategy_enable(live_trading_consent=None), user(ME))
+    detail = exc.value.detail
+    assert exc.value.status_code == 422 and "paper track record" in detail and "3 trades" in detail and "risk disclosure" in detail
+    assert row.live_trading_enabled is False
+    assert strategy_enforced["seen"] == [(ME, "NSE")]  # judged on the LIVE user, for the strategy account's segment
+
+
+def test_turning_on_an_automated_strategy_live_with_the_users_record_is_allowed(creds, strategy_enforced):
+    strategy_enforced["reqs"] = ev()
+    row = strategy_row()
+    put_strategy(row, strategy_enable(), user(ME))
+    assert row.live_trading_enabled is True
+
+
+def test_the_strategy_gate_is_off_by_default(creds, monkeypatch):
+    monkeypatch.setattr(accounts_route, "evaluate_for_user_segment", lambda *a, **k: pytest.fail("not consulted when the flag is off"))
+    row = strategy_row()
+    put_strategy(row, strategy_enable(), user(ME))
+    assert row.live_trading_enabled is True
+
+
+def test_an_already_live_strategy_account_is_not_rechecked_on_a_routine_edit(creds, strategy_enforced):
+    row = strategy_row(live_trading_user_id=ME, live_trading_enabled=True, max_order_value=1000, max_daily_loss=500)
+    put_strategy(row, StrategyAccountUpdate(max_order_value=2500), user(ME))
+    assert strategy_enforced["seen"] == [] and float(row.max_order_value) == 2500
+
+
+def test_paper_only_strategy_account_edits_do_not_consult_it(creds, strategy_enforced):
+    row = strategy_row()
+    put_strategy(row, StrategyAccountUpdate(capital_per_trade=5000), user(ME))
+    assert strategy_enforced["seen"] == []
+
+
+def test_a_strategy_account_on_a_non_live_segment_is_left_to_the_existing_gate(creds, strategy_enforced):
+    row = strategy_row(segment="CRYPTO")
+    with pytest.raises(HTTPException) as exc:
+        put_strategy(row, strategy_enable(), user(ME))
+    assert "only available for" in exc.value.detail and strategy_enforced["seen"] == []

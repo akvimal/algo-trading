@@ -6,13 +6,12 @@ REQUIRE_PAPER_TRACK_RECORD is on, which the `enforced` flag reports."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user
 from app.config import settings
 from app.domain.live_gate import LIVE_SEGMENTS
 from app.domain.models import LiveEligibilityOut, RequirementOut
-from app.domain.track_record import Requirement, Thresholds, evaluate, evaluate_for_account
+from app.domain.track_record import Requirement, evaluate_for_user_segment
 
 router = APIRouter()
 
@@ -27,15 +26,7 @@ def get_live_eligibility(segment: str, user: User = Depends(get_current_user), d
     if seg not in LIVE_SEGMENTS:
         requirements = [Requirement("segment", "Live trading available", " or ".join(LIVE_SEGMENTS), seg, False)]
     else:
-        account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg).first()
-        if account is None:
-            # Nothing traded yet: every requirement is unmet at zero.
-            requirements = evaluate(
-                Thresholds.from_settings(), apply_charges=False, slippage_bps=0.0, qualifying_trades=0, days_tracked=0,
-                discipline_score=None, max_drawdown_pct=None, net_pnl=None,
-            )
-        else:
-            requirements = evaluate_for_account(db, user.id, account)
+        requirements = evaluate_for_user_segment(db, user.id, seg)
     return LiveEligibilityOut(
         segment=seg,
         enforced=settings.require_paper_track_record,

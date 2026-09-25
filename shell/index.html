@@ -1023,7 +1023,7 @@
         if (!notifEnabled) return;
         const base = `${PROTOCOL}//${location.hostname}:${MARKET_DATA_BACKEND_PORT + PORT_OFFSET}`;
         try {
-          const res = await fetch(`${base}/options/sentiment`);
+          const res = await fetch(`${base}/options/sentiment`, { headers: authHeaders() });
           if (!res.ok) return;
           const data = await res.json();
           const next = new Map();

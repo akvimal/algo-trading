@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     # docs/architecture.md.
     dhan_token_renew_interval_hours: int = 20
 
+    # Own-keys data model (docs/redesign-rollout-plan.md, decision 1): when true, live
+    # Dhan-backed market data (quotes, candles, option chains, order blocks, the
+    # regime badge, sentiment, the quote WebSocket) is only served to a SIGNED-IN
+    # user WITH their own saved Dhan keys, on their own rate budget, and never falls
+    # back to the shared platform credential. Trusted internal services (they present
+    # INTERNAL_SERVICE_SECRET) may still use the platform credential, or act on behalf
+    # of one user. The platform credential otherwise serves only the scheduled
+    # end-of-day jobs. Crypto (public Delta data) is unaffected. Off by default: flip it
+    # when onboarding can collect keys. See app/data_access.py.
+    require_own_dhan_keys: bool = False
+
     # Delta Exchange India (CRYPTO segment) - see app/providers/delta.py.
     # Every endpoint this provider calls is public (no api-key/secret
     # needed at all), unlike Dhan - see docs/architecture.md.

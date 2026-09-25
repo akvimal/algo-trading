@@ -21,8 +21,11 @@ from typing import Optional
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.concurrency import run_in_threadpool
 
+from app.auth import user_id_from_token
 from app.config import settings
+from app.data_access import KEYS_REQUIRED_CODE, ws_dhan_allowed
 from app.providers import dhan_feed
 
 logger = logging.getLogger(__name__)
@@ -124,7 +127,19 @@ async def quotes_ws(websocket: WebSocket) -> None:
     {"type": "tick", ...} on every update; {"type": "error", "detail": ...}
     if MAX_SYMBOLS_PER_CONNECTION is exceeded.
 
-    No auth - deliberate, not an oversight. This is exclusively the
+    Auth (2026-09-25, own-keys data model): with REQUIRE_OWN_DHAN_KEYS off
+    (the default) there is none, exactly as below. With it on, a connection
+    may only subscribe to Dhan-backed symbols if it has authenticated as
+    a signed-in user with their own saved Dhan keys (app/data_access.py,
+    ws_dhan_allowed); anything else gets an error frame with code
+    own_dhan_keys_required. Crypto (public Delta data) is always allowed.
+    A browser cannot set an Authorization header on a WebSocket handshake, and a
+    token in the URL would end up in access logs, so the connection authenticates
+    with a first message instead: {"action": "auth", "token": "<JWT>"}, sent
+    before the subscribes. (An unauthenticated or keyless connection is not
+    disconnected; it just cannot subscribe to Dhan symbols.)
+
+    Why there was no auth before - deliberate, not an oversight. This is exclusively the
     platform account's shared global feed (see docs/architecture.md's
     Phase 1 note) - there is no per-user BYO-Dhan-credential branch here
     the way GET /quotes/ltp has (app/api/routes/quotes.py, untouched by
@@ -137,11 +152,17 @@ async def quotes_ws(websocket: WebSocket) -> None:
     needed - not required for this phase."""
     await websocket.accept()
     await _ensure_pubsub_started()
+    # False until this connection authenticates when the flag is on (True always when it is
+    # off). The accounts lookup blocks, so it runs off the event loop.
+    dhan_allowed = await run_in_threadpool(ws_dhan_allowed, None)
     joined: set[tuple[str, str]] = set()
     try:
         while True:
             raw = await websocket.receive_json()
             action = raw.get("action")
+            if action == "auth":
+                dhan_allowed = await run_in_threadpool(ws_dhan_allowed, user_id_from_token(raw.get("token")))
+                continue
             exchange = str(raw.get("exchange") or "").strip().upper()
             symbol = str(raw.get("symbol") or "").strip().upper()
             if not exchange or not symbol:
@@ -154,6 +175,11 @@ async def quotes_ws(websocket: WebSocket) -> None:
                 continue
 
             if action != "subscribe":
+                continue
+            if exchange != "CRYPTO" and not dhan_allowed:
+                await websocket.send_json(
+                    {"type": "error", "code": KEYS_REQUIRED_CODE, "detail": "add your own Dhan API keys to see live prices"}
+                )
                 continue
             if key not in joined and len(joined) >= MAX_SYMBOLS_PER_CONNECTION:
                 await websocket.send_json({"type": "error", "detail": f"max {MAX_SYMBOLS_PER_CONNECTION} symbols per connection"})

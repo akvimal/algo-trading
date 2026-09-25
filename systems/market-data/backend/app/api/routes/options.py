@@ -13,10 +13,10 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.adapters.accounts_client import get_user_dhan_credentials
+from app.data_access import data_credentials
 from app.adapters.db.models import SentimentHistory
 from app.adapters.db.session import get_db
-from app.auth import get_optional_user_id
+from app.auth import Caller, get_caller
 from app.config import settings
 from app.domain.models import MarketSentiment, OptionChain, OptionLegCandle, OptionOiSummary, SentimentHistoryDay, SentimentHistoryPoint
 from app.domain.oi_summary import build_oi_summary
@@ -28,7 +28,7 @@ router = APIRouter()
 
 
 @router.get("/options/expiries")
-def get_expiries(exchange: str, symbol: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
+def get_expiries(exchange: str, symbol: str, caller: Caller = Depends(get_caller)):
     try:
         provider = get_provider(exchange)
     except ValueError as exc:
@@ -39,7 +39,7 @@ def get_expiries(exchange: str, symbol: str, user_id: Optional[UUID] = Depends(g
         raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
 
     try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        credentials = data_credentials(caller, exchange)
         expiries = resolver(symbol, credentials=credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -49,7 +49,7 @@ def get_expiries(exchange: str, symbol: str, user_id: Optional[UUID] = Depends(g
 
 
 @router.get("/options/chain", response_model=OptionChain)
-def get_chain(exchange: str, symbol: str, expiry: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
+def get_chain(exchange: str, symbol: str, expiry: str, caller: Caller = Depends(get_caller)):
     try:
         provider = get_provider(exchange)
     except ValueError as exc:
@@ -60,7 +60,7 @@ def get_chain(exchange: str, symbol: str, expiry: str, user_id: Optional[UUID] =
         raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
 
     try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        credentials = data_credentials(caller, exchange)
         chain = resolver(symbol, expiry, credentials=credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -70,7 +70,7 @@ def get_chain(exchange: str, symbol: str, expiry: str, user_id: Optional[UUID] =
 
 
 @router.get("/options/oi-summary", response_model=OptionOiSummary)
-def get_oi_summary(exchange: str, symbol: str, expiry: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
+def get_oi_summary(exchange: str, symbol: str, expiry: str, caller: Caller = Depends(get_caller)):
     """PCR + chain-wide OI-change totals (5m/15m) + per-strike OI/IV
     breakdown for one (exchange, symbol, expiry) - the OI Summary page,
     not used in the resolve/order-placement path. Reuses the same
@@ -93,7 +93,7 @@ def get_oi_summary(exchange: str, symbol: str, expiry: str, user_id: Optional[UU
         raise HTTPException(status_code=404, detail=f"exchange '{exchange}' has no option-chain support")
 
     try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        credentials = data_credentials(caller, exchange)
         chain = resolver(symbol, expiry, credentials=credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -119,7 +119,7 @@ def get_oi_summary(exchange: str, symbol: str, expiry: str, user_id: Optional[UU
 
 
 @router.get("/options/sentiment", response_model=MarketSentiment)
-def get_sentiment(user_id: Optional[UUID] = Depends(get_optional_user_id)):
+def get_sentiment(caller: Caller = Depends(get_caller)):
     """NSE/MCX bullish-bearish read for the manual-trading SaaS header -
     see app/domain/sentiment.py. BYO-credential-aware the same way GET
     /options/chain etc. already are: a logged-in user with their own
@@ -132,7 +132,7 @@ def get_sentiment(user_id: Optional[UUID] = Depends(get_optional_user_id)):
     token) degrades just that underlying (see UnderlyingSentiment.error)
     rather than 502ing the whole response - a header badge should never
     go blank because one of four symbols had a transient Dhan error."""
-    credentials = get_user_dhan_credentials(user_id) if user_id else None
+    credentials = data_credentials(caller, None)
     exchanges = {}
     for exchange, symbols in SENTIMENT_UNDERLYINGS.items():
         underlyings = [fetch_underlying_sentiment(exchange, symbol, credentials)[0] for symbol in symbols]

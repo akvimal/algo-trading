@@ -19,10 +19,11 @@ from app.providers import dhan_feed
 
 
 class FakeWebSocket:
-    def __init__(self, messages=()):
+    def __init__(self, messages=(), query_params=None):
         self._messages = list(messages)
         self.sent: list[dict] = []
         self.accepted = False
+        self.query_params = query_params or {}  # a real WebSocket always has these (the ?token=)
 
     async def accept(self):
         self.accepted = True

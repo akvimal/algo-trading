@@ -180,6 +180,13 @@ services:
       JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       ACCOUNTS_BASE_URL: http://accounts-backend:8000
+      # Own-keys data model (docs/redesign-rollout-plan.md, decision 1; see
+      # app/data_access.py). When true, live Dhan-backed data is only served to a
+      # signed-in user with their OWN saved Dhan keys and never falls back to the
+      # shared platform credential; execution and signal-engine identify as trusted
+      # services via INTERNAL_SERVICE_SECRET. Off by default; flip it when onboarding
+      # can collect keys.
+      REQUIRE_OWN_DHAN_KEYS: ${REQUIRE_OWN_DHAN_KEYS:-false}
       # Live-broker-adapter P0 (see docs/architecture.md) - DHAN_POSTBACK_SECRET
       # is the shared-secret PATH segment for Dhan's own order-update
       # postback (register https://<this-host>/dhan/order-update/<secret>

@@ -34,6 +34,16 @@ class ResolvedUnderlying:
         self.expiry = expiry
 
 
+def _service_headers() -> dict:
+    """Presents INTERNAL_SERVICE_SECRET so market-data recognises this backend as a
+    trusted service (2026-09-25, own-keys data model): with market-data's
+    REQUIRE_OWN_DHAN_KEYS on, an unauthenticated data request is refused (401)
+    unless it comes from one of our own backends. These calls carry no user, so
+    they run on the platform credential (the documented residual for automated
+    jobs; see market-data's app/data_access.py)."""
+    return {"X-Internal-Secret": settings.internal_service_secret} if settings.internal_service_secret else {}
+
+
 def resolve_underlying(segment: str, underlying: str) -> Optional[ResolvedUnderlying]:
     resp = requests.get(
         f"{settings.market_data_base_url}/instruments/resolve",
@@ -67,6 +77,7 @@ def get_ltp(exchange: str, symbol: str) -> Optional[float]:
         resp = requests.get(
             f"{settings.market_data_base_url}/quotes/ltp",
             params={"exchange": exchange, "symbol": symbol},
+            headers=_service_headers(),
             timeout=settings.market_data_timeout_seconds,
         )
     except requests.RequestException:
@@ -115,6 +126,7 @@ def get_candle_history(
     resp = requests.get(
         f"{settings.market_data_base_url}/candles/history",
         params=params,
+        headers=_service_headers(),
         timeout=settings.market_data_timeout_seconds,
     )
     resp.raise_for_status()
@@ -160,6 +172,7 @@ def get_option_leg_history(
             "from": from_date.isoformat(),
             "to": to_date.isoformat(),
         },
+        headers=_service_headers(),
         timeout=settings.option_history_timeout_seconds,
     )
     if resp.status_code == 404:
@@ -181,6 +194,7 @@ def get_expiry_list(exchange: str, symbol: str) -> Optional[list[str]]:
     resp = requests.get(
         f"{settings.market_data_base_url}/options/expiries",
         params={"exchange": exchange, "symbol": symbol},
+        headers=_service_headers(),
         timeout=settings.market_data_timeout_seconds,
     )
     if resp.status_code == 404:
@@ -208,6 +222,7 @@ def get_order_blocks(
     resp = requests.get(
         f"{settings.market_data_base_url}/order-blocks",
         params=params,
+        headers=_service_headers(),
         timeout=settings.market_data_timeout_seconds,
     )
     if resp.status_code in (404, 422):
@@ -224,6 +239,7 @@ def get_option_chain(exchange: str, symbol: str, expiry: str) -> Optional[dict]:
     resp = requests.get(
         f"{settings.market_data_base_url}/options/chain",
         params={"exchange": exchange, "symbol": symbol, "expiry": expiry},
+        headers=_service_headers(),
         timeout=settings.market_data_timeout_seconds,
     )
     if resp.status_code == 404:

@@ -16,13 +16,14 @@ def get_ltp(exchange: str, symbol: str) -> float:
     resp = requests.get(
         f"{settings.market_data_base_url}/quotes/ltp",
         params={"exchange": exchange, "symbol": symbol},
+        headers=_auth_headers(None),
         timeout=settings.market_data_timeout_seconds,
     )
     resp.raise_for_status()
     return float(resp.json()["ltp"])
 
 
-def _auth_headers(token: Optional[str]) -> Optional[dict]:
+def _auth_headers(token: Optional[str]) -> dict:
     """Phase 3 (BYO Dhan credentials, see docs/architecture.md) - when the
     calling route has a real user's own bearer token in scope (the
     manual-order/square-off routes, since Phase 2), forwarding it lets
@@ -31,8 +32,20 @@ def _auth_headers(token: Optional[str]) -> Optional[dict]:
     scheduler jobs and the automated orders_consumer.py flow, neither of
     which has a single user to attribute a call to) sends no
     Authorization header at all, which market-data treats identically to
-    today - see market-data's app/auth.py's own docstring."""
-    return {"Authorization": f"Bearer {token}"} if token else None
+    today - see market-data's app/auth.py's own docstring.
+
+    Every call ALSO presents INTERNAL_SERVICE_SECRET (2026-09-25, own-keys data
+    model): with market-data's REQUIRE_OWN_DHAN_KEYS on, an unauthenticated data
+    request is refused (401) unless it comes from one of our own backends, which is
+    how market-data recognises this service. Without a user token that means the
+    platform credential (the documented residual for automated jobs, see
+    market-data's app/data_access.py); WITH a user token the user's own keys win."""
+    headers = {}
+    if settings.internal_service_secret:
+        headers["X-Internal-Secret"] = settings.internal_service_secret
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None) -> dict[str, float]:

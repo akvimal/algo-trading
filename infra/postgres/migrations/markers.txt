@@ -1,0 +1,22 @@
+# One object each migration creates, used by `scripts/migrate.sh detect` to tell
+# what an untracked database already has. Format: filename|schema.table|column
+# (leave column empty to test for the table itself). Add a line for every new
+# migration.
+001-execution-multi-tenant.sql|execution.settings|user_id
+002-strategy-exit-condition.sql|signal_generation.strategies|exit_condition
+003-manual-risk-managed.sql|execution.positions|risk_managed
+004-trade-notes.sql|execution.positions|notes
+005-trade-journal.sql|execution.positions|setup_tag
+006-price-alerts.sql|market_data.price_alerts|
+007-timeframe-defaults.sql|execution.accounts|default_interval
+008-discipline-plan.sql|execution.positions|entry_setup_tag
+009-openrouter-byo-key.sql|accounts.broker_credentials|openrouter_api_key_encrypted
+010-weekly-advisor-fundamentals.sql|signal_generation.weekly_advisor_fundamentals|
+010-weekly-advisor-trade-tracking.sql|signal_generation.weekly_advisor_trades|expiry_date
+011-oi-eod-snapshot.sql|market_data.oi_eod_snapshot|
+012-equity-screener-snapshot.sql|market_data.equity_screener_snapshot|
+013-news-history.sql|market_data.news_history|
+014-signal-engine-ownership.sql|signal_generation.rules|created_by
+015-live-trading-consent.sql|execution.accounts|live_trading_consent_at
+016-require-stop-loss.sql|execution.accounts|require_stop_loss
+017-weekly-advisor-ownership.sql|signal_generation.weekly_advisor_recommendations|created_by

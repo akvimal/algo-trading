@@ -34,7 +34,7 @@ A redesign of the platform as a multi-user SaaS with paper trading, a graduation
 | Automate for many users | signal-engine has no login requirement and no tenant isolation. Strategies, rules, watchlists, weekly-advisor data and signals are global. Chartink webhooks have no secret. |
 | Phone-friendly | One layout `@media` in the whole frontend. No PWA manifest, service worker or push. Four frontends in iframes on four ports, four separate CSS files, no shared UI package, about 45k lines of frontend source. |
 
-Also noted by the audit: `WorkspacePage.tsx` (3,531 lines) and the trade-checklist page are unrouted dead code, though they hold the only UI for a few features (SL-limit orders, option trailing SL, partial exits, review flow). `CI` (`.github/workflows/ci.yml`) still targets the removed `signal-generation` and `signal-processing` systems. Migrations are hand-run SQL (`infra/postgres/migrations/001-013`, two files numbered 010) with no tracking table.
+Also noted by the audit: `WorkspacePage.tsx` (3,531 lines) and the trade-checklist page are unrouted dead code, though they hold the only UI for a few features (SL-limit orders, option trailing SL, partial exits, review flow). `CI` (`.github/workflows/ci.yml`) still targets the removed `signal-generation` and `signal-processing` systems. Migrations are hand-run SQL (`infra/postgres/migrations/001-017`, two files numbered 010); **a tracking runner (`scripts/migrate.sh`) was added 2026-09-25**, dev is baselined, test and the VPS are not yet (see `docs/architecture.md`, "Migration tracking").
 
 ### Verified by hand on 2026-09-25
 

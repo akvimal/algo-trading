@@ -9,6 +9,10 @@ set -euo pipefail
 #   scripts/migrate.sh detect              read-only: probe an (untracked) database for what
 #                                          each migration creates, suggest a baseline number
 #   scripts/migrate.sh apply               apply the pending ones, in order (asks first)
+#   scripts/migrate.sh rehash              re-record the checksum of every applied migration
+#                                          (only if status shows MODIFIED for files you know
+#                                          are unchanged, e.g. hashes recorded by an older
+#                                          version of this script that was line-ending sensitive)
 #   scripts/migrate.sh baseline <N|all>    RECORD migrations up to number N (e.g. 017) as
 #                                          applied WITHOUT running them - for a database
 #                                          that already has them, or a fresh install
@@ -38,7 +42,9 @@ CMD=${1:-status}
 psql_q() { $COMPOSE exec -T postgres sh -c 'psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tA "$@"' sh "$@" </dev/null; }
 psql_stdin() { $COMPOSE exec -T postgres sh -c 'psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'; }
 
-sha() { sha256sum "$1" | cut -d' ' -f1; }
+# Line endings stripped first: git rewrites a Windows working copy to CRLF and leaves a Linux one
+# as LF, so the same migration would otherwise hash differently on each machine.
+sha() { tr -d '\r' < "$1" | sha256sum | cut -d' ' -f1; }
 files() { ls "$DIR"/*.sql | sort; }
 num_of() { basename "$1" | cut -d- -f1; }
 
@@ -119,6 +125,15 @@ case "$CMD" in
       if [ "$UPTO" = "all" ] || [ "$(num_of "$f")" -le "$((10#$UPTO))" ]; then record "$f" baseline; echo "  recorded  $(basename "$f")"; fi
     done ;;
 
+  rehash)
+    [ "$TRACKING" = "t" ] || { echo "no schema_migrations table here"; exit 1; }
+    read -r -p "Re-record checksums of all applied migrations from the files as they are now? Type 'yes': " ans; [ "$ans" = "yes" ] || { echo aborted; exit 1; }
+    for f in $(files); do
+      if [ -n "$(applied_checksum "$f")" ]; then
+        psql_q -c "UPDATE public.schema_migrations SET checksum = '$(sha "$f")' WHERE filename = '$(basename "$f")'"; echo "  rehashed  $(basename "$f")"
+      fi
+    done ;;
+
   apply)
     if [ "$TRACKING" != "t" ]; then
       echo "REFUSING: this database has no schema_migrations table, so I cannot tell what it already has." >&2
@@ -137,5 +152,5 @@ case "$CMD" in
     done
     echo done ;;
 
-  *) echo "usage: $0 status | detect | apply | baseline <N|all>" >&2; exit 2 ;;
+  *) echo "usage: $0 status | detect | apply | baseline <N|all> | rehash" >&2; exit 2 ;;
 esac

@@ -13,7 +13,7 @@ async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Prom
   if (!token) return fetch(input, init);
   const headers = new Headers(init.headers);
   if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
-  const res = await authFetch(input, { ...init, headers });
+  const res = await fetch(input, { ...init, headers });
   if (res.status === 401) {
     clearAuthToken();
     window.location.reload();

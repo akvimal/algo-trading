@@ -36,28 +36,46 @@ _scheduler = BackgroundScheduler(timezone=settings.timezone)
 
 THROTTLE_RETRY_ATTEMPTS = 8
 THROTTLE_RETRY_SLEEP_SECONDS = 5.0
+# A real Dhan 429 needs longer than our own queue-full wait for its budget to refill.
+DHAN_429_RETRY_SLEEP_SECONDS = 10.0
 
 
 def _retry_when_throttled(fn, *args):
-    """Calls fn(*args), waiting out DhanProvider._throttle's "queue is
-    backed up" RuntimeError instead of failing the symbol outright.
+    """Calls fn(*args), waiting out a Dhan rate-limit rejection instead of
+    failing the symbol outright. Two flavours, both retried:
 
-    The EOD batch jobs share Dhan's per-endpoint throttle with everything
-    else in this process (browser pollers, the 5-minute sentiment job that
-    fires on the same :40 boundary as the OI job). A failed call reserves
-    no slot and never sleeps, so without this a single brief collision made
-    the loop rip through the ENTIRE ~210/~2000-symbol batch in about a
-    second, every symbol failing while the queue was still backed up - zero
-    rows written for the day. Only that specific error is retried; anything
-    else (bad symbol, auth, HTTP error) propagates to the caller's own
-    per-symbol handling unchanged."""
+    * DhanProvider._throttle's LOCAL "queue is backed up" RuntimeError - the
+      EOD batch jobs share Dhan's per-endpoint throttle with everything else
+      in this process (browser pollers, the 5-minute sentiment job that fires
+      on the same :40 boundary as the OI job). A failed call reserves no slot
+      and never sleeps, so without a retry a single brief collision made the
+      loop rip through the ENTIRE ~210/~2000-symbol batch in about a second,
+      every symbol failing - zero rows written for the day.
+    * A real HTTP 429 from Dhan ("rate limit hit (429)"). The local throttle
+      sits exactly on Dhan's documented 1-request-per-3s limit (and Dhan is
+      known to 429 slightly outside its documented gap - see
+      MIN_LTP_CALL_INTERVAL_SECONDS), so network jitter or another process on
+      the same account (the manual retry script runs in its OWN process with
+      its own clocks) can trip it mid-batch. That used to abandon the symbol
+      on the first 429; now it backs off longer, since the budget needs time
+      to refill, and only then gives up.
+
+    Anything else (bad symbol, auth, HTTP error) propagates to the caller's
+    own per-symbol handling unchanged."""
     for attempt in range(THROTTLE_RETRY_ATTEMPTS):
         try:
             return fn(*args)
         except RuntimeError as e:
-            if "queue is backed up" not in str(e) or attempt == THROTTLE_RETRY_ATTEMPTS - 1:
+            message = str(e)
+            if "rate limit hit (429)" in message:
+                sleep_seconds = DHAN_429_RETRY_SLEEP_SECONDS
+            elif "queue is backed up" in message:
+                sleep_seconds = THROTTLE_RETRY_SLEEP_SECONDS
+            else:
                 raise
-            time.sleep(THROTTLE_RETRY_SLEEP_SECONDS)
+            if attempt == THROTTLE_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(sleep_seconds)
 
 
 def _log_eod_summary(job: str, total: int, tally: dict[str, int]) -> None:

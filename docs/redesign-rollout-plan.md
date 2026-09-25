@@ -107,6 +107,56 @@ When a separate project would make sense instead:
 - A marketing site (landing, pricing, legal pages): small, static, its own release cadence. Fine as a separate project.
 - If a frontend contractor joins or the app is open-sourced: split the new app out then. Starting in-repo does not prevent that.
 
+## Branching and delivery (decided 2026-09-25)
+
+**Use a long-lived `revamp` integration branch, but keep it small.** Only the new frontend and visible behaviour changes go on it. Additive backend work lands on `dev` as it is ready. Otherwise `revamp` drifts from a codebase that is still being shipped to.
+
+Why not put everything on one branch:
+- The new app is a brand-new folder (`systems/web`), so it barely conflicts with `dev`. Branch isolation is cheap for it.
+- Backend changes are the risk. Migrations are hand-run SQL in a single numbered sequence, so two branches each adding "014" would collide. Behaviour changes on a branch that is never deployed also cannot be tested against real usage.
+- Phase 0 closes real security holes and must not wait for the revamp.
+
+| Phase | Branch |
+|---|---|
+| 0: auth, tenancy, real live-trading gate, server-side limits | `dev` then `prod` directly |
+| 1 backend: equity history, charges, pending orders, graduation gate | `dev`, additive and default-off (a flag, or "everyone allowed" until the UI uses it) |
+| 2: `systems/web` and all screens | `revamp` |
+| 3: entitlement checks in the backend | `dev`, default "all allowed" |
+| 3: billing UI, onboarding, notifications inbox | `revamp` |
+| 4 and 5 | same split |
+
+Branch model:
+- `revamp` is created from `dev`. Each phase is a short branch such as `revamp/p2-shell-today`, merged into `revamp` with `--no-ff` so phase boundaries stay visible.
+- Merge `dev` into `revamp` weekly (merges, not rebases, matching the existing direct-merge workflow).
+- Migrations only ever land on `dev`, so there is one numbering sequence.
+
+```bash
+git checkout dev && git checkout -b revamp
+git checkout -b revamp/p2-shell-today        # work, commit
+git checkout revamp && git merge --no-ff revamp/p2-shell-today
+git merge dev                                # weekly sync
+```
+
+Running it without touching dev:
+- `git worktree add ../algo-trading-revamp revamp` keeps both branches checked out at once.
+- Run the revamp checkout on the **test stack** (ports +1000, own volumes) so the dev stack stays on `dev`. Test's schema can drift from dev's, and rebuilding, migrating or deploying test needs explicit approval each time.
+- The VPS never tracks `revamp`.
+
+Reaching users without a big-bang merge:
+1. The new app is served beside the old shell (its own route or port). Nothing legacy changes.
+2. A per-user "try the new UI" switch, plus a link from the old shell.
+3. Milestone merges: once Phase 0, Phase 1 and the first Phase 2 screens work, merge `revamp` into `dev`, then `prod`, **dark** (deployed but hidden). Then open it to the closed-beta users.
+4. Keep merging milestones into `dev` from there. Never wait for the end.
+5. Cutover means flipping the default entry point, which is reversible. Only after several stable weeks are the legacy tabs and the dead `WorkspacePage.tsx` deleted.
+
+Merge gate for every phase:
+- Pytest passes in each touched backend, and the new frontend builds.
+- Any migration is numbered, idempotent, and applied on test first.
+- Docs are updated and a short manual checklist has been run on the test stack.
+- Each milestone is tagged (`revamp-m1`, ...) so rollback is one command.
+
+**Prerequisite: fix CI first.** `.github/workflows/ci.yml` still targets the removed `signal-generation` and `signal-processing` systems and skips `signal-engine`, `accounts` and three of the frontends. Add the new `systems/web` build to it.
+
 ## What breaks first at 100+ users
 
 1. The shared platform Dhan credential. Users without their own keys share one rate-limit budget per data family, and a 429 blocks the shared feed too. Recommendation: live data requires the user's own keys, and the platform serves only shared end-of-day data.

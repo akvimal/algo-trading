@@ -170,7 +170,7 @@ def test_a_successful_login_clears_the_email_counter(monkeypatch):
 
 def test_signup_is_limited_per_ip():
     def signup(peer="10.0.0.5", email="n@example.com"):
-        return auth_route.signup(SignupRequest(email=email, name="N", password="longenoughpw"), request(peer), NoUserDb())
+        return auth_route.signup(SignupRequest(email=email, name="N", password="longenoughpw", accept_risk_disclosure=True), request(peer), NoUserDb())
 
     signup()
     signup(email="m@example.com")

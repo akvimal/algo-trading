@@ -13,6 +13,10 @@ class SignupRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=8, max_length=200)
+    # Must be true: the person confirms the risk disclosure shown at signup.
+    # Defaults to false (not true) so a client that forgets to send it is
+    # refused rather than silently recorded as having agreed.
+    accept_risk_disclosure: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -33,6 +37,8 @@ class UserOut(BaseModel):
     name: str
     created_at: datetime
     is_admin: bool
+    risk_acknowledged_at: Optional[datetime] = None
+    risk_acknowledged_version: Optional[str] = None
 
 
 # All optional - PUT /credentials is a partial update, e.g. setting only

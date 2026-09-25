@@ -143,11 +143,20 @@ export async function login(email: string, password: string): Promise<string> {
   return body.access_token as string;
 }
 
-export async function signup(name: string, email: string, password: string): Promise<string> {
+// What a new user confirms at signup. The accounts backend records that they did
+// and the wording version (app/domain/risk_ack.py RISK_ACK_VERSION) - bump that
+// version when this text changes materially. Plain-language placeholder pending
+// the legal review listed in docs/redesign-rollout-plan.md.
+export const RISK_DISCLOSURE_TEXT =
+  "I understand that trading stocks, futures, options and crypto can lose money, including more than I put in. " +
+  "This platform is a paper-trading and analysis tool, and nothing on it is investment advice or a recommendation. " +
+  "Results on paper do not predict live results, and I am solely responsible for any trade I place with real money.";
+
+export async function signup(name: string, email: string, password: string, acceptRiskDisclosure: boolean): Promise<string> {
   const res = await fetch(`${ACCOUNTS_BASE_URL}/auth/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, email, password }),
+    body: JSON.stringify({ name, email, password, accept_risk_disclosure: acceptRiskDisclosure }),
   });
   if (!res.ok) throw new Error(await extractErrorDetail(res));
   const body = await res.json();

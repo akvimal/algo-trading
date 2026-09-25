@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -7,6 +9,7 @@ from app.adapters.db.session import get_db
 from app.auth import get_current_user
 from app.rate_limit import check_and_record_signup, check_login_allowed, client_ip, record_login_failure, record_login_success
 from app.domain.models import LoginRequest, SignupRequest, TokenResponse, UserOut
+from app.domain.risk_ack import RISK_ACK_VERSION
 from app.domain.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -18,6 +21,13 @@ def _normalize_email(email: str) -> str:
 
 @router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupRequest, request: Request, db: Session = Depends(get_db)):
+    # Before the rate limiter, so a forgotten checkbox does not use up an
+    # honest person's signup attempts.
+    if not payload.accept_risk_disclosure:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="you must confirm the risk disclosure to create an account",
+        )
     check_and_record_signup(client_ip(request))
     email = _normalize_email(payload.email)
     # Bootstraps the platform's first admin - the very first account ever
@@ -35,6 +45,8 @@ def signup(payload: SignupRequest, request: Request, db: Session = Depends(get_d
         name=payload.name.strip(),
         password_hash=hash_password(payload.password),
         is_admin=is_first_user,
+        risk_acknowledged_at=datetime.now(timezone.utc),
+        risk_acknowledged_version=RISK_ACK_VERSION,
     )
     db.add(user)
     try:

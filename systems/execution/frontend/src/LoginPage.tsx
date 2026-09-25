@@ -1,11 +1,12 @@
 import { FormEvent, useState } from "react";
-import { login, setAuthEmail, setAuthToken, signup } from "./auth";
+import { RISK_DISCLOSURE_TEXT, login, setAuthEmail, setAuthToken, signup } from "./auth";
 
 export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [acceptRisk, setAcceptRisk] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,7 +15,7 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => 
     setSubmitting(true);
     setError(null);
     try {
-      const token = mode === "login" ? await login(email, password) : await signup(name, email, password);
+      const token = mode === "login" ? await login(email, password) : await signup(name, email, password, acceptRisk);
       setAuthToken(token);
       setAuthEmail(email);
       onAuthenticated();
@@ -52,8 +53,23 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => 
             onChange={(e) => setPassword(e.target.value)}
           />
         </label>
+        {mode === "signup" && (
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, lineHeight: 1.4 }}>
+            <input
+              type="checkbox"
+              required
+              checked={acceptRisk}
+              onChange={(e) => setAcceptRisk(e.target.checked)}
+              style={{ marginTop: 3, width: "auto" }}
+            />
+            <span>{RISK_DISCLOSURE_TEXT}</span>
+          </label>
+        )}
         {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={submitting || !email || !password || (mode === "signup" && !name.trim())}>
+        <button
+          type="submit"
+          disabled={submitting || !email || !password || (mode === "signup" && (!name.trim() || !acceptRisk))}
+        >
           {submitting ? "..." : mode === "login" ? "Log in" : "Sign up"}
         </button>
         <button

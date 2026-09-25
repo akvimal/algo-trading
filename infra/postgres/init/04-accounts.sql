@@ -62,3 +62,8 @@ CREATE TABLE IF NOT EXISTS accounts.broker_credentials (
 -- same "never break, just skip the AI step" convention news.py/
 -- screener_fetch.py already use for a missing key).
 ALTER TABLE accounts.broker_credentials ADD COLUMN IF NOT EXISTS openrouter_api_key_encrypted TEXT;
+
+-- Risk acknowledgement recorded at signup (2026-09-25): when, and the wording version.
+-- NULL for accounts created before this existed. See migrations/019-risk-acknowledgement.sql.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS risk_acknowledged_at TIMESTAMPTZ;
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS risk_acknowledged_version TEXT;

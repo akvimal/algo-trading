@@ -27,6 +27,10 @@ class User(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     is_admin = Column(Boolean, nullable=False, server_default="false")
     name = Column(Text, nullable=False, server_default="")
+    # When the person confirmed the risk disclosure at signup, and which wording
+    # (app/domain/risk_ack.py). NULL for accounts that predate it.
+    risk_acknowledged_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    risk_acknowledged_version = Column(Text, nullable=True)
 
 
 class BrokerCredentials(Base):

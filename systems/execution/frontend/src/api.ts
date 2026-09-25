@@ -630,7 +630,7 @@ export type StrategySummary = {
 };
 
 export async function fetchStrategyNames(): Promise<StrategySummary[]> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`);
   return asJson(res, "GET /strategies");
 }
 
@@ -642,7 +642,7 @@ export async function fetchStrategyNames(): Promise<StrategySummary[]> {
 export type SignalCount = { strategy_id: string; total_signals: number };
 
 export async function fetchSignalCounts(): Promise<SignalCount[]> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals/counts`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/signals/counts`);
   return asJson(res, "GET /signals/counts");
 }
 

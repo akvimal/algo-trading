@@ -967,10 +967,20 @@
         });
       }
 
+      // signal-engine requires a login for /strategies and /signals once its
+      // REQUIRE_AUTH is on (and then only returns THIS user's data) - send the
+      // session token the shell already holds for the embedded frontends.
+      // Without one (logged out, or enforcement off) the call goes out
+      // unauthenticated exactly as before; a 401 just leaves the bell quiet.
+      function authHeaders() {
+        const token = getSharedToken();
+        return token ? { Authorization: `Bearer ${token}` } : {};
+      }
+
       async function pollStrategyNames() {
         const base = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
         try {
-          const res = await fetch(`${base}/strategies`);
+          const res = await fetch(`${base}/strategies`, { headers: authHeaders() });
           if (!res.ok) return;
           const data = await res.json();
           strategyNames = new Map(data.map((s) => [s.id, s.name]));
@@ -983,7 +993,7 @@
         if (!notifEnabled) return;
         const base = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_BACKEND_PORT + PORT_OFFSET}`;
         try {
-          const res = await fetch(`${base}/signals?limit=20`);
+          const res = await fetch(`${base}/signals?limit=20`, { headers: authHeaders() });
           if (!res.ok) return;
           const signals = await res.json();
           if (seenIds === null) {

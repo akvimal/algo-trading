@@ -1,7 +1,25 @@
-// getAuthToken is only needed for the one route below that resolves a BYO
-// OpenRouter key server-side (fetchWeeklyAdvisorRecommendations) - every
-// other route in this file stays anonymous/open, unchanged.
-import { getAuthToken } from "./auth";
+import { clearAuthToken, getAuthToken } from "./auth";
+
+// Every call to this backend goes through authFetch: it attaches the user's
+// bearer token when there is one. The backend only REQUIRES it once
+// REQUIRE_AUTH is switched on (login + per-user ownership on strategies,
+// rules, indicators, watchlists, backtests and signals) - until then the
+// header is simply attribution. A 401 with a token means the session has
+// expired or been rejected, so the token is dropped and the page reloads
+// into the login screen (AuthGate) instead of leaving every panel showing
+// an error.
+async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const token = getAuthToken();
+  if (!token) return fetch(input, init);
+  const headers = new Headers(init.headers);
+  if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  const res = await authFetch(input, { ...init, headers });
+  if (res.status === 401) {
+    clearAuthToken();
+    window.location.reload();
+  }
+  return res;
+}
 
 // Free-form: only "in_house" is reserved/special (see backend
 // app/domain/models.py's SourceType) - anything else names an external
@@ -828,12 +846,12 @@ async function asJson<T>(res: Response, what: string): Promise<T> {
 }
 
 export async function fetchIndicators(): Promise<Indicator[]> {
-  const res = await fetch(`${API_BASE_URL}/indicators`);
+  const res = await authFetch(`${API_BASE_URL}/indicators`);
   return asJson(res, "GET /indicators");
 }
 
 export async function createIndicator(payload: IndicatorCreate): Promise<Indicator> {
-  const res = await fetch(`${API_BASE_URL}/indicators`, {
+  const res = await authFetch(`${API_BASE_URL}/indicators`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -842,7 +860,7 @@ export async function createIndicator(payload: IndicatorCreate): Promise<Indicat
 }
 
 export async function updateIndicator(id: string, payload: IndicatorUpdate): Promise<Indicator> {
-  const res = await fetch(`${API_BASE_URL}/indicators/${id}`, {
+  const res = await authFetch(`${API_BASE_URL}/indicators/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -851,19 +869,19 @@ export async function updateIndicator(id: string, payload: IndicatorUpdate): Pro
 }
 
 export async function deleteIndicator(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/indicators/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/indicators/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /indicators/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
 export async function fetchWatchlists(): Promise<Watchlist[]> {
-  const res = await fetch(`${API_BASE_URL}/watchlists`);
+  const res = await authFetch(`${API_BASE_URL}/watchlists`);
   return asJson(res, "GET /watchlists");
 }
 
 export async function createWatchlist(payload: WatchlistCreate): Promise<Watchlist> {
-  const res = await fetch(`${API_BASE_URL}/watchlists`, {
+  const res = await authFetch(`${API_BASE_URL}/watchlists`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -872,7 +890,7 @@ export async function createWatchlist(payload: WatchlistCreate): Promise<Watchli
 }
 
 export async function updateWatchlist(id: string, payload: WatchlistUpdate): Promise<Watchlist> {
-  const res = await fetch(`${API_BASE_URL}/watchlists/${id}`, {
+  const res = await authFetch(`${API_BASE_URL}/watchlists/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -881,19 +899,19 @@ export async function updateWatchlist(id: string, payload: WatchlistUpdate): Pro
 }
 
 export async function deleteWatchlist(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/watchlists/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/watchlists/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /watchlists/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
 export async function fetchRules(): Promise<Rule[]> {
-  const res = await fetch(`${API_BASE_URL}/rules`);
+  const res = await authFetch(`${API_BASE_URL}/rules`);
   return asJson(res, "GET /rules");
 }
 
 export async function createRule(payload: RuleCreate): Promise<Rule> {
-  const res = await fetch(`${API_BASE_URL}/rules`, {
+  const res = await authFetch(`${API_BASE_URL}/rules`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -902,7 +920,7 @@ export async function createRule(payload: RuleCreate): Promise<Rule> {
 }
 
 export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule> {
-  const res = await fetch(`${API_BASE_URL}/rules/${id}`, {
+  const res = await authFetch(`${API_BASE_URL}/rules/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -911,7 +929,7 @@ export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule>
 }
 
 export async function deleteRule(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/rules/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/rules/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /rules/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -924,7 +942,7 @@ export async function backtestRule(
   overrides: RuleBacktestRequest = {},
 ): Promise<BacktestResult | UniverseBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${API_BASE_URL}/rules/${id}/backtest?${params}`, {
+  const res = await authFetch(`${API_BASE_URL}/rules/${id}/backtest?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(overrides),
@@ -933,12 +951,12 @@ export async function backtestRule(
 }
 
 export async function listSavedBacktests(ruleId: string): Promise<SavedBacktestSummary[]> {
-  const res = await fetch(`${API_BASE_URL}/rules/${ruleId}/saved-backtests`);
+  const res = await authFetch(`${API_BASE_URL}/rules/${ruleId}/saved-backtests`);
   return asJson(res, "GET /rules/{id}/saved-backtests");
 }
 
 export async function createSavedBacktest(ruleId: string, payload: SavedBacktestCreate): Promise<SavedBacktestOut> {
-  const res = await fetch(`${API_BASE_URL}/rules/${ruleId}/saved-backtests`, {
+  const res = await authFetch(`${API_BASE_URL}/rules/${ruleId}/saved-backtests`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -947,12 +965,12 @@ export async function createSavedBacktest(ruleId: string, payload: SavedBacktest
 }
 
 export async function getSavedBacktest(id: string): Promise<SavedBacktestOut> {
-  const res = await fetch(`${API_BASE_URL}/saved-backtests/${id}`);
+  const res = await authFetch(`${API_BASE_URL}/saved-backtests/${id}`);
   return asJson(res, "GET /saved-backtests/{id}");
 }
 
 export async function deleteSavedBacktest(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /saved-backtests/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -969,7 +987,7 @@ export async function backtestRuleGrid(
   overrides: Omit<RuleBacktestGridRequest, "param_grid"> = {},
 ): Promise<GridBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await fetch(`${API_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
+  const res = await authFetch(`${API_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...overrides, param_grid: paramGrid }),
@@ -979,12 +997,12 @@ export async function backtestRuleGrid(
 
 export async function fetchStrategies(sourceType?: SourceType): Promise<Strategy[]> {
   const params = sourceType ? `?source_type=${sourceType}` : "";
-  const res = await fetch(`${API_BASE_URL}/strategies${params}`);
+  const res = await authFetch(`${API_BASE_URL}/strategies${params}`);
   return asJson(res, "GET /strategies");
 }
 
 export async function createStrategy(payload: StrategyCreate): Promise<Strategy> {
-  const res = await fetch(`${API_BASE_URL}/strategies`, {
+  const res = await authFetch(`${API_BASE_URL}/strategies`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -993,7 +1011,7 @@ export async function createStrategy(payload: StrategyCreate): Promise<Strategy>
 }
 
 export async function updateStrategy(id: string, payload: StrategyEdit): Promise<Strategy> {
-  const res = await fetch(`${API_BASE_URL}/strategies/${id}`, {
+  const res = await authFetch(`${API_BASE_URL}/strategies/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1002,7 +1020,7 @@ export async function updateStrategy(id: string, payload: StrategyEdit): Promise
 }
 
 export async function deleteStrategy(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/strategies/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/strategies/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /strategies/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -1081,7 +1099,7 @@ export async function backtestStrategySignals(
   to?: string,
 ): Promise<ExternalBacktestResponse> {
   const params = to ? `?${new URLSearchParams({ to })}` : "";
-  const res = await fetch(`${API_BASE_URL}/strategies/${strategyId}/backtest-signals${params}`, {
+  const res = await authFetch(`${API_BASE_URL}/strategies/${strategyId}/backtest-signals${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1135,7 +1153,7 @@ export async function backtestStrategySignalsTrades(
   to?: string,
 ): Promise<ExternalBacktestTradeResponse> {
   const params = to ? `?${new URLSearchParams({ to })}` : "";
-  const res = await fetch(`${API_BASE_URL}/strategies/${strategyId}/backtest-signals/trades${params}`, {
+  const res = await authFetch(`${API_BASE_URL}/strategies/${strategyId}/backtest-signals/trades${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1145,7 +1163,7 @@ export async function backtestStrategySignalsTrades(
 
 export async function fetchSignalsForStrategy(strategyId: string, limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ strategy_id: strategyId, limit: String(limit) });
-  const res = await fetch(`${API_BASE_URL}/signals?${params}`);
+  const res = await authFetch(`${API_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals?strategy_id=...");
 }
 
@@ -1154,7 +1172,7 @@ export async function fetchSignalsForStrategy(strategyId: string, limit = 20): P
 // ANY strategy, not just whichever one's row happens to be expanded.
 export async function fetchRecentSignals(limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const res = await fetch(`${API_BASE_URL}/signals?${params}`);
+  const res = await authFetch(`${API_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals");
 }
 
@@ -1174,7 +1192,7 @@ export async function sendManualSignal(payload: {
   action: "BUY" | "SELL";
   price: number;
 }): Promise<{ signal_id: string; status: string }> {
-  const res = await fetch(`${API_BASE_URL}/signals`, {
+  const res = await authFetch(`${API_BASE_URL}/signals`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, source: "manual", source_meta: {} }),
@@ -1192,7 +1210,7 @@ export async function sendManualSignal(payload: {
 export async function fetchSignals(opts: { limit?: number; signalId?: string } = {}): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ limit: String(opts.limit ?? 50) });
   if (opts.signalId) params.set("signal_id", opts.signalId);
-  const res = await fetch(`${API_BASE_URL}/signals?${params}`);
+  const res = await authFetch(`${API_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals");
 }
 
@@ -1203,7 +1221,7 @@ export type ClearSignalsResult = {
 };
 
 export async function clearSignals(): Promise<ClearSignalsResult> {
-  const res = await fetch(`${API_BASE_URL}/signals`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/signals`, { method: "DELETE" });
   return asJson(res, "DELETE /signals");
 }
 
@@ -1211,7 +1229,7 @@ export async function clearSignals(): Promise<ClearSignalsResult> {
 // universe picker when underlying_type='universe'. market-data owns this
 // list (see its app/providers/nse_indices.py).
 export async function fetchUniverses(): Promise<string[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/universes`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/instruments/universes`);
   const data = await asJson<{ universes: string[] }>(res, "GET /instruments/universes");
   return data.universes;
 }
@@ -1221,7 +1239,7 @@ export async function fetchUniverses(): Promise<string[]> {
 // tradeable symbol is chosen instead of typed free-hand. CRYPTO-only -
 // NSE/MCX symbols stay a free-text input, see ManualTab.tsx.
 export async function fetchCryptoSymbols(): Promise<string[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/crypto-symbols`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/instruments/crypto-symbols`);
   const data = await asJson<{ symbols: string[] }>(res, "GET /instruments/crypto-symbols");
   return data.symbols;
 }
@@ -1230,7 +1248,7 @@ export async function fetchCryptoSymbols(): Promise<string[]> {
 // (App.tsx's handleSendSignal) when the price field is left blank, same
 // direct-from-browser pattern as fetchUniverses above.
 export async function fetchLtp(exchange: string, symbol: string): Promise<number> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/quotes/ltp?${new URLSearchParams({ exchange, symbol })}`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/quotes/ltp?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ ltp: number }>(res, `GET /quotes/ltp (${exchange}/${symbol})`);
   return data.ltp;
 }
@@ -1255,7 +1273,7 @@ export type ResolvedUnderlying = {
 };
 
 export async function resolveUnderlying(segment: string, underlying: string): Promise<ResolvedUnderlying> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/resolve?${new URLSearchParams({ segment, underlying })}`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/instruments/resolve?${new URLSearchParams({ segment, underlying })}`);
   return asJson<ResolvedUnderlying>(res, `GET /instruments/resolve (${segment}/${underlying})`);
 }
 
@@ -1265,7 +1283,7 @@ export async function resolveUnderlying(segment: string, underlying: string): Pr
 // "Lots" quantity field for CRYPTO futures, matching execution's own
 // lot-based sizing (see docs/architecture.md).
 export async function fetchLotSize(exchange: string, symbol: string): Promise<number> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/instruments/lot-size?${new URLSearchParams({ exchange, symbol })}`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/instruments/lot-size?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ lot_size: number }>(res, `GET /instruments/lot-size (${exchange}/${symbol})`);
   return data.lot_size;
 }
@@ -1278,7 +1296,7 @@ export async function fetchLotSize(exchange: string, symbol: string): Promise<nu
 // order-placement critical path, so the same slowness is just a loading
 // spinner there, not a stuck trade flow.
 export async function fetchOptionExpiries(exchange: string, symbol: string): Promise<string[]> {
-  const res = await fetch(`${MARKET_DATA_BASE_URL}/options/expiries?${new URLSearchParams({ exchange, symbol })}`);
+  const res = await authFetch(`${MARKET_DATA_BASE_URL}/options/expiries?${new URLSearchParams({ exchange, symbol })}`);
   const data = await asJson<{ expiries: string[] }>(res, "GET /options/expiries");
   return data.expiries;
 }
@@ -1330,7 +1348,7 @@ export type OiSummary = {
 };
 
 export async function fetchOiSummary(exchange: string, symbol: string, expiry: string): Promise<OiSummary> {
-  const res = await fetch(
+  const res = await authFetch(
     `${MARKET_DATA_BASE_URL}/options/oi-summary?${new URLSearchParams({ exchange, symbol, expiry })}`,
   );
   return asJson(res, "GET /options/oi-summary");
@@ -1355,7 +1373,7 @@ export type DataAvailability = {
 };
 
 export async function fetchDataAvailability(exchange: string, symbol: string, interval: string): Promise<DataAvailability> {
-  const res = await fetch(
+  const res = await authFetch(
     `${MARKET_DATA_BASE_URL}/candles/availability?${new URLSearchParams({ exchange, symbol, interval })}`,
   );
   return asJson<DataAvailability>(res, `GET /candles/availability (${exchange}/${symbol}/${interval})`);
@@ -1378,7 +1396,7 @@ export async function fetchCandleCacheStatus(
   from: string,
   to: string,
 ): Promise<CandleCacheStatus> {
-  const res = await fetch(
+  const res = await authFetch(
     `${MARKET_DATA_BASE_URL}/candles/cache-status?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
   );
   return asJson<CandleCacheStatus>(res, `GET /candles/cache-status (${exchange}/${symbol}/${interval})`);
@@ -1388,7 +1406,7 @@ export async function fetchCandleCacheStatus(
 // backtest run for this exact symbol/interval/range genuinely re-fetches
 // from the provider instead of serving the cached copy.
 export async function clearCandleCache(exchange: string, symbol: string, interval: string, from: string, to: string): Promise<void> {
-  const res = await fetch(
+  const res = await authFetch(
     `${MARKET_DATA_BASE_URL}/candles/cache/clear?${new URLSearchParams({ exchange, symbol, interval, from, to })}`,
     { method: "POST" },
   );
@@ -1577,12 +1595,12 @@ export type ChecklistAnswer = {
 
 export async function fetchChecklistItems(activeOnly = false): Promise<ChecklistItem[]> {
   const query = activeOnly ? "?active_only=true" : "";
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items${query}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items${query}`);
   return asJson(res, "GET /checklist-items");
 }
 
 export async function createChecklistItem(label: string, phase: ChecklistPhase, segments: Segment[] = []): Promise<ChecklistItem> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, phase, segments }),
@@ -1594,7 +1612,7 @@ export async function updateChecklistItem(
   id: string,
   payload: { label?: string; phase?: ChecklistPhase; segments?: Segment[]; sort_order?: number; active?: boolean },
 ): Promise<ChecklistItem> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1603,7 +1621,7 @@ export async function updateChecklistItem(
 }
 
 export async function deleteChecklistItem(id: string): Promise<void> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/checklist-items/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /checklist-items/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -1634,7 +1652,7 @@ export type Account = {
 };
 
 export async function fetchAccounts(): Promise<Account[]> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/accounts`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/accounts`);
   return asJson(res, "GET /accounts");
 }
 
@@ -1642,7 +1660,7 @@ export async function updateAccount(
   segment: Segment,
   update: Partial<Pick<Account, "risk_per_trade_pct" | "min_reward_risk_ratio" | "enforce_risk_based_lots">>,
 ): Promise<Account> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/accounts/${segment}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/accounts/${segment}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(update),
@@ -1664,14 +1682,14 @@ export type DailyChecklist = {
 };
 
 export async function fetchDailyChecklist(segment: Segment): Promise<DailyChecklist> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/daily-checklist?${new URLSearchParams({ segment })}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/daily-checklist?${new URLSearchParams({ segment })}`);
   return asJson(res, "GET /daily-checklist");
 }
 
 // Upserts today's (server-computed date, segment) row - answered once,
 // editable the rest of that same day.
 export async function submitDailyChecklist(segment: Segment, answers: ChecklistAnswer[], notes?: string): Promise<DailyChecklist> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/daily-checklist`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/daily-checklist`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ segment, answers, notes }),
@@ -1695,19 +1713,19 @@ export type TradingSession = {
 
 export async function fetchTradingSessions(segment?: Segment): Promise<TradingSession[]> {
   const qs = segment ? `?${new URLSearchParams({ segment })}` : "";
-  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions${qs}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/trading-sessions${qs}`);
   return asJson(res, "GET /trading-sessions");
 }
 
 export async function checkInTradingSession(segment: Segment): Promise<TradingSession> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions/check-in?${new URLSearchParams({ segment })}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/trading-sessions/check-in?${new URLSearchParams({ segment })}`, {
     method: "POST",
   });
   return asJson(res, "POST /trading-sessions/check-in");
 }
 
 export async function checkOutTradingSession(segment: Segment): Promise<TradingSession> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/trading-sessions/check-out?${new URLSearchParams({ segment })}`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/trading-sessions/check-out?${new URLSearchParams({ segment })}`, {
     method: "POST",
   });
   return asJson(res, "POST /trading-sessions/check-out");
@@ -1733,7 +1751,7 @@ export type PendingReview = {
 };
 
 export async function fetchPendingReview(): Promise<PendingReview | null> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/manual-trades/pending-review`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/manual-trades/pending-review`);
   const data = await asJson<{ pending: PendingReview | null }>(res, "GET /manual-trades/pending-review");
   return data.pending;
 }
@@ -1749,7 +1767,7 @@ export type ReviewSubmitPayload = {
 };
 
 export async function submitPositionReview(positionId: string, payload: ReviewSubmitPayload): Promise<ManualPosition> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/review`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/review`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1758,7 +1776,7 @@ export async function submitPositionReview(positionId: string, payload: ReviewSu
 }
 
 export async function submitOptionGroupReview(groupId: string, payload: ReviewSubmitPayload): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/review`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/review`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1778,7 +1796,7 @@ export async function createManualPosition(
     order_type?: "market" | "limit";
   } & ManualStopLossConfig,
 ): Promise<ManualPosition> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/manual`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/manual`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1792,7 +1810,7 @@ export async function createManualPosition(
 // of stop_loss_price/stop_loss_method is required (unlike
 // createManualPosition, where "neither" just means no stop-loss at all).
 export async function updateStopLoss(positionId: string, config: ManualStopLossConfig): Promise<ManualPosition> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/stop-loss`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
@@ -1803,7 +1821,7 @@ export async function updateStopLoss(positionId: string, config: ManualStopLossC
 // Combined SL only (sl_scope='combined') - editing an individual leg's
 // own SL isn't supported by this endpoint.
 export async function updateOptionStopLoss(groupId: string, stopLossPrice: number): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/stop-loss`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stop_loss_price: stopLossPrice }),
@@ -1818,7 +1836,7 @@ export async function updateOptionStopLoss(groupId: string, stopLossPrice: numbe
 // exit-monitor every 30s, unlike the Manual tab's targetPrice/slLimitPrice
 // client-side-only watch fields - see ManualTab.tsx's handleSave.
 export async function updateOptionGroupSpotStopLoss(groupId: string, spotStopLossPrice: number): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/spot-stop-loss`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/spot-stop-loss`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ spot_stop_loss_price: spotStopLossPrice }),
@@ -1845,7 +1863,7 @@ export async function fetchExecPositions(
   if (params.status) query.set("status", params.status);
   if (params.manualOnly) query.set("manual_only", "true");
   if (params.limit) query.set("limit", String(params.limit));
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions?${query}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions?${query}`);
   return asJson(res, "GET /positions");
 }
 
@@ -1865,7 +1883,7 @@ export type SquareOffPositionResult = {
 // position_manager.square_off_position's own docstring).
 export async function squareOffManualPosition(positionId: string, quantity?: number): Promise<SquareOffPositionResult> {
   const query = quantity != null ? `?${new URLSearchParams({ quantity: String(quantity) })}` : "";
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off${query}`, { method: "POST" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/square-off${query}`, { method: "POST" });
   return asJson(res, "POST /positions/{id}/square-off");
 }
 
@@ -1888,7 +1906,7 @@ export async function fetchOptionGroups(
   if (params.status) query.set("status", params.status);
   if (params.manualOnly) query.set("manual_only", "true");
   if (params.limit) query.set("limit", String(params.limit));
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups?${query}`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups?${query}`);
   return asJson(res, "GET /option-groups");
 }
 
@@ -1897,7 +1915,7 @@ export async function fetchOptionGroups(
 export async function squareOffOptionGroup(
   groupId: string,
 ): Promise<{ status: string; group_id: string; underlying_symbol: string; pnl: number }> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off`, { method: "POST" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/square-off`, { method: "POST" });
   return asJson(res, "POST /option-groups/{id}/square-off");
 }
 
@@ -1923,7 +1941,7 @@ export async function createManualOptionGroup(payload: {
   plan_checklist: ChecklistAnswer[];
   order_type?: "market" | "limit";
 }): Promise<ManualOptionGroup> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/manual`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1947,31 +1965,31 @@ export function tradeImageUrl(id: string): string {
 }
 
 export async function fetchPositionImages(positionId: string): Promise<TradeImage[]> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`);
   return asJson(res, "GET /positions/{id}/images");
 }
 
 export async function uploadPositionImage(positionId: string, file: File): Promise<TradeImage> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`, { method: "POST", body: form });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/positions/${positionId}/images`, { method: "POST", body: form });
   return asJson(res, "POST /positions/{id}/images");
 }
 
 export async function fetchOptionGroupImages(groupId: string): Promise<TradeImage[]> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`);
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`);
   return asJson(res, "GET /option-groups/{id}/images");
 }
 
 export async function uploadOptionGroupImage(groupId: string, file: File): Promise<TradeImage> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`, { method: "POST", body: form });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/option-groups/${groupId}/images`, { method: "POST", body: form });
   return asJson(res, "POST /option-groups/{id}/images");
 }
 
 export async function deleteTradeImage(imageId: string): Promise<void> {
-  const res = await fetch(`${EXECUTION_BASE_URL}/images/${imageId}`, { method: "DELETE" });
+  const res = await authFetch(`${EXECUTION_BASE_URL}/images/${imageId}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /images/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -2103,7 +2121,7 @@ export type WeeklyAdvisorResponse = { recommendations: WeeklyRecommendation[]; s
 export async function fetchWeeklyAdvisorRecommendations(symbols?: string[]): Promise<WeeklyAdvisorResponse> {
   const params = symbols && symbols.length > 0 ? `?${new URLSearchParams({ symbols: symbols.join(",") })}` : "";
   const token = getAuthToken();
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations${params}`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/recommendations${params}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
   return asJson(res, "GET /weekly-advisor/recommendations");
@@ -2125,7 +2143,7 @@ export type SavedWeeklyRecommendation = {
 };
 
 export async function saveWeeklyAdvisorRecommendation(symbol: string, asOf?: string): Promise<SavedWeeklyRecommendation> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/save`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/recommendations/save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ symbol, as_of: asOf ?? null }),
@@ -2136,14 +2154,14 @@ export async function saveWeeklyAdvisorRecommendation(symbol: string, asOf?: str
 export async function fetchWeeklyAdvisorHistory(symbol?: string, limit = 50): Promise<SavedWeeklyRecommendation[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (symbol) params.set("symbol", symbol);
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/history?${params}`);
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/recommendations/history?${params}`);
   return asJson(res, "GET /weekly-advisor/recommendations/history");
 }
 
 export async function deleteWeeklyAdvisorRecommendation(recommendationId: string): Promise<void> {
   // ON DELETE CASCADE server-side - a journaled trade against this
   // recommendation, if any, is removed with it automatically.
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /weekly-advisor/recommendations/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -2152,7 +2170,7 @@ export async function deleteWeeklyAdvisorRecommendation(recommendationId: string
 export type WeeklyAdvisorDecisionSet = { decision: WeeklyAdvisorDecision; confidence?: number; comments?: string };
 
 export async function setWeeklyAdvisorDecision(recommendationId: string, payload: WeeklyAdvisorDecisionSet): Promise<SavedWeeklyRecommendation> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}/decision`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}/decision`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -2249,7 +2267,7 @@ export type WeeklyAdvisorTradeCreate = {
 };
 
 export async function createWeeklyAdvisorTrade(recommendationId: string, payload: WeeklyAdvisorTradeCreate): Promise<WeeklyAdvisorTrade> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}/trades`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/recommendations/${recommendationId}/trades`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -2266,7 +2284,7 @@ export async function createWeeklyAdvisorTrade(recommendationId: string, payload
 export type WeeklyAdvisorMarginCheckLeg = { security_id: string; side: "sell" | "buy"; price: number };
 
 export async function checkWeeklyAdvisorMargin(legs: WeeklyAdvisorMarginCheckLeg[], quantity: number): Promise<{ raw: Record<string, number | string> }> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/margin`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/margin`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ legs, quantity }),
@@ -2283,7 +2301,7 @@ export async function checkWeeklyAdvisorMargin(legs: WeeklyAdvisorMarginCheckLeg
 // (not throws) on a 404 - "no suggestion this time" degrades gracefully,
 // same convention this file's other best-effort lookups use.
 export async function fetchWeeklyAdvisorLotSize(securityId: string): Promise<number | null> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/lot-size?security_id=${encodeURIComponent(securityId)}`);
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/lot-size?security_id=${encodeURIComponent(securityId)}`);
   if (res.status === 404) return null;
   const { lot_size } = await asJson<{ lot_size: number }>(res, "GET /weekly-advisor/lot-size");
   return lot_size;
@@ -2302,7 +2320,7 @@ export async function fetchWeeklyAdvisorLotSize(securityId: string): Promise<num
 export type WeeklyAdvisorOptionChainStrike = { strike: number; option_type: "CE" | "PE"; last_price: number; security_id: string | null };
 
 export async function fetchWeeklyAdvisorOptionChainStrikes(symbol: string, expiry: string): Promise<WeeklyAdvisorOptionChainStrike[]> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/option-chain-strikes?symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/option-chain-strikes?symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
   if (res.status === 404) return [];
   return asJson(res, "GET /weekly-advisor/option-chain-strikes");
 }
@@ -2313,7 +2331,7 @@ export async function fetchWeeklyAdvisorOptionChainStrikes(symbol: string, expir
 export type WeeklyAdvisorTradeEntryUpdate = WeeklyAdvisorTradeCreate & { legs?: WeeklyAdvisorTradeLeg[] };
 
 export async function updateWeeklyAdvisorTradeEntry(tradeId: string, payload: WeeklyAdvisorTradeEntryUpdate): Promise<WeeklyAdvisorTrade> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}/entry`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}/entry`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -2326,14 +2344,14 @@ export async function fetchWeeklyAdvisorTrades(filters?: { status?: WeeklyAdviso
   if (filters?.status) params.set("status", filters.status);
   if (filters?.symbol) params.set("symbol", filters.symbol);
   const qs = params.toString();
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades${qs ? `?${qs}` : ""}`);
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/trades${qs ? `?${qs}` : ""}`);
   return asJson(res, "GET /weekly-advisor/trades");
 }
 
 export type WeeklyAdvisorTradeClose = { exit_debit?: number; realized_pnl?: number; exit_notes?: string };
 
 export async function closeWeeklyAdvisorTrade(tradeId: string, payload: WeeklyAdvisorTradeClose): Promise<WeeklyAdvisorTrade> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}/close`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}/close`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -2344,7 +2362,7 @@ export async function closeWeeklyAdvisorTrade(tradeId: string, payload: WeeklyAd
 export async function deleteWeeklyAdvisorTrade(tradeId: string): Promise<void> {
   // Clears just the Performance entry - the recommendation it was
   // journaled against (and the History row for it) is untouched.
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}`, { method: "DELETE" });
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/trades/${tradeId}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /weekly-advisor/trades/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -2363,7 +2381,7 @@ export type WeeklyAdvisorPerformanceSummary = {
 
 export async function fetchWeeklyAdvisorPerformance(symbol?: string): Promise<WeeklyAdvisorPerformanceSummary> {
   const params = symbol ? `?${new URLSearchParams({ symbol })}` : "";
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/performance/summary${params}`);
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/performance/summary${params}`);
   return asJson(res, "GET /weekly-advisor/performance/summary");
 }
 
@@ -2379,12 +2397,12 @@ export async function fetchWeeklyAdvisorPerformance(symbol?: string): Promise<We
 export type WeeklyAdvisorSettings = { openrouter_vision_model: string; defined_risk: boolean };
 
 export async function fetchWeeklyAdvisorSettings(): Promise<WeeklyAdvisorSettings> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/settings`);
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/settings`);
   return asJson(res, "GET /weekly-advisor/settings");
 }
 
 export async function updateWeeklyAdvisorSettings(openrouterVisionModel: string, definedRisk: boolean): Promise<WeeklyAdvisorSettings> {
-  const res = await fetch(`${API_BASE_URL}/weekly-advisor/settings`, {
+  const res = await authFetch(`${API_BASE_URL}/weekly-advisor/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ openrouter_vision_model: openrouterVisionModel, defined_risk: definedRisk }),

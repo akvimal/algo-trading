@@ -10,6 +10,11 @@ set -euo pipefail
 # If strategy_id is omitted, a throwaway "smoke-test" strategy is created
 # (and activated) via signal-engine so this still works as a
 # zero-argument smoke test (`make test-signal`).
+#
+# When signal-engine runs with REQUIRE_AUTH=true, creating/activating that
+# throwaway strategy needs a login: set AUTH_TOKEN to a JWT from accounts'
+# POST /auth/login (the webhook call itself never needs one). The strategy is
+# then owned by that user.
 
 cd "$(dirname "$0")/.."
 [ -f .env ] && { set -a; source .env; set +a; }
@@ -17,6 +22,8 @@ cd "$(dirname "$0")/.."
 DIRECTION="${1:-buy}"      # buy | sell
 STRATEGY_ID="${2:-}"
 BACKEND_PORT="${SIGNAL_ENGINE_BACKEND_PORT:-8000}"
+AUTH_ARGS=()
+[ -n "${AUTH_TOKEN:-}" ] && AUTH_ARGS=(-H "Authorization: Bearer ${AUTH_TOKEN}")
 
 if [[ "$DIRECTION" != "buy" && "$DIRECTION" != "sell" ]]; then
   echo "Usage: $0 [buy|sell] [strategy_id]" >&2
@@ -26,10 +33,12 @@ fi
 if [[ -z "$STRATEGY_ID" ]]; then
   echo "No strategy_id given - creating a throwaway 'smoke-test' strategy..." >&2
   STRATEGY_ID=$(curl -sS -X POST "http://localhost:${BACKEND_PORT}/strategies" \
+    ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
     -H "Content-Type: application/json" \
     -d '{"name":"smoke-test","source_type":"chartink","horizon":"intraday","instrument_type":"spot","quantity":1}' \
     | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
   curl -sS -X PATCH "http://localhost:${BACKEND_PORT}/strategies/${STRATEGY_ID}" \
+    ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
     -H "Content-Type: application/json" -d '{"status":"live"}' > /dev/null
   echo "Created + activated strategy ${STRATEGY_ID}" >&2
 fi

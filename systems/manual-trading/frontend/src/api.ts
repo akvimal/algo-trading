@@ -678,6 +678,9 @@ const PROTOCOL = location.protocol === "https:" ? "https:" : "http:";
 // strategy names and per-strategy signal activity - a view, not a copy
 // of that data.
 const SIGNAL_ENGINE_BASE_URL = `${PROTOCOL}//${location.hostname}:${SIGNAL_ENGINE_PORT}`;
+// Calls to this backend go through authFetch (defined further down, with the
+// execution helpers): signal-engine requires a login for strategies, rules,
+// indicators, watchlists, backtests and signals once REQUIRE_AUTH is on.
 // market-data's API, read directly from the browser (CORS-enabled) - just
 // for the universe picker below, same pattern as signal-engine above.
 const MARKET_DATA_BASE_URL = `${PROTOCOL}//${location.hostname}:${MARKET_DATA_PORT}`;
@@ -746,12 +749,12 @@ async function asJson<T>(res: Response, what: string): Promise<T> {
 }
 
 export async function fetchIndicators(): Promise<Indicator[]> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`);
   return asJson(res, "GET /indicators");
 }
 
 export async function createIndicator(payload: IndicatorCreate): Promise<Indicator> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -760,7 +763,7 @@ export async function createIndicator(payload: IndicatorCreate): Promise<Indicat
 }
 
 export async function updateIndicator(id: string, payload: IndicatorUpdate): Promise<Indicator> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -769,19 +772,19 @@ export async function updateIndicator(id: string, payload: IndicatorUpdate): Pro
 }
 
 export async function deleteIndicator(id: string): Promise<void> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/indicators/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /indicators/{id} failed: ${await extractErrorDetail(res)}`);
   }
 }
 
 export async function fetchRules(): Promise<Rule[]> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules`);
   return asJson(res, "GET /rules");
 }
 
 export async function createRule(payload: RuleCreate): Promise<Rule> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -790,7 +793,7 @@ export async function createRule(payload: RuleCreate): Promise<Rule> {
 }
 
 export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -799,7 +802,7 @@ export async function updateRule(id: string, payload: RuleUpdate): Promise<Rule>
 }
 
 export async function deleteRule(id: string): Promise<void> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /rules/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -812,7 +815,7 @@ export async function backtestRule(
   overrides: RuleBacktestRequest = {},
 ): Promise<BacktestResult | UniverseBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest?${params}`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(overrides),
@@ -821,12 +824,12 @@ export async function backtestRule(
 }
 
 export async function listSavedBacktests(ruleId: string): Promise<SavedBacktestSummary[]> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`);
   return asJson(res, "GET /rules/{id}/saved-backtests");
 }
 
 export async function createSavedBacktest(ruleId: string, payload: SavedBacktestCreate): Promise<SavedBacktestOut> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${ruleId}/saved-backtests`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -835,12 +838,12 @@ export async function createSavedBacktest(ruleId: string, payload: SavedBacktest
 }
 
 export async function getSavedBacktest(id: string): Promise<SavedBacktestOut> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`);
   return asJson(res, "GET /saved-backtests/{id}");
 }
 
 export async function deleteSavedBacktest(id: string): Promise<void> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/saved-backtests/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /saved-backtests/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -857,7 +860,7 @@ export async function backtestRuleGrid(
   overrides: Omit<RuleBacktestGridRequest, "param_grid"> = {},
 ): Promise<GridBacktestResult> {
   const params = new URLSearchParams({ from, to });
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/rules/${id}/backtest/grid?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...overrides, param_grid: paramGrid }),
@@ -867,12 +870,12 @@ export async function backtestRuleGrid(
 
 export async function fetchStrategies(sourceType?: SourceType): Promise<Strategy[]> {
   const params = sourceType ? `?source_type=${sourceType}` : "";
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies${params}`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies${params}`);
   return asJson(res, "GET /strategies");
 }
 
 export async function createStrategy(payload: StrategyCreate): Promise<Strategy> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -881,7 +884,7 @@ export async function createStrategy(payload: StrategyCreate): Promise<Strategy>
 }
 
 export async function updateStrategy(id: string, payload: StrategyEdit): Promise<Strategy> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -890,7 +893,7 @@ export async function updateStrategy(id: string, payload: StrategyEdit): Promise
 }
 
 export async function deleteStrategy(id: string): Promise<void> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, { method: "DELETE" });
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies/${id}`, { method: "DELETE" });
   if (!res.ok) {
     throw new Error(`DELETE /strategies/{id} failed: ${await extractErrorDetail(res)}`);
   }
@@ -898,7 +901,7 @@ export async function deleteStrategy(id: string): Promise<void> {
 
 export async function fetchSignalsForStrategy(strategyId: string, limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ strategy_id: strategyId, limit: String(limit) });
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals?strategy_id=...");
 }
 
@@ -907,7 +910,7 @@ export async function fetchSignalsForStrategy(strategyId: string, limit = 20): P
 // ANY strategy, not just whichever one's row happens to be expanded.
 export async function fetchRecentSignals(limit = 20): Promise<ProviderSignal[]> {
   const params = new URLSearchParams({ limit: String(limit) });
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/signals?${params}`);
   return asJson(res, "GET /signals");
 }
 
@@ -927,7 +930,7 @@ export async function sendManualSignal(payload: {
   action: "BUY" | "SELL";
   price: number;
 }): Promise<{ signal_id: string; status: string }> {
-  const res = await resilientFetch(`${SIGNAL_ENGINE_BASE_URL}/signals`, {
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/signals`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, source: "manual", source_meta: {} }),

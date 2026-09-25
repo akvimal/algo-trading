@@ -14,8 +14,9 @@ from app.adapters.signal_engine.client import NOT_FOUND, UNAVAILABLE, lookup_str
 from app.auth import User, get_current_user, require_admin
 from app.config import settings
 from app.domain.equity_history import record_reset_point
-from app.domain.live_gate import CONSENT_VERSION, format_problems, unmet_requirements
+from app.domain.live_gate import CONSENT_VERSION, LIVE_SEGMENTS, format_problems, unmet_requirements
 from app.domain.models import AccountUpdate, AdminResetAllConfirm, StrategyAccountCreate, StrategyAccountUpdate
+from app.domain.track_record import evaluate_for_account, unmet_messages
 from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
 
 router = APIRouter()
@@ -183,7 +184,20 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.square_off_time = update.square_off_time
     # Real-money order placement goes through the live-trading gate
     # (app/domain/live_gate.py): consent, caps and broker credentials.
-    _apply_live_fields(row, update, segment=segment.upper(), token=user.token, check_credentials=True)
+    # Turning live ON for a user's own segment account also needs a paper track record
+    # (app/domain/track_record.py), when enforced. Its shortfalls are listed alongside
+    # consent, caps and credentials so the user sees everything at once.
+    track_record_problems = None
+    if (
+        settings.require_paper_track_record
+        and update.live_trading_enabled
+        and not row.live_trading_enabled
+        and segment.upper() in LIVE_SEGMENTS
+    ):
+        track_record_problems = unmet_messages(evaluate_for_account(db, user.id, row))
+    _apply_live_fields(
+        row, update, segment=segment.upper(), token=user.token, check_credentials=True, extra_transition_problems=track_record_problems
+    )
     if update.require_stop_loss is not None:
         row.require_stop_loss = update.require_stop_loss
     if update.apply_charges is not None:

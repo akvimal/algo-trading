@@ -57,6 +57,9 @@ class TradeRecord:
     auto_traded: bool
     charges: float = 0.0
     slippage_cost: float = 0.0
+    # True when Indian charges were recorded for this trade (charges is not NULL), i.e. its P&L is
+    # net of costs. A gross trade cannot count toward the paper track record (app/domain/track_record.py).
+    costs_applied: bool = False
 
 
 def day_key(moment: datetime) -> date:
@@ -258,7 +261,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             target_price=_f(p.target_price), quantity=_f(p.quantity), exit_time=p.exit_time, exit_reason=p.exit_reason,
             order_type=p.order_type, entry_setup_tag=p.entry_setup_tag, entry_confidence=p.entry_confidence, setup_tag=p.setup_tag,
             confidence=p.confidence, reviewed=_reviewed(p.reviewed_at, p.notes), auto_traded=bool(p.auto_traded),
-            charges=_f(p.charges) or 0.0, slippage_cost=_f(p.slippage_cost) or 0.0,
+            charges=_f(p.charges) or 0.0, slippage_cost=_f(p.slippage_cost) or 0.0, costs_applied=p.charges is not None,
         )
         for p in positions
     ] + [
@@ -267,7 +270,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             target_price=_f(g.spot_target_price), quantity=_f(g.quantity), exit_time=g.exit_time, exit_reason=g.exit_reason,
             order_type=g.order_type, entry_setup_tag=g.entry_setup_tag, entry_confidence=g.entry_confidence, setup_tag=g.setup_tag,
             confidence=g.confidence, reviewed=_reviewed(g.reviewed_at, g.notes), auto_traded=bool(g.auto_traded),
-            charges=_f(g.charges) or 0.0, slippage_cost=_f(g.slippage_cost) or 0.0,
+            charges=_f(g.charges) or 0.0, slippage_cost=_f(g.slippage_cost) or 0.0, costs_applied=g.charges is not None,
         )
         for g in groups
     ]

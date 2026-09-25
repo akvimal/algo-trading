@@ -251,6 +251,26 @@ class PerformanceOut(BaseModel):
     equity: Optional[EquityStatsOut] = None
 
 
+class RequirementOut(BaseModel):
+    key: str
+    label: str
+    required: str
+    actual: str
+    met: bool
+
+
+class LiveEligibilityOut(BaseModel):
+    """Progress toward live trading for one segment: each track-record
+    requirement with the required and actual value. `enforced` says whether
+    turning live on is actually blocked by it (REQUIRE_PAPER_TRACK_RECORD);
+    when false this is informational."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    enforced: bool
+    eligible: bool
+    requirements: list[RequirementOut]
+
+
 class EquityHistoryOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     days: int

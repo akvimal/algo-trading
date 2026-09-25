@@ -266,6 +266,15 @@ services:
       # deliberately opts an account in.
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       LIVE_TRADING_KILL_SWITCH: ${LIVE_TRADING_KILL_SWITCH:-false}
+      # Paper track-record gate on turning live trading ON for a user's own
+      # segment account (see app/domain/track_record.py). Off by default; the
+      # thresholds are product judgments to tune, not measurements.
+      REQUIRE_PAPER_TRACK_RECORD: ${REQUIRE_PAPER_TRACK_RECORD:-false}
+      TRACK_RECORD_MIN_TRADES: ${TRACK_RECORD_MIN_TRADES:-30}
+      TRACK_RECORD_MIN_DAYS: ${TRACK_RECORD_MIN_DAYS:-14}
+      TRACK_RECORD_MIN_DISCIPLINE: ${TRACK_RECORD_MIN_DISCIPLINE:-60}
+      TRACK_RECORD_MAX_DRAWDOWN_PCT: ${TRACK_RECORD_MAX_DRAWDOWN_PCT:-20}
+      TRACK_RECORD_MIN_SLIPPAGE_BPS: ${TRACK_RECORD_MIN_SLIPPAGE_BPS:-3}
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${EXECUTION_BACKEND_PORT}:8000"
     depends_on:

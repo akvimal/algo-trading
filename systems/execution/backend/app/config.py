@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     # which calendar day a sample belongs to. 0 disables the job (resets still
     # record their own marker).
     equity_snapshot_poll_seconds: int = 300
+
+    # Paper track-record gate on turning live trading ON (app/domain/track_record.py).
+    # Off unless REQUIRE_PAPER_TRACK_RECORD=true. The thresholds are product judgments,
+    # not measurements - tune them.
+    require_paper_track_record: bool = False
+    track_record_min_trades: int = 30
+    track_record_min_days: int = 14
+    track_record_min_discipline: int = 60
+    track_record_max_drawdown_pct: float = 20.0
+    track_record_min_slippage_bps: float = 3.0
     equity_history_timezone: str = "Asia/Kolkata"
 
     # How often the square-off job checks each OPEN position's own

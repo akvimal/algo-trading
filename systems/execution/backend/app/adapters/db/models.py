@@ -99,6 +99,9 @@ class Account(Base):
     # Nets Indian brokerage/STT/exchange/SEBI/stamp/GST into P&L on close (NSE/MCX) - see
     # app/domain/india_charges.py and migrations/021-india-charges.sql. Off for pre-existing accounts.
     apply_charges = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Basis points of slippage netted into P&L on close for market-type fills - see app/domain/slippage.py
+    # and migrations/022-slippage.sql. 0 = off (pre-existing accounts); new accounts default to 5.
+    slippage_bps = Column(Numeric, nullable=False, default=5, server_default=text("5"))
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
     # A user's own declared execution timeframe for this segment
@@ -293,6 +296,8 @@ class OptionPositionGroup(Base):
     # total and the breakdown + schedule version. NULL = none applied. See app/domain/india_charges.py.
     charges = Column(Numeric)
     charges_detail = Column(JSONB(none_as_null=True))
+    # Slippage netted into pnl at close (own currency); NULL = none applied. See app/domain/slippage.py.
+    slippage_cost = Column(Numeric)
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
     exit_reason = Column(Text)
@@ -415,6 +420,8 @@ class Position(Base):
     # total and the breakdown + schedule version. NULL = none applied. See app/domain/india_charges.py.
     charges = Column(Numeric)
     charges_detail = Column(JSONB(none_as_null=True))
+    # Slippage netted into pnl at close (own currency); NULL = none applied. See app/domain/slippage.py.
+    slippage_cost = Column(Numeric)
     # Also reused (not CRYPTO-only) for an NSE MTF positional spot position's
     # own capital posted - see infra/postgres/init/02-execution.sql.
     margin_posted = Column(Numeric)

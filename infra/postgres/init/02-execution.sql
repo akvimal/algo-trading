@@ -1026,3 +1026,10 @@ ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS charges NUMERIC;
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS charges_detail JSONB;
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS charges NUMERIC;
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS charges_detail JSONB;
+
+-- Slippage on paper fills (2026-09-25): per-account bps (existing rows 0, new default 5) and the
+-- cost netted per position/group. See migrations/022-slippage.sql and app/domain/slippage.py.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS slippage_bps NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE execution.accounts ALTER COLUMN slippage_bps SET DEFAULT 5;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS slippage_cost NUMERIC;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS slippage_cost NUMERIC;

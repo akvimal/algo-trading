@@ -45,6 +45,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.domain.delta_fees import compute_option_trading_fee
 from app.domain.india_charges import group_charges, kind_for
+from app.domain.slippage import slippage_cost
 from app.domain.models import ExecutionSettings, ResolvedOrder
 from app.domain.option_templates import bear_put_spread, bull_call_spread, naked_call, naked_put
 from app.domain.position_manager import (
@@ -148,6 +149,27 @@ def _group_charges(group, account, long_leg, long_cmp, short_leg, short_cmp) -> 
     group.charges = breakdown.total
     group.charges_detail = breakdown.as_dict()
     return breakdown.total
+
+
+def _group_slippage(group, account, long_leg, long_cmp, short_leg, short_cmp, exit_reason) -> float:
+    """Slippage on one closing option group: the account's slippage_bps on the
+    turnover of every leg's entry and exit (see app/domain/slippage.py), with the
+    group's own order_type deciding the entry and `exit_reason` the exit. Recorded
+    on group.slippage_cost and returned so the caller can net it out of
+    combined_pnl. 0.0, touching nothing, when it does not apply."""
+    bps = float(getattr(account, "slippage_bps", 0) or 0) if account is not None else 0.0
+    if bps <= 0:
+        return 0.0
+    entry_turnover = float(long_leg.entry_price) * float(long_leg.quantity)
+    exit_turnover = float(long_cmp) * float(long_leg.quantity)
+    if short_leg is not None:
+        entry_turnover += float(short_leg.entry_price) * float(short_leg.quantity)
+        exit_turnover += float(short_cmp) * float(short_leg.quantity)
+    cost = slippage_cost(bps, entry_turnover, exit_turnover, getattr(group, "order_type", None), exit_reason)
+    if cost <= 0:
+        return 0.0
+    group.slippage_cost = cost
+    return cost
 
 
 def _close_delta_option_fee(segment: str, spot_price: Optional[float], quantity: float, long_price: float, short_price: float = 0.0) -> Optional[float]:
@@ -1056,6 +1078,7 @@ def _close_group_at_cmp(
     group.status = "CLOSED"
     group.exit_reason = exit_reason
     combined_pnl -= _group_charges(group, account, long_leg, long_cmp, short_leg, short_cmp)
+    combined_pnl -= _group_slippage(group, account, long_leg, long_cmp, short_leg, short_cmp, exit_reason)
     _apply_realized_pnl(group, account, combined_pnl, usdinr_rate)
     return True
 
@@ -1355,6 +1378,7 @@ def _evaluate_option_group_square_off_due(
         group.exit_reason = "square_off"
         capital_account = _resolve_capital_account(group, accounts_by_segment, strategy_accounts)
         combined_pnl -= _group_charges(group, capital_account, long_leg, long_cmp, short_leg, short_cmp)
+        combined_pnl -= _group_slippage(group, capital_account, long_leg, long_cmp, short_leg, short_cmp, "square_off")
         _apply_realized_pnl(group, capital_account, combined_pnl, rates.get(group.user_id))
         closed += 1
 
@@ -1564,6 +1588,7 @@ def _evaluate_option_group_exits(
         group.exit_reason = group_reason
         capital_account = _resolve_capital_account(group, accounts_by_segment, strategy_accounts)
         combined_pnl -= _group_charges(group, capital_account, long_leg, long_cmp, short_leg, short_cmp)
+        combined_pnl -= _group_slippage(group, capital_account, long_leg, long_cmp, short_leg, short_cmp, group_reason)
         _apply_realized_pnl(group, capital_account, combined_pnl, rates.get(group.user_id))
 
         if sl_hit or spot_sl_hit:

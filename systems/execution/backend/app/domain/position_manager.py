@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.config import settings as app_settings
 from app.domain.india_charges import kind_for, round_trip_charges
+from app.domain.slippage import slippage_cost
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
 from app.domain.exit_condition import evaluate_exit_condition, exit_condition_warmup
 from app.domain.live_broker import (
@@ -562,6 +563,35 @@ def _apply_position_charges(pos, account) -> float:
     return breakdown.total
 
 
+def _apply_position_slippage(pos, account) -> float:
+    """Slippage on one closing Position: the account's slippage_bps on the
+    turnover of each market-type leg (see app/domain/slippage.py), recorded on
+    pos.slippage_cost and returned so _apply_realized_pnl can net it out. A
+    COST, not a repriced fill. 0.0, touching nothing, when it does not apply:
+    no account, slippage_bps <= 0, an option LEG (its group is handled by
+    option_position_manager), an option group object (no instrument_type here),
+    or no exit price yet. Every segment, in the position's own currency."""
+    bps = float(getattr(account, "slippage_bps", 0) or 0) if account is not None else 0.0
+    if bps <= 0:
+        return 0.0
+    if getattr(pos, "option_group_id", None) is not None:
+        return 0.0
+    if getattr(pos, "instrument_type", None) is None or pos.exit_price is None:
+        return 0.0
+    quantity = float(pos.quantity)
+    cost = slippage_cost(
+        bps,
+        float(pos.entry_price) * quantity,
+        float(pos.exit_price) * quantity,
+        getattr(pos, "order_type", None),
+        getattr(pos, "exit_reason", None),
+    )
+    if cost <= 0:
+        return 0.0
+    pos.slippage_cost = cost
+    return cost
+
+
 def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] = None) -> None:
     """Sets pos.pnl (always in the position's own native currency - raw
     USD for CRYPTO, INR for NSE/MCX, matching entry_price/exit_price so
@@ -582,6 +612,7 @@ def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] =
     behavior) rather than leaving a position permanently stuck OPEN over a
     rate that was cleared out from under it after it opened."""
     pnl -= _apply_position_charges(pos, account)
+    pnl -= _apply_position_slippage(pos, account)
     pos.pnl = pnl
     if account is None:
         logger.error("no account found for segment %s - position %s closed without a balance update", pos.segment, pos.id)

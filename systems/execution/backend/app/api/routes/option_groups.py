@@ -125,6 +125,7 @@ def _group_to_out(
         # account has apply_charges): the total and its breakdown + schedule version. None = none applied.
         "charges": float(row.charges) if row.charges is not None else None,
         "charges_detail": row.charges_detail,
+        "slippage_cost": float(row.slippage_cost) if row.slippage_cost is not None else None,
         # Trade discipline checklist (Manual tab only) - null for every
         # Strategy-driven group, see infra/postgres/init/02-execution.sql's
         # own comment on these 4 columns.

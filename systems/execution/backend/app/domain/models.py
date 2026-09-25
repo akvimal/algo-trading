@@ -314,6 +314,8 @@ class AccountUpdate(BaseModel):
     require_stop_loss: Optional[bool] = None
     # Net Indian charges (brokerage, STT, ...) into NSE/MCX P&L on close. None = leave unchanged.
     apply_charges: Optional[bool] = None
+    # Slippage in basis points on market-type fills, netted on close. 0 = off. None = leave unchanged.
+    slippage_bps: Optional[float] = Field(default=None, ge=0, le=500)
     # NULL is meaningful here too (clears a previously-set default, rather
     # than "leave unchanged") - same model_fields_set-distinguished pattern
     # square_off_time above already uses.

@@ -107,6 +107,7 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         # account has apply_charges): the total and its breakdown + schedule version. None = none applied.
         "charges": float(row.charges) if row.charges is not None else None,
         "charges_detail": row.charges_detail,
+        "slippage_cost": float(row.slippage_cost) if row.slippage_cost is not None else None,
         "margin_posted": float(row.margin_posted) if row.margin_posted is not None else None,
         "liquidation_price": float(row.liquidation_price) if row.liquidation_price is not None else None,
         # NSE MTF only - null for every other position. See

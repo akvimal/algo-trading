@@ -66,7 +66,7 @@ Also noted by the audit: `WorkspacePage.tsx` (3,531 lines) and the trade-checkli
 Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 
 **Phase 0: make it safe to open the door (about 2 weeks).** Independent of the redesign. Do these before any other user touches the system.
-- signal-engine: require login, add per-user ownership to strategies, rules and watchlists, add a secret to the Chartink webhooks (already listed under "Open questions": webhook auth).
+- signal-engine: require login, add per-user ownership to strategies, rules and watchlists, add a secret to the Chartink webhooks (already listed under "Open questions": webhook auth). **Login and ownership built 2026-09-25, flag `REQUIRE_AUTH` off by default, not yet enabled anywhere** (see `docs/architecture.md`, "signal-engine: login + per-user ownership"). Still to do here: the Chartink webhook secret, the Weekly Advisor routes and tables, applying migration 014 and flipping the flag on the test then real environments.
 - Owner checks on `/accounts/strategy/*` (currently reachable by any logged-in user).
 - Tighten CORS (wildcard in all four backends), fail startup when secrets are the defaults (`JWT_SECRET`, `CREDENTIALS_ENCRYPTION_KEY`, `INTERNAL_SERVICE_SECRET`), rate-limit auth.
 - Enforce required stop-loss, minimum reward-to-risk and daily loss on the server for paper trading.

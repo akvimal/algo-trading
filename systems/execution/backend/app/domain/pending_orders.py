@@ -86,7 +86,7 @@ def bracket_problem(action: str, trigger: float, stop: Optional[float], target: 
 class Deps:
     """Injectable so the logic is testable without market-data or a broker."""
 
-    underlying_ltp: Callable[[str, str], float]  # (segment, symbol); raises UnknownUnderlying / UnderlyingUnavailable
+    underlying_ltp: Callable  # (segment, symbol, token=None, owner=None) -> price; raises UnknownUnderlying / UnderlyingUnavailable
     open_future: Callable  # (db, order, exec_settings) -> Position
     open_option: Callable  # (db, order, exec_settings) -> OptionPositionGroup
     set_spot_stop: Callable  # (db, user_id, group_id, price)
@@ -107,7 +107,9 @@ def default_deps() -> Deps:
     from app.domain.option_position_manager import open_manual_option_group, update_group_spot_stop_loss, update_group_spot_target
     from app.domain.position_manager import open_manual_position
 
-    def underlying_ltp(segment: str, symbol: str) -> float:
+    def underlying_ltp(segment: str, symbol: str, token: Optional[str] = None, owner=None) -> float:
+        """`token`: a user is arming an order right now (their own keys). `owner`: the watcher is checking
+        on behalf of that order's owner (their keys, with the platform credential as a fallback)."""
         key = (segment, symbol)
         hit = _resolve_cache.get(key)
         if hit is None or time.monotonic() - hit[0] > _RESOLVE_TTL_SECONDS:
@@ -118,7 +120,9 @@ def default_deps() -> Deps:
             _resolve_cache[key] = hit
         exchange, chart_symbol = hit[1]
         try:
-            prices = get_ltp_batch(exchange, [chart_symbol])
+            prices = get_ltp_batch(exchange, [chart_symbol], token=token, on_behalf_of=owner)
+            if not prices.get(chart_symbol) and owner is not None and settings.job_quotes_platform_fallback:
+                prices = get_ltp_batch(exchange, [chart_symbol])  # the owner's keys gave nothing: the platform's, so the order is still watched
         except Exception as exc:
             raise UnderlyingUnavailable(str(exc)) from exc
         price = prices.get(chart_symbol)
@@ -158,7 +162,9 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def create_pending_order(db: Session, user_id: uuid.UUID, payload, deps: Deps, is_live: bool, now: Optional[datetime] = None) -> db_models.PendingOrder:
+def create_pending_order(
+    db: Session, user_id: uuid.UUID, payload, deps: Deps, is_live: bool, now: Optional[datetime] = None, token: Optional[str] = None
+) -> db_models.PendingOrder:
     """`is_live`: whether the caller's account for this segment is live (the route
     looks it up). Raises PendingOrderError for anything the caller can fix."""
     now = now or _now()
@@ -173,7 +179,8 @@ def create_pending_order(db: Session, user_id: uuid.UUID, payload, deps: Deps, i
 
     symbol = payload.symbol.strip().upper()
     try:
-        ltp = deps.underlying_ltp(payload.segment, symbol)
+        # The person arming the order is at a browser: read the price on THEIR keys when we have their token.
+        ltp = deps.underlying_ltp(payload.segment, symbol, token=token) if token else deps.underlying_ltp(payload.segment, symbol)
     except UnknownUnderlying:
         raise PendingOrderError(404, f"unknown symbol {symbol} on {payload.segment}")
     except UnderlyingUnavailable as exc:
@@ -300,12 +307,16 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
     db.commit()
     live = db.query(P).filter(P.status == "pending").all()
 
-    prices: dict[tuple[str, str], Optional[float]] = {}
+    # With JOB_QUOTES_USE_OWNER_KEYS each owner's orders are priced on that owner's own keys, so the
+    # price is fetched once per (underlying, owner) instead of once per underlying.
+    per_owner = settings.job_quotes_use_owner_keys
+    prices: dict[tuple[str, str, Optional[uuid.UUID]], Optional[float]] = {}
     for r in live:
-        key = (r.segment, r.symbol)
+        owner = r.user_id if per_owner else None
+        key = (r.segment, r.symbol, owner)
         if key not in prices:
             try:
-                prices[key] = deps.underlying_ltp(r.segment, r.symbol)
+                prices[key] = deps.underlying_ltp(r.segment, r.symbol, owner=owner) if owner is not None else deps.underlying_ltp(r.segment, r.symbol)
             except (UnknownUnderlying, UnderlyingUnavailable):
                 prices[key] = None
             except Exception:
@@ -314,7 +325,7 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
 
     for r in live:
         counts["checked"] += 1
-        price = prices[(r.segment, r.symbol)]
+        price = prices[(r.segment, r.symbol, r.user_id if per_owner else None)]
         if price is None:
             counts["no_price"] += 1  # retried next tick
             continue

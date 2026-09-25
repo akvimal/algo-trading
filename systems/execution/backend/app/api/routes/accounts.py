@@ -1,3 +1,4 @@
+import functools
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -77,7 +78,7 @@ def _apply_live_fields(
     row.live_trading_enabled = will_be_live
 
 
-def _unrealized_pnl(db: Session, open_positions: list) -> float:
+def _unrealized_pnl(db: Session, open_positions: list, token: Optional[str] = None) -> float:
     """Live mark-to-market sum across `open_positions` (already filtered to
     status='OPEN' by the caller) - 0.0 for none, or if every quote fetch
     fails (compute_unrealized_pnl silently drops those, same convention
@@ -91,11 +92,12 @@ def _unrealized_pnl(db: Session, open_positions: list) -> float:
     own live P&L shows elsewhere."""
     if not open_positions:
         return 0.0
-    mtm = compute_unrealized_pnl(open_positions, get_ltp_batch)
+    # The caller's own token (when a user is asking): their positions are valued on THEIR keys.
+    mtm = compute_unrealized_pnl(open_positions, functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch)
     return sum(pnl for _, pnl in mtm.values())
 
 
-def _to_out(db: Session, row: db_models.Account) -> dict:
+def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) -> dict:
     open_positions = db.query(db_models.Position).filter_by(user_id=row.user_id, segment=row.segment, status="OPEN").all()
     return {
         "segment": row.segment,
@@ -105,7 +107,7 @@ def _to_out(db: Session, row: db_models.Account) -> dict:
         # separate ledger, matches the delta the Dedicated strategy
         # accounts table already computes client-side today.
         "realized_pnl": float(row.current_balance) - float(row.starting_balance),
-        "unrealized_pnl": _unrealized_pnl(db, open_positions),
+        "unrealized_pnl": _unrealized_pnl(db, open_positions, token),
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "min_reward_risk_ratio": float(row.min_reward_risk_ratio),
@@ -136,7 +138,7 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
     first time each is touched, so a brand-new signup always sees all 3
     immediately rather than 404ing until they've placed a trade)."""
     rows = {seg: load_account(db, user.id, seg) for seg in _SEGMENTS}
-    return [_to_out(db, rows[s]) for s in _SEGMENTS if rows[s] is not None]
+    return [_to_out(db, rows[s], token=user.token) for s in _SEGMENTS if rows[s] is not None]
 
 
 @router.put("/accounts/{segment}")
@@ -210,7 +212,7 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.default_higher_interval = update.default_higher_interval
     db.commit()
     db.refresh(row)
-    return _to_out(db, row)
+    return _to_out(db, row, token=user.token)
 
 
 @router.get("/accounts/platform")
@@ -381,7 +383,7 @@ def reset_account(segment: str, user: User = Depends(get_current_user), db: Sess
     record_reset_point(db, row)
     db.commit()
     db.refresh(row)
-    return _to_out(db, row)
+    return _to_out(db, row, token=user.token)
 
 
 # --- Optional per-strategy account override (execution.strategy_accounts) -

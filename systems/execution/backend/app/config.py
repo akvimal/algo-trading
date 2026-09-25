@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     # record their own marker).
     equity_snapshot_poll_seconds: int = 300
 
+    # Own-keys data model, execution side (docs/architecture.md, "Own-keys data model"). When
+    # true, the automated jobs that mark or watch users' positions fetch quotes in one batch
+    # PER OWNER on that owner's own Dhan keys (market-data's X-On-Behalf-Of) instead of one
+    # batch for everyone on the shared platform credential. Off by default.
+    job_quotes_use_owner_keys: bool = False
+    # ...and when an owner's own batch comes back empty (no keys saved, or an expired Dhan
+    # token, which lasts 24h), fall back to the platform credential for that batch so their
+    # stop-losses and square-offs keep being enforced. Turn off to be strict.
+    job_quotes_platform_fallback: bool = True
+
     # Server-side pending (limit) orders (app/domain/pending_orders.py). How often the
     # watcher checks armed orders against the underlying's price (0 disables the job),
     # how long an order lives if the caller gives no expiry, the longest expiry allowed,

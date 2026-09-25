@@ -283,7 +283,7 @@ def reset_env(monkeypatch):
         max_daily_loss=None, default_interval=None, default_higher_interval=None, updated_at=NOON,
     )
     monkeypatch.setattr(accounts_route, "load_account", lambda db, uid, seg: acc)
-    monkeypatch.setattr(accounts_route, "_to_out", lambda db, row: row)
+    monkeypatch.setattr(accounts_route, "_to_out", lambda db, row, token=None: row)
     return acc, ResetDb([acc])
 
 

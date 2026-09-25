@@ -23,7 +23,7 @@ def get_ltp(exchange: str, symbol: str) -> float:
     return float(resp.json()["ltp"])
 
 
-def _auth_headers(token: Optional[str]) -> dict:
+def _auth_headers(token: Optional[str], on_behalf_of=None) -> dict:
     """Phase 3 (BYO Dhan credentials, see docs/architecture.md) - when the
     calling route has a real user's own bearer token in scope (the
     manual-order/square-off routes, since Phase 2), forwarding it lets
@@ -43,12 +43,17 @@ def _auth_headers(token: Optional[str]) -> dict:
     headers = {}
     if settings.internal_service_secret:
         headers["X-Internal-Secret"] = settings.internal_service_secret
+        # An automated job fetching quotes FOR one user asks market-data to run the request on THAT
+        # user's own keys and rate budget. Only honoured by market-data for a trusted service, and
+        # a real user token, when present, still wins.
+        if on_behalf_of:
+            headers["X-On-Behalf-Of"] = str(on_behalf_of)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
-def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None) -> dict[str, float]:
+def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None, on_behalf_of=None) -> dict[str, float]:
     """All symbols for one exchange in a single market-data call - see
     position_manager.compute_unrealized_pnl/square_off_all_open, which
     call this once per exchange instead of once per position.
@@ -66,7 +71,7 @@ def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None
         resp = requests.post(
             f"{settings.market_data_base_url}/quotes/ltp/batch",
             json={"exchange": exchange, "symbols": symbols},
-            headers=_auth_headers(token),
+            headers=_auth_headers(token, on_behalf_of),
             timeout=settings.market_data_timeout_seconds,
         )
         resp.raise_for_status()

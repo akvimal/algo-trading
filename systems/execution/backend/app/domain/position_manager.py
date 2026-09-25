@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings as app_settings
+from app.config import settings as app_settings
 from app.domain.india_charges import kind_for, round_trip_charges
 from app.domain.slippage import slippage_cost
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
@@ -2232,20 +2233,41 @@ def update_stop_loss(
     return row, None
 
 
+def _fetch_prices(get_ltp_batch: GetLtpBatch, exchange: str, symbols: list[str], owner: Optional[uuid.UUID]) -> dict[str, float]:
+    """One batch. With an owner, on THAT owner's own Dhan keys (X-On-Behalf-Of); if that comes
+    back empty (no keys saved, or an expired Dhan token) and the fallback is on, once more on the
+    platform credential so their stop-losses and square-offs keep being enforced."""
+    if owner is None:
+        return get_ltp_batch(exchange, symbols)
+    prices = get_ltp_batch(exchange, symbols, on_behalf_of=owner)
+    if not prices and app_settings.job_quotes_platform_fallback:
+        logger.warning("quotes for %s on user %s's own keys came back empty: falling back to the platform credential", exchange, owner)
+        prices = get_ltp_batch(exchange, symbols)
+    return prices
+
+
 def _quotes_by_exchange(positions: list, get_ltp_batch: GetLtpBatch) -> dict[tuple[str, str], float]:
     """One get_ltp_batch call per distinct exchange among `positions`,
     covering every distinct symbol on that exchange - this is what turns
     N open positions into (at most) len(distinct exchanges) provider
     calls instead of N. A failed batch for one exchange doesn't affect
-    others; its symbols are just absent from the result."""
-    symbols_by_exchange: dict[str, set[str]] = {}
+    others; its symbols are just absent from the result.
+
+    With JOB_QUOTES_USE_OWNER_KEYS on (off by default) the batches are per (owner, exchange)
+    instead, each on that owner's own Dhan keys - so the shared platform credential stops being
+    spent on users' positions (the own-keys data model). Positions with no owner (the automated
+    Strategy-driven flow's platform account) still use the platform credential. More calls, but
+    each on its own user's rate budget."""
+    per_owner = app_settings.job_quotes_use_owner_keys
+    wanted: dict[tuple[Optional[uuid.UUID], str], set[str]] = {}
     for pos in positions:
-        symbols_by_exchange.setdefault(pos.exchange, set()).add(pos.symbol)
+        owner = getattr(pos, "user_id", None) if per_owner else None
+        wanted.setdefault((owner, pos.exchange), set()).add(pos.symbol)
 
     quotes: dict[tuple[str, str], float] = {}
-    for exchange, symbols in symbols_by_exchange.items():
+    for (owner, exchange), symbols in wanted.items():
         try:
-            prices = get_ltp_batch(exchange, list(symbols))
+            prices = _fetch_prices(get_ltp_batch, exchange, list(symbols), owner)
         except Exception:
             logger.exception("failed to fetch CMP batch for %s (%d symbols)", exchange, len(symbols))
             continue

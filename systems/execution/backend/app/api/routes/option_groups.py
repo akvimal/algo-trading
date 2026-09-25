@@ -191,6 +191,7 @@ def _query_option_groups(
     manual_only: bool,
     limit: int,
     with_live_pnl: bool,
+    token: Optional[str] = None,
 ):
     """Shared by GET /option-groups (user_id=caller) and GET
     /option-groups/platform (user_id=None) - see positions.py's identical
@@ -212,7 +213,9 @@ def _query_option_groups(
     rows = q.order_by(db_models.OptionPositionGroup.created_at.desc()).limit(limit).all()
 
     legs = legs_by_group(db, rows)
-    mtm = compute_group_unrealized_pnl(rows, legs, get_ltp_batch) if with_live_pnl else {}
+    # A browser is polling this: value the caller's groups on THEIR OWN Dhan keys (their token).
+    quote = functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch
+    mtm = compute_group_unrealized_pnl(rows, legs, quote) if with_live_pnl else {}
 
     result = []
     for r in rows:
@@ -253,7 +256,7 @@ def list_option_groups(
     reasoning as GET /positions' own identical filters. with_live_pnl:
     mark-to-market OPEN groups against a fresh combined quote - off by
     default, same reasoning as GET /positions."""
-    return _query_option_groups(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+    return _query_option_groups(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl, token=user.token)
 
 
 @router.get("/option-groups/platform")

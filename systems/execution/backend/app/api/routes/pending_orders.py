@@ -43,7 +43,7 @@ def arm_pending_order(payload: PendingOrderCreate, user: User = Depends(get_curr
     account = load_account(db, user.id, payload.segment)
     is_live = bool(account is not None and account.live_trading_enabled)
     try:
-        row = create_pending_order(db, user.id, payload, default_deps(), is_live)
+        row = create_pending_order(db, user.id, payload, default_deps(), is_live, token=user.token)
     except PendingOrderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     return _to_out(row)

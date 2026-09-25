@@ -277,6 +277,12 @@ services:
       # segment account (see app/domain/track_record.py). Off by default; the
       # thresholds are product judgments to tune, not measurements.
       REQUIRE_PAPER_TRACK_RECORD: ${REQUIRE_PAPER_TRACK_RECORD:-false}
+      # Own-keys data model, execution side: the automated jobs (exit monitor, square-off, P&L and
+      # equity snapshots, the pending-order watcher) fetch quotes per OWNER on that owner's own Dhan
+      # keys instead of one batch on the shared platform credential. Off by default. The fallback
+      # keeps an owner's stop-losses enforced when their keys are missing/expired.
+      JOB_QUOTES_USE_OWNER_KEYS: ${JOB_QUOTES_USE_OWNER_KEYS:-false}
+      JOB_QUOTES_PLATFORM_FALLBACK: ${JOB_QUOTES_PLATFORM_FALLBACK:-true}
       TRACK_RECORD_MIN_TRADES: ${TRACK_RECORD_MIN_TRADES:-30}
       TRACK_RECORD_MIN_DAYS: ${TRACK_RECORD_MIN_DAYS:-14}
       TRACK_RECORD_MIN_DISCIPLINE: ${TRACK_RECORD_MIN_DISCIPLINE:-60}

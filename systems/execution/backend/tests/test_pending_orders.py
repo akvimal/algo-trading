@@ -140,7 +140,7 @@ def fake_deps(prices=None, **over):
     prices = prices if prices is not None else {}
     log = SimpleNamespace(price_calls=[], futures=[], options=[], stops=[], targets=[])
 
-    def underlying_ltp(segment, symbol):
+    def underlying_ltp(segment, symbol, token=None, owner=None):
         log.price_calls.append((segment, symbol))
         v = prices.get((segment, symbol), UnknownUnderlying(symbol))
         if isinstance(v, Exception):
@@ -497,7 +497,7 @@ def test_the_default_feed_resolves_once_then_prices_and_maps_failures(monkeypatc
         return None if symbol == "NOPE" else {"chart_exchange": "NSE", "chart_symbol": f"{symbol}-SPOT"}
 
     monkeypatch.setattr(qc, "resolve_underlying", resolve)
-    monkeypatch.setattr(qc, "get_ltp_batch", lambda exchange, symbols, token=None: {"NIFTY-SPOT": 24000.0} if symbols == ["NIFTY-SPOT"] else {})
+    monkeypatch.setattr(qc, "get_ltp_batch", lambda exchange, symbols, token=None, on_behalf_of=None: {"NIFTY-SPOT": 24000.0} if symbols == ["NIFTY-SPOT"] else {})
     po._resolve_cache.clear()
     feed = po.default_deps().underlying_ltp
     assert feed("NSE", "NIFTY") == 24000.0 and feed("NSE", "NIFTY") == 24000.0 and calls["resolve"] == 1  # cached

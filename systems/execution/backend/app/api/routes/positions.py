@@ -159,6 +159,7 @@ def _query_positions(
     manual_only: bool,
     limit: int,
     with_live_pnl: bool,
+    token: Optional[str] = None,
 ):
     """Shared by GET /positions (user_id=caller) and GET /positions/platform
     (user_id=None) - identical filtering/serialization, only the ownership
@@ -180,7 +181,10 @@ def _query_positions(
         q = q.filter(db_models.Position.strategy_id.is_(None))
     rows = q.order_by(db_models.Position.entry_time.desc()).limit(limit).all()
 
-    mtm = compute_unrealized_pnl(rows, get_ltp_batch) if with_live_pnl else {}
+    # A browser is polling this: value the caller's positions on THEIR OWN Dhan keys (their token),
+    # not the shared platform credential. The platform view (no token) still uses the platform's.
+    quote = functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch
+    mtm = compute_unrealized_pnl(rows, quote) if with_live_pnl else {}
 
     return [
         _position_to_out(r, live_price=mtm[r.id][0] if r.id in mtm else None, unrealized_pnl=mtm[r.id][1] if r.id in mtm else None)
@@ -219,7 +223,7 @@ def list_positions(
     default since it means extra Dhan calls on every request; the
     frontend opts in for its own polling, other callers (cross-links,
     other systems) don't pay for it unless they ask."""
-    return _query_positions(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+    return _query_positions(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl, token=user.token)
 
 
 @router.get("/positions/platform")

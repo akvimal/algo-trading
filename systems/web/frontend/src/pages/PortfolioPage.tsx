@@ -3,6 +3,7 @@ import { api } from "../api/http";
 import type { EquityHistory, LiveEligibility, OptionGroup, Performance, Position, Segment } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { SEGMENTS } from "../config";
+import { useProfile } from "../auth/ProfileContext";
 import { useResource } from "../hooks/useResource";
 import { HistoryTab } from "./portfolio/HistoryTab";
 import { OverviewTab } from "./portfolio/OverviewTab";
@@ -45,6 +46,7 @@ async function loadClosed(segment: Segment) {
 
 export function PortfolioPage() {
   const [params, setParams] = useSearchParams();
+  const { markets } = useProfile();
   const segment = parseSegment(params.get("segment"));
   const tab = parseTab(params.get("tab"));
   const set = (next: Record<string, string>) => setParams({ segment, tab, ...next }, { replace: true });
@@ -65,7 +67,7 @@ export function PortfolioPage() {
     <div className="stack">
       <h1>Portfolio</h1>
       <div className="chips" role="group" aria-label="Account">
-        {SEGMENTS.map((s) => (
+        {SEGMENTS.filter((s) => markets.includes(s) || s === segment).map((s) => (
           <button key={s} aria-pressed={segment === s} onClick={() => set({ segment: s })}>
             {SEGMENT_LABEL[s]}
           </button>

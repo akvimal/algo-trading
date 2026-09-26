@@ -1,5 +1,5 @@
 import { api } from "./http";
-import type { Candle, Ltp, MarketRegime, OptionGroup, PendingOrder, Position, ResolvedUnderlying, Segment } from "./types";
+import type { Candle, Ltp, MarketRegime, OiSummary, OptionGroup, PendingOrder, Position, ResolvedUnderlying, Segment } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 
 export const resolveUnderlying = (segment: Segment, symbol: string) =>
@@ -36,6 +36,13 @@ export async function loadChartTrades(segments: Segment[]): Promise<{ positions:
     groups: results.filter((_, i) => i % 4 >= 2).flat() as OptionGroup[],
   };
 }
+
+/** The option-chain expiries for an underlying, nearest first. The provider can be slow to answer. */
+export const getExpiries = (exchange: string, symbol: string) =>
+  api<{ expiries: string[] }>("marketData", `/options/expiries?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}`).then((r) => r.expiries);
+
+export const getOiSummary = (exchange: string, symbol: string, expiry: string) =>
+  api<OiSummary>("marketData", `/options/oi-summary?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
 
 export const listWaitingOrders = () => api<PendingOrder[]>("execution", "/pending-orders?status=pending");
 export const cancelWaitingOrder = (id: string) => api<PendingOrder>("execution", `/pending-orders/${id}`, { method: "DELETE" });

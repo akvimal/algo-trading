@@ -1,6 +1,7 @@
 import { IndicatorSeries, LineType, registerIndicator, registerOverlay, type IndicatorFigureStyle, type OverlayFigure } from "klinecharts";
 import { ACCENT, BUY, SELL } from "./colors";
 import { computeSupertrend } from "./supertrend";
+import type { OiLevelLine } from "./oiLevels";
 import { compactPnl, pnlTone, type TradeMarkerExtend } from "./trades";
 
 export { ACCENT, BUY, SELL };
@@ -15,6 +16,7 @@ export const STRUCTURE_GROUP = "structure";
 export const PLAN_GROUP = "plan";
 export const PEER_GROUP = "peer";
 export const TRADES_GROUP = "trades";
+export const OI_GROUP = "oi-levels";
 
 export type ObExtend = { tf: string; kind: "demand" | "supply"; role: "orderblock" | "breaker"; proximal: number; distal: number; mitigated: boolean; counterTrend: boolean };
 export type FvgExtend = { kind: "bullish" | "bearish"; top: number; bottom: number; filled: boolean };
@@ -96,6 +98,36 @@ export function registerChartExtensions(): void {
       const x = coordinates[0]?.x;
       if (x == null || !Number.isFinite(x)) return [];
       return [{ type: "line", attrs: { coordinates: [{ x, y: 0 }, { x, y: bounding.height }] }, styles: { color: "rgba(147, 161, 177, 0.8)", size: 1, style: "dashed", dashedValue: [3, 3] }, ignoreEvent: true }];
+    },
+  });
+
+  // A support or resistance line from the option chain: full width at the strike, with a filled tag at
+  // the right edge. Resistance is red and support green, brighter than the candles so they read across the
+  // whole chart. The biggest wall on each side is heavy with a soft band behind it; the next is lighter; a
+  // level still forming is dashed with a fainter band.
+  registerOverlay({
+    name: "oiLevel",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, bounding, yAxis }) => {
+      const d = overlay.extendData as OiLevelLine | undefined;
+      if (!d || !yAxis) return [];
+      const y = yAxis.convertToPixel(d.price);
+      if (!Number.isFinite(y)) return [];
+      const rgb = d.kind === "resistance" ? "255, 107, 129" : "77, 227, 158";
+      const primary = d.rank === 1 && !d.forming;
+      const band = primary ? 0.16 : d.forming ? 0.1 : 0;
+      const size = primary ? 13 : 11;
+      const figs: OverlayFigure[] = [];
+      if (band > 0) figs.push({ type: "rect", attrs: { x: 0, y: y - 3, width: bounding.width, height: 6 }, styles: { style: "fill", color: `rgba(${rgb}, ${band})` }, ignoreEvent: true });
+      figs.push({ type: "line", attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] }, styles: { color: `rgba(${rgb}, ${d.forming ? 0.9 : 1})`, size: primary ? 3 : 2, style: d.forming ? "dashed" : "solid", dashedValue: [5, 4] }, ignoreEvent: true });
+      figs.push({
+        type: "text",
+        attrs: { x: bounding.width - 4, y: y - (size + 6), text: d.label, baseline: "top", align: "right" },
+        styles: { color: INK, size, weight: "bold", backgroundColor: `rgba(${rgb}, 0.95)`, borderColor: `rgba(${rgb}, 1)`, borderSize: 1, paddingLeft: 5, paddingRight: 5, paddingTop: 2, paddingBottom: 2, borderRadius: 3 },
+        ignoreEvent: true,
+      });
+      return figs;
     },
   });
 

@@ -449,3 +449,33 @@ table.t th {
   font-size: 12px;
   border-top: 0;
 }
+
+/* ---- trade journal ---- */
+.list-block {
+  border-top: 1px solid var(--border);
+}
+.list-block:first-of-type {
+  border-top: 0;
+}
+.list-button {
+  width: 100%;
+  border: 0;
+  border-top: 0;
+  background: none;
+  cursor: pointer;
+  min-height: var(--tap);
+}
+.list-block .list-row {
+  border-top: 0;
+}
+.journal {
+  padding: 4px 0 14px;
+}
+.textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}

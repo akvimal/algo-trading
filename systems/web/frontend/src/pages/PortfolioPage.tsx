@@ -54,6 +54,11 @@ export function PortfolioPage() {
   const perf = useResource(() => api<Performance>("execution", `/performance/${segment}`), [segment]);
   const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment]);
   const closed = useResource(() => loadClosed(segment), [segment]);
+  // A saved tag, note or review changes both the trade list and the numbers derived from it.
+  const saved = () => {
+    closed.reload();
+    perf.reload();
+  };
   const open = useResource(() => loadOpen(segment), [segment], { pollMs: 15_000, enabled: tab === "positions" });
 
   return (
@@ -78,8 +83,8 @@ export function PortfolioPage() {
       {tab === "positions" && <PositionsTab open={open} />}
       {(tab === "history" || tab === "review") && closed.loading && <Skeleton lines={4} />}
       {(tab === "history" || tab === "review") && closed.error && <ErrorNotice error={closed.error} onRetry={closed.reload} />}
-      {tab === "history" && closed.data && <HistoryTab trades={closed.data} />}
-      {tab === "review" && closed.data && <ReviewTab perf={perf} trades={closed.data} />}
+      {tab === "history" && closed.data && <HistoryTab trades={closed.data} onSaved={saved} />}
+      {tab === "review" && closed.data && <ReviewTab perf={perf} trades={closed.data} onSaved={saved} />}
     </div>
   );
 }

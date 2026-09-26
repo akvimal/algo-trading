@@ -46,6 +46,8 @@ export type Position = {
   confidence?: number | null;
   reviewed_at?: string | null;
   review_violation?: boolean | null;
+  review_notes?: string | null;
+  strategy_id?: string | null;
   auto_traded?: boolean;
 };
 
@@ -76,6 +78,8 @@ export type OptionGroup = {
   confidence?: number | null;
   reviewed_at?: string | null;
   review_violation?: boolean | null;
+  review_notes?: string | null;
+  strategy_id?: string | null;
   auto_traded?: boolean;
 };
 
@@ -154,3 +158,5 @@ export type Performance = {
 export type Requirement = { key: string; label: string; required: string; actual: string; met: boolean };
 
 export type LiveEligibility = { segment: Segment; enforced: boolean; eligible: boolean; requirements: Requirement[] };
+
+export type ChecklistItem = { id: string; label: string; phase: "plan" | "review" | "day"; segments: Segment[]; sort_order: number; active: boolean };

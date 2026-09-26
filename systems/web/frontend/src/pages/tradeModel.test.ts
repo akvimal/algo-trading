@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, analyzeTicket, buildOrder, checkList, computeRR, favorable, instrumentFor, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
+import type { Candle } from "../api/types";
+import { EMPTY_TICKET, analyzeTicket, applyTick, buildOrder, checkList, computeRR, favorable, instrumentFor, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -215,5 +216,36 @@ describe("buildOrder", () => {
     const t = ticket({ stop: "990" });
     const o = buildOrder(t, analyzeTicket(t, ctx()), ctx(), meta);
     for (const k of ["target_price", "setup_tag", "confidence"]) expect(k in o.body).toBe(false);
+  });
+});
+
+describe("applyTick", () => {
+  const bar = (over: Partial<Candle> = {}): Candle => ({ exchange: "NSE", symbol: "X", interval: "15min", open: 100, high: 105, low: 95, close: 102, volume: 1, timestamp: "2026-09-26T09:15:00+05:30", ...over });
+
+  it("lets the newest candle close at the live price, and only that candle", () => {
+    const out = applyTick([bar({ timestamp: "a", close: 90 }), bar()], 103);
+    expect(out[1].close).toBe(103);
+    expect(out[0].close).toBe(90);
+    expect(out).toHaveLength(2); // never adds a bar
+  });
+
+  it("stretches the high or low when the price goes beyond them", () => {
+    expect(applyTick([bar()], 110)[0]).toMatchObject({ close: 110, high: 110, low: 95 });
+    expect(applyTick([bar()], 90)[0]).toMatchObject({ close: 90, high: 105, low: 90 });
+  });
+
+  it("does not change the open, and does not modify the list it was given", () => {
+    const input = [bar()];
+    const out = applyTick(input, 110);
+    expect(out[0].open).toBe(100);
+    expect(input[0].close).toBe(102);
+  });
+
+  it("returns the same list when nothing would change, or when there is no usable price", () => {
+    const input = [bar()];
+    expect(applyTick(input, 102)).toBe(input);
+    expect(applyTick(input, null)).toBe(input);
+    expect(applyTick(input, Number.NaN)).toBe(input);
+    expect(applyTick([], 100)).toEqual([]);
   });
 });

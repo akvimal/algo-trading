@@ -24,7 +24,8 @@ function acct(over: Partial<Account> = {}): Account {
   return {
     segment: "NSE", starting_balance: 200000, current_balance: 200000, realized_pnl: 0, unrealized_pnl: 0,
     capital_per_trade: 10000, max_daily_loss: null, live_trading_enabled: false, apply_charges: false,
-    require_stop_loss: false, square_off_time: null, ...over,
+    require_stop_loss: false, square_off_time: null, risk_per_trade_pct: 1, min_reward_risk_ratio: 2,
+    enforce_risk_based_lots: false, slippage_bps: 0, max_order_value: null, live_trading_consent_at: null, ...over,
   };
 }
 

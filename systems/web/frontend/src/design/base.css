@@ -479,3 +479,28 @@ table.t th {
   border-radius: var(--radius-sm);
   resize: vertical;
 }
+
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.input-row input {
+  flex: 1;
+  min-width: 0;
+}
+.field input[inputmode],
+.field input[type="password"] {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.input-row input {
+  width: auto;
+}
+.field input[aria-invalid="true"] {
+  border-color: var(--dn);
+}

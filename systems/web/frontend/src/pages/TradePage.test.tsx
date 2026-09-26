@@ -30,6 +30,9 @@ let candleFailures: number;
 let structure: Record<string, any>;
 let structureFails: boolean;
 let ltpFails: boolean;
+let positionRows: Record<string, any>[];
+let groupRows: Record<string, any>[];
+let tradeCallsFail: boolean;
 
 // The newest candle opened a few minutes ago, as during market hours, so a price tick lands on a live bar.
 const candlesFor = (symbol: string) => {
@@ -55,6 +58,9 @@ beforeEach(() => {
   candleFailures = 0;
   structureFails = false;
   ltpFails = false;
+  positionRows = [];
+  groupRows = [];
+  tradeCallsFail = false;
   structure = { ...emptyStructure };
   waiting = [];
   screenIs(false);
@@ -110,7 +116,11 @@ beforeEach(() => {
       if (url.endsWith("/positions/manual")) return placeManual(body);
       if (url.endsWith("/option-groups/manual")) return placeOption(body);
       if (url.includes("/spot-stop-loss") || url.includes("/spot-target")) return attachFails ? json({ detail: "no" }, 409) : json({ ok: true });
-      if (url.includes("/positions") || url.includes("/option-groups")) return json([]);
+      if (url.includes("/positions") || url.includes("/option-groups")) {
+        if (tradeCallsFail && q("with_live_pnl") === "true") return json({ detail: "quotes down" }, 503);
+        const rows = url.includes("/positions") ? positionRows : groupRows;
+        return json(rows.filter((r) => (!q("status") || r.status === q("status")) && (!q("segment") || (r.segment ?? "NSE") === q("segment"))));
+      }
       return json({ detail: `unrouted ${url}` }, 404);
     }),
   );
@@ -1221,5 +1231,112 @@ describe("dragging the plan lines", () => {
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await waitFor(() => expect(chart(0).overlaysNamed("planLine")).toHaveLength(1));
     expect(chart(1).overlaysNamed("planLine")).toHaveLength(0);
+  });
+});
+
+describe("your trades on the chart", () => {
+  beforeEach(() => screenIs(true));
+  const step = 15 * 60_000;
+  const newest = () => Math.floor((Date.now() - 2 * 60_000) / step) * step;
+  const iso = (barsBack: number) => new Date(newest() - barsBack * step).toISOString();
+  const position = (over: Record<string, any>) => ({
+    id: "p1", symbol: "RELIANCE", exchange: "NSE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1010, entry_time: iso(8),
+    exit_price: null, exit_time: null, pnl: null, unrealized_pnl: 250, status: "OPEN", option_group_id: null, stop_loss_price: null, target_price: null, ...over,
+  });
+  const markers = (c: ReturnType<typeof chart>) => c.overlaysNamed("tradeMarker");
+
+  it("draws an open trade as an entry with its live result, and a closed one as entry to exit", async () => {
+    positionRows = [
+      position({}),
+      position({ id: "p2", action: "SELL", entry_price: 1020, entry_time: iso(20), exit_price: 1005, exit_time: iso(12), pnl: 150, status: "CLOSED", exit_reason: "target_hit", unrealized_pnl: null }),
+    ];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(markers(c)).toHaveLength(2));
+    const open = markers(c).find((o) => o.extendData.state === "open")!;
+    expect(open.extendData).toMatchObject({ side: "long", pnl: 250, label: "Long 10", entryPrice: 1010 });
+    expect(open.points).toEqual([{ timestamp: Date.parse(iso(8)), value: 1010 }]);
+    const closed = markers(c).find((o) => o.extendData.state === "closed")!;
+    expect(closed.extendData).toMatchObject({ side: "short", pnl: 150, reason: "target_hit" });
+    expect(closed.points).toEqual([{ timestamp: Date.parse(iso(20)), value: 1020 }, { timestamp: Date.parse(iso(12)), value: 1005 }]);
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent(/Your trades on this chart: Long 10 \(open\), Short 10/);
+  });
+
+  it("asks for the open trades with their live result, and only the segment on screen", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await loaded();
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/positions?segment=NSE&status=OPEN&with_live_pnl=true"))).toBe(true));
+    expect(calls.some((c) => c.url.includes("segment=MCX"))).toBe(false);
+  });
+
+  it("shows only this instrument's trades: a futures contract yes, another stock or a lookalike name no", async () => {
+    positionRows = [
+      position({ id: "a", symbol: "RELIANCE" }),
+      position({ id: "b", symbol: "RELIANCEX" }),
+      position({ id: "c", symbol: "TCS" }),
+      position({ id: "d", symbol: "RELIANCE-Sep2026-FUT", instrument_type: "future" }),
+      position({ id: "e", symbol: "RELIANCE26SEP2500CE", option_group_id: "g9" }),
+    ];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(markers(c).length).toBeGreaterThan(0));
+    expect(markers(c)).toHaveLength(2);
+  });
+
+  it("puts an option trade at the underlying's price when it opened, as a diamond with its result", async () => {
+    groupRows = [{
+      id: "g1", underlying_symbol: "NIFTY", strategy_type: "naked_call", action: "BUY", quantity: 1, status: "OPEN", pnl: null, unrealized_pnl: -300,
+      entry_time: iso(6), exit_time: null, entry_spot_price: 1012, segment: "NSE",
+    }];
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    await waitFor(() => expect(markers(c)).toHaveLength(1));
+    expect(markers(c)[0].extendData).toMatchObject({ kind: "option", label: "Naked Call", entryPrice: 1012, pnl: -300 });
+  });
+
+  it("leaves out a trade from before the first candle, which has nowhere to go", async () => {
+    positionRows = [position({ id: "old", entry_time: iso(400) }), position({ id: "new" })];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(markers(c)).toHaveLength(1));
+    expect(markers(c)[0].extendData.label).toBe("Long 10");
+  });
+
+  it("keeps the closed trades on the chart when the live results are unavailable", async () => {
+    tradeCallsFail = true;
+    positionRows = [position({ id: "p2", entry_price: 1020, exit_price: 1005, exit_time: iso(4), pnl: 90, status: "CLOSED", unrealized_pnl: null }), position({})];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(markers(c)).toHaveLength(1));
+    expect(markers(c)[0].extendData.state).toBe("closed");
+  });
+
+  it("the My trades button takes them off the chart and back, and remembers the choice", async () => {
+    const user = userEvent.setup();
+    positionRows = [position({})];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(markers(c)).toHaveLength(1));
+    const button = screen.getByRole("button", { name: "My trades" });
+    expect(button).toHaveAttribute("aria-pressed", "true");
+    await user.click(button);
+    await waitFor(() => expect(markers(c)).toHaveLength(0));
+    expect(button).toHaveAttribute("aria-pressed", "false");
+    expect(JSON.parse(localStorage.getItem("web.chart.tools") ?? "{}").tradesOn).toBe(false);
+    await user.click(button);
+    await waitFor(() => expect(markers(c)).toHaveLength(1));
+  });
+
+  it("each chart of a pair shows its own instrument's trades", async () => {
+    const user = userEvent.setup();
+    positionRows = [position({ id: "n", symbol: "NIFTY-Sep2026-FUT", instrument_type: "future" }), position({ id: "b", symbol: "BANKNIFTY-Sep2026-FUT", instrument_type: "future", action: "SELL" })];
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    await waitFor(() => expect(markers(chart(0))).toHaveLength(1));
+    await waitFor(() => expect(markers(chart(1))).toHaveLength(1));
+    expect(markers(chart(0))[0].extendData.side).toBe("long");
+    expect(markers(chart(1))[0].extendData.side).toBe("short");
   });
 });

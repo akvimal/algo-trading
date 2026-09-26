@@ -68,6 +68,8 @@ export type OptionGroup = {
   combined_stop_loss_price: number | null;
   spot_stop_loss_price: number | null;
   spot_target_price: number | null;
+  /** The underlying's price when the group opened. */
+  entry_spot_price?: number | null;
   live_combined_price?: number | null;
   live_spot_price?: number | null;
   unrealized_pnl?: number | null;

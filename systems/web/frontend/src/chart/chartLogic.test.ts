@@ -124,9 +124,9 @@ describe("saved chart settings", () => {
   });
 
   it("tool settings default off", () => {
-    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false });
-    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true });
-    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true });
+    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true });
+    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false });
+    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false });
   });
 
   it("drawings are kept per instrument, shared by every candle size", () => {
@@ -220,5 +220,45 @@ describe("structure overlays", () => {
     const live = liveSetups([{ label: "15m", data }, { label: "5m", data: { ...data, setups: [{ ...data.setups[0], status: "confirmed" }] } }]);
     expect(live.map((s) => `${s.tf} ${s.status}`)).toEqual(["15m triggered", "5m confirmed"]);
     expect(liveSetups([{ label: "15m", data }], 0)).toEqual([]);
+  });
+});
+
+import { compactPnl, isContractOf, optionLabel, pnlTone, toChartTrades } from "./trades";
+
+describe("trades on the chart", () => {
+  const pos = (over: Record<string, unknown>) =>
+    ({ id: "p", symbol: "NIFTY-Sep2026-FUT", action: "BUY", quantity: 65, entry_price: 100, entry_time: "2026-09-25T04:00:00Z", exit_price: null, exit_time: null, pnl: null, unrealized_pnl: 12, status: "OPEN", option_group_id: null, ...over }) as never;
+
+  it("matches a contract of the instrument, not a lookalike", () => {
+    expect(isContractOf("NIFTY-Sep2026-FUT", "NIFTY")).toBe(true);
+    expect(isContractOf("nifty", "NIFTY")).toBe(true);
+    expect(isContractOf("NIFTYBEES", "NIFTY")).toBe(false);
+    expect(isContractOf("BANKNIFTY-Sep2026-FUT", "NIFTY")).toBe(false);
+  });
+
+  it("uses the live result while open and the booked one once closed", () => {
+    const [open, closed] = toChartTrades("NIFTY", [pos({}), pos({ id: "c", status: "CLOSED", pnl: -40, unrealized_pnl: 999, exit_price: 90, exit_time: "2026-09-25T05:00:00Z" })], [], 0);
+    expect(open.pnl).toBe(12);
+    expect(closed).toMatchObject({ pnl: -40, exitPrice: 90, exitTs: Date.parse("2026-09-25T05:00:00Z") });
+  });
+
+  it("ignores rejected rows, option legs and trades before the window", () => {
+    const rows = [pos({ status: "REJECTED" }), pos({ option_group_id: "g" }), pos({ id: "early", entry_time: "2026-09-01T04:00:00Z" }), pos({ id: "ok" })];
+    expect(toChartTrades("NIFTY", rows, [], Date.parse("2026-09-20T00:00:00Z")).map((t) => t.id)).toEqual(["ok"]);
+  });
+
+  it("names option trades plainly", () => {
+    expect(optionLabel({ strategy_type: "naked_call", action: "BUY" })).toBe("Naked Call");
+    expect(optionLabel({ strategy_type: "naked_put", action: "SELL" })).toBe("Naked Put");
+    expect(optionLabel({ strategy_type: "bull_call_spread", action: "BUY" })).toBe("Bull Call");
+    expect(optionLabel({ strategy_type: "long_straddle", action: "BUY" })).toBe("Straddle");
+  });
+
+  it("writes results compactly, with a proper minus", () => {
+    expect(compactPnl(1234)).toBe("+1.2k");
+    expect(compactPnl(-450)).toBe("−450");
+    expect(compactPnl(null)).toBe("–");
+    expect(pnlTone(0)).toBe("flat");
+    expect(pnlTone(-1)).toBe("dn");
   });
 });

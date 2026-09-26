@@ -1,5 +1,5 @@
 import { api } from "./http";
-import type { Candle, Ltp, MarketRegime, PendingOrder, ResolvedUnderlying, Segment } from "./types";
+import type { Candle, Ltp, MarketRegime, OptionGroup, PendingOrder, Position, ResolvedUnderlying, Segment } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 
 export const resolveUnderlying = (segment: Segment, symbol: string) =>
@@ -18,6 +18,24 @@ export const getLtp = (exchange: string, symbol: string) => api<Ltp>("marketData
 
 export const getRegime = (exchange: string, symbol: string, interval: string) =>
   api<MarketRegime>("marketData", `/regime?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=${interval}`);
+
+/** The person's open trades (with live results) and their most recent closed ones, for the segments on
+ * screen, to draw on the chart. Each of the four requests stands alone: a slow quote for the live result
+ * must not take the closed trades away. */
+export async function loadChartTrades(segments: Segment[]): Promise<{ positions: Position[]; groups: OptionGroup[] }> {
+  const none = <T,>() => [] as T[];
+  const calls = segments.flatMap((s) => [
+    api<Position[]>("execution", `/positions?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<Position>),
+    api<Position[]>("execution", `/positions?segment=${s}&status=CLOSED&limit=50`).catch(none<Position>),
+    api<OptionGroup[]>("execution", `/option-groups?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<OptionGroup>),
+    api<OptionGroup[]>("execution", `/option-groups?segment=${s}&status=CLOSED&limit=50`).catch(none<OptionGroup>),
+  ]);
+  const results = await Promise.all(calls);
+  return {
+    positions: results.filter((_, i) => i % 4 < 2).flat() as Position[],
+    groups: results.filter((_, i) => i % 4 >= 2).flat() as OptionGroup[],
+  };
+}
 
 export const listWaitingOrders = () => api<PendingOrder[]>("execution", "/pending-orders?status=pending");
 export const cancelWaitingOrder = (id: string) => api<PendingOrder>("execution", `/pending-orders/${id}`, { method: "DELETE" });

@@ -1,6 +1,7 @@
 import { IndicatorSeries, LineType, registerIndicator, registerOverlay, type IndicatorFigureStyle, type OverlayFigure } from "klinecharts";
 import { ACCENT, BUY, SELL } from "./colors";
 import { computeSupertrend } from "./supertrend";
+import { compactPnl, pnlTone, type TradeMarkerExtend } from "./trades";
 
 export { ACCENT, BUY, SELL };
 
@@ -13,6 +14,7 @@ const INK = "#0f1216";
 export const STRUCTURE_GROUP = "structure";
 export const PLAN_GROUP = "plan";
 export const PEER_GROUP = "peer";
+export const TRADES_GROUP = "trades";
 
 export type ObExtend = { tf: string; kind: "demand" | "supply"; role: "orderblock" | "breaker"; proximal: number; distal: number; mitigated: boolean; counterTrend: boolean };
 export type FvgExtend = { kind: "bullish" | "bearish"; top: number; bottom: number; filled: boolean };
@@ -94,6 +96,61 @@ export function registerChartExtensions(): void {
       const x = coordinates[0]?.x;
       if (x == null || !Number.isFinite(x)) return [];
       return [{ type: "line", attrs: { coordinates: [{ x, y: 0 }, { x, y: bounding.height }] }, styles: { color: "rgba(147, 161, 177, 0.8)", size: 1, style: "dashed", dashedValue: [3, 3] }, ignoreEvent: true }];
+    },
+  });
+
+  // One of the person's own trades. A future or spot trade is an arrow at its entry; while open it also
+  // runs a dashed line to the right edge with its live result, and once closed it joins the entry to the
+  // exit with a line coloured by how it turned out. An option trade has no price of its own on this chart,
+  // so it is a diamond at the underlying's price when it opened, with its result beside it.
+  registerOverlay({
+    name: "tradeMarker",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+      const d = overlay.extendData as TradeMarkerExtend | undefined;
+      const c0 = coordinates[0];
+      if (!d || !c0 || !yAxis || !Number.isFinite(c0.x)) return [];
+      const yE = yAxis.convertToPixel(d.entryPrice);
+      if (!Number.isFinite(yE)) return [];
+      const long = d.side === "long";
+      const dir = long ? BUY : SELL;
+      const tone = pnlTone(d.pnl);
+      const result = tone === "up" ? BUY : tone === "dn" ? SELL : "#93a1b1";
+      const badge = (glyph: string, bg: string): OverlayFigure => ({
+        type: "text",
+        attrs: { x: 0, y: 0, text: glyph, align: "center", baseline: "middle" },
+        styles: { color: INK, size: 12, weight: "bold", backgroundColor: bg, borderColor: INK, borderSize: 1.5, borderRadius: 8, paddingLeft: 4, paddingRight: 4, paddingTop: 4, paddingBottom: 4 },
+        ignoreEvent: true,
+      });
+      const at = (f: OverlayFigure, x: number, y: number): OverlayFigure => ({ ...f, attrs: { ...(f.attrs as object), x, y } } as OverlayFigure);
+      const label = (text: string, x: number, y: number, bg: string, align: "left" | "right", size = 10): OverlayFigure => ({
+        type: "text",
+        attrs: { x, y, text, align, baseline: "bottom" },
+        styles: { color: INK, size, weight: "bold", backgroundColor: bg, borderRadius: 3, paddingLeft: 3, paddingRight: 3, paddingTop: 1, paddingBottom: 1 },
+        ignoreEvent: true,
+      });
+      const entryGlyph = d.kind === "option" ? "◆" : long ? "▲" : "▼";
+      const figs: OverlayFigure[] = [at(badge(entryGlyph, dir), c0.x, yE)];
+
+      if (d.state === "open") {
+        const right = bounding.width;
+        figs.push({ type: "line", attrs: { coordinates: [{ x: c0.x, y: yE }, { x: right, y: yE }] }, styles: { color: dir, size: 1.5, style: "dashed", dashedValue: [5, 3] }, ignoreEvent: true });
+        figs.push(label(`${d.label} · ${compactPnl(d.pnl)}`, right - 4, yE - 9, result, "right", 11));
+        return figs;
+      }
+
+      const c1 = coordinates[1];
+      const hasExit = d.exitPrice != null && !!c1 && Number.isFinite(c1.x);
+      const x1 = hasExit ? c1!.x : c0.x;
+      const yX = hasExit ? yAxis.convertToPixel(d.exitPrice as number) : yE;
+      if (!Number.isFinite(yX)) return figs;
+      if (hasExit) {
+        figs.push({ type: "line", attrs: { coordinates: [{ x: c0.x, y: yE }, { x: x1, y: yX }] }, styles: { color: result, size: 2, style: "solid" }, ignoreEvent: true });
+        figs.push(at(badge("✕", result), x1, yX));
+      }
+      figs.push(label(`${compactPnl(d.pnl)}${d.reason ? ` · ${d.reason.replace(/_/g, " ")}` : ""}`, x1 + 5, yX - 9, result, "left"));
+      return figs;
     },
   });
 

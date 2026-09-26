@@ -2,8 +2,8 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, type FormEvent } 
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
 import { getAccounts } from "../api/settings";
-import { cancelWaitingOrder, listWaitingOrders } from "../api/trade";
-import type { OptionGroup, Position } from "../api/types";
+import { cancelWaitingOrder, listWaitingOrders, loadChartTrades } from "../api/trade";
+import type { OptionGroup, Position, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
 import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, saveIndicatorParams, saveIndicators, saveStructure, saveTools, type StructureConfig } from "../chart/config";
@@ -13,6 +13,7 @@ import { IndicatorMenu } from "../chart/IndicatorMenu";
 import { StructureMenu } from "../chart/StructureMenu";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
+import { toChartTrades } from "../chart/trades";
 import { TradeTicket } from "../components/TradeTicket";
 import { CLASSIC_APP_URL } from "../config";
 import { formatPrice } from "../format";
@@ -82,6 +83,14 @@ export function TradePage() {
     const d = datas[i];
     return (d.exchange && d.symbol ? pushed[`${d.exchange}:${d.symbol}`] : undefined) ?? d.polledPrice ?? null;
   };
+
+  // ---- the person's own trades, drawn on the charts ----
+  const segmentKey = (twoUp ? [ws.panes[0].segment, ws.panes[1].segment] : [ws.panes[0].segment]).filter((s, i, a) => a.indexOf(s) === i).join(",");
+  const tradeRows = useResource(() => loadChartTrades(segmentKey.split(",") as Segment[]), [segmentKey], { pollMs: 15_000, enabled: tools.tradesOn });
+  const chartTrades = useMemo(
+    () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? toChartTrades(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups, 0) : [])),
+    [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   // ---- account, budget, waiting orders ----
   const accounts = useResource(getAccounts, []);
@@ -241,6 +250,9 @@ export function TradePage() {
             onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
           />
           <StructureMenu config={structure} onChange={setStructure} />
+          <button className="chip-btn" aria-pressed={tools.tradesOn} title="Show your own trades on the chart" onClick={() => setTools((t) => ({ ...t, tradesOn: !t.tradesOn }))}>
+            My trades
+          </button>
           {wide && (
             <>
               <button className="chip-btn" aria-pressed={ws.ticketOpen} onClick={() => setWs((cur) => ({ ...cur, ticketOpen: !cur.ticketOpen }))}>
@@ -329,6 +341,7 @@ export function TradePage() {
                       indicatorsHidden={tools.indicatorsHidden}
                       structure={structure}
                       plan={active === i ? plan : []}
+                      trades={chartTrades[i]}
                       magnet={tools.magnet}
                       drawingsHidden={tools.drawingsHidden}
                       pickField={active === i ? pickField : null}
@@ -363,7 +376,7 @@ export function TradePage() {
             </div>
           )}
           <p className="faint ws-note">
-            Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. The intraday auto-trader and price-alert drawings are still in the{" "}
+            Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. The intraday auto-trader, price-alert drawings and OI level lines are still in the{" "}
             <a href={CLASSIC_APP_URL}>classic app</a>.
           </p>
         </div>

@@ -1,0 +1,45 @@
+/* Design tokens. Dark-first (traders sit in front of screens for hours), IBM Plex,
+   restrained palette: one accent, and profit/loss colours that always travel WITH a sign
+   or label, so colour is never the only signal (colour-blind safe, glare safe). */
+:root {
+  --bg: #0e1319;
+  --surface: #151c24;
+  --surface-2: #1c2530;
+  --border: #263241;
+  --text: #e6edf3;
+  --text-dim: #93a1b1;
+  --text-faint: #6b7a8b;
+  --accent: #4cc2ff;
+  --accent-ink: #06202e;
+  --up: #3ddc97;
+  --dn: #ff6b6b;
+  --warn: #f5b74a;
+
+  --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --gutter: 16px;
+  --tap: 44px; /* minimum touch target */
+  --nav-h: 60px;
+  --sidebar-w: 224px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f6f9;
+    --surface: #ffffff;
+    --surface-2: #eef1f5;
+    --border: #d8dee6;
+    --text: #131a22;
+    --text-dim: #4a5866;
+    --text-faint: #7a8794;
+    --accent: #0a6cb0;
+    --accent-ink: #ffffff;
+    --up: #14804f;
+    --dn: #c62f2f;
+    --warn: #a86a00;
+  }
+}

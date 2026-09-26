@@ -84,6 +84,8 @@ def update_preferences(payload: PreferencesUpdate, user: models.User = Depends(g
     (admin flag, email, the risk acknowledgement) can be reached through here."""
     if payload.experience is not None:
         user.experience = payload.experience
+    if payload.markets is not None:
+        user.markets = list(dict.fromkeys(payload.markets))
     if payload.onboarded is True and user.onboarded_at is None:
         user.onboarded_at = datetime.now(timezone.utc)
     elif payload.onboarded is False:

@@ -7,8 +7,8 @@ column, update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Text, func
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy import Boolean, Column, ForeignKey, Text, func, text
+from sqlalchemy.dialects.postgresql import ARRAY, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
 from app.config import settings
@@ -35,6 +35,8 @@ class User(Base):
     # is denser; onboarded_at is when the first-run flow was finished or skipped (NULL = not yet).
     experience = Column(Text, nullable=False, server_default="guided")
     onboarded_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    # The markets picked at first-run setup (migrations/025); all three until the person chooses.
+    markets = Column(ARRAY(Text), nullable=False, server_default=text("ARRAY['NSE', 'MCX', 'CRYPTO']"))
 
 
 class BrokerCredentials(Base):

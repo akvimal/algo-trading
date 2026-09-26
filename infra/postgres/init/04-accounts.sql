@@ -78,3 +78,6 @@ BEGIN
         ALTER TABLE accounts.users ADD CONSTRAINT users_experience_check CHECK (experience IN ('guided', 'pro'));
     END IF;
 END $$;
+
+-- Markets chosen at first-run setup (2026-09-26); all three until the person picks. See migrations/025-user-markets.sql.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS markets TEXT[] NOT NULL DEFAULT ARRAY['NSE', 'MCX', 'CRYPTO'];

@@ -101,3 +101,33 @@ def test_nothing_else_about_the_account_can_be_set_through_it():
 def test_the_real_route_needs_a_login():
     client = TestClient(app)  # no lifespan
     assert client.put("/auth/me/preferences", json={"experience": "pro"}).status_code == 401
+
+
+def test_a_new_user_has_all_three_markets_until_they_choose():
+    assert UserOut.model_validate(user()).markets == ["NSE", "MCX", "CRYPTO"]
+
+
+def test_older_rows_without_markets_still_serialise_as_all_three():
+    bare = SimpleNamespace(id="00000000-0000-0000-0000-000000000003", email="d@e.f", name="D", created_at=datetime.now(timezone.utc),
+                           is_admin=False, risk_acknowledged_at=None, risk_acknowledged_version=None)
+    assert UserOut.model_validate(bare).markets == ["NSE", "MCX", "CRYPTO"]
+
+
+def test_choosing_markets_keeps_the_order_and_drops_duplicates():
+    row = user()
+    update(row, markets=["MCX", "NSE", "MCX"])
+    assert row.markets == ["MCX", "NSE"]
+
+
+def test_at_least_one_market_and_only_known_ones():
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(markets=[])
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(markets=["NSE", "FOREX"])
+
+
+def test_markets_alone_changes_nothing_else():
+    stamp = datetime.now(timezone.utc)
+    row = user(experience="pro", onboarded_at=stamp)
+    update(row, markets=["NSE"])
+    assert row.experience == "pro" and row.onboarded_at == stamp and row.markets == ["NSE"]

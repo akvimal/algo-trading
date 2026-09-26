@@ -504,3 +504,52 @@ table.t th {
 .field input[aria-invalid="true"] {
   border-color: var(--dn);
 }
+
+/* ---- Scan ---- */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+.select-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.select-field select,
+.select-field input {
+  min-height: var(--tap);
+  padding: 0 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 15px;
+  width: 100%;
+}
+.legend {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.legend summary {
+  cursor: pointer;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+.scan-card {
+  display: grid;
+  gap: 8px;
+}
+.scan-card .pair {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  flex-wrap: wrap;
+}

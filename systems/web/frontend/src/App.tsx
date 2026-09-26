@@ -3,6 +3,7 @@ import { useAuth } from "./auth/AuthContext";
 import { AppShell } from "./layout/AppShell";
 import { ComingPage } from "./pages/ComingPage";
 import { MorePage } from "./pages/MorePage";
+import { ScanPage } from "./pages/ScanPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { SignInPage } from "./pages/SignInPage";
@@ -22,7 +23,7 @@ export function App() {
       <Route element={<RequireAuth />}>
         <Route element={<AppShell />}>
           <Route index element={<TodayPage />} />
-          <Route path="scan" element={<ComingPage title="Scan" blurb="Ideas that match your rules, ready to review before you trade." />} />
+          <Route path="scan" element={<ScanPage />} />
           <Route path="trade" element={<ComingPage title="Trade" blurb="Place a paper trade with your stop-loss and target set up front." />} />
           <Route path="portfolio" element={<PortfolioPage />} />
           <Route path="more">

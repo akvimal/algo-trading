@@ -39,6 +39,14 @@ export type Position = {
   target_price: number | null;
   option_group_id: string | null;
   charges?: number | null;
+  slippage_cost?: number | null;
+  exit_reason?: string | null;
+  notes?: string | null;
+  setup_tag?: string | null;
+  confidence?: number | null;
+  reviewed_at?: string | null;
+  review_violation?: boolean | null;
+  auto_traded?: boolean;
 };
 
 export type OptionGroup = {
@@ -61,6 +69,14 @@ export type OptionGroup = {
   exit_time: string | null;
   segment?: "NSE" | "MCX" | "CRYPTO";
   charges?: number | null;
+  slippage_cost?: number | null;
+  exit_reason?: string | null;
+  notes?: string | null;
+  setup_tag?: string | null;
+  confidence?: number | null;
+  reviewed_at?: string | null;
+  review_violation?: boolean | null;
+  auto_traded?: boolean;
 };
 
 export type SentimentUnderlying = {
@@ -75,3 +91,66 @@ export type SentimentUnderlying = {
 export type MarketSentiment = {
   exchanges: Record<string, { direction: string; strength: string; score: number | null; underlyings: SentimentUnderlying[] }>;
 };
+
+export type Segment = "NSE" | "MCX" | "CRYPTO";
+
+export type EquityPoint = { snapshot_date: string; balance: number; unrealized_pnl: number; equity: number; is_reset_point: boolean };
+
+export type EquityStats = {
+  since: string;
+  baseline: number;
+  latest_equity: number;
+  return_pct: number;
+  peak_equity: number;
+  max_drawdown_pct: number;
+  days_tracked: number;
+  points: number;
+};
+
+export type EquityHistory = { segment: Segment; days: number; points: EquityPoint[]; stats: EquityStats | null };
+
+export type PerformanceStats = {
+  trades: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  win_rate_pct: number | null;
+  total_pnl: number;
+  gross_pnl: number;
+  total_charges: number;
+  total_slippage: number;
+  avg_pnl: number | null;
+  avg_win: number | null;
+  avg_loss: number | null;
+  profit_factor: number | null;
+  avg_r: number | null;
+  best_trade: number | null;
+  worst_trade: number | null;
+  max_consecutive_losses: number;
+};
+
+export type DisciplineComponent = { rate: number | null; trades: number };
+
+export type Discipline = {
+  score: number | null;
+  window_days: number;
+  window_start: string | null;
+  trade_count: number;
+  planned: DisciplineComponent;
+  plan_adherence: DisciplineComponent;
+  plan_review: DisciplineComponent & { before_rate: number | null; after_rate: number | null };
+  outcome: DisciplineComponent & { win_rate: number | null; avg_r: number | null };
+};
+
+export type Performance = {
+  segment: Segment;
+  scope: "epoch" | "all";
+  since: string | null;
+  performance: PerformanceStats | null;
+  discipline: Discipline;
+  equity: EquityStats | null;
+};
+
+export type Requirement = { key: string; label: string; required: string; actual: string; met: boolean };
+
+export type LiveEligibility = { segment: Segment; enforced: boolean; eligible: boolean; requirements: Requirement[] };

@@ -22,3 +22,6 @@ infra/postgres/data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# local dev seed-user credentials (never commit)
+.dev-seed-user.local

@@ -169,10 +169,16 @@ export function lookbackRange(days: number, now: Date = new Date()): { from: str
 export const drawingsKey = (exchange: string, symbol: string) => `drawings:${exchange}:${symbol}`;
 
 export type StoredPoint = { timestamp?: number; value?: number };
-export type StoredDrawing = { name: string; points: StoredPoint[]; color?: string };
+/** A drawing as saved. `alert`, when set, means the page tells the person when the price crosses it. */
+export type StoredDrawing = { name: string; points: StoredPoint[]; color?: string; alert?: { trigger: "cross" | "close" } };
 
 const isDrawings = (v: unknown): v is StoredDrawing[] =>
   Array.isArray(v) && v.every((d) => d && typeof d.name === "string" && Array.isArray(d.points));
 
-export const loadDrawings = (exchange: string, symbol: string): StoredDrawing[] => read(drawingsKey(exchange, symbol), [], isDrawings);
+/** What was saved, made safe: an alert setting that is not a known trigger is dropped. */
+export const loadDrawings = (exchange: string, symbol: string): StoredDrawing[] =>
+  read(drawingsKey(exchange, symbol), [], isDrawings).map((d) => {
+    const { alert, ...rest } = d;
+    return alert && (alert.trigger === "cross" || alert.trigger === "close") ? { ...rest, alert: { trigger: alert.trigger } } : rest;
+  });
 export const saveDrawings = (exchange: string, symbol: string, d: StoredDrawing[]) => write(drawingsKey(exchange, symbol), d);

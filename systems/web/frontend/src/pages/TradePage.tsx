@@ -8,8 +8,11 @@ import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
 import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, saveIndicatorParams, saveIndicators, saveStructure, saveTools, type StructureConfig } from "../chart/config";
 import { ACCENT, BUY, SELL } from "../chart/colors";
+import { AlertBar } from "../chart/AlertBar";
+import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
+import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
@@ -159,6 +162,22 @@ export function TradePage() {
   const paneRefs = [useRef<ChartPaneHandle>(null), useRef<ChartPaneHandle>(null)];
   const [tool, setTool] = useState<DrawTool | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
+  const [selection, setSelection] = useState<SelectionInfo | null>(null);
+  // ---- alerts on drawings: watched by the chart, announced here ----
+  const [armed, setArmed] = useState<[number, number]>([0, 0]);
+  const [flash, setFlash] = useState<string | null>(null);
+  const flashTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(flashTimer.current), []);
+  function fireAlert(message: string) {
+    announceAlert(message);
+    setFlash(message);
+    window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlash(null), 8_000);
+  }
+  function setAlert(trigger: Trigger | null) {
+    if (trigger) prepareAlertChannel(); // a click, so the browser lets it wake the sound and ask about notifications
+    paneRefs[active].current?.setSelectedAlert(trigger);
+  }
   const chooseTool = (t: DrawTool | null) => {
     setTool(t);
     if (t) paneRefs[active].current?.startDrawing(t);
@@ -168,6 +187,7 @@ export function TradePage() {
     // Changing which chart is active puts a half-armed tool down.
     setTool(null);
     setHasSelection(false);
+    setSelection(null);
   }, [active]);
 
   // ---- linked crosshair and scrolling ----
@@ -311,6 +331,15 @@ export function TradePage() {
         )}
 
         <div className="ws-charts">
+          <AlertBar selection={selection} armed={shown.reduce<number>((n, i) => n + armed[i], 0)} onSet={setAlert} />
+          {flash && (
+            <div className="ws-flash" role="status" aria-live="polite" data-testid="alert-flash">
+              <strong>Price alert</strong> {flash}
+              <button className="link-btn" onClick={() => setFlash(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
           <div className={`ws-grid layout-${twoUp ? ws.layout : "single"}`}>
           {shown.map((i) => {
             const d = datas[i];
@@ -359,7 +388,10 @@ export function TradePage() {
                         if (active !== i) return;
                         if (!s.drawing) setTool(null);
                         setHasSelection(s.selected);
+                        setSelection(s.selection);
                       }}
+                      onAlert={fireAlert}
+                      onArmed={(n) => setArmed((cur) => (i === 0 ? [n, cur[1]] : [cur[0], n]))}
                       onStructure={(r) => setReports((cur) => (i === 0 ? [r, cur[1]] : [cur[0], r]))}
                       onCursor={linkCrosshair ? (ts) => setCursor({ from: i, ts }) : undefined}
                       peerCursor={linkCrosshair && cursor.from !== i ? cursor.ts : null}
@@ -384,7 +416,7 @@ export function TradePage() {
             </div>
           )}
           <p className="faint ws-note">
-            Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. The intraday auto-trader and price-alert drawings are still in the{" "}
+            Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. Select a line or zone to be alerted when the price crosses it. The intraday auto-trader is still in the{" "}
             <a href={CLASSIC_APP_URL}>classic app</a>.
           </p>
         </div>

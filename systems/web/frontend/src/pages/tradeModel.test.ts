@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, analyzeTicket, buildOrder, checkList, computeRR, favorable, instrumentFor, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, favorable, instrumentFor, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -237,5 +237,35 @@ describe("peer confirmation", () => {
   it("is a caution when the other index is going sideways, and not applicable before it loads", () => {
     expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: "neutral" })?.status).toBe("warn");
     expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: null })?.status).toBe("na");
+  });
+});
+
+describe("defaultLevel", () => {
+  it("puts a stop against the trade, a target in its favour, and a waiting entry back from the price", () => {
+    expect(defaultLevel("stop", "BUY", 1000)).toBe(995);
+    expect(defaultLevel("target", "BUY", 1000)).toBe(1010);
+    expect(defaultLevel("entry", "BUY", 1000)).toBe(997);
+    expect(defaultLevel("stop", "SELL", 1000)).toBe(1005);
+    expect(defaultLevel("target", "SELL", 1000)).toBe(990);
+    expect(defaultLevel("entry", "SELL", 1000)).toBe(1003);
+  });
+
+  it("gives levels on the right side for the order, which the ticket accepts", () => {
+    for (const action of ["BUY", "SELL"] as const) {
+      const t = ticket({ action, stop: String(defaultLevel("stop", action, 1000)), target: String(defaultLevel("target", action, 1000)) });
+      expect(analyzeTicket(t, ctx()).errors).toEqual([]);
+    }
+  });
+
+  it("rounds to the decimals the chart shows", () => {
+    expect(defaultLevel("stop", "BUY", 23140.5)).toBe(23024.8);
+    expect(defaultLevel("stop", "BUY", 12.5)).toBe(12.438);
+    expect(defaultLevel("target", "BUY", 0.5)).toBe(0.505);
+  });
+
+  it("has nothing to offer without a usable price", () => {
+    expect(defaultLevel("stop", "BUY", null)).toBeNull();
+    expect(defaultLevel("stop", "BUY", 0)).toBeNull();
+    expect(defaultLevel("stop", "BUY", Number.NaN)).toBeNull();
   });
 });

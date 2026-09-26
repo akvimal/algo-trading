@@ -27,7 +27,7 @@ import {
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
-import { EMPTY_TICKET, PRESETS, analyzeTicket, instrumentFor, type Ticket } from "./tradeModel";
+import { EMPTY_TICKET, PRESETS, analyzeTicket, defaultLevel, instrumentFor, type Ticket } from "./tradeModel";
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
@@ -131,6 +131,15 @@ export function TradePage() {
     if (!pickField) return;
     setTicket((t) => ({ ...t, [pickField]: String(price), ...(pickField === "entry" ? { orderType: "limit" as const } : {}) }));
     setPickField(null);
+  }
+
+  // A plan line dragged on the chart (or added with "Add line") sets the ticket's price for that field.
+  function setLevel(field: PriceField, price: number) {
+    setTicket((t) => ({ ...t, [field]: String(price), ...(field === "entry" ? { orderType: "limit" as const } : {}) }));
+  }
+  function addLine(field: PriceField) {
+    const level = defaultLevel(field, ticket.action, activePrice);
+    if (level != null) setLevel(field, level);
   }
 
   // ---- drawing tools act on the active chart ----
@@ -324,6 +333,7 @@ export function TradePage() {
                       drawingsHidden={tools.drawingsHidden}
                       pickField={active === i ? pickField : null}
                       onPick={onPick}
+                      onPlanMove={setLevel}
                       onDrawingChange={(s) => {
                         if (active !== i) return;
                         if (!s.drawing) setTool(null);
@@ -387,6 +397,7 @@ export function TradePage() {
                 peer={peer}
                 pickField={pickField}
                 onPickField={setPickField}
+                onAddLine={addLine}
                 onPlaced={() => {
                   waiting.reload();
                   today.reload();

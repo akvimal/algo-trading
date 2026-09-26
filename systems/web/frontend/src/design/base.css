@@ -1015,3 +1015,8 @@ table.t th {
   font-family: var(--font-mono);
   font-size: 12px;
 }
+
+.field-actions {
+  display: inline-flex;
+  gap: 12px;
+}

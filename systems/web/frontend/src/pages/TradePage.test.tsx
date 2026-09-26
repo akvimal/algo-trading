@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +29,7 @@ let attachFails: boolean;
 let candleFailures: number;
 let structure: Record<string, any>;
 let structureFails: boolean;
+let ltpFails: boolean;
 
 // The newest candle opened a few minutes ago, as during market hours, so a price tick lands on a live bar.
 const candlesFor = (symbol: string) => {
@@ -53,6 +54,7 @@ beforeEach(() => {
   attachFails = false;
   candleFailures = 0;
   structureFails = false;
+  ltpFails = false;
   structure = { ...emptyStructure };
   waiting = [];
   screenIs(false);
@@ -77,6 +79,7 @@ beforeEach(() => {
         const u = q("underlying");
         return json({ chart_symbol: u, chart_exchange: "NSE", trade_symbol: u, trade_exchange: "NSE", lot_size: lotSize, expiry: null });
       }
+      if (url.includes("/quotes/ltp") && ltpFails) return json({ detail: "no quote" }, 503);
       if (url.includes("/quotes/ltp")) return json({ exchange: "NSE", symbol: q("symbol"), ltp: prices[q("symbol")] ?? prices.default, provider: "dhan" });
       if (url.includes("/candles/history")) {
         if (candleFailures > 0) {
@@ -1069,5 +1072,154 @@ describe("when candles will not load", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => (String(url).includes("/candles/history") ? json([]) : base(url, init))));
     renderAt("/trade?symbol=NIFTY");
     expect(await screen.findByText(/No candles for NIFTY at 15m/)).toBeInTheDocument();
+  });
+});
+
+describe("dragging the plan lines", () => {
+  beforeEach(() => screenIs(true));
+  const line = (c: ReturnType<typeof chart>, label: string) => c.overlaysNamed("planLine").find((o) => o.extendData.label === label)!;
+
+  it("moves the stop on the ticket when its line is dragged on the chart, rounded to the chart's decimals", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const t = await ticket();
+    const c = await loaded();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await waitFor(() => expect(line(c, "Stop")).toBeDefined());
+    const ov = line(c, "Stop");
+    expect(typeof ov.handlers.onPressedMoveEnd).toBe("function"); // it can be grabbed
+    act(() => c.moveOverlay(ov.id, [{ timestamp: c.data[c.data.length - 1].timestamp, value: 985.1234 }]));
+    await waitFor(() => expect(t.getByLabelText("Stop-loss")).toHaveValue("985.12"));
+    // the same line moved: it was not deleted and drawn again
+    await waitFor(() => expect(line(c, "Stop").points[0].value).toBe(985.12));
+    expect(line(c, "Stop").id).toBe(ov.id);
+    expect(c.overlaysNamed("planLine")).toHaveLength(1);
+  });
+
+  it("sizes the trade from the dragged stop: the risk on the ticket follows the chart", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    const summary = within(t.getByTestId("summary"));
+    await waitFor(() => expect(summary.getByText("₹1,000")).toBeInTheDocument());
+    act(() => c.moveOverlay(line(c, "Stop").id, [{ timestamp: c.data[0].timestamp, value: 980 }]));
+    await waitFor(() => expect(t.getByLabelText("Stop-loss")).toHaveValue("980"));
+    expect(summary.getByText("50 (auto)")).toBeInTheDocument(); // a wider stop, a smaller size: 1% of 1,00,000 over 20
+    expect(summary.getByText("₹1,000")).toBeInTheDocument(); // the same money at risk
+  });
+
+  it("drags the target the same way, and keeps both lines apart", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Target"), "1030");
+    await waitFor(() => expect(c.overlaysNamed("planLine")).toHaveLength(2));
+    act(() => c.moveOverlay(line(c, "Target").id, [{ timestamp: c.data[0].timestamp, value: 1055.5 }]));
+    await waitFor(() => expect(t.getByLabelText("Target")).toHaveValue("1055.5"));
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("990");
+  });
+
+  it("dragging the entry of a waiting order changes its price", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    await user.click(t.getByRole("button", { name: "Wait for a price" }));
+    await user.type(t.getByLabelText("Enter when the price reaches"), "980");
+    await waitFor(() => expect(line(c, "Entry")).toBeDefined());
+    act(() => c.moveOverlay(line(c, "Entry").id, [{ timestamp: c.data[0].timestamp, value: 975 }]));
+    await waitFor(() => expect(t.getByLabelText("Enter when the price reaches")).toHaveValue("975"));
+  });
+
+  it("a line dragged to the wrong side is refused by the ticket, in words, and nothing is sent", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await waitFor(() => expect(line(c, "Stop")).toBeDefined());
+    act(() => c.moveOverlay(line(c, "Stop").id, [{ timestamp: c.data[0].timestamp, value: 1020 }]));
+    expect(await t.findByText(/stop-loss must be below/)).toBeInTheDocument();
+    expect(t.getByRole("button", { name: /Buy RELIANCE/ })).toBeDisabled();
+  });
+
+  it("keeps one overlay per level when the ticket is edited by hand, moving it rather than redrawing", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await waitFor(() => expect(line(c, "Stop")).toBeDefined());
+    const id = line(c, "Stop").id;
+    fireEvent.change(t.getByLabelText("Stop-loss"), { target: { value: "985" } }); // one edit, so the field is never empty in between
+    await waitFor(() => expect(line(c, "Stop").points[0].value).toBe(985));
+    expect(line(c, "Stop").id).toBe(id);
+    await user.clear(t.getByLabelText("Stop-loss"));
+    await waitFor(() => expect(c.overlaysNamed("planLine")).toHaveLength(0)); // a cleared field removes its line
+  });
+
+  it("draws the lines again, once each, when the candle size changes", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Target"), "1030");
+    await waitFor(() => expect(c.overlaysNamed("planLine")).toHaveLength(2));
+    const applied = c.applyCalls;
+    await user.click(screen.getByRole("button", { name: "5m" }));
+    await waitFor(() => expect(c.applyCalls).toBeGreaterThan(applied));
+    await waitFor(() => expect(c.overlaysNamed("planLine").map((o) => o.extendData.label).sort()).toEqual(["Stop", "Target"]));
+  });
+
+  it("adds a starting line on the right side of the price for the order, ready to drag", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("995");
+    await user.click(t.getByRole("button", { name: "Add target line" }));
+    expect(t.getByLabelText("Target")).toHaveValue("1010");
+    await waitFor(() => expect(c.overlaysNamed("planLine").map((o) => o.extendData.label).sort()).toEqual(["Stop", "Target"]));
+    // the button goes away once the field has a value: there is a line to drag
+    expect(t.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument();
+  });
+
+  it("puts the starting line the other side of the price for a sell, and for a waiting entry", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.click(t.getByRole("button", { name: "Sell" }));
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("1005");
+    await user.click(t.getByRole("button", { name: "Wait for a price" }));
+    await user.click(t.getByRole("button", { name: "Add entry line" }));
+    expect(t.getByLabelText("Enter when the price reaches")).toHaveValue("1003");
+  });
+
+  it("offers no starting line until there is a price to base it on", async () => {
+    ltpFails = true;
+    renderAt("/trade?symbol=RELIANCE");
+    await loaded();
+    await waitFor(() => expect(calls.some((x) => x.url.includes("/quotes/ltp"))).toBe(true));
+    expect(screen.getByTestId("price-0")).toHaveTextContent("–");
+    expect(screen.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument();
+  });
+
+  it("lines exist only on the active chart, so a drag on one cannot touch the other's ticket", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    const t = within(await screen.findByTestId("ticket"));
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await waitFor(() => expect(chart(0).overlaysNamed("planLine")).toHaveLength(1));
+    expect(chart(1).overlaysNamed("planLine")).toHaveLength(0);
   });
 });

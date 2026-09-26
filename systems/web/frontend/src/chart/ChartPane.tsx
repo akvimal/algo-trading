@@ -15,7 +15,7 @@ import { chartStyles, prefersLight } from "./theme";
 
 export type DrawTool = "segment" | "rayLine" | "horizontalStraightLine" | "priceLine" | "rect" | "fibonacciLine" | "parallelStraightLine";
 
-export type PlanLine = { key: string; price: number; label: string; color: string; dashed?: boolean };
+export type PlanLine = { key: PriceField; price: number; label: string; color: string; dashed?: boolean };
 
 export type PriceField = "entry" | "stop" | "target";
 
@@ -49,6 +49,8 @@ type Props = {
   /** Set while the person is choosing a price on the chart for a ticket field. */
   pickField: PriceField | null;
   onPick: (price: number) => void;
+  /** The person dragged a plan line to a new price (reported once, when they let go). */
+  onPlanMove?: (key: PriceField, price: number) => void;
   onDrawingChange?: (state: { drawing: boolean; selected: boolean }) => void;
   onStructure?: (report: StructureReport) => void;
   /** Linking: this chart reports where the pointer is (a bar time, or null when it leaves) and the visible
@@ -97,6 +99,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const panesRef = useRef<Map<string, string>>(new Map());
   const paramsAppliedRef = useRef<Map<string, string>>(new Map());
   const hoverRef = useRef<number | null>(null);
+  const planIds = useRef<Map<string, string>>(new Map());
+  const planEpoch = useRef(0);
   const peerCursorId = useRef<string | null>(null);
   const applyingPeer = useRef(false);
   const seqRef = useRef(0);
@@ -319,16 +323,47 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     }
   }, [indicators, indicatorParams, indicatorsHidden]);
 
-  // ---- the trade plan: entry, stop and target drawn as levels ----
+  // ---- the trade plan: entry, stop and target drawn as levels the person can drag ----
+  // Each level keeps ONE overlay for as long as it exists: a changed price moves it (so a drag in
+  // progress is never interrupted by a redraw), a cleared one removes it. A reloaded series starts them
+  // again from nothing, since the old anchors belong to the old bars.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || status !== "ready") return;
-    chart.removeOverlay({ groupId: PLAN_GROUP });
+    if (planEpoch.current !== epoch) {
+      planEpoch.current = epoch;
+      chart.removeOverlay({ groupId: PLAN_GROUP });
+      planIds.current.clear();
+    }
     const anchor = barsRef.current[barsRef.current.length - 1]?.timestamp;
     if (anchor == null) return;
+    const wanted = new Set<string>(plan.map((l) => l.key));
+    for (const [key, id] of [...planIds.current]) {
+      if (!wanted.has(key)) {
+        chart.removeOverlay(id);
+        planIds.current.delete(key);
+      }
+    }
     for (const l of plan) {
-      const extendData: PlanLineExtend = { label: l.label, color: l.color, dashed: l.dashed ?? true };
-      chart.createOverlay({ name: "planLine", groupId: PLAN_GROUP, lock: true, points: [{ timestamp: anchor, value: l.price }], extendData });
+      const extendData: PlanLineExtend = { key: l.key, label: l.label, color: l.color, dashed: l.dashed ?? true };
+      const points = [{ timestamp: anchor, value: l.price }];
+      const existing = planIds.current.get(l.key);
+      if (existing) {
+        chart.overrideOverlay({ id: existing, points, extendData });
+        continue;
+      }
+      const id = chart.createOverlay({
+        name: "planLine",
+        groupId: PLAN_GROUP,
+        points,
+        extendData,
+        onPressedMoveEnd: (e: OverlayEvent) => {
+          const v = e.overlay.points[0]?.value;
+          if (typeof v === "number" && Number.isFinite(v)) propsRef.current.onPlanMove?.(l.key, Number(v.toFixed(pricePrecision(v))));
+          return false;
+        },
+      });
+      if (typeof id === "string") planIds.current.set(l.key, id);
     }
   }, [plan, status, epoch]);
 

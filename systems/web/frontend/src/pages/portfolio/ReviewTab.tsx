@@ -1,9 +1,9 @@
-import { CLASSIC_APP_URL } from "../../config";
 import type { Discipline, Performance } from "../../api/types";
 import type { Resource } from "../../hooks/useResource";
 import { ErrorNotice, Signed, Skeleton } from "../../components/bits";
 import { Stat } from "../../components/Stat";
-import { formatDay, formatInr, formatPct, formatPnl } from "../../format";
+import { TradeListItem } from "../../components/TradeListItem";
+import { formatInr, formatPct, formatPnl } from "../../format";
 import { bySetup, disciplineBand, unreviewed, type Trade } from "../portfolioModel";
 
 const BAND_TEXT = { none: "Not enough trades yet", low: "Needs work", fair: "Getting there", good: "Good" } as const;
@@ -19,12 +19,12 @@ function rows(d: Discipline): Row[] {
   ];
 }
 
-type Props = { perf: Resource<Performance>; trades: Trade[] };
+type Props = { perf: Resource<Performance>; trades: Trade[]; onSaved: () => void };
 
-export function ReviewTab({ perf, trades }: Props) {
+export function ReviewTab({ perf, trades, onSaved }: Props) {
   const p = perf.data?.performance ?? null;
   const d = perf.data?.discipline ?? null;
-  const manual = trades.filter((t) => !t.autoTraded);
+  const manual = trades.filter((t) => t.manual && !t.autoTraded);
   const owed = unreviewed(trades);
   const setups = bySetup(manual);
   const band = d ? disciplineBand(d.score) : "none";
@@ -124,19 +124,9 @@ export function ReviewTab({ perf, trades }: Props) {
           {owed.length === 0 ? "Every closed trade is reviewed." : `${owed.length} of ${manual.length} closed trades still need a review.`}
         </p>
         {owed.slice(0, 8).map((t) => (
-          <div className="list-row" key={t.id}>
-            <span>
-              {t.symbol} <span className="faint">{formatDay(t.exitTime)}</span>
-              {t.setupTag && <span className="pill"> {t.setupTag}</span>}
-            </span>
-            <Signed value={t.pnl} text={formatPnl(t.pnl)} />
-          </div>
+          <TradeListItem key={t.id} trade={t} onSaved={onSaved} cta="tap to review" />
         ))}
-        {owed.length > 0 && (
-          <p style={{ marginBottom: 0 }}>
-            <a href={CLASSIC_APP_URL}>Write the reviews in the classic app</a> <span className="faint">(reviewing is being rebuilt here)</span>
-          </p>
-        )}
+        {owed.length > 8 && <p className="faint" style={{ margin: "8px 0 0", fontSize: 12 }}>Showing the 8 most recent. Review these and the rest appear.</p>}
       </div>
     </div>
   );

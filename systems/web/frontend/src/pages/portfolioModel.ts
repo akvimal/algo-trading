@@ -1,4 +1,4 @@
-import type { EquityPoint, EquityStats, LiveEligibility, OptionGroup, Position, Requirement } from "../api/types";
+import type { EquityPoint, EquityStats, LiveEligibility, OptionGroup, Position, Requirement, Segment } from "../api/types";
 
 export type CurvePoint = { date: string; equity: number };
 
@@ -48,11 +48,15 @@ export type Trade = {
   violation: boolean | null;
   charges: number | null;
   autoTraded: boolean;
+  segment: Segment;
+  /** Opened by hand (no strategy behind it): only these have a discipline review. */
+  manual: boolean;
+  reviewNotes: string | null;
 };
 
 /** Closed trades as a person thinks of them: an option group is ONE trade (its legs are
  * Position rows too and must never appear alongside it), rejected orders are not trades. */
-export function closedTrades(positions: Position[], groups: OptionGroup[]): Trade[] {
+export function closedTrades(positions: Position[], groups: OptionGroup[], fallbackSegment: Segment = "NSE"): Trade[] {
   const trades: Trade[] = [];
   for (const p of positions) {
     if (p.status !== "CLOSED" || p.option_group_id != null || !p.exit_time) continue;
@@ -60,6 +64,7 @@ export function closedTrades(positions: Position[], groups: OptionGroup[]): Trad
       id: p.id, kind: "position", symbol: p.symbol, action: p.action, pnl: p.pnl ?? 0, exitTime: p.exit_time,
       exitReason: p.exit_reason ?? null, setupTag: p.setup_tag ?? null, confidence: p.confidence ?? null, notes: p.notes ?? null,
       reviewed: p.reviewed_at != null, violation: p.review_violation ?? null, charges: p.charges ?? null, autoTraded: Boolean(p.auto_traded),
+      segment: p.segment, manual: p.strategy_id == null, reviewNotes: p.review_notes ?? null,
     });
   }
   for (const g of groups) {
@@ -68,6 +73,7 @@ export function closedTrades(positions: Position[], groups: OptionGroup[]): Trad
       id: g.id, kind: "group", symbol: g.underlying_symbol, action: g.action, pnl: g.pnl ?? 0, exitTime: g.exit_time,
       exitReason: g.exit_reason ?? null, setupTag: g.setup_tag ?? null, confidence: g.confidence ?? null, notes: g.notes ?? null,
       reviewed: g.reviewed_at != null, violation: g.review_violation ?? null, charges: g.charges ?? null, autoTraded: Boolean(g.auto_traded),
+      segment: g.segment ?? fallbackSegment, manual: g.strategy_id == null, reviewNotes: g.review_notes ?? null,
     });
   }
   return trades.sort((a, b) => b.exitTime.localeCompare(a.exitTime));
@@ -95,10 +101,10 @@ export function bySetup(trades: Trade[]): SetupRow[] {
     .sort((a, b) => b.trades - a.trades || a.tag.localeCompare(b.tag));
 }
 
-/** Trades the person should still review. Automated (strategy/auto-trader) fills are not
- * reviewed by hand, so they never count as owed. */
+/** Trades the person should still review. Anything a strategy or the auto-trader opened is
+ * not reviewed by hand (the server refuses it), so it never counts as owed. */
 export function unreviewed(trades: Trade[]): Trade[] {
-  return trades.filter((t) => !t.reviewed && !t.autoTraded);
+  return trades.filter((t) => !t.reviewed && t.manual && !t.autoTraded);
 }
 
 export type Graduation = { met: number; total: number; unmet: Requirement[]; eligible: boolean; enforced: boolean };

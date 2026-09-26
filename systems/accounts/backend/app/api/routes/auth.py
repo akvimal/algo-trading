@@ -8,7 +8,7 @@ from app.adapters.db import models
 from app.adapters.db.session import get_db
 from app.auth import get_current_user
 from app.rate_limit import check_and_record_signup, check_login_allowed, client_ip, record_login_failure, record_login_success
-from app.domain.models import LoginRequest, SignupRequest, TokenResponse, UserOut
+from app.domain.models import LoginRequest, PreferencesUpdate, SignupRequest, TokenResponse, UserOut
 from app.domain.risk_ack import RISK_ACK_VERSION
 from app.domain.security import create_access_token, hash_password, verify_password
 
@@ -75,4 +75,19 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
 @router.get("/me", response_model=UserOut)
 def me(user: models.User = Depends(get_current_user)):
+    return user
+
+
+@router.put("/me/preferences", response_model=UserOut)
+def update_preferences(payload: PreferencesUpdate, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Only the caller's own row, and only these two fields: nothing else about the account
+    (admin flag, email, the risk acknowledgement) can be reached through here."""
+    if payload.experience is not None:
+        user.experience = payload.experience
+    if payload.onboarded is True and user.onboarded_at is None:
+        user.onboarded_at = datetime.now(timezone.utc)
+    elif payload.onboarded is False:
+        user.onboarded_at = None
+    db.commit()
+    db.refresh(user)
     return user

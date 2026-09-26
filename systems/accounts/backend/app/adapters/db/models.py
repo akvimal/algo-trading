@@ -31,6 +31,10 @@ class User(Base):
     # (app/domain/risk_ack.py). NULL for accounts that predate it.
     risk_acknowledged_at = Column(TIMESTAMP(timezone=True), nullable=True)
     risk_acknowledged_version = Column(Text, nullable=True)
+    # First-run onboarding (migrations/024): 'guided' adds hints and a first-week checklist, 'pro'
+    # is denser; onboarded_at is when the first-run flow was finished or skipped (NULL = not yet).
+    experience = Column(Text, nullable=False, server_default="guided")
+    onboarded_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class BrokerCredentials(Base):

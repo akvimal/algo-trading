@@ -1,0 +1,308 @@
+import { IndicatorSeries, LineType, registerIndicator, registerOverlay, type IndicatorFigureStyle, type OverlayFigure } from "klinecharts";
+import { ACCENT, BUY, SELL } from "./colors";
+import { computeSupertrend } from "./supertrend";
+
+export { ACCENT, BUY, SELL };
+
+// Custom drawings and indicators the chart library does not ship. They register globally and once
+// (a second call is a no-op), so any number of chart panes can share them. Colours here are literal
+// because the canvas cannot read CSS variables; they match the app's up/down/accent tokens.
+
+const INK = "#0f1216";
+
+export const STRUCTURE_GROUP = "structure";
+export const PLAN_GROUP = "plan";
+export const PEER_GROUP = "peer";
+
+export type ObExtend = { tf: string; kind: "demand" | "supply"; role: "orderblock" | "breaker"; proximal: number; distal: number; mitigated: boolean; counterTrend: boolean };
+export type FvgExtend = { kind: "bullish" | "bearish"; top: number; bottom: number; filled: boolean };
+export type BreakExtend = { tf: string; kind: "bos" | "choch"; direction: "up" | "down"; price: number };
+export type TrendMarkExtend = { tf: string; trend: "up" | "down" | "range"; price: number };
+export type SetupExtend = { tf: string; direction: "long" | "short"; status: "confirmed" | "triggered" | "hit_target" | "hit_sl" | "invalidated"; entry: number; stop: number; target: number; rr: number };
+export type PlanLineExtend = { label: string; color: string; dashed: boolean };
+
+const pill = (color: string, size = 10) => ({
+  color,
+  size,
+  backgroundColor: "rgba(15, 18, 22, 0.78)",
+  paddingLeft: 3,
+  paddingRight: 3,
+  paddingTop: 1,
+  paddingBottom: 1,
+  borderRadius: 2,
+});
+
+const NO_DEFAULTS = { needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false } as const;
+
+let registered = false;
+
+export function registerChartExtensions(): void {
+  if (registered) return;
+  registered = true;
+
+  // klinecharts 9 has no rectangle: a supply/demand zone is two clicked corners and a translucent box.
+  registerOverlay({
+    name: "rect",
+    totalStep: 3,
+    needDefaultPointFigure: true,
+    needDefaultXAxisFigure: true,
+    needDefaultYAxisFigure: true,
+    createPointFigures: ({ coordinates, overlay }) => {
+      if (coordinates.length < 2) return [];
+      const [a, b] = coordinates;
+      return [
+        {
+          type: "polygon",
+          attrs: { coordinates: [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y: b.y }, { x: a.x, y: b.y }] },
+          styles: { ...(overlay.styles?.polygon ?? {}), style: "stroke_fill" },
+        },
+      ];
+    },
+  });
+
+  // A level of the trade plan (entry, stop, target): a full-width line with a label at the price axis.
+  registerOverlay({
+    name: "planLine",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, bounding, yAxis }) => {
+      const v = overlay.points[0]?.value;
+      const d = overlay.extendData as PlanLineExtend | undefined;
+      if (!yAxis || v == null || !d || !Number.isFinite(v)) return [];
+      const y = yAxis.convertToPixel(v);
+      if (!Number.isFinite(y)) return [];
+      return [
+        { type: "line", attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] }, styles: { color: d.color, size: 1.5, style: d.dashed ? "dashed" : "solid", dashedValue: [6, 4] }, ignoreEvent: true },
+        {
+          type: "text",
+          attrs: { x: bounding.width - 4, y: y - 3, text: `${d.label} ${v.toFixed(2)}`, align: "right", baseline: "bottom" },
+          styles: { color: INK, size: 11, weight: "bold", backgroundColor: d.color, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 2 },
+          ignoreEvent: true,
+        },
+      ];
+    },
+  });
+
+  // The other chart's crosshair: a faint dashed vertical line at the time the person is pointing at over
+  // there, so two charts read as one when they are linked.
+  registerOverlay({
+    name: "peerCursor",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ coordinates, bounding }) => {
+      const x = coordinates[0]?.x;
+      if (x == null || !Number.isFinite(x)) return [];
+      return [{ type: "line", attrs: { coordinates: [{ x, y: 0 }, { x, y: bounding.height }] }, styles: { color: "rgba(147, 161, 177, 0.8)", size: 1, style: "dashed", dashedValue: [3, 3] }, ignoreEvent: true }];
+    },
+  });
+
+  // Order blocks and breakers: a band from the origin candle to the right edge, redrawn every frame so
+  // it extends as the live bar advances and survives pan and zoom. Counter-trend zones are dimmed.
+  registerOverlay({
+    name: "htfOrderBlock",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+      if (coordinates.length < 1 || !coordinates[0] || !yAxis) return [];
+      const d = overlay.extendData as ObExtend | undefined;
+      if (!d) return [];
+      const leftX = coordinates[0].x;
+      const rightX = bounding.width;
+      if (!Number.isFinite(leftX) || rightX <= leftX) return [];
+      const yA = yAxis.convertToPixel(d.proximal);
+      const yB = yAxis.convertToPixel(d.distal);
+      const top = Math.min(yA, yB);
+      const height = Math.max(1, Math.abs(yA - yB));
+      const breaker = d.role === "breaker";
+      const dim = d.counterTrend ? 0.45 : 1;
+      const rgb = d.kind === "demand" ? "62, 207, 142" : "232, 88, 106";
+      const label = `${d.tf} ${breaker ? "breaker" : d.kind}${d.mitigated ? " · tested" : ""}${d.counterTrend ? " · counter" : ""}`;
+      return [
+        {
+          type: "rect",
+          attrs: { x: leftX, y: top, width: rightX - leftX, height },
+          styles: { style: "stroke_fill", color: `rgba(${rgb}, ${(breaker ? 0.22 : 0.16) * dim})`, borderColor: `rgba(${rgb}, ${0.85 * dim})`, borderSize: breaker ? 2 : 1, borderStyle: d.mitigated ? "dashed" : "solid" },
+          ignoreEvent: true,
+        },
+        { type: "text", attrs: { x: rightX - 4, y: top + 2, text: label, baseline: "top", align: "right" }, styles: pill(`rgba(${rgb}, 1)`), ignoreEvent: true },
+      ];
+    },
+  });
+
+  // Break of structure / change of character: the swing level that broke, from the pivot candle to the
+  // candle that closed through it. CHoCH (it flipped the trend) is dashed, BOS solid.
+  registerOverlay({
+    name: "htfStructureBreak",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, coordinates, yAxis }) => {
+      if (coordinates.length < 2 || !coordinates[0] || !coordinates[1] || !yAxis) return [];
+      const d = overlay.extendData as BreakExtend | undefined;
+      if (!d) return [];
+      const leftX = coordinates[0].x;
+      const rightX = coordinates[1].x;
+      if (!Number.isFinite(leftX) || !Number.isFinite(rightX) || rightX <= leftX) return [];
+      const y = yAxis.convertToPixel(d.price);
+      const color = d.direction === "up" ? "rgba(62, 207, 142, 0.85)" : "rgba(232, 88, 106, 0.85)";
+      return [
+        { type: "line", attrs: { coordinates: [{ x: leftX, y }, { x: rightX, y }] }, styles: { color, size: 1, style: d.kind === "choch" ? "dashed" : "solid" }, ignoreEvent: true },
+        { type: "circle", attrs: { x: rightX, y, r: 2.5 }, styles: { color, style: "fill" }, ignoreEvent: true },
+        { type: "text", attrs: { x: rightX + 3, y: y - 13, text: `${d.tf} ${d.kind.toUpperCase()} ${d.direction === "up" ? "▲" : "▼"}`, baseline: "top", align: "left" }, styles: pill(color), ignoreEvent: true },
+      ];
+    },
+  });
+
+  // Trend-change marks: a dashed full-height line at the candle where the confirmed trend flipped.
+  registerOverlay({
+    name: "htfTrendMark",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+      if (coordinates.length < 1 || !coordinates[0]) return [];
+      const d = overlay.extendData as TrendMarkExtend | undefined;
+      const x = coordinates[0].x;
+      if (!d || !Number.isFinite(x)) return [];
+      const color = d.trend === "up" ? "rgba(62, 207, 142, 0.95)" : d.trend === "down" ? "rgba(232, 88, 106, 0.95)" : "rgba(176, 180, 190, 0.85)";
+      const glyph = d.trend === "up" ? "▲" : d.trend === "down" ? "▼" : "◆";
+      const label = d.trend === "range" ? "TREND LOST" : d.trend === "up" ? "TREND UP" : "TREND DOWN";
+      const figs: OverlayFigure[] = [
+        { type: "line", attrs: { coordinates: [{ x, y: 0 }, { x, y: bounding.height }] }, styles: { color, size: 1.5, style: "dashed" }, ignoreEvent: true },
+        { type: "text", attrs: { x: x + 3, y: 4, text: `${d.tf} ${glyph} ${label}`, baseline: "top", align: "left" }, styles: { ...pill("rgba(15, 18, 22, 0.95)"), backgroundColor: color }, ignoreEvent: true },
+      ];
+      if (yAxis) {
+        const y = yAxis.convertToPixel(d.price);
+        if (Number.isFinite(y)) figs.push({ type: "text", attrs: { x, y, text: glyph, align: "center", baseline: "middle" }, styles: { color, size: 13 }, ignoreEvent: true });
+      }
+      return figs;
+    },
+  });
+
+  // A rejection-confirmed setup: entry, stop and target lines with a risk box and a reward box, from the
+  // confirming candle to where it resolved (or the right edge while it is live). Resolved ones fade.
+  // A throw in here would freeze the whole chart, so every coordinate is checked.
+  registerOverlay({
+    name: "htfSetup",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+      if (coordinates.length < 1 || !coordinates[0] || !yAxis) return [];
+      const d = overlay.extendData as SetupExtend | undefined;
+      if (!d) return [];
+      const x0 = coordinates[0].x;
+      if (!Number.isFinite(x0)) return [];
+      const x1raw = coordinates.length >= 2 && coordinates[1] && Number.isFinite(coordinates[1].x) ? coordinates[1].x : bounding.width;
+      const x1 = Math.max(x1raw, x0 + 2);
+      const yE = yAxis.convertToPixel(d.entry);
+      const yS = yAxis.convertToPixel(d.stop);
+      const yT = yAxis.convertToPixel(d.target);
+      if (!Number.isFinite(yE) || !Number.isFinite(yS) || !Number.isFinite(yT)) return [];
+      const live = d.status === "confirmed" || d.status === "triggered";
+      const a = live ? 1 : 0.55;
+      const red = `rgba(232, 88, 106, ${0.9 * a})`;
+      const green = `rgba(62, 207, 142, ${0.9 * a})`;
+      const neutral = `rgba(230, 233, 238, ${a})`;
+      const label = `${d.tf} ${d.direction} · ${d.status} · ${Number.isFinite(d.rr) ? d.rr.toFixed(1) : "?"}R`;
+      return [
+        { type: "rect", attrs: { x: x0, y: Math.min(yE, yS), width: x1 - x0, height: Math.max(1, Math.abs(yE - yS)) }, styles: { style: "fill", color: `rgba(232, 88, 106, ${0.16 * a})` }, ignoreEvent: true },
+        { type: "rect", attrs: { x: x0, y: Math.min(yE, yT), width: x1 - x0, height: Math.max(1, Math.abs(yE - yT)) }, styles: { style: "fill", color: `rgba(62, 207, 142, ${0.16 * a})` }, ignoreEvent: true },
+        { type: "line", attrs: { coordinates: [{ x: x0, y: yE }, { x: x1, y: yE }] }, styles: { color: neutral, size: 1.5, style: d.status === "triggered" ? "solid" : "dashed" }, ignoreEvent: true },
+        { type: "line", attrs: { coordinates: [{ x: x0, y: yS }, { x: x1, y: yS }] }, styles: { color: red, size: 1.5 }, ignoreEvent: true },
+        { type: "line", attrs: { coordinates: [{ x: x0, y: yT }, { x: x1, y: yT }] }, styles: { color: green, size: 1.5 }, ignoreEvent: true },
+        {
+          type: "text",
+          attrs: { x: x1 - 3, y: Math.min(yE, yS, yT) - 15, text: label, baseline: "top", align: "right" },
+          styles: { ...pill(neutral, 11), weight: "bold", backgroundColor: "rgba(15, 18, 22, 0.82)", borderColor: neutral, borderSize: 1 },
+          ignoreEvent: true,
+        },
+      ];
+    },
+  });
+
+  // Fair value gaps: a thin amber band, unlabelled (they are small and frequent); filled ones fainter.
+  registerOverlay({
+    name: "htfFvg",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+      if (coordinates.length < 1 || !coordinates[0] || !yAxis) return [];
+      const d = overlay.extendData as FvgExtend | undefined;
+      if (!d) return [];
+      const leftX = coordinates[0].x;
+      const rightX = bounding.width;
+      if (!Number.isFinite(leftX) || rightX <= leftX) return [];
+      const yTop = yAxis.convertToPixel(d.top);
+      const yBottom = yAxis.convertToPixel(d.bottom);
+      return [
+        {
+          type: "rect",
+          attrs: { x: leftX, y: Math.min(yTop, yBottom), width: rightX - leftX, height: Math.max(1, Math.abs(yTop - yBottom)) },
+          styles: { style: "stroke_fill", color: `rgba(224, 176, 88, ${d.filled ? 0.07 : 0.2})`, borderColor: `rgba(224, 176, 88, ${d.filled ? 0.25 : 0.55})`, borderSize: 1, borderStyle: d.filled ? "dashed" : "solid" },
+          ignoreEvent: true,
+        },
+      ];
+    },
+  });
+
+  // Supertrend: the trailing line that flips from below the price to above it.
+  type SupertrendPoint = { up?: number; down?: number };
+  registerIndicator<SupertrendPoint>({
+    name: "SUPERTREND",
+    shortName: "Supertrend",
+    series: IndicatorSeries.Price,
+    calcParams: [10, 3],
+    precision: 2,
+    shouldOhlc: true,
+    figures: [
+      { key: "up", title: "up: ", type: "line", styles: () => ({ color: BUY }) },
+      { key: "down", title: "down: ", type: "line", styles: () => ({ color: SELL }) },
+    ],
+    regenerateFigures: null,
+    calc: (dataList, indicator) => {
+      const [period, mult] = indicator.calcParams as number[];
+      return computeSupertrend(dataList, period, mult).map((pt) => (pt.dir === "up" ? { up: pt.line } : { down: pt.line }));
+    },
+  });
+
+  // RSI with the two reference bands configurable, replacing the built-in (whose parameters are three
+  // separate periods and which has no overbought/oversold lines): [period, overbought, oversold].
+  type RsiPoint = { rsi?: number; overbought?: number; oversold?: number };
+  registerIndicator<RsiPoint>({
+    name: "RSI",
+    shortName: "RSI",
+    series: IndicatorSeries.Normal,
+    calcParams: [14, 70, 30],
+    precision: 2,
+    figures: [
+      { key: "rsi", title: "RSI: ", type: "line" },
+      { key: "overbought", title: "OB: ", type: "line", styles: () => ({ color: SELL, style: LineType.Dashed, size: 1 }) as unknown as IndicatorFigureStyle },
+      { key: "oversold", title: "OS: ", type: "line", styles: () => ({ color: BUY, style: LineType.Dashed, size: 1 }) as unknown as IndicatorFigureStyle },
+    ],
+    regenerateFigures: null,
+    calc: (dataList, indicator) => {
+      const [rawPeriod, rawOb, rawOs] = indicator.calcParams as number[];
+      const period = Math.max(1, Math.round(rawPeriod || 14));
+      const overbought = rawOb ?? 70;
+      const oversold = rawOs ?? 30;
+      const out: RsiPoint[] = new Array(dataList.length);
+      let sumUp = 0;
+      let sumDown = 0;
+      for (let i = 0; i < dataList.length; i++) {
+        const k = dataList[i];
+        const diff = k.close - (i > 0 ? dataList[i - 1].close : k.close);
+        if (diff > 0) sumUp += diff;
+        else sumDown += Math.abs(diff);
+        let rsi: number | undefined;
+        if (i >= period - 1) {
+          rsi = sumDown !== 0 ? 100 - 100 / (1 + sumUp / sumDown) : 100;
+          const ago = dataList[i - (period - 1)];
+          const agoPrev = dataList[i - period] ?? ago;
+          const agoDiff = ago.close - agoPrev.close;
+          if (agoDiff > 0) sumUp -= agoDiff;
+          else sumDown -= Math.abs(agoDiff);
+        }
+        out[i] = { rsi, overbought, oversold };
+      }
+      return out;
+    },
+  });
+}

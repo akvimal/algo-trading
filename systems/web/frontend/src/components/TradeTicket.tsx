@@ -7,8 +7,9 @@ import { formatInr, formatPrice } from "../format";
 import { SETUP_TAGS } from "../pages/journalModel";
 import {
   ACTION_WORD, analyzeTicket, buildOrder, checkList, favorable, optionsAvailable,
-  type Action, type BuildMeta, type DayBudget, type Moneyness, type RegimeRead, type Ticket, type TicketContext,
+  type Action, type BuildMeta, type DayBudget, type Moneyness, type PeerRead, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
+import type { PriceField } from "../chart/ChartPane";
 import { TextField } from "./Field";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
@@ -29,13 +30,17 @@ type Props = {
   meta: BuildMeta;
   regime: RegimeRead | null;
   budget: DayBudget;
+  peer?: PeerRead;
+  /** Which field the person is picking a price for on the chart, if any. */
+  pickField?: PriceField | null;
+  onPickField?: (f: PriceField | null) => void;
   onPlaced: () => void;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, onPlaced }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onPlaced }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -46,7 +51,13 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, on
     onChange({ ...t, [key]: value });
   };
   const a = analyzeTicket(t, ctx);
-  const checks = checkList(t, a, ctx, regime, budget);
+  const checks = checkList(t, a, ctx, regime, budget, peer);
+  const pickAction = (f: PriceField) =>
+    onPickField ? (
+      <button className="link-btn" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
+        {pickField === f ? "Click the chart…" : "Pick on chart"}
+      </button>
+    ) : undefined;
   const fav = favorable(checks);
   const stock = meta.instrument === "spot";
   const options = optionsAvailable(ctx.symbol);
@@ -124,10 +135,10 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, on
       </div>
 
       {limit && (
-        <TextField id="t-entry" label="Enter when the price reaches" value={t.entry} onChange={(v) => set("entry", v)} hint={guided ? `It fires the first time the price crosses this level${isOption ? " (the option is priced then)" : ""}. Watched on our servers, so it works with the app closed.` : undefined} />
+        <TextField id="t-entry" label="Enter when the price reaches" action={pickAction("entry")} value={t.entry} onChange={(v) => set("entry", v)} hint={guided ? `It fires the first time the price crosses this level${isOption ? " (the option is priced then)" : ""}. Watched on our servers, so it works with the app closed.` : undefined} />
       )}
-      <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} value={t.stop} onChange={(v) => set("stop", v)} hint={guided ? (isOption ? "A level of the underlying. The trade closes if the price gets there." : "Where you admit you are wrong. The trade closes there.") : undefined} />
-      <TextField id="t-target" label="Target" value={t.target} onChange={(v) => set("target", v)} hint={guided ? "Optional. Where you take profit." : undefined} />
+      <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} hint={guided ? (isOption ? "A level of the underlying. The trade closes if the price gets there." : "Where you admit you are wrong. The trade closes there.") : undefined} />
+      <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} hint={guided ? "Optional. Where you take profit." : undefined} />
       <TextField
         id="t-lots"
         label={stock ? "Number of shares" : "Number of lots"}

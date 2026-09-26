@@ -13,6 +13,7 @@ export function TextField({
   type = "text",
   suffix,
   id,
+  action,
 }: {
   label: string;
   value: string;
@@ -24,13 +25,18 @@ export function TextField({
   type?: "text" | "password";
   suffix?: string;
   id: string;
+  /** Something to the right of the label, such as a "pick on chart" button. */
+  action?: ReactNode;
 }) {
   const describedBy = [hint ? `${id}-hint` : "", error ? `${id}-err` : ""].filter(Boolean).join(" ") || undefined;
   return (
     <div className="field">
-      <label htmlFor={id}>
-        <span>{label}</span>
-      </label>
+      <div className="field-head">
+        <label htmlFor={id}>
+          <span>{label}</span>
+        </label>
+        {action}
+      </div>
       <div className="input-row">
         <input
           id={id}

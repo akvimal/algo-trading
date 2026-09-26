@@ -1,4 +1,4 @@
-import type { Candle, Segment } from "../api/types";
+import type { Segment } from "../api/types";
 
 export type Action = "BUY" | "SELL";
 export type Strategy = "future" | "naked" | "spread";
@@ -183,10 +183,12 @@ export type Check = { key: string; label: string; status: CheckStatus; detail: s
 
 export type RegimeRead = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; trend: "up" | "down" | "range"; adx: number };
 export type DayBudget = { limit: number; lostToday: number } | null;
+/** The other chart on the desk, when there is one: which way it is pointing. */
+export type PeerRead = { symbol: string; direction: "up" | "down" | "neutral" | null } | null;
 
 /** The "before you place" list: each item is a fact about this trade, marked in favour of it,
  * against it, or not applicable. It informs the decision; it never blocks the order. */
-export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: RegimeRead | null, budget: DayBudget): Check[] {
+export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: RegimeRead | null, budget: DayBudget, peer: PeerRead = null): Check[] {
   const buy = t.action === "BUY";
   const checks: Check[] = [];
 
@@ -217,6 +219,19 @@ export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: Re
       checks.push({
         key: "trend", label: `Structure: ${regime.trend === "up" ? "higher highs" : "lower lows"}`, status: aligned ? "good" : "warn",
         detail: aligned ? "Recent structure agrees with your side." : "Recent structure points the other way.",
+      });
+    }
+  }
+
+  if (peer) {
+    const label = `Confirmed by ${peer.symbol}`;
+    if (peer.direction === null) checks.push({ key: "peer", label, status: "na", detail: `${peer.symbol} has not loaded yet.` });
+    else if (peer.direction === "neutral") checks.push({ key: "peer", label, status: "warn", detail: `${peer.symbol} is going sideways, so it does not confirm either side.` });
+    else {
+      const with_ = (peer.direction === "up") === buy;
+      checks.push({
+        key: "peer", label, status: with_ ? "good" : "bad",
+        detail: with_ ? `${peer.symbol} is moving the same way.` : `${peer.symbol} is moving the other way.`,
       });
     }
   }
@@ -284,18 +299,6 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
     stop: a.stop,
     target: a.target,
   };
-}
-
-/** Folds the latest price into the newest candle, so the chart moves with the price instead of only
- * when the next candle download arrives. It never adds a candle (a new bar comes from the next
- * download); it only lets the current one close at the live price and stretch its high or low. */
-export function applyTick(candles: Candle[], price: number | null): Candle[] {
-  if (price == null || !Number.isFinite(price) || candles.length === 0) return candles;
-  const last = candles[candles.length - 1];
-  const high = Math.max(last.high, price);
-  const low = Math.min(last.low, price);
-  if (last.close === price && last.high === high && last.low === low) return candles;
-  return [...candles.slice(0, -1), { ...last, close: price, high, low }];
 }
 
 export const ACTION_WORD = (a: Action) => (a === "BUY" ? "Buy" : "Sell");

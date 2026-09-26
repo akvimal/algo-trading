@@ -16,6 +16,12 @@ export type Account = {
   apply_charges: boolean;
   require_stop_loss: boolean;
   square_off_time: string | null;
+  risk_per_trade_pct: number;
+  min_reward_risk_ratio: number;
+  enforce_risk_based_lots: boolean;
+  slippage_bps: number;
+  max_order_value: number | null;
+  live_trading_consent_at: string | null;
 };
 
 export type Position = {
@@ -160,3 +166,6 @@ export type Requirement = { key: string; label: string; required: string; actual
 export type LiveEligibility = { segment: Segment; enforced: boolean; eligible: boolean; requirements: Requirement[] };
 
 export type ChecklistItem = { id: string; label: string; phase: "plan" | "review" | "day"; segments: Segment[]; sort_order: number; active: boolean };
+
+export type Credentials = { has_dhan: boolean; has_delta: boolean; has_openrouter: boolean; dhan_client_id_masked: string | null };
+export type Ltp = { exchange: string; symbol: string; ltp: number; provider: string };

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ApiError } from "../api/http";
-import { CLASSIC_APP_URL } from "../config";
+import { Link } from "react-router-dom";
 import { tone } from "../format";
 
 export function Skeleton({ lines = 3 }: { lines?: number }) {
@@ -28,9 +28,9 @@ export function ErrorNotice({ error, onRetry }: { error: ApiError; onRetry?: () 
         <p className="dim" style={{ margin: "6px 0 10px" }}>
           Live prices come from your own Dhan account. Add your Dhan client ID and access token, then come back here.
         </p>
-        <a className="btn btn-primary" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }} href={`${CLASSIC_APP_URL}/#settings`}>
+        <Link className="btn btn-primary" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }} to="/more/settings?tab=broker">
           Add Dhan keys
-        </a>
+        </Link>
       </div>
     );
   }

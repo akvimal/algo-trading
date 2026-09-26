@@ -26,3 +26,4 @@
 021-india-charges.sql|execution.accounts|apply_charges
 022-slippage.sql|execution.accounts|slippage_bps
 023-pending-orders.sql|execution.pending_orders|
+024-onboarding.sql|accounts.users|onboarded_at

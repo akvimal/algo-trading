@@ -3,6 +3,7 @@ import { ActionType, OverlayMode, dispose, init, type Chart, type Crosshair, typ
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
+import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
   INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
@@ -26,6 +27,8 @@ export type ChartPaneHandle = {
   cancelDrawing: () => void;
   clearDrawings: () => void;
   removeSelected: () => void;
+  /** Arm the selected drawing (or, with null, disarm it). Only lines and zones can be armed. */
+  setSelectedAlert: (trigger: Trigger | null) => void;
 };
 
 /** The visible window of a chart, in terms another chart can follow: the size of a bar and the time at the
@@ -57,7 +60,11 @@ type Props = {
   onPick: (price: number) => void;
   /** The person dragged a plan line to a new price (reported once, when they let go). */
   onPlanMove?: (key: PriceField, price: number) => void;
-  onDrawingChange?: (state: { drawing: boolean; selected: boolean }) => void;
+  onDrawingChange?: (state: { drawing: boolean; selected: boolean; selection: SelectionInfo | null }) => void;
+  /** An armed drawing was crossed: the words to tell the person. */
+  onAlert?: (message: string) => void;
+  /** How many drawings on this chart have an alert armed (reported whenever it changes). */
+  onArmed?: (count: number) => void;
   onStructure?: (report: StructureReport) => void;
   /** Linking: this chart reports where the pointer is (a bar time, or null when it leaves) and the visible
    * window; it draws the other chart's pointer and follows the other chart's window. */
@@ -107,6 +114,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const hoverRef = useRef<number | null>(null);
   const planIds = useRef<Map<string, string>>(new Map());
   const planEpoch = useRef(0);
+  // Which side of each armed drawing the price was on at the last check, by overlay id.
+  const sidesRef = useRef<Map<string, Side>>(new Map());
   const peerCursorId = useRef<string | null>(null);
   const applyingPeer = useRef(false);
   const seqRef = useRef(0);
@@ -251,12 +260,21 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const chart = chartRef.current;
     if (!chart || status !== "ready") return;
     const bars = barsRef.current;
-    const next = rollLiveBar(bars[bars.length - 1] ?? null, price, Date.now(), intervalMs, def.value !== "daily");
-    if (!next) return;
-    chart.updateData(next);
     const last = bars[bars.length - 1];
-    barsRef.current = last && last.timestamp === next.timestamp ? [...bars.slice(0, -1), next] : [...bars, next];
-    anchorRef.current = { timestamps: barsRef.current.map((b) => b.timestamp) };
+    const next = rollLiveBar(last ?? null, price, Date.now(), intervalMs, def.value !== "daily");
+    if (next) {
+      chart.updateData(next);
+      barsRef.current = last && last.timestamp === next.timestamp ? [...bars.slice(0, -1), next] : [...bars, next];
+      anchorRef.current = { timestamps: barsRef.current.map((b) => b.timestamp) };
+    }
+    if (price == null) return;
+    // Armed drawings: one that has not been looked at yet only learns which side it is on; a new bar
+    // starting means the one before it has closed, which "on a close" alerts judge by; every price judges
+    // the "as it crosses" ones.
+    seedAlerts(price);
+    if (next && last && next.timestamp !== last.timestamp) runAlerts("close", last.close);
+    runAlerts("cross", price);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seedAlerts and runAlerts read refs only
   }, [price, status, intervalMs, def.value]);
 
   // ---- linking: draw the other chart's pointer, and follow its window ----
@@ -412,35 +430,36 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       drawnRef.current.set(e.overlay.id, serialize(e.overlay));
       persist();
       pendingRef.current = null;
-      propsRef.current.onDrawingChange?.({ drawing: false, selected: selectedRef.current != null });
+      emitDrawing();
       return false;
     },
     onPressedMoveEnd: (e: OverlayEvent) => {
       drawnRef.current.set(e.overlay.id, serialize(e.overlay));
+      sidesRef.current.delete(e.overlay.id); // it moved: the next price only learns its side, it cannot cross
       persist();
+      emitDrawing();
       return false;
     },
     onRemoved: (e: OverlayEvent) => {
-      if (selectedRef.current === e.overlay.id) {
-        selectedRef.current = null;
-        propsRef.current.onDrawingChange?.({ drawing: pendingRef.current != null, selected: false });
-      }
+      if (selectedRef.current === e.overlay.id) selectedRef.current = null;
       if (pendingRef.current === e.overlay.id) pendingRef.current = null;
-      if (restoringRef.current) return false;
-      drawnRef.current.delete(e.overlay.id);
-      persist();
+      if (!restoringRef.current) {
+        drawnRef.current.delete(e.overlay.id);
+        sidesRef.current.delete(e.overlay.id);
+        persist();
+      }
+      emitDrawing();
+      emitArmed();
       return false;
     },
     onSelected: (e: OverlayEvent) => {
       selectedRef.current = e.overlay.id;
-      propsRef.current.onDrawingChange?.({ drawing: pendingRef.current != null, selected: true });
+      emitDrawing();
       return false;
     },
     onDeselected: (e: OverlayEvent) => {
-      if (selectedRef.current === e.overlay.id) {
-        selectedRef.current = null;
-        propsRef.current.onDrawingChange?.({ drawing: pendingRef.current != null, selected: false });
-      }
+      if (selectedRef.current === e.overlay.id) selectedRef.current = null;
+      emitDrawing();
       return false;
     },
     // Right-click deletes: the library ships no delete affordance and a 1px line is hard to aim at.
@@ -451,7 +470,39 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   });
 
   function serialize(o: Overlay): StoredDrawing {
-    return { name: o.name, points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })) };
+    const alert = drawnRef.current.get(o.id)?.alert;
+    return { name: o.name, points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })), ...(alert ? { alert } : {}) };
+  }
+
+  // ---- alerts on drawings ----
+  /** What the page is told about the drawing state: drawing in progress, something selected, and, for a
+   * selected line or zone, whether it is armed and where it is. */
+  function emitDrawing() {
+    const id = selectedRef.current;
+    const d = id ? drawnRef.current.get(id) : undefined;
+    const selection: SelectionInfo | null = d ? { alertable: ALERTABLE.has(d.name), trigger: d.alert?.trigger ?? null, level: levelText(d) } : null;
+    propsRef.current.onDrawingChange?.({ drawing: pendingRef.current != null, selected: id != null, selection });
+  }
+  function emitArmed() {
+    let n = 0;
+    for (const d of drawnRef.current.values()) if (d.alert) n += 1;
+    propsRef.current.onArmed?.(n);
+  }
+  function seedAlerts(price: number) {
+    for (const [id, d] of drawnRef.current) {
+      if (!d.alert || sidesRef.current.has(id)) continue;
+      const z = alertZone(d);
+      if (z) sidesRef.current.set(id, sideOf(price, z));
+    }
+  }
+  function runAlerts(phase: Trigger, price: number) {
+    for (const [id, d] of drawnRef.current) {
+      if (d.alert?.trigger !== phase) continue;
+      const r = checkAlert(propsRef.current.symbol, d, phase, sidesRef.current.get(id) ?? null, price);
+      if (!r) continue;
+      sidesRef.current.set(id, r.side);
+      if (r.message) propsRef.current.onAlert?.(r.message);
+    }
   }
 
   useEffect(() => {
@@ -472,6 +523,10 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (typeof id === "string") drawnRef.current.set(id, d);
     }
     restoringRef.current = false;
+    sidesRef.current.clear();
+    // A restored alert starts from where the price is now, not from whichever tick happens to come next.
+    if (propsRef.current.price != null) seedAlerts(propsRef.current.price);
+    emitArmed();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers() and the saved set read refs only; a new series always bumps epoch
   }, [epoch]);
 
@@ -488,22 +543,40 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (pendingRef.current) chart.removeOverlay(pendingRef.current);
       const id = chart.createOverlay({ name: tool, groupId: USER_DRAWINGS, mode: magnetMode(propsRef.current.magnet), ...handlers() });
       pendingRef.current = typeof id === "string" ? id : null;
-      propsRef.current.onDrawingChange?.({ drawing: pendingRef.current != null, selected: selectedRef.current != null });
+      emitDrawing();
     },
     cancelDrawing() {
       if (pendingRef.current) chartRef.current?.removeOverlay(pendingRef.current);
       pendingRef.current = null;
-      propsRef.current.onDrawingChange?.({ drawing: false, selected: selectedRef.current != null });
+      emitDrawing();
     },
     clearDrawings() {
       const chart = chartRef.current;
       if (!chart) return;
       for (const id of [...drawnRef.current.keys()]) chart.removeOverlay(id);
       drawnRef.current.clear();
+      sidesRef.current.clear();
       persist();
+      emitArmed();
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);
+    },
+    setSelectedAlert(trigger) {
+      const id = selectedRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!id || !d || !ALERTABLE.has(d.name)) return;
+      const { alert: _old, ...rest } = d;
+      void _old;
+      drawnRef.current.set(id, trigger ? { ...rest, alert: { trigger } } : rest);
+      sidesRef.current.delete(id);
+      // Arming starts from where the price is now, so it can only tell of a crossing from here on.
+      const price = propsRef.current.price;
+      const z = trigger ? alertZone(d) : null;
+      if (price != null && z) sidesRef.current.set(id, sideOf(price, z));
+      persist();
+      emitDrawing();
+      emitArmed();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);

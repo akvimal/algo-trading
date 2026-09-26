@@ -1455,3 +1455,222 @@ describe("option-chain levels on the chart", () => {
     expect(asked).toContain("BANKNIFTY");
   });
 });
+
+describe("alerts on drawings", () => {
+  beforeEach(() => screenIs(true));
+  const KEY = "web.chart.drawings:NSE:RELIANCE";
+  const saved = () => JSON.parse(localStorage.getItem(KEY) ?? "[]");
+  const level = (value: number, extra: object = {}) => ({ name: "horizontalStraightLine", points: [{ value }], ...extra });
+  const band = (a: number, b: number, extra: object = {}) => ({ name: "rect", points: [{ timestamp: Date.now() - 3_600_000, value: a }, { timestamp: Date.now() - 1_800_000, value: b }], ...extra });
+
+  async function open(drawings: object[], names = drawings.map((d: any) => d.name)) {
+    localStorage.setItem(KEY, JSON.stringify(drawings));
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    await waitFor(() => expect(names.every((n) => c.overlaysNamed(n).length > 0)).toBe(true));
+    const socket = await (async () => {
+      await waitFor(() => expect(FakeWebSocket.last).toBeDefined());
+      act(() => FakeWebSocket.last!.open());
+      await waitFor(() => expect(FakeWebSocket.last!.sent.length).toBeGreaterThan(0));
+      return FakeWebSocket.last!;
+    })();
+    const tick = (price: number) => act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "RELIANCE", price }));
+    const select = (name: string) => act(() => c.select(c.overlaysNamed(name)[0].id));
+    return { c, tick, select };
+  }
+  const bar = () => screen.getByRole("group", { name: "Alerts on drawings" });
+  const flash = () => screen.queryByTestId("alert-flash");
+
+  it("offers an alert on a selected line, reading out its level, and says it works only while the page is open", async () => {
+    const { select } = await open([level(1015)]);
+    expect(screen.queryByRole("group", { name: "Alerts on drawings" })).not.toBeInTheDocument(); // nothing selected, nothing armed
+    select("horizontalStraightLine");
+    expect(within(bar()).getByText("1,015")).toBeInTheDocument();
+    expect(within(bar()).getByRole("button", { name: "Alert me" })).toHaveAttribute("aria-pressed", "false");
+    expect(within(bar()).getByText(/only while this page is open/)).toBeInTheDocument();
+  });
+
+  it("arms it, keeps it with the drawing, and counts it", async () => {
+    const user = userEvent.setup();
+    const { select } = await open([level(1015)]);
+    select("horizontalStraightLine");
+    await user.click(within(bar()).getByRole("button", { name: "Alert me" }));
+    expect(within(bar()).getByRole("button", { name: "Alert on" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(bar()).getByRole("button", { name: "As it crosses" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed");
+    expect(saved()[0].alert).toEqual({ trigger: "cross" });
+  });
+
+  it("tells the person when the price crosses the line, once, and not before", async () => {
+    const user = userEvent.setup();
+    const { select, tick } = await open([level(1015)]);
+    select("horizontalStraightLine");
+    await user.click(within(bar()).getByRole("button", { name: "Alert me" }));
+    tick(1010);
+    tick(1014.9);
+    expect(flash()).not.toBeInTheDocument();
+    tick(1016);
+    expect(await screen.findByTestId("alert-flash")).toHaveTextContent("RELIANCE ▲ crossed above 1,015");
+    await user.click(within(flash()!).getByRole("button", { name: "Dismiss" }));
+    tick(1020);
+    tick(1030);
+    expect(flash()).not.toBeInTheDocument(); // still on the same side: nothing more to say
+    tick(1010);
+    expect(await screen.findByTestId("alert-flash")).toHaveTextContent("RELIANCE ▼ crossed below 1,015"); // and back again is another crossing
+  });
+
+  it("arming starts from where the price is now, so a price already past the line does not fire", async () => {
+    const user = userEvent.setup();
+    const { select, tick } = await open([level(990)]); // the price is 1,000: already above it
+    select("horizontalStraightLine");
+    await user.click(within(bar()).getByRole("button", { name: "Alert me" }));
+    tick(1005);
+    tick(1050);
+    expect(flash()).not.toBeInTheDocument();
+    tick(985);
+    expect(await screen.findByTestId("alert-flash")).toHaveTextContent("▼ crossed below 990");
+  });
+
+  it("watches a zone: entering it, and leaving it", async () => {
+    const user = userEvent.setup();
+    const { select, tick } = await open([band(1010, 1020)]);
+    select("rect");
+    expect(within(bar()).getByText("1,010 to 1,020")).toBeInTheDocument();
+    await user.click(within(bar()).getByRole("button", { name: "Alert me" }));
+    tick(1012);
+    expect(await screen.findByTestId("alert-flash")).toHaveTextContent("RELIANCE entered the zone 1,010–1,020");
+    tick(1025);
+    await waitFor(() => expect(screen.getByTestId("alert-flash")).toHaveTextContent("left the zone ▲ 1,010–1,020"));
+  });
+
+  it("watches a diagonal line where it is now", async () => {
+    const user = userEvent.setup();
+    const t = Date.now();
+    // 1,000 an hour ago rising to 1,020 now-ish: about 1,020 at this moment, and rising 20 an hour
+    const { select, tick } = await open([{ name: "rayLine", points: [{ timestamp: t - 3_600_000, value: 1000 }, { timestamp: t, value: 1020 }] }]);
+    select("rayLine");
+    await user.click(within(bar()).getByRole("button", { name: "Alert me" }));
+    tick(1010); // below the line
+    tick(1040); // above it
+    expect(await screen.findByTestId("alert-flash")).toHaveTextContent("▲ crossed above");
+  });
+
+  it("on a candle close waits for the candle to finish across the line, and a wick through it does not count", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const user = userEvent.setup();
+      const { select, tick } = await open([level(1015)]);
+      select("horizontalStraightLine");
+      await user.click(within(bar()).getByRole("button", { name: "Alert me" }));
+      await user.click(within(bar()).getByRole("button", { name: "On a candle close" }));
+      expect(saved()[0].alert).toEqual({ trigger: "close" });
+      tick(1020); // across, mid-candle
+      expect(flash()).not.toBeInTheDocument();
+      tick(1010); // wick back: the candle will close below it
+      vi.setSystemTime(Date.now() + 16 * 60_000);
+      tick(1011); // the next candle starts: the last one closed at 1,010, below the line
+      expect(flash()).not.toBeInTheDocument();
+      tick(1022);
+      vi.setSystemTime(Date.now() + 16 * 60_000);
+      tick(1023); // that candle closed at 1,022: above
+      expect(await screen.findByTestId("alert-flash")).toHaveTextContent("RELIANCE ▲ closed above 1,015");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a restored on-a-close alert already knows which side the price was on, so the first close across the line counts", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { tick } = await open([level(1015, { alert: { trigger: "close" } })]); // the price is 1,000: below
+      tick(1020);
+      vi.setSystemTime(Date.now() + 16 * 60_000);
+      tick(1021); // the candle that closed at 1,020 finished above the line
+      expect(await screen.findByTestId("alert-flash")).toHaveTextContent("▲ closed above 1,015");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("turns off again, and the drawing forgets the alert", async () => {
+    const user = userEvent.setup();
+    const { select, tick } = await open([level(1015, { alert: { trigger: "cross" } })]);
+    select("horizontalStraightLine");
+    expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed");
+    await user.click(within(bar()).getByRole("button", { name: "Alert on" }));
+    expect(screen.queryByTestId("armed")).not.toBeInTheDocument();
+    expect(saved()[0].alert).toBeUndefined();
+    tick(1016);
+    expect(flash()).not.toBeInTheDocument();
+  });
+
+  it("remembers an armed alert across a reload, showing that one is armed without selecting anything", async () => {
+    const { tick } = await open([level(1015, { alert: { trigger: "cross" } })]);
+    expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed");
+    tick(1010);
+    tick(1020);
+    expect(await screen.findByTestId("alert-flash")).toHaveTextContent("▲ crossed above 1,015");
+  });
+
+  it("does not fire for the price already being across a restored line: it only learns the side first", async () => {
+    const { tick } = await open([level(990, { alert: { trigger: "cross" } })]);
+    tick(1005);
+    tick(1030);
+    expect(flash()).not.toBeInTheDocument();
+  });
+
+  it("moving an armed drawing does not set it off: it learns its new side", async () => {
+    const user = userEvent.setup();
+    const { c, select, tick } = await open([level(1015, { alert: { trigger: "cross" } })]);
+    tick(1010); // below 1,015
+    select("horizontalStraightLine");
+    // drag the line down through the price to 1,005: the price is now above it, which is not a crossing
+    act(() => c.moveOverlay(c.overlaysNamed("horizontalStraightLine")[0].id, [{ timestamp: c.data[0].timestamp, value: 1005 }]));
+    tick(1011);
+    expect(flash()).not.toBeInTheDocument();
+    expect(saved()[0].alert).toEqual({ trigger: "cross" }); // still armed, at the new level
+    expect(within(bar()).getByText("1,005")).toBeInTheDocument();
+    tick(1000);
+    expect(await screen.findByTestId("alert-flash")).toHaveTextContent("▼ crossed below 1,005");
+    void user;
+  });
+
+  it("removing an armed drawing removes its alert", async () => {
+    const user = userEvent.setup();
+    const { c, select, tick } = await open([level(1015, { alert: { trigger: "cross" } })]);
+    tick(1010);
+    select("horizontalStraightLine");
+    await user.click(screen.getByRole("button", { name: "Delete selected drawing" }));
+    await waitFor(() => expect(c.overlaysNamed("horizontalStraightLine")).toHaveLength(0));
+    expect(screen.queryByTestId("armed")).not.toBeInTheDocument();
+    tick(1020);
+    expect(flash()).not.toBeInTheDocument();
+  });
+
+  it("offers no alert on a drawing that has no price to watch", async () => {
+    const { select } = await open([{ name: "fibonacciLine", points: [{ timestamp: Date.now() - 3_600_000, value: 1000 }, { timestamp: Date.now() - 1_800_000, value: 1020 }] }]);
+    select("fibonacciLine");
+    expect(screen.queryByRole("button", { name: "Alert me" })).not.toBeInTheDocument();
+  });
+
+  it("drops an alert setting it does not understand, rather than trusting it", async () => {
+    const { select } = await open([level(1015, { alert: { trigger: "sometimes" } })]);
+    expect(screen.queryByTestId("armed")).not.toBeInTheDocument();
+    select("horizontalStraightLine");
+    expect(within(bar()).getByRole("button", { name: "Alert me" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("each chart of a pair watches its own instrument's drawings", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([level(1015, { alert: { trigger: "cross" } })]));
+    localStorage.setItem("web.chart.drawings:NSE:BANKNIFTY", JSON.stringify([level(1016, { alert: { trigger: "cross" } }), level(1017, { alert: { trigger: "close" } })]));
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("3 alerts armed"));
+    await user.click(screen.getByRole("button", { name: "One chart" }));
+    await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed")); // the hidden chart's are not counted
+  });
+});

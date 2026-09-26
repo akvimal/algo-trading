@@ -1020,3 +1020,21 @@ table.t th {
   display: inline-flex;
   gap: 12px;
 }
+
+.ws-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  font-size: 13px;
+}
+.ws-flash {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: var(--radius, 8px);
+  border: 1px solid var(--accent, #4cc2ff);
+  background: var(--surface-2, rgba(76, 194, 255, 0.1));
+}

@@ -237,3 +237,13 @@ export type PendingOrder = {
   expires_at: string;
   last_price: number | null;
 };
+
+export type Profile = {
+  id: string;
+  email: string;
+  name: string;
+  is_admin: boolean;
+  experience: "guided" | "pro";
+  onboarded_at: string | null;
+  markets: Segment[];
+};

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
+import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
 import { SETUP_TAGS } from "../pages/journalModel";
 import {
@@ -35,6 +36,7 @@ type Props = {
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
 export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, onPlaced }: Props) {
+  const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -122,10 +124,10 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, on
       </div>
 
       {limit && (
-        <TextField id="t-entry" label="Enter when the price reaches" value={t.entry} onChange={(v) => set("entry", v)} hint={`It fires the first time the price crosses this level${isOption ? " (the option is priced then)" : ""}. Watched on our servers, so it works with the app closed.`} />
+        <TextField id="t-entry" label="Enter when the price reaches" value={t.entry} onChange={(v) => set("entry", v)} hint={guided ? `It fires the first time the price crosses this level${isOption ? " (the option is priced then)" : ""}. Watched on our servers, so it works with the app closed.` : undefined} />
       )}
-      <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} value={t.stop} onChange={(v) => set("stop", v)} hint={isOption ? "A level of the underlying. The trade closes if the price gets there." : "Where you admit you are wrong. The trade closes there."} />
-      <TextField id="t-target" label="Target" value={t.target} onChange={(v) => set("target", v)} hint="Optional. Where you take profit." />
+      <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} value={t.stop} onChange={(v) => set("stop", v)} hint={guided ? (isOption ? "A level of the underlying. The trade closes if the price gets there." : "Where you admit you are wrong. The trade closes there.") : undefined} />
+      <TextField id="t-target" label="Target" value={t.target} onChange={(v) => set("target", v)} hint={guided ? "Optional. Where you take profit." : undefined} />
       <TextField
         id="t-lots"
         label={stock ? "Number of shares" : "Number of lots"}

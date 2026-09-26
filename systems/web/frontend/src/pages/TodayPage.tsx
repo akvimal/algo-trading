@@ -1,10 +1,14 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/http";
 import type { Account, MarketSentiment, OptionGroup, Position } from "../api/types";
+import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
+import { FirstWeekCard } from "../components/FirstWeekCard";
 import { PositionCard } from "../components/PositionCard";
 import { formatInr, formatPnl } from "../format";
 import { useResource } from "../hooks/useResource";
+import { firstWeek } from "./onboardingModel";
 import { dayPnl, inMode, lossBudget, openGroups, openPositions, paperBalance, type Mode } from "./todayModel";
 
 const POLL_MS = 15_000;
@@ -25,6 +29,7 @@ async function loadToday() {
 
 export function TodayPage() {
   const [mode, setMode] = useState<Mode>("intraday");
+  const { guided, markets } = useProfile();
   const today = useResource(loadToday, [], { pollMs: POLL_MS });
   // Sentiment is context, not the point of the screen: it loads on its own and its failure
   // never blocks (or replaces) the positions above it.
@@ -34,7 +39,9 @@ export function TodayPage() {
   if (today.error && !today.data) return <ErrorNotice error={today.error} onRetry={today.reload} />;
   if (!today.data) return null;
 
-  const { accounts, positions, groups } = today.data;
+  const { positions, groups } = today.data;
+  // Every market has an account, but only the ones the person chose count towards their totals.
+  const accounts = today.data.accounts.filter((a) => markets.includes(a.segment));
   const pnl = dayPnl(positions, groups);
   const budget = lossBudget(accounts, pnl.total);
   const shownPositions = mode === "options" ? [] : openPositions(positions).filter((p) => inMode(p, mode));
@@ -74,6 +81,8 @@ export function TodayPage() {
 
       {today.error && <ErrorNotice error={today.error} onRetry={today.reload} />}
 
+      {guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
+
       <div className="tabs" role="group" aria-label="Trade type">
         {MODES.map((m) => (
           <button key={m.id} aria-pressed={mode === m.id} onClick={() => setMode(m.id)}>
@@ -85,7 +94,13 @@ export function TodayPage() {
       <h2 className="section-title">Open now</h2>
       {shownPositions.length + shownGroups.length === 0 ? (
         <Empty title="Nothing open here">
-          {positions.length + groups.length === 0 ? "Your trades will show up here once you place one." : "No open trades in this view."}
+          {positions.length + groups.length === 0 ? (
+            <>
+              Your trades will show up here once you place one. <Link to="/trade">Place your first trade</Link>
+            </>
+          ) : (
+            "No open trades in this view."
+          )}
         </Empty>
       ) : (
         <div className="stack">

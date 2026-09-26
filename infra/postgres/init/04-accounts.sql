@@ -67,3 +67,17 @@ ALTER TABLE accounts.broker_credentials ADD COLUMN IF NOT EXISTS openrouter_api_
 -- NULL for accounts created before this existed. See migrations/019-risk-acknowledgement.sql.
 ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS risk_acknowledged_at TIMESTAMPTZ;
 ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS risk_acknowledged_version TEXT;
+
+-- First-run onboarding state (2026-09-26): chosen experience and when the first-run flow was
+-- finished or skipped. See migrations/024-onboarding.sql (which also backfills existing users).
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS experience TEXT NOT NULL DEFAULT 'guided';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_experience_check') THEN
+        ALTER TABLE accounts.users ADD CONSTRAINT users_experience_check CHECK (experience IN ('guided', 'pro'));
+    END IF;
+END $$;
+
+-- Markets chosen at first-run setup (2026-09-26); all three until the person picks. See migrations/025-user-markets.sql.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS markets TEXT[] NOT NULL DEFAULT ARRAY['NSE', 'MCX', 'CRYPTO'];

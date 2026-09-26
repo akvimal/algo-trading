@@ -4,7 +4,7 @@ other backend consumer in Phase 1, only the frontend calls it directly."""
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +29,9 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+Market = Literal["NSE", "MCX", "CRYPTO"]
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -39,6 +42,20 @@ class UserOut(BaseModel):
     is_admin: bool
     risk_acknowledged_at: Optional[datetime] = None
     risk_acknowledged_version: Optional[str] = None
+    experience: Literal["guided", "pro"] = "guided"
+    onboarded_at: Optional[datetime] = None
+    markets: list[Market] = ["NSE", "MCX", "CRYPTO"]
+
+
+class PreferencesUpdate(BaseModel):
+    """PUT /auth/me/preferences - a partial update: only what is present changes. `onboarded`
+    true records that the first-run flow is finished (or skipped) if it was not already; false
+    clears it so the flow can be replayed."""
+
+    experience: Optional[Literal["guided", "pro"]] = None
+    onboarded: Optional[bool] = None
+    # At least one; duplicates are dropped and the order is kept.
+    markets: Optional[list[Market]] = Field(default=None, min_length=1)
 
 
 # All optional - PUT /credentials is a partial update, e.g. setting only

@@ -301,4 +301,17 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
   };
 }
 
+/** A sensible first position for a plan level, from the live price, so a line can be put on the chart and
+ * then dragged to where the person really wants it: a stop half a percent against the trade, a target a
+ * percent in its favour, a waiting entry a third of a percent back from the price. Rounded to the
+ * decimals the chart shows. Null when there is no price to work from. */
+export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null): number | null {
+  if (price == null || !Number.isFinite(price) || price <= 0) return null;
+  const buy = action === "BUY";
+  const pct = field === "stop" ? (buy ? -0.005 : 0.005) : field === "target" ? (buy ? 0.01 : -0.01) : buy ? -0.003 : 0.003;
+  const raw = price * (1 + pct);
+  const decimals = price >= 100 ? 2 : price >= 1 ? 3 : 6;
+  return Number(raw.toFixed(decimals));
+}
+
 export const ACTION_WORD = (a: Action) => (a === "BUY" ? "Buy" : "Sell");

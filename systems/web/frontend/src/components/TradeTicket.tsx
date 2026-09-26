@@ -34,13 +34,15 @@ type Props = {
   /** Which field the person is picking a price for on the chart, if any. */
   pickField?: PriceField | null;
   onPickField?: (f: PriceField | null) => void;
+  /** Put a starting line for this field on the chart, to drag to the right price. */
+  onAddLine?: (f: PriceField) => void;
   onPlaced: () => void;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onPlaced }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -52,11 +54,19 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
   };
   const a = analyzeTicket(t, ctx);
   const checks = checkList(t, a, ctx, regime, budget, peer);
+  const fieldValue: Record<PriceField, string> = { entry: t.entry, stop: t.stop, target: t.target };
   const pickAction = (f: PriceField) =>
     onPickField ? (
-      <button className="link-btn" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
-        {pickField === f ? "Click the chart…" : "Pick on chart"}
-      </button>
+      <span className="field-actions">
+        {onAddLine && fieldValue[f].trim() === "" && ctx.price != null && (
+          <button className="link-btn" aria-label={`Add ${f} line`} title="Put a starting line on the chart, then drag it" onClick={() => onAddLine(f)}>
+            Add line
+          </button>
+        )}
+        <button className="link-btn" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
+          {pickField === f ? "Click the chart…" : "Pick on chart"}
+        </button>
+      </span>
     ) : undefined;
   const fav = favorable(checks);
   const stock = meta.instrument === "spot";

@@ -19,7 +19,7 @@ export type FvgExtend = { kind: "bullish" | "bearish"; top: number; bottom: numb
 export type BreakExtend = { tf: string; kind: "bos" | "choch"; direction: "up" | "down"; price: number };
 export type TrendMarkExtend = { tf: string; trend: "up" | "down" | "range"; price: number };
 export type SetupExtend = { tf: string; direction: "long" | "short"; status: "confirmed" | "triggered" | "hit_target" | "hit_sl" | "invalidated"; entry: number; stop: number; target: number; rr: number };
-export type PlanLineExtend = { label: string; color: string; dashed: boolean };
+export type PlanLineExtend = { key: string; label: string; color: string; dashed: boolean };
 
 const pill = (color: string, size = 10) => ({
   color,
@@ -61,6 +61,8 @@ export function registerChartExtensions(): void {
   });
 
   // A level of the trade plan (entry, stop, target): a full-width line with a label at the price axis.
+  // Its figures take pointer events, so the person can grab it and drag it to a new price; the chart
+  // reports the new price when the drag ends (see ChartPane) and the ticket follows.
   registerOverlay({
     name: "planLine",
     totalStep: 2,
@@ -72,12 +74,11 @@ export function registerChartExtensions(): void {
       const y = yAxis.convertToPixel(v);
       if (!Number.isFinite(y)) return [];
       return [
-        { type: "line", attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] }, styles: { color: d.color, size: 1.5, style: d.dashed ? "dashed" : "solid", dashedValue: [6, 4] }, ignoreEvent: true },
+        { type: "line", attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] }, styles: { color: d.color, size: 1.5, style: d.dashed ? "dashed" : "solid", dashedValue: [6, 4] } },
         {
           type: "text",
           attrs: { x: bounding.width - 4, y: y - 3, text: `${d.label} ${v.toFixed(2)}`, align: "right", baseline: "bottom" },
           styles: { color: INK, size: 11, weight: "bold", backgroundColor: d.color, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 2 },
-          ignoreEvent: true,
         },
       ];
     },

@@ -110,7 +110,7 @@ export class FakeChart {
   }
   overrideOverlay(o: any) {
     const cur = this.overlays.get(o.id);
-    if (cur) Object.assign(cur, { ...(o.points ? { points: o.points } : {}), ...(o.visible !== undefined ? { visible: o.visible } : {}), ...(o.mode ? { mode: o.mode } : {}) });
+    if (cur) Object.assign(cur, { ...(o.points ? { points: o.points } : {}), ...(o.extendData ? { extendData: o.extendData } : {}), ...(o.visible !== undefined ? { visible: o.visible } : {}), ...(o.mode ? { mode: o.mode } : {}) });
     this.overrides.push(o);
   }
   removeOverlay(arg?: string | { groupId?: string; id?: string }) {

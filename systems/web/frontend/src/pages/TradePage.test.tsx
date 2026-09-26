@@ -1,10 +1,11 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { AuthProvider } from "../auth/AuthContext";
 import { setToken } from "../auth/token";
+import { FakeWebSocket } from "../test/fakeSocket";
 
 function jwt(claims: object): string {
   const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, "");
@@ -309,5 +310,71 @@ describe("Scan to Trade", () => {
     renderAt("/trade?symbol=M%26M&segment=NSE");
     expect(await screen.findByRole("heading", { name: "Trade" })).toBeInTheDocument();
     expect(calls.some((c) => c.url.includes("underlying=M%26M"))).toBe(true);
+  });
+});
+
+describe("live price push", () => {
+  const openSocket = async () => {
+    await waitFor(() => expect(FakeWebSocket.last).toBeDefined());
+    await waitFor(() => expect(FakeWebSocket.last!.readyState === FakeWebSocket.OPEN || FakeWebSocket.last!.sent.length === 0).toBe(true));
+    act(() => FakeWebSocket.last!.open());
+    return FakeWebSocket.last!;
+  };
+
+  it("subscribes to the series it is charting, and follows the price as it moves", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price")).toHaveTextContent("1,000"));
+    const socket = await openSocket();
+    await waitFor(() => expect(socket.sent).toContainEqual({ action: "subscribe", exchange: "NSE", symbol: "RELIANCE" }));
+    expect(screen.getByTestId("feed")).toHaveTextContent("Live");
+    act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "RELIANCE", price: 1012.5 }));
+    expect(screen.getByTestId("price")).toHaveTextContent("1,012.5");
+    // the chart moves with it, not only at the next candle download
+    expect(screen.getByRole("img", { name: /Last close 1,012\.5/ })).toBeInTheDocument();
+  });
+
+  it("uses the pushed price for a market order and for the risk on the ticket", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const socket = await openSocket();
+    await waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+    act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "RELIANCE", price: 1010 }));
+    await waitFor(() => expect(screen.getByTestId("price")).toHaveTextContent("1,010"));
+    const t = within(await screen.findByTestId("ticket"));
+    await user.type(t.getByLabelText("Stop-loss"), "1000");
+    expect(within(t.getByTestId("summary")).getByText("1,010")).toBeInTheDocument(); // entry
+    await user.click(t.getByRole("button", { name: /Buy RELIANCE/ }));
+    await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
+    expect(posts("/positions/manual")[0].body).toMatchObject({ price: 1010, stop_loss_price: 1000 });
+  });
+
+  it("ignores a tick for some other symbol", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price")).toHaveTextContent("1,000"));
+    const socket = await openSocket();
+    act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "TCS", price: 4000 }));
+    expect(screen.getByTestId("price")).toHaveTextContent("1,000");
+  });
+
+  it("says it is polling when the socket is down, and goes back to Live when it returns", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price")).toHaveTextContent("1,000"));
+    expect(screen.getByTestId("feed")).toHaveTextContent("every 5 seconds");
+    const socket = await openSocket();
+    expect(screen.getByTestId("feed")).toHaveTextContent("Live");
+    act(() => socket.drop());
+    expect(screen.getByTestId("feed")).toHaveTextContent("every 5 seconds");
+  });
+
+  it("does not carry the old symbol's price to the new one", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const socket = await openSocket();
+    await waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+    act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "RELIANCE", price: 1555 }));
+    expect(screen.getByTestId("price")).toHaveTextContent("1,555");
+    await user.click(screen.getByRole("button", { name: "Bank Nifty" }));
+    await waitFor(() => expect(screen.getByTestId("price")).toHaveTextContent("1,000")); // this symbol's own quote
+    expect(screen.getByTestId("price")).not.toHaveTextContent("1,555");
   });
 });

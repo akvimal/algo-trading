@@ -9,9 +9,10 @@ import { ErrorNotice, Skeleton } from "../components/bits";
 import { TradeTicket } from "../components/TradeTicket";
 import { CLASSIC_APP_URL } from "../config";
 import { formatPrice } from "../format";
+import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
 import { dayPnl } from "./todayModel";
-import { EMPTY_TICKET, INTERVALS, PRESETS, analyzeTicket, instrumentFor, parseTradeParams, type IntervalId, type Ticket } from "./tradeModel";
+import { EMPTY_TICKET, INTERVALS, PRESETS, analyzeTicket, applyTick, instrumentFor, parseTradeParams, type IntervalId, type Ticket } from "./tradeModel";
 
 export function TradePage() {
   const [params] = useSearchParams();
@@ -30,7 +31,11 @@ export function TradePage() {
   const chartSym = resolved.data?.chart_symbol;
   const ready = Boolean(chartEx && chartSym);
 
-  const ltp = useResource(() => getLtp(chartEx!, chartSym!), [chartEx, chartSym], { pollMs: 5_000, enabled: ready });
+  // Prices arrive over a socket; polling is only the fallback while it is down.
+  const seriesKey = `${chartEx}:${chartSym}`;
+  const [pushed, setPushed] = useState<{ key: string; price: number } | null>(null);
+  const socket = useQuoteSocket(ready ? [{ exchange: chartEx!, symbol: chartSym! }] : [], (t) => setPushed({ key: `${t.exchange}:${t.symbol}`, price: t.price }));
+  const ltp = useResource(() => getLtp(chartEx!, chartSym!), [chartEx, chartSym], { pollMs: socket.connected ? undefined : 5_000, enabled: ready });
   const candles = useResource(() => getCandles(chartEx!, chartSym!, interval, meta.days), [chartEx, chartSym, interval], { pollMs: 30_000, enabled: ready });
   const regime = useResource(() => getRegime(chartEx!, chartSym!, interval), [chartEx, chartSym, interval], { pollMs: 60_000, enabled: ready });
   const accounts = useResource(getAccounts, []);
@@ -47,7 +52,7 @@ export function TradePage() {
   );
 
   const account = accounts.data?.find((a) => a.segment === segment);
-  const price = ltp.data?.ltp ?? null;
+  const price = (pushed?.key === seriesKey ? pushed.price : null) ?? ltp.data?.ltp ?? null;
   const instrument = instrumentFor(symbol, segment);
   const ctx = account
     ? {
@@ -102,6 +107,9 @@ export function TradePage() {
             {price == null ? "–" : formatPrice(price)}
           </span>
         </div>
+        <div className="faint" style={{ fontSize: 12 }} data-testid="feed">
+          {socket.connected ? "Live: the price updates as it moves." : "Updating every 5 seconds."}
+        </div>
         {resolved.error && <ErrorNotice error={resolved.error} onRetry={resolved.reload} />}
         {ltp.error && <ErrorNotice error={ltp.error} onRetry={ltp.reload} />}
         <div className="chips" role="group" aria-label="Candle size" style={{ margin: "10px 0" }}>
@@ -113,7 +121,7 @@ export function TradePage() {
         </div>
         {candles.loading && ready && <Skeleton lines={4} />}
         {candles.error && !candles.data && <ErrorNotice error={candles.error} onRetry={candles.reload} />}
-        {candles.data && <CandleChart candles={candles.data} lines={lines} intraday={interval !== "60min"} />}
+        {candles.data && <CandleChart candles={applyTick(candles.data, price)} lines={lines} intraday={interval !== "60min"} />}
         <p className="faint" style={{ fontSize: 12, margin: "8px 0 0" }}>
           Structure zones and drawing tools are in the <a href={CLASSIC_APP_URL}>classic chart</a>.
         </p>

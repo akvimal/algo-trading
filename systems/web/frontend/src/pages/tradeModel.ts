@@ -1,4 +1,4 @@
-import type { Segment } from "../api/types";
+import type { Candle, Segment } from "../api/types";
 
 export type Action = "BUY" | "SELL";
 export type Strategy = "future" | "naked" | "spread";
@@ -284,6 +284,18 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
     stop: a.stop,
     target: a.target,
   };
+}
+
+/** Folds the latest price into the newest candle, so the chart moves with the price instead of only
+ * when the next candle download arrives. It never adds a candle (a new bar comes from the next
+ * download); it only lets the current one close at the live price and stretch its high or low. */
+export function applyTick(candles: Candle[], price: number | null): Candle[] {
+  if (price == null || !Number.isFinite(price) || candles.length === 0) return candles;
+  const last = candles[candles.length - 1];
+  const high = Math.max(last.high, price);
+  const low = Math.min(last.low, price);
+  if (last.close === price && last.high === high && last.low === low) return candles;
+  return [...candles.slice(0, -1), { ...last, close: price, high, low }];
 }
 
 export const ACTION_WORD = (a: Action) => (a === "BUY" ? "Buy" : "Sell");

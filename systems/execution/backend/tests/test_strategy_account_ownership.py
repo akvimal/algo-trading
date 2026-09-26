@@ -304,6 +304,49 @@ def test_client_without_a_token_does_not_call_out(monkeypatch):
     assert calls == []
 
 
+# --- the owner's view of what the strategy traded ------------------------------------------------
+
+
+def test_a_stranger_cannot_read_a_strategys_trades_and_nothing_is_queried(monkeypatch):
+    asked = []
+    monkeypatch.setattr(route, "_query_positions", lambda *a, **k: asked.append("positions") or [])
+    monkeypatch.setattr(route, "_query_option_groups", lambda *a, **k: asked.append("groups") or [])
+    with pytest.raises(HTTPException) as exc:
+        route.list_strategy_account_trades(str(SID), user=user(BOB), db=FakeDb([account(owner=ALICE)]))
+    assert exc.value.status_code == 404
+    assert asked == []
+
+
+def test_the_owner_gets_that_strategys_trades_and_only_that_strategys(monkeypatch):
+    seen = {}
+
+    def positions(db, user_id, **kw):
+        seen["positions"] = (user_id, kw)
+        return [{"id": "spot", "option_group_id": None}, {"id": "leg", "option_group_id": "g1"}]
+
+    def groups(db, user_id, **kw):
+        seen["groups"] = (user_id, kw)
+        return [{"id": "g1"}]
+
+    monkeypatch.setattr(route, "_query_positions", positions)
+    monkeypatch.setattr(route, "_query_option_groups", groups)
+    out = route.list_strategy_account_trades(str(SID), status="OPEN", limit=50, with_live_pnl=True, user=user(ALICE), db=FakeDb([account(owner=ALICE)]))
+    assert out == {"positions": [{"id": "spot", "option_group_id": None}], "groups": [{"id": "g1"}]}  # a leg belongs to its group
+    for key in ("positions", "groups"):
+        user_id, kw = seen[key]
+        assert user_id is None and kw["strategy_id"] == SID  # scoped by strategy, not by who is asking
+        assert kw["status"] == "OPEN" and kw["limit"] == 50 and kw["with_live_pnl"] is True and kw["token"] == f"token-{ALICE}"
+
+
+def test_the_limit_is_kept_within_bounds(monkeypatch):
+    limits = []
+    monkeypatch.setattr(route, "_query_positions", lambda db, uid, **kw: limits.append(kw["limit"]) or [])
+    monkeypatch.setattr(route, "_query_option_groups", lambda db, uid, **kw: [])
+    for asked in (0, 10_000):
+        route.list_strategy_account_trades(str(SID), limit=asked, user=user(ALICE), db=FakeDb([account(owner=ALICE)]))
+    assert limits == [1, 500]
+
+
 # --- real app wiring --------------------------------------------------------------------------------
 
 client = TestClient(app)  # no lifespan: no scheduler, no consumer
@@ -318,6 +361,7 @@ client = TestClient(app)  # no lifespan: no scheduler, no consumer
         ("PUT", f"/accounts/strategy/{SID}"),
         ("DELETE", f"/accounts/strategy/{SID}"),
         ("POST", f"/accounts/strategy/{SID}/reset"),
+        ("GET", f"/accounts/strategy/{SID}/trades"),
     ],
 )
 def test_every_strategy_account_route_needs_a_login(method, path):

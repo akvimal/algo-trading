@@ -12,6 +12,8 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_ltp_batch
 from app.adapters.signal_engine.client import NOT_FOUND, UNAVAILABLE, lookup_strategy
+from app.api.routes.option_groups import _query_option_groups
+from app.api.routes.positions import _query_positions
 from app.auth import User, get_current_user, require_admin
 from app.config import settings
 from app.domain.equity_history import record_reset_point
@@ -448,6 +450,30 @@ def list_strategy_accounts(user: User = Depends(get_current_user), db: Session =
 @router.get("/accounts/strategy/{strategy_id}")
 def get_strategy_account(strategy_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return _strategy_account_to_out(db, _strategy_account_or_404(db, strategy_id, user))
+
+
+@router.get("/accounts/strategy/{strategy_id}/trades")
+def list_strategy_account_trades(
+    strategy_id: str,
+    status: Optional[str] = None,
+    limit: int = 100,
+    with_live_pnl: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The trades a strategy has made on its dedicated account, for the person who owns that account.
+
+    A strategy's positions belong to the platform (user_id IS NULL), so GET /positions never shows them
+    to anyone but an admin (see GET /positions/platform). This is the owner's own way to see them:
+    the same 404 as the account itself for a stranger, and only that one strategy's rows. Futures and
+    spot come back as `positions` (option legs, which belong to their group, are left out), naked and
+    spread options as `groups`."""
+    row = _strategy_account_or_404(db, strategy_id, user)
+    limit = max(1, min(limit, 500))
+    args = dict(status=status, signal_id=None, symbol=None, segment=None, manual_only=False, limit=limit, with_live_pnl=with_live_pnl, token=user.token)
+    positions = _query_positions(db, None, strategy_id=row.strategy_id, **args)
+    groups = _query_option_groups(db, None, strategy_id=row.strategy_id, **args)
+    return {"positions": [p for p in positions if p.get("option_group_id") is None], "groups": groups}
 
 
 @router.post("/accounts/strategy/{strategy_id}")

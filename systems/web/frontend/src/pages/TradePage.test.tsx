@@ -121,6 +121,8 @@ beforeEach(() => {
           ],
         });
       }
+      // signal-engine: the auto-trader looks for its strategy (there is none unless a test says so)
+      if (url.includes("/indicators") || url.includes("/rules") || url.includes("/strategies?")) return json([]);
       if (url.includes("/regime")) return json(regimes[q("symbol")] ?? regimes.default);
       if (url.endsWith("/accounts")) return json([account]);
       if (url.includes("/pending-orders") && method === "POST")
@@ -1672,5 +1674,24 @@ describe("alerts on drawings", () => {
     await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("3 alerts armed"));
     await user.click(screen.getByRole("button", { name: "One chart" }));
     await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed")); // the hidden chart's are not counted
+  });
+});
+
+describe("the auto-trader on the trade screen", () => {
+  beforeEach(() => screenIs(true));
+
+  it("is offered for the instrument on the chart when it has contracts, and follows the active chart", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const card = within(await screen.findByTestId("auto-trader"));
+    expect(card.getByRole("heading", { name: "Auto-trader · NIFTY" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Bank Nifty" }));
+    expect(await screen.findByRole("heading", { name: "Auto-trader · BANKNIFTY" })).toBeInTheDocument();
+  });
+
+  it("says it is not available for a stock", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    expect(await screen.findByText(/A stock is traded as shares/)).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-trader")).not.toBeInTheDocument();
   });
 });

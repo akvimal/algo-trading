@@ -169,3 +169,43 @@ export type ChecklistItem = { id: string; label: string; phase: "plan" | "review
 
 export type Credentials = { has_dhan: boolean; has_delta: boolean; has_openrouter: boolean; dhan_client_id_masked: string | null };
 export type Ltp = { exchange: string; symbol: string; ltp: number; provider: string };
+
+export type Buildup = "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding";
+
+export type OiRow = {
+  symbol: string;
+  exchange: string;
+  snapshot_date: string;
+  spot_price: number | null;
+  total_call_oi: number;
+  total_put_oi: number;
+  pcr: number | null;
+  call_oi_change_pct: number | null;
+  put_oi_change_pct: number | null;
+  price_change_pct: number | null;
+  call_buildup: Buildup | null;
+  put_buildup: Buildup | null;
+  history: { snapshot_date: string; spot_price?: number | null }[];
+};
+export type OiBuildup = { snapshot_date: string; rows: OiRow[] };
+
+export type Regime = "trending_up" | "trending_down" | "ranging" | "transitional";
+export type Proximity = "near_52w_high" | "near_52w_low";
+
+export type ScreenerRow = {
+  symbol: string;
+  exchange: string;
+  snapshot_date: string;
+  close: number;
+  pct_change_5d: number | null;
+  pct_change_20d: number | null;
+  adx: number | null;
+  regime: Regime | null;
+  high_52w: number | null;
+  low_52w: number | null;
+  pct_from_52w_high: number | null;
+  pct_from_52w_low: number | null;
+  proximity: Proximity | null;
+  history: { snapshot_date: string; close: number }[];
+};
+export type Screener = { snapshot_date: string; rows: ScreenerRow[] };

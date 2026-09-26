@@ -209,3 +209,31 @@ export type ScreenerRow = {
   history: { snapshot_date: string; close: number }[];
 };
 export type Screener = { snapshot_date: string; rows: ScreenerRow[] };
+
+export type Candle = { exchange: string; symbol: string; interval: string; open: number; high: number; low: number; close: number; volume: number; timestamp: string };
+
+export type ResolvedUnderlying = {
+  chart_symbol: string;
+  chart_exchange: string;
+  trade_symbol: string;
+  trade_exchange: string;
+  lot_size: number;
+  expiry: string | null;
+};
+
+export type MarketRegime = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; adx: number; atr_percentile: number; trend: "up" | "down" | "range"; advice: string };
+
+export type PendingOrder = {
+  id: string;
+  segment: Segment;
+  symbol: string;
+  action: "BUY" | "SELL";
+  strategy: "future" | "naked" | "spread";
+  trigger_price: number;
+  stop_loss_price: number | null;
+  target_price: number | null;
+  status: "pending" | "triggered" | "rejected" | "failed" | "cancelled" | "expired";
+  status_reason: string | null;
+  expires_at: string;
+  last_price: number | null;
+};

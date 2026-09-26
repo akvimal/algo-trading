@@ -65,3 +65,18 @@ export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "–";
   return new Intl.DateTimeFormat("en-IN", { timeZone: IST, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
 }
+
+/** R-multiples (profit in units of the risk taken): +0.42R / −0.4R. */
+export function formatR(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "–";
+  const body = Math.abs(value).toFixed(2);
+  if (value === 0) return `${body}R`;
+  return `${value > 0 ? "+" : MINUS}${body}R`;
+}
+
+/** 'Sep 25' style date for a YYYY-MM-DD or ISO instant, on the IST calendar. */
+export function formatDay(iso: string | null | undefined): string {
+  if (!iso) return "–";
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? new Date(`${iso}T00:00:00+05:30`) : new Date(iso);
+  return new Intl.DateTimeFormat("en-IN", { timeZone: IST, day: "numeric", month: "short" }).format(d);
+}

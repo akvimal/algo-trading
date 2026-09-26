@@ -1038,3 +1038,42 @@ table.t th {
   border: 1px solid var(--accent, #4cc2ff);
   background: var(--surface-2, rgba(76, 194, 255, 0.1));
 }
+
+.auto-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+}
+.auto-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 8px;
+}
+.auto-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 16px;
+  margin-top: 8px;
+}
+.auto-windows {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-sm, 8px);
+  padding: 8px 12px;
+}
+.auto-window-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.auto-note {
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+.error-text {
+  color: var(--down, #e8586a);
+  font-size: 12px;
+}

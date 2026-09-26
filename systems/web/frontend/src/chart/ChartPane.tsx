@@ -8,10 +8,11 @@ import {
   INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
   STRUCTURE_TIMEFRAMES, type StoredDrawing, type StructureConfig,
 } from "./config";
-import { PEER_GROUP, PLAN_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
+import { PEER_GROUP, PLAN_GROUP, OI_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
 import { rollLiveBar, type Bar } from "./liveBar";
 import { chartStyles, prefersLight } from "./theme";
+import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, TradeMarkerExtend } from "./trades";
 
 export type DrawTool = "segment" | "rayLine" | "horizontalStraightLine" | "priceLine" | "rect" | "fibonacciLine" | "parallelStraightLine";
@@ -47,6 +48,8 @@ type Props = {
   plan: PlanLine[];
   /** The person's own trades on this instrument, drawn as markers (none by default). */
   trades?: ChartTrade[];
+  /** Support and resistance lines read from the option chain (none by default). */
+  oiLevels?: OiLevelLine[];
   magnet: boolean;
   drawingsHidden: boolean;
   /** Set while the person is choosing a price on the chart for a ticket field. */
@@ -390,6 +393,17 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     }
   }, [trades, status, epoch]);
 
+  // ---- support and resistance from the option chain ----
+  const oiLevels = props.oiLevels;
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || status !== "ready") return;
+    chart.removeOverlay({ groupId: OI_GROUP });
+    const anchor = barsRef.current[barsRef.current.length - 1]?.timestamp;
+    if (anchor == null) return;
+    for (const l of oiLevels ?? []) chart.createOverlay({ name: "oiLevel", groupId: OI_GROUP, lock: true, points: [{ timestamp: anchor, value: l.price }], extendData: l });
+  }, [oiLevels, status, epoch]);
+
   // ---- drawings: saved per instrument, restored after every load ----
   const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()]);
 
@@ -581,7 +595,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [pickField]);
 
   // The canvas is invisible to a screen reader, so the same facts are stated in words.
-  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
+  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${oiLevels?.length ? ` Option-chain levels: ${oiLevels.map((l) => l.label).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
 
   return (
     <div className="chart-pane" data-testid="chart-pane">

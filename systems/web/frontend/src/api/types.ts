@@ -223,6 +223,18 @@ export type ResolvedUnderlying = {
   expiry: string | null;
 };
 
+export type OiLeg = { oi: number; oi_change_5m: number | null; oi_change_15m: number | null };
+export type OiSummary = {
+  underlying_symbol: string;
+  underlying_exchange: string;
+  expiry: string;
+  underlying_last_price: number;
+  total_call_oi: number;
+  total_put_oi: number;
+  pcr: number | null;
+  strikes: { strike: number; call: OiLeg | null; put: OiLeg | null }[];
+};
+
 export type MarketRegime = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; adx: number; atr_percentile: number; trend: "up" | "down" | "range"; advice: string };
 
 export type PendingOrder = {

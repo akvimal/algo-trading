@@ -25,6 +25,7 @@ import {
   applyPair, isPair, loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSymbol,
   withUrlSymbol, type Layout, type WorkstationState,
 } from "../workstation/state";
+import { useOiLevels } from "../workstation/useOiLevels";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
@@ -74,6 +75,9 @@ export function TradePage() {
   const dataA = usePaneData(ws.panes[0], true, socketUp);
   const dataB = usePaneData(twoUp ? ws.panes[1] : null, twoUp, socketUp);
   const datas = [dataA, dataB];
+  const oiA = useOiLevels(dataA, ws.panes[0].symbol, tools.oiLevelsOn);
+  const oiB = useOiLevels(dataB, ws.panes[1].symbol, tools.oiLevelsOn && twoUp);
+  const oiLevels = [oiA, oiB];
 
   const [pushed, setPushed] = useState<Record<string, number>>({});
   const subs = datas.flatMap((d, i) => (d.exchange && d.symbol && (i === 0 || twoUp) ? [{ exchange: d.exchange, symbol: d.symbol }] : []));
@@ -253,6 +257,9 @@ export function TradePage() {
           <button className="chip-btn" aria-pressed={tools.tradesOn} title="Show your own trades on the chart" onClick={() => setTools((t) => ({ ...t, tradesOn: !t.tradesOn }))}>
             My trades
           </button>
+          <button className="chip-btn" aria-pressed={tools.oiLevelsOn} title="Support and resistance from option open interest (indices, gold, crude, Bitcoin, Ether)" onClick={() => setTools((t) => ({ ...t, oiLevelsOn: !t.oiLevelsOn }))}>
+            OI levels
+          </button>
           {wide && (
             <>
               <button className="chip-btn" aria-pressed={ws.ticketOpen} onClick={() => setWs((cur) => ({ ...cur, ticketOpen: !cur.ticketOpen }))}>
@@ -342,6 +349,7 @@ export function TradePage() {
                       structure={structure}
                       plan={active === i ? plan : []}
                       trades={chartTrades[i]}
+                      oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
                       drawingsHidden={tools.drawingsHidden}
                       pickField={active === i ? pickField : null}
@@ -376,7 +384,7 @@ export function TradePage() {
             </div>
           )}
           <p className="faint ws-note">
-            Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. The intraday auto-trader, price-alert drawings and OI level lines are still in the{" "}
+            Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. The intraday auto-trader and price-alert drawings are still in the{" "}
             <a href={CLASSIC_APP_URL}>classic app</a>.
           </p>
         </div>

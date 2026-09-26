@@ -33,11 +33,12 @@ let ltpFails: boolean;
 let positionRows: Record<string, any>[];
 let groupRows: Record<string, any>[];
 let tradeCallsFail: boolean;
+let oiFails: boolean;
 
-// The newest candle opened a few minutes ago, as during market hours, so a price tick lands on a live bar.
+// The newest candle is the one being formed right now, as during market hours, so a price tick lands on it (and never starts a new bar, whatever minute of the quarter hour the test runs in).
 const candlesFor = (symbol: string) => {
   const step = 15 * 60_000;
-  const newest = Math.floor((Date.now() - 2 * 60_000) / step) * step;
+  const newest = Math.floor(Date.now() / step) * step;
   return Array.from({ length: 30 }, (_, i) => ({
     exchange: "NSE", symbol, interval: "15min", open: 1000 + i, high: 1005 + i, low: 995 + i, close: 1002 + i, volume: 1,
     timestamp: new Date(newest - (29 - i) * step).toISOString(), provider: "dhan",
@@ -61,6 +62,7 @@ beforeEach(() => {
   positionRows = [];
   groupRows = [];
   tradeCallsFail = false;
+  oiFails = false;
   structure = { ...emptyStructure };
   waiting = [];
   screenIs(false);
@@ -102,6 +104,21 @@ beforeEach(() => {
           fvgs: q("fvg") === "true" ? structure.fvgs : [],
           setups: q("setups") === "true" ? structure.setups : [],
           order_blocks: (structure.order_blocks as any[]).filter((z) => z.role === "orderblock" || q("breakers") === "true"),
+        });
+      }
+      if (url.includes("/options/expiries")) return json({ expiries: ["2026-09-29", "2026-10-06"] });
+      if (url.includes("/options/oi-summary")) {
+        if (oiFails) return json({ detail: "chain unavailable" }, 502);
+        const leg = (oi: number, c: number | null = null) => ({ oi, oi_change_5m: null, oi_change_15m: c });
+        return json({
+          underlying_symbol: q("symbol"), underlying_exchange: "NSE", expiry: q("expiry"), underlying_last_price: 1000, total_call_oi: 1, total_put_oi: 1, pcr: 1,
+          strikes: [
+            { strike: 960, call: null, put: leg(9_000_000) },
+            { strike: 980, call: null, put: leg(4_000_000) },
+            { strike: 990, call: null, put: leg(500_000, 300_000) },
+            { strike: 1020, call: leg(8_000_000), put: null },
+            { strike: 1040, call: leg(2_000_000, 100_000), put: null },
+          ],
         });
       }
       if (url.includes("/regime")) return json(regimes[q("symbol")] ?? regimes.default);
@@ -1237,7 +1254,7 @@ describe("dragging the plan lines", () => {
 describe("your trades on the chart", () => {
   beforeEach(() => screenIs(true));
   const step = 15 * 60_000;
-  const newest = () => Math.floor((Date.now() - 2 * 60_000) / step) * step;
+  const newest = () => Math.floor(Date.now() / step) * step;
   const iso = (barsBack: number) => new Date(newest() - barsBack * step).toISOString();
   const position = (over: Record<string, any>) => ({
     id: "p1", symbol: "RELIANCE", exchange: "NSE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1010, entry_time: iso(8),
@@ -1338,5 +1355,103 @@ describe("your trades on the chart", () => {
     await waitFor(() => expect(markers(chart(1))).toHaveLength(1));
     expect(markers(chart(0))[0].extendData.side).toBe("long");
     expect(markers(chart(1))[0].extendData.side).toBe("short");
+  });
+});
+
+describe("option-chain levels on the chart", () => {
+  beforeEach(() => screenIs(true));
+  const levels = (c: ReturnType<typeof chart>) => c.overlaysNamed("oiLevel");
+  const oiCalls = () => calls.filter((c) => c.url.includes("/options/"));
+
+  it("is off until asked for, and then costs no requests", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("aria-pressed", "false");
+    expect(levels(c)).toHaveLength(0);
+    expect(oiCalls()).toHaveLength(0);
+  });
+
+  it("draws resistance above and support below from the nearest expiry once switched on", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
+    await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
+    const lines = levels(c).map((o) => o.extendData);
+    expect(lines.find((l) => l.kind === "resistance" && l.rank === 1)).toMatchObject({ price: 1020, label: "R1 1020 · 80.00L OI" });
+    expect(lines.find((l) => l.kind === "support" && l.rank === 1)).toMatchObject({ price: 960 });
+    expect(lines.find((l) => l.forming)).toMatchObject({ kind: "support", price: 990 });
+    expect(calls.find((x) => x.url.includes("/options/oi-summary"))!.url).toContain("expiry=2026-09-29"); // the nearest
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent(/Option-chain levels: /);
+    expect(JSON.parse(localStorage.getItem("web.chart.tools") ?? "{}").oiLevelsOn).toBe(true);
+  });
+
+  it("takes the lines off again, and stops asking", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    const button = screen.getByRole("button", { name: "OI levels" });
+    await user.click(button);
+    await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
+    await user.click(button);
+    await waitFor(() => expect(levels(c)).toHaveLength(0));
+  });
+
+  it("asks for nothing on an instrument with no option chain", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(levels(c)).toHaveLength(0);
+    expect(oiCalls()).toHaveLength(0);
+  });
+
+  it("looks up the expiry once and reuses it, and again after a failed reading", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await user.click(screen.getByRole("button", { name: "OI levels" }));
+      await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
+      await act(async () => void vi.advanceTimersByTime(60_500));
+      await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/oi-summary")).length).toBe(2));
+      expect(calls.filter((x) => x.url.includes("/options/expiries"))).toHaveLength(1);
+      oiFails = true;
+      await act(async () => void vi.advanceTimersByTime(60_500));
+      await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/oi-summary")).length).toBe(3));
+      oiFails = false;
+      await act(async () => void vi.advanceTimersByTime(60_500));
+      await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/expiries"))).toHaveLength(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the last good lines when a refresh fails", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
+    await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
+    const n = levels(c).length;
+    oiFails = true;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(levels(c)).toHaveLength(n);
+  });
+
+  it("each chart of a pair draws the levels of its own chain", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
+    await waitFor(() => expect(levels(chart(0)).length).toBeGreaterThan(0));
+    await waitFor(() => expect(levels(chart(1)).length).toBeGreaterThan(0));
+    const asked = calls.filter((x) => x.url.includes("/options/oi-summary")).map((x) => new URL(x.url).searchParams.get("symbol"));
+    expect(asked).toContain("NIFTY");
+    expect(asked).toContain("BANKNIFTY");
   });
 });

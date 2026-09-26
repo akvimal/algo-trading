@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" } as const;
@@ -50,6 +50,8 @@ export const NAV = [
  * component, no separate "mobile site". */
 export function AppShell() {
   const { session } = useAuth();
+  // The trading workstation needs the whole width: no reading-column limit on this one screen.
+  const wide = useLocation().pathname.startsWith("/trade");
   return (
     <div className="app">
       <nav className="nav" aria-label="Main">
@@ -62,7 +64,7 @@ export function AppShell() {
         ))}
         {session?.email && <span className="sr-only">Signed in as {session.email}</span>}
       </nav>
-      <main className="app-main">
+      <main className={`app-main${wide ? " wide" : ""}`}>
         <Outlet />
       </main>
     </div>

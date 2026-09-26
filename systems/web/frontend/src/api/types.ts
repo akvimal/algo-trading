@@ -247,3 +247,36 @@ export type Profile = {
   onboarded_at: string | null;
   markets: Segment[];
 };
+
+export type OrderBlock = {
+  kind: "demand" | "supply";
+  role: "orderblock" | "breaker";
+  proximal: number;
+  distal: number;
+  origin_timestamp: string;
+  mitigated: boolean;
+  counter_trend: boolean;
+};
+export type Fvg = { kind: "bullish" | "bearish"; top: number; bottom: number; origin_timestamp: string; filled: boolean };
+export type StructureEvent = { kind: "bos" | "choch"; direction: "up" | "down"; price: number; timestamp: string; from_timestamp: string };
+export type TrendChange = { timestamp: string; price: number; trend: "up" | "down" | "range" };
+export type Setup = {
+  direction: "long" | "short";
+  status: "confirmed" | "triggered" | "hit_target" | "hit_sl" | "invalidated";
+  entry: number;
+  stop_loss: number;
+  target: number;
+  risk_reward: number;
+  zone_proximal: number;
+  zone_distal: number;
+  confirmed_timestamp: string;
+  resolved_timestamp: string | null;
+};
+export type ChartStructure = {
+  order_blocks: OrderBlock[];
+  fvgs: Fvg[];
+  trend: "up" | "down" | "range";
+  events: StructureEvent[];
+  trend_changes: TrendChange[];
+  setups: Setup[];
+};

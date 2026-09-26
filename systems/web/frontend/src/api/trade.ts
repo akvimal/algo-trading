@@ -8,9 +8,10 @@ export const resolveUnderlying = (segment: Segment, symbol: string) =>
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
 /** Recent candles for one series. `days` reaches back far enough to cover a weekend or holiday. */
-export function getCandles(exchange: string, symbol: string, interval: string, days: number, now: Date = new Date()) {
+export function getCandles(exchange: string, symbol: string, interval: string, days: number, now: Date = new Date(), source?: string) {
   const from = isoDay(new Date(now.getTime() - days * 86_400_000));
-  return api<Candle[]>("marketData", `/candles/history?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&from=${from}`);
+  const src = source ? `&source=${source}` : "";
+  return api<Candle[]>("marketData", `/candles/history?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=${interval}&from=${from}${src}`);
 }
 
 export const getLtp = (exchange: string, symbol: string) => api<Ltp>("marketData", `/quotes/ltp?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}`);

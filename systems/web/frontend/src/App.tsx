@@ -1,9 +1,9 @@
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { AppShell } from "./layout/AppShell";
-import { ComingPage } from "./pages/ComingPage";
 import { MorePage } from "./pages/MorePage";
 import { ScanPage } from "./pages/ScanPage";
+import { TradePage } from "./pages/TradePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { SignInPage } from "./pages/SignInPage";
@@ -24,7 +24,7 @@ export function App() {
         <Route element={<AppShell />}>
           <Route index element={<TodayPage />} />
           <Route path="scan" element={<ScanPage />} />
-          <Route path="trade" element={<ComingPage title="Trade" blurb="Place a paper trade with your stop-loss and target set up front." />} />
+          <Route path="trade" element={<TradePage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
           <Route path="more">
             <Route index element={<MorePage />} />

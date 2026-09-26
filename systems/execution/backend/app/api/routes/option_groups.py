@@ -192,11 +192,13 @@ def _query_option_groups(
     limit: int,
     with_live_pnl: bool,
     token: Optional[str] = None,
+    strategy_id: Optional[uuid.UUID] = None,
 ):
     """Shared by GET /option-groups (user_id=caller) and GET
     /option-groups/platform (user_id=None) - see positions.py's identical
-    _query_positions for the reasoning."""
-    q = db.query(db_models.OptionPositionGroup).filter_by(user_id=user_id)
+    _query_positions for the reasoning (including `strategy_id`)."""
+    q = db.query(db_models.OptionPositionGroup)
+    q = q.filter_by(strategy_id=strategy_id) if strategy_id is not None else q.filter_by(user_id=user_id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:

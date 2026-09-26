@@ -160,12 +160,16 @@ def _query_positions(
     limit: int,
     with_live_pnl: bool,
     token: Optional[str] = None,
+    strategy_id: Optional[uuid.UUID] = None,
 ):
     """Shared by GET /positions (user_id=caller) and GET /positions/platform
     (user_id=None) - identical filtering/serialization, only the ownership
     scope differs. See both routes' own docstrings for what each filter
-    means."""
-    q = db.query(db_models.Position).filter_by(user_id=user_id)
+    means. `strategy_id` replaces the ownership scope with one strategy's
+    positions: the caller (GET /accounts/strategy/{id}/trades) has already
+    proven the person may see that strategy's dedicated account."""
+    q = db.query(db_models.Position)
+    q = q.filter_by(strategy_id=strategy_id) if strategy_id is not None else q.filter_by(user_id=user_id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:

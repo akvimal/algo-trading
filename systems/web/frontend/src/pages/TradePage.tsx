@@ -15,6 +15,7 @@ import { IndicatorMenu } from "../chart/IndicatorMenu";
 import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
 import { AutoTrader } from "../components/AutoTrader";
+import { loadAutoTraderVisible } from "../autotrader/model";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
 import { checkLevelMove, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
@@ -52,6 +53,8 @@ export function TradePage() {
 
   const urlSymbol = params.get("symbol");
   const urlSegment = params.get("segment");
+  // Off by default; turned on in Settings — see autotrader/model.ts.
+  const [autoTraderVisible] = useState(loadAutoTraderVisible);
   const [ws, setWs] = useState<WorkstationState>(() => withUrlSymbol(loadWorkstation(), urlSymbol, urlSegment));
   useEffect(() => saveWorkstation(ws), [ws]);
   // A link from Scan while this screen is already open changes the first chart.
@@ -457,7 +460,7 @@ export function TradePage() {
               ))}
             </div>
           )}
-          <AutoTrader segment={activeSpec.segment} symbol={activeSpec.symbol} contracts={instrumentFor(activeSpec.symbol, activeSpec.segment) === "future"} />
+          {autoTraderVisible && <AutoTrader segment={activeSpec.segment} symbol={activeSpec.symbol} contracts={instrumentFor(activeSpec.symbol, activeSpec.segment) === "future"} />}
           <p className="faint ws-note">
             Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. Select a line or zone to be alerted when the price crosses it.
           </p>

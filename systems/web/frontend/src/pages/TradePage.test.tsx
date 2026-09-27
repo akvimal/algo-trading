@@ -34,6 +34,9 @@ let positionRows: Record<string, any>[];
 let groupRows: Record<string, any>[];
 let tradeCallsFail: boolean;
 let oiFails: boolean;
+let oiSummaryPcr: number | null;
+let oiBuildups: { call: string | null; put: string | null } | null;
+let sentHistPoints: any[];
 let levelFails: string | null;
 
 // The newest candle is the one being formed right now, as during market hours, so a price tick lands on it (and never starts a new bar, whatever minute of the quarter hour the test runs in).
@@ -64,6 +67,9 @@ beforeEach(() => {
   groupRows = [];
   tradeCallsFail = false;
   oiFails = false;
+  oiSummaryPcr = 1;
+  oiBuildups = null;
+  sentHistPoints = [];
   levelFails = null;
   structure = { ...emptyStructure };
   waiting = [];
@@ -109,11 +115,14 @@ beforeEach(() => {
         });
       }
       if (url.includes("/options/expiries")) return json({ expiries: ["2026-09-29", "2026-10-06"] });
+      if (url.includes("/options/sentiment-history")) return json({ exchange: "NSE", session_start: "09:15", session_end: "15:30", points: sentHistPoints });
       if (url.includes("/options/oi-summary")) {
         if (oiFails) return json({ detail: "chain unavailable" }, 502);
-        const leg = (oi: number, c: number | null = null) => ({ oi, oi_change_5m: null, oi_change_15m: c });
+        const leg = (oi: number, c: number | null = null, vol = 0) => ({ oi, oi_change_5m: null, oi_change_15m: c, volume: vol });
         return json({
-          underlying_symbol: q("symbol"), underlying_exchange: "NSE", expiry: q("expiry"), underlying_last_price: 1000, total_call_oi: 1, total_put_oi: 1, pcr: 1,
+          underlying_symbol: q("symbol"), underlying_exchange: "NSE", expiry: q("expiry"), underlying_last_price: 1000, total_call_oi: 1, total_put_oi: 1, pcr: oiSummaryPcr,
+          total_call_oi_change_5m: null, total_put_oi_change_5m: null, total_call_oi_change_15m: null, total_put_oi_change_15m: null,
+          total_call_buildup: oiBuildups?.call ?? null, total_put_buildup: oiBuildups?.put ?? null,
           strikes: [
             { strike: 960, call: null, put: leg(9_000_000) },
             { strike: 980, call: null, put: leg(4_000_000) },
@@ -1378,12 +1387,13 @@ describe("option-chain levels on the chart", () => {
   const levels = (c: ReturnType<typeof chart>) => c.overlaysNamed("oiLevel");
   const oiCalls = () => calls.filter((c) => c.url.includes("/options/"));
 
-  it("is off until asked for, and then costs no requests", async () => {
+  it("draws no lines on the chart until asked for, even though the strip below already reads the chain", async () => {
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
     expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("aria-pressed", "false");
     expect(levels(c)).toHaveLength(0);
-    expect(oiCalls()).toHaveLength(0);
+    await waitFor(() => expect(oiCalls().length).toBeGreaterThan(0)); // the always-on strip below the chart
+    expect(await screen.findByTestId("oi-strip")).toBeInTheDocument();
   });
 
   it("draws resistance above and support below from the nearest expiry once switched on", async () => {
@@ -1412,7 +1422,7 @@ describe("option-chain levels on the chart", () => {
     await waitFor(() => expect(levels(c)).toHaveLength(0));
   });
 
-  it("asks for nothing on an instrument with no option chain", async () => {
+  it("asks for nothing on an instrument with no option chain, and shows no strip", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const c = await loaded();
@@ -1420,6 +1430,7 @@ describe("option-chain levels on the chart", () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(levels(c)).toHaveLength(0);
     expect(oiCalls()).toHaveLength(0);
+    expect(screen.queryByTestId("oi-strip")).not.toBeInTheDocument();
   });
 
   it("looks up the expiry once and reuses it, and again after a failed reading", async () => {
@@ -1468,6 +1479,66 @@ describe("option-chain levels on the chart", () => {
     const asked = calls.filter((x) => x.url.includes("/options/oi-summary")).map((x) => new URL(x.url).searchParams.get("symbol"));
     expect(asked).toContain("NIFTY");
     expect(asked).toContain("BANKNIFTY");
+  });
+});
+
+describe("the OI strip under the chart", () => {
+  beforeEach(() => screenIs(true));
+  const strip = () => within(screen.getByTestId("oi-strip"));
+
+  it("shows PCR, call/put OI and support/resistance for an eligible instrument, with no toggle needed", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const s = strip();
+    expect(s.getByText("1.00")).toBeInTheDocument(); // PCR
+    expect(s.getByText(/CE OI/)).toBeInTheDocument();
+    expect(s.getByText(/PE OI/)).toBeInTheDocument();
+    expect(s.getByText(/1,020/)).toBeInTheDocument(); // resistance
+    expect(s.getByText(/960/)).toBeInTheDocument(); // support
+  });
+
+  it("shows a buildup badge for each side that has one", async () => {
+    oiBuildups = { call: "long_buildup", put: "short_covering" };
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const s = strip();
+    expect(s.getByText(/CE long buildup/)).toBeInTheDocument();
+    expect(s.getByText(/PE short covering/)).toBeInTheDocument();
+  });
+
+  it("shows the OI-trend sparklines once there is sentiment history, and not before", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      const s = strip();
+      expect(s.queryByTestId("oi-sent-5m")).not.toBeInTheDocument();
+      const now = Date.now();
+      sentHistPoints = [
+        { recorded_at: new Date(now - 5 * 60_000).toISOString(), score_5m: 0.1, score_15m: 0.1 },
+        { recorded_at: new Date(now).toISOString(), score_5m: 0.15, score_15m: 0.12 },
+      ];
+      await act(async () => void vi.advanceTimersByTime(60_500));
+      await waitFor(() => expect(strip().getByTestId("oi-sent-5m")).toBeInTheDocument());
+      expect(strip().getByTestId("oi-sent-5m")).toHaveTextContent("+0.15%");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows nothing before the first reading arrives, and nothing for a stock", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await loaded();
+    expect(screen.queryByTestId("oi-strip")).not.toBeInTheDocument();
+  });
+
+  it("each chart of a pair shows its own strip", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    await waitFor(() => expect(screen.getAllByTestId("oi-strip")).toHaveLength(2));
   });
 });
 

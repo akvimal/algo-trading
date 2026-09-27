@@ -24,6 +24,7 @@
   --tap: 44px; /* minimum touch target */
   --nav-h: 60px;
   --sidebar-w: 224px;
+  --sidebar-w-collapsed: 64px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 

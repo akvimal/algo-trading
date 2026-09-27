@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -198,6 +198,7 @@ describe("navigation", () => {
     renderApp("/more");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     for (const label of ["Today", "Scan", "Trade", "Portfolio", "More"]) expect(nav).toHaveTextContent(label);
-    expect(screen.getByText("me@x.com")).toBeInTheDocument();
+    expect(within(nav).getByText("me@x.com")).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
   });
 });

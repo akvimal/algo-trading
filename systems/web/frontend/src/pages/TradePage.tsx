@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, type FormEvent } 
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
 import { getAccounts } from "../api/settings";
-import { cancelWaitingOrder, listWaitingOrders, loadChartTrades } from "../api/trade";
+import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel } from "../api/trade";
 import type { OptionGroup, Position, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
@@ -17,7 +17,7 @@ import { StructureMenu } from "../chart/StructureMenu";
 import { AutoTrader } from "../components/AutoTrader";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
-import { toChartTrades } from "../chart/trades";
+import { checkLevelMove, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
 import { TradeTicket } from "../components/TradeTicket";
 import { CLASSIC_APP_URL } from "../config";
 import { formatPrice } from "../format";
@@ -99,6 +99,30 @@ export function TradePage() {
     () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? toChartTrades(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups, 0) : [])),
     [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
   );
+
+  // The stop and target of open trades, as lines the person can drag.
+  const chartLevels = useMemo(
+    () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? openLevels(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups) : [])),
+    [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const [levelNote, setLevelNote] = useState<{ text: string; error: boolean } | null>(null);
+  async function moveLevel(pane: 0 | 1, level: OpenLevel, price: number): Promise<boolean> {
+    const word = level.field === "stop" ? "Stop-loss" : "Target";
+    const problem = checkLevelMove(level, price, priceOf(pane));
+    if (problem) {
+      setLevelNote({ text: problem, error: true });
+      return false;
+    }
+    try {
+      await moveOpenLevel(level, price);
+    } catch (e) {
+      setLevelNote({ text: e instanceof Error ? e.message : "Could not move it. Try again.", error: true });
+      return false;
+    }
+    setLevelNote({ text: `${word} moved to ${formatPrice(price)}.`, error: false });
+    tradeRows.reload();
+    return true;
+  }
 
   // ---- account, budget, waiting orders ----
   const accounts = useResource(getAccounts, []);
@@ -333,6 +357,14 @@ export function TradePage() {
 
         <div className="ws-charts">
           <AlertBar selection={selection} armed={shown.reduce<number>((n, i) => n + armed[i], 0)} onSet={setAlert} />
+          {levelNote && (
+            <div className={`ws-flash ${levelNote.error ? "error" : ""}`} role={levelNote.error ? "alert" : "status"} data-testid="level-note">
+              {levelNote.text}
+              <button className="link-btn" onClick={() => setLevelNote(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
           {flash && (
             <div className="ws-flash" role="status" aria-live="polite" data-testid="alert-flash">
               <strong>Price alert</strong> {flash}
@@ -379,6 +411,8 @@ export function TradePage() {
                       structure={structure}
                       plan={active === i ? plan : []}
                       trades={chartTrades[i]}
+                      levels={chartLevels[i]}
+                      onLevelMove={(l, p) => moveLevel(i, l, p)}
                       oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
                       drawingsHidden={tools.drawingsHidden}

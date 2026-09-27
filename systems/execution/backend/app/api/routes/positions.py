@@ -15,6 +15,7 @@ from app.domain.models import (
     ReviewSubmit,
     SquareOffTimeUpdate,
     StopLossUpdate,
+    TargetUpdate,
     TradeTagsUpdate,
 )
 from app.domain.position_manager import (
@@ -31,6 +32,7 @@ from app.domain.position_manager import (
     update_position_tags,
     update_square_off_time,
     update_stop_loss,
+    update_target,
 )
 
 router = APIRouter()
@@ -420,6 +422,30 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         functools.partial(get_previous_candle, token=user.token),
         functools.partial(get_candle_history, token=user.token),
     )
+    if reject_reason is not None:
+        raise HTTPException(status_code=422, detail=reject_reason)
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/target")
+def edit_target(position_id: str, payload: TargetUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Moves an already-open position's take-profit (the counterpart of
+    PUT /positions/{id}/stop-loss, which had no target sibling for spot and
+    futures). 404 if missing or owned by another user, 409 if not OPEN, 422
+    if the price is on the wrong side of the entry."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
+
+    row, reject_reason = update_target(db, owner_id, parsed_id, payload.target_price)
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
     return _position_to_out(row)

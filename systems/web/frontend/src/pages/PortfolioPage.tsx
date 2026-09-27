@@ -4,6 +4,7 @@ import type { EquityHistory, LiveEligibility, OptionGroup, Performance, Position
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { SEGMENTS } from "../config";
 import { useProfile } from "../auth/ProfileContext";
+import { useLivePositions } from "../hooks/useLivePositions";
 import { useResource } from "../hooks/useResource";
 import { HistoryTab } from "./portfolio/HistoryTab";
 import { OverviewTab } from "./portfolio/OverviewTab";
@@ -62,6 +63,7 @@ export function PortfolioPage() {
     perf.reload();
   };
   const open = useResource(() => loadOpen(segment), [segment], { pollMs: 15_000, enabled: tab === "positions" });
+  const live = useLivePositions(tab === "positions" ? open.data?.positions : undefined);
 
   return (
     <div className="stack">
@@ -82,7 +84,7 @@ export function PortfolioPage() {
       </div>
 
       {tab === "overview" && <OverviewTab equity={equity} perf={perf} elig={elig} trades={closed.data} />}
-      {tab === "positions" && <PositionsTab open={open} />}
+      {tab === "positions" && <PositionsTab open={open} positions={live.positions} live={live.live} />}
       {(tab === "history" || tab === "review") && closed.loading && <Skeleton lines={4} />}
       {(tab === "history" || tab === "review") && closed.error && <ErrorNotice error={closed.error} onRetry={closed.reload} />}
       {tab === "history" && closed.data && <HistoryTab trades={closed.data} onSaved={saved} />}

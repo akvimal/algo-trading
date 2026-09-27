@@ -7,6 +7,7 @@ import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
 import { PositionCard } from "../components/PositionCard";
 import { formatInr, formatPnl } from "../format";
+import { useLivePositions } from "../hooks/useLivePositions";
 import { useResource } from "../hooks/useResource";
 import { firstWeek } from "./onboardingModel";
 import { dayPnl, inMode, lossBudget, openGroups, openPositions, paperBalance, type Mode } from "./todayModel";
@@ -31,6 +32,8 @@ export function TodayPage() {
   const [mode, setMode] = useState<Mode>("intraday");
   const { guided, markets } = useProfile();
   const today = useResource(loadToday, [], { pollMs: POLL_MS });
+  // Open spot and futures results follow the price socket between polls.
+  const live = useLivePositions(today.data?.positions);
   // Sentiment is context, not the point of the screen: it loads on its own and its failure
   // never blocks (or replaces) the positions above it.
   const pulse = useResource(() => api<MarketSentiment>("marketData", "/options/sentiment"), [], { pollMs: 60_000 });
@@ -39,10 +42,12 @@ export function TodayPage() {
   if (today.error && !today.data) return <ErrorNotice error={today.error} onRetry={today.reload} />;
   if (!today.data) return null;
 
-  const { positions, groups } = today.data;
+  const { groups } = today.data;
+  const positions = live.positions;
   // Every market has an account, but only the ones the person chose count towards their totals.
   const accounts = today.data.accounts.filter((a) => markets.includes(a.segment));
   const pnl = dayPnl(positions, groups);
+  const liveDelta = accounts.reduce((n, a) => n + (live.delta[a.segment] ?? 0), 0);
   const budget = lossBudget(accounts, pnl.total);
   const shownPositions = mode === "options" ? [] : openPositions(positions).filter((p) => inMode(p, mode));
   const shownGroups = mode === "options" ? openGroups(groups) : [];
@@ -51,11 +56,18 @@ export function TodayPage() {
     <div className="stack">
       <div className="card hero">
         <span className="dim">Paper balance</span>
-        <span className="big num">{formatInr(paperBalance(accounts))}</span>
+        <span className="big num">{formatInr(paperBalance(accounts) + liveDelta)}</span>
       </div>
 
       <div className="card hero" aria-label="Today's profit and loss">
-        <span className="dim">Today</span>
+        <span className="dim">
+          Today
+          {live.live && (
+            <span className="live-dot on" data-testid="live-today" title="Live: open results update as prices move">
+              <span className="sr-only">Live</span>
+            </span>
+          )}
+        </span>
         <Signed className="big" value={pnl.total} text={formatPnl(pnl.total)} />
         <span className="dim" style={{ fontSize: 13 }}>
           {formatPnl(pnl.realized)} booked from {pnl.closedToday} closed · {formatPnl(pnl.unrealized)} open

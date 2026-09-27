@@ -86,6 +86,10 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 
 **The auto-trader hidden by default built 2026-09-27** (`revamp-p2-autotrader-toggle`, on user report "lets turn it off by default for user, let user turn it on in the settings"): a `web.autotrader.visible` per-browser preference, off by default, with the switch under Settings → Advanced (a new tab).
 
+**UX pass on the workstation, in progress 2026-09-27**, on user feedback ("in desktop view the left side nav can be collapsible with collapsed default, top 2 rows can be reviewed for collapsing to 1 row, ... the logout action is inside the more... menu, it can be shown in left nav bottom"). Scoped with the user to three pieces (a 4th, a live trend arrow on each instrument chip, deferred — it needs a new batched-regime endpoint and a real decision on polling cost against the price socket's 5-symbol cap):
+- **The Layers menu built** (`revamp-p2-layers-menu`): My trades / OI levels / Show ticket fold into one popover. Indicators and Structure deliberately kept separate — see the architecture note.
+- Collapsible sidebar, sign out moved to the sidebar — in progress.
+
 Remaining in Phase 2: retiring the classic frontends; email verification and password reset stay in Phase 3.
 
 **Retiring the classic frontends — inventory taken 2026-09-27, nothing removed yet.** The shell's tab bar (`shell/index.html`) names what still has to move or be deliberately dropped before any classic frontend or the shell can go:

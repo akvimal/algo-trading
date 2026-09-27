@@ -12,6 +12,7 @@ import { AlertBar } from "../chart/AlertBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
+import { LayersMenu } from "../chart/LayersMenu";
 import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
 import { AutoTrader } from "../components/AutoTrader";
@@ -308,21 +309,17 @@ export function TradePage() {
             onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
           />
           <StructureMenu config={structure} onChange={setStructure} />
-          <button className="chip-btn" aria-pressed={tools.tradesOn} title="Show your own trades on the chart" onClick={() => setTools((t) => ({ ...t, tradesOn: !t.tradesOn }))}>
-            My trades
-          </button>
-          <button className="chip-btn" aria-pressed={tools.oiLevelsOn} title="Support and resistance from option open interest (indices, gold, crude, Bitcoin, Ether)" onClick={() => setTools((t) => ({ ...t, oiLevelsOn: !t.oiLevelsOn }))}>
-            OI levels
-          </button>
+          <LayersMenu
+            tradesOn={tools.tradesOn}
+            onTradesOn={(on) => setTools((t) => ({ ...t, tradesOn: on }))}
+            oiLevelsOn={tools.oiLevelsOn}
+            onOiLevelsOn={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
+            ticket={wide ? { open: ws.ticketOpen, onToggle: (open) => setWs((cur) => ({ ...cur, ticketOpen: open })) } : undefined}
+          />
           {wide && (
-            <>
-              <button className="chip-btn" aria-pressed={ws.ticketOpen} onClick={() => setWs((cur) => ({ ...cur, ticketOpen: !cur.ticketOpen }))}>
-                {ws.ticketOpen ? "Hide ticket" : "Show ticket"}
-              </button>
-              <button className="chip-btn" aria-label={fullscreen ? "Exit full screen" : "Full screen"} title={fullscreen ? "Exit full screen" : "Full screen"} aria-pressed={fullscreen} onClick={toggleFullscreen}>
-                <ExpandIcon />
-              </button>
-            </>
+            <button className="chip-btn" aria-label={fullscreen ? "Exit full screen" : "Full screen"} title={fullscreen ? "Exit full screen" : "Full screen"} aria-pressed={fullscreen} onClick={toggleFullscreen}>
+              <ExpandIcon />
+            </button>
           )}
         </div>
       </div>

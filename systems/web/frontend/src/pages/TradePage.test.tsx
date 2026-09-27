@@ -1764,7 +1764,15 @@ describe("alerts on drawings", () => {
 describe("the auto-trader on the trade screen", () => {
   beforeEach(() => screenIs(true));
 
-  it("is offered for the instrument on the chart when it has contracts, and follows the active chart", async () => {
+  it("is hidden by default, and asks the server for nothing", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByTestId("auto-trader")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.url.includes("/strategies") || c.url.includes("/indicators") || c.url.includes("/rules"))).toBe(false);
+  });
+
+  it("is offered for the instrument on the chart when it has contracts, and follows the active chart, once turned on in Settings", async () => {
+    localStorage.setItem("web.autotrader.visible", "true");
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const card = within(await screen.findByTestId("auto-trader"));
@@ -1773,7 +1781,8 @@ describe("the auto-trader on the trade screen", () => {
     expect(await screen.findByRole("heading", { name: "Auto-trader · BANKNIFTY" })).toBeInTheDocument();
   });
 
-  it("says it is not available for a stock", async () => {
+  it("says it is not available for a stock, once turned on", async () => {
+    localStorage.setItem("web.autotrader.visible", "true");
     renderAt("/trade?symbol=RELIANCE");
     expect(await screen.findByText(/A stock is traded as shares/)).toBeInTheDocument();
     expect(screen.queryByTestId("auto-trader")).not.toBeInTheDocument();

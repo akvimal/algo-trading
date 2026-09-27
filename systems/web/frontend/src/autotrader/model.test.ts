@@ -1,10 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
-  ADX_PARAMS, DEFAULT_CONFIG, buildProvision, cleanConfig, configFromServer, optionEligible, sameConfig, strategyName, summarise, tagFor, validateConfig,
+  ADX_PARAMS, DEFAULT_CONFIG, buildProvision, cleanConfig, configFromServer, loadAutoTraderVisible, optionEligible, sameConfig, saveAutoTraderVisible,
+  strategyName, summarise, tagFor, validateConfig,
 } from "./model";
 import { tradeRows } from "./trades";
 
 const cfg = (over: object = {}) => ({ ...DEFAULT_CONFIG, ...over });
+
+describe("loadAutoTraderVisible and saveAutoTraderVisible", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("is off until the person turns it on", () => {
+    expect(loadAutoTraderVisible()).toBe(false);
+  });
+  it("remembers the choice", () => {
+    saveAutoTraderVisible(true);
+    expect(loadAutoTraderVisible()).toBe(true);
+    saveAutoTraderVisible(false);
+    expect(loadAutoTraderVisible()).toBe(false);
+  });
+  it("treats anything but the exact saved 'true' as off", () => {
+    localStorage.setItem("web.autotrader.visible", "yes");
+    expect(loadAutoTraderVisible()).toBe(false);
+  });
+});
 
 describe("validateConfig", () => {
   it("accepts the defaults", () => {

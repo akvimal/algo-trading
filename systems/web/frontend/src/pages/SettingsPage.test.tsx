@@ -285,6 +285,27 @@ describe("live trading", () => {
   });
 });
 
+describe("advanced: the auto-trader toggle", () => {
+  it("is off until switched on, and remembers the choice", async () => {
+    const user = userEvent.setup();
+    renderAt("/more/settings?tab=advanced");
+    const box = await screen.findByLabelText(/Show the auto-trader/);
+    expect(box).not.toBeChecked();
+    await user.click(box);
+    expect(box).toBeChecked();
+    expect(localStorage.getItem("web.autotrader.visible")).toBe("true");
+    await user.click(box);
+    expect(box).not.toBeChecked();
+    expect(localStorage.getItem("web.autotrader.visible")).toBe("false");
+  });
+
+  it("shows on already switched on", async () => {
+    localStorage.setItem("web.autotrader.visible", "true");
+    renderAt("/more/settings?tab=advanced");
+    expect(await screen.findByLabelText(/Show the auto-trader/)).toBeChecked();
+  });
+});
+
 describe("the add-keys prompt elsewhere", () => {
   it("points at this screen", async () => {
     vi.stubGlobal(

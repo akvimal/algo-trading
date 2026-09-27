@@ -84,6 +84,8 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 
 **The OI strip built 2026-09-27** (`revamp-p2-oi-strip`, on user report "I don't see OI strip, that used to show under live chart"): restores the classic Live Chart's compact option-chain read under the workstation's charts, always shown for an OI-eligible instrument (unlike the on-chart OI levels, which stay opt-in); adds `GET /options/sentiment-history` to web.
 
+**The auto-trader hidden by default built 2026-09-27** (`revamp-p2-autotrader-toggle`, on user report "lets turn it off by default for user, let user turn it on in the settings"): a `web.autotrader.visible` per-browser preference, off by default, with the switch under Settings → Advanced (a new tab).
+
 Remaining in Phase 2: retiring the classic frontends; email verification and password reset stay in Phase 3.
 
 **Retiring the classic frontends — inventory taken 2026-09-27, nothing removed yet.** The shell's tab bar (`shell/index.html`) names what still has to move or be deliberately dropped before any classic frontend or the shell can go:

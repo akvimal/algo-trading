@@ -26,6 +26,26 @@ export type AutoConfig = {
   balance: number;
 };
 
+// Off by default: it places real (paper) orders on its own once armed, so it stays out of the way of a
+// new user until they deliberately turn it on in Settings. A per-browser preference, not account state.
+const VISIBLE_KEY = "web.autotrader.visible";
+
+export function loadAutoTraderVisible(): boolean {
+  try {
+    return localStorage.getItem(VISIBLE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveAutoTraderVisible(visible: boolean): void {
+  try {
+    localStorage.setItem(VISIBLE_KEY, String(visible));
+  } catch {
+    // storage blocked: the choice simply lasts this session
+  }
+}
+
 export const DEFAULT_CONFIG: AutoConfig = {
   instrument: "future", moneyness: "ATM", period: 10, multiplier: 3, interval: "5min", lots: 1, adxGate: false, windows: [], balance: 100_000,
 };

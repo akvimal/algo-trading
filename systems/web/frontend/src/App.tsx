@@ -8,6 +8,7 @@ import { PortfolioPage } from "./pages/PortfolioPage";
 import { ScanPage } from "./pages/ScanPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SignInPage } from "./pages/SignInPage";
+import { StrategiesPage } from "./pages/StrategiesPage";
 import { TodayPage } from "./pages/TodayPage";
 import { TradePage } from "./pages/TradePage";
 import { WelcomePage } from "./pages/WelcomePage";
@@ -56,6 +57,7 @@ export function App() {
           <Route path="more">
             <Route index element={<MorePage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="strategies" element={<StrategiesPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

@@ -95,6 +95,17 @@ export function MorePage() {
         </Link>
       </div>
       <div className="card">
+        <Link to="/more/strategies" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+          <span>
+            <strong>Strategies</strong>
+            <span className="dim" style={{ display: "block", fontSize: 13 }}>
+              Rules, indicators, watchlists and signals for webhook and in-house strategies
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      </div>
+      <div className="card">
         <p style={{ marginTop: 0 }}>Alerts and the rest are still in the classic app while this one is built out.</p>
         <a className="btn" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }} href={CLASSIC_APP_URL}>
           Open classic app

@@ -886,6 +886,16 @@ class StopLossUpdate(BaseModel):
         return self
 
 
+class TargetUpdate(BaseModel):
+    """PUT /positions/{id}/target - moves an already-open spot/futures
+    position's take-profit, the sibling of StopLossUpdate (an option group's
+    own is SpotTargetUpdate). Same side rule ManualPositionCreate applies at
+    order time, checked against the position's own entry price in
+    update_target (the model does not know it)."""
+
+    target_price: float = Field(gt=0)
+
+
 class SquareOffTimeUpdate(BaseModel):
     """PUT /positions/{id}/square-off-time and PUT /option-groups/{id}/
     square-off-time - edits an already-open position's/group's own

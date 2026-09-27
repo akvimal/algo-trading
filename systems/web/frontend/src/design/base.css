@@ -1081,3 +1081,49 @@ table.t th {
   border-color: var(--down, #e8586a);
   background: rgba(232, 88, 106, 0.1);
 }
+
+.oi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  color: var(--text-dim, #93a1b1);
+}
+.oi-strip b {
+  color: var(--text, #e6e9ee);
+}
+.oi-strip .up {
+  color: var(--up);
+}
+.oi-strip .dn {
+  color: var(--dn);
+}
+.oi-strip-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.oi-strip-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 16px;
+}
+.oi-strip-spark-bar {
+  width: 3px;
+  min-height: 2px;
+  border-radius: 1px;
+  background: var(--text-dim, #93a1b1);
+}
+.oi-strip-spark-bar[data-tone="up"] {
+  background: var(--up);
+}
+.oi-strip-spark-bar[data-tone="dn"] {
+  background: var(--dn);
+}
+.oi-strip-spark-bar.is-major {
+  outline: 1px solid var(--accent);
+}

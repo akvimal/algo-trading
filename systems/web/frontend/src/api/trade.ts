@@ -1,5 +1,5 @@
 import { api } from "./http";
-import type { Candle, Ltp, MarketRegime, OiSummary, OptionGroup, PendingOrder, Position, ResolvedUnderlying, Segment } from "./types";
+import type { Candle, Ltp, MarketRegime, OiSummary, OptionGroup, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 import type { OpenLevel } from "../chart/trades";
 
@@ -44,6 +44,10 @@ export const getExpiries = (exchange: string, symbol: string) =>
 
 export const getOiSummary = (exchange: string, symbol: string, expiry: string) =>
   api<OiSummary>("marketData", `/options/oi-summary?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
+
+/** Today's 5-minute OI-sentiment readings for `symbol` (the bare underlying, not its resolved contract —
+ * sentiment_history is keyed by the underlying). */
+export const getSentimentHistory = (symbol: string) => api<SentimentHistoryDay>("marketData", `/options/sentiment-history?symbol=${encodeURIComponent(symbol)}`);
 
 /** Moves the stop or target of an open trade to a new price. A position's target has its own route; an
  * option group's stop and target are levels of the underlying. */

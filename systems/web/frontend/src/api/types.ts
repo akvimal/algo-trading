@@ -226,7 +226,7 @@ export type ResolvedUnderlying = {
   expiry: string | null;
 };
 
-export type OiLeg = { oi: number; oi_change_5m: number | null; oi_change_15m: number | null };
+export type OiLeg = { oi: number; oi_change_5m: number | null; oi_change_15m: number | null; volume: number };
 export type OiSummary = {
   underlying_symbol: string;
   underlying_exchange: string;
@@ -235,8 +235,18 @@ export type OiSummary = {
   total_call_oi: number;
   total_put_oi: number;
   pcr: number | null;
+  total_call_oi_change_5m: number | null;
+  total_put_oi_change_5m: number | null;
+  total_call_oi_change_15m: number | null;
+  total_put_oi_change_15m: number | null;
+  total_call_buildup: Buildup | null;
+  total_put_buildup: Buildup | null;
   strikes: { strike: number; call: OiLeg | null; put: OiLeg | null }[];
 };
+
+/** One market_data.sentiment_history row, written every 5 minutes for an OI-chain instrument. */
+export type SentimentHistoryPoint = { recorded_at: string; score_5m: number | null; score_15m: number | null };
+export type SentimentHistoryDay = { exchange: string; session_start: string; session_end: string; points: SentimentHistoryPoint[] };
 
 export type MarketRegime = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; adx: number; atr_percentile: number; trend: "up" | "down" | "range"; advice: string };
 

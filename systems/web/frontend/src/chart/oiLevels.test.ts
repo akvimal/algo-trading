@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { OiSummary } from "../api/types";
 import { compactIndian, computeOiLevels, hasOiChain, oiCount, oiLevelLines } from "./oiLevels";
 
-const leg = (oi: number, change15: number | null = null) => ({ oi, oi_change_5m: null, oi_change_15m: change15 });
+const leg = (oi: number, change15: number | null = null) => ({ oi, oi_change_5m: null, oi_change_15m: change15, volume: 0 });
 
 /** A chain around 24,500: call walls above, put walls below. */
 const chain = (over: Partial<OiSummary> = {}): OiSummary => ({
   underlying_symbol: "NIFTY", underlying_exchange: "NSE", expiry: "2026-09-29", underlying_last_price: 24500, total_call_oi: 0, total_put_oi: 0, pcr: 1,
+  total_call_oi_change_5m: null, total_put_oi_change_5m: null, total_call_oi_change_15m: null, total_put_oi_change_15m: null, total_call_buildup: null, total_put_buildup: null,
   strikes: [
     { strike: 24200, call: leg(9_000_000), put: leg(2_000_000, 50_000) },
     { strike: 24300, call: leg(1_000_000), put: leg(5_000_000, 10_000) },

@@ -29,7 +29,8 @@ import {
   applyPair, isPair, loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSymbol,
   withUrlSymbol, type Layout, type WorkstationState,
 } from "../workstation/state";
-import { useOiLevels } from "../workstation/useOiLevels";
+import { OiStrip } from "../chart/OiStrip";
+import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
@@ -79,9 +80,14 @@ export function TradePage() {
   const dataA = usePaneData(ws.panes[0], true, socketUp);
   const dataB = usePaneData(twoUp ? ws.panes[1] : null, twoUp, socketUp);
   const datas = [dataA, dataB];
-  const oiA = useOiLevels(dataA, ws.panes[0].symbol, tools.oiLevelsOn);
-  const oiB = useOiLevels(dataB, ws.panes[1].symbol, tools.oiLevelsOn && twoUp);
-  const oiLevels = [oiA, oiB];
+  // Always fetched for an eligible instrument (the strip is not opt-in); only the "OI levels" toggle
+  // decides whether the derived lines are also drawn on the chart itself. Called unconditionally for
+  // both panes, same as usePaneData above: dataB's own fields are null while the second pane is not
+  // shown, so its own `enabled` check inside useOiData already costs nothing.
+  const oiA = useOiData(dataA, ws.panes[0].symbol);
+  const oiB = useOiData(dataB, ws.panes[1].symbol);
+  const oi = [oiA, oiB];
+  const oiLevels = [tools.oiLevelsOn ? oiA.levels : [], tools.oiLevelsOn && twoUp ? oiB.levels : []];
 
   const [pushed, setPushed] = useState<Record<string, number>>({});
   const subs = datas.flatMap((d, i) => (d.exchange && d.symbol && (i === 0 || twoUp) ? [{ exchange: d.exchange, symbol: d.symbol }] : []));
@@ -397,6 +403,7 @@ export function TradePage() {
                   showActive={twoUp}
                 />
                 {d.error && !d.exchange && <ErrorNotice error={d.error as never} onRetry={d.reloadResolve} />}
+                <OiStrip summary={oi[i].summary} sentiment={oi[i].sentiment} levels={oi[i].levels} />
                 {d.exchange && d.symbol ? (
                   <Suspense fallback={<div className="chart-status">Loading chart…</div>}>
                     <ChartPane

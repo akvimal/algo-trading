@@ -262,3 +262,32 @@ describe("trades on the chart", () => {
     expect(pnlTone(-1)).toBe("dn");
   });
 });
+
+import { checkLevelMove, openLevels } from "./trades";
+
+describe("open trade levels", () => {
+  const level = (field: "stop" | "target", long: boolean) => ({ field, long });
+
+  it("keeps a long's stop below the price and its target above, and the reverse for a short", () => {
+    expect(checkLevelMove(level("stop", true), 99, 100)).toBeNull();
+    expect(checkLevelMove(level("stop", true), 100, 100)).toMatch(/below/); // level with the price would close it at once
+    expect(checkLevelMove(level("target", true), 101, 100)).toBeNull();
+    expect(checkLevelMove(level("target", true), 99, 100)).toMatch(/above/);
+    expect(checkLevelMove(level("stop", false), 101, 100)).toBeNull();
+    expect(checkLevelMove(level("stop", false), 99, 100)).toMatch(/above/);
+    expect(checkLevelMove(level("target", false), 99, 100)).toBeNull();
+    expect(checkLevelMove(level("target", false), 101, 100)).toMatch(/below/);
+  });
+
+  it("will not judge without a live price, or a price that is not one", () => {
+    expect(checkLevelMove(level("stop", true), 99, null)).toMatch(/no live price/);
+    expect(checkLevelMove(level("stop", true), Number.NaN, 100)).toBe("That is not a price.");
+    expect(checkLevelMove(level("stop", true), 0, 100)).toBe("That is not a price.");
+  });
+
+  it("makes a level of each stop and target that is set on an open trade of this instrument", () => {
+    const pos = (over: object) => ({ id: "p", symbol: "NIFTY-Sep2026-FUT", action: "BUY", quantity: 65, status: "OPEN", option_group_id: null, stop_loss_price: 100, target_price: null, ...over }) as never;
+    const levels = openLevels("NIFTY", [pos({}), pos({ id: "closed", status: "CLOSED" }), pos({ id: "leg", option_group_id: "g" }), pos({ id: "other", symbol: "BANKNIFTY-Sep2026-FUT" })], []);
+    expect(levels.map((l) => [l.key, l.price, l.draggable])).toEqual([["position:p:stop", 100, true]]);
+  });
+});

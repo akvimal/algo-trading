@@ -112,3 +112,58 @@ export function pnlTone(pnl: number | null): "up" | "dn" | "flat" {
   if (pnl == null || pnl === 0) return "flat";
   return pnl > 0 ? "up" : "dn";
 }
+
+// ---- the stop and target of trades that are still open, as levels on the chart ----
+
+export type OpenLevel = {
+  /** Unique per trade and field: "position:<id>:stop". */
+  key: string;
+  tradeId: string;
+  kind: "position" | "group";
+  field: "stop" | "target";
+  price: number;
+  /** For the tag on the line, e.g. "Stop · Long 10". */
+  label: string;
+  long: boolean;
+  /** A stop that moves by itself (trailing) is shown but cannot be dragged: moving it by hand would switch the trailing off. */
+  draggable: boolean;
+};
+
+/** The stop and target of each open trade on the chart of `base`: a position's own stop and target, and for
+ * an option group the stop and target on the underlying's price. A level that is not set has no line. */
+export function openLevels(base: string, positions: Position[], groups: OptionGroup[]): OpenLevel[] {
+  const want = base.trim().toUpperCase();
+  const out: OpenLevel[] = [];
+  const add = (l: Omit<OpenLevel, "key">) => out.push({ ...l, key: `${l.kind}:${l.tradeId}:${l.field}` });
+  for (const p of positions) {
+    if (p.status !== "OPEN" || p.option_group_id != null || !isContractOf(p.symbol, want)) continue;
+    const long = p.action === "BUY";
+    const name = `${long ? "Long" : "Short"} ${qty(p.quantity)}`;
+    const trailing = p.trailing_stop_enabled === true;
+    if (p.stop_loss_price != null) add({ tradeId: p.id, kind: "position", field: "stop", price: p.stop_loss_price, label: `Stop · ${name}${trailing ? " (trailing)" : ""}`, long, draggable: !trailing });
+    if (p.target_price != null) add({ tradeId: p.id, kind: "position", field: "target", price: p.target_price, label: `Target · ${name}`, long, draggable: true });
+  }
+  for (const g of groups) {
+    if (g.status !== "OPEN" || g.underlying_symbol.toUpperCase() !== want) continue;
+    const long = g.action === "BUY";
+    const name = optionLabel(g);
+    const trailing = g.spot_stop_loss_trailing_enabled === true;
+    if (g.spot_stop_loss_price != null) add({ tradeId: g.id, kind: "group", field: "stop", price: g.spot_stop_loss_price, label: `Stop · ${name}${trailing ? " (trailing)" : ""}`, long, draggable: !trailing });
+    if (g.spot_target_price != null) add({ tradeId: g.id, kind: "group", field: "target", price: g.spot_target_price, label: `Target · ${name}`, long, draggable: true });
+  }
+  return out;
+}
+
+/** Why a level cannot be moved to `price`, or null when it can. A stop must stay on the losing side of the
+ * price now and a target on the winning side: on the wrong side it would close the trade at the next check,
+ * which is not what dragging a line means. The server has the last word; this saves a trip and says why. */
+export function checkLevelMove(level: Pick<OpenLevel, "field" | "long">, price: number, live: number | null): string | null {
+  if (!Number.isFinite(price) || price <= 0) return "That is not a price.";
+  if (live == null) return "There is no live price yet, so the level cannot be checked. Try again in a moment.";
+  const below = level.field === "stop" ? level.long : !level.long; // the level belongs below the price now
+  const word = level.field === "stop" ? "stop-loss" : "target";
+  const trade = level.long ? "long" : "short";
+  if (below && price >= live) return `The ${word} of a ${trade} trade has to stay below the current price (${live}).`;
+  if (!below && price <= live) return `The ${word} of a ${trade} trade has to stay above the current price (${live}).`;
+  return null;
+}

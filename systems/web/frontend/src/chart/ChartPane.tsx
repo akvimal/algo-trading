@@ -9,12 +9,12 @@ import {
   INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
   STRUCTURE_TIMEFRAMES, type StoredDrawing, type StructureConfig,
 } from "./config";
-import { PEER_GROUP, PLAN_GROUP, OI_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
+import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
 import { rollLiveBar, type Bar } from "./liveBar";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
-import type { ChartTrade, TradeMarkerExtend } from "./trades";
+import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
 
 export type DrawTool = "segment" | "rayLine" | "horizontalStraightLine" | "priceLine" | "rect" | "fibonacciLine" | "parallelStraightLine";
 
@@ -51,6 +51,10 @@ type Props = {
   plan: PlanLine[];
   /** The person's own trades on this instrument, drawn as markers (none by default). */
   trades?: ChartTrade[];
+  /** The stop and target of open trades on this instrument, as lines the person can drag (none by default). */
+  levels?: OpenLevel[];
+  /** A level was dragged to a new price. Answer true if it was accepted; on false the line goes back. */
+  onLevelMove?: (level: OpenLevel, price: number) => Promise<boolean> | boolean;
   /** Support and resistance lines read from the option chain (none by default). */
   oiLevels?: OiLevelLine[];
   magnet: boolean;
@@ -114,6 +118,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const hoverRef = useRef<number | null>(null);
   const planIds = useRef<Map<string, string>>(new Map());
   const planEpoch = useRef(0);
+  const levelIds = useRef<Map<string, string>>(new Map());
+  const levelEpoch = useRef(0);
   // Which side of each armed drawing the price was on at the last check, by overlay id.
   const sidesRef = useRef<Map<string, Side>>(new Map());
   const peerCursorId = useRef<string | null>(null);
@@ -390,6 +396,66 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (typeof id === "string") planIds.current.set(l.key, id);
     }
   }, [plan, status, epoch]);
+
+  // ---- the stop and target of open trades: lines that can be dragged, and go back if refused ----
+  // One overlay per level for as long as it exists, like the plan lines: a changed price moves it, a
+  // level that is gone is removed, a reloaded series starts from nothing. A stop that trails by itself is
+  // drawn locked (it cannot be picked up).
+  const levels = props.levels;
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || status !== "ready") return;
+    if (levelEpoch.current !== epoch) {
+      levelEpoch.current = epoch;
+      chart.removeOverlay({ groupId: LEVELS_GROUP });
+      levelIds.current.clear();
+    }
+    const anchor = barsRef.current[barsRef.current.length - 1]?.timestamp;
+    if (anchor == null) return;
+    const wanted = new Set((levels ?? []).map((l) => l.key));
+    for (const [key, id] of [...levelIds.current]) {
+      if (!wanted.has(key)) {
+        chart.removeOverlay(id);
+        levelIds.current.delete(key);
+      }
+    }
+    for (const l of levels ?? []) {
+      const extendData: PlanLineExtend = { key: l.key, label: l.label, color: l.field === "stop" ? "#e8586a" : "#3ecf8e", dashed: false };
+      const points = [{ timestamp: anchor, value: l.price }];
+      const existing = levelIds.current.get(l.key);
+      if (existing) {
+        chart.overrideOverlay({ id: existing, points, extendData });
+        continue;
+      }
+      const id = chart.createOverlay({
+        name: "planLine",
+        groupId: LEVELS_GROUP,
+        points,
+        extendData,
+        lock: !l.draggable,
+        onPressedMoveEnd: (e: OverlayEvent) => {
+          const v = e.overlay.points[0]?.value;
+          const current = propsRef.current.levels?.find((x) => x.key === l.key);
+          if (!current || typeof v !== "number" || !Number.isFinite(v)) return false;
+          const price = Number(v.toFixed(pricePrecision(v)));
+          void (async () => {
+            let accepted = false;
+            try {
+              accepted = (await propsRef.current.onLevelMove?.(current, price)) === true;
+            } catch {
+              accepted = false;
+            }
+            if (accepted) return; // the page reloads the trade and the line follows the saved price
+            const back = propsRef.current.levels?.find((x) => x.key === l.key);
+            const lineId = levelIds.current.get(l.key);
+            if (back && lineId) chartRef.current?.overrideOverlay({ id: lineId, points: [{ timestamp: anchor, value: back.price }] });
+          })();
+          return false;
+        },
+      });
+      if (typeof id === "string") levelIds.current.set(l.key, id);
+    }
+  }, [levels, status, epoch]);
 
   // ---- the person's own trades: an arrow at each entry, an exit mark and a result ----
   // Redrawn whole on each change (a poll brings new results), and against the loaded series: a trade from
@@ -668,7 +734,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [pickField]);
 
   // The canvas is invisible to a screen reader, so the same facts are stated in words.
-  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${oiLevels?.length ? ` Option-chain levels: ${oiLevels.map((l) => l.label).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
+  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${oiLevels?.length ? ` Option-chain levels: ${oiLevels.map((l) => l.label).join(", ")}.` : ""}${levels?.length ? ` Stops and targets of open trades: ${levels.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
 
   return (
     <div className="chart-pane" data-testid="chart-pane">

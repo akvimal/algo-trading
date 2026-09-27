@@ -17,6 +17,7 @@ export const PLAN_GROUP = "plan";
 export const PEER_GROUP = "peer";
 export const TRADES_GROUP = "trades";
 export const OI_GROUP = "oi-levels";
+export const LEVELS_GROUP = "open-levels";
 
 export type ObExtend = { tf: string; kind: "demand" | "supply"; role: "orderblock" | "breaker"; proximal: number; distal: number; mitigated: boolean; counterTrend: boolean };
 export type FvgExtend = { kind: "bullish" | "bearish"; top: number; bottom: number; filled: boolean };

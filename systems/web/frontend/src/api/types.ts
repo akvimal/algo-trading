@@ -44,6 +44,8 @@ export type Position = {
   stop_loss_price: number | null;
   target_price: number | null;
   option_group_id: string | null;
+  /** A stop that follows the price (or a method such as previous candle) rather than a fixed level. */
+  trailing_stop_enabled?: boolean;
   charges?: number | null;
   slippage_cost?: number | null;
   exit_reason?: string | null;
@@ -70,6 +72,7 @@ export type OptionGroup = {
   spot_target_price: number | null;
   /** The underlying's price when the group opened. */
   entry_spot_price?: number | null;
+  spot_stop_loss_trailing_enabled?: boolean;
   live_combined_price?: number | null;
   live_spot_price?: number | null;
   unrealized_pnl?: number | null;

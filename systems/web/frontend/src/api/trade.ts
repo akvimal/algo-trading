@@ -1,6 +1,7 @@
 import { api } from "./http";
 import type { Candle, Ltp, MarketRegime, OiSummary, OptionGroup, PendingOrder, Position, ResolvedUnderlying, Segment } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
+import type { OpenLevel } from "../chart/trades";
 
 export const resolveUnderlying = (segment: Segment, symbol: string) =>
   api<ResolvedUnderlying>("marketData", `/instruments/resolve?segment=${segment}&underlying=${encodeURIComponent(symbol)}`);
@@ -43,6 +44,17 @@ export const getExpiries = (exchange: string, symbol: string) =>
 
 export const getOiSummary = (exchange: string, symbol: string, expiry: string) =>
   api<OiSummary>("marketData", `/options/oi-summary?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
+
+/** Moves the stop or target of an open trade to a new price. A position's target has its own route; an
+ * option group's stop and target are levels of the underlying. */
+export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number): Promise<void> {
+  const base = level.kind === "position" ? `/positions/${level.tradeId}` : `/option-groups/${level.tradeId}`;
+  const [path, body] =
+    level.kind === "position"
+      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price }] : [`${base}/target`, { target_price: price }]
+      : level.field === "stop" ? [`${base}/spot-stop-loss`, { spot_stop_loss_price: price }] : [`${base}/spot-target`, { spot_target_price: price }];
+  await api("execution", path, { method: "PUT", json: body });
+}
 
 export const listWaitingOrders = () => api<PendingOrder[]>("execution", "/pending-orders?status=pending");
 export const cancelWaitingOrder = (id: string) => api<PendingOrder>("execution", `/pending-orders/${id}`, { method: "DELETE" });

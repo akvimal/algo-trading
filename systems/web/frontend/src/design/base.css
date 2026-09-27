@@ -1077,3 +1077,7 @@ table.t th {
   color: var(--down, #e8586a);
   font-size: 12px;
 }
+.ws-flash.error {
+  border-color: var(--down, #e8586a);
+  background: rgba(232, 88, 106, 0.1);
+}

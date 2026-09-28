@@ -172,9 +172,15 @@ export function TradePage() {
   // ---- the ticket belongs to the active chart ----
   const [ticket, setTicket] = useState<Ticket>(EMPTY_TICKET);
   const [pickField, setPickField] = useState<PriceField | null>(null);
+  // The order form is hidden once something is already open on this instrument - the open
+  // position(s) are almost always what the person came to look at then, and a bare order form
+  // above them just pushes that down. "+ Place another order" reveals it again for pyramiding, and
+  // resets with everything else the moment the instrument changes.
+  const [showFormAnyway, setShowFormAnyway] = useState(false);
   useEffect(() => {
     setTicket(EMPTY_TICKET);
     setPickField(null);
+    setShowFormAnyway(false);
   }, [activeSpec.symbol, activeSpec.segment]);
 
   const activeData = datas[active];
@@ -191,6 +197,7 @@ export function TradePage() {
       groups: tradeRows.data.groups.filter((g) => g.status === "OPEN" && g.underlying_symbol.toUpperCase() === want),
     };
   }, [tradeRows.data, activeSpec.symbol]);
+  const hasOpenForInstrument = activeTrades.positions.length > 0 || activeTrades.groups.length > 0;
   const ctx = account
     ? {
         price: activePrice, lotSize: activeData.resolved?.lot_size ?? 1, capital: account.capital_per_trade, riskPct: account.risk_per_trade_pct,
@@ -511,7 +518,7 @@ export function TradePage() {
                 </p>
               </div>
             )}
-            {ctx && !live && (
+            {ctx && !live && (!hasOpenForInstrument || showFormAnyway) && (
               <TradeTicket
                 ticket={ticket}
                 onChange={setTicket}
@@ -534,9 +541,16 @@ export function TradePage() {
                 }}
               />
             )}
-            {(activeTrades.positions.length > 0 || activeTrades.groups.length > 0) && (
+            {hasOpenForInstrument && (
               <>
-                <h2 className="section-title">Open positions</h2>
+                <div className="row">
+                  <h2 className="section-title">Open positions</h2>
+                  {ctx && !live && !showFormAnyway && (
+                    <button className="link-btn" onClick={() => setShowFormAnyway(true)}>
+                      + Place another order
+                    </button>
+                  )}
+                </div>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
                     <PositionCard key={p.id} kind="position" item={p} compact onChanged={tradeRows.reload} />

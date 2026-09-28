@@ -304,7 +304,8 @@ describe("placing", () => {
     localStorage.setItem("web.chart.tools", JSON.stringify({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: false, oiLevelsOn: false }));
     positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
     renderAt("/trade?symbol=RELIANCE");
-    await ticket();
+    // The order form is hidden with a position already open (see below), so this waits directly
+    // rather than through the ticket() helper, which expects the form itself to be present.
     const list = within(await screen.findByTestId("ticket-positions"));
     expect(list.getByText("RELIANCE")).toBeInTheDocument();
   });
@@ -323,6 +324,28 @@ describe("placing", () => {
     await waitFor(() => expect(calls.some((c) => c.url.includes("/positions?segment=NSE"))).toBe(true));
     expect(screen.queryByTestId("ticket-positions")).not.toBeInTheDocument();
   });
+
+  it("hides the order form once something is open on this instrument, showing only the position", async () => {
+    positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
+    renderAt("/trade?symbol=RELIANCE");
+    await screen.findByTestId("ticket-positions");
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
+  });
+
+  it("'+ Place another order' brings the form back for a deliberate second entry, and resets on a symbol change", async () => {
+    positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await screen.findByTestId("ticket-positions");
+    await user.click(screen.getByRole("button", { name: "+ Place another order" }));
+    expect(await screen.findByTestId("ticket")).toBeInTheDocument();
+    expect(screen.getByTestId("ticket-positions")).toBeInTheDocument(); // still shown too, not replaced
+
+    await user.click(screen.getByRole("button", { name: "Bank Nifty" })); // BANKNIFTY has nothing open
+    await waitFor(() => expect(screen.getByTestId("ticket")).toBeInTheDocument());
+    expect(screen.queryByTestId("ticket-positions")).not.toBeInTheDocument();
+  });
+
 
   it("will not place without a stop-loss when the account requires one, and says why", async () => {
     account.require_stop_loss = true;

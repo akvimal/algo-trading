@@ -27,16 +27,45 @@ const scrRow = (symbol: string, over: object = {}) => ({
 let oi: { snapshot_date: string; rows: object[] };
 let scr: { snapshot_date: string; rows: object[] };
 let oiStatus = 200;
+let customScreens: any[];
+let previewResult: any;
+let previewErrorDetail: string | null;
+let seq: number;
 
 beforeEach(() => {
   oi = { snapshot_date: "2026-09-25", rows: [oiRow("RELIANCE"), oiRow("TCS", { call_oi_change_pct: 12, call_buildup: "short_buildup" })] };
   scr = { snapshot_date: "2026-09-25", rows: [scrRow("SBIN"), scrRow("ITC", { regime: "ranging", proximity: null, pct_change_5d: -2 })] };
   oiStatus = 200;
+  customScreens = [];
+  previewResult = { snapshot_date: "2026-09-25", candidates: 2, matches: [{ symbol: "TCS", exchange: "NSE", close: 3500 }] };
+  previewErrorDetail = null;
+  seq = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
       if (url.includes("/oi-buildup")) return oiStatus === 200 ? json(oi) : json({ detail: "boom" }, oiStatus);
       if (url.includes("/equity-screener")) return json(scr);
+      if (url.includes("/custom-screens/preview")) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
+      if (/\/custom-screens\/[^/]+\/run$/.test(url)) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
+      if (url.endsWith("/custom-screens") && method === "GET") return json(customScreens);
+      if (url.endsWith("/custom-screens") && method === "POST") {
+        if (previewErrorDetail) return json({ detail: previewErrorDetail }, 422);
+        const body = JSON.parse(init!.body as string);
+        const row = { id: `s${++seq}`, ...body, created_at: "2026-09-25T00:00:00Z", updated_at: "2026-09-25T00:00:00Z" };
+        customScreens.push(row);
+        return json(row, 201);
+      }
+      const putMatch = /\/custom-screens\/([^/]+)$/.exec(url);
+      if (putMatch && method === "PUT") {
+        const row = customScreens.find((s) => s.id === putMatch[1]);
+        Object.assign(row, JSON.parse(init!.body as string));
+        return json(row);
+      }
+      if (putMatch && method === "DELETE") {
+        customScreens = customScreens.filter((s) => s.id !== putMatch[1]);
+        return json(null, 204);
+      }
       return json({ detail: `unrouted ${url}` }, 404);
     }),
   );
@@ -137,5 +166,94 @@ describe("Screener", () => {
     await screen.findByTestId("oi-list");
     await user.click(screen.getByRole("tab", { name: "Screener" }));
     expect(await screen.findByTestId("screener-list")).toBeInTheDocument();
+  });
+});
+
+describe("Custom screen", () => {
+  it("disables Preview and Save, with reasons, until the form is minimally valid", async () => {
+    renderAt("/scan?tab=custom");
+    await screen.findByText("No saved screens yet");
+    expect(screen.getByRole("button", { name: "Preview" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save screen" })).toBeDisabled();
+    expect(screen.getByText(/Give the screen a label/)).toBeInTheDocument();
+    expect(screen.getByText(/Type a condition/)).toBeInTheDocument();
+  });
+
+  it("previews an ad-hoc expression and shows the matches, with a chart link", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByText("No saved screens yet");
+    await user.type(screen.getByLabelText("Label"), "Bearish breakout");
+    await user.type(screen.getByLabelText("Condition"), "close > 100");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    const result = await screen.findByTestId("custom-screen-result");
+    expect(within(result).getByText(/1 of 2 stocks matched/)).toBeInTheDocument();
+    const match = within(screen.getByTestId("custom-screen-matches"));
+    expect(match.getByText("TCS")).toBeInTheDocument();
+    expect(match.getByRole("link", { name: "Chart" })).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE");
+  });
+
+  it("shows the server's own parse error in words, not a generic failure", async () => {
+    previewErrorDetail = "Unknown name 'banana'. Expected one of: close, open, high, low, weekly_close, ema(N), min(x, N), max(x, N).";
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByText("No saved screens yet");
+    await user.type(screen.getByLabelText("Label"), "x");
+    await user.type(screen.getByLabelText("Condition"), "banana > 100");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByText(/Unknown name 'banana'/)).toBeInTheDocument();
+    expect(screen.queryByTestId("custom-screen-result")).not.toBeInTheDocument();
+  });
+
+  it("saves a new screen, lists it, runs it, edits it, and deletes it", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByText("No saved screens yet");
+    await user.type(screen.getByLabelText("Label"), "Bearish breakout");
+    await user.type(screen.getByLabelText("Condition"), "close > 100");
+    await user.click(screen.getByRole("button", { name: "Save screen" }));
+
+    const list = await screen.findByTestId("saved-screens");
+    expect(within(list).getByText("Bearish breakout")).toBeInTheDocument();
+    expect(within(list).getByText("close > 100")).toBeInTheDocument();
+    // the form resets after a successful save
+    expect(screen.getByLabelText("Label")).toHaveValue("");
+
+    await user.click(within(screen.getByTestId("saved-screen")).getByRole("button", { name: "Run" }));
+    expect(await screen.findByTestId("custom-screen-matches")).toBeInTheDocument();
+
+    await user.click(within(screen.getByTestId("saved-screen")).getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Label")).toHaveValue("Bearish breakout");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Label"));
+    await user.type(screen.getByLabelText("Label"), "Renamed");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await within(screen.getByTestId("saved-screens")).findByText("Renamed")).toBeInTheDocument();
+
+    await user.click(within(screen.getByTestId("saved-screen")).getByRole("button", { name: "Delete" }));
+    expect(await screen.findByText("No saved screens yet")).toBeInTheDocument();
+  });
+
+  it("Cancel leaves an edit in progress without saving anything", async () => {
+    customScreens = [{ id: "s1", label: "Existing", expression: "close > 1", is_fno: null, index_membership: null, min_price: null, max_price: null, created_at: "2026-09-25T00:00:00Z", updated_at: "2026-09-25T00:00:00Z" }];
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await user.click(within(await screen.findByTestId("saved-screen")).getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Label")).toHaveValue("Existing");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByLabelText("Label")).toHaveValue("");
+    expect(within(screen.getByTestId("saved-screen")).getByText("Existing")).toBeInTheDocument(); // unchanged
+  });
+
+  it("names the active universe filters next to the results", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByText("No saved screens yet");
+    await user.type(screen.getByLabelText("Label"), "x");
+    await user.type(screen.getByLabelText("Condition"), "close > 100");
+    await user.selectOptions(screen.getByLabelText("F&O"), "yes");
+    await user.type(screen.getByLabelText("Min price"), "100");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByText(/F&O stocks, above ₹100/)).toBeInTheDocument();
   });
 });

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api } from "../api/http";
-import type { Buildup, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
+import { api, ApiError } from "../api/http";
+import { createCustomScreen, deleteCustomScreen, listCustomScreens, previewCustomScreen, runCustomScreen, updateCustomScreen } from "../api/customScreens";
+import type { Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
 import { CLASSIC_APP_URL } from "../config";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
+import { TextField } from "../components/Field";
 import { Sparkline } from "../components/Sparkline";
 import { formatDay, formatPct, formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
@@ -11,10 +13,14 @@ import {
   BUILDUP_HELP, BUILDUP_LABEL, OI_DEFAULTS, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, tradeLink, visible,
   type OiFilters, type OiSort, type ScreenerFilters, type ScreenerSort,
 } from "./scanModel";
+import {
+  EMPTY_FORM, INDEX_OPTIONS, defToForm, filterSummary, formToDef, sortScreens, validateForm, type CustomScreenForm,
+} from "./customScreenModel";
 
 const TABS = [
   { id: "oi", label: "OI buildup" },
   { id: "screener", label: "Screener" },
+  { id: "custom", label: "Custom" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 const parseTab = (v: string | null): TabId => (TABS.some((t) => t.id === v) ? (v as TabId) : "oi");
@@ -32,7 +38,7 @@ export function ScanPage() {
           </button>
         ))}
       </div>
-      {tab === "oi" ? <OiScan /> : <ScreenerScan />}
+      {tab === "oi" ? <OiScan /> : tab === "screener" ? <ScreenerScan /> : <CustomScreenScan />}
       <p className="faint" style={{ fontSize: 12 }}>
         End-of-day readings for information only. They are not recommendations to buy or sell. Live OI and the Weekly Advisor are still in the{" "}
         <a href={CLASSIC_APP_URL}>classic app</a>.
@@ -269,6 +275,198 @@ function ScreenerCard({ row: r }: { row: ScreenerRow }) {
         </span>
         <Link to={tradeLink(r.symbol)}>Chart</Link>
       </div>
+    </div>
+  );
+}
+
+const FNO_OPTIONS = [{ value: "any" as const, label: "Any" }, { value: "yes" as const, label: "F&O only" }, { value: "no" as const, label: "Non-F&O only" }];
+const INDEX_SELECT_OPTIONS = [{ value: "", label: "Any" }, ...INDEX_OPTIONS.map((i) => ({ value: i, label: i }))];
+
+/** A saved, per-user, typed expression evaluated against the same EOD universe the other two
+ * tabs read - "weekly_close < min(weekly_low, 20) and ema(5) crosses_below ema(20)", labelled
+ * "Bearish breakout", filterable to F&O stocks / an index / a price range. See
+ * app/domain/screener_expr.py (market-data) for the expression grammar. */
+function CustomScreenScan() {
+  const saved = useResource(listCustomScreens, []);
+  const [form, setForm] = useState<CustomScreenForm>(EMPTY_FORM);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [result, setResult] = useState<CustomScreenRunResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const errors = validateForm(form);
+
+  async function preview() {
+    setRunError(null);
+    setResult(null);
+    setBusy(true);
+    try {
+      setResult(await previewCustomScreen(formToDef(form)));
+    } catch (e) {
+      setRunError(e instanceof ApiError ? e.message : "Something went wrong. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runSaved(s: CustomScreen) {
+    setRunError(null);
+    setResult(null);
+    setBusy(true);
+    try {
+      setResult(await runCustomScreen(s.id));
+    } catch (e) {
+      setRunError(e instanceof ApiError ? e.message : "Something went wrong. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function save() {
+    setSaveError(null);
+    setBusy(true);
+    try {
+      const def = formToDef(form);
+      if (editingId) await updateCustomScreen(editingId, def);
+      else await createCustomScreen(def);
+      cancelEdit();
+      saved.reload();
+    } catch (e) {
+      setSaveError(e instanceof ApiError ? e.message : "Could not save. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    await deleteCustomScreen(id).catch(() => undefined);
+    if (editingId === id) cancelEdit();
+    saved.reload();
+  }
+
+  function edit(s: CustomScreen) {
+    setEditingId(s.id);
+    setForm(defToForm(s));
+    setResult(null);
+    setRunError(null);
+    setSaveError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+  }
+
+  return (
+    <div className="stack">
+      <div className="card">
+        <h2 className="section-title" style={{ marginTop: 0 }}>
+          {editingId ? "Edit screen" : "New screen"}
+        </h2>
+        <TextField id="cs-label" label="Label" value={form.label} onChange={(label) => setForm({ ...form, label })} placeholder="e.g. Bearish breakout" inputMode="text" />
+        <TextField
+          id="cs-expr"
+          label="Condition"
+          value={form.expression}
+          onChange={(expression) => setForm({ ...form, expression })}
+          placeholder="weekly_close < min(weekly_low, 20) and ema(5) crosses_below ema(20)"
+          inputMode="text"
+          hint="close, open, high, low (daily); weekly_close etc (weekly); ema(N), weekly_ema(N); min(x, N), max(x, N); <, <=, >, >=, ==, !=, crosses_above, crosses_below; and, or, not."
+        />
+        <div className="filters">
+          <Select<CustomScreenForm["fno"]> label="F&O" value={form.fno} onChange={(fno) => setForm({ ...form, fno })} options={FNO_OPTIONS} />
+          <Select label="Index" value={form.index} onChange={(index) => setForm({ ...form, index })} options={INDEX_SELECT_OPTIONS} />
+          <TextField id="cs-min" label="Min price" value={form.minPrice} onChange={(minPrice) => setForm({ ...form, minPrice })} inputMode="decimal" suffix="₹" />
+          <TextField id="cs-max" label="Max price" value={form.maxPrice} onChange={(maxPrice) => setForm({ ...form, maxPrice })} inputMode="decimal" suffix="₹" />
+        </div>
+        {errors.length > 0 && (
+          <ul className="hints" aria-live="polite">
+            {errors.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+        )}
+        {runError && (
+          <div className="notice error" role="alert">
+            {runError}
+          </div>
+        )}
+        {saveError && (
+          <div className="notice error" role="alert">
+            {saveError}
+          </div>
+        )}
+        <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+          {editingId && (
+            <button className="btn btn-small" onClick={cancelEdit} disabled={busy}>
+              Cancel
+            </button>
+          )}
+          <button className="btn btn-small" onClick={() => void preview()} disabled={busy || errors.length > 0}>
+            Preview
+          </button>
+          <button className="btn btn-small btn-primary" onClick={() => void save()} disabled={busy || errors.length > 0}>
+            {editingId ? "Save changes" : "Save screen"}
+          </button>
+        </div>
+      </div>
+
+      {result && (
+        <div className="card" data-testid="custom-screen-result">
+          <p className="dim" style={{ margin: 0 }}>
+            {result.snapshot_date ? `EOD read for ${formatDay(result.snapshot_date)}` : "No EOD data yet - the screener has not run once."}
+            {result.snapshot_date && ` · ${result.matches.length} of ${result.candidates} stocks matched`}
+            {filterSummary(form) && ` (${filterSummary(form)})`}
+          </p>
+          {result.snapshot_date && result.matches.length === 0 ? (
+            <Empty title="No matches">Try a different condition, or loosen the filters.</Empty>
+          ) : (
+            <div className="stack" data-testid="custom-screen-matches">
+              {result.matches.map((m) => (
+                <div className="row" key={m.symbol}>
+                  <strong>{m.symbol}</strong>
+                  <span className="num">{formatPrice(m.close)}</span>
+                  <Link to={tradeLink(m.symbol)}>Chart</Link>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <h2 className="section-title">Saved screens</h2>
+      {saved.loading && <Skeleton lines={3} />}
+      {saved.error && <ErrorNotice error={saved.error} onRetry={saved.reload} />}
+      {saved.data &&
+        (sortScreens(saved.data).length === 0 ? (
+          <Empty title="No saved screens yet">Build one above and save it.</Empty>
+        ) : (
+          <div className="stack" data-testid="saved-screens">
+            {sortScreens(saved.data).map((s) => (
+              <div className="card scan-card" key={s.id} data-testid="saved-screen">
+                <div className="row">
+                  <strong>{s.label}</strong>
+                  {filterSummary(defToForm(s)) && <span className="faint" style={{ fontSize: 12 }}>{filterSummary(defToForm(s))}</span>}
+                </div>
+                <p className="faint num" style={{ margin: "4px 0", fontSize: 13 }}>
+                  {s.expression}
+                </p>
+                <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+                  <button className="btn btn-small" onClick={() => edit(s)}>
+                    Edit
+                  </button>
+                  <button className="btn btn-small" onClick={() => void runSaved(s)} disabled={busy}>
+                    Run
+                  </button>
+                  <button className="btn btn-small btn-danger" onClick={() => void remove(s.id)}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
 }

@@ -215,6 +215,20 @@ export type ScreenerRow = {
 };
 export type Screener = { snapshot_date: string; rows: ScreenerRow[] };
 
+// ---- custom equity screener (an expression, evaluated against the same EOD universe) ----
+
+export type CustomScreenDef = {
+  label: string;
+  expression: string;
+  is_fno: boolean | null;
+  index_membership: string | null;
+  min_price: number | null;
+  max_price: number | null;
+};
+export type CustomScreen = CustomScreenDef & { id: string; created_at: string; updated_at: string };
+export type CustomScreenMatch = { symbol: string; exchange: string; close: number };
+export type CustomScreenRunResult = { snapshot_date: string | null; candidates: number; matches: CustomScreenMatch[] };
+
 export type Candle = { exchange: string; symbol: string; interval: string; open: number; high: number; low: number; close: number; volume: number; timestamp: string };
 
 export type ResolvedUnderlying = {

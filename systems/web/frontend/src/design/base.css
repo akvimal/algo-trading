@@ -1010,7 +1010,13 @@ table.t th {
   align-items: baseline;
   gap: 8px;
 }
-.pane-title .num {
+.pane-price {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-left: auto;
+}
+.pane-price .num {
   font-size: 18px;
   font-weight: 600;
 }

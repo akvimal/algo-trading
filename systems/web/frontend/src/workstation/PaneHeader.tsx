@@ -28,12 +28,6 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, live, r
     <div className="pane-header">
       <div className="pane-title">
         <strong>{symbol}</strong>
-        <span className="num" data-testid={`price-${index}`}>
-          {price == null ? "–" : formatPrice(price)}
-        </span>
-        <span className={`live-dot ${live ? "on" : ""}`} data-testid={`feed-${index}`} title={live ? "Live: the price updates as it moves" : "Updating every 5 seconds"}>
-          <span className="sr-only">{live ? "Live" : "Updating every 5 seconds"}</span>
-        </span>
         {showActive && active && <span className="pill" title="Orders and drawing tools apply to this chart">Trading</span>}
       </div>
       <div className="chips" role="group" aria-label={`Candle size, ${symbol}`}>
@@ -53,6 +47,18 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, live, r
           {tf} structure {t === "range" ? "sideways" : t}
         </span>
       ))}
+      {/* Pinned to the far right (margin-left: auto), after everything else - its own width changes
+          on every tick (more digits, a comma appearing/disappearing, ...), and sitting ahead of the
+          candle-size buttons made them visibly jump sideways on every update. Nothing sits after it,
+          so its own reflow no longer moves anything else. */}
+      <span className="pane-price">
+        <span className="num" data-testid={`price-${index}`}>
+          {price == null ? "–" : formatPrice(price)}
+        </span>
+        <span className={`live-dot ${live ? "on" : ""}`} data-testid={`feed-${index}`} title={live ? "Live: the price updates as it moves" : "Updating every 5 seconds"}>
+          <span className="sr-only">{live ? "Live" : "Updating every 5 seconds"}</span>
+        </span>
+      </span>
     </div>
   );
 }

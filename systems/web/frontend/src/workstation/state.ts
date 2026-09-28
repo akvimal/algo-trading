@@ -22,9 +22,6 @@ export const DEFAULT_LINKS: Links = { crosshair: true, scale: true, interval: tr
 
 const pane = (symbol: string, segment: Segment, interval = DEFAULT_INTERVAL): PaneSpec => ({ symbol, segment, interval });
 
-/** The pair the desk watches together: the two NSE indices. */
-export const PAIR: [PaneSpec, PaneSpec] = [pane("NIFTY", "NSE"), pane("BANKNIFTY", "NSE")];
-
 export const DEFAULT_STATE: WorkstationState = {
   layout: "single",
   panes: [pane("NIFTY", "NSE"), pane("BANKNIFTY", "NSE")],
@@ -83,19 +80,6 @@ export const paneCount = (s: WorkstationState) => (s.layout === "single" ? 1 : 2
 export function setLayout(s: WorkstationState, layout: Layout): WorkstationState {
   return { ...s, layout, active: layout === "single" ? 0 : s.active };
 }
-
-/** Put the two indices side by side, linked, at one candle size. The first chart's candle size wins. */
-export function applyPair(s: WorkstationState): WorkstationState {
-  const interval = s.panes[0].interval;
-  return {
-    ...s,
-    layout: s.layout === "single" ? "side" : s.layout,
-    panes: [{ ...PAIR[0], interval }, { ...PAIR[1], interval }],
-    links: DEFAULT_LINKS,
-  };
-}
-
-export const isPair = (s: WorkstationState) => paneCount(s) === 2 && s.panes[0].symbol === PAIR[0].symbol && s.panes[1].symbol === PAIR[1].symbol;
 
 /** Change one chart's candle size. With the interval link on, the other follows: comparing two charts
  * at different candle sizes is rarely what someone wants. */

@@ -208,6 +208,18 @@ describe("the page", () => {
     expect(t.queryByRole("button", { name: "Option" })).not.toBeInTheDocument(); // no options on a stock
   });
 
+  it("shows today's realized and unrealized result for the account, in the ticket", async () => {
+    positionRows = [
+      { id: "closed", symbol: "TCS", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 5, entry_price: 3000, entry_time: new Date().toISOString(), exit_time: new Date().toISOString(), status: "CLOSED", pnl: 500, option_group_id: null },
+      { id: "open", symbol: "INFY", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1500, entry_time: new Date().toISOString(), status: "OPEN", unrealized_pnl: -120, option_group_id: null },
+    ];
+    renderAt("/trade?symbol=RELIANCE&segment=NSE");
+    const p = await screen.findByTestId("ws-today-pnl");
+    expect(p).toHaveTextContent("Today on NSE:");
+    expect(p).toHaveTextContent("+₹380"); // 500 realized − 120 open
+    expect(p).toHaveTextContent("+₹500 booked from 1 closed, −₹120 open");
+  });
+
   it("offers futures and options on an index, in lots", async () => {
     lotSize = 65;
     renderAt("/trade?symbol=NIFTY");
@@ -1047,6 +1059,7 @@ describe("two linked charts", () => {
   const pair = async (user: ReturnType<typeof userEvent.setup>) => {
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
   };
@@ -1186,6 +1199,55 @@ describe("two linked charts", () => {
     await pair(user);
     await user.click(screen.getByRole("button", { name: "Stacked" }));
     expect(document.querySelector(".ws-grid")!.className).toContain("layout-stack");
+  });
+});
+
+describe("saved combos", () => {
+  beforeEach(() => screenIs(true));
+  const openCombos = async (user: ReturnType<typeof userEvent.setup>) => user.click(screen.getByRole("button", { name: /Combos/ }));
+
+  it("NIFTY + BANKNIFTY is there from the start, with nothing saved yet", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await openCombos(user);
+    expect(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" })).toBeInTheDocument();
+  });
+
+  it("offers to save the two charts on screen once they show two different instruments, applies and removes it", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await openCombos(user);
+    expect(screen.queryByRole("button", { name: /\+ Save/ })).not.toBeInTheDocument(); // one chart only: nothing to save yet
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" })); // two-up, still the seeded combo
+    await loaded(1);
+
+    // Make the second chart RELIANCE instead of BANKNIFTY: click into it, then search.
+    await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
+    await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "RELIANCE");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    expect(await screen.findByRole("heading", { name: "Trade RELIANCE" })).toBeInTheDocument();
+
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "+ Save NIFTY + RELIANCE" }));
+    expect(await screen.findByRole("button", { name: "NIFTY + RELIANCE" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ Save/ })).not.toBeInTheDocument(); // now saved: nothing more to offer
+    expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Remove NIFTY + RELIANCE" }));
+    expect(screen.queryByRole("button", { name: "NIFTY + RELIANCE" })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toHaveLength(1);
+  });
+
+  it("removing every saved combo, including the default, leaves the menu empty rather than reseeding it", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "Remove NIFTY + BANKNIFTY" }));
+    expect(screen.getByText("No saved combos yet.")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toEqual([]);
   });
 });
 
@@ -1391,6 +1453,7 @@ describe("dragging the plan lines", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     const t = within(await screen.findByTestId("ticket"));
@@ -1499,6 +1562,7 @@ describe("your trades on the chart", () => {
     positionRows = [position({ id: "n", symbol: "NIFTY-Sep2026-FUT", instrument_type: "future" }), position({ id: "b", symbol: "BANKNIFTY-Sep2026-FUT", instrument_type: "future", action: "SELL" })];
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     await waitFor(() => expect(markers(chart(0))).toHaveLength(1));
@@ -1631,6 +1695,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     await user.click(screen.getByRole("button", { name: /Layers/ }));
@@ -1697,6 +1762,7 @@ describe("the OI strip under the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     await waitFor(() => expect(screen.getAllByTestId("oi-strip")).toHaveLength(2));
@@ -1804,7 +1870,7 @@ describe("alerts on drawings", () => {
   });
 
   it("on a candle close waits for the candle to finish across the line, and a wick through it does not count", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const user = userEvent.setup();
       const { select, tick } = await open([level(1015)]);
@@ -1828,7 +1894,7 @@ describe("alerts on drawings", () => {
   });
 
   it("a restored on-a-close alert already knows which side the price was on, so the first close across the line counts", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const { tick } = await open([level(1015, { alert: { trigger: "close" } })]); // the price is 1,000: below
       tick(1020);
@@ -1914,6 +1980,7 @@ describe("alerts on drawings", () => {
     localStorage.setItem("web.chart.drawings:NSE:BANKNIFTY", JSON.stringify([level(1016, { alert: { trigger: "cross" } }), level(1017, { alert: { trigger: "close" } })]));
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("3 alerts armed"));
@@ -2096,6 +2163,7 @@ describe("moving the stop and target of open trades", () => {
     positionRows = [long({ id: "n", symbol: "NIFTY-Sep2026-FUT", instrument_type: "future" }), long({ id: "b", symbol: "BANKNIFTY-Sep2026-FUT", instrument_type: "future", stop_loss_price: null })];
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     await waitFor(() => expect(lines(chart(0))).toHaveLength(2));

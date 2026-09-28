@@ -1083,6 +1083,10 @@ table.t th {
   font-size: 16px;
   margin: 0 0 8px;
 }
+.ws-today-pnl {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
 .ws-setups {
   display: flex;
   flex-wrap: wrap;

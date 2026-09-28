@@ -17,19 +17,21 @@ import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
 import { AutoTrader } from "../components/AutoTrader";
 import { loadAutoTraderVisible } from "../autotrader/model";
-import { ErrorNotice, Skeleton } from "../components/bits";
+import { ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
 import { checkLevelMove, isContractOf, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
 import { PositionCard } from "../components/PositionCard";
 import { TradeTicket } from "../components/TradeTicket";
 import { CLASSIC_APP_URL } from "../config";
-import { formatPrice } from "../format";
+import { formatPnl, formatPrice } from "../format";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
 import { agreement, directionOf } from "../workstation/confluence";
 import { PaneHeader } from "../workstation/PaneHeader";
+import { CombosMenu } from "../workstation/CombosMenu";
+import { addCombo, applyCombo, loadCombos, removeCombo, saveCombos, type Combo } from "../workstation/combos";
 import {
-  applyPair, isPair, loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSymbol,
+  loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSymbol,
   withUrlSymbol, type Layout, type WorkstationState,
 } from "../workstation/state";
 import { OiStrip } from "../chart/OiStrip";
@@ -59,6 +61,8 @@ export function TradePage() {
   const [autoTraderVisible] = useState(loadAutoTraderVisible);
   const [ws, setWs] = useState<WorkstationState>(() => withUrlSymbol(loadWorkstation(), urlSymbol, urlSegment));
   useEffect(() => saveWorkstation(ws), [ws]);
+  const [combos, setCombos] = useState<Combo[]>(loadCombos);
+  useEffect(() => saveCombos(combos), [combos]);
   // A link from Scan while this screen is already open changes the first chart.
   const lastUrl = useRef(`${urlSymbol}|${urlSegment}`);
   useEffect(() => {
@@ -165,6 +169,7 @@ export function TradePage() {
       return dayPnl(positions, groups);
     },
     [activeSpec.segment],
+    { pollMs: 30_000 },
   );
   const account = accounts.data?.find((a) => a.segment === activeSpec.segment);
   const live = account?.live_trading_enabled;
@@ -331,10 +336,16 @@ export function TradePage() {
                   {l.label}
                 </button>
               ))}
-              <button aria-pressed={isPair(ws) && twoUp} title="Show NIFTY and BANKNIFTY together, linked" onClick={() => setWs((cur) => applyPair(cur))}>
-                NIFTY + BANKNIFTY
-              </button>
             </div>
+          )}
+          {wide && (
+            <CombosMenu
+              ws={ws}
+              combos={combos}
+              onApply={(c) => setWs((cur) => applyCombo(cur, c))}
+              onRemove={(id) => setCombos((cur) => removeCombo(cur, id))}
+              onSave={() => setCombos((cur) => addCombo(cur, ws.panes[0], ws.panes[1]))}
+            />
           )}
           <IndicatorMenu
             selected={indicators}
@@ -507,6 +518,14 @@ export function TradePage() {
         {ticketOpen && (
           <aside className="ws-ticket" aria-label="Order ticket">
             <h1 className="ws-h1">Trade {activeSpec.symbol}</h1>
+            {today.data && (
+              <p className="ws-today-pnl" data-testid="ws-today-pnl">
+                Today on {activeSpec.segment}: <Signed value={today.data.total} text={formatPnl(today.data.total)} /> ·{" "}
+                <span className="faint">
+                  {formatPnl(today.data.realized)} booked from {today.data.closedToday} closed, {formatPnl(today.data.unrealized)} open
+                </span>
+              </p>
+            )}
             {accounts.loading && <Skeleton lines={5} />}
             {accounts.error && !accounts.data && <ErrorNotice error={accounts.error} onRetry={accounts.reload} />}
             {live && (

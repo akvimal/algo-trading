@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { MarketRegime } from "../api/types";
 import { agreement, directionOf } from "./confluence";
+import { applyCombo, isActiveCombo, type Combo } from "./combos";
 import {
-  DEFAULT_STATE, applyPair, isPair, loadWorkstation, paneCount, saveWorkstation, setInterval as setIv, setLayout, setLinks, setSymbol, withUrlSymbol,
+  DEFAULT_STATE, loadWorkstation, paneCount, saveWorkstation, setInterval as setIv, setLayout, setLinks, setSymbol, withUrlSymbol,
 } from "./state";
+
+const NIFTY_BANKNIFTY: Combo = { id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: { symbol: "NIFTY", segment: "NSE" }, b: { symbol: "BANKNIFTY", segment: "NSE" } };
+const applyPair = (s: Parameters<typeof applyCombo>[0]) => applyCombo(s, NIFTY_BANKNIFTY);
+const isPair = (s: Parameters<typeof isActiveCombo>[0]) => isActiveCombo(s, NIFTY_BANKNIFTY);
 
 const regime = (r: MarketRegime["regime"], trend: MarketRegime["trend"] = "range"): MarketRegime => ({ regime: r, trend, adx: 25, atr_percentile: 50, advice: "" });
 

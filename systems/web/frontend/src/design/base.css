@@ -439,6 +439,57 @@ a {
   font-size: 13px;
   color: var(--text-dim);
 }
+.pos-compact {
+  padding: 10px 12px;
+  gap: 4px;
+}
+.pos-compact .pos-head strong {
+  font-size: 14px;
+}
+.pos-level {
+  padding: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.pos-level:disabled {
+  cursor: default;
+  opacity: 0.7;
+  text-decoration: none;
+}
+.pos-level-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pos-level-input {
+  width: 84px;
+  min-height: 26px;
+  padding: 0 6px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.icon-btn {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+}
+.icon-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .tabs {
   display: flex;
   gap: 6px;

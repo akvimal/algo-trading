@@ -1,23 +1,31 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/http";
+import { moveOpenLevel } from "../api/trade";
 import type { OptionGroup, Position } from "../api/types";
 import { formatPnl, formatPrice, formatTime } from "../format";
 import { Signed } from "./bits";
 
 type Props =
-  | { kind: "position"; item: Position; onChanged: () => void }
-  | { kind: "group"; item: OptionGroup; onChanged: () => void };
+  | { kind: "position"; item: Position; onChanged: () => void; compact?: boolean }
+  | { kind: "group"; item: OptionGroup; onChanged: () => void; compact?: boolean };
 
-/** One open trade. Squaring off is a deliberate two-step (tap, then confirm in place): an
- * accidental tap on a phone must not close a position, and a browser confirm() dialog is
- * both ugly and blocked in installed PWAs on some platforms. */
+type Field = "stop" | "target";
+
+/** One open trade: what it is, its P&L, and its stop/target - either as plain text or, tapped, a
+ * small inline editor (moveOpenLevel, the same route a chart-line drag already uses). Squaring off
+ * is a deliberate two-step (tap, then confirm in place): an accidental tap on a phone must not
+ * close a position, and a browser confirm() dialog is both ugly and blocked in installed PWAs on
+ * some platforms. `compact` trims it to fit a narrow sidebar (the trade ticket) - same information,
+ * tighter spacing, no entry-time line. */
 export function PositionCard(props: Props) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Field | null>(null);
+  const [draft, setDraft] = useState("");
 
   const isPos = props.kind === "position";
-  const { item } = props;
+  const { item, compact } = props;
   const p = props.kind === "position" ? props.item : null;
   const g = props.kind === "group" ? props.item : null;
   const title = p ? p.symbol : g!.underlying_symbol;
@@ -28,6 +36,7 @@ export function PositionCard(props: Props) {
     : `${g!.strategy_type.replace(/_/g, " ")} · lots ${g!.quantity}`;
   const stop = p ? p.stop_loss_price : (g!.spot_stop_loss_price ?? g!.combined_stop_loss_price);
   const target = p ? p.target_price : g!.spot_target_price;
+  const stopTrailing = (p ? p.trailing_stop_enabled : g!.spot_stop_loss_trailing_enabled) === true;
 
   async function squareOff() {
     setBusy(true);
@@ -44,8 +53,81 @@ export function PositionCard(props: Props) {
     }
   }
 
+  function startEdit(field: Field, current: number | null) {
+    setEditing(field);
+    setDraft(current != null ? String(current) : "");
+    setError(null);
+  }
+
+  async function saveEdit() {
+    if (!editing) return;
+    const price = Number(draft);
+    if (!draft.trim() || !Number.isFinite(price) || price <= 0) {
+      setError("Enter a valid price.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await moveOpenLevel({ kind: props.kind, field: editing, tradeId: item.id }, price);
+      setEditing(null);
+      props.onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not move it. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function level(field: Field, value: number | null) {
+    const label = field === "stop" ? "SL" : "Target";
+    const trailing = field === "stop" && stopTrailing;
+    if (editing === field) {
+      return (
+        <span className="pos-level-edit" key={field}>
+          <label className="sr-only" htmlFor={`pos-${item.id}-${field}`}>
+            {label}
+          </label>
+          <input
+            id={`pos-${item.id}-${field}`}
+            className="pos-level-input"
+            inputMode="decimal"
+            value={draft}
+            disabled={busy}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void saveEdit();
+              if (e.key === "Escape") setEditing(null);
+            }}
+          />
+          <button className="icon-btn" aria-label={`Save ${label.toLowerCase()}`} disabled={busy} onClick={() => void saveEdit()}>
+            ✓
+          </button>
+          <button className="icon-btn" aria-label={`Cancel editing ${label.toLowerCase()}`} disabled={busy} onClick={() => setEditing(null)}>
+            ✕
+          </button>
+        </span>
+      );
+    }
+    return (
+      <button
+        key={field}
+        type="button"
+        className="link-btn pos-level"
+        disabled={trailing}
+        aria-label={`Edit ${label.toLowerCase()}`}
+        title={trailing ? "Trailing stop - cannot be edited by hand" : `Edit ${label.toLowerCase()}`}
+        onClick={() => startEdit(field, value)}
+      >
+        {label} {value == null ? "not set" : formatPrice(value)}
+        {trailing ? " (trailing)" : ""}
+      </button>
+    );
+  }
+
   return (
-    <div className="card pos" data-testid="position-card">
+    <div className={`card pos ${compact ? "pos-compact" : ""}`} data-testid="position-card">
       <div className="pos-head">
         <strong>
           {title} <span className={`pill ${side === "BUY" ? "up" : "dn"}`}>{side}</span>
@@ -54,13 +136,17 @@ export function PositionCard(props: Props) {
       </div>
       <div className="pos-sub">
         <span>{detail}</span>
-        <span>since {formatTime(item.entry_time)}</span>
+        {!compact && <span>since {formatTime(item.entry_time)}</span>}
       </div>
       <div className="pos-sub">
-        <span>SL {stop == null ? "not set" : formatPrice(stop)}</span>
-        <span>Target {target == null ? "not set" : formatPrice(target)}</span>
+        {level("stop", stop)}
+        {level("target", target)}
       </div>
-      {error && <div className="dn" role="alert">{error}</div>}
+      {error && (
+        <div className="dn" role="alert">
+          {error}
+        </div>
+      )}
       <div className="row" style={{ justifyContent: "flex-end" }}>
         {confirming ? (
           <>

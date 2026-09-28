@@ -19,7 +19,8 @@ import { AutoTrader } from "../components/AutoTrader";
 import { loadAutoTraderVisible } from "../autotrader/model";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
-import { checkLevelMove, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
+import { checkLevelMove, isContractOf, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
+import { PositionCard } from "../components/PositionCard";
 import { TradeTicket } from "../components/TradeTicket";
 import { CLASSIC_APP_URL } from "../config";
 import { formatPrice } from "../format";
@@ -115,9 +116,13 @@ export function TradePage() {
     return live ?? polled ?? null;
   };
 
-  // ---- the person's own trades, drawn on the charts ----
+  // ---- the person's own trades, drawn on the charts and listed in the ticket ----
+  const ticketOpen = ws.ticketOpen || !wide;
   const segmentKey = (twoUp ? [ws.panes[0].segment, ws.panes[1].segment] : [ws.panes[0].segment]).filter((s, i, a) => a.indexOf(s) === i).join(",");
-  const tradeRows = useResource(() => loadChartTrades(segmentKey.split(",") as Segment[]), [segmentKey], { pollMs: 15_000, enabled: tools.tradesOn });
+  // Needed whenever the "My trades" chart overlay is on OR the ticket is open (which shows the
+  // active instrument's own open positions/groups beneath the order form) - either on its own
+  // already justifies the fetch, so this is not gated behind both.
+  const tradeRows = useResource(() => loadChartTrades(segmentKey.split(",") as Segment[]), [segmentKey], { pollMs: 15_000, enabled: tools.tradesOn || ticketOpen });
   const chartTrades = useMemo(
     () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? toChartTrades(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups, 0) : [])),
     [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
@@ -174,6 +179,18 @@ export function TradePage() {
 
   const activeData = datas[active];
   const activePrice = priceOf(active);
+  // Open positions/groups for the active instrument specifically, shown compactly in the ticket -
+  // filtered from the same fetch chartTrades/chartLevels above already use, not a second one. Same
+  // matching rules as toChartTrades: a position by its resolved contract, a group by its bare
+  // underlying (an option group has no per-contract symbol of its own).
+  const activeTrades = useMemo(() => {
+    if (!tradeRows.data) return { positions: [] as Position[], groups: [] as OptionGroup[] };
+    const want = activeSpec.symbol.trim().toUpperCase();
+    return {
+      positions: tradeRows.data.positions.filter((p) => p.status === "OPEN" && p.option_group_id == null && isContractOf(p.symbol, want)),
+      groups: tradeRows.data.groups.filter((g) => g.status === "OPEN" && g.underlying_symbol.toUpperCase() === want),
+    };
+  }, [tradeRows.data, activeSpec.symbol]);
   const ctx = account
     ? {
         price: activePrice, lotSize: activeData.resolved?.lot_size ?? 1, capital: account.capital_per_trade, riskPct: account.risk_per_trade_pct,
@@ -276,7 +293,6 @@ export function TradePage() {
   };
 
   const shown: (0 | 1)[] = twoUp ? [0, 1] : [0];
-  const ticketOpen = ws.ticketOpen || !wide;
   const linkCrosshair = twoUp && ws.links.crosshair;
   const linkScale = twoUp && ws.links.scale;
 
@@ -514,8 +530,22 @@ export function TradePage() {
                 onPlaced={() => {
                   waiting.reload();
                   today.reload();
+                  tradeRows.reload();
                 }}
               />
+            )}
+            {(activeTrades.positions.length > 0 || activeTrades.groups.length > 0) && (
+              <>
+                <h2 className="section-title">Open positions</h2>
+                <div className="stack" data-testid="ticket-positions">
+                  {activeTrades.positions.map((p) => (
+                    <PositionCard key={p.id} kind="position" item={p} compact onChanged={tradeRows.reload} />
+                  ))}
+                  {activeTrades.groups.map((g) => (
+                    <PositionCard key={g.id} kind="group" item={g} compact onChanged={tradeRows.reload} />
+                  ))}
+                </div>
+              </>
             )}
             {mine.length > 0 && (
               <>

@@ -272,6 +272,58 @@ describe("placing", () => {
     expect(t.getByRole("link", { name: "See it in Portfolio" })).toHaveAttribute("href", "/portfolio?tab=positions");
   });
 
+  it("shows the resulting position in the same ticket once it is placed, with its stop editable right there", async () => {
+    // A real server persists the new row - the mock does the same, so the ticket's own reload (onPlaced)
+    // picks it up from the next GET /positions, same as the real app.
+    placeManual = (body) => {
+      const row = { id: "p1", symbol: body.symbol, segment: "NSE", action: body.action, instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: body.stop_loss_price ?? null, target_price: body.target_price ?? null, option_group_id: null, unrealized_pnl: 0 };
+      positionRows.push(row);
+      return json(row);
+    };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
+    await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
+
+    const list = within(await screen.findByTestId("ticket-positions"));
+    expect(list.getByText("RELIANCE")).toBeInTheDocument();
+    expect(list.getByRole("button", { name: "Edit sl" })).toHaveTextContent("SL 990");
+
+    // ...and its stop can be moved right there, without leaving the ticket.
+    await user.click(list.getByRole("button", { name: "Edit sl" }));
+    await user.clear(list.getByLabelText("SL"));
+    await user.type(list.getByLabelText("SL"), "985");
+    await user.click(list.getByRole("button", { name: "Save sl" }));
+    await waitFor(() => expect(puts("/positions/p1/stop-loss")).toHaveLength(1));
+    expect(puts("/positions/p1/stop-loss")[0].body).toEqual({ stop_loss_price: 985 });
+  });
+
+  it("fetches positions for the ticket even with 'My trades' off on the chart", async () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: false, oiLevelsOn: false }));
+    positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
+    renderAt("/trade?symbol=RELIANCE");
+    await ticket();
+    const list = within(await screen.findByTestId("ticket-positions"));
+    expect(list.getByText("RELIANCE")).toBeInTheDocument();
+  });
+
+  it("says nothing about open positions when there are none for this instrument", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await ticket();
+    expect(screen.queryByTestId("ticket-positions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open positions")).not.toBeInTheDocument();
+  });
+
+  it("lists only the active instrument's own positions, not another symbol's", async () => {
+    positionRows = [{ id: "other", symbol: "TCS", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 5, entry_price: 4000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: null, target_price: null, option_group_id: null, unrealized_pnl: 10 }];
+    renderAt("/trade?symbol=RELIANCE");
+    await ticket();
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/positions?segment=NSE"))).toBe(true));
+    expect(screen.queryByTestId("ticket-positions")).not.toBeInTheDocument();
+  });
+
   it("will not place without a stop-loss when the account requires one, and says why", async () => {
     account.require_stop_loss = true;
     const user = userEvent.setup();

@@ -125,6 +125,41 @@ def test_sixth_distinct_symbol_gets_error_frame_not_disconnect(monkeypatch):
     assert sum(1 for v in ws.sent if v.get("type") == "error") == 1
 
 
+def test_subscribe_preserves_a_mixed_case_expiry_symbol(monkeypatch):
+    """Reproduced live 2026-09-28: any expiry-dated contract (GOLDM-05Oct2026-FUT,
+    NIFTY-24800-16Oct2026-CE, ...) is genuinely mixed-case in Dhan's own symbol format - a plain
+    index/equity symbol (NIFTY, RELIANCE) is already all-uppercase, which is exactly why this
+    went unnoticed: only instruments with an expiry ever needed the casing preserved. Uppercasing
+    here used to register the WRONG dict key - dhan_feed.subscribe/publish always use the
+    ORIGINAL casing (never uppercased), so a real tick could never match an uppercased
+    registration, silently forcing every future/option onto REST polling's slower fallback
+    forever."""
+    _reset(monkeypatch)
+    subscribed = []
+    monkeypatch.setattr(dhan_feed, "subscribe", lambda exchange, symbol: subscribed.append((exchange, symbol)) or True)
+    ws = FakeWebSocket([{"action": "subscribe", "exchange": "mcx", "symbol": "GOLDM-05Oct2026-FUT"}])
+
+    run(quotes_ws.quotes_ws(ws))
+
+    # exchange is normalized (dhan_feed's own exchange codes are always plain uppercase); the
+    # symbol's case must reach dhan_feed.subscribe untouched, or its resolver (keyed by the
+    # instrument master's own casing) silently fails to find a real security id at all.
+    assert subscribed == [("MCX", "GOLDM-05Oct2026-FUT")]
+
+
+def test_dispatch_tick_reaches_a_mixed_case_expiry_symbol(monkeypatch):
+    """The other half of the regression above: a real tick (published under Dhan's own casing)
+    must actually reach a subscriber registered under that same casing."""
+    _reset(monkeypatch)
+    ws = FakeWebSocket([])
+    quotes_ws._subscribers[("MCX", "GOLDM-05Oct2026-FUT")] = {ws}
+    payload = {"exchange": "MCX", "symbol": "GOLDM-05Oct2026-FUT", "price": 146500.0}
+
+    run(quotes_ws._dispatch_tick(payload))
+
+    assert ws.sent == [{"type": "tick", **payload}]
+
+
 def test_unsubscribe_removes_from_registry_immediately(monkeypatch):
     _reset(monkeypatch)
     ws = FakeWebSocket(

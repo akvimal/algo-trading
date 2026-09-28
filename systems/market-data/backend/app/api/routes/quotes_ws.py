@@ -164,7 +164,18 @@ async def quotes_ws(websocket: WebSocket) -> None:
                 dhan_allowed = await run_in_threadpool(ws_dhan_allowed, user_id_from_token(raw.get("token")))
                 continue
             exchange = str(raw.get("exchange") or "").strip().upper()
-            symbol = str(raw.get("symbol") or "").strip().upper()
+            # NOT .upper() - unlike exchange codes (always plain uppercase), Dhan's own contract
+            # symbols for anything with an expiry are genuinely mixed-case ("GOLDM-05Oct2026-FUT",
+            # "NIFTY-24800-16Oct2026-CE" - see option_templates.py/the instrument-master sync).
+            # Uppercasing here used to silently break every one of them: dhan_feed.subscribe()
+            # resolves/publishes/registers ticks under the ORIGINAL casing (never uppercased - see
+            # dhan_feed.py), so an uppercased key here could never match a real tick's dispatch key,
+            # and could also fail dhan_feed._resolve_target's own lookup outright. A bare index/
+            # equity symbol (already all-uppercase, e.g. "NIFTY") was never affected either way -
+            # exactly why this went unnoticed: plain symbols worked, every expiry-dated one silently
+            # never received a single live tick, forced onto REST polling's slower fallback cadence
+            # forever. Reproduced live 2026-09-28 (see docs/architecture.md).
+            symbol = str(raw.get("symbol") or "").strip()
             if not exchange or not symbol:
                 continue
             key = (exchange, symbol)

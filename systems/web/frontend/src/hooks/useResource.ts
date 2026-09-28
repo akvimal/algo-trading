@@ -8,6 +8,12 @@ export type Resource<T> = {
   loading: boolean;
   /** True while a background refresh is in flight (data stays on screen). */
   refreshing: boolean;
+  /** When `data` was last successfully fetched (client clock), or null before the first success.
+   * Unlike `data` itself, this keeps advancing only on a genuine success - a run of failed
+   * background refreshes (a dead upstream feed, an expired token, ...) leaves it exactly where
+   * it was, so a caller that cares how OLD an on-screen value really is (not just whether one
+   * exists) can tell "fresh" apart from "the last one that ever worked". */
+  fetchedAt: number | null;
   reload: () => void;
 };
 
@@ -26,6 +32,7 @@ export function useResource<T>(fetcher: () => Promise<T>, deps: unknown[], { pol
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const requestId = useRef(0);
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -38,6 +45,7 @@ export function useResource<T>(fetcher: () => Promise<T>, deps: unknown[], { pol
       if (id !== requestId.current) return; // a newer request superseded this one
       setData(result);
       setError(null);
+      setFetchedAt(Date.now());
     } catch (e) {
       if (id !== requestId.current) return;
       setError(e instanceof ApiError ? e : new ApiError(0, e instanceof Error ? e.message : "Something went wrong"));
@@ -58,6 +66,7 @@ export function useResource<T>(fetcher: () => Promise<T>, deps: unknown[], { pol
     setData(null);
     setError(null);
     setLoading(true);
+    setFetchedAt(null);
     void load(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, load, ...deps]);
@@ -77,5 +86,5 @@ export function useResource<T>(fetcher: () => Promise<T>, deps: unknown[], { pol
   }, [enabled, pollMs, load]);
 
   const reload = useCallback(() => void load(true), [load]);
-  return { data, error, loading, refreshing, reload };
+  return { data, error, loading, refreshing, fetchedAt, reload };
 }

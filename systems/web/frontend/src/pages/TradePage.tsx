@@ -36,7 +36,7 @@ import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
-import { EMPTY_TICKET, PRESETS, analyzeTicket, defaultLevel, instrumentFor, type Ticket } from "./tradeModel";
+import { EMPTY_TICKET, PRESETS, analyzeTicket, defaultLevel, instrumentFor, isFresh, type Ticket } from "./tradeModel";
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
@@ -94,12 +94,25 @@ export function TradePage() {
   const oiLevels = [tools.oiLevelsOn ? oiA.levels : [], tools.oiLevelsOn && twoUp ? oiB.levels : []];
 
   const [pushed, setPushed] = useState<Record<string, number>>({});
+  const [pushedAt, setPushedAt] = useState<Record<string, number>>({});
   const subs = datas.flatMap((d, i) => (d.exchange && d.symbol && (i === 0 || twoUp) ? [{ exchange: d.exchange, symbol: d.symbol }] : []));
-  const socket = useQuoteSocket(subs, (t) => setPushed((cur) => ({ ...cur, [`${t.exchange}:${t.symbol}`]: t.price })));
+  const socket = useQuoteSocket(subs, (t) => {
+    const key = `${t.exchange}:${t.symbol}`;
+    setPushed((cur) => ({ ...cur, [key]: t.price }));
+    // A tick already passed the socket's own freshness gate (useQuoteSocket) when it arrived, but
+    // that only checks it at receipt - if the feed then goes quiet, the last value would otherwise
+    // sit in `pushed` looking just as live a minute or an hour later. Track receipt time here too,
+    // same "stale at READ time, not just at arrival" gate as `polledAt` below.
+    setPushedAt((cur) => ({ ...cur, [key]: Date.now() }));
+  });
   useEffect(() => setSocketUp(socket.connected), [socket.connected]);
   const priceOf = (i: 0 | 1): number | null => {
     const d = datas[i];
-    return (d.exchange && d.symbol ? pushed[`${d.exchange}:${d.symbol}`] : undefined) ?? d.polledPrice ?? null;
+    const key = d.exchange && d.symbol ? `${d.exchange}:${d.symbol}` : null;
+    const now = Date.now();
+    const live = key != null && isFresh(pushedAt[key] ?? null, now) ? pushed[key] : undefined;
+    const polled = isFresh(d.polledAt, now) ? d.polledPrice : null;
+    return live ?? polled ?? null;
   };
 
   // ---- the person's own trades, drawn on the charts ----

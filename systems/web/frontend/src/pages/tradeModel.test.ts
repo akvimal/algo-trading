@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, favorable, instrumentFor, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -267,5 +267,18 @@ describe("defaultLevel", () => {
     expect(defaultLevel("stop", "BUY", null)).toBeNull();
     expect(defaultLevel("stop", "BUY", 0)).toBeNull();
     expect(defaultLevel("stop", "BUY", Number.NaN)).toBeNull();
+  });
+});
+
+describe("isFresh", () => {
+  it("is never fresh with no timestamp at all", () => {
+    expect(isFresh(null, Date.now())).toBe(false);
+  });
+
+  it("is fresh right up to, but not at or past, the staleness cutoff", () => {
+    const now = 1_700_000_000_000;
+    expect(isFresh(now - (PRICE_STALE_MS - 1), now)).toBe(true);
+    expect(isFresh(now - PRICE_STALE_MS, now)).toBe(false);
+    expect(isFresh(now, now)).toBe(true); // just arrived
   });
 });

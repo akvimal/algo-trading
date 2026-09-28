@@ -474,6 +474,24 @@ describe("live price push", () => {
     expect(screen.getByTestId("feed-0")).toHaveTextContent("every 5 seconds");
   });
 
+  it("stops trusting a pushed price once the feed has been quiet for a while, rather than showing an old one forever", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderAt("/trade?symbol=RELIANCE");
+      await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+      const socket = await openSocket();
+      await waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+      act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "RELIANCE", price: 1010 }));
+      await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,010"));
+      // The feed goes quiet - no more ticks, and REST polling stays off while the socket is still
+      // connected (only a dead socket falls back to it). The old push just sits there otherwise.
+      act(() => void vi.advanceTimersByTime(2 * 60_000 + 1_000));
+      expect(screen.getByTestId("price-0")).toHaveTextContent("–");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not carry the old symbol's price to the new one", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");

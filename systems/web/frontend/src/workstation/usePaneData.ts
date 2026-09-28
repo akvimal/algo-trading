@@ -9,6 +9,10 @@ export type PaneData = {
   symbol: string | null;
   /** The last price REST returned (the socket's price is layered on top by the caller). */
   polledPrice: number | null;
+  /** When `polledPrice` was actually fetched - `useResource` keeps a value on screen through any
+   * number of failing refreshes (a dead upstream feed, an expired token, ...), so this is what
+   * lets the caller tell a genuinely live price apart from one that stopped updating a while ago. */
+  polledAt: number | null;
   regime: MarketRegime | null;
   error: Error | null;
   reloadResolve: () => void;
@@ -30,6 +34,7 @@ export function usePaneData(spec: { symbol: string; segment: Segment; interval: 
     exchange,
     symbol,
     polledPrice: ltp.data?.ltp ?? null,
+    polledAt: ltp.fetchedAt,
     regime: regime.data,
     error: resolved.error ?? ltp.error,
     reloadResolve: resolved.reload,

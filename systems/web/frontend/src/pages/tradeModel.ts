@@ -315,3 +315,19 @@ export function defaultLevel(field: "entry" | "stop" | "target", action: Action,
 }
 
 export const ACTION_WORD = (a: Action) => (a === "BUY" ? "Buy" : "Sell");
+
+// How old a price is allowed to be before the page stops treating it as "live" and falls back to
+// showing none at all - matches useQuoteSocket's own MAX_TICK_AGE_MS. Both the pushed (WS) and
+// polled (REST) price sources can go stale in the same way: a value that was genuinely fresh when
+// it arrived just sits there once the upstream feed goes quiet (a dead Dhan token, a network
+// stall, ...), with nothing to invalidate it - useResource keeps the last successful fetch on
+// screen through any number of failing background refreshes, by design, and a WS tick that passed
+// its own freshness check on arrival is still just a React state value afterwards. Checking
+// freshness again at READ time, not only at arrival, is what actually closes that gap.
+export const PRICE_STALE_MS = 2 * 60_000;
+
+/** True when `at` (a client-clock timestamp from useResource's fetchedAt or the moment a socket
+ * tick was received) is recent enough to trust as a live price; null means "never fetched". */
+export function isFresh(at: number | null, now: number): boolean {
+  return at != null && now - at < PRICE_STALE_MS;
+}

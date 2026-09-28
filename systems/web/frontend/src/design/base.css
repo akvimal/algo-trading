@@ -1009,6 +1009,19 @@ table.t th {
   width: auto;
   overflow: visible;
 }
+/* Same sidebar pattern as .ws-ticket, alongside the chart rather than spanning full width
+   underneath it - a touch wider since its settings form has more to say than the ticket does. */
+.ws-autotrader {
+  width: 380px;
+  flex: none;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.workstation:not(.wide) .ws-autotrader {
+  width: auto;
+  overflow: visible;
+}
 .ws-h1 {
   font-size: 16px;
   margin: 0 0 8px;

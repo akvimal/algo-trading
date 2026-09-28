@@ -470,11 +470,16 @@ export function TradePage() {
               ))}
             </div>
           )}
-          {autoTraderVisible && <AutoTrader segment={activeSpec.segment} symbol={activeSpec.symbol} contracts={instrumentFor(activeSpec.symbol, activeSpec.segment) === "future"} />}
           <p className="faint ws-note">
             Drawings are saved per instrument. Right-click a drawing, or select it and press Delete, to remove it. Select a line or zone to be alerted when the price crosses it.
           </p>
         </div>
+
+        {autoTraderVisible && (
+          <aside className="ws-autotrader" aria-label="Auto-trader panel">
+            <AutoTrader segment={activeSpec.segment} symbol={activeSpec.symbol} contracts={instrumentFor(activeSpec.symbol, activeSpec.segment) === "future"} />
+          </aside>
+        )}
 
         {ticketOpen && (
           <aside className="ws-ticket" aria-label="Order ticket">

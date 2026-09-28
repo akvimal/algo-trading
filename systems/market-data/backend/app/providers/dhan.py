@@ -202,8 +202,21 @@ QUOTE_CACHE_TTL_SECONDS = 3.0
 # If the throttle wait already implied by another in-flight request is
 # longer than this, fail fast instead of piling another thread onto the
 # queue - callers already treat a failed quote as "unavailable, try again
-# later" rather than something to block indefinitely on.
-MAX_THROTTLE_WAIT_SECONDS = 4.0
+# later" rather than something to block indefinitely on. Raised from 4.0
+# 2026-09-28: opening the Live Chart's Side by side view fires several
+# DIFFERENT symbols' worth of candle-category calls (each chart's own
+# candles + its own regime badge, which reuses the same category) at
+# once - 4 calls genuinely queued on the SAME 2s-per-call candle clock
+# need up to 6s to all get served, which used to exceed the old 4.0s
+# ceiling and fail outright (reproduced live, DH-906 "Invalid Token" -
+# see MIN_GLOBAL_CALL_GAP_SECONDS's own comment for why Dhan's real
+# rejection doesn't always come back as a 429). Waiting costs nothing but
+# this thread's own time - it's a local queue, not a live Dhan cost - so
+# letting a genuine multi-call burst actually queue that deep instead of
+# rejecting it is a straightforward improvement, not just a bigger
+# number: the frontend already shows "trying again automatically" for
+# exactly this wait.
+MAX_THROTTLE_WAIT_SECONDS = 8.0
 
 # Dhan's documented order-API rate limit is NOT yet confirmed against
 # current docs (unlike MIN_LTP_CALL_INTERVAL_SECONDS/

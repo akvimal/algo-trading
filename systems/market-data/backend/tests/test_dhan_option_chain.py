@@ -183,7 +183,7 @@ def test_get_option_chain_fails_fast_when_throttle_queue_too_deep(monkeypatch):
     # Simulate a request already in-flight far enough ahead that the
     # implied wait exceeds MAX_THROTTLE_WAIT_SECONDS - should raise
     # immediately rather than block the test for several seconds.
-    dhan._last_option_chain_call_at[None] = time.monotonic() + 5.0
+    dhan._last_option_chain_call_at[None] = time.monotonic() + 9.0
 
     try:
         provider.get_option_chain("NIFTY", "2026-08-14")
@@ -212,7 +212,7 @@ def test_option_chain_throttle_is_shared_across_dhan_provider_instances(monkeypa
 
     # Simulate dhan-nse's queue backed up - dhan-mcx must see the SAME
     # backed-up clock (shared module-level state), not its own clean one.
-    dhan._last_option_chain_call_at[None] = time.monotonic() + 5.0
+    dhan._last_option_chain_call_at[None] = time.monotonic() + 9.0
 
     try:
         mcx_provider.get_option_chain("GOLDM", "2026-08-14")

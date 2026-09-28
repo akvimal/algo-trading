@@ -25,6 +25,13 @@ const openPos = {
   unrealized_pnl: 250,
 };
 const closedPos = { ...openPos, id: "p2", symbol: "TCS", status: "CLOSED", pnl: -600, exit_time: TODAY, unrealized_pnl: undefined };
+const emptyComponent = { rate: null, trades: 0 };
+const emptyDiscipline = {
+  score: null, window_days: 30, window_start: null, trade_count: 0,
+  planned: emptyComponent, plan_adherence: emptyComponent,
+  plan_review: { ...emptyComponent, before_rate: null, after_rate: null },
+  outcome: { ...emptyComponent, win_rate: null, avg_r: null },
+};
 
 type Route = (url: string, init?: RequestInit) => Response | Promise<Response>;
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -131,6 +138,30 @@ describe("Today", () => {
     expect(await screen.findByText(/bullish/)).toBeInTheDocument();
   });
 
+  it("shows performance and a discipline score on Today, scoped to the account's own segment", async () => {
+    mockFetch({
+      "/accounts": () => json([account]),
+      "/option-groups": () => json([]),
+      "/positions": () => json([]),
+      "/options/sentiment": () => json(sentiment),
+      "/equity-history": () => json({ segment: "NSE", days: 30, points: [{ snapshot_date: "2026-09-01", balance: 200000, unrealized_pnl: 0, equity: 200000, is_reset_point: true }, { snapshot_date: "2026-09-27", balance: 210000, unrealized_pnl: 0, equity: 210000, is_reset_point: false }], stats: { since: "2026-09-01", baseline: 200000, latest_equity: 210000, return_pct: 5, peak_equity: 210000, max_drawdown_pct: 0, days_tracked: 27, points: 2 } }),
+      "/performance": () =>
+        json({
+          segment: "NSE", scope: "epoch", since: "2026-09-01",
+          performance: { trades: 10, wins: 7, losses: 3, breakeven: 0, win_rate_pct: 70, total_pnl: 10000, gross_pnl: 10500, total_charges: 400, total_slippage: 100, avg_pnl: 1000, avg_win: 2000, avg_loss: -1500, profit_factor: 2.5, avg_r: 0.8, best_trade: 3000, worst_trade: -1500, max_consecutive_losses: 1 },
+          discipline: { score: 82, window_days: 30, window_start: "2026-08-28", trade_count: 10, planned: { rate: 0.9, trades: 10 }, plan_adherence: { rate: 0.8, trades: 10 }, plan_review: { rate: 0.7, trades: 10, before_rate: 0.7, after_rate: 0.7 }, outcome: { rate: 0.7, trades: 10, win_rate: 0.7, avg_r: 0.8 } },
+          equity: null,
+        }),
+    });
+    renderApp("/");
+    expect(await screen.findByText("₹2,10,000")).toBeInTheDocument(); // equity headline
+    expect(screen.getByText("70%")).toBeInTheDocument(); // win rate
+    expect(screen.getByText("+0.80R")).toBeInTheDocument(); // expectancy
+    expect(screen.getByText("82")).toBeInTheDocument(); // discipline score, in the gauge
+    expect(screen.getByText("Good")).toBeInTheDocument(); // discipline band
+    expect(screen.getByRole("link", { name: /full breakdown/ })).toHaveAttribute("href", "/portfolio?segment=NSE&tab=review");
+  });
+
   it("squares off only after an explicit confirm", async () => {
     const calls = happy();
     const user = userEvent.setup();
@@ -161,6 +192,8 @@ describe("Today", () => {
       "/accounts": () => json([account]),
       "/option-groups": () => json([]),
       "/positions": () => json([openPos]),
+      "/equity-history": () => json({ segment: "NSE", days: 30, points: [], stats: null }),
+      "/performance": () => json({ segment: "NSE", scope: "epoch", since: null, performance: null, discipline: emptyDiscipline, equity: null }),
       "/options/sentiment": () => json({ detail: "boom" }, 500),
     });
     renderApp("/");

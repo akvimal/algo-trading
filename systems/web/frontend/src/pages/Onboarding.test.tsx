@@ -28,6 +28,13 @@ const account = (segment: string) => ({
   live_trading_enabled: false, apply_charges: false, require_stop_loss: false, square_off_time: null, risk_per_trade_pct: 1, min_reward_risk_ratio: 2,
   enforce_risk_based_lots: false, slippage_bps: 0, max_order_value: null, live_trading_consent_at: null,
 });
+const emptyComponent = { rate: null, trades: 0 };
+const emptyDiscipline = {
+  score: null, window_days: 30, window_start: null, trade_count: 0,
+  planned: emptyComponent, plan_adherence: emptyComponent,
+  plan_review: { ...emptyComponent, before_rate: null, after_rate: null },
+  outcome: { ...emptyComponent, win_rate: null, avg_r: null },
+};
 
 beforeEach(() => {
   calls = [];
@@ -326,6 +333,8 @@ describe("markets", () => {
             { ...account("CRYPTO"), current_balance: 200000 },
           ]);
         if (url.includes("/options/sentiment")) return json({ exchanges: {} });
+        if (url.includes("/equity-history")) return json({ segment: "NSE", days: 30, points: [], stats: null });
+        if (url.includes("/performance/")) return json({ segment: "NSE", scope: "epoch", since: null, performance: null, discipline: emptyDiscipline, equity: null });
         return json([]);
       }),
     );

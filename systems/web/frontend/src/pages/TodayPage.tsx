@@ -5,6 +5,7 @@ import type { Account, MarketSentiment, OptionGroup, Position } from "../api/typ
 import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
+import { PerformanceSnapshot } from "../components/PerformanceSnapshot";
 import { PositionCard } from "../components/PositionCard";
 import { formatInr, formatPnl } from "../format";
 import { useLivePositions } from "../hooks/useLivePositions";
@@ -124,6 +125,8 @@ export function TodayPage() {
           ))}
         </div>
       )}
+
+      <PerformanceSnapshot markets={accounts.map((a) => a.segment)} />
 
       <h2 className="section-title">Market pulse</h2>
       {pulse.loading && <Skeleton lines={2} />}

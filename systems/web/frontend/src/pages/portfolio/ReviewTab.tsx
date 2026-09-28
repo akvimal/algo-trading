@@ -1,5 +1,6 @@
 import type { Discipline, Performance } from "../../api/types";
 import type { Resource } from "../../hooks/useResource";
+import { DisciplineGauge } from "../../components/DisciplineGauge";
 import { ErrorNotice, Signed, Skeleton } from "../../components/bits";
 import { Stat } from "../../components/Stat";
 import { TradeListItem } from "../../components/TradeListItem";
@@ -39,18 +40,18 @@ export function ReviewTab({ perf, trades, onSaved }: Props) {
         {perf.error && <ErrorNotice error={perf.error} onRetry={perf.reload} />}
         {d && (
           <>
-            <div className="row" style={{ alignItems: "baseline" }}>
-              <span className="num" style={{ fontSize: 32, fontWeight: 600 }}>
-                {d.score ?? "–"}
-                {d.score != null && <span className="dim" style={{ fontSize: 14 }}> out of 100</span>}
-              </span>
-              <span className={`pill ${band === "good" ? "up" : band === "low" ? "dn" : ""}`}>{BAND_TEXT[band]}</span>
+            <div className="row" style={{ alignItems: "center", gap: 16 }}>
+              <DisciplineGauge score={d.score} size={84} />
+              <div>
+                <span className={`pill ${band === "good" ? "up" : band === "low" ? "dn" : ""}`}>{BAND_TEXT[band]}</span>
+                <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }}>
+                  {d.score == null
+                    ? `Needs at least 5 trades in the last ${d.window_days} days. You have ${d.trade_count}.`
+                    : `Your last ${d.window_days} days, ${d.trade_count} trades. Habits, not profit: it rewards following your own plan.`}
+                </p>
+              </div>
             </div>
-            <p className="faint" style={{ fontSize: 12, margin: "4px 0 12px" }}>
-              {d.score == null
-                ? `Needs at least 5 trades in the last ${d.window_days} days. You have ${d.trade_count}.`
-                : `Your last ${d.window_days} days, ${d.trade_count} trades. Habits, not profit: it rewards following your own plan.`}
-            </p>
+            <div style={{ marginTop: 12 }} />
             {rows(d).map((r) => (
               <div key={r.label} style={{ marginBottom: 12 }}>
                 <div className="row">

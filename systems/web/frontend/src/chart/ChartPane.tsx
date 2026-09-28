@@ -262,26 +262,39 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [exchange, symbol, interval, tick]);
 
   // ---- the newest bar follows the price ----
-  useEffect(() => {
+  // Runs on every genuine price change, so a real tick shows at once - and also on a steady timer, so
+  // the current bar still rolls into a fresh one right at its own boundary even when the price has not
+  // moved since the last tick. A live feed pushes on a trade, not on a clock; two ticks reporting the
+  // identical price never change React's own `price` prop, so without the timer the last candle would
+  // sit well past when it should have closed, waiting for a price that happens to differ from before -
+  // "the chart is delayed to refresh" for anything quiet enough to go a while between real moves.
+  function rollTick() {
     const chart = chartRef.current;
     if (!chart || status !== "ready") return;
     const bars = barsRef.current;
     const last = bars[bars.length - 1];
-    const next = rollLiveBar(last ?? null, price, Date.now(), intervalMs, def.value !== "daily");
+    const tickPrice = propsRef.current.price;
+    const next = rollLiveBar(last ?? null, tickPrice, Date.now(), intervalMs, def.value !== "daily");
     if (next) {
       chart.updateData(next);
       barsRef.current = last && last.timestamp === next.timestamp ? [...bars.slice(0, -1), next] : [...bars, next];
       anchorRef.current = { timestamps: barsRef.current.map((b) => b.timestamp) };
     }
-    if (price == null) return;
+    if (tickPrice == null) return;
     // Armed drawings: one that has not been looked at yet only learns which side it is on; a new bar
     // starting means the one before it has closed, which "on a close" alerts judge by; every price judges
     // the "as it crosses" ones.
-    seedAlerts(price);
+    seedAlerts(tickPrice);
     if (next && last && next.timestamp !== last.timestamp) runAlerts("close", last.close);
-    runAlerts("cross", price);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- seedAlerts and runAlerts read refs only
-  }, [price, status, intervalMs, def.value]);
+    runAlerts("cross", tickPrice);
+  }
+  useEffect(rollTick, [price, status, intervalMs, def.value]); // eslint-disable-line react-hooks/exhaustive-deps -- rollTick reads refs/propsRef fresh
+  useEffect(() => {
+    if (status !== "ready") return;
+    const id = window.setInterval(rollTick, 1_000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rollTick reads refs/propsRef fresh; only these three actually change what it does
+  }, [status, intervalMs, def.value]);
 
   // ---- linking: draw the other chart's pointer, and follow its window ----
   const peerCursor = props.peerCursor ?? null;

@@ -174,13 +174,25 @@ def _aggregate_candles(one_min_candles: list[Candle], interval: str, minutes: in
     app/domain/candle_aggregation.py."""
     return aggregate_candles(one_min_candles, interval, minutes)
 
-# Dhan doesn't publish a specific rate limit for charts/intraday (unlike
-# marketfeed/ltp's documented-and-empirically-confirmed 1 req/sec) - this
-# is a conservative default, not a known requirement. Kept as independent
+# Empirically confirmed live 2026-09-28 (see docs/architecture.md) -
+# calls a full 6x tighter than the old 2.0s guess (down to 0.3s) all
+# succeeded; 0.15s got a genuine Dhan rate-limit rejection (DH-904
+# "Rate_Limit", not the DH-906 "Invalid Token" that a COLLISION between
+# different call categories surfaces as - see MIN_GLOBAL_CALL_GAP_SECONDS's
+# own comment - so DH-904 is the real per-endpoint ceiling, DH-906 was
+# never this). Set to 0.5s: comfortably under the confirmed-clean 0.3s
+# tier, comfortably over the confirmed-broken 0.15s one. The old 2.0s
+# was never a documented Dhan requirement (unlike marketfeed/ltp's
+# confirmed 1 req/sec below) - just an untested conservative guess that
+# turned out to be the real bottleneck behind the Live Chart's
+# sustained "Invalid Token" errors under Structure/multi-symbol load
+# (order-blocks retries its own separate candle fetch every 10s while
+# failing - a 4x-tighter budget gives that loop room to actually drain
+# instead of staying perpetually backed up). Kept as independent
 # throttle state from the LTP throttle below (own lock, own timestamp)
 # since these hit a different Dhan endpoint - no reason for one to
 # serialize behind the other.
-MIN_CANDLE_CALL_INTERVAL_SECONDS = 2.0
+MIN_CANDLE_CALL_INTERVAL_SECONDS = 0.5
 
 # Dhan's LTP endpoint is limited to 1 request/second, but empirically a
 # ~1.05s gap still gets 429'd - build in real margin rather than shaving

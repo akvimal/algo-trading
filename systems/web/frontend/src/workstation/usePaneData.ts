@@ -2,6 +2,21 @@ import { getCandles, getLtp, getRegime, resolveUnderlying } from "../api/trade";
 import { useResource } from "../hooks/useResource";
 import type { MarketRegime, ResolvedUnderlying, Segment } from "../api/types";
 
+// While the socket looks down, REST is the only source, so it polls quickly. Once the socket
+// connects it is USUALLY the faster path, but "connected" only means the handshake to market-data
+// succeeded - the tick still has to come from market-data's own shared upstream Dhan feed, which
+// can be dead (an expired token, a rate-limit block, ...) while the socket itself sits open and
+// silent. REST used to stop polling entirely in that case (pollMs: undefined), so polledPrice
+// would freeze at whatever it last fetched with nothing to refresh it - harmless when a stale
+// value was still shown as if live, but once TradePage started re-checking freshness on every
+// read (see tradeModel.ts's isFresh/PRICE_STALE_MS) that froze value aged out and there was no
+// fallback left: the price genuinely disappeared for as long as the tab stayed open, breaking a
+// market order ("Waiting for a live price"). Never switch this to `undefined` again - keep REST
+// polling, just less often, so it can always self-heal within one cycle, comfortably inside
+// PRICE_STALE_MS, if the socket stops actually delivering.
+const LTP_POLL_MS_SOCKET_DOWN = 5_000;
+const LTP_POLL_MS_SOCKET_UP = 30_000;
+
 export type PaneData = {
   resolved: ResolvedUnderlying | null;
   /** The series the chart draws (for an index, the index itself, not its future). */
@@ -27,7 +42,7 @@ export function usePaneData(spec: { symbol: string; segment: Segment; interval: 
   const exchange = resolved.data?.chart_exchange ?? null;
   const symbol = resolved.data?.chart_symbol ?? null;
   const ready = on && exchange != null && symbol != null;
-  const ltp = useResource(() => getLtp(exchange!, symbol!), [exchange, symbol], { pollMs: socketConnected ? undefined : 5_000, enabled: ready });
+  const ltp = useResource(() => getLtp(exchange!, symbol!), [exchange, symbol], { pollMs: socketConnected ? LTP_POLL_MS_SOCKET_UP : LTP_POLL_MS_SOCKET_DOWN, enabled: ready });
   const regime = useResource(() => getRegime(exchange!, symbol!, spec!.interval), [exchange, symbol, spec?.interval], { pollMs: 60_000, enabled: ready });
   return {
     resolved: resolved.data,

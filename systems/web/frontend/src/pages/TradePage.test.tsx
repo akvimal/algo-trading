@@ -474,7 +474,13 @@ describe("live price push", () => {
     expect(screen.getByTestId("feed-0")).toHaveTextContent("every 5 seconds");
   });
 
-  it("stops trusting a pushed price once the feed has been quiet for a while, rather than showing an old one forever", async () => {
+  it("falls back to REST once a pushed price has gone stale, rather than leaving no price at all", async () => {
+    // The socket can be "connected" (the handshake to market-data succeeded) while delivering
+    // nothing at all - market-data's own shared upstream feed can be dead independently of that.
+    // REST keeps polling in the background even once the socket is up (just slower), specifically
+    // so this can self-heal - see usePaneData's own comment on LTP_POLL_MS_SOCKET_UP. Without that,
+    // this reproduces exactly what was reported live: a market order stuck on "Waiting for a live
+    // price" indefinitely once the one pushed tick aged out, with nothing left to fall back to.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       renderAt("/trade?symbol=RELIANCE");
@@ -483,9 +489,32 @@ describe("live price push", () => {
       await waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
       act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "RELIANCE", price: 1010 }));
       await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,010"));
-      // The feed goes quiet - no more ticks, and REST polling stays off while the socket is still
-      // connected (only a dead socket falls back to it). The old push just sits there otherwise.
-      act(() => void vi.advanceTimersByTime(2 * 60_000 + 1_000));
+      // The feed goes quiet - no more ticks - but REST (still returning 1,000 throughout) keeps
+      // confirming freshness in the background at its slower, socket-up cadence.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000);
+      });
+      expect(screen.getByTestId("price-0")).toHaveTextContent("1,000");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows no price at all once both the pushed and the polled price have gone stale", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderAt("/trade?symbol=RELIANCE");
+      await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+      const socket = await openSocket();
+      await waitFor(() => expect(socket.sent.length).toBeGreaterThan(0));
+      act(() => socket.push({ type: "tick", exchange: "NSE", symbol: "RELIANCE", price: 1010 }));
+      await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,010"));
+      // Now REST starts failing too, same as the live feed actually being down end to end (an
+      // expired/blocked Dhan token) - nothing left to confirm freshness with at all.
+      ltpFails = true;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000);
+      });
       expect(screen.getByTestId("price-0")).toHaveTextContent("–");
     } finally {
       vi.useRealTimers();

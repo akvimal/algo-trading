@@ -341,8 +341,28 @@ def _record_equity_screener_snapshot() -> None:
         for symbol in symbols:
             try:
                 candles = _retry_when_throttled(provider.get_candle_history, symbol, "daily", from_date, today)
+
+                # Cache the raw bars regardless of whether there's enough history for the
+                # regime/ADX read below - a symbol too young/thin for a real ADX read can
+                # still have perfectly good bars for the custom screener to evaluate a
+                # short-lookback expression against (or none at all yet, which is a
+                # correct, informative absence - not a reason to skip caching what DOES
+                # exist). Must run BEFORE the `result is None: continue` below, not after -
+                # a thin symbol would otherwise never get cached at all.
+                existing = (
+                    db.query(EquityDailyBar.bar_date).filter(EquityDailyBar.symbol == symbol).order_by(EquityDailyBar.bar_date.desc()).first()
+                )
+                existing_max = existing[0] if existing else None
+                for c in candles:
+                    bar_date = date.fromisoformat(c.timestamp[:10])
+                    if existing_max is not None and bar_date <= existing_max:
+                        continue
+                    db.add(EquityDailyBar(symbol=symbol, exchange=c.exchange, bar_date=bar_date, open=c.open, high=c.high, low=c.low, close=c.close, volume=c.volume))
+                db.query(EquityDailyBar).filter(EquityDailyBar.symbol == symbol, EquityDailyBar.bar_date < from_date).delete()
+
                 result = compute_equity_screener_row(candles)
                 if result is None:
+                    db.commit()  # the bar cache above still needs to be saved even with nothing else to write
                     continue  # not enough history yet - see equity_screener.py's own MIN_BARS floor
 
                 row = (
@@ -365,17 +385,6 @@ def _record_equity_screener_snapshot() -> None:
                 row.proximity = result.proximity
                 row.is_fno = symbol in fno_symbols
                 row.index_memberships = ",".join(sorted(symbol_indices.get(symbol, []))) or None
-
-                existing = (
-                    db.query(EquityDailyBar.bar_date).filter(EquityDailyBar.symbol == symbol).order_by(EquityDailyBar.bar_date.desc()).first()
-                )
-                existing_max = existing[0] if existing else None
-                for c in candles:
-                    bar_date = date.fromisoformat(c.timestamp[:10])
-                    if existing_max is not None and bar_date <= existing_max:
-                        continue
-                    db.add(EquityDailyBar(symbol=symbol, exchange=c.exchange, bar_date=bar_date, open=c.open, high=c.high, low=c.low, close=c.close, volume=c.volume))
-                db.query(EquityDailyBar).filter(EquityDailyBar.symbol == symbol, EquityDailyBar.bar_date < from_date).delete()
 
                 db.commit()
             except Exception:

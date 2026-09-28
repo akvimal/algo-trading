@@ -5,6 +5,7 @@ from app.secure_config import cors_origins, enforce_secure_config
 from app.api.routes import (
     calendar,
     candles,
+    custom_screens,
     delta,
     dhan,
     equity_screener,
@@ -49,6 +50,7 @@ app.include_router(delta.router)
 app.include_router(options.router)
 app.include_router(oi_buildup.router)
 app.include_router(equity_screener.router)
+app.include_router(custom_screens.router)
 app.include_router(news.router)
 app.include_router(calendar.router)
 

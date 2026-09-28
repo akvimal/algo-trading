@@ -176,6 +176,30 @@ class EquityDailyBar(Base):
     volume = Column(Float, nullable=False)
 
 
+class CustomScreen(Base):
+    """A saved custom equity screen - a typed condition (app/domain/
+    screener_expr.py) plus a label and optional base-universe filters, owned
+    by exactly one user (require_user_id, never anonymous - decided with
+    the user: per-user, not shared platform-wide, unlike PriceAlert above).
+    See app/api/routes/custom_screens.py. is_fno NULL / index_membership
+    NULL / min_price NULL / max_price NULL each mean "no filter on this" -
+    distinct from false/empty, which would wrongly exclude every stock."""
+
+    __tablename__ = "custom_screens"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    label = Column(Text, nullable=False)
+    expression = Column(Text, nullable=False)
+    is_fno = Column(Boolean)
+    index_membership = Column(Text)
+    min_price = Column(Float)
+    max_price = Column(Float)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class NewsHistory(Base):
     """One row per underlying per news-cache refresh - the AI digest
     (bias/bias_reason/digest) plus its scored articles (JSONB), so a past

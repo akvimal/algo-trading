@@ -203,3 +203,22 @@ CREATE TABLE IF NOT EXISTS market_data.equity_daily_bar (
 );
 CREATE INDEX IF NOT EXISTS idx_equity_daily_bar_symbol_date
     ON market_data.equity_daily_bar (symbol, bar_date DESC);
+
+-- A saved custom equity screen - a typed condition (app/domain/
+-- screener_expr.py) + a label + optional base-universe filters, owned by
+-- exactly one user (never anonymous/shared - decided with the user).
+-- NULL on is_fno/index_membership/min_price/max_price means "no filter on
+-- that dimension", not "false"/"none".
+CREATE TABLE IF NOT EXISTS market_data.custom_screens (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL,
+    label            TEXT NOT NULL,
+    expression       TEXT NOT NULL,
+    is_fno           BOOLEAN,
+    index_membership TEXT,
+    min_price        DOUBLE PRECISION,
+    max_price        DOUBLE PRECISION,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_custom_screens_user ON market_data.custom_screens (user_id, created_at DESC);

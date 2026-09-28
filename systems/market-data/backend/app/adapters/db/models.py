@@ -137,6 +137,43 @@ class EquityScreenerSnapshot(Base):
     pct_from_52w_low = Column(Float)
     # near_52w_high/near_52w_low or NULL (mid-range/not enough history).
     proximity = Column(Text)
+    # Cheap, already-available lookups tagged once per symbol per run (see
+    # app/scheduler.py) - the base filters the custom screener needs
+    # alongside a typed expression: "F&O stocks only", "in Nifty 100", etc.
+    # index_memberships is comma-joined ("NIFTY50,NIFTY100,NIFTY500") rather
+    # than an array column - one extra split() on read beats an array type
+    # this ORM otherwise has no other use for.
+    is_fno = Column(Boolean, nullable=False, server_default="false")
+    index_memberships = Column(Text)
+
+
+class EquityDailyBar(Base):
+    """One row per (symbol, bar_date) - a rolling raw-OHLCV cache, refreshed
+    alongside EquityScreenerSnapshot above from the SAME already-fetched
+    Dhan candles (see app/scheduler.py's _record_equity_screener_snapshot) -
+    no extra provider calls. Unlike that table, this persists the raw bars
+    themselves, not a derived read: the (upcoming) custom equity screener
+    evaluates an arbitrary user-typed expression ("ema(5,1d) crosses_below
+    ema(20,1d)", "weekly close < min(low, 20w)") that can name any period or
+    window, so there is no fixed set of derived columns that would cover
+    every expression someone might type - the expression evaluator computes
+    directly from these bars (via app/domain/indicators.py) instead. Pruned
+    to a rolling window (see the scheduler job) rather than kept forever -
+    the 52-week/20-week lookbacks the screener cares about never need more
+    than about a year of daily bars."""
+
+    __tablename__ = "equity_daily_bar"
+    __table_args__ = (UniqueConstraint("symbol", "bar_date"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    symbol = Column(Text, nullable=False)
+    exchange = Column(Text, nullable=False)
+    bar_date = Column(Date, nullable=False)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
 
 
 class NewsHistory(Base):

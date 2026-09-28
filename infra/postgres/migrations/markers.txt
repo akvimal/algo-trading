@@ -28,3 +28,4 @@
 023-pending-orders.sql|execution.pending_orders|
 024-onboarding.sql|accounts.users|onboarded_at
 025-user-markets.sql|accounts.users|markets
+026-equity-screener-expression-groundwork.sql|market_data.equity_daily_bar|

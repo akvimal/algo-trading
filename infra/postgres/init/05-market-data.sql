@@ -167,6 +167,13 @@ CREATE TABLE IF NOT EXISTS market_data.equity_screener_snapshot (
     -- near_52w_high/near_52w_low or NULL (mid-range, or not enough
     -- history yet - see MIN_BARS_FOR_52W_PROXIMITY).
     proximity          TEXT,
+    -- Cheap, already-available tags (DhanProvider.list_fno_stock_underlyings,
+    -- app/providers/nse_indices.py's synced constituent lists) - the base
+    -- filters the (upcoming) custom expression screener needs alongside a
+    -- typed condition. index_memberships is comma-joined ("NIFTY50,NIFTY100")
+    -- rather than an array column - see app/adapters/db/models.py.
+    is_fno             BOOLEAN NOT NULL DEFAULT false,
+    index_memberships  TEXT,
     UNIQUE (symbol, snapshot_date)
 );
 
@@ -174,3 +181,25 @@ CREATE INDEX IF NOT EXISTS idx_equity_screener_snapshot_symbol_date
     ON market_data.equity_screener_snapshot (symbol, snapshot_date DESC);
 CREATE INDEX IF NOT EXISTS idx_equity_screener_snapshot_date
     ON market_data.equity_screener_snapshot (snapshot_date);
+
+-- A rolling raw-OHLCV cache, refreshed from the SAME Dhan candles the
+-- screener snapshot job above already fetches (no extra provider calls) -
+-- see app/adapters/db/models.py's EquityDailyBar for why raw bars are kept
+-- here rather than only more derived columns (an arbitrary user-typed
+-- screener expression can name any EMA period or lookback window - there is
+-- no fixed set of precomputed columns that covers every expression someone
+-- might type). Pruned to a rolling window by the scheduler job.
+CREATE TABLE IF NOT EXISTS market_data.equity_daily_bar (
+    id       BIGSERIAL PRIMARY KEY,
+    symbol   TEXT NOT NULL,
+    exchange TEXT NOT NULL,
+    bar_date DATE NOT NULL,
+    open     DOUBLE PRECISION NOT NULL,
+    high     DOUBLE PRECISION NOT NULL,
+    low      DOUBLE PRECISION NOT NULL,
+    close    DOUBLE PRECISION NOT NULL,
+    volume   DOUBLE PRECISION NOT NULL,
+    UNIQUE (symbol, bar_date)
+);
+CREATE INDEX IF NOT EXISTS idx_equity_daily_bar_symbol_date
+    ON market_data.equity_daily_bar (symbol, bar_date DESC);

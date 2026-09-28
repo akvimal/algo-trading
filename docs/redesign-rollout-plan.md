@@ -91,6 +91,8 @@ Estimates assume a single developer and are rough. Phases 1 and 2 can overlap.
 - **Collapsible sidebar and sign out in the sidebar built** (`revamp-p2-sidebar-collapse`): default follows Guided/Pro until the person overrides it; sign out reachable from any screen, not only More. Verified live on dev.
 - Deferred: a live trend arrow on each instrument chip (new batched-regime endpoint, and a decision on polling cost against the price socket's 5-symbol cap — not started).
 
+**Live-candle refresh delay fixed (2026-09-28)**, on user report "the live chart's current candle is delayed to refresh". The current bar only rolled forward on a genuine price change; a quiet instrument (no new tick, even though real time had crossed the bar's own boundary) left it stuck. Fixed with a 1-second timer alongside the existing price-driven update — see the architecture note for the mechanism and how the regression is proven by a new test.
+
 Remaining in Phase 2: retiring the classic frontends; email verification and password reset stay in Phase 3.
 
 **Retiring the classic frontends — inventory taken 2026-09-27, updated as items ship, nothing removed yet.** The shell's tab bar (`shell/index.html`) names what still has to move or be deliberately dropped before any classic frontend or the shell can go:

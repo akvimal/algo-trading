@@ -10,6 +10,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, SentimentHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
+from app.domain.dhan_retry import dhan_retry_delay
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.oi_buildup import PreviousSnapshot, compute_eod_buildup
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
@@ -61,17 +62,16 @@ def _retry_when_throttled(fn, *args):
       to refill, and only then gives up.
 
     Anything else (bad symbol, auth, HTTP error) propagates to the caller's
-    own per-symbol handling unchanged."""
+    own per-symbol handling unchanged. The message-sniffing itself
+    (dhan_retry_delay) is shared with app/domain/dhan_retry.py's own
+    interactive_retry - the interactive Dhan-backed routes' much shorter-
+    budget version of this same retry, for the same two transient shapes."""
     for attempt in range(THROTTLE_RETRY_ATTEMPTS):
         try:
             return fn(*args)
         except RuntimeError as e:
-            message = str(e)
-            if "rate limit hit (429)" in message:
-                sleep_seconds = DHAN_429_RETRY_SLEEP_SECONDS
-            elif "queue is backed up" in message:
-                sleep_seconds = THROTTLE_RETRY_SLEEP_SECONDS
-            else:
+            sleep_seconds = dhan_retry_delay(str(e), THROTTLE_RETRY_SLEEP_SECONDS, DHAN_429_RETRY_SLEEP_SECONDS)
+            if sleep_seconds is None:
                 raise
             if attempt == THROTTLE_RETRY_ATTEMPTS - 1:
                 raise

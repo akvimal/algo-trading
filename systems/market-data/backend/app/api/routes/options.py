@@ -18,6 +18,7 @@ from app.adapters.db.models import SentimentHistory
 from app.adapters.db.session import get_db
 from app.auth import Caller, get_caller
 from app.config import settings
+from app.domain.dhan_retry import interactive_retry
 from app.domain.models import MarketSentiment, OptionChain, OptionLegCandle, OptionOiSummary, SentimentHistoryDay, SentimentHistoryPoint
 from app.domain.oi_summary import build_oi_summary
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, aggregate_exchange, exchange_for_symbol, session_bounds
@@ -40,7 +41,7 @@ def get_expiries(exchange: str, symbol: str, caller: Caller = Depends(get_caller
 
     try:
         credentials = data_credentials(caller, exchange)
-        expiries = resolver(symbol, credentials=credentials)
+        expiries = interactive_retry(resolver, symbol, credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if expiries is None:
@@ -61,7 +62,7 @@ def get_chain(exchange: str, symbol: str, expiry: str, caller: Caller = Depends(
 
     try:
         credentials = data_credentials(caller, exchange)
-        chain = resolver(symbol, expiry, credentials=credentials)
+        chain = interactive_retry(resolver, symbol, expiry, credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if chain is None:
@@ -94,7 +95,7 @@ def get_oi_summary(exchange: str, symbol: str, expiry: str, caller: Caller = Dep
 
     try:
         credentials = data_credentials(caller, exchange)
-        chain = resolver(symbol, expiry, credentials=credentials)
+        chain = interactive_retry(resolver, symbol, expiry, credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if chain is None:

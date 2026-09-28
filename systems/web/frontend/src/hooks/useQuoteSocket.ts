@@ -13,7 +13,27 @@ export type QuoteSubscription = { exchange: string; symbol: string };
 const FIRST_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 30_000;
 
+// The server caches the last tick it ever saw for a symbol for a full 24h (market-data's
+// md:ltp:* key, self-cleaning, re-armed on every real tick) and hands it out as the `snapshot`
+// on subscribe even when the upstream Dhan feed has been dead for hours (an expired access
+// token, a network stall, ...) - there is no separate "feed is down" signal on this socket. A
+// snapshot/tick that old is not "a few seconds stale", it is a different session's price
+// entirely, and trusting it as `price` bridges a giant fake candle on the chart (rollLiveBar)
+// and corrupts live P&L (useLivePositions) alike. Comfortably above any real gap between a tick
+// being produced (`received_at`) and reaching us, well below "stale by market-hours".
+const MAX_TICK_AGE_MS = 2 * 60_000;
+
 const keyOf = (s: QuoteSubscription) => `${s.exchange}:${s.symbol}`;
+
+/** True when `receivedAt` is missing/unparseable (older test fixtures and any frame the server
+ * sends without it - treated as fresh rather than dropped) or within MAX_TICK_AGE_MS of `now`.
+ * Pure and exported so the staleness cutoff itself is directly unit-testable. */
+export function isFreshTick(receivedAt: string | undefined, now: number): boolean {
+  if (!receivedAt) return true;
+  const ts = Date.parse(receivedAt);
+  if (Number.isNaN(ts)) return true;
+  return now - ts < MAX_TICK_AGE_MS;
+}
 
 /** Same origin as the page, through its own nginx /ws/ proxy rather than a direct hop to a bare
  * backend port that a firewall may not open. The scheme follows the page, or an https page would
@@ -75,7 +95,7 @@ export function useQuoteSocket(
           return; // one malformed frame is not worth dropping the connection over
         }
         if ((frame.type === "snapshot" || frame.type === "tick") && frame.exchange && frame.symbol && typeof frame.price === "number") {
-          onTickRef.current(frame as QuoteTick);
+          if (isFreshTick(frame.received_at, Date.now())) onTickRef.current(frame as QuoteTick);
         } else if (frame.type === "error" && frame.code === "own_dhan_keys_required") {
           setKeysRequired(true);
         }

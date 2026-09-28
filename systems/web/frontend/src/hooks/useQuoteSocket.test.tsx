@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../auth/token";
 import { FakeWebSocket } from "../test/fakeSocket";
-import { nextDelay, socketUrl, useQuoteSocket, type QuoteSubscription, type QuoteTick } from "./useQuoteSocket";
+import { isFreshTick, nextDelay, socketUrl, useQuoteSocket, type QuoteSubscription, type QuoteTick } from "./useQuoteSocket";
 
 const NIFTY: QuoteSubscription = { exchange: "NSE", symbol: "NIFTY" };
 const GOLD: QuoteSubscription = { exchange: "MCX", symbol: "GOLDM" };
@@ -93,6 +93,31 @@ describe("ticks", () => {
     act(() => ws().push({ type: "tick", exchange: "NSE", symbol: "NIFTY", price: 1 }));
     expect(first).toEqual([]);
     expect(second).toEqual([1]);
+  });
+
+  it("drops a snapshot/tick the server cached from long before the feed went stale, but keeps a fresh one", () => {
+    const seen: QuoteTick[] = [];
+    mount([NIFTY], (t) => seen.push(t));
+    act(() => ws().open());
+    const now = Date.now();
+    act(() =>
+      ws().push({ type: "snapshot", exchange: "NSE", symbol: "NIFTY", price: 55580.4, received_at: new Date(now - 3 * 60_000).toISOString() }),
+    );
+    act(() =>
+      ws().push({ type: "tick", exchange: "NSE", symbol: "NIFTY", price: 54720.05, received_at: new Date(now - 1_000).toISOString() }),
+    );
+    expect(seen.map((t) => t.price)).toEqual([54720.05]);
+  });
+
+  it("keeps a frame with no received_at (older fixtures, or a server that omits it) rather than dropping it", () => {
+    expect(isFreshTick(undefined, Date.now())).toBe(true);
+    expect(isFreshTick("not a date", Date.now())).toBe(true);
+  });
+
+  it("the staleness cutoff is exactly 2 minutes", () => {
+    const now = Date.now();
+    expect(isFreshTick(new Date(now - 119_000).toISOString(), now)).toBe(true);
+    expect(isFreshTick(new Date(now - 120_000).toISOString(), now)).toBe(false);
   });
 
   it("notices when the server says live data needs the person's own keys", () => {

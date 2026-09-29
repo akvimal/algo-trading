@@ -765,16 +765,21 @@ table.t th {
 }
 /* The chart inside an expanded OI-buildup card (ScanChartPanel) - the same draw-toolbar/chart-pane
    pair the trading workstation uses (see "trading workstation" below), just given a fixed height
-   of its own instead of filling the screen, since it sits inside a card in a scrolling list. */
+   of its own instead of filling the screen, since it sits inside a card in a scrolling list.
+   overflow: hidden is a backstop, not the fix - .scan-chart-body is already tall enough that the
+   12-button draw-toolbar (its own height is fixed, not flexible, so a too-short row does not
+   shrink it, it just overflows past the row) fits without needing to clip; this only guards
+   against a card ever bleeding into the one below it again if that toolbar grows. */
 .scan-chart {
   margin-top: 4px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
+  overflow: hidden;
 }
 .scan-chart-body {
   display: flex;
   gap: 8px;
-  height: 360px;
+  height: 480px;
   margin-top: 6px;
 }
 

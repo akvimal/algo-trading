@@ -1,11 +1,13 @@
 import { getOptionLegPreview } from "../api/trade";
 import { formatDay, formatInr } from "../format";
 import { useResource } from "../hooks/useResource";
-import type { Moneyness, Ticket } from "./tradeModel";
+import type { Moneyness, Strategy, Ticket } from "./tradeModel";
 
 const STRATEGY_LABEL: Record<string, string> = {
   bull_call_spread: "Bull Call Spread",
   bear_put_spread: "Bear Put Spread",
+  bull_put_spread: "Bull Put Spread",
+  bear_call_spread: "Bear Call Spread",
   naked_call: "Buy Call",
   naked_put: "Buy Put",
 };
@@ -28,32 +30,42 @@ type Props = { exchange: string; symbol: string; ticket: Ticket; onChange: (t: T
  * The leg table below (following the classic app's manual-trading leg tables, e.g.
  * WeeklyAdvisorPage's journal-entry rows) shows the real legs a placed order would resolve to -
  * this calls the same route (as a preview, nothing is placed) so the two can never disagree.
- * Unlike that journal table, every field here maps to something this app's constrained 4-template
- * placement API can actually execute: the strike stepper moves the PRIMARY leg's moneyness (the
- * only strike-choice open_manual_option_group's real templates expose - see option_templates.py),
- * the short leg's strike always auto-derives 2 strikes further out and is shown, not editable, and
- * the checkbox on the short leg is really the naked/spread toggle (unchecking it drops the hedge
- * leg entirely) - there is no independent per-leg strike or lot control because the real order
- * genuinely has none. Expiry is deliberately display-only, not a picker - see "The Manual tab" in
- * docs/architecture.md for why an interactive expiry dropdown was removed for manual option
+ * Unlike that journal table, every field here maps to something this app's constrained template
+ * placement API can actually execute: the primary leg's strike stepper moves ticket.moneyness,
+ * the second leg's strike stepper moves ticket.spreadWidth (how many strikes it sits from the
+ * primary leg - option_templates.py's own SPREAD_WIDTH_STRIKES override), and the checkbox on the
+ * second leg is the naked/spread toggle (unchecking it drops the second leg entirely, buying the
+ * option outright). When a second leg is included, a Debit/Credit choice appears: Debit
+ * (bull_call_spread/bear_put_spread - pays a net premium) or Credit (bull_put_spread/
+ * bear_call_spread - receives one, sized by max loss instead of cost - see execution's
+ * _spread_sizing_basis). Expiry is deliberately display-only, not a picker - see "The Manual tab"
+ * in docs/architecture.md for why an interactive expiry dropdown was removed for manual option
  * orders (GET /options/expiries proved too slow/unreliable as a blocking dependency). */
 export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props) {
-  const style: "naked" | "spread" = t.strategy === "naked" ? "naked" : "spread";
-  const preview = useResource(() => getOptionLegPreview(exchange, symbol, t.action, style, t.moneyness), [exchange, symbol, t.action, style, t.moneyness]);
+  const style: "naked" | "spread" | "credit_spread" = t.strategy === "naked" ? "naked" : t.strategy === "credit_spread" ? "credit_spread" : "spread";
+  const hasSecondLeg = style !== "naked";
+  const preview = useResource(
+    () => getOptionLegPreview(exchange, symbol, t.action, style, t.moneyness, hasSecondLeg ? t.spreadWidth : undefined),
+    [exchange, symbol, t.action, style, t.moneyness, hasSecondLeg, t.spreadWidth],
+  );
 
   const moneynessIndex = MONEYNESS_ORDER.indexOf(t.moneyness);
   const stepMoneyness = (delta: number) => {
     const next = MONEYNESS_ORDER[Math.min(MONEYNESS_ORDER.length - 1, Math.max(0, moneynessIndex + delta))];
     if (next !== t.moneyness) onChange({ ...t, moneyness: next });
   };
+  const stepWidth = (delta: number) => onChange({ ...t, spreadWidth: Math.max(1, t.spreadWidth + delta) });
 
   const legs = preview.data?.legs ?? [];
   const primary = legs[0];
-  const short = legs[1];
-  const netPremium =
-    primary?.premium != null && (style === "naked" || short?.premium != null)
-      ? primary.premium - (style === "spread" ? (short?.premium ?? 0) : 0)
-      : null;
+  const second = legs[1];
+  const buyLeg = legs.find((l) => l.action === "BUY");
+  const sellLeg = legs.find((l) => l.action === "SELL");
+  const netDebit = buyLeg?.premium != null && (!sellLeg || sellLeg.premium != null) ? buyLeg.premium - (sellLeg?.premium ?? 0) : null;
+  const width = primary && second ? Math.abs(primary.strike - second.strike) : null;
+  const maxLoss = netDebit != null && netDebit < 0 && width != null ? width - Math.abs(netDebit) : null;
+
+  const setStyle = (next: "naked" | "spread" | "credit_spread") => onChange({ ...t, strategy: next as Strategy });
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -121,27 +133,35 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
                 <td>
                   <input
                     type="checkbox"
-                    checked={style === "spread"}
-                    aria-label={style === "spread" ? "Remove the hedge leg (buy the option outright)" : "Add a hedge leg (defined-risk spread)"}
-                    onChange={(e) => onChange({ ...t, strategy: e.target.checked ? "spread" : "naked" })}
+                    checked={hasSecondLeg}
+                    aria-label={hasSecondLeg ? "Remove the second leg (buy the option outright)" : "Add a second leg to cap the risk"}
+                    onChange={(e) => setStyle(e.target.checked ? "spread" : "naked")}
                   />
                 </td>
-                {style === "spread" && short ? (
+                {hasSecondLeg && second ? (
                   <>
                     <td>
-                      <span className="pill dn">Sell</span>
+                      <span className={`pill ${second.action === "BUY" ? "up" : "dn"}`}>{second.action === "BUY" ? "Buy" : "Sell"}</span>
                     </td>
                     <td className="num">
-                      {short.strike} <span className="faint">(auto)</span>
+                      <span className="chips" role="group" aria-label="Second leg strike" style={{ display: "inline-flex" }}>
+                        <button aria-label="Bring the second leg's strike closer" disabled={t.spreadWidth <= 1} onClick={() => stepWidth(-1)}>
+                          −
+                        </button>
+                        <span style={{ padding: "0 8px" }}>{second.strike}</span>
+                        <button aria-label="Move the second leg's strike further out" onClick={() => stepWidth(1)}>
+                          +
+                        </button>
+                      </span>
                     </td>
-                    <td>{short.option_type}</td>
-                    <td className="dim">{formatDay(short.expiry)}</td>
+                    <td>{second.option_type}</td>
+                    <td className="dim">{formatDay(second.expiry)}</td>
                     <td className="num">{t.lots.trim() === "" ? "Auto" : t.lots}</td>
-                    <td className="num">{formatInr(short.premium, 2)}</td>
+                    <td className="num">{formatInr(second.premium, 2)}</td>
                   </>
                 ) : (
                   <td colSpan={6} className="dim" style={{ fontSize: 13 }}>
-                    Add a hedge leg to cap the risk (a defined-risk spread) instead of buying the option outright.
+                    Add a second leg to cap the risk (a defined-risk spread) instead of buying the option outright.
                   </td>
                 )}
               </tr>
@@ -149,11 +169,27 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
           </table>
         </div>
       )}
+      {hasSecondLeg && (
+        <div className="chips" role="group" aria-label="Debit or credit" style={{ margin: "8px 0" }}>
+          <button aria-pressed={style === "spread"} onClick={() => setStyle("spread")}>
+            Pay premium (debit)
+          </button>
+          <button aria-pressed={style === "credit_spread"} onClick={() => setStyle("credit_spread")}>
+            Receive premium (credit)
+          </button>
+        </div>
+      )}
       {primary && (
         <div className="row" style={{ marginTop: 8, fontSize: 13 }} data-testid="option-strategy-summary">
           <span className="dim">
             <strong style={{ color: "var(--text)" }}>{preview.data ? STRATEGY_LABEL[preview.data.strategy_type] ?? preview.data.strategy_type : ""}</strong>
-            {netPremium != null && <> · Net {netPremium >= 0 ? "debit" : "credit"} {formatInr(Math.abs(netPremium), 2)} per lot</>}
+            {netDebit != null && (
+              <>
+                {" · Net "}
+                {netDebit >= 0 ? "debit" : "credit"} {formatInr(Math.abs(netDebit), 2)} per lot
+                {maxLoss != null && <> · max loss {formatInr(maxLoss, 2)} per lot</>}
+              </>
+            )}
           </span>
           <button className="link-btn" onClick={() => preview.reload()} disabled={preview.refreshing}>
             {preview.refreshing ? "Refreshing…" : "Refresh prices"}

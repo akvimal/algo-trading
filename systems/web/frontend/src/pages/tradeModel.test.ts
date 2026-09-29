@@ -120,6 +120,13 @@ describe("analyzeTicket", () => {
     expect(a.riskAmount).toBe(a.lots! * 10);
   });
 
+  it("refuses a waiting order for a credit spread - the pending-order watcher can't build one yet", () => {
+    const a = analyzeTicket(ticket({ orderType: "limit", strategy: "credit_spread", entry: "980" }), ctx());
+    expect(a.errors.join(" ")).toMatch(/credit spread/);
+    // The same ticket at Market instead isn't blocked by this rule.
+    expect(analyzeTicket(ticket({ orderType: "market", strategy: "credit_spread" }), ctx()).errors.join(" ")).not.toMatch(/credit spread/);
+  });
+
   it("waits for a live price on a market order", () => {
     expect(analyzeTicket(ticket({ stop: "990" }), ctx({ price: null })).errors.join(" ")).toMatch(/live price/);
   });

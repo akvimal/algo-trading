@@ -53,12 +53,19 @@ type Props = {
    * Scan page's bias-driven leg table) already exposes a strike stepper wired to the same
    * ticket.moneyness field, so the two controls never fight for the same line. */
   hideMoneynessField?: boolean;
+  /** Drops Target, Lots, "Before you place" and Confidence for an OPTION order only (a plain
+   * spot/future order keeps all of them) - the Scan page's leg table already shows what's being
+   * bought/sold and its live price, so a quick option trade there doesn't need the same
+   * plan-first ceremony a directional spot/future trade does. Stop-loss stays even here when the
+   * account's own require_stop_loss setting is on - hiding it would leave no way to satisfy that
+   * requirement and the order permanently blocked. */
+  hideOptionExtras?: boolean;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -89,6 +96,9 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
   const options = optionsForced ?? optionsAvailable(ctx.symbol);
   const isOption = t.strategy !== "future";
   const limit = t.orderType === "limit";
+  const simplifiedOption = Boolean(hideOptionExtras) && isOption;
+  const showStop = !simplifiedOption || ctx.requireStop;
+  const showTarget = !simplifiedOption;
 
   async function submit() {
     // Re-derive from the current ticket: nothing captured from an earlier render is ever sent.
@@ -157,7 +167,10 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         <button aria-pressed={!limit} onClick={() => set("orderType", "market")}>
           Market
         </button>
-        <button aria-pressed={limit} onClick={() => set("orderType", "limit")}>
+        {/* Credit spreads (bull_put_spread/bear_call_spread) can't wait for a price yet - the
+            pending-order watcher (app/domain/pending_orders.py) only knows how to build a naked/
+            debit-spread leg once triggered, not a credit one. Market-only until that's built. */}
+        <button aria-pressed={limit} disabled={t.strategy === "credit_spread"} title={t.strategy === "credit_spread" ? "Not yet supported for a credit spread - place at the market price instead." : undefined} onClick={() => set("orderType", "limit")}>
           Wait for a price
         </button>
       </div>
@@ -172,22 +185,26 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
           placeholder ("Auto from your risk"/"Sized for you"), so it gets the full row below
           instead of a cramped third column. No hints here (unlike Entry above): the label and
           placeholder already say what is needed, and dropping them is what kept this compact. */}
-      <div className="field-row">
-        <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />
-        <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} />
-      </div>
-      <TextField
-        id="t-lots"
-        // An option order is always lot-based, whatever the underlying is - stock vs index only
-        // matters for a spot/future order's own units. Previously always true together (only
-        // PRESETS symbols - all index/commodity/crypto - ever reached the option chips, and none
-        // of those are "stock"), so this only started to matter once optionsForced (the Scan
-        // page's ticket) let a stock's own option order through.
-        label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
-        value={t.lots}
-        onChange={(v) => set("lots", v)}
-        placeholder={isOption || ctx.segment === "CRYPTO" ? "Sized for you" : "Auto from your risk"}
-      />
+      {(showStop || showTarget) && (
+        <div className="field-row">
+          {showStop && <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />}
+          {showTarget && <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} />}
+        </div>
+      )}
+      {!simplifiedOption && (
+        <TextField
+          id="t-lots"
+          // An option order is always lot-based, whatever the underlying is - stock vs index only
+          // matters for a spot/future order's own units. Previously always true together (only
+          // PRESETS symbols - all index/commodity/crypto - ever reached the option chips, and none
+          // of those are "stock"), so this only started to matter once optionsForced (the Scan
+          // page's ticket) let a stock's own option order through.
+          label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
+          value={t.lots}
+          onChange={(v) => set("lots", v)}
+          placeholder={isOption || ctx.segment === "CRYPTO" ? "Sized for you" : "Auto from your risk"}
+        />
+      )}
 
       <dl className="summary" data-testid="summary">
         <div>
@@ -212,29 +229,31 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         </div>
       </dl>
 
-      <div className="checks" data-testid="checks">
-        <div className="row" style={{ marginBottom: 6 }}>
-          <strong>Before you place</strong>
-          <span className="dim">
-            {fav.good} of {fav.total} in favour
-          </span>
-        </div>
-        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-          {checks.map((c) => (
-            <li key={c.key} className="check-item">
-              <span className={`mark ${c.status}`} role="img" aria-label={STATUS_WORD[c.status]}>
-                {STATUS_MARK[c.status]}
-              </span>
-              <span>
-                {c.label}
-                <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                  {c.detail}
+      {!simplifiedOption && (
+        <div className="checks" data-testid="checks">
+          <div className="row" style={{ marginBottom: 6 }}>
+            <strong>Before you place</strong>
+            <span className="dim">
+              {fav.good} of {fav.total} in favour
+            </span>
+          </div>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {checks.map((c) => (
+              <li key={c.key} className="check-item">
+                <span className={`mark ${c.status}`} role="img" aria-label={STATUS_WORD[c.status]}>
+                  {STATUS_MARK[c.status]}
                 </span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
+                <span>
+                  {c.label}
+                  <span className="faint" style={{ display: "block", fontSize: 12 }}>
+                    {c.detail}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <label className="select-field" style={{ margin: "12px 0" }}>
         <span className="dim">Why this trade? (helps your review later)</span>
@@ -247,16 +266,20 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
           ))}
         </select>
       </label>
-      <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>
-        Confidence
-      </div>
-      <div className="chips" role="group" aria-label="Confidence" style={{ marginBottom: 12 }}>
-        {[1, 2, 3, 4, 5].map((n) => (
-          <button key={n} aria-pressed={t.confidence === n} onClick={() => set("confidence", t.confidence === n ? null : n)}>
-            {n}
-          </button>
-        ))}
-      </div>
+      {!simplifiedOption && (
+        <>
+          <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>
+            Confidence
+          </div>
+          <div className="chips" role="group" aria-label="Confidence" style={{ marginBottom: 12 }}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n} aria-pressed={t.confidence === n} onClick={() => set("confidence", t.confidence === n ? null : n)}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       {[...a.errors, ...a.warnings].length > 0 && (
         <ul className="hints" aria-live="polite">

@@ -48,11 +48,14 @@ export const getOiSummary = (exchange: string, symbol: string, expiry: string) =
 /** The legs a real order with these exact params would use, without placing anything - backs the
  * Scan page's bias-driven option panel (Bullish/Bearish -> the real recommended strikes, before
  * committing to an order). `action`: "BUY" for bullish, "SELL" for bearish - the same field a real
- * order carries, see execution's option_position_manager.preview_option_legs. */
-export const getOptionLegPreview = (exchange: string, symbol: string, action: "BUY" | "SELL", style: "naked" | "spread", moneyness: string) =>
+ * order carries, see execution's option_position_manager.preview_option_legs. `spreadWidth`
+ * overrides the short/protection leg's own distance (in strikes) from the primary leg - omit for
+ * the backend's own default. */
+export const getOptionLegPreview = (exchange: string, symbol: string, action: "BUY" | "SELL", style: "naked" | "spread" | "credit_spread", moneyness: string, spreadWidth?: number) =>
   api<OptionLegPreview>(
     "execution",
-    `/option-groups/preview-legs?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&action=${action}&option_position_style=${style}&option_strike_moneyness=${moneyness}`,
+    `/option-groups/preview-legs?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&action=${action}&option_position_style=${style}&option_strike_moneyness=${moneyness}` +
+      (spreadWidth != null ? `&spread_width=${spreadWidth}` : ""),
   );
 
 /** Today's 5-minute OI-sentiment readings for `symbol` (the bare underlying, not its resolved contract —

@@ -77,15 +77,28 @@ beforeEach(() => {
       if (url.includes("/option-groups/preview-legs")) {
         const u = new URL(url);
         const bullish = u.searchParams.get("action") === "BUY";
-        const spread = u.searchParams.get("option_position_style") === "spread";
+        const style = u.searchParams.get("option_position_style");
+        const widthParam = u.searchParams.get("spread_width");
+        const width = widthParam ? Number(widthParam) : 2;
+        const secondStrike = (base: number, dir: 1 | -1) => base + dir * width * 100;
+        if (style === "credit_spread") {
+          return json({
+            strategy_type: bullish ? "bull_put_spread" : "bear_call_spread",
+            expiry: "2026-10-30",
+            legs: [
+              { action: "SELL", option_type: bullish ? "PE" : "CE", strike: 2500, expiry: "2026-10-30", premium: 42.5 },
+              { action: "BUY", option_type: bullish ? "PE" : "CE", strike: secondStrike(2500, bullish ? -1 : 1), expiry: "2026-10-30", premium: 12.5 },
+            ],
+          });
+        }
         return json(
-          spread
+          style === "spread"
             ? {
                 strategy_type: bullish ? "bull_call_spread" : "bear_put_spread",
                 expiry: "2026-10-30",
                 legs: [
                   { action: "BUY", option_type: bullish ? "CE" : "PE", strike: bullish ? 2600 : 2400, expiry: "2026-10-30", premium: 42.5 },
-                  { action: "SELL", option_type: bullish ? "CE" : "PE", strike: bullish ? 2800 : 2200, expiry: "2026-10-30", premium: 12.5 },
+                  { action: "SELL", option_type: bullish ? "CE" : "PE", strike: secondStrike(bullish ? 2600 : 2400, bullish ? 1 : -1), expiry: "2026-10-30", premium: 12.5 },
                 ],
               }
             : {
@@ -291,37 +304,55 @@ describe("OI buildup", () => {
       expect(tcs.queryByText("Strike", { selector: "span.dim" })).not.toBeInTheDocument(); // TradeTicket's own moneyness dropdown stays hidden too
 
       // No default_option_strategy set on this mocked profile, so ProfileContext falls back to
-      // "naked" (see items 4/5) - a single row, and an unchecked "add a hedge leg" checkbox.
+      // "naked" (see items 4/5) - a single row, and an unchecked "add a second leg" checkbox.
       let table = await tcs.findByTestId("option-leg-table");
       let rows = within(table).getAllByRole("row").slice(1); // drop the header row
-      expect(rows).toHaveLength(2); // the primary leg's own row, plus the "add a hedge leg" row
+      expect(rows).toHaveLength(2); // the primary leg's own row, plus the "add a second leg" row
       expect(within(rows[0]).getByText("Buy")).toBeInTheDocument();
       expect(within(rows[0]).getByText("2500")).toBeInTheDocument();
       expect(within(rows[0]).getByText("CE")).toBeInTheDocument();
       expect(within(rows[0]).getByText("₹28.75")).toBeInTheDocument();
-      expect(tcs.getByRole("checkbox", { name: "Add a hedge leg (defined-risk spread)" })).not.toBeChecked();
+      expect(tcs.getByRole("checkbox", { name: "Add a second leg to cap the risk" })).not.toBeChecked();
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Buy Call");
+      expect(tcs.queryByRole("group", { name: "Debit or credit" })).not.toBeInTheDocument(); // naked - no style choice yet
 
-      await user.click(tcs.getByRole("checkbox", { name: "Add a hedge leg (defined-risk spread)" }));
+      await user.click(tcs.getByRole("checkbox", { name: "Add a second leg to cap the risk" }));
       table = await tcs.findByTestId("option-leg-table");
       await within(table).findByText("₹42.50"); // waits for the spread preview to land
       rows = within(table).getAllByRole("row").slice(1);
       expect(rows).toHaveLength(2);
       expect(within(rows[0]).getByText("2600")).toBeInTheDocument();
       expect(within(rows[1]).getByText("Sell")).toBeInTheDocument();
-      expect(within(rows[1]).getByText("2800")).toBeInTheDocument();
+      expect(within(rows[1]).getByText("2800")).toBeInTheDocument(); // default width (2)
       expect(within(rows[1]).getByText("₹12.50")).toBeInTheDocument();
-      expect(tcs.getByRole("checkbox", { name: "Remove the hedge leg (buy the option outright)" })).toBeChecked();
+      expect(tcs.getByRole("checkbox", { name: "Remove the second leg (buy the option outright)" })).toBeChecked();
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Call Spread");
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit ₹30.00 per lot"); // 42.50 - 12.50
+      expect(tcs.getByRole("button", { name: "Pay premium (debit)" })).toHaveAttribute("aria-pressed", "true");
+
+      // Widening the second leg's own strike (independent of the primary leg's moneyness) re-fetches.
+      await user.click(tcs.getByRole("button", { name: "Move the second leg's strike further out" }));
+      table = await tcs.findByTestId("option-leg-table");
+      await within(table).findByText("2900"); // width 3 -> 2600 + 3*100
+      rows = within(table).getAllByRole("row").slice(1);
+      expect(within(rows[1]).getByText("2900")).toBeInTheDocument();
+
+      // Switching to Credit swaps in bull_put_spread - the SELL leg is now primary.
+      await user.click(tcs.getByRole("button", { name: "Receive premium (credit)" }));
+      await waitFor(() => expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Put Spread"));
+      table = await tcs.findByTestId("option-leg-table");
+      rows = within(table).getAllByRole("row").slice(1);
+      expect(within(rows[0]).getByText("Sell")).toBeInTheDocument();
+      expect(within(rows[1]).getByText("Buy")).toBeInTheDocument();
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Put Spread");
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net credit ₹30.00 per lot");
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("max loss");
 
       await user.click(tcs.getByRole("button", { name: "Bearish" }));
+      await waitFor(() => expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bear Call Spread")); // credit_spread + Bearish
       table = await tcs.findByTestId("option-leg-table");
-      await within(table).findByText("2400");
       rows = within(table).getAllByRole("row").slice(1);
-      expect(within(rows[0]).getByText("PE")).toBeInTheDocument();
-      expect(within(rows[1]).getByText("2200")).toBeInTheDocument();
-      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bear Put Spread");
+      expect(within(rows[0]).getByText("CE")).toBeInTheDocument();
     });
 
     it("Chart and Trade are independent - both can be open on the same card, and different cards can each have one open", async () => {
@@ -354,6 +385,8 @@ describe("OI buildup", () => {
     });
 
     it("places an option order straight from the card", async () => {
+      // No Stop-loss/Target/Lots/checks/Confidence for an option trade here (hideOptionExtras) -
+      // the account doesn't require a stop-loss, so nothing blocks placing without one.
       const user = userEvent.setup();
       renderAt("/scan");
       const list = await screen.findByTestId("oi-list");
@@ -361,9 +394,23 @@ describe("OI buildup", () => {
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       await tcs.findByTestId("ticket");
       await user.click(tcs.getByRole("button", { name: "Option" }));
-      await user.type(tcs.getByLabelText("Stop-loss"), "2400");
+      expect(tcs.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+      expect(tcs.queryByTestId("checks")).not.toBeInTheDocument();
       await user.click(tcs.getByRole("button", { name: /Buy TCS, paper order/ }));
       await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/option-groups/manual"))).toBe(true));
+    });
+
+    it("still shows Stop-loss for an option trade when the account requires one", async () => {
+      account.require_stop_loss = true;
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      await tcs.findByTestId("ticket");
+      await user.click(tcs.getByRole("button", { name: "Option" }));
+      expect(tcs.getByLabelText("Stop-loss (required)")).toBeInTheDocument();
+      expect(tcs.queryByLabelText("Target")).not.toBeInTheDocument(); // still simplified otherwise
     });
 
     it("shows the live-trading notice instead of a ticket when the account is set to live", async () => {

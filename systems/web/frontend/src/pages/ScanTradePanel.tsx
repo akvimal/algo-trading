@@ -84,6 +84,7 @@ export function ScanTradePanel({ exchange, symbol }: Props) {
         optionsForced
         hideStrategyChips
         hideMoneynessField={isOption}
+        hideOptionExtras={isOption}
         onPlaced={() => setTicket(emptyTicketFor(symbol, defaultInstrument, defaultOptionStrategy))}
       />
     </>

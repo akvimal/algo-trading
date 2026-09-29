@@ -1,7 +1,12 @@
 import type { Segment } from "../api/types";
 
 export type Action = "BUY" | "SELL";
-export type Strategy = "future" | "naked" | "spread";
+// 'spread' = a debit spread (bull_call_spread/bear_put_spread - pays a net premium).
+// 'credit_spread' = the net-credit counterpart (bull_put_spread/bear_call_spread - receives a
+// net premium, sized by max loss instead of cost - see execution's _spread_sizing_basis). Only
+// the Scan page's ScanOptionBias panel ever sets it today - TradePage's own "What to trade"
+// chips (TradeTicket) don't offer it.
+export type Strategy = "future" | "naked" | "spread" | "credit_spread";
 export type Moneyness = "ITM2" | "ITM1" | "ATM" | "OTM1" | "OTM2";
 export type OrderType = "market" | "limit";
 
@@ -50,6 +55,10 @@ export type Ticket = {
   action: Action;
   strategy: Strategy;
   moneyness: Moneyness;
+  // How many strikes the short/protection leg sits from the primary leg, for 'spread'/
+  // 'credit_spread' only - overrides option_templates.py's own SPREAD_WIDTH_STRIKES default (2)
+  // when the Scan page's leg table steps it independently of the primary leg's moneyness.
+  spreadWidth: number;
   orderType: OrderType;
   entry: string;
   stop: string;
@@ -60,7 +69,7 @@ export type Ticket = {
 };
 
 export const EMPTY_TICKET: Ticket = {
-  action: "BUY", strategy: "future", moneyness: "ATM", orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null,
+  action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null,
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -135,6 +144,11 @@ export function analyzeTicket(t: Ticket, ctx: TicketContext): Analysis {
   const buy = t.action === "BUY";
 
   const limit = t.orderType === "limit";
+  // The pending-order watcher (execution's app/domain/pending_orders.py) only knows how to build
+  // a naked/debit-spread leg once triggered, not a credit one yet - block this combo here too,
+  // not just by disabling the chip in TradeTicket, so it's caught even if the ticket reached this
+  // state some other way (e.g. picking Credit after already choosing "Wait for a price").
+  if (limit && t.strategy === "credit_spread") errors.push("Waiting orders aren't supported for a credit spread yet - use Market instead.");
   const typedEntry = num(t.entry);
   const stop = num(t.stop);
   const target = num(t.target);
@@ -304,7 +318,8 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
     kind: "option",
     path: "/option-groups/manual",
     body: {
-      ...common, option_position_style: t.strategy === "spread" ? "spread" : "naked", option_strike_moneyness: t.moneyness,
+      ...common, option_position_style: t.strategy === "naked" ? "naked" : t.strategy, option_strike_moneyness: t.moneyness,
+      ...(t.strategy !== "naked" ? { spread_width: t.spreadWidth } : {}),
       ...(a.lotsAuto ? {} : { option_fixed_lots: a.lots }), plan_checklist: [], order_type: "market",
       trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, ...journal,
     },

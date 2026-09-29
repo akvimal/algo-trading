@@ -554,7 +554,8 @@ a {
   cursor: pointer;
 }
 .chips button[aria-pressed="true"],
-.chips button[aria-selected="true"] {
+.chips button[aria-selected="true"],
+.chips button[aria-checked="true"] {
   border-color: var(--accent);
   color: var(--text);
   background: var(--surface-2);

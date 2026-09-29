@@ -37,6 +37,10 @@ class User(Base):
     onboarded_at = Column(TIMESTAMP(timezone=True), nullable=True)
     # The markets picked at first-run setup (migrations/025); all three until the person chooses.
     markets = Column(ARRAY(Text), nullable=False, server_default=text("ARRAY['NSE', 'MCX', 'CRYPTO']"))
+    # What the web frontend's manual trade ticket pre-selects on a fresh instrument (migrations/028)
+    # - see UserOut's own comment in app/domain/models.py for why these are two separate columns.
+    default_instrument = Column(Text, nullable=False, server_default="future")
+    default_option_strategy = Column(Text, nullable=False, server_default="naked")
 
 
 class BrokerCredentials(Base):

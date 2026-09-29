@@ -45,6 +45,13 @@ class UserOut(BaseModel):
     experience: Literal["guided", "pro"] = "guided"
     onboarded_at: Optional[datetime] = None
     markets: list[Market] = ["NSE", "MCX", "CRYPTO"]
+    # What the manual trade ticket (web frontend) pre-selects on a fresh instrument, so a person
+    # who always trades options (say) does not re-click past Future every time. default_instrument
+    # only chooses between the two visible top-level chips (Future vs Option); which option style
+    # (naked vs spread) is a second, independent preference - a future-only trader has no use for
+    # it, and someone who always wants a spread should not have to also declare "option" twice.
+    default_instrument: Literal["future", "option"] = "future"
+    default_option_strategy: Literal["naked", "spread"] = "naked"
 
 
 class PreferencesUpdate(BaseModel):
@@ -56,6 +63,8 @@ class PreferencesUpdate(BaseModel):
     onboarded: Optional[bool] = None
     # At least one; duplicates are dropped and the order is kept.
     markets: Optional[list[Market]] = Field(default=None, min_length=1)
+    default_instrument: Optional[Literal["future", "option"]] = None
+    default_option_strategy: Optional[Literal["naked", "spread"]] = None
 
 
 # All optional - PUT /credentials is a partial update, e.g. setting only

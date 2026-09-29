@@ -284,15 +284,18 @@ const INDEX_SELECT_OPTIONS = [{ value: "", label: "Any" }, ...INDEX_OPTIONS.map(
 
 /** A saved, per-user, typed expression evaluated against the same EOD universe the other two
  * tabs read - "weekly_close < min(weekly_low, 20) and ema(5) crosses_below ema(20)", labelled
- * "Bearish breakout", filterable to F&O stocks / an index / a price range. See
- * app/domain/screener_expr.py (market-data) for the expression grammar. */
+ * "Bearish breakout", filterable to F&O stocks / an index. A price range is just another
+ * condition ("close > 100 and close < 500") - no separate min/max fields, see customScreenModel.
+ * See app/domain/screener_expr.py (market-data) for the expression grammar. */
 function CustomScreenScan() {
   const saved = useResource(listCustomScreens, []);
+  const [tab, setTab] = useState<"new" | "saved">("new");
   const [form, setForm] = useState<CustomScreenForm>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [result, setResult] = useState<CustomScreenRunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const errors = validateForm(form);
@@ -332,6 +335,7 @@ function CustomScreenScan() {
       else await createCustomScreen(def);
       cancelEdit();
       saved.reload();
+      setTab("saved");
     } catch (e) {
       setSaveError(e instanceof ApiError ? e.message : "Could not save. Try again.");
     } finally {
@@ -342,6 +346,7 @@ function CustomScreenScan() {
   async function remove(id: string) {
     await deleteCustomScreen(id).catch(() => undefined);
     if (editingId === id) cancelEdit();
+    setDeletingId(null);
     saved.reload();
   }
 
@@ -351,6 +356,7 @@ function CustomScreenScan() {
     setResult(null);
     setRunError(null);
     setSaveError(null);
+    setTab("new"); // the form lives there, whether starting fresh or editing
   }
 
   function cancelEdit() {
@@ -360,6 +366,16 @@ function CustomScreenScan() {
 
   return (
     <div className="stack">
+      <div className="chips" role="tablist" aria-label="Custom screens">
+        <button role="tab" aria-selected={tab === "new"} onClick={() => setTab("new")}>
+          {editingId ? "Edit screen" : "New screen"}
+        </button>
+        <button role="tab" aria-selected={tab === "saved"} onClick={() => setTab("saved")}>
+          Saved screens{saved.data && saved.data.length > 0 ? ` (${saved.data.length})` : ""}
+        </button>
+      </div>
+
+      {tab === "new" && (
       <div className="card">
         <h2 className="section-title" style={{ marginTop: 0 }}>
           {editingId ? "Edit screen" : "New screen"}
@@ -377,8 +393,6 @@ function CustomScreenScan() {
         <div className="filters">
           <Select<CustomScreenForm["fno"]> label="F&O" value={form.fno} onChange={(fno) => setForm({ ...form, fno })} options={FNO_OPTIONS} />
           <Select label="Index" value={form.index} onChange={(index) => setForm({ ...form, index })} options={INDEX_SELECT_OPTIONS} />
-          <TextField id="cs-min" label="Min price" value={form.minPrice} onChange={(minPrice) => setForm({ ...form, minPrice })} inputMode="decimal" suffix="₹" />
-          <TextField id="cs-max" label="Max price" value={form.maxPrice} onChange={(maxPrice) => setForm({ ...form, maxPrice })} inputMode="decimal" suffix="₹" />
         </div>
         {errors.length > 0 && (
           <ul className="hints" aria-live="polite">
@@ -411,6 +425,7 @@ function CustomScreenScan() {
           </button>
         </div>
       </div>
+      )}
 
       {result && (
         <div className="card" data-testid="custom-screen-result">
@@ -435,12 +450,13 @@ function CustomScreenScan() {
         </div>
       )}
 
-      <h2 className="section-title">Saved screens</h2>
+      {tab === "saved" && (
+      <>
       {saved.loading && <Skeleton lines={3} />}
       {saved.error && <ErrorNotice error={saved.error} onRetry={saved.reload} />}
       {saved.data &&
         (sortScreens(saved.data).length === 0 ? (
-          <Empty title="No saved screens yet">Build one above and save it.</Empty>
+          <Empty title="No saved screens yet">Build one and save it.</Empty>
         ) : (
           <div className="stack" data-testid="saved-screens">
             {sortScreens(saved.data).map((s) => (
@@ -453,20 +469,36 @@ function CustomScreenScan() {
                   {s.expression}
                 </p>
                 <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-                  <button className="btn btn-small" onClick={() => edit(s)}>
-                    Edit
-                  </button>
-                  <button className="btn btn-small" onClick={() => void runSaved(s)} disabled={busy}>
-                    Run
-                  </button>
-                  <button className="btn btn-small btn-danger" onClick={() => void remove(s.id)}>
-                    Delete
-                  </button>
+                  {deletingId === s.id ? (
+                    <>
+                      <span className="dim" style={{ fontSize: 13 }}>Delete this screen?</span>
+                      <button className="btn btn-small" onClick={() => setDeletingId(null)} disabled={busy}>
+                        Keep
+                      </button>
+                      <button className="btn btn-small btn-danger" onClick={() => void remove(s.id)} disabled={busy}>
+                        Confirm delete
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="btn btn-small" onClick={() => edit(s)}>
+                        Edit
+                      </button>
+                      <button className="btn btn-small" onClick={() => void runSaved(s)} disabled={busy}>
+                        Run
+                      </button>
+                      <button className="btn btn-small btn-danger" onClick={() => setDeletingId(s.id)}>
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
           </div>
         ))}
+      </>
+      )}
     </div>
   );
 }

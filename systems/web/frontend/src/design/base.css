@@ -222,6 +222,10 @@ a {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  /* A narrow column (the ticket's field-row) can be too tight for a long placeholder like
+     "Auto from your risk" - fade it with an ellipsis instead of the browser's default hard clip
+     mid-word/mid-glyph. */
+  text-overflow: ellipsis;
 }
 .check {
   display: flex;
@@ -665,6 +669,7 @@ table.t th {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  text-overflow: ellipsis;
 }
 .input-row input {
   width: auto;
@@ -870,9 +875,16 @@ table.t th {
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
+  /* In the ticket's field-row (Stop-loss/Target side by side, see .field-row above), a column can
+     be far narrower than this row's natural content width once a "Pick on chart"/"Add line"
+     action sits next to the label - without wrapping, the actions overflowed their own .field-head
+     and bled visually into the neighbouring column instead of shrinking. Wrapping the action onto
+     its own line keeps everything inside its own column, just taller, rather than corrupted. */
+  flex-wrap: wrap;
 }
 .field-head > label {
   flex: 1;
+  min-width: 0;
 }
 .field-head > label > span {
   margin-bottom: 4px;
@@ -1221,6 +1233,10 @@ table.t th {
 .field-actions {
   display: inline-flex;
   gap: 12px;
+  flex-wrap: wrap;
+  /* Also allow the wrapped line under the label (above) to right-align rather than jump to the
+     column's left edge, matching where it sat when there was room to stay inline. */
+  justify-content: flex-end;
 }
 
 .ws-alerts {

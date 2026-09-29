@@ -1277,12 +1277,12 @@ table.t th {
 .oi-strip-spark {
   display: inline-flex;
   align-items: flex-end;
-  gap: 1px;
-  height: 16px;
+  gap: 2px;
+  height: 28px;
 }
 .oi-strip-spark-bar {
-  width: 3px;
-  min-height: 2px;
+  width: 5px;
+  min-height: 3px;
   border-radius: 1px;
   background: var(--text-dim, #93a1b1);
 }

@@ -9,6 +9,7 @@ import { TextField } from "../components/Field";
 import { Sparkline } from "../components/Sparkline";
 import { formatDay, formatPct, formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
+import { ScanChartPanel } from "./ScanChartPanel";
 import {
   BUILDUP_HELP, BUILDUP_LABEL, OI_DEFAULTS, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, tradeLink, visible,
   type OiFilters, type OiSort, type ScreenerFilters, type ScreenerSort,
@@ -85,6 +86,10 @@ function OiScan() {
   const [f, setF] = useState<OiFilters>(OI_DEFAULTS);
   const rows = data.data ? filterOi(data.data.rows, f) : [];
   const [shown, more] = useShown(JSON.stringify(f));
+  // Only one card's chart is ever open at a time - each one is a real live chart (its own quote
+  // socket, its own klinecharts instance), so this bounds the list to exactly one of those however
+  // many cards are on screen. Picking a different card's Chart closes whichever was open.
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   return (
     <div className="stack">
@@ -131,7 +136,7 @@ function OiScan() {
             <>
               <div className="stack" data-testid="oi-list">
                 {visible(rows, shown).map((r) => (
-                  <OiCard key={r.symbol} row={r} />
+                  <OiCard key={r.symbol} row={r} expanded={expanded === r.symbol} onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))} />
                 ))}
               </div>
               {shown < rows.length && (
@@ -157,7 +162,7 @@ function BuildupPill({ b }: { b: Buildup | null }) {
   );
 }
 
-function OiCard({ row: r }: { row: OiRow }) {
+function OiCard({ row: r, expanded, onToggle }: { row: OiRow; expanded: boolean; onToggle: () => void }) {
   return (
     <div className="card scan-card" data-testid="oi-card">
       <div className="row">
@@ -181,8 +186,18 @@ function OiCard({ row: r }: { row: OiRow }) {
         <span className="dim">
           Put/call ratio <span className="num">{r.pcr == null ? "–" : r.pcr.toFixed(2)}</span>
         </span>
-        <Link to={tradeLink(r.symbol)}>Chart</Link>
+        <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
+          {expanded ? "Close chart" : "Chart"}
+        </button>
       </div>
+      {expanded && (
+        <>
+          <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />
+          <p style={{ margin: "2px 0 0" }}>
+            <Link to={tradeLink(r.symbol)}>Open in Trade, to place an order →</Link>
+          </p>
+        </>
+      )}
     </div>
   );
 }

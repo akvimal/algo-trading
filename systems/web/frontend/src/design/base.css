@@ -763,6 +763,20 @@ table.t th {
   align-items: center;
   flex-wrap: wrap;
 }
+/* The chart inside an expanded OI-buildup card (ScanChartPanel) - the same draw-toolbar/chart-pane
+   pair the trading workstation uses (see "trading workstation" below), just given a fixed height
+   of its own instead of filling the screen, since it sits inside a card in a scrolling list. */
+.scan-chart {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.scan-chart-body {
+  display: flex;
+  gap: 8px;
+  height: 360px;
+  margin-top: 6px;
+}
 
 /* ---- Trade ---- */
 .seg {

@@ -284,6 +284,21 @@ describe("placing", () => {
     expect(t.getByRole("link", { name: "See it in Portfolio" })).toHaveAttribute("href", "/portfolio?tab=positions");
   });
 
+  it("clears the draft's plan lines off the chart once the order is placed", async () => {
+    // Otherwise the chart kept showing the just-placed stop/target forever - the ticket draft
+    // that drives those lines was never reset by a successful placement, only by switching
+    // symbol/segment.
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Target"), "1030");
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent(/Marked levels: Stop 990, Target 1,030/);
+    await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
+    await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId("chart-summary")).not.toHaveTextContent(/Marked levels/));
+  });
+
   it("shows the resulting position in the same ticket once it is placed, with its stop editable right there", async () => {
     // A real server persists the new row - the mock does the same, so the ticket's own reload (onPlaced)
     // picks it up from the next GET /positions, same as the real app.
@@ -1050,6 +1065,7 @@ describe("layout and the ticket panel", () => {
     await loaded(0);
     await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(2));
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: /Sync/ }));
     expect(screen.getByLabelText("Sync crosshair")).not.toBeChecked();
   });
 });
@@ -1107,6 +1123,7 @@ describe("two linked charts", () => {
   it("does not link the crosshair when that is switched off", async () => {
     const user = userEvent.setup();
     await pair(user);
+    await user.click(screen.getByRole("button", { name: /Sync/ }));
     await user.click(screen.getByLabelText("Sync crosshair"));
     act(() => chart(0).emit("onCrosshairChange", { paneId: "candle_pane", kLineData: { timestamp: chart(0).data[5].timestamp } }));
     expect(chart(1).overlaysNamed("peerCursor")).toHaveLength(0);
@@ -1133,6 +1150,7 @@ describe("two linked charts", () => {
   it("does not link scrolling when that is switched off", async () => {
     const user = userEvent.setup();
     await pair(user);
+    await user.click(screen.getByRole("button", { name: /Sync/ }));
     await user.click(screen.getByLabelText("Sync scrolling and zoom"));
     chart(0).barSpace = 15;
     act(() => chart(0).emit("onVisibleRangeChange"));
@@ -1146,6 +1164,7 @@ describe("two linked charts", () => {
     await user.click(within(screen.getByRole("group", { name: "Candle size, BANKNIFTY" })).getByRole("button", { name: "5m" }));
     await waitFor(() => expect(screen.getByRole("group", { name: "Candle size, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m"));
     expect(size).toBeDefined();
+    await user.click(screen.getByRole("button", { name: /Sync/ }));
     await user.click(screen.getByLabelText("Same candle size"));
     await user.click(within(screen.getByRole("group", { name: "Candle size, BANKNIFTY" })).getByRole("button", { name: "1h" }));
     expect(screen.getByRole("group", { name: "Candle size, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m");
@@ -1588,6 +1607,19 @@ describe("the Layers menu", () => {
     expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers2 ▾");
   });
 
+  it("hides the header's live price from Layers, and it comes back the same way", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.getByTestId("price-0")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Layers/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Price in header" }));
+    expect(screen.queryByTestId("price-0")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers3 ▾"); // trades + ticket + hidden price
+    await user.click(screen.getByRole("checkbox", { name: "Price in header" }));
+    expect(screen.getByTestId("price-0")).toBeInTheDocument();
+  });
+
   it("has no ticket row on a phone: there is nothing to toggle, the ticket is always shown", async () => {
     screenIs(false);
     const user = userEvent.setup();
@@ -1721,6 +1753,18 @@ describe("the OI strip under the chart", () => {
     expect(s.getByText(/PE OI/)).toBeInTheDocument();
     expect(s.getByText(/1,020/)).toBeInTheDocument(); // resistance
     expect(s.getByText(/960/)).toBeInTheDocument(); // support
+  });
+
+  it("hides the R/S text once the chart is already drawing those same levels", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(strip().getByText(/1,020/)).toBeInTheDocument(); // resistance, shown by default
+    await user.click(screen.getByRole("button", { name: /Layers/ }));
+    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await waitFor(() => expect(strip().queryByText(/1,020/)).not.toBeInTheDocument());
+    expect(strip().queryByText(/960/)).not.toBeInTheDocument(); // support, same
+    expect(strip().getByText(/CE OI/)).toBeInTheDocument(); // everything else stays
   });
 
   it("shows a buildup badge for each side that has one", async () => {
@@ -2003,6 +2047,9 @@ describe("the auto-trader on the trade screen", () => {
     localStorage.setItem("web.autotrader.visible", "true");
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    // Shares the aside with the ticket, as a tab - not shown side by side, to save the width.
+    await user.click(screen.getByRole("tab", { name: "Auto-trader" }));
     const card = within(await screen.findByTestId("auto-trader"));
     expect(card.getByRole("heading", { name: "Auto-trader · NIFTY" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Bank Nifty" }));
@@ -2011,9 +2058,29 @@ describe("the auto-trader on the trade screen", () => {
 
   it("says it is not available for a stock, once turned on", async () => {
     localStorage.setItem("web.autotrader.visible", "true");
+    const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
+    await loaded();
+    await user.click(screen.getByRole("tab", { name: "Auto-trader" }));
     expect(await screen.findByText(/A stock is traded as shares/)).toBeInTheDocument();
     expect(screen.queryByTestId("auto-trader")).not.toBeInTheDocument();
+  });
+
+  it("starts on the Manual tab, with the ticket, and only the auto-trader tab shows its panel", async () => {
+    localStorage.setItem("web.autotrader.visible", "true");
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.getByTestId("ticket")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-trader")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Manual" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Auto-trader" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("has no tab strip at all when the auto-trader is off - just the ticket, as before", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("tab", { name: "Manual" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("ticket")).toBeInTheDocument();
   });
 });
 

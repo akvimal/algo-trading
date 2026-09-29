@@ -124,9 +124,9 @@ describe("saved chart settings", () => {
   });
 
   it("tool settings default off", () => {
-    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false });
-    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true });
-    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true });
+    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false, priceHidden: false });
+    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, priceHidden: true });
+    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, priceHidden: true });
   });
 
   it("drawings are kept per instrument, shared by every candle size", () => {

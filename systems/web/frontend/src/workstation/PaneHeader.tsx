@@ -11,6 +11,7 @@ type Props = {
   interval: string;
   onInterval: (interval: string) => void;
   price: number | null;
+  priceShown: boolean;
   live: boolean;
   regime: MarketRegime | null;
   /** Structure trend on the detection timeframes that are switched on, e.g. { "15m": "up" }. */
@@ -21,7 +22,7 @@ type Props = {
 
 /** The title bar of one chart: which instrument, its price, whether it is live, the candle size, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
-export function PaneHeader({ index, symbol, interval, onInterval, price, live, regime, structureTrend, active, showActive }: Props) {
+export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive }: Props) {
   const dir = directionOf(regime);
   const trends = Object.entries(structureTrend ?? {});
   return (
@@ -50,15 +51,18 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, live, r
       {/* Pinned to the far right (margin-left: auto), after everything else - its own width changes
           on every tick (more digits, a comma appearing/disappearing, ...), and sitting ahead of the
           candle-size buttons made them visibly jump sideways on every update. Nothing sits after it,
-          so its own reflow no longer moves anything else. */}
-      <span className="pane-price">
-        <span className="num" data-testid={`price-${index}`}>
-          {price == null ? "–" : formatPrice(price)}
+          so its own reflow no longer moves anything else. Hidden entirely (Layers ▾ > Price in
+          header) rather than just blanked, so it doesn't leave a dead gap in its place. */}
+      {priceShown && (
+        <span className="pane-price">
+          <span className="num" data-testid={`price-${index}`}>
+            {price == null ? "–" : formatPrice(price)}
+          </span>
+          <span className={`live-dot ${live ? "on" : ""}`} data-testid={`feed-${index}`} title={live ? "Live: the price updates as it moves" : "Updating every 5 seconds"}>
+            <span className="sr-only">{live ? "Live" : "Updating every 5 seconds"}</span>
+          </span>
         </span>
-        <span className={`live-dot ${live ? "on" : ""}`} data-testid={`feed-${index}`} title={live ? "Live: the price updates as it moves" : "Updating every 5 seconds"}>
-          <span className="sr-only">{live ? "Live" : "Updating every 5 seconds"}</span>
-        </span>
-      </span>
+      )}
     </div>
   );
 }

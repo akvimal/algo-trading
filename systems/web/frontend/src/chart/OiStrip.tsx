@@ -71,14 +71,16 @@ function Sentiment({ points, window }: { points: SentimentHistoryPoint[]; window
 /** A compact read of the option chain under the chart of an OI-eligible instrument — PCR (open-interest
  * and volume-based), call/put OI with their 5m/15m change, resistance/support strikes, buildup badges,
  * a flow-skew read, and the "OI trend" sentiment sparklines. Always shown for an eligible instrument; the
- * on-chart lines are a separate, opt-in layer (see the "OI levels" toggle). Renders nothing without data. */
-export function OiStrip({ summary, sentiment, levels }: { summary: OiSummary | null; sentiment: SentimentHistoryPoint[]; levels: OiLevelLine[] }) {
+ * on-chart lines are a separate, opt-in layer (see the "OI levels" toggle). Renders nothing without data.
+ * The R/S text below is skipped when that same layer is already drawing them on the chart - the same
+ * numbers, so showing both just duplicates the space rather than the information. */
+export function OiStrip({ summary, sentiment, levels, onChartLevelsOn }: { summary: OiSummary | null; sentiment: SentimentHistoryPoint[]; levels: OiLevelLine[]; onChartLevelsOn: boolean }) {
   if (!summary) return null;
   const crypto = summary.underlying_exchange === "CRYPTO";
   const volPcr = volumePcr(summary.strikes);
   const diverges = pcrDiverges(summary.pcr, volPcr);
   const skew = flowSkew(summary.total_call_oi_change_5m, summary.total_call_oi, summary.total_put_oi_change_5m, summary.total_put_oi);
-  const solid = levels.filter((l) => !l.forming);
+  const solid = onChartLevelsOn ? [] : levels.filter((l) => !l.forming);
   const resistance = solid.filter((l) => l.kind === "resistance").sort((a, b) => a.rank - b.rank);
   const support = solid.filter((l) => l.kind === "support").sort((a, b) => a.rank - b.rank);
 

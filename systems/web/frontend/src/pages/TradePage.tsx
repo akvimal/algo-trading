@@ -13,6 +13,7 @@ import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
 import { LayersMenu } from "../chart/LayersMenu";
+import { LinksMenu } from "../workstation/LinksMenu";
 import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
 import { AutoTrader } from "../components/AutoTrader";
@@ -282,6 +283,12 @@ export function TradePage() {
   const peer = havePeer ? { symbol: ws.panes[peerIndex].symbol, direction: directionOf(datas[peerIndex].regime) } : null;
   const agree = twoUp ? agreement({ symbol: ws.panes[0].symbol, regime: dataA.regime }, { symbol: ws.panes[1].symbol, regime: dataB.regime }) : null;
 
+  // Which panel the aside shows when the auto-trader is visible at all - otherwise there is
+  // nothing to switch between, the aside is just the ticket, same as before. Not persisted:
+  // starting back on Manual every visit is the safer default (an accidental view of an
+  // auto-trader you forgot was on is a worse surprise than one extra tap).
+  const [asideTab, setAsideTab] = useState<"manual" | "auto">("manual");
+
   // ---- search, waiting orders, fullscreen ----
   const [search, setSearch] = useState("");
   const go = (e: FormEvent) => {
@@ -356,11 +363,23 @@ export function TradePage() {
             onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
           />
           <StructureMenu config={structure} onChange={setStructure} />
+          {twoUp && (
+            <LinksMenu
+              crosshair={ws.links.crosshair}
+              onCrosshair={(v) => setWs((cur) => setLinks(cur, { ...cur.links, crosshair: v }))}
+              scale={ws.links.scale}
+              onScale={(v) => setWs((cur) => setLinks(cur, { ...cur.links, scale: v }))}
+              interval={ws.links.interval}
+              onInterval={(v) => setWs((cur) => setLinks(cur, { ...cur.links, interval: v }))}
+            />
+          )}
           <LayersMenu
             tradesOn={tools.tradesOn}
             onTradesOn={(on) => setTools((t) => ({ ...t, tradesOn: on }))}
             oiLevelsOn={tools.oiLevelsOn}
             onOiLevelsOn={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
+            priceShown={!tools.priceHidden}
+            onPriceShown={(shown) => setTools((t) => ({ ...t, priceHidden: !shown }))}
             ticket={wide ? { open: ws.ticketOpen, onToggle: (open) => setWs((cur) => ({ ...cur, ticketOpen: open })) } : undefined}
           />
           {wide && (
@@ -371,25 +390,11 @@ export function TradePage() {
         </div>
       </div>
 
-      {twoUp && (
+      {twoUp && agree && (
         <div className="ws-links" role="group" aria-label="Linked charts">
-          <label className="check">
-            <input type="checkbox" checked={ws.links.crosshair} onChange={(e) => setWs((cur) => setLinks(cur, { ...cur.links, crosshair: e.target.checked }))} />
-            <span>Sync crosshair</span>
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={ws.links.scale} onChange={(e) => setWs((cur) => setLinks(cur, { ...cur.links, scale: e.target.checked }))} />
-            <span>Sync scrolling and zoom</span>
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={ws.links.interval} onChange={(e) => setWs((cur) => setLinks(cur, { ...cur.links, interval: e.target.checked }))} />
-            <span>Same candle size</span>
-          </label>
-          {agree && (
-            <span className={`pill confluence ${agree.verdict === "aligned-up" ? "up" : agree.verdict === "aligned-down" ? "dn" : agree.verdict === "mixed" ? "warn" : ""}`} data-testid="agreement">
-              {agree.text}
-            </span>
-          )}
+          <span className={`pill confluence ${agree.verdict === "aligned-up" ? "up" : agree.verdict === "aligned-down" ? "dn" : agree.verdict === "mixed" ? "warn" : ""}`} data-testid="agreement">
+            {agree.text}
+          </span>
         </div>
       )}
 
@@ -443,6 +448,7 @@ export function TradePage() {
                   interval={spec.interval}
                   onInterval={(iv) => setWs((cur) => setPaneInterval(cur, i, iv))}
                   price={priceOf(i)}
+                  priceShown={!tools.priceHidden}
                   live={socket.connected}
                   regime={d.regime}
                   structureTrend={trendFor(i)}
@@ -450,7 +456,7 @@ export function TradePage() {
                   showActive={twoUp}
                 />
                 {d.error && !d.exchange && <ErrorNotice error={d.error as never} onRetry={d.reloadResolve} />}
-                <OiStrip summary={oi[i].summary} sentiment={oi[i].sentiment} levels={oi[i].levels} />
+                <OiStrip summary={oi[i].summary} sentiment={oi[i].sentiment} levels={oi[i].levels} onChartLevelsOn={tools.oiLevelsOn} />
                 {d.exchange && d.symbol ? (
                   <Suspense fallback={<div className="chart-status">Loading chart…</div>}>
                     <ChartPane
@@ -509,14 +515,24 @@ export function TradePage() {
           </p>
         </div>
 
-        {autoTraderVisible && (
-          <aside className="ws-autotrader" aria-label="Auto-trader panel">
-            <AutoTrader segment={activeSpec.segment} symbol={activeSpec.symbol} contracts={instrumentFor(activeSpec.symbol, activeSpec.segment) === "future"} />
-          </aside>
-        )}
-
-        {ticketOpen && (
-          <aside className="ws-ticket" aria-label="Order ticket">
+        {(autoTraderVisible || ticketOpen) && (
+          <aside className="ws-ticket" aria-label={autoTraderVisible ? "Trade panel" : "Order ticket"}>
+            {autoTraderVisible && (
+              <div className="chips" role="tablist" aria-label="Trade panel" style={{ marginBottom: 12 }}>
+                <button role="tab" aria-selected={asideTab === "manual"} onClick={() => setAsideTab("manual")}>
+                  Manual
+                </button>
+                <button role="tab" aria-selected={asideTab === "auto"} onClick={() => setAsideTab("auto")}>
+                  Auto-trader
+                </button>
+              </div>
+            )}
+            {autoTraderVisible && asideTab === "auto" ? (
+              <AutoTrader segment={activeSpec.segment} symbol={activeSpec.symbol} contracts={instrumentFor(activeSpec.symbol, activeSpec.segment) === "future"} />
+            ) : !ticketOpen ? (
+              <p className="dim">The ticket is hidden - turn it back on from Layers ▾.</p>
+            ) : (
+              <>
             <h1 className="ws-h1">Trade {activeSpec.symbol}</h1>
             {today.data && (
               <p className="ws-today-pnl" data-testid="ws-today-pnl">
@@ -557,6 +573,12 @@ export function TradePage() {
                   waiting.reload();
                   today.reload();
                   tradeRows.reload();
+                  // The chart's "plan" lines (entry/stop/target) are drawn straight from this
+                  // draft - left alone, they kept showing the just-placed order's prices
+                  // indefinitely (nothing else ever cleared them; the ticket itself only resets
+                  // on a symbol/segment change, not on a successful placement).
+                  setTicket(EMPTY_TICKET);
+                  setPickField(null);
                 }}
               />
             )}
@@ -599,6 +621,8 @@ export function TradePage() {
                     </div>
                   ))}
                 </div>
+              </>
+            )}
               </>
             )}
           </aside>

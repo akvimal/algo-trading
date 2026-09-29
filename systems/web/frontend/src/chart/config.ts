@@ -137,10 +137,13 @@ export const saveStructure = (s: StructureConfig) => write("structure", s);
 
 export const structureIsOn = (s: StructureConfig) => s.tfs.length > 0;
 
-export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean };
+export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean; priceHidden: boolean };
 export const loadTools = (): ToolSettings => {
   const raw = read<Record<string, unknown>>("tools", {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));
-  return { magnet: raw.magnet === true, drawingsHidden: raw.drawingsHidden === true, indicatorsHidden: raw.indicatorsHidden === true, tradesOn: raw.tradesOn !== false, oiLevelsOn: raw.oiLevelsOn === true };
+  return {
+    magnet: raw.magnet === true, drawingsHidden: raw.drawingsHidden === true, indicatorsHidden: raw.indicatorsHidden === true,
+    tradesOn: raw.tradesOn !== false, oiLevelsOn: raw.oiLevelsOn === true, priceHidden: raw.priceHidden === true,
+  };
 };
 export const saveTools = (t: ToolSettings) => write("tools", t);
 

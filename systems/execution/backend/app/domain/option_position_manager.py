@@ -26,11 +26,22 @@ short leg at all) - combined premium = long leg's own price, so it's
 still a "BUY" position throughout, no separate naked-specific math
 anywhere below. Every group in this module always has exactly one BUY
 leg (`legs_by_group()`'s 'BUY' key) and an OPTIONAL SELL leg (present for
-'spread', absent for 'naked') - every function below treats the SELL leg
-as Optional accordingly. So every combined SL/target/pnl calculation
-reuses position_manager's existing BUY-direction formulas unchanged; the
-group's own `action` field still records the REAL original signal
-direction for reporting."""
+'spread'/'credit_spread', absent for 'naked') - every function below
+treats the SELL leg as Optional accordingly. So every combined SL/
+target/pnl calculation reuses position_manager's existing BUY-direction
+formulas unchanged; the group's own `action` field still records the
+REAL original signal direction for reporting.
+
+The identity above holds regardless of which leg costs more: a CREDIT
+spread (bull_put_spread/bear_call_spread - the SELL leg's premium
+exceeds the BUY leg's) still has exactly one BUY + one SELL leg, so
+net_debit (= long_premium - short_premium) simply comes out negative -
+`combined_price - net_debit` still rises as the thesis plays out (both
+legs decaying toward 0 moves a negative net_debit's combined_price
+toward 0, i.e. up), so every PnL/exit function below needs no sign-aware
+branching. The one place that DOES need to branch is capital sizing -
+see _spread_sizing_basis - since a negative net_debit isn't a cost to
+size against, it's a credit received against a defined max loss."""
 
 import logging
 import uuid
@@ -47,7 +58,7 @@ from app.domain.delta_fees import compute_option_trading_fee
 from app.domain.india_charges import group_charges, kind_for
 from app.domain.slippage import slippage_cost
 from app.domain.models import ExecutionSettings, ResolvedOrder
-from app.domain.option_templates import bear_put_spread, bull_call_spread, naked_call, naked_put
+from app.domain.option_templates import bear_call_spread, bear_put_spread, bull_call_spread, bull_put_spread, naked_call, naked_put
 from app.domain.position_manager import (
     GetCandleHistory,
     GetLotSize,
@@ -130,6 +141,42 @@ def _open_delta_option_fee(
             underlying_notional if underlying_notional is not None else short_premium_amount, short_premium_amount
         )
     return fee
+
+
+def _spread_sizing_basis(net_debit: float, long_leg_dict: dict, short_leg_dict: Optional[dict]) -> Optional[float]:
+    """The per-lot amount capital sizing/affordability is measured against.
+
+    A debit position (naked BUY, or a debit spread - bull_call_spread/
+    bear_put_spread, whose net_debit is always positive) simply sizes
+    against its own cost: net_debit itself, unchanged from before credit
+    spreads existed.
+
+    A CREDIT spread (bull_put_spread/bear_call_spread - the SELL leg's
+    premium exceeds the BUY protection leg's, so net_debit comes out
+    negative) has no "cost" to size against - money is received at open,
+    not paid. The real capital at risk is its DEFINED max loss instead:
+    the strike width minus the credit actually received (standard
+    defined-risk-spread math - see docs/architecture.md's Credit spread
+    idea note). That width comes straight off the two legs' own strikes,
+    not a new field - nothing to persist beyond net_debit itself, which
+    already carries the sign that tells every PnL/exit function below
+    (compute_group_unrealized_pnl, _project_group_close_pnl, ...) how to
+    read `combined_price - net_debit` - see this module's own docstring
+    for why that identity needs no special-casing either way.
+
+    Returns None when a credit result's max loss can't be computed (no
+    short leg at all - shouldn't happen by construction, only a credit
+    template ever produces net_debit < 0) or comes out <= 0 (the credit
+    received meets or exceeds the strike width - a stale/crossed quote,
+    not a real defined-risk spread); callers reject in that case rather
+    than sizing against a non-positive or nonsensical basis."""
+    if net_debit > 0:
+        return net_debit
+    if short_leg_dict is None:
+        return None
+    width = abs(float(long_leg_dict["strike"]) - float(short_leg_dict["strike"]))
+    max_loss = width - abs(net_debit)
+    return max_loss if max_loss > 0 else None
 
 
 def _group_charges(group, account, long_leg, long_cmp, short_leg, short_cmp) -> float:
@@ -409,9 +456,17 @@ def open_option_group(
         return row
 
     net_debit = long_premium - short_premium
-    if net_debit <= 0:
+    if net_debit == 0:
         row = _reject_group(
-            db, order, signal_id, f"combined net debit ({net_debit}) is not positive - can't size or monitor this spread"
+            db, order, signal_id, "combined premium is exactly zero - can't size or monitor this position"
+        )
+        db.commit()
+        return row
+    sizing_basis = _spread_sizing_basis(net_debit, long_leg_dict, short_leg_dict)
+    if sizing_basis is None:
+        row = _reject_group(
+            db, order, signal_id,
+            f"credit received ({-net_debit}) meets or exceeds the strike width - can't size this spread's max loss",
         )
         db.commit()
         return row
@@ -473,12 +528,12 @@ def open_option_group(
     # "paper trading still respects the simulated balance" reasoning every
     # other rejection case here already has.
     required_lots = order.fixed_lots if order.fixed_lots is not None else 1
-    if effective_capital < net_debit * lot_size * required_lots:
+    if effective_capital < sizing_basis * lot_size * required_lots:
         capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
         row = _reject_group(
             db, order, signal_id,
             f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
-            f"need at least {net_debit * lot_size * required_lots} for {required_lots} lot(s))",
+            f"need at least {sizing_basis * lot_size * required_lots} for {required_lots} lot(s))",
         )
         db.commit()
         return row
@@ -536,7 +591,7 @@ def open_option_group(
             effective_capital, float(capital_account.risk_per_trade_pct), sizing_price, sizing_stop_loss_price, lot_size
         )
     else:
-        quantity = compute_quantity(effective_capital, net_debit, lot_size)
+        quantity = compute_quantity(effective_capital, sizing_basis, lot_size)
 
     open_fee = _open_delta_option_fee(order.segment, entry_spot_price, quantity, long_premium, short_premium)
     if open_fee is not None:
@@ -674,6 +729,7 @@ def open_manual_option_group(
     get_ltp_batch: GetLtpBatch,
     resolve_symbol_by_security_id: ResolveSymbolBySecurityId,
     get_lot_size: GetLotSize,
+    spread_width: Optional[int] = None,
     plan_checklist: Optional[list[dict]] = None,
     order_type: Optional[str] = None,
     square_off_time: Optional[time] = None,
@@ -753,16 +809,27 @@ def open_manual_option_group(
         db.commit()
         return row
 
+    # spread_width overrides option_templates.py's SPREAD_WIDTH_STRIKES
+    # default for the second (short/protection) leg only - the Scan page's
+    # leg table lets that leg's own strike step independently of the
+    # primary leg's moneyness (see ScanOptionBias.tsx). Not meaningful for
+    # 'naked' (no second leg), so left out of those two calls entirely.
+    width_kwargs = {"width": spread_width} if spread_width is not None else {}
     try:
         if option_position_style == "naked":
             if action == "BUY":
                 strategy_type, legs = "naked_call", naked_call(chain, option_strike_moneyness)
             else:
                 strategy_type, legs = "naked_put", naked_put(chain, option_strike_moneyness)
+        elif option_position_style == "credit_spread":
+            if action == "BUY":
+                strategy_type, legs = "bull_put_spread", bull_put_spread(chain, option_strike_moneyness, **width_kwargs)
+            else:
+                strategy_type, legs = "bear_call_spread", bear_call_spread(chain, option_strike_moneyness, **width_kwargs)
         elif action == "BUY":
-            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness)
+            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness, **width_kwargs)
         else:
-            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness)
+            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness, **width_kwargs)
     except ValueError as exc:
         row = _reject_manual_group(
             db, user_id, signal_id, symbol, segment, action, strategy_type_for_rejection,
@@ -771,10 +838,14 @@ def open_manual_option_group(
         db.commit()
         return row
 
-    # Template output order is always [long, short?] - see
-    # option_templates.py's bull_call_spread/bear_put_spread/naked_*.
-    long_leg_dict = legs[0]
-    short_leg_dict = legs[1] if len(legs) == 2 else None
+    # Template output order is [long, short?] for a DEBIT spread/naked
+    # (bull_call_spread/bear_put_spread/naked_*) but [short, long?] for a
+    # CREDIT spread (bull_put_spread/bear_call_spread - the credit leg is
+    # the anchor/primary one, listed first) - so legs are found by their
+    # own action, not by position, same as open_option_group's identical
+    # buy_legs/sell_legs split above.
+    long_leg_dict = next(leg for leg in legs if leg["action"] == "BUY")
+    short_leg_dict = next((leg for leg in legs if leg["action"] == "SELL"), None)
 
     account = load_account(db, user_id, segment)
     if account is None:
@@ -829,10 +900,18 @@ def open_manual_option_group(
         return row
 
     net_debit = long_premium - short_premium
-    if net_debit <= 0:
+    if net_debit == 0:
         row = _reject_manual_group(
             db, user_id, signal_id, symbol, segment, action, strategy_type,
-            f"combined net debit ({net_debit}) is not positive - can't size or monitor this spread",
+            "combined premium is exactly zero - can't size or monitor this position",
+        )
+        db.commit()
+        return row
+    sizing_basis = _spread_sizing_basis(net_debit, long_leg_dict, short_leg_dict)
+    if sizing_basis is None:
+        row = _reject_manual_group(
+            db, user_id, signal_id, symbol, segment, action, strategy_type,
+            f"credit received ({-net_debit}) meets or exceeds the strike width - can't size this spread's max loss",
         )
         db.commit()
         return row
@@ -877,11 +956,11 @@ def open_manual_option_group(
         effective_capital = effective_capital / settings.usdinr_rate
 
     required_lots = option_fixed_lots if option_fixed_lots is not None else 1
-    if effective_capital < net_debit * lot_size * required_lots:
+    if effective_capital < sizing_basis * lot_size * required_lots:
         row = _reject_manual_group(
             db, user_id, signal_id, symbol, segment, action, strategy_type,
             f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
-            f"need at least {net_debit * lot_size * required_lots} for {required_lots} lot(s))",
+            f"need at least {sizing_basis * lot_size * required_lots} for {required_lots} lot(s))",
         )
         db.commit()
         return row
@@ -890,7 +969,7 @@ def open_manual_option_group(
     # pre-2026-08-14 auto-provisioned-Strategy path, which never set one
     # either) - use PUT /option-groups/{id}/stop-loss afterward, same as
     # any other already-open group.
-    quantity = option_fixed_lots * lot_size if option_fixed_lots is not None else compute_quantity(effective_capital, net_debit, lot_size)
+    quantity = option_fixed_lots * lot_size if option_fixed_lots is not None else compute_quantity(effective_capital, sizing_basis, lot_size)
 
     open_fee = _open_delta_option_fee(segment, entry_spot_price, quantity, long_premium, short_premium)
     if open_fee is not None:
@@ -994,6 +1073,7 @@ def preview_option_legs(
     get_option_chain: GetOptionChain,
     resolve_symbol_by_security_id: Optional[ResolveSymbolBySecurityId] = None,
     get_ltp_batch: Optional[GetLtpBatch] = None,
+    spread_width: Optional[int] = None,
 ) -> dict:
     """Read-only counterpart to open_manual_option_group's own leg-selection block above -
     the exact same resolve_underlying -> expiry -> get_option_chain -> option_templates
@@ -1034,13 +1114,22 @@ def preview_option_legs(
     if chain is None:
         raise OptionLegPreviewError(f"could not resolve option chain for '{chart_symbol}' ({resolved_expiry})")
 
+    # See open_manual_option_group's identical width_kwargs comment - not
+    # meaningful for 'naked', left out of those two calls entirely.
+    width_kwargs = {"width": spread_width} if spread_width is not None else {}
     try:
         if option_position_style == "naked":
             strategy_type, legs = ("naked_call", naked_call(chain, option_strike_moneyness)) if action == "BUY" else ("naked_put", naked_put(chain, option_strike_moneyness))
+        elif option_position_style == "credit_spread":
+            strategy_type, legs = (
+                ("bull_put_spread", bull_put_spread(chain, option_strike_moneyness, **width_kwargs))
+                if action == "BUY"
+                else ("bear_call_spread", bear_call_spread(chain, option_strike_moneyness, **width_kwargs))
+            )
         elif action == "BUY":
-            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness)
+            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness, **width_kwargs)
         else:
-            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness)
+            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness, **width_kwargs)
     except ValueError as exc:
         raise OptionLegPreviewError(f"could not build an option strategy for '{symbol}': {exc}") from exc
 

@@ -13,8 +13,10 @@ import pytest
 from app.domain.option_templates import (
     MIN_SHORT_LEG_OI,
     _find_primary_leg_index,
+    bear_call_spread,
     bear_put_spread,
     bull_call_spread,
+    bull_put_spread,
     naked_call,
     naked_put,
 )
@@ -82,6 +84,15 @@ def test_bull_call_spread_falls_back_to_ideal_strike_if_nothing_liquid():
     assert legs[1]["strike"] == 24100.0  # fell back to the ideal (illiquid) strike, not None
 
 
+def test_bull_call_spread_width_override_moves_only_the_short_leg():
+    chain = _make_chain(_wide_strikes())
+
+    legs = bull_call_spread(chain, width=1)
+
+    assert legs[0]["strike"] == 24000.0  # primary leg untouched by width
+    assert legs[1]["strike"] == 24050.0  # 1 strike out instead of the default 2 (24100)
+
+
 def test_bull_call_spread_raises_when_no_atm_strike():
     strikes = [s for s in _default_strikes() if s["strike"] != 24000.0]
     chain = _make_chain(strikes)
@@ -122,6 +133,69 @@ def test_bear_put_spread_raises_when_no_atm_strike():
 
     with pytest.raises(ValueError, match="no ATM put"):
         bear_put_spread(chain)
+
+
+# --- bull_put_spread / bear_call_spread (option_position_style='credit_spread') ----------------
+
+
+def test_bull_put_spread_sells_atm_and_buys_otm_protection():
+    chain = _make_chain(_default_strikes())
+
+    legs = bull_put_spread(chain)
+
+    assert legs == [
+        {"action": "SELL", "option_type": "PE", "strike": 24000.0, "expiry": "2026-08-14", "security_id": "pe-24000"},
+        {"action": "BUY", "option_type": "PE", "strike": 23900.0, "expiry": "2026-08-14", "security_id": "pe-23900"},
+    ]
+
+
+def test_bull_put_spread_raises_when_no_atm_strike():
+    strikes = [s for s in _default_strikes() if s["strike"] != 24000.0]
+    chain = _make_chain(strikes)
+
+    with pytest.raises(ValueError, match="no ATM put"):
+        bull_put_spread(chain)
+
+
+def test_bull_put_spread_with_otm1_moneyness_shifts_both_legs():
+    chain = _make_chain(_wide_strikes())
+
+    legs = bull_put_spread(chain, moneyness="OTM1")
+
+    # Primary (SELL) leg: ATM(index 4) - direction(-1)*offset(1) -> index 3 (23950).
+    # Protection (BUY) leg: further OTM (lower index) by 2 from index 3 -> index 1 (23850).
+    assert legs[0]["strike"] == 23950.0
+    assert legs[1]["strike"] == 23850.0
+
+
+def test_bear_call_spread_sells_atm_and_buys_otm_protection():
+    chain = _make_chain(_default_strikes())
+
+    legs = bear_call_spread(chain)
+
+    assert legs == [
+        {"action": "SELL", "option_type": "CE", "strike": 24000.0, "expiry": "2026-08-14", "security_id": "ce-24000"},
+        {"action": "BUY", "option_type": "CE", "strike": 24100.0, "expiry": "2026-08-14", "security_id": "ce-24100"},
+    ]
+
+
+def test_bear_call_spread_raises_when_no_atm_strike():
+    strikes = [s for s in _default_strikes() if s["strike"] != 24000.0]
+    chain = _make_chain(strikes)
+
+    with pytest.raises(ValueError, match="no ATM call"):
+        bear_call_spread(chain)
+
+
+def test_bear_call_spread_with_itm1_moneyness_shifts_both_legs():
+    chain = _make_chain(_wide_strikes())
+
+    legs = bear_call_spread(chain, moneyness="ITM1")
+
+    # Primary (SELL) leg: ATM(index 4) + direction(1)*offset(-1) -> index 3 (23950).
+    # Protection (BUY) leg: further OTM (higher index) by 2 from index 3 -> index 5 (24050).
+    assert legs[0]["strike"] == 23950.0
+    assert legs[1]["strike"] == 24050.0
 
 
 # --- naked_call / naked_put (option_position_style='naked') -----------------------------------

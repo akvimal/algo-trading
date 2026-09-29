@@ -59,14 +59,19 @@ def _find_primary_leg_index(strikes: list[dict], leg_key: Literal["ce", "pe"], m
     return max(0, min(n - 1, atm_index + direction * offset))
 
 
-def _pick_short_leg_index(strikes: list[dict], atm_index: int, direction: int, leg_key: str) -> int:
-    """The ideal short-leg index is atm_index + direction*SPREAD_WIDTH_STRIKES
-    (clamped into range). If that strike's OI is below MIN_SHORT_LEG_OI,
-    keeps stepping further in `direction` (further OTM) looking for one
-    that clears it - falls back to the clamped ideal index if none do
-    before running out of strikes, rather than returning nothing."""
+def _pick_short_leg_index(strikes: list[dict], atm_index: int, direction: int, leg_key: str, width: int = SPREAD_WIDTH_STRIKES) -> int:
+    """The ideal short-leg index is atm_index + direction*width (default
+    SPREAD_WIDTH_STRIKES, clamped into range) - `width` is the caller's own
+    override (the Scan page's leg table lets the second leg's own strike
+    step independently of the primary leg's moneyness, see ScanOptionBias.tsx)
+    for how many strikes it sits from the primary leg; every other caller
+    still gets the fixed default. If that strike's OI is below
+    MIN_SHORT_LEG_OI, keeps stepping further in `direction` (further OTM)
+    looking for one that clears it - falls back to the clamped ideal index
+    if none do before running out of strikes, rather than returning
+    nothing."""
     n = len(strikes)
-    ideal = max(0, min(n - 1, atm_index + direction * SPREAD_WIDTH_STRIKES))
+    ideal = max(0, min(n - 1, atm_index + direction * width))
 
     index = ideal
     while 0 <= index < n:
@@ -88,34 +93,77 @@ def _leg(strikes: list[dict], index: int, leg_key: str, action: str, expiry: str
     }
 
 
-def bull_call_spread(chain: dict, moneyness: str = "ATM") -> list[dict]:
+def bull_call_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
     """BUY a call at the requested moneyness (ATM by default), SELL a call
-    SPREAD_WIDTH_STRIKES further OTM from THAT strike (not necessarily
-    from ATM itself, if moneyness shifted the primary leg). Raises
-    ValueError if the chain has no ATM call to anchor off of."""
+    `width` strikes further OTM from THAT strike (not necessarily from ATM
+    itself, if moneyness shifted the primary leg) - `width` defaults to
+    SPREAD_WIDTH_STRIKES but is the caller's own override, letting the
+    short leg's own strike step independently of the primary leg's
+    moneyness (see ScanOptionBias.tsx). Raises ValueError if the chain has
+    no ATM call to anchor off of."""
     strikes = chain["strikes"]
     primary_index = _find_primary_leg_index(strikes, "ce", moneyness)
     if primary_index is None:
         raise ValueError("no ATM call strike found in chain")
-    short_index = _pick_short_leg_index(strikes, primary_index, +1, "ce")
+    short_index = _pick_short_leg_index(strikes, primary_index, +1, "ce", width)
     return [
         _leg(strikes, primary_index, "ce", "BUY", chain["expiry"]),
         _leg(strikes, short_index, "ce", "SELL", chain["expiry"]),
     ]
 
 
-def bear_put_spread(chain: dict, moneyness: str = "ATM") -> list[dict]:
+def bear_put_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
     """BUY a put at the requested moneyness (ATM by default), SELL a put
-    SPREAD_WIDTH_STRIKES further OTM from THAT strike. Raises ValueError
-    if the chain has no ATM put to anchor off of."""
+    `width` strikes further OTM from THAT strike (see bull_call_spread's
+    own `width` note). Raises ValueError if the chain has no ATM put to
+    anchor off of."""
     strikes = chain["strikes"]
     primary_index = _find_primary_leg_index(strikes, "pe", moneyness)
     if primary_index is None:
         raise ValueError("no ATM put strike found in chain")
-    short_index = _pick_short_leg_index(strikes, primary_index, -1, "pe")
+    short_index = _pick_short_leg_index(strikes, primary_index, -1, "pe", width)
     return [
         _leg(strikes, primary_index, "pe", "BUY", chain["expiry"]),
         _leg(strikes, short_index, "pe", "SELL", chain["expiry"]),
+    ]
+
+
+def bull_put_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
+    """SELL a put at the requested moneyness (ATM by default) - the credit
+    leg - and BUY a put `width` strikes further OTM (lower strike) as
+    protection, capping the loss at the strike width minus the credit
+    received. The net-credit, bullish counterpart to bull_call_spread's
+    debit construction - same anchor-then-protection shape as
+    bear_put_spread, BUY/SELL swapped (see its own `width` note too). See
+    option_position_manager's _spread_sizing_basis for how a negative
+    net_debit (this template always produces one, when quotes are sane)
+    gets sized by max loss instead of premium cost. Raises ValueError if
+    the chain has no ATM put to anchor off of."""
+    strikes = chain["strikes"]
+    primary_index = _find_primary_leg_index(strikes, "pe", moneyness)
+    if primary_index is None:
+        raise ValueError("no ATM put strike found in chain")
+    protection_index = _pick_short_leg_index(strikes, primary_index, -1, "pe", width)
+    return [
+        _leg(strikes, primary_index, "pe", "SELL", chain["expiry"]),
+        _leg(strikes, protection_index, "pe", "BUY", chain["expiry"]),
+    ]
+
+
+def bear_call_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
+    """SELL a call at the requested moneyness (ATM by default) - the
+    credit leg - and BUY a call `width` strikes further OTM (higher
+    strike) as protection. The net-credit, bearish counterpart to
+    bear_put_spread's debit construction. Raises ValueError if the chain
+    has no ATM call to anchor off of."""
+    strikes = chain["strikes"]
+    primary_index = _find_primary_leg_index(strikes, "ce", moneyness)
+    if primary_index is None:
+        raise ValueError("no ATM call strike found in chain")
+    protection_index = _pick_short_leg_index(strikes, primary_index, +1, "ce", width)
+    return [
+        _leg(strikes, primary_index, "ce", "SELL", chain["expiry"]),
+        _leg(strikes, protection_index, "ce", "BUY", chain["expiry"]),
     ]
 
 

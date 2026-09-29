@@ -311,9 +311,13 @@ def preview_legs(
     segment: str,
     symbol: str,
     action: Literal["BUY", "SELL"],
-    option_position_style: Literal["naked", "spread"] = "spread",
+    option_position_style: Literal["naked", "spread", "credit_spread"] = "spread",
     option_strike_moneyness: str = "ATM",
     expiry: Optional[str] = None,
+    # Overrides the short/protection leg's own distance (in strikes) from
+    # the primary leg - default (None) is option_templates.py's own
+    # SPREAD_WIDTH_STRIKES. Ignored for option_position_style='naked'.
+    spread_width: Optional[int] = None,
     user: User = Depends(get_current_user),
 ):
     """Read-only: the legs a real POST /option-groups/manual with these exact params would
@@ -329,6 +333,7 @@ def preview_legs(
             functools.partial(get_option_chain, token=user.token),
             resolve_symbol_by_security_id,
             functools.partial(get_ltp_batch, token=user.token),
+            spread_width,
         )
     except OptionLegPreviewError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -367,6 +372,7 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         functools.partial(get_ltp_batch, token=user.token),
         resolve_symbol_by_security_id,
         get_lot_size,
+        payload.spread_width,
         [a.model_dump() for a in payload.plan_checklist],
         payload.order_type,
         payload.square_off_time,

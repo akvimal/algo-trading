@@ -55,10 +55,11 @@ def preview(
     get_option_chain=_get_option_chain,
     resolve_symbol_by_security_id=None,
     get_ltp_batch=None,
+    spread_width=None,
 ):
     return preview_option_legs(
         "NSE", "RELIANCE", action, style, moneyness, expiry, _resolve_underlying, _get_expiry_list, get_option_chain,
-        resolve_symbol_by_security_id, get_ltp_batch,
+        resolve_symbol_by_security_id, get_ltp_batch, spread_width,
     )
 
 
@@ -74,6 +75,29 @@ def test_bearish_spread_is_a_bear_put_spread():
     out = preview(action="SELL", style="spread")
     assert out["strategy_type"] == "bear_put_spread"
     assert [leg["option_type"] for leg in out["legs"]] == ["PE", "PE"]
+
+
+def test_bullish_credit_spread_is_a_bull_put_spread():
+    out = preview(action="BUY", style="credit_spread")
+    assert out["strategy_type"] == "bull_put_spread"
+    assert [leg["option_type"] for leg in out["legs"]] == ["PE", "PE"]
+    assert [leg["action"] for leg in out["legs"]] == ["SELL", "BUY"]
+
+
+def test_spread_width_override_moves_only_the_short_leg():
+    default_out = preview(action="BUY", style="spread")
+    narrower_out = preview(action="BUY", style="spread", spread_width=1)
+
+    assert default_out["legs"][0]["strike"] == narrower_out["legs"][0]["strike"] == 2500.0  # primary leg untouched
+    assert default_out["legs"][1]["strike"] == 2600.0  # default width 2
+    assert narrower_out["legs"][1]["strike"] == 2550.0  # width override 1
+
+
+def test_bearish_credit_spread_is_a_bear_call_spread():
+    out = preview(action="SELL", style="credit_spread")
+    assert out["strategy_type"] == "bear_call_spread"
+    assert [leg["option_type"] for leg in out["legs"]] == ["CE", "CE"]
+    assert [leg["action"] for leg in out["legs"]] == ["SELL", "BUY"]
 
 
 def test_naked_style_is_a_single_leg():
@@ -118,6 +142,14 @@ def test_the_security_id_is_never_the_point_of_this_response_but_is_still_presen
 def test_premium_is_none_when_the_caller_does_not_ask_for_quotes():
     out = preview()
     assert all(leg["premium"] is None for leg in out["legs"])
+
+
+def test_premium_is_filled_in_for_a_credit_spread_too():
+    # legs[0] is SELL (the credit leg) here, unlike a debit spread's
+    # legs[0]=BUY - premium resolution is per-leg by security_id, not by
+    # position, so this needs no special-casing either.
+    out = preview(action="BUY", style="credit_spread", resolve_symbol_by_security_id=_resolve_symbol_by_security_id, get_ltp_batch=_get_ltp_batch)
+    assert all(leg["premium"] is not None for leg in out["legs"])
 
 
 def test_premium_is_filled_in_when_a_quote_source_is_given():

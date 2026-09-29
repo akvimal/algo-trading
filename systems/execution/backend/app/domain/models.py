@@ -802,7 +802,12 @@ class ManualOptionPositionCreate(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str  # the logical underlying (e.g. "NIFTY", "GOLDM", "BTCUSD"), not a leg's own symbol
     action: Literal["BUY", "SELL"]
-    option_position_style: Literal["spread", "naked"] = "spread"
+    # 'spread' = a debit spread (bull_call_spread/bear_put_spread - pays a
+    # net premium). 'credit_spread' = the net-credit counterpart
+    # (bull_put_spread/bear_call_spread - receives a net premium, sized by
+    # max loss instead of cost - see option_position_manager's
+    # _spread_sizing_basis).
+    option_position_style: Literal["spread", "naked", "credit_spread"] = "spread"
     option_strike_moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"
     # Optional override - omitted (the normal case, no Expiry dropdown in
     # the frontend anymore as of 2026-08-14) means open_manual_option_group
@@ -812,6 +817,11 @@ class ManualOptionPositionCreate(BaseModel):
     # GET /options/expiries call in open_manual_option_group, not just
     # format-checked here.
     expiry: Optional[str] = None
+    # Overrides the short/protection leg's own distance (in strikes) from
+    # the primary leg - omitted (the normal case) means
+    # option_templates.py's own SPREAD_WIDTH_STRIKES default. Ignored for
+    # option_position_style='naked' (no second leg to place).
+    spread_width: Optional[int] = Field(default=None, ge=1)
     sl_scope: Literal["combined", "individual"] = "combined"
     # Bypasses auto-sizing entirely when given - same precedence pattern
     # as Strategy.fixed_lots in open_option_group.

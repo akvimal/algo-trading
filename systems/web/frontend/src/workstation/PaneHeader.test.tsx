@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { PaneHeader } from "./PaneHeader";
+import { INTERVALS } from "../chart/config";
 
 // The price's own text changes on every tick (more digits, a comma appearing/disappearing, ...) -
 // it has to sit where its own reflow cannot push anything else sideways, i.e. last in the row, with
@@ -35,5 +36,18 @@ describe("PaneHeader", () => {
     expect(screen.getByText("RELIANCE")).toBeInTheDocument();
     expect(screen.queryByTestId("price-0")).not.toBeInTheDocument();
     expect(screen.queryByTestId("feed-0")).not.toBeInTheDocument();
+  });
+
+  it("offers every candle size by default, including the just-added weekly one", () => {
+    render(header());
+    expect(screen.getByRole("button", { name: "1w" })).toBeInTheDocument();
+    for (const i of INTERVALS) expect(screen.getByRole("button", { name: i.label })).toBeInTheDocument();
+  });
+
+  it("offers only a caller-given shorter list when one is passed (the Scan page's inline chart)", () => {
+    render(<PaneHeader index={0} symbol="RELIANCE" interval="daily" onInterval={() => {}} price={1000} priceShown live={false} regime={null} active showActive={false} intervals={INTERVALS.filter((i) => ["15min", "daily", "weekly"].includes(i.value))} />);
+    expect(screen.getByRole("button", { name: "1d" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1w" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "1m" })).not.toBeInTheDocument();
   });
 });

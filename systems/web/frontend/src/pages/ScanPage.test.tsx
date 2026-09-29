@@ -207,6 +207,19 @@ describe("OI buildup", () => {
       expect(tcs.getByRole("button", { name: "1d" })).toHaveAttribute("aria-pressed", "false");
       await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("interval=15min"))).toBe(true));
     });
+
+    it("only offers 15m/1d/1w - a scan card is an end-of-day/swing read, not an intraday one", async () => {
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(tcs.getByRole("button", { name: "Chart" }));
+      await tcs.findByTestId("chart-pane");
+      expect(tcs.getByRole("button", { name: "15m" })).toBeInTheDocument();
+      expect(tcs.getByRole("button", { name: "1d" })).toBeInTheDocument();
+      expect(tcs.getByRole("button", { name: "1w" })).toBeInTheDocument();
+      for (const label of ["1m", "3m", "5m", "30m", "1h"]) expect(tcs.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    });
   });
 });
 

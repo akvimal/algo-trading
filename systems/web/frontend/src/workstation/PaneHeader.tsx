@@ -1,5 +1,5 @@
 import type { MarketRegime } from "../api/types";
-import { INTERVALS } from "../chart/config";
+import { INTERVALS, type IntervalDef } from "../chart/config";
 import { formatPrice } from "../format";
 import { directionOf } from "./confluence";
 
@@ -18,11 +18,14 @@ type Props = {
   structureTrend?: Record<string, "up" | "down" | "range">;
   active: boolean;
   showActive: boolean;
+  /** Which candle sizes to offer - the full set by default; a caller with narrower needs (the
+   * Scan page's inline chart) can pass a shorter list instead. */
+  intervals?: IntervalDef[];
 };
 
 /** The title bar of one chart: which instrument, its price, whether it is live, the candle size, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
-export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive }: Props) {
+export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals = INTERVALS }: Props) {
   const dir = directionOf(regime);
   const trends = Object.entries(structureTrend ?? {});
   return (
@@ -32,7 +35,7 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
         {showActive && active && <span className="pill" title="Orders and drawing tools apply to this chart">Trading</span>}
       </div>
       <div className="chips" role="group" aria-label={`Candle size, ${symbol}`}>
-        {INTERVALS.map((i) => (
+        {intervals.map((i) => (
           <button key={i.value} aria-pressed={interval === i.value} onClick={() => onInterval(i.value)}>
             {i.label}
           </button>

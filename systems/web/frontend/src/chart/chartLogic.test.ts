@@ -152,10 +152,11 @@ describe("saved chart settings", () => {
 
 describe("candle sizes and precision", () => {
   it("knows each size, and falls back to 15 minutes for an unknown one", () => {
-    expect(INTERVALS.map((i) => i.label)).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d"]);
+    expect(INTERVALS.map((i) => i.label)).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d", "1w"]);
     expect(intervalDef("60min").label).toBe("1h");
     expect(intervalDef("bogus").value).toBe("15min");
     expect(intervalDef("daily").source).toBe("yahoo"); // daily comes from a provider that needs no Dhan token
+    expect(intervalDef("weekly").source).toBe("yahoo"); // same provider, same no-Dhan-token benefit
   });
 
   it("uses the decimals that tell adjacent ticks apart", () => {

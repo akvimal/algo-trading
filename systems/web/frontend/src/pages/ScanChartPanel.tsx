@@ -2,7 +2,7 @@ import { Suspense, lazy, useRef, useState } from "react";
 import { getLtp } from "../api/trade";
 import type { ChartPaneHandle, DrawTool } from "../chart/ChartPane";
 import { DrawToolbar } from "../chart/DrawToolbar";
-import { EMPTY_STRUCTURE, loadTools, saveTools } from "../chart/config";
+import { EMPTY_STRUCTURE, INTERVALS, loadTools, saveTools } from "../chart/config";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
 import { PaneHeader } from "../workstation/PaneHeader";
@@ -12,6 +12,12 @@ import { isFresh } from "./tradeModel";
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
 
 const DEFAULT_INTERVAL = "daily";
+
+// A scan card is an end-of-day/swing read, not an intraday one - the full seven-size switch (down
+// to 1m) is more choice than that view needs. 15m stands in for "zoom into today", daily is the
+// default and matches what the card's own numbers are, weekly for the wider swing/positional
+// picture - see chart/config.ts's own INTERVALS for the full set every other chart still offers.
+const SCAN_INTERVALS = INTERVALS.filter((i) => ["15min", "daily", "weekly"].includes(i.value));
 
 type Props = { exchange: string; symbol: string };
 
@@ -51,7 +57,7 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
 
   return (
     <div className="scan-chart">
-      <PaneHeader index={0} symbol={symbol} interval={interval} onInterval={setInterval} price={price} priceShown live={socket.connected} regime={null} active={false} showActive={false} />
+      <PaneHeader index={0} symbol={symbol} interval={interval} onInterval={setInterval} price={price} priceShown live={socket.connected} regime={null} active={false} showActive={false} intervals={SCAN_INTERVALS} />
       <div className="scan-chart-body">
         <DrawToolbar
           active={tool}

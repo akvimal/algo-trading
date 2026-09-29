@@ -29,8 +29,8 @@ function write(key: string, value: unknown): void {
 export type IntervalDef = { label: string; value: string; minutes: number; lookbackDays: number; source?: string };
 
 /** Candle sizes, in the vocabulary market-data speaks. `lookbackDays` keeps the first download to a
- * few hundred bars whatever the size. Daily comes from a different provider (Yahoo), so it works
- * for NSE stocks even when a Dhan token has lapsed; every intraday size needs Dhan. */
+ * few hundred bars whatever the size. Daily and weekly come from a different provider (Yahoo, NSE
+ * only), so they work even when a Dhan token has lapsed; every intraday size needs Dhan. */
 export const INTERVALS: IntervalDef[] = [
   { label: "1m", value: "1min", minutes: 1, lookbackDays: 3 },
   { label: "3m", value: "3min", minutes: 3, lookbackDays: 6 },
@@ -39,6 +39,7 @@ export const INTERVALS: IntervalDef[] = [
   { label: "30m", value: "30min", minutes: 30, lookbackDays: 45 },
   { label: "1h", value: "60min", minutes: 60, lookbackDays: 75 },
   { label: "1d", value: "daily", minutes: 1440, lookbackDays: 365, source: "yahoo" },
+  { label: "1w", value: "weekly", minutes: 10080, lookbackDays: 1095, source: "yahoo" },
 ];
 
 export const DEFAULT_INTERVAL = "15min";

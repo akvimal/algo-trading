@@ -38,6 +38,10 @@ let oiSummaryPcr: number | null;
 let oiBuildups: { call: string | null; put: string | null } | null;
 let sentHistPoints: any[];
 let levelFails: string | null;
+// Unset (null) for most tests - /auth/me then falls through to the generic 404 below, same as
+// before this existed; OnboardingGate opens the app anyway on a failed profile read, and the
+// ticket's defaults (future/naked) match what an unset preference already produced.
+let profilePrefs: { default_instrument: "future" | "option"; default_option_strategy: "naked" | "spread" } | null;
 
 // The newest candle is the one being formed right now, as during market hours, so a price tick lands on it (and never starts a new bar, whatever minute of the quarter hour the test runs in).
 const candlesFor = (symbol: string) => {
@@ -71,6 +75,7 @@ beforeEach(() => {
   oiBuildups = null;
   sentHistPoints = [];
   levelFails = null;
+  profilePrefs = null;
   structure = { ...emptyStructure };
   waiting = [];
   screenIs(false);
@@ -162,6 +167,12 @@ beforeEach(() => {
         const rows = url.includes("/positions") ? positionRows : groupRows;
         return json(rows.filter((r) => (!q("status") || r.status === q("status")) && (!q("segment") || (r.segment ?? "NSE") === q("segment"))));
       }
+      if (url.endsWith("/auth/me") && profilePrefs) {
+        return json({
+          id: "u1", email: "me@x.com", name: "Me", is_admin: false, experience: "guided", onboarded_at: "2026-09-01T00:00:00Z",
+          markets: ["NSE", "MCX", "CRYPTO"], default_instrument: profilePrefs.default_instrument, default_option_strategy: profilePrefs.default_option_strategy,
+        });
+      }
       return json({ detail: `unrouted ${url}` }, 404);
     }),
   );
@@ -227,6 +238,41 @@ describe("the page", () => {
     expect(await t.findByLabelText("Number of lots")).toBeInTheDocument();
     expect(t.getByRole("button", { name: "Option spread" })).toBeInTheDocument();
     expect(t.getByText(/One lot is 65 units/)).toBeInTheDocument();
+  });
+
+  it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    const t = await ticket();
+    expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("starts the ticket on the person's preferred option style, on a symbol that has options", async () => {
+    profilePrefs = { default_instrument: "option", default_option_strategy: "spread" };
+    renderAt("/trade?symbol=NIFTY");
+    const t = await ticket();
+    await waitFor(() => expect(t.getByRole("button", { name: "Option spread" })).toHaveAttribute("aria-pressed", "true"));
+    expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "false");
+    expect(t.getByLabelText("Strike")).toBeInTheDocument(); // the option-only strike field follows
+  });
+
+  it("falls back to Future for an Option preference on a stock - there is nothing to pick naked/spread of", async () => {
+    profilePrefs = { default_instrument: "option", default_option_strategy: "naked" };
+    renderAt("/trade?symbol=RELIANCE&segment=NSE");
+    const t = await ticket();
+    expect(t.queryByRole("button", { name: "Option" })).not.toBeInTheDocument();
+  });
+
+  it("goes back to the preferred instrument, not a bare Future, after placing an order", async () => {
+    profilePrefs = { default_instrument: "option", default_option_strategy: "naked" };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    let t = await ticket();
+    await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
+    await user.type(t.getByLabelText("Stop-loss"), "900");
+    await user.click(t.getByRole("button", { name: /Buy NIFTY, paper order/ }));
+    await waitFor(() => expect(posts("/option-groups/manual")).toHaveLength(1));
+    t = within(await screen.findByTestId("ticket"));
+    expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("marks the plan on the chart and shows the risk in rupees as you type", async () => {

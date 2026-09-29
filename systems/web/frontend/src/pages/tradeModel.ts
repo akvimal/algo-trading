@@ -63,6 +63,18 @@ export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null,
 };
 
+export type DefaultInstrument = "future" | "option";
+export type DefaultOptionStrategy = "naked" | "spread";
+
+/** A fresh ticket for this instrument, its "what to trade" chip pre-set from the person's own
+ * preference (More > Experience) instead of always starting on Future - "option" only takes
+ * effect where options actually exist for the symbol; default_option_strategy then picks naked vs
+ * spread within that, a second, independent preference. */
+export function emptyTicketFor(symbol: string, defaultInstrument: DefaultInstrument, defaultOptionStrategy: DefaultOptionStrategy): Ticket {
+  const strategy = defaultInstrument === "option" && optionsAvailable(symbol) ? defaultOptionStrategy : "future";
+  return { ...EMPTY_TICKET, strategy };
+}
+
 export type TicketContext = {
   price: number | null; // live price of the underlying
   lotSize: number;

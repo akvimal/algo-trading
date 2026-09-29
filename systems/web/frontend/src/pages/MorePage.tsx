@@ -9,8 +9,9 @@ import { useAuth } from "../auth/AuthContext";
 
 export function MorePage() {
   const { session, signOut } = useAuth();
-  const { profile, guided, markets, update } = useProfile();
+  const { profile, guided, markets, defaultInstrument, defaultOptionStrategy, update } = useProfile();
   const [error, setError] = useState<string | null>(null);
+  const [tradeError, setTradeError] = useState<string | null>(null);
 
   async function choose(experience: "guided" | "pro") {
     setError(null);
@@ -29,6 +30,24 @@ export function MorePage() {
       await update({ markets: next });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not save. Try again.");
+    }
+  }
+
+  async function chooseInstrument(default_instrument: "future" | "option") {
+    setTradeError(null);
+    try {
+      await update({ default_instrument });
+    } catch (e) {
+      setTradeError(e instanceof ApiError ? e.message : "Could not save. Try again.");
+    }
+  }
+
+  async function chooseOptionStrategy(default_option_strategy: "naked" | "spread") {
+    setTradeError(null);
+    try {
+      await update({ default_option_strategy });
+    } catch (e) {
+      setTradeError(e instanceof ApiError ? e.message : "Could not save. Try again.");
     }
   }
 
@@ -81,6 +100,40 @@ export function MorePage() {
               <span>{s.title}</span>
             </label>
           ))}
+        </div>
+      )}
+      {profile && (
+        <div className="card">
+          <strong>Default trade instrument</strong>
+          <p className="dim" style={{ margin: "2px 0 8px", fontSize: 13 }}>
+            What the trade ticket starts on for a fresh instrument, where options exist.
+          </p>
+          <div className="chips" role="radiogroup" aria-label="Default trade instrument" style={{ margin: "8px 0" }}>
+            <button role="radio" aria-checked={defaultInstrument === "future"} onClick={() => void chooseInstrument("future")}>
+              Future
+            </button>
+            <button role="radio" aria-checked={defaultInstrument === "option"} onClick={() => void chooseInstrument("option")}>
+              Option
+            </button>
+          </div>
+          {defaultInstrument === "option" && (
+            <>
+              <strong style={{ display: "block", marginTop: 12 }}>Default option strategy</strong>
+              <div className="chips" role="radiogroup" aria-label="Default option strategy" style={{ margin: "8px 0" }}>
+                <button role="radio" aria-checked={defaultOptionStrategy === "naked"} onClick={() => void chooseOptionStrategy("naked")}>
+                  Naked
+                </button>
+                <button role="radio" aria-checked={defaultOptionStrategy === "spread"} onClick={() => void chooseOptionStrategy("spread")}>
+                  Spread
+                </button>
+              </div>
+            </>
+          )}
+          {tradeError && (
+            <div className="notice error" role="alert" style={{ marginTop: 8 }}>
+              {tradeError}
+            </div>
+          )}
         </div>
       )}
       <div className="card">

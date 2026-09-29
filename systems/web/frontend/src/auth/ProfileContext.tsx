@@ -12,7 +12,17 @@ type ProfileValue = {
   guided: boolean;
   /** The markets they practise on: all three when the profile cannot be read. */
   markets: Segment[];
-  update: (prefs: { experience?: "guided" | "pro"; onboarded?: boolean; markets?: Segment[] }) => Promise<Profile>;
+  /** What a fresh trade ticket should pre-select - "future" (the ticket's own longstanding
+   * default) when the profile cannot be read. */
+  defaultInstrument: "future" | "option";
+  defaultOptionStrategy: "naked" | "spread";
+  update: (prefs: {
+    experience?: "guided" | "pro";
+    onboarded?: boolean;
+    markets?: Segment[];
+    default_instrument?: "future" | "option";
+    default_option_strategy?: "naked" | "spread";
+  }) => Promise<Profile>;
   reload: () => void;
 };
 
@@ -42,15 +52,33 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     };
   }, [tick]);
 
-  const update = useCallback(async (prefs: { experience?: "guided" | "pro"; onboarded?: boolean; markets?: Segment[] }) => {
-    const next = await updatePreferences(prefs);
-    setProfile(next);
-    setStatus("ready");
-    return next;
-  }, []);
+  const update = useCallback(
+    async (prefs: {
+      experience?: "guided" | "pro";
+      onboarded?: boolean;
+      markets?: Segment[];
+      default_instrument?: "future" | "option";
+      default_option_strategy?: "naked" | "spread";
+    }) => {
+      const next = await updatePreferences(prefs);
+      setProfile(next);
+      setStatus("ready");
+      return next;
+    },
+    [],
+  );
 
   const value = useMemo<ProfileValue>(
-    () => ({ profile, status, guided: profile?.experience !== "pro", markets: profile?.markets?.length ? profile.markets : ["NSE", "MCX", "CRYPTO"], update, reload: () => setTick((n) => n + 1) }),
+    () => ({
+      profile,
+      status,
+      guided: profile?.experience !== "pro",
+      markets: profile?.markets?.length ? profile.markets : ["NSE", "MCX", "CRYPTO"],
+      defaultInstrument: profile?.default_instrument ?? "future",
+      defaultOptionStrategy: profile?.default_option_strategy ?? "naked",
+      update,
+      reload: () => setTick((n) => n + 1),
+    }),
     [profile, status, update],
   );
   return <ProfileContext.Provider value={value}>{children}</ProfileContext.Provider>;

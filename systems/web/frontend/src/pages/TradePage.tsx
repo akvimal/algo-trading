@@ -40,7 +40,7 @@ import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
-import { EMPTY_TICKET, PRESETS, analyzeTicket, defaultLevel, instrumentFor, isFresh, type Ticket } from "./tradeModel";
+import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, isFresh, type Ticket } from "./tradeModel";
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
@@ -54,7 +54,7 @@ const LAYOUTS: { id: Layout; label: string }[] = [
 export function TradePage() {
   const [params] = useSearchParams();
   const wide = useMediaQuery(WIDE_QUERY);
-  const { markets } = useProfile();
+  const { markets, defaultInstrument, defaultOptionStrategy } = useProfile();
 
   const urlSymbol = params.get("symbol");
   const urlSegment = params.get("segment");
@@ -176,7 +176,7 @@ export function TradePage() {
   const live = account?.live_trading_enabled;
 
   // ---- the ticket belongs to the active chart ----
-  const [ticket, setTicket] = useState<Ticket>(EMPTY_TICKET);
+  const [ticket, setTicket] = useState<Ticket>(() => emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
   const [pickField, setPickField] = useState<PriceField | null>(null);
   // The order form is hidden once something is already open on this instrument - the open
   // position(s) are almost always what the person came to look at then, and a bare order form
@@ -184,9 +184,12 @@ export function TradePage() {
   // resets with everything else the moment the instrument changes.
   const [showFormAnyway, setShowFormAnyway] = useState(false);
   useEffect(() => {
-    setTicket(EMPTY_TICKET);
+    setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
     setPickField(null);
     setShowFormAnyway(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- defaultInstrument/defaultOptionStrategy
+    // intentionally excluded: changing the preference mid-session (e.g. from another tab) should
+    // not yank a ticket already in progress here; it takes effect on the next instrument change.
   }, [activeSpec.symbol, activeSpec.segment]);
 
   const activeData = datas[active];
@@ -577,7 +580,7 @@ export function TradePage() {
                   // draft - left alone, they kept showing the just-placed order's prices
                   // indefinitely (nothing else ever cleared them; the ticket itself only resets
                   // on a symbol/segment change, not on a successful placement).
-                  setTicket(EMPTY_TICKET);
+                  setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
                   setPickField(null);
                 }}
               />

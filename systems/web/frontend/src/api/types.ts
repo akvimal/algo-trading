@@ -287,6 +287,8 @@ export type Profile = {
   experience: "guided" | "pro";
   onboarded_at: string | null;
   markets: Segment[];
+  default_instrument: "future" | "option";
+  default_option_strategy: "naked" | "spread";
 };
 
 export type OrderBlock = {

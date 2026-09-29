@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -31,6 +31,26 @@ describe("instrument", () => {
     expect(instrumentFor("GOLDM", "MCX")).toBe("future");
     expect(optionsAvailable("NIFTY")).toBe(true);
     expect(optionsAvailable("RELIANCE")).toBe(false);
+  });
+});
+
+describe("emptyTicketFor", () => {
+  it("starts on Future when that is the preference, whatever else is blank", () => {
+    expect(emptyTicketFor("NIFTY", "future", "naked").strategy).toBe("future");
+    expect(emptyTicketFor("NIFTY", "future", "spread").strategy).toBe("future");
+  });
+
+  it("starts on the preferred option style when the preference is Option and options exist", () => {
+    expect(emptyTicketFor("NIFTY", "option", "naked").strategy).toBe("naked");
+    expect(emptyTicketFor("NIFTY", "option", "spread").strategy).toBe("spread");
+  });
+
+  it("falls back to Future for an Option preference on a symbol with no options", () => {
+    expect(emptyTicketFor("RELIANCE", "option", "spread").strategy).toBe("future");
+  });
+
+  it("otherwise matches EMPTY_TICKET exactly - only the strategy field differs", () => {
+    expect(emptyTicketFor("NIFTY", "option", "spread")).toEqual({ ...EMPTY_TICKET, strategy: "spread" });
   });
 });
 

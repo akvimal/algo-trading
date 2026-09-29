@@ -258,7 +258,7 @@ export type OiSummary = {
   strikes: { strike: number; call: OiLeg | null; put: OiLeg | null }[];
 };
 
-export type OptionLegPreviewLeg = { action: "BUY" | "SELL"; option_type: "CE" | "PE"; strike: number; expiry: string };
+export type OptionLegPreviewLeg = { action: "BUY" | "SELL"; option_type: "CE" | "PE"; strike: number; expiry: string; premium: number | null };
 export type OptionLegPreview = { strategy_type: string; expiry: string; legs: OptionLegPreviewLeg[] };
 
 /** One market_data.sentiment_history row, written every 5 minutes for an OI-chain instrument. */

@@ -49,12 +49,16 @@ type Props = {
    * The Side chips stay for a plain spot/future order (isOption false) - nothing else replaces
    * them there. */
   hideStrategyChips?: boolean;
+  /** Hides the "Strike" moneyness dropdown too - for a caller whose own strategy panel (the
+   * Scan page's bias-driven leg table) already exposes a strike stepper wired to the same
+   * ticket.moneyness field, so the two controls never fight for the same line. */
+  hideMoneynessField?: boolean;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -136,7 +140,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
           </button>
         </div>
       )}
-      {isOption && (
+      {isOption && !hideMoneynessField && (
         <label className="select-field" style={{ marginBottom: 12 }}>
           <span className="dim">Strike</span>
           <select value={t.moneyness} onChange={(e) => set("moneyness", e.target.value as Moneyness)}>

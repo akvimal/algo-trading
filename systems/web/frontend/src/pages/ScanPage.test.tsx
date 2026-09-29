@@ -84,14 +84,14 @@ beforeEach(() => {
                 strategy_type: bullish ? "bull_call_spread" : "bear_put_spread",
                 expiry: "2026-10-30",
                 legs: [
-                  { action: "BUY", option_type: bullish ? "CE" : "PE", strike: bullish ? 2600 : 2400, expiry: "2026-10-30" },
-                  { action: "SELL", option_type: bullish ? "CE" : "PE", strike: bullish ? 2800 : 2200, expiry: "2026-10-30" },
+                  { action: "BUY", option_type: bullish ? "CE" : "PE", strike: bullish ? 2600 : 2400, expiry: "2026-10-30", premium: 42.5 },
+                  { action: "SELL", option_type: bullish ? "CE" : "PE", strike: bullish ? 2800 : 2200, expiry: "2026-10-30", premium: 12.5 },
                 ],
               }
             : {
                 strategy_type: bullish ? "naked_call" : "naked_put",
                 expiry: "2026-10-30",
-                legs: [{ action: "BUY", option_type: bullish ? "CE" : "PE", strike: 2500, expiry: "2026-10-30" }],
+                legs: [{ action: "BUY", option_type: bullish ? "CE" : "PE", strike: 2500, expiry: "2026-10-30", premium: 28.75 }],
               },
         );
       }
@@ -288,16 +288,40 @@ describe("OI buildup", () => {
       expect(tcs.getByRole("button", { name: "Bullish" })).toHaveAttribute("aria-pressed", "true"); // BUY is the ticket's own default
       expect(tcs.getByRole("button", { name: "Bearish" })).toBeInTheDocument();
       expect(tcs.queryByRole("button", { name: "Option spread" })).not.toBeInTheDocument(); // TradeTicket's own chips stay hidden
-      // "Just buy the option" (naked) is the default here - no default_option_strategy set on
-      // this mocked profile, so ProfileContext falls back to "naked" (see items 4/5).
-      expect(tcs.getByRole("button", { name: "Just buy the option" })).toHaveAttribute("aria-pressed", "true");
-      expect(await tcs.findByTestId("option-leg-preview")).toHaveTextContent("Buy Call, exp 30 Oct — Buy 2500 CE");
+      expect(tcs.queryByText("Strike", { selector: "span.dim" })).not.toBeInTheDocument(); // TradeTicket's own moneyness dropdown stays hidden too
 
-      await user.click(tcs.getByRole("button", { name: "Defined-risk spread" }));
-      expect(await tcs.findByTestId("option-leg-preview")).toHaveTextContent("Bull Call Spread, exp 30 Oct — Buy 2600 CE, Sell 2800 CE");
+      // No default_option_strategy set on this mocked profile, so ProfileContext falls back to
+      // "naked" (see items 4/5) - a single row, and an unchecked "add a hedge leg" checkbox.
+      let table = await tcs.findByTestId("option-leg-table");
+      let rows = within(table).getAllByRole("row").slice(1); // drop the header row
+      expect(rows).toHaveLength(2); // the primary leg's own row, plus the "add a hedge leg" row
+      expect(within(rows[0]).getByText("Buy")).toBeInTheDocument();
+      expect(within(rows[0]).getByText("2500")).toBeInTheDocument();
+      expect(within(rows[0]).getByText("CE")).toBeInTheDocument();
+      expect(within(rows[0]).getByText("₹28.75")).toBeInTheDocument();
+      expect(tcs.getByRole("checkbox", { name: "Add a hedge leg (defined-risk spread)" })).not.toBeChecked();
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Buy Call");
+
+      await user.click(tcs.getByRole("checkbox", { name: "Add a hedge leg (defined-risk spread)" }));
+      table = await tcs.findByTestId("option-leg-table");
+      await within(table).findByText("₹42.50"); // waits for the spread preview to land
+      rows = within(table).getAllByRole("row").slice(1);
+      expect(rows).toHaveLength(2);
+      expect(within(rows[0]).getByText("2600")).toBeInTheDocument();
+      expect(within(rows[1]).getByText("Sell")).toBeInTheDocument();
+      expect(within(rows[1]).getByText("2800")).toBeInTheDocument();
+      expect(within(rows[1]).getByText("₹12.50")).toBeInTheDocument();
+      expect(tcs.getByRole("checkbox", { name: "Remove the hedge leg (buy the option outright)" })).toBeChecked();
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Call Spread");
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit ₹30.00 per lot"); // 42.50 - 12.50
 
       await user.click(tcs.getByRole("button", { name: "Bearish" }));
-      expect(await tcs.findByTestId("option-leg-preview")).toHaveTextContent("Bear Put Spread, exp 30 Oct — Buy 2400 PE, Sell 2200 PE");
+      table = await tcs.findByTestId("option-leg-table");
+      await within(table).findByText("2400");
+      rows = within(table).getAllByRole("row").slice(1);
+      expect(within(rows[0]).getByText("PE")).toBeInTheDocument();
+      expect(within(rows[1]).getByText("2200")).toBeInTheDocument();
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bear Put Spread");
     });
 
     it("Chart and Trade are independent - both can be open on the same card, and different cards can each have one open", async () => {

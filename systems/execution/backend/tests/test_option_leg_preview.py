@@ -38,8 +38,28 @@ def _get_option_chain(exchange, symbol, expiry):
     return _make_chain(_default_strikes(), expiry)
 
 
-def preview(action="BUY", style="spread", moneyness="ATM", expiry=None, get_option_chain=_get_option_chain):
-    return preview_option_legs("NSE", "RELIANCE", action, style, moneyness, expiry, _resolve_underlying, _get_expiry_list, get_option_chain)
+def _resolve_symbol_by_security_id(segment, security_id):
+    return f"SYM-{security_id}"
+
+
+def _get_ltp_batch(segment, symbols):
+    # A stable, made-up premium per symbol so assertions can key off the security_id suffix.
+    return {s: 100.0 + i for i, s in enumerate(symbols)}
+
+
+def preview(
+    action="BUY",
+    style="spread",
+    moneyness="ATM",
+    expiry=None,
+    get_option_chain=_get_option_chain,
+    resolve_symbol_by_security_id=None,
+    get_ltp_batch=None,
+):
+    return preview_option_legs(
+        "NSE", "RELIANCE", action, style, moneyness, expiry, _resolve_underlying, _get_expiry_list, get_option_chain,
+        resolve_symbol_by_security_id, get_ltp_batch,
+    )
 
 
 def test_bullish_spread_is_a_bull_call_spread():
@@ -93,3 +113,36 @@ def test_the_security_id_is_never_the_point_of_this_response_but_is_still_presen
     # route has something to filter rather than a hand-trimmed dict that could drift.
     out = preview()
     assert all("security_id" in leg for leg in out["legs"])
+
+
+def test_premium_is_none_when_the_caller_does_not_ask_for_quotes():
+    out = preview()
+    assert all(leg["premium"] is None for leg in out["legs"])
+
+
+def test_premium_is_filled_in_when_a_quote_source_is_given():
+    out = preview(resolve_symbol_by_security_id=_resolve_symbol_by_security_id, get_ltp_batch=_get_ltp_batch)
+    assert all(leg["premium"] is not None for leg in out["legs"])
+    # Each leg's premium came from its own resolved symbol, not just the first one repeated.
+    assert len({leg["premium"] for leg in out["legs"]}) == len(out["legs"])
+
+
+def test_a_quote_lookup_failure_does_not_fail_the_whole_preview():
+    def _broken_get_ltp_batch(segment, symbols):
+        raise ConnectionError("provider unreachable")
+
+    out = preview(resolve_symbol_by_security_id=_resolve_symbol_by_security_id, get_ltp_batch=_broken_get_ltp_batch)
+    assert out["strategy_type"]  # the legs themselves still resolved
+    assert all(leg["premium"] is None for leg in out["legs"])
+
+
+def test_an_unresolvable_leg_symbol_just_leaves_that_legs_premium_none():
+    # bull_call_spread @ ATM against _default_strikes resolves to long=ce-2500, short=ce-2600
+    # (ATM index + SPREAD_WIDTH_STRIKES) - block just the short leg's symbol resolution.
+    def _resolve_all_but_short(segment, security_id):
+        return None if security_id == "ce-2600" else f"SYM-{security_id}"
+
+    out = preview(action="BUY", style="spread", resolve_symbol_by_security_id=_resolve_all_but_short, get_ltp_batch=_get_ltp_batch)
+    premiums = {leg["strike"]: leg["premium"] for leg in out["legs"]}
+    assert premiums[2500.0] is not None  # long leg still priced
+    assert premiums[2600.0] is None  # short leg's symbol never resolved, so no quote for it

@@ -992,13 +992,21 @@ def preview_option_legs(
     resolve_underlying: ResolveUnderlying,
     get_expiry_list: GetExpiryList,
     get_option_chain: GetOptionChain,
+    resolve_symbol_by_security_id: Optional[ResolveSymbolBySecurityId] = None,
+    get_ltp_batch: Optional[GetLtpBatch] = None,
 ) -> dict:
     """Read-only counterpart to open_manual_option_group's own leg-selection block above -
     the exact same resolve_underlying -> expiry -> get_option_chain -> option_templates
     steps, reused verbatim (not a parallel reimplementation) so a preview can never drift
     from what a real POST /option-groups/manual with the same params would actually place.
-    No account, DB, quote or sizing touched - nothing here can reject for a reason the real
-    order would not also hit at this exact same step.
+    No account, DB or sizing touched - nothing here can reject for a reason the real order
+    would not also hit at this exact same step.
+
+    `resolve_symbol_by_security_id`/`get_ltp_batch` are optional: when both are given, each
+    leg also gets a live `premium` (best-effort, same lookup open_manual_option_group's real
+    path uses just before sizing - see its long_symbol/short_symbol/quotes block) - a quote
+    failure or a caller that omits these leaves `premium` as None per leg rather than failing
+    the whole preview, since price here is informational, not the point of the preview.
 
     Backs the Scan page's bias-driven option panel: the person picks Bullish (action='BUY')
     or Bearish ('SELL') first, sees the real strikes this would resolve to, before
@@ -1036,7 +1044,19 @@ def preview_option_legs(
     except ValueError as exc:
         raise OptionLegPreviewError(f"could not build an option strategy for '{symbol}': {exc}") from exc
 
-    return {"strategy_type": strategy_type, "expiry": resolved_expiry, "legs": legs}
+    legs_out = [dict(leg, premium=None) for leg in legs]
+    if resolve_symbol_by_security_id is not None and get_ltp_batch is not None:
+        try:
+            leg_symbols = [resolve_symbol_by_security_id(segment, leg["security_id"]) for leg in legs]
+            quotable = [s for s in leg_symbols if s is not None]
+            quotes = get_ltp_batch(segment, quotable) if quotable else {}
+            for leg_out, leg_symbol in zip(legs_out, leg_symbols):
+                if leg_symbol is not None:
+                    leg_out["premium"] = quotes.get(leg_symbol)
+        except Exception:
+            pass  # premium is informational - a quote-provider hiccup must not fail the preview
+
+    return {"strategy_type": strategy_type, "expiry": resolved_expiry, "legs": legs_out}
 
 
 def submit_option_group_review(

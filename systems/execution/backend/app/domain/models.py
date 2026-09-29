@@ -937,6 +937,9 @@ class OptionLegPreviewLeg(BaseModel):
     option_type: Literal["CE", "PE"]
     strike: float
     expiry: str
+    # Live per-leg premium, best-effort (see preview_option_legs's own docstring) - None when
+    # the caller didn't ask for quotes, or the quote lookup itself failed.
+    premium: Optional[float] = None
 
 
 class OptionLegPreview(BaseModel):

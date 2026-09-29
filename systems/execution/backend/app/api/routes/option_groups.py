@@ -327,6 +327,8 @@ def preview_legs(
             resolve_underlying,
             functools.partial(get_expiry_list, token=user.token),
             functools.partial(get_option_chain, token=user.token),
+            resolve_symbol_by_security_id,
+            functools.partial(get_ltp_batch, token=user.token),
         )
     except OptionLegPreviewError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

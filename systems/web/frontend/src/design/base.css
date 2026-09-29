@@ -185,6 +185,28 @@ a {
   display: block;
   margin-bottom: 14px;
 }
+/* Several short number fields side by side instead of each its own full-width row (the ticket's
+   stop/target/lots - see TradeTicket.tsx) - each .field keeps its own bottom margin, just laid
+   out in a row instead of stacked. min-width: 0 lets a field shrink below its content's natural
+   width rather than forcing the row to overflow/wrap. */
+.field-row {
+  display: flex;
+  gap: 10px;
+}
+.field-row > .field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* The ticket packs a lot of fields into a sidebar - a little smaller than the form-page default
+   (Settings etc keep the full size; this is scoped to .ticket only) buys back some of the room
+   the field-row above doesn't. */
+.ticket .field-head > label > span {
+  font-size: 12px;
+}
+.ticket .field input[inputmode],
+.ticket .field input[type="password"] {
+  font-size: 14px;
+}
 .field > span {
   display: block;
   font-size: 13px;
@@ -675,6 +697,30 @@ table.t th {
   font-size: 15px;
   width: 100%;
 }
+/* A bare <select> otherwise keeps the browser's own native chrome (arrow, insets) even with the
+   background/border/radius above matched to .field's text inputs - visibly a different control
+   next to them. Reset to the same box, redraw the arrow ourselves so it still looks like a
+   dropdown. The chevron's own color is hardcoded to match --text-dim per theme (this app is
+   dark-first - see tokens.css - with a light override, not the other way round), since `color`
+   here needs to stay var(--text) - the selected option's own text, not the chevron. */
+.select-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2393a1b1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+.select-field select option {
+  color: var(--text);
+  background: var(--surface-2);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .select-field select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234a5866' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+}
 .legend {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1063,19 +1109,6 @@ table.t th {
   padding-right: 2px;
 }
 .workstation:not(.wide) .ws-ticket {
-  width: auto;
-  overflow: visible;
-}
-/* Same sidebar pattern as .ws-ticket, alongside the chart rather than spanning full width
-   underneath it - a touch wider since its settings form has more to say than the ticket does. */
-.ws-autotrader {
-  width: 380px;
-  flex: none;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-.workstation:not(.wide) .ws-autotrader {
   width: auto;
   overflow: visible;
 }

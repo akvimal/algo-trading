@@ -234,6 +234,21 @@ describe("Screener", () => {
     await user.click(screen.getByRole("tab", { name: "Screener" }));
     expect(await screen.findByTestId("screener-list")).toBeInTheDocument();
   });
+
+  it("opens the same inline chart Chart does on OI buildup, one card at a time", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=screener");
+    const list = await screen.findByTestId("screener-list");
+    const cards = within(list).getAllByTestId("screener-card");
+    const [sbin, itc] = [within(cards[0]), within(cards[1])];
+    await user.click(sbin.getByRole("button", { name: "Chart" }));
+    expect(await sbin.findByTestId("chart-pane")).toBeInTheDocument();
+    expect(sbin.getByRole("button", { name: "1d" })).toHaveAttribute("aria-pressed", "true");
+    expect(sbin.getByRole("link", { name: /Open in Trade/ })).toHaveAttribute("href", "/trade?symbol=SBIN&segment=NSE");
+    await user.click(itc.getByRole("button", { name: "Chart" })); // opening the second closes the first
+    expect(sbin.queryByTestId("chart-pane")).not.toBeInTheDocument();
+    expect(await itc.findByTestId("chart-pane")).toBeInTheDocument();
+  });
 });
 
 describe("Custom screen", () => {
@@ -246,7 +261,7 @@ describe("Custom screen", () => {
     expect(screen.getByText(/Type a condition/)).toBeInTheDocument();
   });
 
-  it("previews an ad-hoc expression and shows the matches, with a chart link", async () => {
+  it("previews an ad-hoc expression and shows the matches, with a chart toggle", async () => {
     const user = userEvent.setup();
     renderAt("/scan?tab=custom");
     await screen.findByLabelText("Condition");
@@ -257,7 +272,22 @@ describe("Custom screen", () => {
     expect(within(result).getByText(/1 of 2 stocks matched/)).toBeInTheDocument();
     const match = within(screen.getByTestId("custom-screen-matches"));
     expect(match.getByText("TCS")).toBeInTheDocument();
-    expect(match.getByRole("link", { name: "Chart" })).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE");
+    expect(match.getByRole("button", { name: "Chart" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens the same inline chart Chart does on OI buildup, and closes it again on the next Preview", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByLabelText("Condition");
+    await user.type(screen.getByLabelText("Label"), "Bearish breakout");
+    await user.type(screen.getByLabelText("Condition"), "close > 100");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    const match = within(await screen.findByTestId("custom-screen-matches"));
+    await user.click(match.getByRole("button", { name: "Chart" }));
+    expect(await match.findByTestId("chart-pane")).toBeInTheDocument();
+    expect(match.getByRole("button", { name: "1d" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Preview" })); // a fresh run drops any open chart
+    expect(within(await screen.findByTestId("custom-screen-matches")).queryByTestId("chart-pane")).not.toBeInTheDocument();
   });
 
   it("shows the server's own parse error in words, not a generic failure", async () => {

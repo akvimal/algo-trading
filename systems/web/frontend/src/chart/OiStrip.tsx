@@ -43,7 +43,13 @@ function Sentiment({ points, window }: { points: SentimentHistoryPoint[]; window
     >
       <span className="oi-strip-spark">
         {steps.map((s) => (
-          <span key={s.barTime} className={`oi-strip-spark-bar ${s.major ? "is-major" : ""}`} style={{ height: `${Math.max(8, (Math.abs(s.score) / maxAbs) * 100)}%` }} data-tone={s.score > 0.02 ? "up" : s.score < -0.02 ? "dn" : "flat"} />
+          <span
+            key={s.barTime}
+            className={`oi-strip-spark-bar ${s.major ? "is-major" : ""}`}
+            style={{ height: `${Math.max(8, (Math.abs(s.score) / maxAbs) * 100)}%` }}
+            data-tone={s.score > 0.02 ? "up" : s.score < -0.02 ? "dn" : "flat"}
+            title={`${hhmm(s.barTime)}: ${s.score >= 0 ? "+" : ""}${s.score.toFixed(2)}%${s.major ? " — major move" : ""}`}
+          />
         ))}
       </span>
       <b className={last.score > 0.02 ? "up" : last.score < -0.02 ? "dn" : "faint"}>
@@ -121,7 +127,7 @@ export function OiStrip({ summary, sentiment, levels }: { summary: OiSummary | n
           Δ{skew.pct.toFixed(1)}pp {skew.leader}-led
         </span>
       )}
-      {hasSentimentTrend(sentiment) && <span className="faint">OI trend</span>}
+      {hasSentimentTrend(sentiment) && <span className="faint oi-strip-trend-label">OI trend</span>}
       <Sentiment points={sentiment} window="15m" />
       <Sentiment points={sentiment} window="5m" />
     </div>

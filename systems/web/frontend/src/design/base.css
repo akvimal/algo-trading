@@ -203,6 +203,19 @@ a {
 .ticket .field-head > label > span {
   font-size: 12px;
 }
+/* .field-head's own flex-wrap (above) only kicks in once the label can no longer shrink - but a
+   flex:1 label with min-width:0 never hits that limit, it just keeps shrinking and wrapping its
+   own text instead, so the row never wraps and the action ends up squeezed onto the label's first
+   line. In the ticket's narrow columns that showed up as the label and action overlapping. Always
+   stacking the action under the label here sidesteps the whole heuristic. */
+.ticket .field-head {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.ticket .field-actions {
+  justify-content: flex-start;
+}
 .ticket .field input[inputmode],
 .ticket .field input[type="password"] {
   font-size: 14px;

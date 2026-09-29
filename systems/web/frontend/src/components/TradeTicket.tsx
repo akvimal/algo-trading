@@ -147,22 +147,24 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
       {limit && (
         <TextField id="t-entry" label="Enter when the price reaches" action={pickAction("entry")} value={t.entry} onChange={(v) => set("entry", v)} hint={guided ? `It fires the first time the price crosses this level${isOption ? " (the option is priced then)" : ""}. Watched on our servers, so it works with the app closed.` : undefined} />
       )}
-      {/* Stop/target/lots side by side rather than each its own full-width row - three short
-          number fields stacked used to cost more vertical space than they needed. Entry stays on
-          its own row above: its hint is longer and it carries the same pick-on-chart action, so a
-          three-up row would crowd it more than it saves. */}
+      {/* Stop-loss and Target share a row - both carry the same pick-on-chart/add-line actions, so
+          a two-up row gives each enough width for them (a three-up row, tried first, left too
+          little for those actions next to a label - see base.css's .field-head/.field-actions
+          wrap comment for the overlap that caused). Lots has no such action and a longer
+          placeholder ("Auto from your risk"/"Sized for you"), so it gets the full row below
+          instead of a cramped third column. No hints here (unlike Entry above): the label and
+          placeholder already say what is needed, and dropping them is what kept this compact. */}
       <div className="field-row">
-        <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} hint={guided ? (isOption ? "A level of the underlying. The trade closes if the price gets there." : "Where you admit you are wrong. The trade closes there.") : undefined} />
-        <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} hint={guided ? "Optional. Where you take profit." : undefined} />
-        <TextField
-          id="t-lots"
-          label={stock ? "Number of shares" : "Number of lots"}
-          value={t.lots}
-          onChange={(v) => set("lots", v)}
-          placeholder={isOption || ctx.segment === "CRYPTO" ? "Sized for you" : "Auto from your risk"}
-          hint={ctx.lotSize !== 1 ? `One lot is ${ctx.lotSize} units.` : undefined}
-        />
+        <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />
+        <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} />
       </div>
+      <TextField
+        id="t-lots"
+        label={stock ? "Number of shares" : "Number of lots"}
+        value={t.lots}
+        onChange={(v) => set("lots", v)}
+        placeholder={isOption || ctx.segment === "CRYPTO" ? "Sized for you" : "Auto from your risk"}
+      />
 
       <dl className="summary" data-testid="summary">
         <div>

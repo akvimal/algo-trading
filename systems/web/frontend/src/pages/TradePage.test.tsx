@@ -237,7 +237,6 @@ describe("the page", () => {
     const t = await ticket();
     expect(await t.findByLabelText("Number of lots")).toBeInTheDocument();
     expect(t.getByRole("button", { name: "Option spread" })).toBeInTheDocument();
-    expect(t.getByText(/One lot is 65 units/)).toBeInTheDocument();
   });
 
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {

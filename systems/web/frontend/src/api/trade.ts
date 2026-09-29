@@ -1,5 +1,5 @@
 import { api } from "./http";
-import type { Candle, Ltp, MarketRegime, OiSummary, OptionGroup, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
+import type { Candle, Ltp, MarketRegime, OiSummary, OptionGroup, OptionLegPreview, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 import type { OpenLevel } from "../chart/trades";
 
@@ -44,6 +44,16 @@ export const getExpiries = (exchange: string, symbol: string) =>
 
 export const getOiSummary = (exchange: string, symbol: string, expiry: string) =>
   api<OiSummary>("marketData", `/options/oi-summary?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
+
+/** The legs a real order with these exact params would use, without placing anything - backs the
+ * Scan page's bias-driven option panel (Bullish/Bearish -> the real recommended strikes, before
+ * committing to an order). `action`: "BUY" for bullish, "SELL" for bearish - the same field a real
+ * order carries, see execution's option_position_manager.preview_option_legs. */
+export const getOptionLegPreview = (exchange: string, symbol: string, action: "BUY" | "SELL", style: "naked" | "spread", moneyness: string) =>
+  api<OptionLegPreview>(
+    "execution",
+    `/option-groups/preview-legs?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&action=${action}&option_position_style=${style}&option_strike_moneyness=${moneyness}`,
+  );
 
 /** Today's 5-minute OI-sentiment readings for `symbol` (the bare underlying, not its resolved contract —
  * sentiment_history is keyed by the underlying). */

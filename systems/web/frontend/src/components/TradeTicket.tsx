@@ -42,12 +42,19 @@ type Props = {
    * some other way - e.g. the Scan page's embedded ticket, whose rows come from the OI-buildup
    * feed and so are guaranteed to have an option chain even though they are not a PRESETS entry. */
   optionsForced?: boolean;
+  /** Hides the "What to trade" (Future/Option/Option spread) chips, and, once the ticket is
+   * already in an option strategy, the "Side" (Buy/Sell) chips too - for a caller that drives
+   * both itself through some other UI instead (the Scan page's bias-driven option panel picks
+   * Bullish/Bearish, which sets the same action/strategy fields this component already reads).
+   * The Side chips stay for a plain spot/future order (isOption false) - nothing else replaces
+   * them there. */
+  hideStrategyChips?: boolean;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -106,15 +113,17 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         <span className="pill">Paper</span>
       </div>
 
-      <div className="chips seg" role="group" aria-label="Side" style={{ margin: "12px 0" }}>
-        {(["BUY", "SELL"] as Action[]).map((s) => (
-          <button key={s} className={s === "BUY" ? "buy" : "sell"} aria-pressed={t.action === s} onClick={() => set("action", s)}>
-            {ACTION_WORD(s)}
-          </button>
-        ))}
-      </div>
+      {!(hideStrategyChips && isOption) && (
+        <div className="chips seg" role="group" aria-label="Side" style={{ margin: "12px 0" }}>
+          {(["BUY", "SELL"] as Action[]).map((s) => (
+            <button key={s} className={s === "BUY" ? "buy" : "sell"} aria-pressed={t.action === s} onClick={() => set("action", s)}>
+              {ACTION_WORD(s)}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {options && (
+      {options && !hideStrategyChips && (
         <div className="chips" role="group" aria-label="What to trade" style={{ marginBottom: 12 }}>
           <button aria-pressed={t.strategy === "future"} onClick={() => set("strategy", "future")}>
             {stock ? "Spot" : "Future"}

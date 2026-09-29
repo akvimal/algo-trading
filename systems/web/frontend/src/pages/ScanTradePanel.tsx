@@ -6,6 +6,7 @@ import { useProfile } from "../auth/ProfileContext";
 import { Skeleton } from "../components/bits";
 import { TradeTicket } from "../components/TradeTicket";
 import { useResource } from "../hooks/useResource";
+import { ScanOptionBias } from "./ScanOptionBias";
 import { emptyTicketFor, instrumentFor, type Ticket } from "./tradeModel";
 import { useScanLivePrice } from "./useScanLivePrice";
 
@@ -16,12 +17,15 @@ const REGIME_INTERVAL = "15min";
 
 type Props = { exchange: string; symbol: string };
 
-/** The order ticket inside an expanded OI-buildup card (ScanPage.tsx's OiCard) - the same
- * TradeTicket the Trade page uses (options included: every OI-buildup row has an option chain by
- * definition, so optionsForced skips the usual PRESETS-only check), just fed from this card's own
- * account/price/regime reads instead of the workstation's. Paper-only, same as TradeTicket itself
- * - an account with live trading on gets the same notice the Trade page shows instead of a ticket
- * reaching for real money from inside a scan card. */
+/** The order ticket inside an expanded OI-buildup card (ScanPage.tsx's OiCard) - fed from this
+ * card's own account/price/regime reads instead of the workstation's, and its own view into an
+ * option order: a Spot/Option choice here, then (for Option) ScanOptionBias's Bullish/Bearish
+ * picker instead of the Trade page's Future/Option/Option spread chips and a bare moneyness
+ * dropdown - see that component's own docstring for why. Placing itself still goes through the
+ * real TradeTicket (stop-loss/target/lots/checks/submit) - reusing proven sizing/validation, not
+ * duplicating it, is the point; only the strategy-selection step needed rethinking. Paper-only,
+ * same as TradeTicket itself - an account with live trading on gets the same notice the Trade
+ * page shows instead of a ticket reaching for real money from inside a scan card. */
 export function ScanTradePanel({ exchange, symbol }: Props) {
   const { defaultInstrument, defaultOptionStrategy } = useProfile();
   const accounts = useResource(getAccounts, []);
@@ -57,17 +61,30 @@ export function ScanTradePanel({ exchange, symbol }: Props) {
     symbol,
   };
   const trendFollowed = regime.data ? regime.data.trend !== "range" && (regime.data.trend === "up") === (ticket.action === "BUY") : false;
+  const isOption = ticket.strategy !== "future";
 
   return (
-    <TradeTicket
-      ticket={ticket}
-      onChange={setTicket}
-      ctx={ctx}
-      meta={{ instrument: instrumentFor(symbol, "NSE"), interval: REGIME_INTERVAL, trendFollowed }}
-      regime={regime.data}
-      budget={null}
-      optionsForced
-      onPlaced={() => setTicket(emptyTicketFor(symbol, defaultInstrument, defaultOptionStrategy))}
-    />
+    <>
+      <div className="chips" role="group" aria-label="Instrument" style={{ marginBottom: 12 }}>
+        <button aria-pressed={!isOption} onClick={() => setTicket((cur) => ({ ...cur, strategy: "future" }))}>
+          Spot
+        </button>
+        <button aria-pressed={isOption} onClick={() => setTicket((cur) => (cur.strategy === "future" ? { ...cur, strategy: defaultOptionStrategy } : cur))}>
+          Option
+        </button>
+      </div>
+      {isOption && <ScanOptionBias exchange={exchange} symbol={symbol} ticket={ticket} onChange={setTicket} />}
+      <TradeTicket
+        ticket={ticket}
+        onChange={setTicket}
+        ctx={ctx}
+        meta={{ instrument: instrumentFor(symbol, "NSE"), interval: REGIME_INTERVAL, trendFollowed }}
+        regime={regime.data}
+        budget={null}
+        optionsForced
+        hideStrategyChips
+        onPlaced={() => setTicket(emptyTicketFor(symbol, defaultInstrument, defaultOptionStrategy))}
+      />
+    </>
   );
 }

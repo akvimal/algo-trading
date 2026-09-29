@@ -74,6 +74,27 @@ beforeEach(() => {
       if (url.includes("/regime")) return json(regimeRead);
       if (url.endsWith("/positions/manual")) return placeManual(init?.body ? JSON.parse(init.body as string) : {});
       if (url.endsWith("/option-groups/manual")) return placeOption(init?.body ? JSON.parse(init.body as string) : {});
+      if (url.includes("/option-groups/preview-legs")) {
+        const u = new URL(url);
+        const bullish = u.searchParams.get("action") === "BUY";
+        const spread = u.searchParams.get("option_position_style") === "spread";
+        return json(
+          spread
+            ? {
+                strategy_type: bullish ? "bull_call_spread" : "bear_put_spread",
+                expiry: "2026-10-30",
+                legs: [
+                  { action: "BUY", option_type: bullish ? "CE" : "PE", strike: bullish ? 2600 : 2400, expiry: "2026-10-30" },
+                  { action: "SELL", option_type: bullish ? "CE" : "PE", strike: bullish ? 2800 : 2200, expiry: "2026-10-30" },
+                ],
+              }
+            : {
+                strategy_type: bullish ? "naked_call" : "naked_put",
+                expiry: "2026-10-30",
+                legs: [{ action: "BUY", option_type: bullish ? "CE" : "PE", strike: 2500, expiry: "2026-10-30" }],
+              },
+        );
+      }
       if (url.includes("/equity-screener")) return json(scr);
       if (url.includes("/custom-screens/preview")) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
       if (/\/custom-screens\/[^/]+\/run$/.test(url)) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
@@ -239,7 +260,7 @@ describe("OI buildup", () => {
   });
 
   describe("the inline trade ticket", () => {
-    it("opens the real ticket in the card on Trade, with options offered even though this is not a PRESETS symbol", async () => {
+    it("opens the real ticket in the card on Trade, with a Spot/Option choice of its own", async () => {
       const user = userEvent.setup();
       renderAt("/scan");
       const list = await screen.findByTestId("oi-list");
@@ -247,13 +268,36 @@ describe("OI buildup", () => {
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       expect(tcs.getByRole("button", { name: "Close trade" })).toHaveAttribute("aria-expanded", "true");
       expect(await tcs.findByTestId("ticket")).toBeInTheDocument();
-      // Not a PRESETS instrument (only NIFTY/BANKNIFTY/... are), but every OI-buildup row has an
-      // option chain by definition - optionsForced is what makes these show up here.
-      expect(tcs.getByRole("button", { name: "Spot" })).toBeInTheDocument();
+      expect(tcs.getByRole("button", { name: "Spot" })).toHaveAttribute("aria-pressed", "true");
       expect(tcs.getByRole("button", { name: "Option" })).toBeInTheDocument();
-      expect(tcs.getByRole("button", { name: "Option spread" })).toBeInTheDocument();
+      // No Future/Option/Option spread chips or Buy/Sell pill from TradeTicket itself while on
+      // Spot either - ScanTradePanel's own Spot/Option choice is the only one shown.
+      expect(tcs.queryByRole("button", { name: "Option spread" })).not.toBeInTheDocument();
       await user.click(tcs.getByRole("button", { name: "Close trade" }));
       expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
+    });
+
+    it("picking Option shows a Bullish/Bearish view instead of naked/spread jargon, with the real recommended legs - not a PRESETS symbol, but every OI-buildup row has an option chain by definition", async () => {
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]); // TCS
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      await tcs.findByTestId("ticket");
+      await user.click(tcs.getByRole("button", { name: "Option" }));
+      expect(tcs.getByRole("button", { name: "Bullish" })).toHaveAttribute("aria-pressed", "true"); // BUY is the ticket's own default
+      expect(tcs.getByRole("button", { name: "Bearish" })).toBeInTheDocument();
+      expect(tcs.queryByRole("button", { name: "Option spread" })).not.toBeInTheDocument(); // TradeTicket's own chips stay hidden
+      // "Just buy the option" (naked) is the default here - no default_option_strategy set on
+      // this mocked profile, so ProfileContext falls back to "naked" (see items 4/5).
+      expect(tcs.getByRole("button", { name: "Just buy the option" })).toHaveAttribute("aria-pressed", "true");
+      expect(await tcs.findByTestId("option-leg-preview")).toHaveTextContent("Buy Call, exp 30 Oct — Buy 2500 CE");
+
+      await user.click(tcs.getByRole("button", { name: "Defined-risk spread" }));
+      expect(await tcs.findByTestId("option-leg-preview")).toHaveTextContent("Bull Call Spread, exp 30 Oct — Buy 2600 CE, Sell 2800 CE");
+
+      await user.click(tcs.getByRole("button", { name: "Bearish" }));
+      expect(await tcs.findByTestId("option-leg-preview")).toHaveTextContent("Bear Put Spread, exp 30 Oct — Buy 2400 PE, Sell 2200 PE");
     });
 
     it("Chart and Trade are independent - both can be open on the same card, and different cards can each have one open", async () => {

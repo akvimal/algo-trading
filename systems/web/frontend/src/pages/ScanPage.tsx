@@ -10,6 +10,7 @@ import { Sparkline } from "../components/Sparkline";
 import { formatDay, formatPct, formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
 import { ScanChartPanel } from "./ScanChartPanel";
+import { ScanTradePanel } from "./ScanTradePanel";
 import {
   BUILDUP_HELP, BUILDUP_LABEL, OI_DEFAULTS, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, tradeLink, visible,
   type OiFilters, type OiSort, type ScreenerFilters, type ScreenerSort,
@@ -86,10 +87,13 @@ function OiScan() {
   const [f, setF] = useState<OiFilters>(OI_DEFAULTS);
   const rows = data.data ? filterOi(data.data.rows, f) : [];
   const [shown, more] = useShown(JSON.stringify(f));
-  // Only one card's chart is ever open at a time - each one is a real live chart (its own quote
-  // socket, its own klinecharts instance), so this bounds the list to exactly one of those however
-  // many cards are on screen. Picking a different card's Chart closes whichever was open.
+  // Only one card's chart, and independently only one card's ticket, is ever open at a time - each
+  // is its own live read (a quote socket for the chart, an account/regime read for the ticket), so
+  // this bounds the page to at most one of each however many cards are on screen. The two track
+  // separately (a different card's Chart and a different card's Trade can be open together) since
+  // there is no real link between which chart you are looking at and which ticket you are filling.
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [tradeOpen, setTradeOpen] = useState<string | null>(null);
 
   return (
     <div className="stack">
@@ -136,7 +140,14 @@ function OiScan() {
             <>
               <div className="stack" data-testid="oi-list">
                 {visible(rows, shown).map((r) => (
-                  <OiCard key={r.symbol} row={r} expanded={expanded === r.symbol} onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))} />
+                  <OiCard
+                    key={r.symbol}
+                    row={r}
+                    expanded={expanded === r.symbol}
+                    onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))}
+                    tradeOpen={tradeOpen === r.symbol}
+                    onToggleTrade={() => setTradeOpen((cur) => (cur === r.symbol ? null : r.symbol))}
+                  />
                 ))}
               </div>
               {shown < rows.length && (
@@ -162,7 +173,19 @@ function BuildupPill({ b }: { b: Buildup | null }) {
   );
 }
 
-function OiCard({ row: r, expanded, onToggle }: { row: OiRow; expanded: boolean; onToggle: () => void }) {
+function OiCard({
+  row: r,
+  expanded,
+  onToggle,
+  tradeOpen,
+  onToggleTrade,
+}: {
+  row: OiRow;
+  expanded: boolean;
+  onToggle: () => void;
+  tradeOpen: boolean;
+  onToggleTrade: () => void;
+}) {
   return (
     <div className="card scan-card" data-testid="oi-card">
       <div className="row">
@@ -186,17 +209,25 @@ function OiCard({ row: r, expanded, onToggle }: { row: OiRow; expanded: boolean;
         <span className="dim">
           Put/call ratio <span className="num">{r.pcr == null ? "–" : r.pcr.toFixed(2)}</span>
         </span>
-        <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
-          {expanded ? "Close chart" : "Chart"}
-        </button>
+        <span className="field-actions">
+          <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
+            {expanded ? "Close chart" : "Chart"}
+          </button>
+          <button className="link-btn" aria-expanded={tradeOpen} onClick={onToggleTrade}>
+            {tradeOpen ? "Close trade" : "Trade"}
+          </button>
+        </span>
       </div>
-      {expanded && (
-        <>
-          <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />
-          <p style={{ margin: "2px 0 0" }}>
-            <Link to={tradeLink(r.symbol)}>Open in Trade, to place an order →</Link>
-          </p>
-        </>
+      {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
+      {tradeOpen && (
+        <div className="scan-chart">
+          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} />
+        </div>
+      )}
+      {(expanded || tradeOpen) && (
+        <p style={{ margin: "2px 0 0" }}>
+          <Link to={tradeLink(r.symbol)}>Open the full Trade page →</Link>
+        </p>
       )}
     </div>
   );

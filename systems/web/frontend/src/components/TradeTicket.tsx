@@ -37,12 +37,17 @@ type Props = {
   /** Put a starting line for this field on the chart, to drag to the right price. */
   onAddLine?: (f: PriceField) => void;
   onPlaced: () => void;
+  /** Overrides the usual optionsAvailable(symbol) check (which only knows about the handful of
+   * index/commodity/crypto PRESETS) for a caller that already knows options exist for this symbol
+   * some other way - e.g. the Scan page's embedded ticket, whose rows come from the OI-buildup
+   * feed and so are guaranteed to have an option chain even though they are not a PRESETS entry. */
+  optionsForced?: boolean;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -70,7 +75,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
     ) : undefined;
   const fav = favorable(checks);
   const stock = meta.instrument === "spot";
-  const options = optionsAvailable(ctx.symbol);
+  const options = optionsForced ?? optionsAvailable(ctx.symbol);
   const isOption = t.strategy !== "future";
   const limit = t.orderType === "limit";
 
@@ -112,7 +117,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
       {options && (
         <div className="chips" role="group" aria-label="What to trade" style={{ marginBottom: 12 }}>
           <button aria-pressed={t.strategy === "future"} onClick={() => set("strategy", "future")}>
-            Future
+            {stock ? "Spot" : "Future"}
           </button>
           <button aria-pressed={t.strategy === "naked"} onClick={() => set("strategy", "naked")}>
             Option
@@ -160,7 +165,12 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
       </div>
       <TextField
         id="t-lots"
-        label={stock ? "Number of shares" : "Number of lots"}
+        // An option order is always lot-based, whatever the underlying is - stock vs index only
+        // matters for a spot/future order's own units. Previously always true together (only
+        // PRESETS symbols - all index/commodity/crypto - ever reached the option chips, and none
+        // of those are "stock"), so this only started to matter once optionsForced (the Scan
+        // page's ticket) let a stock's own option order through.
+        label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
         value={t.lots}
         onChange={(v) => set("lots", v)}
         placeholder={isOption || ctx.segment === "CRYPTO" ? "Sized for you" : "Auto from your risk"}

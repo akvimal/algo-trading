@@ -1,12 +1,9 @@
 import { Suspense, lazy, useRef, useState } from "react";
-import { getLtp } from "../api/trade";
 import type { ChartPaneHandle, DrawTool } from "../chart/ChartPane";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { EMPTY_STRUCTURE, INTERVALS, loadTools, saveTools } from "../chart/config";
-import { useQuoteSocket } from "../hooks/useQuoteSocket";
-import { useResource } from "../hooks/useResource";
 import { PaneHeader } from "../workstation/PaneHeader";
-import { isFresh } from "./tradeModel";
+import { useScanLivePrice } from "./useScanLivePrice";
 
 // The chart library is large and only a card that is actually expanded needs it.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
@@ -34,14 +31,7 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
   const [hasSelection, setHasSelection] = useState(false);
   const paneRef = useRef<ChartPaneHandle>(null);
 
-  // Same "socket first, REST underneath" price as the Trade page's own charts (usePaneData +
-  // TradePage's priceOf), just for the one symbol this card is showing.
-  const ltp = useResource(() => getLtp(exchange, symbol), [exchange, symbol], { pollMs: 30_000 });
-  const [pushed, setPushed] = useState<{ price: number; at: number } | null>(null);
-  const socket = useQuoteSocket([{ exchange, symbol }], (t) => {
-    if (t.exchange === exchange && t.symbol === symbol) setPushed({ price: t.price, at: Date.now() });
-  });
-  const price = pushed && isFresh(pushed.at, Date.now()) ? pushed.price : (ltp.data?.ltp ?? null);
+  const { price, connected } = useScanLivePrice(exchange, symbol);
 
   const chooseTool = (t: DrawTool | null) => {
     setTool(t);
@@ -57,7 +47,7 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
 
   return (
     <div className="scan-chart">
-      <PaneHeader index={0} symbol={symbol} interval={interval} onInterval={setInterval} price={price} priceShown live={socket.connected} regime={null} active={false} showActive={false} intervals={SCAN_INTERVALS} />
+      <PaneHeader index={0} symbol={symbol} interval={interval} onInterval={setInterval} price={price} priceShown live={connected} regime={null} active={false} showActive={false} intervals={SCAN_INTERVALS} />
       <div className="scan-chart-body">
         <DrawToolbar
           active={tool}

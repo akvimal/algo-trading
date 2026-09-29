@@ -37,6 +37,10 @@ let previewResult: any;
 let previewErrorDetail: string | null;
 let seq: number;
 let calls: { url: string; method: string }[];
+let account: Record<string, any>;
+let regimeRead: Record<string, any>;
+let placeManual: (body: any) => Response;
+let placeOption: (body: any) => Response;
 
 beforeEach(() => {
   calls = [];
@@ -47,6 +51,14 @@ beforeEach(() => {
   previewResult = { snapshot_date: "2026-09-25", candidates: 2, matches: [{ symbol: "TCS", exchange: "NSE", close: 3500 }] };
   previewErrorDetail = null;
   seq = 0;
+  account = {
+    segment: "NSE", starting_balance: 200000, current_balance: 200000, realized_pnl: 0, unrealized_pnl: 0, capital_per_trade: 100000,
+    max_daily_loss: null, live_trading_enabled: false, apply_charges: false, require_stop_loss: false, square_off_time: null,
+    risk_per_trade_pct: 1, min_reward_risk_ratio: 2, enforce_risk_based_lots: false, slippage_bps: 0, max_order_value: null, live_trading_consent_at: null,
+  };
+  regimeRead = { regime: "trending_up", trend: "up", adx: 28 };
+  placeManual = () => json({ id: "p1", status: "OPEN" });
+  placeOption = () => json({ id: "g1", status: "OPEN" });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -58,6 +70,10 @@ beforeEach(() => {
         return json(candlesFor(new URL(url).searchParams.get("symbol") ?? "", interval));
       }
       if (url.includes("/quotes/ltp")) return json({ exchange: "NSE", symbol: new URL(url).searchParams.get("symbol"), ltp: 2500, provider: "dhan" });
+      if (url.endsWith("/accounts")) return json([account]);
+      if (url.includes("/regime")) return json(regimeRead);
+      if (url.endsWith("/positions/manual")) return placeManual(init?.body ? JSON.parse(init.body as string) : {});
+      if (url.endsWith("/option-groups/manual")) return placeOption(init?.body ? JSON.parse(init.body as string) : {});
       if (url.includes("/equity-screener")) return json(scr);
       if (url.includes("/custom-screens/preview")) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
       if (/\/custom-screens\/[^/]+\/run$/.test(url)) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
@@ -175,8 +191,8 @@ describe("OI buildup", () => {
       expect(tcs.getByRole("button", { name: "Trend line" })).toBeInTheDocument();
       expect(tcs.getByRole("button", { name: "Zone (supply or demand)" })).toBeInTheDocument();
       await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("interval=daily") && c.url.includes("symbol=TCS"))).toBe(true));
-      // Placing an order still needs the real ticket - not lost, just no longer the default action.
-      expect(tcs.getByRole("link", { name: /Open in Trade/ })).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE");
+      // The full Trade page is still one tap away - not lost, just no longer the default action.
+      expect(tcs.getByRole("link", { name: /Open the full Trade page/ })).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE");
     });
 
     it("closes again on a second click, and only one card's chart is open at a time", async () => {
@@ -219,6 +235,78 @@ describe("OI buildup", () => {
       expect(tcs.getByRole("button", { name: "1d" })).toBeInTheDocument();
       expect(tcs.getByRole("button", { name: "1w" })).toBeInTheDocument();
       for (const label of ["1m", "3m", "5m", "30m", "1h"]) expect(tcs.queryByRole("button", { name: label })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("the inline trade ticket", () => {
+    it("opens the real ticket in the card on Trade, with options offered even though this is not a PRESETS symbol", async () => {
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]); // TCS
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      expect(tcs.getByRole("button", { name: "Close trade" })).toHaveAttribute("aria-expanded", "true");
+      expect(await tcs.findByTestId("ticket")).toBeInTheDocument();
+      // Not a PRESETS instrument (only NIFTY/BANKNIFTY/... are), but every OI-buildup row has an
+      // option chain by definition - optionsForced is what makes these show up here.
+      expect(tcs.getByRole("button", { name: "Spot" })).toBeInTheDocument();
+      expect(tcs.getByRole("button", { name: "Option" })).toBeInTheDocument();
+      expect(tcs.getByRole("button", { name: "Option spread" })).toBeInTheDocument();
+      await user.click(tcs.getByRole("button", { name: "Close trade" }));
+      expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
+    });
+
+    it("Chart and Trade are independent - both can be open on the same card, and different cards can each have one open", async () => {
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const [tcs, reliance] = [within(within(list).getAllByTestId("oi-card")[0]), within(within(list).getAllByTestId("oi-card")[1])];
+      await user.click(tcs.getByRole("button", { name: "Chart" }));
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      expect(await tcs.findByTestId("chart-pane")).toBeInTheDocument();
+      expect(tcs.getByTestId("ticket")).toBeInTheDocument();
+      await user.click(reliance.getByRole("button", { name: "Trade" })); // a different card's Trade closes TCS's, not its chart
+      expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
+      expect(tcs.getByTestId("chart-pane")).toBeInTheDocument();
+      expect(await reliance.findByTestId("ticket")).toBeInTheDocument();
+    });
+
+    it("places a spot order straight from the card", async () => {
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      await tcs.findByTestId("ticket");
+      await user.type(tcs.getByLabelText("Stop-loss"), "2400");
+      await user.click(tcs.getByRole("button", { name: /Buy TCS, paper order/ }));
+      await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/positions/manual"))).toBe(true));
+      const posted = calls.find((c) => c.method === "POST" && c.url.endsWith("/positions/manual"))!;
+      expect(posted).toBeDefined();
+    });
+
+    it("places an option order straight from the card", async () => {
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      await tcs.findByTestId("ticket");
+      await user.click(tcs.getByRole("button", { name: "Option" }));
+      await user.type(tcs.getByLabelText("Stop-loss"), "2400");
+      await user.click(tcs.getByRole("button", { name: /Buy TCS, paper order/ }));
+      await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/option-groups/manual"))).toBe(true));
+    });
+
+    it("shows the live-trading notice instead of a ticket when the account is set to live", async () => {
+      account.live_trading_enabled = true;
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      expect(await tcs.findByText(/set to live trading/)).toBeInTheDocument();
+      expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
     });
   });
 });

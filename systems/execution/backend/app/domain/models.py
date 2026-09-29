@@ -932,6 +932,25 @@ class SpotTargetUpdate(BaseModel):
     spot_target_price: float = Field(gt=0)
 
 
+class OptionLegPreviewLeg(BaseModel):
+    action: Literal["BUY", "SELL"]
+    option_type: Literal["CE", "PE"]
+    strike: float
+    expiry: str
+
+
+class OptionLegPreview(BaseModel):
+    """GET /option-groups/preview-legs - the legs a real POST /option-groups/manual with the
+    same params would use, without placing anything. Backs the Scan page's bias-driven
+    option-strategy panel (see option_position_manager.preview_option_legs's own docstring).
+    security_id (present on the underlying leg dicts) is deliberately not carried through -
+    this is a display-only preview, not something a caller re-submits verbatim."""
+
+    strategy_type: str
+    expiry: str
+    legs: list[OptionLegPreviewLeg]
+
+
 class NotesUpdate(BaseModel):
     """PUT /positions/{id}/notes and PUT /option-groups/{id}/notes - a
     free-text journal comment on a manual trade, shown and edited from the

@@ -975,6 +975,70 @@ def open_manual_option_group(
     return group
 
 
+class OptionLegPreviewError(Exception):
+    """Raised by preview_option_legs when the legs cannot be resolved (unknown symbol, no
+    tradeable expiry, no chain, or the chain lacks a strike the requested template needs) -
+    the route maps it straight to a 422, using the exact same failure text
+    open_manual_option_group would have rejected the real order with at that same step."""
+
+
+def preview_option_legs(
+    segment: str,
+    symbol: str,
+    action: str,
+    option_position_style: str,
+    option_strike_moneyness: str,
+    expiry: Optional[str],
+    resolve_underlying: ResolveUnderlying,
+    get_expiry_list: GetExpiryList,
+    get_option_chain: GetOptionChain,
+) -> dict:
+    """Read-only counterpart to open_manual_option_group's own leg-selection block above -
+    the exact same resolve_underlying -> expiry -> get_option_chain -> option_templates
+    steps, reused verbatim (not a parallel reimplementation) so a preview can never drift
+    from what a real POST /option-groups/manual with the same params would actually place.
+    No account, DB, quote or sizing touched - nothing here can reject for a reason the real
+    order would not also hit at this exact same step.
+
+    Backs the Scan page's bias-driven option panel: the person picks Bullish (action='BUY')
+    or Bearish ('SELL') first, sees the real strikes this would resolve to, before
+    committing to anything - see docs/architecture.md's Scan-page option-strategy section.
+
+    Raises OptionLegPreviewError - there is no signal_id/row here to attach a rejection
+    reason to (unlike open_manual_option_group's own _reject_manual_group calls), so this
+    just raises instead; the route maps it to a 422 with the same message."""
+    resolved = resolve_underlying(segment, symbol)
+    if resolved is None:
+        raise OptionLegPreviewError(f"could not resolve underlying '{symbol}' on {segment} for options")
+    chart_symbol, chart_exchange = resolved["chart_symbol"], resolved["chart_exchange"]
+
+    expiries = get_expiry_list(chart_exchange, chart_symbol)
+    if not expiries:
+        raise OptionLegPreviewError(f"no currently-tradeable expiry available for '{chart_symbol}'")
+    if expiry is None:
+        resolved_expiry = sorted(expiries)[0]  # nearest - same default open_manual_option_group uses
+    elif expiry not in expiries:
+        raise OptionLegPreviewError(f"'{expiry}' is not a currently-tradeable expiry for '{chart_symbol}' - available: {expiries}")
+    else:
+        resolved_expiry = expiry
+
+    chain = get_option_chain(chart_exchange, chart_symbol, resolved_expiry)
+    if chain is None:
+        raise OptionLegPreviewError(f"could not resolve option chain for '{chart_symbol}' ({resolved_expiry})")
+
+    try:
+        if option_position_style == "naked":
+            strategy_type, legs = ("naked_call", naked_call(chain, option_strike_moneyness)) if action == "BUY" else ("naked_put", naked_put(chain, option_strike_moneyness))
+        elif action == "BUY":
+            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness)
+        else:
+            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness)
+    except ValueError as exc:
+        raise OptionLegPreviewError(f"could not build an option strategy for '{symbol}': {exc}") from exc
+
+    return {"strategy_type": strategy_type, "expiry": resolved_expiry, "legs": legs}
+
+
 def submit_option_group_review(
     db: Session,
     user_id: uuid.UUID,

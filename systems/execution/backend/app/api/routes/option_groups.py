@@ -5,7 +5,7 @@ equivalents this parallels."""
 
 import functools
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from app.auth import User, get_current_user, require_admin
 from app.domain.models import (
     ManualOptionPositionCreate,
     NotesUpdate,
+    OptionLegPreview,
     ReviewSubmit,
     SpotStopLossUpdate,
     SpotTargetUpdate,
@@ -33,10 +34,12 @@ from app.domain.models import (
     TradeTagsUpdate,
 )
 from app.domain.option_position_manager import (
+    OptionLegPreviewError,
     check_option_group_exits,
     compute_group_unrealized_pnl,
     legs_by_group,
     open_manual_option_group,
+    preview_option_legs,
     square_off_all_open_option_groups,
     square_off_due_option_groups,
     square_off_option_group,
@@ -301,6 +304,32 @@ def get_option_group_pnl_history(group_id: str, user: User = Depends(get_current
         {"recorded_at": r.recorded_at.isoformat(), "combined_price": float(r.combined_price), "unrealized_pnl": float(r.unrealized_pnl)}
         for r in rows
     ]
+
+
+@router.get("/option-groups/preview-legs", response_model=OptionLegPreview)
+def preview_legs(
+    segment: str,
+    symbol: str,
+    action: Literal["BUY", "SELL"],
+    option_position_style: Literal["naked", "spread"] = "spread",
+    option_strike_moneyness: str = "ATM",
+    expiry: Optional[str] = None,
+    user: User = Depends(get_current_user),
+):
+    """Read-only: the legs a real POST /option-groups/manual with these exact params would
+    use, without placing anything - see option_position_manager.preview_option_legs's own
+    docstring for why this can never drift from what actually gets placed. Backs the Scan
+    page's bias-driven option panel: Bullish (action='BUY') or Bearish ('SELL') first, the
+    real recommended strikes before committing to an order."""
+    try:
+        return preview_option_legs(
+            segment, symbol, action, option_position_style, option_strike_moneyness, expiry,
+            resolve_underlying,
+            functools.partial(get_expiry_list, token=user.token),
+            functools.partial(get_option_chain, token=user.token),
+        )
+    except OptionLegPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/option-groups/manual")

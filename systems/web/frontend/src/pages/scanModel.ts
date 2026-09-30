@@ -15,6 +15,23 @@ export const BUILDUP_HELP: Record<Buildup, string> = {
   long_unwinding: "price down, open interest down: buyers are exiting",
 };
 
+/** A first guess at Bullish/Bearish from the call/put OI buildup readings already on the card -
+ * "good" (long_buildup/short_covering - this leg's OWN premium rising, see BUILDUP_HELP) on the
+ * call side reads bullish (calls being bought or short-covered as the underlying rises); the same
+ * "good" reading on the put side reads bearish (puts being bought or short-covered as the
+ * underlying falls) - the same "good" classification BuildupPill already uses for its own colour.
+ * When the two agree with each other (both or neither "good" - no clear call/put split) this
+ * falls back to the day's own price change. Always just a starting point for the Bullish/Bearish
+ * chips, never a recommendation - the person can change it with one click either way. */
+export function defaultViewFromOi(row: Pick<OiRow, "call_buildup" | "put_buildup" | "price_change_pct">): "BUY" | "SELL" {
+  const good = (b: Buildup | null) => b === "long_buildup" || b === "short_covering";
+  const callBullish = good(row.call_buildup);
+  const putBearish = good(row.put_buildup);
+  if (callBullish && !putBearish) return "BUY";
+  if (putBearish && !callBullish) return "SELL";
+  return (row.price_change_pct ?? 0) >= 0 ? "BUY" : "SELL";
+}
+
 export const REGIME_LABEL: Record<Regime, string> = {
   trending_up: "Trending up",
   trending_down: "Trending down",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, tradeLink, visible } from "./scanModel";
+import { OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, tradeLink, visible } from "./scanModel";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
   symbol, exchange: "NSE", snapshot_date: "2026-09-25", spot_price: 100, total_call_oi: 1000, total_put_oi: 1000, pcr: 1,
@@ -46,6 +46,24 @@ describe("filterOi", () => {
 
   it("sorts A to Z on request", () => {
     expect(filterOi(rows, { ...OI_DEFAULTS, sort: "symbol" }).map((r) => r.symbol)).toEqual(["AAA", "BBB", "CCC", "DDD"]);
+  });
+});
+
+describe("defaultViewFromOi", () => {
+  it("reads bullish when the call side is 'good' and the put side isn't", () => {
+    expect(defaultViewFromOi(oi("AAA", { call_buildup: "long_buildup", put_buildup: "short_buildup" }))).toBe("BUY");
+    expect(defaultViewFromOi(oi("AAA", { call_buildup: "short_covering", put_buildup: "long_unwinding" }))).toBe("BUY");
+  });
+
+  it("reads bearish when the put side is 'good' and the call side isn't", () => {
+    expect(defaultViewFromOi(oi("AAA", { call_buildup: "short_buildup", put_buildup: "long_buildup" }))).toBe("SELL");
+    expect(defaultViewFromOi(oi("AAA", { call_buildup: "long_unwinding", put_buildup: "short_covering" }))).toBe("SELL");
+  });
+
+  it("falls back to the day's own price change when both sides read the same way", () => {
+    expect(defaultViewFromOi(oi("AAA", { call_buildup: "long_buildup", put_buildup: "long_buildup", price_change_pct: 2 }))).toBe("BUY");
+    expect(defaultViewFromOi(oi("AAA", { call_buildup: "long_buildup", put_buildup: "long_buildup", price_change_pct: -2 }))).toBe("SELL");
+    expect(defaultViewFromOi(oi("AAA", { call_buildup: null, put_buildup: null, price_change_pct: null }))).toBe("BUY"); // no signal at all - stays on the ticket's own BUY default
   });
 });
 

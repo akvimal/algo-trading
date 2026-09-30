@@ -267,10 +267,11 @@ describe("OI buildup", () => {
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       expect(tcs.getByRole("button", { name: "Close trade" })).toHaveAttribute("aria-expanded", "true");
       expect(await tcs.findByTestId("ticket")).toBeInTheDocument();
-      expect(tcs.getByRole("button", { name: "Spot" })).toHaveAttribute("aria-pressed", "true");
-      expect(tcs.getByRole("button", { name: "Option" })).toBeInTheDocument();
-      // No Future/Option/Option spread chips or Buy/Sell pill from TradeTicket itself while on
-      // Spot either - ScanTradePanel's own Spot/Option choice is the only one shown.
+      // Defaults to Option, not Spot - every OI-buildup row has an option chain by definition.
+      expect(tcs.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true");
+      expect(tcs.getByRole("button", { name: "Spot" })).toBeInTheDocument();
+      // No Future/Option/Option spread chips from TradeTicket itself - ScanTradePanel's own
+      // Spot/Option choice is the only one shown (hideStrategyChips).
       expect(tcs.queryByRole("button", { name: "Option spread" })).not.toBeInTheDocument();
       await user.click(tcs.getByRole("button", { name: "Close trade" }));
       expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
@@ -394,6 +395,7 @@ describe("OI buildup", () => {
       const tcs = within(within(list).getAllByTestId("oi-card")[0]);
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       await tcs.findByTestId("ticket");
+      await user.click(tcs.getByRole("button", { name: "Spot" })); // defaults to Option now - every OI-buildup row has an option chain
       await user.type(tcs.getByLabelText("Stop-loss"), "2400");
       await user.click(tcs.getByRole("button", { name: /Buy TCS, paper order/ }));
       await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/positions/manual"))).toBe(true));
@@ -401,23 +403,26 @@ describe("OI buildup", () => {
       expect(posted).toBeDefined();
     });
 
-    it("places an option order straight from the card", async () => {
-      // No Stop-loss/Target/Lots/checks/Confidence for an option trade here (hideOptionExtras) -
-      // the account doesn't require a stop-loss, so nothing blocks placing without one.
+    it("places an option order straight from the card - defaults to Option, no spot-oriented chrome at all", async () => {
+      // Defaults to Option (no click needed) - and no Order type/Stop-loss/Target/Lots/checks/
+      // Confidence for an option trade here (hideOptionExtras): every option position this
+      // platform can place is already risk-capped by construction, so analyzeTicket never
+      // requires a stop-loss for one regardless of the account's own require_stop_loss setting.
       const user = userEvent.setup();
       renderAt("/scan");
       const list = await screen.findByTestId("oi-list");
       const tcs = within(within(list).getAllByTestId("oi-card")[0]);
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       await tcs.findByTestId("ticket");
-      await user.click(tcs.getByRole("button", { name: "Option" }));
+      expect(tcs.queryByRole("group", { name: "Order type" })).not.toBeInTheDocument();
       expect(tcs.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
       expect(tcs.queryByTestId("checks")).not.toBeInTheDocument();
+      expect(tcs.getByLabelText("Why this trade? (helps your review later)")).toBeInTheDocument(); // kept, unlike the rest
       await user.click(tcs.getByRole("button", { name: /Buy TCS, paper order/ }));
       await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/option-groups/manual"))).toBe(true));
     });
 
-    it("still shows Stop-loss for an option trade when the account requires one", async () => {
+    it("hides Stop-loss/Order type for an option trade even when the account requires a stop-loss", async () => {
       account.require_stop_loss = true;
       const user = userEvent.setup();
       renderAt("/scan");
@@ -425,9 +430,11 @@ describe("OI buildup", () => {
       const tcs = within(within(list).getAllByTestId("oi-card")[0]);
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       await tcs.findByTestId("ticket");
-      await user.click(tcs.getByRole("button", { name: "Option" }));
-      expect(tcs.getByLabelText("Stop-loss (required)")).toBeInTheDocument();
-      expect(tcs.queryByLabelText("Target")).not.toBeInTheDocument(); // still simplified otherwise
+      expect(tcs.queryByLabelText(/Stop-loss/)).not.toBeInTheDocument();
+      expect(tcs.queryByRole("group", { name: "Order type" })).not.toBeInTheDocument();
+      // Not blocked by the account's own requirement either - placing still works.
+      await user.click(tcs.getByRole("button", { name: /Buy TCS, paper order/ }));
+      await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/option-groups/manual"))).toBe(true));
     });
 
     it("shows the live-trading notice instead of a ticket when the account is set to live", async () => {

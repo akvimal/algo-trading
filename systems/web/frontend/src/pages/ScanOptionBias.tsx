@@ -102,15 +102,6 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
 
   const strikesForType = (chain.data?.strikes ?? []).filter((s) => legQuote(s, legKey) != null);
 
-  // Defaults Lots to 1 the first time this panel is used (EMPTY_TICKET's own "" means "size it
-  // from my risk", a spot-order concept - options are always sized by lots directly, so a person
-  // opening the option view for the first time should see a real starting quantity, not a blank
-  // that quietly means "1, auto" until they notice otherwise).
-  useEffect(() => {
-    if (t.lots.trim() === "") onChange({ ...t, lots: "1" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // A fresh chain, or a flip between CE and PE (Bullish<->Bearish, or Debit<->Credit - both
   // change which side each leg trades), always gets fresh ATM/width-2 defaults for BOTH legs - a
   // strike price carried over from the OTHER side means something completely different (what was
@@ -246,9 +237,10 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
             Bearish
           </button>
         </div>
-        <label className="select-field" style={{ width: "auto" }}>
+        <label className="select-field" style={{ flex: "0 0 auto" }}>
           <span className="dim">Expiry</span>
           <select
+            style={{ width: "max-content" }}
             value={chainExpiry ?? ""}
             disabled={!expiries.data || expiries.data.length === 0}
             onChange={(e) => onChange({ ...t, expiry: e.target.value, primaryStrike: null, secondStrike: null })}

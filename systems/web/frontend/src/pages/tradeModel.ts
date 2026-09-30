@@ -197,7 +197,12 @@ export function analyzeTicket(t: Ticket, ctx: TicketContext): Analysis {
   const validStop = stop !== null && Number.isFinite(stop) && stop > 0 ? stop : null;
   const validTarget = target !== null && Number.isFinite(target) && target > 0 ? target : null;
 
-  if (validStop === null && stop === null) {
+  // Every option position this platform can place is already risk-capped by construction (a
+  // naked position's max loss is the premium paid; a spread's is the strike width - see
+  // execution's _spread_sizing_basis) - unlike a spot/future position, which really can lose more
+  // than expected without a stop. require_stop_loss (and the "no limit" warning otherwise) only
+  // makes sense for the latter.
+  if (validStop === null && stop === null && !isOption(t.strategy)) {
     if (ctx.requireStop) errors.push("Your settings require a stop-loss on every order.");
     else warnings.push("No stop-loss: there is no limit on how much this trade can lose.");
   }

@@ -12,7 +12,7 @@ import { useResource } from "../hooks/useResource";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { ScanTradePanel } from "./ScanTradePanel";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, OI_DEFAULTS, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, tradeLink, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, OI_DEFAULTS, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, tradeLink, visible,
   type OiFilters, type OiSort, type ScreenerFilters, type ScreenerSort,
 } from "./scanModel";
 import {
@@ -221,7 +221,7 @@ function OiCard({
       {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
       {tradeOpen && (
         <div className="scan-chart">
-          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} />
+          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} defaultView={defaultViewFromOi(r)} />
         </div>
       )}
       {(expanded || tradeOpen) && (

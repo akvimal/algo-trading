@@ -7,7 +7,7 @@ import { Skeleton } from "../components/bits";
 import { TradeTicket } from "../components/TradeTicket";
 import { useResource } from "../hooks/useResource";
 import { ScanOptionBias } from "./ScanOptionBias";
-import { emptyTicketFor, instrumentFor, type Ticket } from "./tradeModel";
+import { EMPTY_TICKET, instrumentFor, type Action, type DefaultOptionStrategy, type Ticket } from "./tradeModel";
 import { useScanLivePrice } from "./useScanLivePrice";
 
 // The regime read is for the ticket's own "before you place" checks, not for the chart (which has
@@ -15,7 +15,30 @@ import { useScanLivePrice } from "./useScanLivePrice";
 // whatever candle size ScanChartPanel's own switch happens to be on.
 const REGIME_INTERVAL = "15min";
 
-type Props = { exchange: string; symbol: string };
+type Props = {
+  exchange: string;
+  symbol: string;
+  /** Bullish/Bearish to start the ticket on - the OI-buildup card's own call/put reading (see
+   * scanModel.ts's defaultViewFromOi), not a fixed default. Still just a starting point: the
+   * Bullish/Bearish chips inside change it with one click either way. */
+  defaultView: Action;
+};
+
+/** A fresh ticket for this card - always starting on Option (every OI-buildup row has an option
+ * chain by definition, not just the PRESETS index/commodity/crypto handful emptyTicketFor's own
+ * optionsAvailable(symbol) check knows about, so that helper isn't used here - it would silently
+ * fall back to Future for a plain stock symbol), and on whatever view the OI buildup itself
+ * suggests. The Spot/Option chips below still let a person switch to Spot if that's what they
+ * actually want. Lots starts at 1, not EMPTY_TICKET's own "" ("size it from my risk", a spot-
+ * order concept) - options are always sized by lots directly, set once here rather than via a
+ * mount effect in ScanOptionBias.tsx, which would race the same component's own chain-loaded
+ * reset effects (both derived from the same pre-update `t` closure on the first render). */
+const initialTicket = (defaultOptionStrategy: DefaultOptionStrategy, defaultView: Action): Ticket => ({
+  ...EMPTY_TICKET,
+  strategy: defaultOptionStrategy,
+  action: defaultView,
+  lots: "1",
+});
 
 /** The order ticket inside an expanded OI-buildup card (ScanPage.tsx's OiCard) - fed from this
  * card's own account/price/regime reads instead of the workstation's, and its own view into an
@@ -26,12 +49,12 @@ type Props = { exchange: string; symbol: string };
  * duplicating it, is the point; only the strategy-selection step needed rethinking. Paper-only,
  * same as TradeTicket itself - an account with live trading on gets the same notice the Trade
  * page shows instead of a ticket reaching for real money from inside a scan card. */
-export function ScanTradePanel({ exchange, symbol }: Props) {
-  const { defaultInstrument, defaultOptionStrategy } = useProfile();
+export function ScanTradePanel({ exchange, symbol, defaultView }: Props) {
+  const { defaultOptionStrategy } = useProfile();
   const accounts = useResource(getAccounts, []);
   const { price } = useScanLivePrice(exchange, symbol);
   const regime = useResource(() => getRegime(exchange, symbol, REGIME_INTERVAL), [exchange, symbol]);
-  const [ticket, setTicket] = useState<Ticket>(() => emptyTicketFor(symbol, defaultInstrument, defaultOptionStrategy));
+  const [ticket, setTicket] = useState<Ticket>(() => initialTicket(defaultOptionStrategy, defaultView));
 
   if (accounts.loading) return <Skeleton lines={5} />;
   if (accounts.error && !accounts.data) return null; // the card still works without a ticket; OiScan already shows the row itself
@@ -85,7 +108,7 @@ export function ScanTradePanel({ exchange, symbol }: Props) {
         hideStrategyChips
         hideMoneynessField={isOption}
         hideOptionExtras={isOption}
-        onPlaced={() => setTicket(emptyTicketFor(symbol, defaultInstrument, defaultOptionStrategy))}
+        onPlaced={() => setTicket(initialTicket(defaultOptionStrategy, defaultView))}
       />
     </>
   );

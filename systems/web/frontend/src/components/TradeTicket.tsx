@@ -53,14 +53,15 @@ type Props = {
    * Scan page's bias-driven leg table) already exposes a strike stepper wired to the same
    * ticket.moneyness field, so the two controls never fight for the same line. */
   hideMoneynessField?: boolean;
-  /** Drops Target, Lots, the Entry/Size/risk summary, "Before you place", "Why this trade?" and
-   * Confidence for an OPTION order only (a plain spot/future order keeps all of them) - the Scan
-   * page's own leg table already shows what's being bought/sold, its live price, and (see
-   * ScanOptionBias.tsx) the real max profit/loss and margin, so a quick option trade there
-   * doesn't need the same plan-first ceremony, spot-oriented risk numbers, or journal prompts a
-   * directional spot/future trade does. Stop-loss stays even here when the account's own
-   * require_stop_loss setting is on - hiding it would leave no way to satisfy that requirement
-   * and the order permanently blocked. */
+  /** Drops Order type (Market/"Wait for a price"), Stop-loss, Target, Lots, the Entry/Size/risk
+   * summary, "Before you place" and Confidence for an OPTION order only (a plain spot/future
+   * order keeps all of them, and "Why this trade?" stays for options too) - the Scan page's own
+   * leg table already shows what's being bought/sold, its live price, the real max profit/loss/
+   * margin, and its own combined stop-loss %/target % (see ScanOptionBias.tsx), all more specific
+   * to an option position than this spot/future-shaped chrome (a limit order waiting for the
+   * underlying, a stop-loss on the underlying's own price) would be. analyzeTicket never requires
+   * a stop-loss for an option regardless of this flag - every option position here is already
+   * risk-capped by construction (premium paid, or strike width), unlike a spot/future position. */
   hideOptionExtras?: boolean;
 };
 
@@ -99,8 +100,6 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
   const isOption = t.strategy !== "future";
   const limit = t.orderType === "limit";
   const simplifiedOption = Boolean(hideOptionExtras) && isOption;
-  const showStop = !simplifiedOption || ctx.requireStop;
-  const showTarget = !simplifiedOption;
 
   async function submit() {
     // Re-derive from the current ticket: nothing captured from an earlier render is ever sent.
@@ -165,17 +164,26 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         </label>
       )}
 
-      <div className="chips" role="group" aria-label="Order type" style={{ marginBottom: 12 }}>
-        <button aria-pressed={!limit} onClick={() => set("orderType", "market")}>
-          Market
-        </button>
-        {/* Credit spreads (bull_put_spread/bear_call_spread) can't wait for a price yet - the
-            pending-order watcher (app/domain/pending_orders.py) only knows how to build a naked/
-            debit-spread leg once triggered, not a credit one. Market-only until that's built. */}
-        <button aria-pressed={limit} disabled={t.strategy === "credit_spread"} title={t.strategy === "credit_spread" ? "Not yet supported for a credit spread - place at the market price instead." : undefined} onClick={() => set("orderType", "limit")}>
-          Wait for a price
-        </button>
-      </div>
+      {/* Market/"Wait for a price" and the spot-based Stop-loss/Target below are a spot/future
+          concept (a limit order waits for the underlying to reach a level; a spot stop-loss
+          protects against the underlying moving further than expected) - for a simplified option
+          order in Scan, the leg table's own Debit/Credit-aware combined stop-loss %/target %
+          (ScanOptionBias.tsx) already covers this, more precisely (as a fraction of the position's
+          own bounded max loss/profit, not an arbitrary underlying level). TradePage's own option
+          ticket (hideOptionExtras not set there) still gets all of this, unchanged. */}
+      {!simplifiedOption && (
+        <div className="chips" role="group" aria-label="Order type" style={{ marginBottom: 12 }}>
+          <button aria-pressed={!limit} onClick={() => set("orderType", "market")}>
+            Market
+          </button>
+          {/* Credit spreads (bull_put_spread/bear_call_spread) can't wait for a price yet - the
+              pending-order watcher (app/domain/pending_orders.py) only knows how to build a naked/
+              debit-spread leg once triggered, not a credit one. Market-only until that's built. */}
+          <button aria-pressed={limit} disabled={t.strategy === "credit_spread"} title={t.strategy === "credit_spread" ? "Not yet supported for a credit spread - place at the market price instead." : undefined} onClick={() => set("orderType", "limit")}>
+            Wait for a price
+          </button>
+        </div>
+      )}
 
       {limit && (
         <TextField id="t-entry" label="Enter when the price reaches" action={pickAction("entry")} value={t.entry} onChange={(v) => set("entry", v)} hint={guided ? `It fires the first time the price crosses this level${isOption ? " (the option is priced then)" : ""}. Watched on our servers, so it works with the app closed.` : undefined} />
@@ -187,10 +195,10 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
           placeholder ("Auto from your risk"/"Sized for you"), so it gets the full row below
           instead of a cramped third column. No hints here (unlike Entry above): the label and
           placeholder already say what is needed, and dropping them is what kept this compact. */}
-      {(showStop || showTarget) && (
+      {!simplifiedOption && (
         <div className="field-row">
-          {showStop && <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />}
-          {showTarget && <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} />}
+          <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />
+          <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} />
         </div>
       )}
       {!simplifiedOption && (
@@ -259,19 +267,21 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         </div>
       )}
 
-      {!simplifiedOption && (
-        <label className="select-field" style={{ margin: "12px 0" }}>
-          <span className="dim">Why this trade? (helps your review later)</span>
-          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
-            <option value="">Not tagged</option>
-            {SETUP_TAGS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      {/* Kept even in the simplified option ticket, unlike the rest of the journal prompts below
+          it (Confidence) - a person asked for this back specifically: unlike Confidence, it's the
+          one place to leave an actual note on WHY, not just how sure, and that's worth keeping
+          even in a quick trade. */}
+      <label className="select-field" style={{ margin: "12px 0" }}>
+        <span className="dim">Why this trade? (helps your review later)</span>
+        <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
+          <option value="">Not tagged</option>
+          {SETUP_TAGS.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </label>
       {!simplifiedOption && (
         <>
           <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>

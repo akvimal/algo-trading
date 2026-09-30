@@ -112,6 +112,14 @@ describe("analyzeTicket", () => {
     expect(soft.warnings.join(" ")).toMatch(/No stop-loss/);
   });
 
+  it("never requires or warns about a stop-loss for an option - every option position here is already risk-capped", () => {
+    const naked = analyzeTicket(ticket({ strategy: "naked" }), ctx({ requireStop: true }));
+    expect(naked.errors.join(" ")).not.toMatch(/require a stop-loss/);
+    expect(naked.warnings.join(" ")).not.toMatch(/No stop-loss/);
+    const spread = analyzeTicket(ticket({ strategy: "spread" }), ctx({ requireStop: false }));
+    expect(spread.warnings.join(" ")).not.toMatch(/No stop-loss/);
+  });
+
   it("a limit order needs its price, and is judged against that price, not the live one", () => {
     expect(analyzeTicket(ticket({ orderType: "limit" }), ctx()).errors.join(" ")).toMatch(/price you want/);
     const a = analyzeTicket(ticket({ orderType: "limit", entry: "980", stop: "970", target: "1010" }), ctx());

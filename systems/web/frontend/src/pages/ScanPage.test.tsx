@@ -29,6 +29,19 @@ const scrRow = (symbol: string, over: object = {}) => ({
   history: [{ snapshot_date: "2026-09-24", close: 800 }, { snapshot_date: "2026-09-25", close: 812.5 }], ...over,
 });
 
+// The Scan page's option leg table (ScanOptionBias) reads a real option chain now, not a
+// preview-legs round trip per click - TCS's spot is 2500 (matches the /quotes/ltp mock below),
+// ATM at the 2500 strike for both sides.
+const OPTION_EXPIRY = "2026-10-30";
+const chainLeg = (securityId: string, lastPrice: number, moneyness: "ITM" | "ATM" | "OTM") => ({ security_id: securityId, last_price: lastPrice, oi: 5000, moneyness });
+const chainStrikes = [
+  { strike: 2300, ce: chainLeg("ce-2300", 300, "ITM"), pe: chainLeg("pe-2300", 25, "OTM") },
+  { strike: 2400, ce: chainLeg("ce-2400", 200, "ITM"), pe: chainLeg("pe-2400", 50, "OTM") },
+  { strike: 2500, ce: chainLeg("ce-2500", 100, "ATM"), pe: chainLeg("pe-2500", 100, "ATM") },
+  { strike: 2600, ce: chainLeg("ce-2600", 50, "OTM"), pe: chainLeg("pe-2600", 200, "ITM") },
+  { strike: 2700, ce: chainLeg("ce-2700", 25, "OTM"), pe: chainLeg("pe-2700", 300, "ITM") },
+];
+
 let oi: { snapshot_date: string; rows: object[] };
 let scr: { snapshot_date: string; rows: object[] };
 let oiStatus = 200;
@@ -74,39 +87,10 @@ beforeEach(() => {
       if (url.includes("/regime")) return json(regimeRead);
       if (url.endsWith("/positions/manual")) return placeManual(init?.body ? JSON.parse(init.body as string) : {});
       if (url.endsWith("/option-groups/manual")) return placeOption(init?.body ? JSON.parse(init.body as string) : {});
-      if (url.includes("/option-groups/preview-legs")) {
-        const u = new URL(url);
-        const bullish = u.searchParams.get("action") === "BUY";
-        const style = u.searchParams.get("option_position_style");
-        const widthParam = u.searchParams.get("spread_width");
-        const width = widthParam ? Number(widthParam) : 2;
-        const secondStrike = (base: number, dir: 1 | -1) => base + dir * width * 100;
-        if (style === "credit_spread") {
-          return json({
-            strategy_type: bullish ? "bull_put_spread" : "bear_call_spread",
-            expiry: "2026-10-30",
-            legs: [
-              { action: "SELL", option_type: bullish ? "PE" : "CE", strike: 2500, expiry: "2026-10-30", premium: 42.5 },
-              { action: "BUY", option_type: bullish ? "PE" : "CE", strike: secondStrike(2500, bullish ? -1 : 1), expiry: "2026-10-30", premium: 12.5 },
-            ],
-          });
-        }
-        return json(
-          style === "spread"
-            ? {
-                strategy_type: bullish ? "bull_call_spread" : "bear_put_spread",
-                expiry: "2026-10-30",
-                legs: [
-                  { action: "BUY", option_type: bullish ? "CE" : "PE", strike: bullish ? 2600 : 2400, expiry: "2026-10-30", premium: 42.5 },
-                  { action: "SELL", option_type: bullish ? "CE" : "PE", strike: secondStrike(bullish ? 2600 : 2400, bullish ? 1 : -1), expiry: "2026-10-30", premium: 12.5 },
-                ],
-              }
-            : {
-                strategy_type: bullish ? "naked_call" : "naked_put",
-                expiry: "2026-10-30",
-                legs: [{ action: "BUY", option_type: bullish ? "CE" : "PE", strike: 2500, expiry: "2026-10-30", premium: 28.75 }],
-              },
-        );
+      if (url.includes("/options/expiries")) return json({ expiries: [OPTION_EXPIRY, "2026-11-06"] });
+      if (url.includes("/options/chain")) {
+        const expiry = new URL(url).searchParams.get("expiry") ?? OPTION_EXPIRY;
+        return json({ underlying_symbol: "TCS", underlying_exchange: "NSE", expiry, underlying_last_price: 2500, strikes: chainStrikes });
       }
       if (url.includes("/equity-screener")) return json(scr);
       if (url.includes("/custom-screens/preview")) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
@@ -303,50 +287,68 @@ describe("OI buildup", () => {
       expect(tcs.queryByRole("button", { name: "Option spread" })).not.toBeInTheDocument(); // TradeTicket's own chips stay hidden
       expect(tcs.queryByText("Strike", { selector: "span.dim" })).not.toBeInTheDocument(); // TradeTicket's own moneyness dropdown stays hidden too
 
+      // The leg table now reads a real option chain (fetched once), not a preview-legs round
+      // trip per click - every strike is a real dropdown option, Lots is editable right in the
+      // table, and Expiry is its own dropdown above it.
+      const expirySelect = await tcs.findByRole("combobox", { name: "Expiry" });
+      expect(within(expirySelect).getByRole("option", { name: "30 Oct" })).toBeInTheDocument();
+      expect(within(expirySelect).getByRole("option", { name: "6 Nov" })).toBeInTheDocument();
+      expect(expirySelect).toHaveValue(OPTION_EXPIRY);
+
       // No default_option_strategy set on this mocked profile, so ProfileContext falls back to
       // "naked" (see items 4/5) - a single row, and an unchecked "add a second leg" checkbox.
       let table = await tcs.findByTestId("option-leg-table");
       let rows = within(table).getAllByRole("row").slice(1); // drop the header row
       expect(rows).toHaveLength(2); // the primary leg's own row, plus the "add a second leg" row
       expect(within(rows[0]).getByText("Buy")).toBeInTheDocument();
-      expect(within(rows[0]).getByText("2500")).toBeInTheDocument();
+      expect(within(rows[0]).getByRole("combobox", { name: "Primary leg strike" })).toHaveValue("2500"); // ATM
       expect(within(rows[0]).getByText("CE")).toBeInTheDocument();
-      expect(within(rows[0]).getByText("₹28.75")).toBeInTheDocument();
+      expect(within(rows[0]).getByText("₹100.00")).toBeInTheDocument();
       expect(tcs.getByRole("checkbox", { name: "Add a second leg to cap the risk" })).not.toBeChecked();
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Buy Call");
       expect(tcs.queryByRole("group", { name: "Debit or credit" })).not.toBeInTheDocument(); // naked - no style choice yet
 
+      // Lots is editable right in the leg table now (hideOptionExtras dropped the standalone field).
+      const lotsInput = within(rows[0]).getByRole("spinbutton");
+      await user.clear(lotsInput);
+      await user.type(lotsInput, "3");
+      expect(lotsInput).toHaveValue(3);
+
       await user.click(tcs.getByRole("checkbox", { name: "Add a second leg to cap the risk" }));
       table = await tcs.findByTestId("option-leg-table");
-      await within(table).findByText("₹42.50"); // waits for the spread preview to land
       rows = within(table).getAllByRole("row").slice(1);
       expect(rows).toHaveLength(2);
-      expect(within(rows[0]).getByText("2600")).toBeInTheDocument();
       expect(within(rows[1]).getByText("Sell")).toBeInTheDocument();
-      expect(within(rows[1]).getByText("2800")).toBeInTheDocument(); // default width (2)
-      expect(within(rows[1]).getByText("₹12.50")).toBeInTheDocument();
+      expect(within(rows[1]).getByRole("combobox", { name: "Second leg strike" })).toHaveValue("2700"); // default: 2 strikes OTM from the 2500 ATM primary
+      expect(within(rows[1]).getByText("₹25.00")).toBeInTheDocument();
       expect(tcs.getByRole("checkbox", { name: "Remove the second leg (buy the option outright)" })).toBeChecked();
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Call Spread");
-      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit ₹30.00 per lot"); // 42.50 - 12.50
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit ₹75.00 per lot"); // 100 - 25
       expect(tcs.getByRole("button", { name: "Pay premium (debit)" })).toHaveAttribute("aria-pressed", "true");
 
-      // Widening the second leg's own strike (independent of the primary leg's moneyness) re-fetches.
-      await user.click(tcs.getByRole("button", { name: "Move the second leg's strike further out" }));
-      table = await tcs.findByTestId("option-leg-table");
-      await within(table).findByText("2900"); // width 3 -> 2600 + 3*100
-      rows = within(table).getAllByRole("row").slice(1);
-      expect(within(rows[1]).getByText("2900")).toBeInTheDocument();
+      // Picking any strike directly - not just stepping through a fixed ITM/OTM ladder - and no
+      // network round trip: the chain's already in hand, so this re-renders instantly.
+      await user.selectOptions(within(rows[0]).getByRole("combobox", { name: "Primary leg strike" }), "2400");
+      expect(within(rows[0]).getByText("₹200.00")).toBeInTheDocument();
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit ₹175.00 per lot"); // 200 - 25
+      expect(within(rows[1]).getByRole("combobox", { name: "Second leg strike" })).toHaveValue("2700"); // untouched by the primary leg's own pick
 
-      // Switching to Credit swaps in bull_put_spread - the SELL leg is now primary.
+      await user.selectOptions(within(rows[1]).getByRole("combobox", { name: "Second leg strike" }), "2600");
+      expect(within(rows[1]).getByText("₹50.00")).toBeInTheDocument();
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit ₹150.00 per lot"); // 200 - 50
+
+      // Switching to Credit swaps in bull_put_spread - the SELL leg is now primary, and picking
+      // it up flips to the PE column (fresh ATM/width-2 defaults, since a CE strike means nothing
+      // on the put side).
       await user.click(tcs.getByRole("button", { name: "Receive premium (credit)" }));
       await waitFor(() => expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Put Spread"));
       table = await tcs.findByTestId("option-leg-table");
       rows = within(table).getAllByRole("row").slice(1);
       expect(within(rows[0]).getByText("Sell")).toBeInTheDocument();
+      expect(within(rows[0]).getByText("PE")).toBeInTheDocument();
       expect(within(rows[1]).getByText("Buy")).toBeInTheDocument();
-      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Put Spread");
-      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net credit ₹30.00 per lot");
-      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("max loss");
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net credit ₹75.00 per lot"); // 100 (SELL 2500 PE) - 25 (BUY 2300 PE)
+      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("max loss ₹125.00 per lot"); // width 200 - credit 75
 
       await user.click(tcs.getByRole("button", { name: "Bearish" }));
       await waitFor(() => expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bear Call Spread")); // credit_spread + Bearish

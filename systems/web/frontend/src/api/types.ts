@@ -261,6 +261,14 @@ export type OiSummary = {
 export type OptionLegPreviewLeg = { action: "BUY" | "SELL"; option_type: "CE" | "PE"; strike: number; expiry: string; premium: number | null };
 export type OptionLegPreview = { strategy_type: string; expiry: string; legs: OptionLegPreviewLeg[] };
 
+/** One CE or PE leg's live quote at one strike (market-data's GET /options/chain) - the same
+ * shape option_templates.py's own chain fixtures use, minus the fields this app doesn't need
+ * (greeks, bid/ask). security_id backs a real order's leg resolution; last_price is what the Scan
+ * page's leg table shows without a separate per-click quote round trip. */
+export type OptionLegQuote = { security_id: string; last_price: number; oi: number; moneyness: "ITM" | "ATM" | "OTM" };
+export type OptionChainStrike = { strike: number; ce: OptionLegQuote | null; pe: OptionLegQuote | null };
+export type OptionChain = { underlying_symbol: string; underlying_exchange: string; expiry: string; underlying_last_price: number; strikes: OptionChainStrike[] };
+
 /** One market_data.sentiment_history row, written every 5 minutes for an OI-chain instrument. */
 export type SentimentHistoryPoint = { recorded_at: string; score_5m: number | null; score_15m: number | null };
 export type SentimentHistoryDay = { exchange: string; session_start: string; session_end: string; points: SentimentHistoryPoint[] };

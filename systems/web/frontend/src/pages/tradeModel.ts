@@ -56,9 +56,21 @@ export type Ticket = {
   strategy: Strategy;
   moneyness: Moneyness;
   // How many strikes the short/protection leg sits from the primary leg, for 'spread'/
-  // 'credit_spread' only - overrides option_templates.py's own SPREAD_WIDTH_STRIKES default (2)
-  // when the Scan page's leg table steps it independently of the primary leg's moneyness.
+  // 'credit_spread' only - overrides option_templates.py's own SPREAD_WIDTH_STRIKES default (2).
+  // Only still meaningful as a fallback when primaryStrike/secondStrike below are null (the Scan
+  // page's leg table always has both set once its option chain has loaded).
   spreadWidth: number;
+  // An explicit strike per leg, picked directly from a real fetched option chain (the Scan
+  // page's leg table - see ScanOptionBias.tsx) - each overrides moneyness/spreadWidth entirely
+  // for its own leg once set. null until a chain has loaded (or for TradePage's own option
+  // ticket, which still drives off moneyness alone - see hideMoneynessField).
+  primaryStrike: number | null;
+  secondStrike: number | null;
+  // The expiry a chosen primaryStrike/secondStrike actually came from - sent through so the
+  // order resolves against the SAME chain the strike was picked from, not whatever the server's
+  // own nearest-expiry default happens to be at submit time. null lets the server pick nearest,
+  // same as before a chain was ever fetched.
+  expiry: string | null;
   orderType: OrderType;
   entry: string;
   stop: string;
@@ -69,7 +81,8 @@ export type Ticket = {
 };
 
 export const EMPTY_TICKET: Ticket = {
-  action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null,
+  action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
+  orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null,
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -320,6 +333,11 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
     body: {
       ...common, option_position_style: t.strategy === "naked" ? "naked" : t.strategy, option_strike_moneyness: t.moneyness,
       ...(t.strategy !== "naked" ? { spread_width: t.spreadWidth } : {}),
+      // An explicit strike per leg (picked from a real fetched chain - see ScanOptionBias.tsx)
+      // takes precedence over moneyness/spread_width above entirely, same as the preview route.
+      ...(t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
+      ...(t.strategy !== "naked" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
+      ...(t.expiry != null ? { expiry: t.expiry } : {}),
       ...(a.lotsAuto ? {} : { option_fixed_lots: a.lots }), plan_checklist: [], order_type: "market",
       trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, ...journal,
     },

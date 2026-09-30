@@ -1,5 +1,5 @@
 import { api } from "./http";
-import type { Candle, Ltp, MarketRegime, OiSummary, OptionGroup, OptionLegPreview, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
+import type { Candle, Ltp, MarketRegime, OiSummary, OptionChain, OptionGroup, OptionLegPreview, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 import type { OpenLevel } from "../chart/trades";
 
@@ -41,6 +41,13 @@ export async function loadChartTrades(segments: Segment[]): Promise<{ positions:
 /** The option-chain expiries for an underlying, nearest first. The provider can be slow to answer. */
 export const getExpiries = (exchange: string, symbol: string) =>
   api<{ expiries: string[] }>("marketData", `/options/expiries?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}`).then((r) => r.expiries);
+
+/** The real option chain for one expiry - every strike's live CE/PE quote (security_id,
+ * last_price, oi, moneyness). Fetched once per (exchange, symbol, expiry) so the Scan page's leg
+ * table can let a person pick any strike directly and re-render instantly on every click, instead
+ * of a fresh preview-legs round trip per interaction. */
+export const getOptionChain = (exchange: string, symbol: string, expiry: string) =>
+  api<OptionChain>("marketData", `/options/chain?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
 
 export const getOiSummary = (exchange: string, symbol: string, expiry: string) =>
   api<OiSummary>("marketData", `/options/oi-summary?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);

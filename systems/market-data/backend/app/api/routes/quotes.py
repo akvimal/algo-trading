@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.data_access import data_credentials
 from app.auth import Caller, get_caller
+from app.domain.dhan_retry import interactive_retry
 from app.domain.models import BatchQuoteRequest, BatchQuoteResponse, Quote
 from app.providers.router import get_provider
 
@@ -16,7 +17,7 @@ def get_ltp(exchange: str, symbol: str, caller: Caller = Depends(get_caller)):
     try:
         provider = get_provider(exchange)
         credentials = data_credentials(caller, exchange)
-        price = provider.get_ltp(symbol, credentials=credentials)
+        price = interactive_retry(provider.get_ltp, symbol, credentials)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -38,7 +39,7 @@ def get_ltp_batch(payload: BatchQuoteRequest, caller: Caller = Depends(get_calle
     try:
         provider = get_provider(payload.exchange)
         credentials = data_credentials(caller, payload.exchange)
-        prices = provider.get_ltp_batch(payload.symbols, credentials=credentials)
+        prices = interactive_retry(provider.get_ltp_batch, payload.symbols, credentials)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

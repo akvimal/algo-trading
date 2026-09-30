@@ -268,6 +268,9 @@ class OptionPositionGroup(Base):
     horizon = Column(Text, nullable=False)
     quantity = Column(Numeric)
     net_debit = Column(Numeric)
+    # The two legs' own strike difference, frozen at open - NULL for a naked (single-leg) group.
+    # See infra/postgres/init/02-execution.sql's own comment on this column.
+    strike_width = Column(Numeric)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
     sl_scope = Column(Text, nullable=False, default="combined")

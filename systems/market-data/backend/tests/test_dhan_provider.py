@@ -122,7 +122,7 @@ def test_get_ltp_fails_fast_when_throttle_queue_too_deep(monkeypatch):
     # up well past MAX_THROTTLE_WAIT_SECONDS, so this should raise
     # immediately rather than block the test (or a real request) for
     # several seconds.
-    dhan._last_ltp_call_at[None] = time.monotonic() + 3.0
+    dhan._last_ltp_call_at[None] = time.monotonic() + 9.0
 
     try:
         provider.get_ltp("RELIANCE")

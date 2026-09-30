@@ -29,7 +29,8 @@ class FakeDb:
 
 def user(**over):
     fields = dict(id="00000000-0000-0000-0000-000000000001", email="a@b.c", name="A", created_at=datetime.now(timezone.utc),
-                  is_admin=False, risk_acknowledged_at=None, risk_acknowledged_version=None, experience="guided", onboarded_at=None)
+                  is_admin=False, risk_acknowledged_at=None, risk_acknowledged_version=None, experience="guided", onboarded_at=None,
+                  default_instrument="future", default_option_strategy="naked")
     fields.update(over)
     return SimpleNamespace(**fields)
 
@@ -131,3 +132,35 @@ def test_markets_alone_changes_nothing_else():
     row = user(experience="pro", onboarded_at=stamp)
     update(row, markets=["NSE"])
     assert row.experience == "pro" and row.onboarded_at == stamp and row.markets == ["NSE"]
+
+
+def test_a_new_user_defaults_to_future_and_naked():
+    out = UserOut.model_validate(user())
+    assert out.default_instrument == "future" and out.default_option_strategy == "naked"
+
+
+def test_older_rows_without_the_default_strategy_fields_still_serialise():
+    bare = SimpleNamespace(id="00000000-0000-0000-0000-000000000004", email="d@e.f", name="D", created_at=datetime.now(timezone.utc),
+                           is_admin=False, risk_acknowledged_at=None, risk_acknowledged_version=None)
+    out = UserOut.model_validate(bare)
+    assert out.default_instrument == "future" and out.default_option_strategy == "naked"
+
+
+def test_choosing_a_default_instrument_and_option_strategy():
+    row = user()
+    update(row, default_instrument="option", default_option_strategy="spread")
+    assert row.default_instrument == "option" and row.default_option_strategy == "spread"
+
+
+def test_an_unknown_default_instrument_or_option_strategy_is_refused():
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(default_instrument="spot")
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(default_option_strategy="strangle")
+
+
+def test_default_instrument_alone_changes_nothing_else():
+    stamp = datetime.now(timezone.utc)
+    row = user(experience="pro", onboarded_at=stamp, default_option_strategy="spread")
+    update(row, default_instrument="option")
+    assert row.experience == "pro" and row.onboarded_at == stamp and row.default_option_strategy == "spread" and row.default_instrument == "option"

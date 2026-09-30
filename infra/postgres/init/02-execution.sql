@@ -372,6 +372,13 @@ CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     horizon                  TEXT NOT NULL,
     quantity                 NUMERIC,  -- lots*lot_size, same units as positions.quantity - NULL if REJECTED
     net_debit                NUMERIC,  -- combined entry premium (long leg - short leg), per unit
+    -- The two legs' own strike difference, frozen at open (strikes never change after) - NULL for
+    -- a naked (single-leg) group. Lets a spread's theoretical max profit/max loss be recovered
+    -- later without a strike/security_id stored anywhere on positions.symbol to re-derive it from
+    -- - see option_position_manager.py's _spread_sizing_basis for the debit/credit width math
+    -- this backs, and migrations/029-option-group-strike-width.sql for the same column added to
+    -- an existing volume.
+    strike_width              NUMERIC,
     combined_stop_loss_price NUMERIC,
     combined_target_price    NUMERIC,
     -- 'combined' (default): combined_stop_loss_price/combined_target_price

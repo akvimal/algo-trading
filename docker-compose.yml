@@ -370,6 +370,27 @@ services:
     depends_on:
       - execution-backend
 
+  # The redesigned, responsive app (docs/redesign-rollout-plan.md Phase 2): one
+  # frontend-only system that grows screen by screen until it replaces the
+  # per-system frontends and the iframe shell below. Same direct-from-browser CORS
+  # pattern as every other frontend; behind the execution profile because its
+  # Today screen is empty without execution running.
+  web-frontend:
+    profiles: ["execution"]
+    build:
+      context: ./systems/web/frontend
+      args:
+        VITE_SIGNAL_ENGINE_PORT: ${SIGNAL_ENGINE_BACKEND_PORT}
+        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+        VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
+        VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
+        VITE_SHELL_PORT: ${SHELL_PORT}
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${WEB_FRONTEND_PORT:-8095}:80"
+    depends_on:
+      - execution-backend
+
   # Static tab shell - not a system of its own, just nav + iframes onto
   # each system's already-independent frontend. See shell/README.md.
   shell:

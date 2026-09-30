@@ -5,7 +5,7 @@ equivalents this parallels."""
 
 import functools
 import uuid
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -23,20 +23,24 @@ from app.adapters.quotes.client import (
 )
 from app.auth import User, get_current_user, require_admin
 from app.domain.models import (
+    CombinedStopLossUpdate,
+    CombinedTargetUpdate,
     ManualOptionPositionCreate,
     NotesUpdate,
+    OptionLegPreview,
     ReviewSubmit,
     SpotStopLossUpdate,
     SpotTargetUpdate,
     SquareOffTimeUpdate,
-    StopLossUpdate,
     TradeTagsUpdate,
 )
 from app.domain.option_position_manager import (
+    OptionLegPreviewError,
     check_option_group_exits,
     compute_group_unrealized_pnl,
     legs_by_group,
     open_manual_option_group,
+    preview_option_legs,
     square_off_all_open_option_groups,
     square_off_due_option_groups,
     square_off_option_group,
@@ -47,6 +51,7 @@ from app.domain.option_position_manager import (
     update_group_spot_target,
     update_group_square_off_time,
     update_group_stop_loss,
+    update_group_target,
 )
 from app.domain.position_manager import load_settings
 
@@ -84,6 +89,11 @@ def _group_to_out(
         "horizon": row.horizon,
         "quantity": float(row.quantity) if row.quantity is not None else None,
         "net_debit": float(row.net_debit) if row.net_debit is not None else None,
+        # The two legs' own strike difference, frozen at open - null for naked, and for any group
+        # opened before this column existed (migrations/029-option-group-strike-width.sql). Lets
+        # the frontend recover a spread's theoretical max profit/loss - see
+        # option_position_manager's _spread_sizing_basis for the identical debit/credit split.
+        "strike_width": float(row.strike_width) if row.strike_width is not None else None,
         "combined_stop_loss_price": float(row.combined_stop_loss_price) if row.combined_stop_loss_price is not None else None,
         "combined_target_price": float(row.combined_target_price) if row.combined_target_price is not None else None,
         "sl_scope": row.sl_scope,
@@ -192,11 +202,13 @@ def _query_option_groups(
     limit: int,
     with_live_pnl: bool,
     token: Optional[str] = None,
+    strategy_id: Optional[uuid.UUID] = None,
 ):
     """Shared by GET /option-groups (user_id=caller) and GET
     /option-groups/platform (user_id=None) - see positions.py's identical
-    _query_positions for the reasoning."""
-    q = db.query(db_models.OptionPositionGroup).filter_by(user_id=user_id)
+    _query_positions for the reasoning (including `strategy_id`)."""
+    q = db.query(db_models.OptionPositionGroup)
+    q = q.filter_by(strategy_id=strategy_id) if strategy_id is not None else q.filter_by(user_id=user_id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:
@@ -301,6 +313,46 @@ def get_option_group_pnl_history(group_id: str, user: User = Depends(get_current
     ]
 
 
+@router.get("/option-groups/preview-legs", response_model=OptionLegPreview)
+def preview_legs(
+    segment: str,
+    symbol: str,
+    action: Literal["BUY", "SELL"],
+    option_position_style: Literal["naked", "spread", "credit_spread"] = "spread",
+    option_strike_moneyness: str = "ATM",
+    expiry: Optional[str] = None,
+    # Overrides the short/protection leg's own distance (in strikes) from
+    # the primary leg - default (None) is option_templates.py's own
+    # SPREAD_WIDTH_STRIKES. Ignored for option_position_style='naked'.
+    spread_width: Optional[int] = None,
+    # An explicit strike per leg, taking precedence over
+    # option_strike_moneyness/spread_width entirely for its own leg - see
+    # ManualOptionPositionCreate's identical fields.
+    primary_strike: Optional[float] = None,
+    second_strike: Optional[float] = None,
+    user: User = Depends(get_current_user),
+):
+    """Read-only: the legs a real POST /option-groups/manual with these exact params would
+    use, without placing anything - see option_position_manager.preview_option_legs's own
+    docstring for why this can never drift from what actually gets placed. Backs the Scan
+    page's bias-driven option panel: Bullish (action='BUY') or Bearish ('SELL') first, the
+    real recommended strikes before committing to an order."""
+    try:
+        return preview_option_legs(
+            segment, symbol, action, option_position_style, option_strike_moneyness, expiry,
+            resolve_underlying,
+            functools.partial(get_expiry_list, token=user.token),
+            functools.partial(get_option_chain, token=user.token),
+            resolve_symbol_by_security_id,
+            functools.partial(get_ltp_batch, token=user.token),
+            spread_width,
+            primary_strike,
+            second_strike,
+        )
+    except OptionLegPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/option-groups/manual")
 def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The Manual tab (signal-generation's frontend) - option orders,
@@ -334,6 +386,9 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         functools.partial(get_ltp_batch, token=user.token),
         resolve_symbol_by_security_id,
         get_lot_size,
+        payload.spread_width,
+        payload.primary_strike,
+        payload.second_strike,
         [a.model_dump() for a in payload.plan_checklist],
         payload.order_type,
         payload.square_off_time,
@@ -341,6 +396,7 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         payload.risk_managed,
         payload.setup_tag,
         payload.confidence,
+        payload.notes,
         payload.entry_interval,
         payload.auto_traded,
     )
@@ -372,7 +428,7 @@ def review_group(group_id: str, payload: ReviewSubmit, user: User = Depends(get_
 
 @router.put("/option-groups/{group_id}/stop-loss")
 def edit_group_stop_loss(
-    group_id: str, payload: StopLossUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    group_id: str, payload: CombinedStopLossUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """Generically useful, not manual-only - editing combined SL on any
     already-open option group. 404 if missing or owned by another user,
@@ -391,10 +447,33 @@ def edit_group_stop_loss(
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
     if row.sl_scope != "combined":
         raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing SL here")
-    if payload.stop_loss_method is not None:
-        raise HTTPException(status_code=422, detail="stop_loss_method is not supported for options - use stop_loss_price")
 
     row = update_group_stop_loss(db, owner_id, parsed_id, payload.stop_loss_price)
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/target")
+def edit_group_target(group_id: str, payload: CombinedTargetUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """edit_group_stop_loss's identical counterpart for combined_target_price - same
+    404/409 shape. Backs the Scan page's %-of-max-profit target (see
+    option_position_manager.update_group_target's own docstring) - attached right after a manual
+    option order opens, the same post-open PUT pattern spot_stop_loss/spot_target already use."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
+    if row.sl_scope != "combined":
+        raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing target here")
+
+    row = update_group_target(db, owner_id, parsed_id, payload.target_price)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 

@@ -1,0 +1,1383 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* Visible keyboard focus everywhere; never removed, only restyled. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.up {
+  color: var(--up);
+}
+.dn {
+  color: var(--dn);
+}
+.flat {
+  color: var(--text-dim);
+}
+.dim {
+  color: var(--text-dim);
+}
+.faint {
+  color: var(--text-faint);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---- primitives ---- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px var(--gutter);
+}
+
+.card + .card,
+.stack > * + * {
+  margin-top: 12px;
+}
+
+.section-title {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 20px 2px 8px;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.btn {
+  min-height: var(--tap);
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.btn-danger {
+  border-color: var(--dn);
+  color: var(--dn);
+  background: transparent;
+}
+.btn-small {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.pill.up {
+  border-color: var(--up);
+}
+.pill.dn {
+  border-color: var(--dn);
+}
+.pill.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.notice {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.notice.error {
+  border-left-color: var(--dn);
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: var(--radius-sm);
+  min-height: 18px;
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+/* ---- forms ---- */
+.field {
+  display: block;
+  margin-bottom: 14px;
+}
+/* Several short number fields side by side instead of each its own full-width row (the ticket's
+   stop/target/lots - see TradeTicket.tsx) - each .field keeps its own bottom margin, just laid
+   out in a row instead of stacked. min-width: 0 lets a field shrink below its content's natural
+   width rather than forcing the row to overflow/wrap. */
+.field-row {
+  display: flex;
+  gap: 10px;
+}
+.field-row > .field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* The ticket packs a lot of fields into a sidebar - a little smaller than the form-page default
+   (Settings etc keep the full size; this is scoped to .ticket only) buys back some of the room
+   the field-row above doesn't. */
+.ticket .field-head > label > span {
+  font-size: 12px;
+}
+/* .field-head's own flex-wrap (above) only kicks in once the label can no longer shrink - but a
+   flex:1 label with min-width:0 never hits that limit, it just keeps shrinking and wrapping its
+   own text instead, so the row never wraps and the action ends up squeezed onto the label's first
+   line. In the ticket's narrow columns that showed up as the label and action overlapping. Always
+   stacking the action under the label here sidesteps the whole heuristic. */
+.ticket .field-head {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.ticket .field-actions {
+  justify-content: flex-start;
+}
+.ticket .field input[inputmode],
+.ticket .field input[type="password"] {
+  font-size: 14px;
+}
+.field > span {
+  display: block;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.field input[type="text"],
+.field input[type="email"],
+.field input[type="password"] {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* A narrow column (the ticket's field-row) can be too tight for a long placeholder like
+     "Auto from your risk" - fade it with an ellipsis instead of the browser's default hard clip
+     mid-word/mid-glyph. */
+  text-overflow: ellipsis;
+}
+.check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.check input {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  flex: none;
+}
+
+/* ---- app shell: bottom tab bar on phones, sidebar from 900px ---- */
+.app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.app-main {
+  flex: 1;
+  padding: var(--gutter);
+  padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + var(--gutter));
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+.nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  height: calc(var(--nav-h) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  z-index: 10;
+}
+.nav a {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 600;
+}
+.nav a svg {
+  width: 22px;
+  height: 22px;
+}
+.nav a[aria-current="page"] {
+  color: var(--accent);
+}
+.brand {
+  display: none;
+}
+/* The collapse toggle and the pinned sign-out footer only exist in the desktop sidebar — the phone's
+ * bottom tab bar has no room for either, and Sign out stays reachable there through More. */
+.nav-top,
+.nav-bottom {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .app {
+    flex-direction: row;
+  }
+  .nav {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    flex-direction: column;
+    width: var(--sidebar-w);
+    height: 100vh;
+    padding: 20px 12px;
+    border-top: 0;
+    border-right: 1px solid var(--border);
+    gap: 4px;
+    transition: width 0.15s ease;
+  }
+  .nav.collapsed {
+    width: var(--sidebar-w-collapsed);
+  }
+  .nav a {
+    flex: none;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 12px;
+    min-height: var(--tap);
+    padding: 0 12px;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+  }
+  .nav.collapsed a {
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+  .nav a[aria-current="page"] {
+    background: var(--surface-2);
+  }
+  .nav-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 4px 16px 12px;
+  }
+  .nav.collapsed .nav-top {
+    justify-content: center;
+    padding: 4px 0 16px;
+  }
+  .brand {
+    display: block;
+    font-weight: 700;
+    font-size: 16px;
+    white-space: nowrap;
+  }
+  .nav.collapsed .brand {
+    display: none;
+  }
+  .nav-collapse {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .nav-collapse svg {
+    width: 16px;
+    height: 16px;
+  }
+  .nav-collapse:hover {
+    color: var(--text);
+    background: var(--surface-2);
+  }
+  .nav-bottom {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .nav-email {
+    padding: 0 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nav-signout {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: var(--tap);
+    padding: 0 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+  }
+  .nav-signout:hover {
+    color: var(--text);
+    background: var(--surface-2);
+  }
+  .nav-signout svg {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+  }
+  .nav.collapsed .nav-signout {
+    justify-content: center;
+    padding: 0;
+  }
+  .app-main {
+    padding: 24px 32px;
+    max-width: 880px;
+    margin: 0;
+  }
+}
+
+/* ---- Today ---- */
+.hero {
+  display: grid;
+  gap: 4px;
+}
+.hero .big {
+  font-size: 28px;
+  font-weight: 600;
+}
+.meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+  margin-top: 8px;
+}
+.meter > i {
+  display: block;
+  height: 100%;
+  background: var(--dn);
+}
+.pos {
+  display: grid;
+  gap: 6px;
+}
+.pos-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.pos-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.pos-compact {
+  padding: 10px 12px;
+  gap: 4px;
+}
+.pos-compact .pos-head strong {
+  font-size: 14px;
+}
+.pos-level {
+  padding: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.pos-level:disabled {
+  cursor: default;
+  opacity: 0.7;
+  text-decoration: none;
+}
+.pos-level-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pos-level-input {
+  width: 84px;
+  min-height: 26px;
+  padding: 0 6px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.icon-btn {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+}
+.icon-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tabs {
+  display: flex;
+  gap: 6px;
+}
+.tabs button {
+  flex: 1;
+  min-height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 600;
+  cursor: pointer;
+}
+.tabs button[aria-pressed="true"] {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--accent);
+}
+.signin {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 32px var(--gutter);
+}
+
+/* ---- Portfolio / Review ---- */
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chips button {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 600;
+  cursor: pointer;
+}
+.chips button[aria-pressed="true"],
+.chips button[aria-selected="true"],
+.chips button[aria-checked="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+@media (min-width: 600px) {
+  .stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.list-row:first-child {
+  border-top: 0;
+}
+.table-scroll {
+  overflow-x: auto;
+}
+table.t {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.t th,
+table.t td {
+  text-align: right;
+  padding: 8px 6px;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+table.t th:first-child,
+table.t td:first-child {
+  text-align: left;
+}
+table.t th {
+  color: var(--text-faint);
+  font-weight: 600;
+  font-size: 12px;
+  border-top: 0;
+}
+
+/* ---- trade journal ---- */
+.list-block {
+  border-top: 1px solid var(--border);
+}
+.list-block:first-of-type {
+  border-top: 0;
+}
+.list-button {
+  width: 100%;
+  border: 0;
+  border-top: 0;
+  background: none;
+  cursor: pointer;
+  min-height: var(--tap);
+}
+.list-block .list-row {
+  border-top: 0;
+}
+.journal {
+  padding: 4px 0 14px;
+}
+.textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.input-row input {
+  flex: 1;
+  min-width: 0;
+}
+.field input[inputmode],
+.field input[type="password"] {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-overflow: ellipsis;
+}
+.input-row input {
+  width: auto;
+}
+.field input[aria-invalid="true"] {
+  border-color: var(--dn);
+}
+
+/* ---- Scan ---- */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+.select-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.select-field select,
+.select-field input {
+  min-height: var(--tap);
+  padding: 0 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 15px;
+  width: 100%;
+}
+/* A bare <select> otherwise keeps the browser's own native chrome (arrow, insets) even with the
+   background/border/radius above matched to .field's text inputs - visibly a different control
+   next to them. Reset to the same box, redraw the arrow ourselves so it still looks like a
+   dropdown. The chevron's own color is hardcoded to match --text-dim per theme (this app is
+   dark-first - see tokens.css - with a light override, not the other way round), since `color`
+   here needs to stay var(--text) - the selected option's own text, not the chevron. */
+.select-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2393a1b1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+.select-field select option {
+  color: var(--text);
+  background: var(--surface-2);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .select-field select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234a5866' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+}
+.legend {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.legend summary {
+  cursor: pointer;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+.scan-card {
+  display: grid;
+  gap: 8px;
+}
+.scan-card .pair {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* The chart inside an expanded OI-buildup card (ScanChartPanel) - the same draw-toolbar/chart-pane
+   pair the trading workstation uses (see "trading workstation" below), just given a fixed height
+   of its own instead of filling the screen, since it sits inside a card in a scrolling list.
+   overflow: hidden is a backstop, not the fix - .scan-chart-body is already tall enough that the
+   12-button draw-toolbar (its own height is fixed, not flexible, so a too-short row does not
+   shrink it, it just overflows past the row) fits without needing to clip; this only guards
+   against a card ever bleeding into the one below it again if that toolbar grows. */
+.scan-chart {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+.scan-chart-body {
+  display: flex;
+  gap: 8px;
+  height: 480px;
+  margin-top: 6px;
+}
+
+/* ---- Trade ---- */
+.seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.seg button {
+  min-height: var(--tap);
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+}
+.seg button.buy[aria-pressed="true"] {
+  border-color: var(--up);
+  color: var(--up);
+}
+.seg button.sell[aria-pressed="true"] {
+  border-color: var(--dn);
+  color: var(--dn);
+}
+.summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 4px 0 14px;
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.summary > div {
+  min-width: 0;
+}
+.summary dt {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.summary dd {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.checks {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.check-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 6px 0;
+}
+.mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.mark.good {
+  border-color: var(--up);
+  color: var(--up);
+}
+.mark.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.mark.bad {
+  border-color: var(--dn);
+  color: var(--dn);
+}
+.hints {
+  margin: 0 0 12px;
+  padding: 0 0 0 18px;
+  font-size: 13px;
+}
+
+/* ---- first-run setup ---- */
+.choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text);
+}
+.choice[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.choice-check {
+  padding: 10px 12px;
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.steps li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.field-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  /* In the ticket's field-row (Stop-loss/Target side by side, see .field-row above), a column can
+     be far narrower than this row's natural content width once a "Pick on chart"/"Add line"
+     action sits next to the label - without wrapping, the actions overflowed their own .field-head
+     and bled visually into the neighbouring column instead of shrinking. Wrapping the action onto
+     its own line keeps everything inside its own column, just taller, rather than corrupted. */
+  flex-wrap: wrap;
+}
+.field-head > label {
+  flex: 1;
+  min-width: 0;
+}
+.field-head > label > span {
+  margin-bottom: 4px;
+}
+
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 0 0 4px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 24px;
+}
+.link-btn[aria-pressed="true"] {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+/* ---- trading workstation ---- */
+.app-main.wide {
+  max-width: none;
+}
+@media (min-width: 900px) {
+  .app-main.wide {
+    padding: 12px 16px;
+  }
+}
+.workstation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg);
+}
+.workstation.wide {
+  height: calc(100vh - 24px);
+  min-height: 580px;
+}
+.workstation.fullscreen {
+  height: 100vh;
+  padding: 8px;
+}
+.ws-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+.ws-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+}
+.ws-search {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ws-search input {
+  min-height: 36px;
+  width: 170px;
+  padding: 0 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.ws-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+}
+.ws-links .check {
+  margin: 0;
+}
+.pill.confluence {
+  white-space: normal;
+}
+.ws-body {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  min-height: 0;
+}
+.workstation:not(.wide) .ws-body {
+  flex-direction: column;
+}
+.draw-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  width: 46px;
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.tool {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.tool:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.tool[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface-2);
+}
+.tool:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.tool-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}
+.ws-charts {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ws-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+  grid-auto-rows: minmax(0, 1fr);
+}
+.ws-grid.layout-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.ws-grid.layout-side {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ws-grid.layout-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workstation:not(.wide) .ws-grid {
+  grid-auto-rows: 420px;
+  flex: none;
+}
+.ws-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.ws-pane.active {
+  border-color: var(--accent);
+}
+.pane-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+}
+.pane-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.pane-price {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-left: auto;
+}
+.pane-price .num {
+  font-size: 18px;
+  font-weight: 600;
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  align-self: center;
+}
+.live-dot.on {
+  background: var(--up);
+}
+.pane-header .chips button {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+.chart-pane {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.chart-canvas {
+  position: absolute;
+  inset: 0;
+}
+.chart-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  color: var(--text-dim);
+  background: var(--surface);
+}
+.ws-ticket {
+  width: 360px;
+  flex: none;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.workstation:not(.wide) .ws-ticket {
+  width: auto;
+  overflow: visible;
+}
+.ws-h1 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+.ws-today-pnl {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.ws-setups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ws-note {
+  font-size: 12px;
+  margin: 0;
+}
+.popover {
+  position: relative;
+}
+.chip-btn {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.chip-btn[aria-expanded="true"],
+.chip-btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-2);
+}
+.badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11px;
+  text-align: center;
+}
+.popover-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  z-index: 30;
+  width: 320px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.popover-panel.left {
+  left: 0;
+}
+.popover-panel.right {
+  right: 0;
+}
+.workstation:not(.wide) .popover-panel {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: auto;
+  bottom: calc(var(--nav-h) + 8px);
+  width: auto;
+  max-height: 60vh;
+}
+.menu-check {
+  margin: 0 0 8px;
+}
+.menu-heading {
+  font-size: 12px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.menu-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.param-box {
+  width: 110px;
+  min-height: 30px;
+  padding: 0 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.field-actions {
+  display: inline-flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  /* Also allow the wrapped line under the label (above) to right-align rather than jump to the
+     column's left edge, matching where it sat when there was room to stay inline. */
+  justify-content: flex-end;
+}
+
+.ws-alerts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  font-size: 13px;
+}
+.ws-flash {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: var(--radius, 8px);
+  border: 1px solid var(--accent, #4cc2ff);
+  background: var(--surface-2, rgba(76, 194, 255, 0.1));
+}
+
+.auto-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+}
+.auto-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 8px;
+}
+.auto-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 16px;
+  margin-top: 8px;
+}
+.auto-windows {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-sm, 8px);
+  padding: 8px 12px;
+}
+.auto-window-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.auto-note {
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+.error-text {
+  color: var(--down, #e8586a);
+  font-size: 12px;
+}
+.ws-flash.error {
+  border-color: var(--down, #e8586a);
+  background: rgba(232, 88, 106, 0.1);
+}
+
+.oi-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  color: var(--text-dim, #93a1b1);
+}
+.oi-strip b {
+  color: var(--text, #e6e9ee);
+}
+.oi-strip .up {
+  color: var(--up);
+}
+.oi-strip .dn {
+  color: var(--dn);
+}
+.oi-strip-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+.oi-strip-trend-label {
+  font-size: 13px;
+}
+.oi-strip-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 28px;
+}
+.oi-strip-spark-bar {
+  width: 5px;
+  min-height: 3px;
+  border-radius: 1px;
+  background: var(--text-dim, #93a1b1);
+}
+.oi-strip-spark-bar[data-tone="up"] {
+  background: var(--up);
+}
+.oi-strip-spark-bar[data-tone="dn"] {
+  background: var(--dn);
+}
+.oi-strip-spark-bar.is-major {
+  outline: 1px solid var(--accent);
+}

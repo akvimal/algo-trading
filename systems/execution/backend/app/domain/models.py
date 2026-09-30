@@ -704,6 +704,10 @@ class ManualPositionCreate(BaseModel):
     # editable later via PUT /positions/{id}/tags. Feed Trading Performance.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # Free-text reason captured at order time, alongside setup_tag - written straight to
+    # positions.notes (the same column PUT /positions/{id}/notes edits later), so a person can say
+    # WHY beyond picking a category. Optional; None leaves notes unset.
+    notes: Optional[str] = Field(default=None, max_length=2000)
     # This fill came from the Intraday SuperTrend auto-trader (AutoTradePanel),
     # not a discretionary decision - open_manual_position records it on the
     # row so the Discipline score can exclude it. None/False from every
@@ -802,16 +806,35 @@ class ManualOptionPositionCreate(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str  # the logical underlying (e.g. "NIFTY", "GOLDM", "BTCUSD"), not a leg's own symbol
     action: Literal["BUY", "SELL"]
-    option_position_style: Literal["spread", "naked"] = "spread"
+    # 'spread' = a debit spread (bull_call_spread/bear_put_spread - pays a
+    # net premium). 'credit_spread' = the net-credit counterpart
+    # (bull_put_spread/bear_call_spread - receives a net premium, sized by
+    # max loss instead of cost - see option_position_manager's
+    # _spread_sizing_basis).
+    option_position_style: Literal["spread", "naked", "credit_spread"] = "spread"
     option_strike_moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"
-    # Optional override - omitted (the normal case, no Expiry dropdown in
-    # the frontend anymore as of 2026-08-14) means open_manual_option_group
-    # picks the nearest currently-tradeable expiry itself, matching the
-    # pre-2026-08-14 Strategy-mediated path's own always-nearest behavior.
-    # A caller-supplied value is still validated against a live
-    # GET /options/expiries call in open_manual_option_group, not just
+    # Optional override - omitted means open_manual_option_group picks the nearest
+    # currently-tradeable expiry itself, matching the pre-2026-08-14 Strategy-mediated path's own
+    # always-nearest behavior (no Expiry dropdown in the frontend at all until 2026-09-30, when
+    # the Scan page's leg table got one back - other callers, e.g. TradePage's own option ticket,
+    # still omit it and get the silent default). A caller-supplied value is still validated
+    # against a live GET /options/expiries call in open_manual_option_group, not just
     # format-checked here.
     expiry: Optional[str] = None
+    # Overrides the short/protection leg's own distance (in strikes) from
+    # the primary leg - omitted (the normal case) means
+    # option_templates.py's own SPREAD_WIDTH_STRIKES default. Ignored for
+    # option_position_style='naked' (no second leg to place). Superseded
+    # entirely by second_strike below when that's also given.
+    spread_width: Optional[int] = Field(default=None, ge=1)
+    # An explicit strike per leg (the Scan page's leg table, once it has the real chain) - each
+    # overrides option_strike_moneyness/spread_width entirely for its own leg. second_strike is
+    # ignored for option_position_style='naked' (no second leg). Rejected (422, via
+    # OptionLegPreviewError's route mapping / _reject_manual_group's own reason text) if the named
+    # strike isn't actually in the resolved chain - see option_templates.py's
+    # _resolve_primary_index/_resolve_second_index.
+    primary_strike: Optional[float] = Field(default=None, gt=0)
+    second_strike: Optional[float] = Field(default=None, gt=0)
     sl_scope: Literal["combined", "individual"] = "combined"
     # Bypasses auto-sizing entirely when given - same precedence pattern
     # as Strategy.fixed_lots in open_option_group.
@@ -840,6 +863,8 @@ class ManualOptionPositionCreate(BaseModel):
     # Structured trade journal set at order time - see ManualPositionCreate.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # See ManualPositionCreate.notes's own comment - written to option_position_groups.notes.
+    notes: Optional[str] = Field(default=None, max_length=2000)
     # See ManualPositionCreate.auto_traded's own comment.
     auto_traded: bool = False
     # See ManualPositionCreate.entry_interval's own comment.
@@ -886,6 +911,40 @@ class StopLossUpdate(BaseModel):
         return self
 
 
+class TargetUpdate(BaseModel):
+    """PUT /positions/{id}/target - moves an already-open spot/futures
+    position's take-profit, the sibling of StopLossUpdate. Same side rule
+    ManualPositionCreate applies at order time, checked against the
+    position's own entry price in update_target (the model does not know
+    it). A real spot/futures price is always positive, hence gt=0 - NOT
+    reused for the option-group combined target (see CombinedTargetUpdate
+    below), whose price can legitimately be negative."""
+
+    target_price: float = Field(gt=0)
+
+
+class CombinedStopLossUpdate(BaseModel):
+    """PUT /option-groups/{id}/stop-loss's own shape - deliberately NOT StopLossUpdate (shared
+    with spot/future positions, where a stop price must be positive - a real market price never
+    isn't). A COMBINED option premium can legitimately be negative: a credit spread's net_debit
+    (its own entry combined price) is negative by construction (see option_position_manager's
+    _spread_sizing_basis), and a stop/target computed as a fraction of its own max loss/profit
+    stays in that same negative range - see ScanOptionBias.tsx's stopPct/targetPct. No
+    stop_loss_method/trailing concept exists for options (open_option_group's own
+    'percent'-only stop-loss, set once at open) - just the one flat field."""
+
+    stop_loss_price: float
+
+
+class CombinedTargetUpdate(BaseModel):
+    """PUT /option-groups/{id}/target's own shape - CombinedStopLossUpdate's identical reasoning
+    for why this is its own model rather than reusing TargetUpdate's gt=0. An option group's
+    SPOT-price target is the separate SpotTargetUpdate; this is the COMBINED-premium one,
+    sl_scope='combined' groups only - see update_group_target."""
+
+    target_price: float
+
+
 class SquareOffTimeUpdate(BaseModel):
     """PUT /positions/{id}/square-off-time and PUT /option-groups/{id}/
     square-off-time - edits an already-open position's/group's own
@@ -920,6 +979,28 @@ class SpotTargetUpdate(BaseModel):
     option order."""
 
     spot_target_price: float = Field(gt=0)
+
+
+class OptionLegPreviewLeg(BaseModel):
+    action: Literal["BUY", "SELL"]
+    option_type: Literal["CE", "PE"]
+    strike: float
+    expiry: str
+    # Live per-leg premium, best-effort (see preview_option_legs's own docstring) - None when
+    # the caller didn't ask for quotes, or the quote lookup itself failed.
+    premium: Optional[float] = None
+
+
+class OptionLegPreview(BaseModel):
+    """GET /option-groups/preview-legs - the legs a real POST /option-groups/manual with the
+    same params would use, without placing anything. Backs the Scan page's bias-driven
+    option-strategy panel (see option_position_manager.preview_option_legs's own docstring).
+    security_id (present on the underlying leg dicts) is deliberately not carried through -
+    this is a display-only preview, not something a caller re-submits verbatim."""
+
+    strategy_type: str
+    expiry: str
+    legs: list[OptionLegPreviewLeg]
 
 
 class NotesUpdate(BaseModel):

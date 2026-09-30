@@ -15,6 +15,7 @@ from app.domain.models import (
     ReviewSubmit,
     SquareOffTimeUpdate,
     StopLossUpdate,
+    TargetUpdate,
     TradeTagsUpdate,
 )
 from app.domain.position_manager import (
@@ -31,6 +32,7 @@ from app.domain.position_manager import (
     update_position_tags,
     update_square_off_time,
     update_stop_loss,
+    update_target,
 )
 
 router = APIRouter()
@@ -160,12 +162,16 @@ def _query_positions(
     limit: int,
     with_live_pnl: bool,
     token: Optional[str] = None,
+    strategy_id: Optional[uuid.UUID] = None,
 ):
     """Shared by GET /positions (user_id=caller) and GET /positions/platform
     (user_id=None) - identical filtering/serialization, only the ownership
     scope differs. See both routes' own docstrings for what each filter
-    means."""
-    q = db.query(db_models.Position).filter_by(user_id=user_id)
+    means. `strategy_id` replaces the ownership scope with one strategy's
+    positions: the caller (GET /accounts/strategy/{id}/trades) has already
+    proven the person may see that strategy's dedicated account."""
+    q = db.query(db_models.Position)
+    q = q.filter_by(strategy_id=strategy_id) if strategy_id is not None else q.filter_by(user_id=user_id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:
@@ -348,6 +354,7 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag,
         confidence=payload.confidence,
+        notes=payload.notes,
         auto_traded=payload.auto_traded,
         entry_interval=payload.entry_interval,
     )
@@ -416,6 +423,30 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         functools.partial(get_previous_candle, token=user.token),
         functools.partial(get_candle_history, token=user.token),
     )
+    if reject_reason is not None:
+        raise HTTPException(status_code=422, detail=reject_reason)
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/target")
+def edit_target(position_id: str, payload: TargetUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Moves an already-open position's take-profit (the counterpart of
+    PUT /positions/{id}/stop-loss, which had no target sibling for spot and
+    futures). 404 if missing or owned by another user, 409 if not OPEN, 422
+    if the price is on the wrong side of the entry."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
+
+    row, reject_reason = update_target(db, owner_id, parsed_id, payload.target_price)
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
     return _position_to_out(row)

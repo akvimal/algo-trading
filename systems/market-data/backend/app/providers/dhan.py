@@ -174,13 +174,25 @@ def _aggregate_candles(one_min_candles: list[Candle], interval: str, minutes: in
     app/domain/candle_aggregation.py."""
     return aggregate_candles(one_min_candles, interval, minutes)
 
-# Dhan doesn't publish a specific rate limit for charts/intraday (unlike
-# marketfeed/ltp's documented-and-empirically-confirmed 1 req/sec) - this
-# is a conservative default, not a known requirement. Kept as independent
+# Empirically confirmed live 2026-09-28 (see docs/architecture.md) -
+# calls a full 6x tighter than the old 2.0s guess (down to 0.3s) all
+# succeeded; 0.15s got a genuine Dhan rate-limit rejection (DH-904
+# "Rate_Limit", not the DH-906 "Invalid Token" that a COLLISION between
+# different call categories surfaces as - see MIN_GLOBAL_CALL_GAP_SECONDS's
+# own comment - so DH-904 is the real per-endpoint ceiling, DH-906 was
+# never this). Set to 0.5s: comfortably under the confirmed-clean 0.3s
+# tier, comfortably over the confirmed-broken 0.15s one. The old 2.0s
+# was never a documented Dhan requirement (unlike marketfeed/ltp's
+# confirmed 1 req/sec below) - just an untested conservative guess that
+# turned out to be the real bottleneck behind the Live Chart's
+# sustained "Invalid Token" errors under Structure/multi-symbol load
+# (order-blocks retries its own separate candle fetch every 10s while
+# failing - a 4x-tighter budget gives that loop room to actually drain
+# instead of staying perpetually backed up). Kept as independent
 # throttle state from the LTP throttle below (own lock, own timestamp)
 # since these hit a different Dhan endpoint - no reason for one to
 # serialize behind the other.
-MIN_CANDLE_CALL_INTERVAL_SECONDS = 2.0
+MIN_CANDLE_CALL_INTERVAL_SECONDS = 0.5
 
 # Dhan's LTP endpoint is limited to 1 request/second, but empirically a
 # ~1.05s gap still gets 429'd - build in real margin rather than shaving
@@ -202,8 +214,21 @@ QUOTE_CACHE_TTL_SECONDS = 3.0
 # If the throttle wait already implied by another in-flight request is
 # longer than this, fail fast instead of piling another thread onto the
 # queue - callers already treat a failed quote as "unavailable, try again
-# later" rather than something to block indefinitely on.
-MAX_THROTTLE_WAIT_SECONDS = 4.0
+# later" rather than something to block indefinitely on. Raised from 4.0
+# 2026-09-28: opening the Live Chart's Side by side view fires several
+# DIFFERENT symbols' worth of candle-category calls (each chart's own
+# candles + its own regime badge, which reuses the same category) at
+# once - 4 calls genuinely queued on the SAME 2s-per-call candle clock
+# need up to 6s to all get served, which used to exceed the old 4.0s
+# ceiling and fail outright (reproduced live, DH-906 "Invalid Token" -
+# see MIN_GLOBAL_CALL_GAP_SECONDS's own comment for why Dhan's real
+# rejection doesn't always come back as a 429). Waiting costs nothing but
+# this thread's own time - it's a local queue, not a live Dhan cost - so
+# letting a genuine multi-call burst actually queue that deep instead of
+# rejecting it is a straightforward improvement, not just a bigger
+# number: the frontend already shows "trying again automatically" for
+# exactly this wait.
+MAX_THROTTLE_WAIT_SECONDS = 8.0
 
 # Dhan's documented order-API rate limit is NOT yet confirmed against
 # current docs (unlike MIN_LTP_CALL_INTERVAL_SECONDS/
@@ -314,6 +339,32 @@ _option_chain_throttle_lock = threading.Lock()
 _last_option_chain_call_at: dict[Optional[str], float] = {}
 _order_throttle_lock = threading.Lock()
 _last_order_call_at: dict[Optional[str], float] = {}
+
+# A SECOND, smaller wait layered on top of the four category clocks above -
+# reproduced live 2026-09-28: opening (or switching the symbol on) the Live
+# Chart fires several DIFFERENT categories at once (LTP, candle, option-
+# chain for expiries, ...). Each category clock only tracks its OWN
+# category, so on a page that hasn't called any of them recently, every
+# one of those first calls sees "nothing recent" and fires immediately -
+# a chart load can genuinely put 5-10 requests on the wire in the same
+# instant, across categories that were each individually compliant with
+# their own documented pace. Dhan's real per-account gateway then rejects
+# several of them - inconsistently, since it depends on exactly how many
+# land in the same instant - and (confirmed live) doesn't always use 429
+# for this: it's sometimes surfaced as DH-906 "Invalid Token" instead,
+# which is why that error looked like a real auth problem even though the
+# token was fine throughout every reproduction. A short GLOBAL minimum
+# gap between ANY two Dhan calls (regardless of category) closes the gap
+# a per-category clock structurally cannot: it does not touch how often
+# ONE category may be called (MIN_LTP_CALL_INTERVAL_SECONDS etc. are
+# unchanged), it only stops several different categories' first calls
+# from landing in the same instant. Deliberately much smaller than any
+# category's own interval (a network round trip's worth of margin, not a
+# real rate-limit's worth) - it exists to break up simultaneity, not to
+# add meaningful latency to an already-paced call.
+MIN_GLOBAL_CALL_GAP_SECONDS = 0.35
+_global_throttle_lock = threading.Lock()
+_last_any_call_at: dict[Optional[str], float] = {}
 
 
 def _persist_credentials(client_id: str, access_token: str) -> None:
@@ -834,20 +885,27 @@ class DhanProvider(QuoteProvider):
         for a BYO one - see DhanCredentials's own docstring) so each gets
         an independent rate-limit clock.
 
-        Reserves this call's slot atomically under `lock` (so concurrent
-        callers for the same key queue up min_interval apart rather than
-        racing), then sleeps *outside* the lock - holding it across
-        time.sleep() serialized every caller for every key on one mutex,
-        which under manual-trading's several concurrent pollers stretched
-        request latency enough to surface as "Failed to fetch" in the
-        browser."""
+        Also enforces MIN_GLOBAL_CALL_GAP_SECONDS against `_last_any_call_at`
+        (same `key`, shared across every category, not just this one) -
+        see that constant's own comment for why a per-category clock alone
+        isn't enough. Reserves this call's slot atomically under `lock`
+        (so concurrent callers for the same key queue up min_interval
+        apart rather than racing) plus `_global_throttle_lock` for the
+        shared clock, then sleeps *outside* both locks - holding either
+        across time.sleep() serialized every caller for every key on one
+        mutex, which under manual-trading's several concurrent pollers
+        stretched request latency enough to surface as "Failed to fetch"
+        in the browser."""
         with lock:
             now = time.monotonic()
             last = timestamps.get(key, 0.0)
-            wait = min_interval - (now - last)
-            if wait > MAX_THROTTLE_WAIT_SECONDS:
-                raise RuntimeError(f"Dhan {label} queue is backed up ({wait:.1f}s wait) - try again shortly")
-            next_at = max(now, last + min_interval)
+            with _global_throttle_lock:
+                last_any = _last_any_call_at.get(key, 0.0)
+                wait = max(min_interval - (now - last), MIN_GLOBAL_CALL_GAP_SECONDS - (now - last_any))
+                if wait > MAX_THROTTLE_WAIT_SECONDS:
+                    raise RuntimeError(f"Dhan {label} queue is backed up ({wait:.1f}s wait) - try again shortly")
+                next_at = max(now, last + min_interval, last_any + MIN_GLOBAL_CALL_GAP_SECONDS)
+                _last_any_call_at[key] = next_at
             timestamps[key] = next_at
         wait = next_at - time.monotonic()
         if wait > 0:

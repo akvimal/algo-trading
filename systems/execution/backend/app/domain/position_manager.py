@@ -1765,6 +1765,7 @@ def open_manual_position(
     risk_managed: Optional[bool] = None,
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
+    notes: Optional[str] = None,
     auto_traded: bool = False,
     entry_interval: Optional[str] = None,
 ) -> db_models.Position:
@@ -2098,6 +2099,7 @@ def open_manual_position(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        notes=notes or None,
         # Immutable entry snapshot - see OptionPositionGroup's identical pair.
         entry_setup_tag=setup_tag or None,
         entry_confidence=confidence,
@@ -2154,6 +2156,28 @@ def update_square_off_time(
     row.square_off_time = square_off_time
     db.commit()
     return row
+
+
+def update_target(
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float
+) -> tuple[Optional[db_models.Position], Optional[str]]:
+    """Moves an open position's take-profit. Returns (row, reject_reason):
+    (None, None) for a missing or someone else's row, (row, reason) with the
+    row untouched when the price is on the wrong side of the entry (a buy's
+    target above it, a sell's below, the rule open-time validation applies),
+    else (row, None). Only the price changes: the position's stop-loss and
+    every other setting are left alone."""
+    row = db.get(db_models.Position, position_id)
+    if row is None or row.user_id != user_id:
+        return None, None
+    entry = float(row.entry_price)
+    if row.action == "BUY" and target_price <= entry:
+        return row, f"target ({target_price}) must be above entry ({entry}) for a BUY"
+    if row.action == "SELL" and target_price >= entry:
+        return row, f"target ({target_price}) must be below entry ({entry}) for a SELL"
+    row.target_price = target_price
+    db.commit()
+    return row, None
 
 
 def update_stop_loss(

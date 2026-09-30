@@ -80,12 +80,16 @@ def me(user: models.User = Depends(get_current_user)):
 
 @router.put("/me/preferences", response_model=UserOut)
 def update_preferences(payload: PreferencesUpdate, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Only the caller's own row, and only these two fields: nothing else about the account
-    (admin flag, email, the risk acknowledgement) can be reached through here."""
+    """Only the caller's own row, and only the fields PreferencesUpdate declares: nothing else
+    about the account (admin flag, email, the risk acknowledgement) can be reached through here."""
     if payload.experience is not None:
         user.experience = payload.experience
     if payload.markets is not None:
         user.markets = list(dict.fromkeys(payload.markets))
+    if payload.default_instrument is not None:
+        user.default_instrument = payload.default_instrument
+    if payload.default_option_strategy is not None:
+        user.default_option_strategy = payload.default_option_strategy
     if payload.onboarded is True and user.onboarded_at is None:
         user.onboarded_at = datetime.now(timezone.utc)
     elif payload.onboarded is False:

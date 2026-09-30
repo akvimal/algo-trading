@@ -396,6 +396,7 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         payload.risk_managed,
         payload.setup_tag,
         payload.confidence,
+        payload.notes,
         payload.entry_interval,
         payload.auto_traded,
     )

@@ -354,6 +354,7 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag,
         confidence=payload.confidence,
+        notes=payload.notes,
         auto_traded=payload.auto_traded,
         entry_interval=payload.entry_interval,
     )

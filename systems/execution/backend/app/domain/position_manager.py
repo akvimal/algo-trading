@@ -1765,6 +1765,7 @@ def open_manual_position(
     risk_managed: Optional[bool] = None,
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
+    notes: Optional[str] = None,
     auto_traded: bool = False,
     entry_interval: Optional[str] = None,
 ) -> db_models.Position:
@@ -2098,6 +2099,7 @@ def open_manual_position(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        notes=notes or None,
         # Immutable entry snapshot - see OptionPositionGroup's identical pair.
         entry_setup_tag=setup_tag or None,
         entry_confidence=confidence,

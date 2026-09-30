@@ -740,6 +740,7 @@ def open_manual_option_group(
     risk_managed: Optional[bool] = None,
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
+    notes: Optional[str] = None,
     entry_interval: Optional[str] = None,
     auto_traded: bool = False,
 ) -> db_models.OptionPositionGroup:
@@ -1015,6 +1016,7 @@ def open_manual_option_group(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        notes=notes or None,
         # Immutable entry snapshot - setup_tag/confidence above stay
         # editable for the post-trade review; these don't.
         entry_setup_tag=setup_tag or None,

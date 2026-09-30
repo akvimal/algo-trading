@@ -704,6 +704,10 @@ class ManualPositionCreate(BaseModel):
     # editable later via PUT /positions/{id}/tags. Feed Trading Performance.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # Free-text reason captured at order time, alongside setup_tag - written straight to
+    # positions.notes (the same column PUT /positions/{id}/notes edits later), so a person can say
+    # WHY beyond picking a category. Optional; None leaves notes unset.
+    notes: Optional[str] = Field(default=None, max_length=2000)
     # This fill came from the Intraday SuperTrend auto-trader (AutoTradePanel),
     # not a discretionary decision - open_manual_position records it on the
     # row so the Discipline score can exclude it. None/False from every
@@ -859,6 +863,8 @@ class ManualOptionPositionCreate(BaseModel):
     # Structured trade journal set at order time - see ManualPositionCreate.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # See ManualPositionCreate.notes's own comment - written to option_position_groups.notes.
+    notes: Optional[str] = Field(default=None, max_length=2000)
     # See ManualPositionCreate.auto_traded's own comment.
     auto_traded: bool = False
     # See ManualPositionCreate.entry_interval's own comment.

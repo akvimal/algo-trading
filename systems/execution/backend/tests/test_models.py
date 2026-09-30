@@ -36,6 +36,17 @@ def test_manual_position_create_rejects_confidence_out_of_range():
         ManualPositionCreate(**_base(confidence=0))
 
 
+def test_manual_position_create_accepts_notes():
+    p = ManualPositionCreate(**_base(notes="Retested the daily OB and held."))
+    assert p.notes == "Retested the daily OB and held."
+    assert ManualPositionCreate(**_base()).notes is None
+
+
+def test_manual_position_create_rejects_an_overlong_note():
+    with pytest.raises(ValidationError):
+        ManualPositionCreate(**_base(notes="x" * 2001))
+
+
 def test_trade_tags_update_is_partial_and_bounded():
     assert TradeTagsUpdate(setup_tag="Breakout").model_dump(exclude_unset=True) == {"setup_tag": "Breakout"}
     assert TradeTagsUpdate(confidence=3).model_dump(exclude_unset=True) == {"confidence": 3}

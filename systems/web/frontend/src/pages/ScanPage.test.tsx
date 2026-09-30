@@ -92,6 +92,8 @@ beforeEach(() => {
         const expiry = new URL(url).searchParams.get("expiry") ?? OPTION_EXPIRY;
         return json({ underlying_symbol: "TCS", underlying_exchange: "NSE", expiry, underlying_last_price: 2500, strikes: chainStrikes });
       }
+      if (url.includes("/dhan/lot-size")) return json({ lot_size: 500 });
+      if (url.includes("/dhan/margin/combo")) return json({ raw: { totalMargin: 40760 } });
       if (url.includes("/equity-screener")) return json(scr);
       if (url.includes("/custom-screens/preview")) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
       if (/\/custom-screens\/[^/]+\/run$/.test(url)) return previewErrorDetail ? json({ detail: previewErrorDetail }, 422) : json(previewResult);
@@ -308,8 +310,14 @@ describe("OI buildup", () => {
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Buy Call");
       expect(tcs.queryByRole("group", { name: "Debit or credit" })).not.toBeInTheDocument(); // naked - no style choice yet
 
-      // Lots is editable right in the leg table now (hideOptionExtras dropped the standalone field).
+      // Lots is editable right in the leg table now (hideOptionExtras dropped the standalone
+      // field), and defaults to 1 (not blank/"auto") the first time the option view is entered.
       const lotsInput = within(rows[0]).getByRole("spinbutton");
+      await waitFor(() => expect(lotsInput).toHaveValue(1));
+      await waitFor(() => expect(tcs.getByTestId("option-economics")).toHaveTextContent("Max loss")); // fills in once lot size loads
+      await user.click(tcs.getByRole("button", { name: "Check margin (Dhan)" }));
+      await waitFor(() => expect(tcs.getByTestId("option-economics")).toHaveTextContent("₹40,760.00")); // the mocked Dhan combo-margin figure
+
       await user.clear(lotsInput);
       await user.type(lotsInput, "3");
       expect(lotsInput).toHaveValue(3);
@@ -325,6 +333,9 @@ describe("OI buildup", () => {
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Call Spread");
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit ₹75.00 per lot"); // 100 - 25
       expect(tcs.getByRole("button", { name: "Pay premium (debit)" })).toHaveAttribute("aria-pressed", "true");
+      // Combined stop-loss %/target % only appear for a two-leg position, defaulting 50/70.
+      expect(tcs.getByLabelText("Stop-loss (% of max loss)")).toHaveValue(50);
+      expect(tcs.getByLabelText("Target (% of max profit)")).toHaveValue(70);
 
       // Picking any strike directly - not just stepping through a fixed ITM/OTM ladder - and no
       // network round trip: the chain's already in hand, so this re-renders instantly.
@@ -348,7 +359,11 @@ describe("OI buildup", () => {
       expect(within(rows[0]).getByText("PE")).toBeInTheDocument();
       expect(within(rows[1]).getByText("Buy")).toBeInTheDocument();
       expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Net credit ₹75.00 per lot"); // 100 (SELL 2500 PE) - 25 (BUY 2300 PE)
-      expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("max loss ₹125.00 per lot"); // width 200 - credit 75
+      // Max loss/profit are real totals now (per-unit x lots x the contract's own real lot size,
+      // fetched from Dhan - see getLotSizeForSecurity) - lots is 3 here (typed earlier), lot size
+      // 500 per the mock -> quantity 1500. Per-unit max loss = width 200 - credit 75 = 125.
+      expect(tcs.getByTestId("option-economics")).toHaveTextContent("Max loss");
+      await waitFor(() => expect(tcs.getByTestId("option-economics")).toHaveTextContent("₹1,87,500.00"));
 
       await user.click(tcs.getByRole("button", { name: "Bearish" }));
       await waitFor(() => expect(tcs.getByTestId("option-strategy-summary")).toHaveTextContent("Bear Call Spread")); // credit_spread + Bearish

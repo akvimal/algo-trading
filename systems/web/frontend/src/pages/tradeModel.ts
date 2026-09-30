@@ -71,6 +71,16 @@ export type Ticket = {
   // own nearest-expiry default happens to be at submit time. null lets the server pick nearest,
   // same as before a chain was ever fetched.
   expiry: string | null;
+  // The COMBINED (multi-leg) premium's own stop-loss/target, as a real price level - separate
+  // from spot-based stop/target below, and separate from a single leg's own price. Computed by
+  // ScanOptionBias.tsx from a %-of-max-profit/loss the person picks there (a defined-risk
+  // spread's max profit/loss is bounded and known up front), not typed in directly - null means
+  // "don't attach one" (also the only option for a naked position, which has no defined max
+  // profit to measure a target against). Attached post-open via PUT /option-groups/{id}/
+  // stop-loss and /target, the same "attach right after placing" pattern spot stop/target below
+  // already use.
+  combinedStopLossPrice: number | null;
+  combinedTargetPrice: number | null;
   orderType: OrderType;
   entry: string;
   stop: string;
@@ -82,6 +92,7 @@ export type Ticket = {
 
 export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
+  combinedStopLossPrice: null, combinedTargetPrice: null,
   orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null,
 };
 
@@ -289,7 +300,15 @@ export const favorable = (checks: Check[]) => ({ good: checks.filter((c) => c.st
 
 export type OrderRequest =
   | { kind: "position"; path: string; body: Record<string, unknown> }
-  | { kind: "option"; path: string; body: Record<string, unknown>; stop: number | null; target: number | null }
+  | {
+      kind: "option";
+      path: string;
+      body: Record<string, unknown>;
+      stop: number | null;
+      target: number | null;
+      combinedStop: number | null;
+      combinedTarget: number | null;
+    }
   | { kind: "pending"; path: string; body: Record<string, unknown> };
 
 export type BuildMeta = { instrument: "spot" | "future"; interval: string; trendFollowed: boolean };
@@ -343,6 +362,8 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
     },
     stop: a.stop,
     target: a.target,
+    combinedStop: t.combinedStopLossPrice,
+    combinedTarget: t.combinedTargetPrice,
   };
 }
 

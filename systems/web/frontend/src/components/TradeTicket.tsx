@@ -53,12 +53,14 @@ type Props = {
    * Scan page's bias-driven leg table) already exposes a strike stepper wired to the same
    * ticket.moneyness field, so the two controls never fight for the same line. */
   hideMoneynessField?: boolean;
-  /** Drops Target, Lots, "Before you place" and Confidence for an OPTION order only (a plain
-   * spot/future order keeps all of them) - the Scan page's leg table already shows what's being
-   * bought/sold and its live price, so a quick option trade there doesn't need the same
-   * plan-first ceremony a directional spot/future trade does. Stop-loss stays even here when the
-   * account's own require_stop_loss setting is on - hiding it would leave no way to satisfy that
-   * requirement and the order permanently blocked. */
+  /** Drops Target, Lots, the Entry/Size/risk summary, "Before you place", "Why this trade?" and
+   * Confidence for an OPTION order only (a plain spot/future order keeps all of them) - the Scan
+   * page's own leg table already shows what's being bought/sold, its live price, and (see
+   * ScanOptionBias.tsx) the real max profit/loss and margin, so a quick option trade there
+   * doesn't need the same plan-first ceremony, spot-oriented risk numbers, or journal prompts a
+   * directional spot/future trade does. Stop-loss stays even here when the account's own
+   * require_stop_loss setting is on - hiding it would leave no way to satisfy that requirement
+   * and the order permanently blocked. */
   hideOptionExtras?: boolean;
 };
 
@@ -206,28 +208,30 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         />
       )}
 
-      <dl className="summary" data-testid="summary">
-        <div>
-          <dt>Entry</dt>
-          <dd className="num">{a.entry == null ? "–" : formatPrice(a.entry)}</dd>
-        </div>
-        <div>
-          <dt>Size</dt>
-          <dd className="num">{a.lots == null ? "By the server" : `${a.lots}${a.lotsAuto ? " (auto)" : ""}`}</dd>
-        </div>
-        <div>
-          <dt>You risk</dt>
-          <dd className="num dn">{a.riskAmount == null ? "–" : formatInr(a.riskAmount)}</dd>
-        </div>
-        <div>
-          <dt>You could make</dt>
-          <dd className="num up">{a.rewardAmount == null ? "–" : formatInr(a.rewardAmount)}</dd>
-        </div>
-        <div>
-          <dt>Reward to risk</dt>
-          <dd className="num">{a.rr == null ? "–" : `${a.rr.toFixed(1)} : 1`}</dd>
-        </div>
-      </dl>
+      {!simplifiedOption && (
+        <dl className="summary" data-testid="summary">
+          <div>
+            <dt>Entry</dt>
+            <dd className="num">{a.entry == null ? "–" : formatPrice(a.entry)}</dd>
+          </div>
+          <div>
+            <dt>Size</dt>
+            <dd className="num">{a.lots == null ? "By the server" : `${a.lots}${a.lotsAuto ? " (auto)" : ""}`}</dd>
+          </div>
+          <div>
+            <dt>You risk</dt>
+            <dd className="num dn">{a.riskAmount == null ? "–" : formatInr(a.riskAmount)}</dd>
+          </div>
+          <div>
+            <dt>You could make</dt>
+            <dd className="num up">{a.rewardAmount == null ? "–" : formatInr(a.rewardAmount)}</dd>
+          </div>
+          <div>
+            <dt>Reward to risk</dt>
+            <dd className="num">{a.rr == null ? "–" : `${a.rr.toFixed(1)} : 1`}</dd>
+          </div>
+        </dl>
+      )}
 
       {!simplifiedOption && (
         <div className="checks" data-testid="checks">
@@ -255,17 +259,19 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         </div>
       )}
 
-      <label className="select-field" style={{ margin: "12px 0" }}>
-        <span className="dim">Why this trade? (helps your review later)</span>
-        <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
-          <option value="">Not tagged</option>
-          {SETUP_TAGS.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </label>
+      {!simplifiedOption && (
+        <label className="select-field" style={{ margin: "12px 0" }}>
+          <span className="dim">Why this trade? (helps your review later)</span>
+          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
+            <option value="">Not tagged</option>
+            {SETUP_TAGS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {!simplifiedOption && (
         <>
           <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>

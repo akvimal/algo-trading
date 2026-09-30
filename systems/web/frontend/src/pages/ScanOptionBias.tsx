@@ -1,5 +1,6 @@
-import { useEffect } from "react";
-import { getExpiries, getOptionChain } from "../api/trade";
+import { useEffect, useState } from "react";
+import { ApiError } from "../api/http";
+import { getComboMargin, getExpiries, getLotSizeForSecurity, getOptionChain } from "../api/trade";
 import type { OptionChainStrike, OptionLegQuote } from "../api/types";
 import { formatDay, formatInr } from "../format";
 import { useResource } from "../hooks/useResource";
@@ -69,25 +70,26 @@ type Props = { exchange: string; symbol: string; ticket: Ticket; onChange: (t: T
  * (naked vs spread, which moneyness) before anything concrete shows up. Picking a view sets the
  * same ticket.action a plain spot order already uses (BUY=bullish, SELL=bearish).
  *
- * Unlike the first two cuts of this panel, the leg table now works off a REAL option chain
- * (market-data's GET /options/chain), fetched once per (symbol, expiry) - not a preview-legs
- * round trip on every click. That fixes the two real usability problems the stepper-based design
- * had: it couldn't offer more than 5 fixed ITM/OTM points per leg, and every interaction paid a
- * network round trip ("Working out the legs…" on every click). With the chain in hand: Strike is
- * a real dropdown of every strike the chain actually has (any of them, not just ITM2..OTM2);
- * Expiry is a real dropdown too (own loading state, never blocks the rest of the ticket if it's
- * slow - the same reliability concern that got the old expiry dropdown removed in 2026-08-14,
- * just no longer a reason to omit ONE THAT ASKS FOR ITSELF, since nothing else here depends on
- * it); Lots is editable right in the table (one shared quantity - that's how sizing actually
- * works, both legs always trade the same lot count). Only Type/Side stay derived, not editable -
- * see legPlanFor - flipping a leg's call/put or buy/sell independent of the chosen view isn't a
- * strategy any of execution's templates can place.
+ * The leg table works off a REAL option chain (market-data's GET /options/chain), fetched once
+ * per (symbol, expiry) - not a preview-legs round trip on every click. Strike is a real dropdown
+ * of every strike the chain actually has; Expiry is a real dropdown too (own loading state);
+ * Lots is editable right in the table, defaulting to 1 on first entering an option view. Only
+ * Type/Side stay derived, not editable - see legPlanFor.
  *
  * A Debit/Credit choice appears once a second leg is added: Debit (bull_call_spread/
  * bear_put_spread - pays a net premium) or Credit (bull_put_spread/bear_call_spread - receives
- * one, sized by max loss instead of cost - see execution's _spread_sizing_basis). The checkbox on
- * the second leg is the naked/spread toggle (unchecking it drops the second leg, buying the
- * option outright). */
+ * one, sized by max loss instead of cost - see execution's _spread_sizing_basis).
+ *
+ * Below the table: Max profit/Max loss (pure arithmetic from the chosen strikes/premiums/lots -
+ * see maxProfitPerUnit/maxLossPerUnit) and a "Check margin" button (Dhan's real combo margin
+ * calculator - market-data's GET /dhan/margin/combo, the same one weekly_advisor's own decision
+ * form already uses, read-only - nothing is placed by this call). For a two-leg position, a
+ * Stop-loss %/Target % pair (defaults 50/70) lets the combined premium's own stop/target be set
+ * as a fraction of that bounded max loss/profit - "close at 70% of max profit" - translated here
+ * into a real combined_stop_loss_price/combined_target_price and attached right after the order
+ * opens (ticket.combinedStopLossPrice/combinedTargetPrice, see tradeModel.ts's buildOrder). Not
+ * offered for a naked position: max profit is unbounded for a naked call and only nominally
+ * bounded (at the strike) for a naked put, so "% of max profit" doesn't mean the same thing. */
 export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props) {
   const style: Style = t.strategy === "naked" ? "naked" : t.strategy === "credit_spread" ? "credit_spread" : "spread";
   const hasSecondLeg = style !== "naked";
@@ -99,6 +101,15 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
   const chain = useResource(() => getOptionChain(exchange, symbol, chainExpiry ?? ""), [exchange, symbol, chainExpiry], { enabled: chainExpiry != null });
 
   const strikesForType = (chain.data?.strikes ?? []).filter((s) => legQuote(s, legKey) != null);
+
+  // Defaults Lots to 1 the first time this panel is used (EMPTY_TICKET's own "" means "size it
+  // from my risk", a spot-order concept - options are always sized by lots directly, so a person
+  // opening the option view for the first time should see a real starting quantity, not a blank
+  // that quietly means "1, auto" until they notice otherwise).
+  useEffect(() => {
+    if (t.lots.trim() === "") onChange({ ...t, lots: "1" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // A fresh chain, or a flip between CE and PE (Bullish<->Bearish, or Debit<->Credit - both
   // change which side each leg trades), always gets fresh ATM/width-2 defaults for BOTH legs - a
@@ -133,13 +144,90 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
 
   const primaryQuote = t.primaryStrike != null ? strikesForType.find((s) => s.strike === t.primaryStrike) : undefined;
   const secondQuote = t.secondStrike != null ? strikesForType.find((s) => s.strike === t.secondStrike) : undefined;
-  const primaryPremium = primaryQuote ? legQuote(primaryQuote, legKey)!.last_price : null;
-  const secondPremium = secondQuote ? legQuote(secondQuote, legKey)!.last_price : null;
+  const primaryLeg = primaryQuote ? legQuote(primaryQuote, legKey) : null;
+  const secondLeg = secondQuote ? legQuote(secondQuote, legKey) : null;
+  const primaryPremium = primaryLeg?.last_price ?? null;
+  const secondPremium = secondLeg?.last_price ?? null;
   const buyPremium = plan.primaryAction === "BUY" ? primaryPremium : secondPremium;
   const sellPremium = plan.primaryAction === "SELL" ? primaryPremium : secondPremium;
   const netDebit = buyPremium != null && (plan.secondAction == null || sellPremium != null) ? buyPremium - (sellPremium ?? 0) : null;
   const strikeWidth = hasSecondLeg && t.primaryStrike != null && t.secondStrike != null ? Math.abs(t.primaryStrike - t.secondStrike) : null;
-  const maxLoss = netDebit != null && netDebit < 0 && strikeWidth != null ? strikeWidth - Math.abs(netDebit) : null;
+
+  // Per-unit (one share's worth) max loss/profit - bounded and knowable up front for anything
+  // with a defined risk (a spread, or a naked put); "Unlimited" for a naked call, the one case
+  // with no ceiling at all.
+  const maxLossPerUnit = netDebit != null ? (netDebit >= 0 ? netDebit : strikeWidth != null ? strikeWidth - Math.abs(netDebit) : null) : null;
+  const unlimitedProfit = style === "naked" && plan.optionType === "CE";
+  const maxProfitPerUnit = unlimitedProfit
+    ? null
+    : style === "naked"
+      ? primaryPremium != null && t.primaryStrike != null
+        ? t.primaryStrike - primaryPremium // a naked put's max gain is capped at the underlying going to zero
+        : null
+      : netDebit != null && strikeWidth != null
+        ? netDebit >= 0
+          ? strikeWidth - netDebit // debit spread: width minus what was paid
+          : Math.abs(netDebit) // credit spread: the credit received IS the max profit
+        : null;
+
+  // The real, current lot size for this contract (NOT the underlying's own lot-size concept -
+  // see getLotSizeForSecurity) - needed for both the rupee totals below and a valid Dhan margin
+  // request. Keyed on the primary leg's security_id only: lot size doesn't vary by strike within
+  // one contract series.
+  const lotSize = useResource(
+    () => getLotSizeForSecurity(primaryLeg!.security_id, exchange),
+    [primaryLeg?.security_id, exchange],
+    { enabled: primaryLeg != null },
+  );
+  const lots = Number(t.lots) || 0;
+  const quantity = lotSize.data != null && lots > 0 ? lots * lotSize.data : null;
+  const maxLossTotal = maxLossPerUnit != null && quantity != null ? maxLossPerUnit * quantity : null;
+  const maxProfitTotal = maxProfitPerUnit != null && quantity != null ? maxProfitPerUnit * quantity : null;
+
+  const [margin, setMargin] = useState<number | null>(null);
+  const [marginBusy, setMarginBusy] = useState(false);
+  const [marginError, setMarginError] = useState<string | null>(null);
+  // A margin figure for a different set of legs/quantity would be misleading - clear it the
+  // moment anything it depended on changes, rather than leaving a stale number on screen.
+  useEffect(() => {
+    setMargin(null);
+    setMarginError(null);
+  }, [t.primaryStrike, t.secondStrike, hasSecondLeg, quantity, style, t.action]);
+
+  async function checkMargin() {
+    if (!primaryLeg || quantity == null) return;
+    setMarginBusy(true);
+    setMarginError(null);
+    try {
+      const legs = [{ security_id: primaryLeg.security_id, action: plan.primaryAction, price: primaryPremium ?? 0, quantity }];
+      if (hasSecondLeg && secondLeg && plan.secondAction) legs.push({ security_id: secondLeg.security_id, action: plan.secondAction, price: secondPremium ?? 0, quantity });
+      const res = await getComboMargin(exchange, legs);
+      const total = res.raw.totalMargin;
+      if (typeof total === "number") setMargin(total);
+      else setMarginError("Dhan didn't return a margin figure.");
+    } catch (e) {
+      setMarginError(e instanceof ApiError ? e.message : "Could not check margin.");
+    } finally {
+      setMarginBusy(false);
+    }
+  }
+
+  // Stop-loss %/Target % of max loss/profit, for a two-leg position only (see this component's
+  // own docstring for why naked is excluded) - defaults 50/70, editable. Translated into a real
+  // combined price and written onto the ticket whenever the percentages or the underlying
+  // economics change, so it's always in sync with the strikes/lots actually chosen.
+  const [stopPct, setStopPct] = useState(50);
+  const [targetPct, setTargetPct] = useState(70);
+  useEffect(() => {
+    if (!hasSecondLeg || netDebit == null || maxLossPerUnit == null || maxProfitPerUnit == null) {
+      if (t.combinedStopLossPrice != null || t.combinedTargetPrice != null) onChange({ ...t, combinedStopLossPrice: null, combinedTargetPrice: null });
+      return;
+    }
+    const stopPrice = netDebit - (stopPct / 100) * maxLossPerUnit;
+    const targetPrice = netDebit + (targetPct / 100) * maxProfitPerUnit;
+    if (stopPrice !== t.combinedStopLossPrice || targetPrice !== t.combinedTargetPrice) onChange({ ...t, combinedStopLossPrice: stopPrice, combinedTargetPrice: targetPrice });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSecondLeg, netDebit, maxLossPerUnit, maxProfitPerUnit, stopPct, targetPct]);
 
   const setStyle = (next: Style) => onChange({ ...t, strategy: next as Strategy });
   const setLots = (v: string) => onChange({ ...t, lots: v });
@@ -149,29 +237,30 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
       <label className="dim" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
         Your view on {symbol}
       </label>
-      <div className="chips" role="group" aria-label="Your view" style={{ marginBottom: 12 }}>
-        <button aria-pressed={t.action === "BUY"} onClick={() => onChange({ ...t, action: "BUY" })}>
-          Bullish
-        </button>
-        <button aria-pressed={t.action === "SELL"} onClick={() => onChange({ ...t, action: "SELL" })}>
-          Bearish
-        </button>
+      <div className="row" style={{ marginBottom: 12, alignItems: "flex-end" }}>
+        <div className="chips" role="group" aria-label="Your view">
+          <button aria-pressed={t.action === "BUY"} onClick={() => onChange({ ...t, action: "BUY" })}>
+            Bullish
+          </button>
+          <button aria-pressed={t.action === "SELL"} onClick={() => onChange({ ...t, action: "SELL" })}>
+            Bearish
+          </button>
+        </div>
+        <label className="select-field" style={{ width: "auto" }}>
+          <span className="dim">Expiry</span>
+          <select
+            value={chainExpiry ?? ""}
+            disabled={!expiries.data || expiries.data.length === 0}
+            onChange={(e) => onChange({ ...t, expiry: e.target.value, primaryStrike: null, secondStrike: null })}
+          >
+            {expiries.data?.map((exp) => (
+              <option key={exp} value={exp}>
+                {formatDay(exp)}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
-
-      <label className="select-field" style={{ marginBottom: 12 }}>
-        <span className="dim">Expiry</span>
-        <select
-          value={chainExpiry ?? ""}
-          disabled={!expiries.data || expiries.data.length === 0}
-          onChange={(e) => onChange({ ...t, expiry: e.target.value, primaryStrike: null, secondStrike: null })}
-        >
-          {expiries.data?.map((exp) => (
-            <option key={exp} value={exp}>
-              {formatDay(exp)}
-            </option>
-          ))}
-        </select>
-      </label>
       {expiries.error && (
         <p className="dn" style={{ fontSize: 13, margin: "0 0 12px" }} role="alert">
           Couldn't load expiries: {expiries.error.message}
@@ -220,7 +309,7 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
                 </td>
                 <td>{plan.optionType}</td>
                 <td className="num">
-                  <input type="number" min={1} value={t.lots} onChange={(e) => setLots(e.target.value)} placeholder="Auto" style={{ width: 64 }} />
+                  <input type="number" min={1} value={t.lots} onChange={(e) => setLots(e.target.value)} placeholder="1" style={{ width: 64 }} />
                 </td>
                 <td className="num">{formatInr(primaryPremium, 2)}</td>
               </tr>
@@ -249,7 +338,7 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
                     </td>
                     <td>{plan.optionType}</td>
                     <td className="num">
-                      <input type="number" min={1} value={t.lots} onChange={(e) => setLots(e.target.value)} placeholder="Auto" style={{ width: 64 }} />
+                      <input type="number" min={1} value={t.lots} onChange={(e) => setLots(e.target.value)} placeholder="1" style={{ width: 64 }} />
                     </td>
                     <td className="num">{formatInr(secondPremium, 2)}</td>
                   </>
@@ -281,13 +370,56 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
               <>
                 {" · Net "}
                 {netDebit >= 0 ? "debit" : "credit"} {formatInr(Math.abs(netDebit), 2)} per lot
-                {maxLoss != null && <> · max loss {formatInr(maxLoss, 2)} per lot</>}
               </>
             )}
           </span>
           <button className="link-btn" onClick={() => chain.reload()} disabled={chain.refreshing}>
             {chain.refreshing ? "Refreshing…" : "Refresh prices"}
           </button>
+        </div>
+      )}
+
+      {primaryLeg && (
+        <dl className="summary" data-testid="option-economics" style={{ marginTop: 8 }}>
+          <div>
+            <dt>Max profit</dt>
+            <dd className="num up">{unlimitedProfit ? "Unlimited" : formatInr(maxProfitTotal, 2)}</dd>
+          </div>
+          <div>
+            <dt>Max loss</dt>
+            <dd className="num dn">{formatInr(maxLossTotal, 2)}</dd>
+          </div>
+          <div>
+            <dt>Margin needed</dt>
+            <dd className="num">{marginBusy ? "Checking…" : margin != null ? formatInr(margin, 2) : "–"}</dd>
+          </div>
+        </dl>
+      )}
+      {primaryLeg && (
+        <button className="link-btn" onClick={() => void checkMargin()} disabled={marginBusy || quantity == null} style={{ marginBottom: 8 }}>
+          {marginBusy ? "Checking margin…" : "Check margin (Dhan)"}
+        </button>
+      )}
+      {marginError && (
+        <p className="dn" style={{ fontSize: 13, margin: "0 0 8px" }} role="alert">
+          {marginError}
+        </p>
+      )}
+
+      {hasSecondLeg && primaryLeg && (
+        <div className="field-row" style={{ marginBottom: 12 }}>
+          <label>
+            <span className="dim" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
+              Stop-loss (% of max loss)
+            </span>
+            <input type="number" min={1} max={100} value={stopPct} onChange={(e) => setStopPct(Math.max(1, Math.min(100, Number(e.target.value) || 0)))} />
+          </label>
+          <label>
+            <span className="dim" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
+              Target (% of max profit)
+            </span>
+            <input type="number" min={1} max={100} value={targetPct} onChange={(e) => setTargetPct(Math.max(1, Math.min(100, Number(e.target.value) || 0)))} />
+          </label>
         </div>
       )}
     </div>

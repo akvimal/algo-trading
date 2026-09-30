@@ -52,6 +52,34 @@ export const getOptionChain = (exchange: string, symbol: string, expiry: string)
 export const getOiSummary = (exchange: string, symbol: string, expiry: string) =>
   api<OiSummary>("marketData", `/options/oi-summary?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&expiry=${encodeURIComponent(expiry)}`);
 
+/** The real, current lot size for one specific option contract (its own security_id) - NOT the
+ * same thing as the underlying's own lot-size concept (which returns 1 for a bare stock symbol).
+ * Needed to size a Dhan margin-calculator request correctly: quantity there must be an exact
+ * multiple of this, not just any number of "lots". */
+export const getLotSizeForSecurity = (securityId: string, exchange: string) =>
+  api<{ lot_size: number }>("marketData", `/dhan/lot-size?security_id=${encodeURIComponent(securityId)}&exchange=${exchange}`).then((r) => r.lot_size);
+
+export type ComboMarginLeg = { security_id: string; action: "BUY" | "SELL"; price: number; quantity: number };
+/** Real Dhan margin for a set of legs (read-only "what if" - nothing is placed). NSE_FNO/
+ * INTRADAY are hardcoded: the Scan page's OI-buildup panel is NSE stocks only, and every option
+ * order it places is intraday (squared off same day, see execution's OptionPositionGroup.horizon)
+ * - "MARGIN" (Dhan's held-to-expiry product) would return a different, larger figure, the wrong
+ * one for what these paper positions actually are. */
+export const getComboMargin = (exchange: string, legs: ComboMarginLeg[]) =>
+  api<{ raw: Record<string, unknown> }>("marketData", `/dhan/margin/combo?exchange=${exchange}`, {
+    method: "POST",
+    json: {
+      legs: legs.map((l) => ({
+        security_id: l.security_id,
+        exchange_segment: "NSE_FNO",
+        transaction_type: l.action,
+        quantity: l.quantity,
+        product_type: "INTRADAY",
+        price: l.price,
+      })),
+    },
+  });
+
 /** The legs a real order with these exact params would use, without placing anything - backs the
  * Scan page's bias-driven option panel (Bullish/Bearish -> the real recommended strikes, before
  * committing to an order). `action`: "BUY" for bullish, "SELL" for bearish - the same field a real
@@ -105,10 +133,14 @@ export async function placeOrder(req: OrderRequest): Promise<PlaceResult> {
   if (placed.status === "REJECTED") return { ok: false, kind: req.kind, message: placed.rejection_reason ?? "The order was rejected." };
 
   if (req.kind === "option" && placed.id) {
-    // For an option the stop and target are levels of the underlying, attached right after it opens.
+    // For an option the stop and target are levels of the underlying, attached right after it
+    // opens - the combined (multi-leg) premium's own stop/target, when the Scan page's leg table
+    // computed one from a %-of-max-profit/loss, are attached the same post-open way.
     const missed: string[] = [];
     if (req.stop != null) await api("execution", `/option-groups/${placed.id}/spot-stop-loss`, { method: "PUT", json: { spot_stop_loss_price: req.stop } }).catch(() => missed.push("stop-loss"));
     if (req.target != null) await api("execution", `/option-groups/${placed.id}/spot-target`, { method: "PUT", json: { spot_target_price: req.target } }).catch(() => missed.push("target"));
+    if (req.combinedStop != null) await api("execution", `/option-groups/${placed.id}/stop-loss`, { method: "PUT", json: { stop_loss_price: req.combinedStop } }).catch(() => missed.push("combined stop-loss"));
+    if (req.combinedTarget != null) await api("execution", `/option-groups/${placed.id}/target`, { method: "PUT", json: { target_price: req.combinedTarget } }).catch(() => missed.push("combined target"));
     if (missed.length) return { ok: true, kind: "option", message: "Paper order placed.", warning: `The ${missed.join(" and ")} did not attach. Set it from Portfolio → Positions.` };
   }
   return { ok: true, kind: req.kind, message: "Paper order placed." };

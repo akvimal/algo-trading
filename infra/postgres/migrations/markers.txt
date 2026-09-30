@@ -31,3 +31,4 @@
 026-equity-screener-expression-groundwork.sql|market_data.equity_daily_bar|
 027-custom-screens.sql|market_data.custom_screens|
 028-default-trade-instrument.sql|accounts.users|default_instrument
+029-option-group-strike-width.sql|execution.option_position_groups|strike_width

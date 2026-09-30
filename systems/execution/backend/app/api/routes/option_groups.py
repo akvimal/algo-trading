@@ -89,6 +89,11 @@ def _group_to_out(
         "horizon": row.horizon,
         "quantity": float(row.quantity) if row.quantity is not None else None,
         "net_debit": float(row.net_debit) if row.net_debit is not None else None,
+        # The two legs' own strike difference, frozen at open - null for naked, and for any group
+        # opened before this column existed (migrations/029-option-group-strike-width.sql). Lets
+        # the frontend recover a spread's theoretical max profit/loss - see
+        # option_position_manager's _spread_sizing_basis for the identical debit/credit split.
+        "strike_width": float(row.strike_width) if row.strike_width is not None else None,
         "combined_stop_loss_price": float(row.combined_stop_loss_price) if row.combined_stop_loss_price is not None else None,
         "combined_target_price": float(row.combined_target_price) if row.combined_target_price is not None else None,
         "sl_scope": row.sl_scope,

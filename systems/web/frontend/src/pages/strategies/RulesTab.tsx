@@ -106,7 +106,7 @@ function ConfigFields({ config, onChange, indicators, prefix }: { config: RuleCo
     );
   }
   if (config.type === "multi_condition") {
-    return <p className="faint" style={{ margin: 0 }}>Multi-condition rules are edited in the classic app for now.</p>;
+    return <p className="faint" style={{ margin: 0 }}>Multi-condition rules aren't editable here yet.</p>;
   }
   return <TextField id={`${prefix}-bp`} label="Breakout period (bars)" value={String(config.breakout_period)} onChange={(v) => onChange({ ...config, breakout_period: Number(v) })} inputMode="numeric" />;
 }
@@ -343,7 +343,7 @@ export function RulesTab({ rules, indicators, watchlists }: { rules: Resource<Ru
                     <button
                       className="btn btn-small"
                       disabled={r.rule_config?.type === "multi_condition"}
-                      title={r.rule_config?.type === "multi_condition" ? "Multi-condition rules are edited in the classic app for now" : undefined}
+                      title={r.rule_config?.type === "multi_condition" ? "Multi-condition rules aren't editable here yet" : undefined}
                       onClick={() => {
                         setEditingId(r.id);
                         setEditDraft(draftFromRule(r));

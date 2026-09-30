@@ -34,7 +34,7 @@ export function StrategiesPage() {
     <div className="stack">
       <h1>Strategies</h1>
       <p className="faint" style={{ margin: 0 }}>
-        What decides a signal fires, and what happens once it does. A multi-condition rule, a strategy's exit condition, and backtesting are still in the classic app.
+        What decides a signal fires, and what happens once it does. A multi-condition rule, a strategy's exit condition, and backtesting aren't editable here yet.
       </p>
       <div className="chips" role="tablist" aria-label="Strategy sections">
         {TABS.map((t) => (

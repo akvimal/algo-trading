@@ -23,7 +23,6 @@ import { ExpandIcon } from "../chart/icons";
 import { checkLevelMove, isContractOf, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
 import { PositionCard } from "../components/PositionCard";
 import { TradeTicket } from "../components/TradeTicket";
-import { CLASSIC_APP_URL } from "../config";
 import { formatPnl, formatPrice } from "../format";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
@@ -551,7 +550,7 @@ export function TradePage() {
               <div className="notice error" role="alert">
                 <strong>Your {activeSpec.segment} account is set to live trading.</strong>
                 <p style={{ margin: "6px 0 0" }}>
-                  Orders here would use real money, so this ticket is paper-only for now. Place live orders in the <a href={CLASSIC_APP_URL}>classic app</a>, or switch back to paper in{" "}
+                  Orders here would use real money, so this ticket is paper-only for now. Live order placement isn't built yet - switch back to paper in{" "}
                   <Link to="/more/settings?tab=broker">Settings</Link>.
                 </p>
               </div>

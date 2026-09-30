@@ -4,7 +4,6 @@ import { ApiError } from "../api/http";
 import type { Segment } from "../api/types";
 import { SEGMENT_CHOICES } from "./onboardingModel";
 import { useProfile } from "../auth/ProfileContext";
-import { CLASSIC_APP_URL } from "../config";
 import { useAuth } from "../auth/AuthContext";
 
 export function MorePage() {
@@ -157,12 +156,6 @@ export function MorePage() {
           </span>
           <span aria-hidden="true">›</span>
         </Link>
-      </div>
-      <div className="card">
-        <p style={{ marginTop: 0 }}>Alerts and the rest are still in the classic app while this one is built out.</p>
-        <a className="btn" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }} href={CLASSIC_APP_URL}>
-          Open classic app
-        </a>
       </div>
     </div>
   );

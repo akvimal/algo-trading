@@ -2,11 +2,11 @@
 # never part of local dev/test). One free Let's Encrypt cert for
 # {$VPS_DOMAIN} (a cert is scoped to a hostname, not a port), reused
 # across every port below via TLS SNI - so the existing per-service port
-# scheme (shell/index.html's TABS, every frontend's own api.ts) needs no
-# restructuring into per-service subdomains. Each block just terminates
-# TLS and reverse-proxies plaintext to the same container:port the host
-# used to publish directly - see docker-compose.prod.yml's own comment for
-# why those services stop publishing to 0.0.0.0 once this exists.
+# scheme (every frontend's own api.ts) needs no restructuring into
+# per-service subdomains. Each block just terminates TLS and reverse-proxies
+# plaintext to the same container:port the host used to publish directly -
+# see docker-compose.prod.yml's own comment for why those services stop
+# publishing to 0.0.0.0 once this exists.
 #
 # Ports mirror .env's *_PORT values - if you change one there, mirror it
 # here too (this file has no access to .env's variable names, only
@@ -17,13 +17,21 @@
 # file's git history (2026-09-21) for the workaround: Caddy's ACME
 # listener moves to host port 8078, plus one new nginx server block
 # forwarding just /.well-known/acme-challenge/ to it.
+#
+# Classic frontends retired 2026-09-30 (docs/redesign-rollout-plan.md,
+# "Retiring the classic frontends"): port 8090 (SHELL_PORT, "the default
+# URL") now serves web-frontend instead of shell; the signal-engine-
+# frontend/execution-frontend/manual-trading-frontend blocks that used to
+# sit here (ports 8085/8081/8084) are gone along with those containers.
+# market-data-frontend keeps its own block - it's operator tooling (Dhan/
+# Delta feed status, instrument-master sync, Dhan token renewal), not an
+# end-user screen, and has no web/frontend equivalent. Every backend port
+# is untouched: web-frontend's own build reaches them at these exact same
+# addresses (its VITE_*_PORT build args), same as every classic frontend
+# already did.
 
 {$VPS_DOMAIN}:8090 {
-	reverse_proxy shell:80
-}
-
-{$VPS_DOMAIN}:8085 {
-	reverse_proxy signal-engine-frontend:80
+	reverse_proxy web-frontend:80
 }
 
 {$VPS_DOMAIN}:8000 {
@@ -38,18 +46,10 @@
 	reverse_proxy market-data-backend:8000
 }
 
-{$VPS_DOMAIN}:8081 {
-	reverse_proxy execution-frontend:80
-}
-
 {$VPS_DOMAIN}:8002 {
 	reverse_proxy execution-backend:8000
 }
 
 {$VPS_DOMAIN}:8004 {
 	reverse_proxy accounts-backend:8000
-}
-
-{$VPS_DOMAIN}:8084 {
-	reverse_proxy manual-trading-frontend:80
 }

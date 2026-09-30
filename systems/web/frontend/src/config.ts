@@ -19,8 +19,5 @@ export const SERVICE_URLS: Record<Service, string> = {
   signalEngine: base(import.meta.env.VITE_SIGNAL_ENGINE_PORT, "8000"),
 };
 
-// The classic (iframe-shell) app, linked from screens that are not ported yet.
-export const CLASSIC_APP_URL = `${protocol}//${location.hostname}:${import.meta.env.VITE_SHELL_PORT ?? "8090"}`;
-
 export const SEGMENTS = ["NSE", "MCX", "CRYPTO"] as const;
 export type Segment = (typeof SEGMENTS)[number];

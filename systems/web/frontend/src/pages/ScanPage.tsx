@@ -3,7 +3,6 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/http";
 import { createCustomScreen, deleteCustomScreen, listCustomScreens, previewCustomScreen, runCustomScreen, updateCustomScreen } from "../api/customScreens";
 import type { Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
-import { CLASSIC_APP_URL } from "../config";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { TextField } from "../components/Field";
 import { Sparkline } from "../components/Sparkline";
@@ -42,8 +41,7 @@ export function ScanPage() {
       </div>
       {tab === "oi" ? <OiScan /> : tab === "screener" ? <ScreenerScan /> : <CustomScreenScan />}
       <p className="faint" style={{ fontSize: 12 }}>
-        End-of-day readings for information only. They are not recommendations to buy or sell. Live OI and the Weekly Advisor are still in the{" "}
-        <a href={CLASSIC_APP_URL}>classic app</a>.
+        End-of-day readings for information only. They are not recommendations to buy or sell. Live OI and the Weekly Advisor aren't available here yet.
       </p>
     </div>
   );

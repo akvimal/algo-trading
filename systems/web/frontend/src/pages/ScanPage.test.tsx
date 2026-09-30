@@ -287,7 +287,7 @@ describe("OI buildup", () => {
       expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
     });
 
-    it("shows an already-open spot position with its own status and a square-off, above the ticket", async () => {
+    it("shows an already-open spot position with its own status and a square-off, instead of the ticket entirely", async () => {
       openPositionsFor.TCS = [
         {
           id: "ep1", symbol: "TCS", exchange: "NSE", segment: "NSE", action: "BUY", horizon: "intraday", instrument_type: "spot", quantity: 10,
@@ -300,18 +300,19 @@ describe("OI buildup", () => {
       const list = await screen.findByTestId("oi-list");
       const tcs = within(within(list).getAllByTestId("oi-card")[0]);
       await user.click(tcs.getByRole("button", { name: "Trade" }));
-      await tcs.findByTestId("ticket");
-      await user.click(tcs.getByRole("button", { name: "Spot" })); // defaults to Option - switch to see the spot position
       const card = await tcs.findByTestId("position-card");
       expect(within(card).getByText("TCS")).toBeInTheDocument();
       expect(within(card).getByText("+₹500")).toBeInTheDocument();
+      // An active position takes over the whole panel - no Instrument toggle, no ticket, nothing
+      // to place another order with (Portfolio's own positions list is still where you pyramid).
+      expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
+      expect(tcs.queryByRole("group", { name: "Instrument" })).not.toBeInTheDocument();
       await user.click(within(card).getByRole("button", { name: "Square off" }));
       await user.click(within(card).getByRole("button", { name: "Confirm square off" }));
       await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.includes("/positions/ep1/square-off"))).toBe(true));
-      expect(tcs.getByTestId("ticket")).toBeInTheDocument(); // still there underneath, for pyramiding
     });
 
-    it("shows an already-open option group with its own status, economics and a square-off", async () => {
+    it("shows an already-open option group with its own status, economics and a square-off, instead of the ticket", async () => {
       openGroupsFor.TCS = [
         {
           id: "eg1", underlying_symbol: "TCS", action: "BUY", strategy_type: "naked_call", quantity: 500, unrealized_pnl: 1200,
@@ -323,12 +324,18 @@ describe("OI buildup", () => {
       renderAt("/scan");
       const list = await screen.findByTestId("oi-list");
       const tcs = within(within(list).getAllByTestId("oi-card")[0]);
-      await user.click(tcs.getByRole("button", { name: "Trade" })); // defaults to Option already
-      await tcs.findByTestId("ticket");
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
       const card = await tcs.findByTestId("position-card");
       expect(within(card).getByText("TCS")).toBeInTheDocument();
       expect(within(card).getByText(/naked call/)).toBeInTheDocument();
       expect(within(card).getByTestId("pos-option-metrics")).toHaveTextContent("Premium");
+      expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
+      // An option position gets its own inline chart toggle, scoped to the card itself (distinct
+      // from OiCard's own top-level Chart button) - so squaring off is an informed decision.
+      await user.click(within(card).getByRole("button", { name: "Chart" }));
+      expect(await within(card).findByTestId("chart-pane")).toBeInTheDocument();
+      await user.click(within(card).getByRole("button", { name: "Hide chart" }));
+      expect(within(card).queryByTestId("chart-pane")).not.toBeInTheDocument();
       await user.click(within(card).getByRole("button", { name: "Square off" }));
       await user.click(within(card).getByRole("button", { name: "Confirm square off" }));
       await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.includes("/option-groups/eg1/square-off"))).toBe(true));
@@ -547,14 +554,17 @@ describe("Screener", () => {
     expect(await itc.findByTestId("chart-pane")).toBeInTheDocument();
   });
 
-  it("also has its own Trade panel now, independent of Chart - defaults to Spot (a Screener row's F&O eligibility isn't known)", async () => {
+  it("also has its own Trade panel now, independent of Chart - a non-F&O stock gets Spot/Buy only, no toggle to switch either away", async () => {
     const user = userEvent.setup();
     renderAt("/scan?tab=screener");
     const list = await screen.findByTestId("screener-list");
     const sbin = within(within(list).getAllByTestId("screener-card")[0]);
     await user.click(sbin.getByRole("button", { name: "Trade" }));
     expect(await sbin.findByTestId("ticket")).toBeInTheDocument();
-    expect(sbin.getByRole("button", { name: "Spot" })).toHaveAttribute("aria-pressed", "true");
+    // SBIN isn't a PRESETS symbol (no F&O here) - the Instrument (Spot/Option) toggle and the
+    // Side (Buy/Sell) chips both stay hidden: a cash-equity stock can only ever be a long spot buy.
+    expect(sbin.queryByRole("group", { name: "Instrument" })).not.toBeInTheDocument();
+    expect(sbin.queryByRole("group", { name: "Side" })).not.toBeInTheDocument();
     await user.click(sbin.getByRole("button", { name: "Chart" }));
     expect(await sbin.findByTestId("chart-pane")).toBeInTheDocument();
     expect(sbin.getByTestId("ticket")).toBeInTheDocument(); // Chart and Trade are independent here too

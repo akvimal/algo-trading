@@ -191,6 +191,22 @@ describe("squaring off", () => {
     expect(changed).toHaveBeenCalled();
   });
 
+  it("stays disabled and showing 'Closing…' after a successful square-off, not flashing back to askable", async () => {
+    const user = userEvent.setup();
+    render(<PositionCard kind="position" item={position()} onChanged={onChanged()} />);
+    await user.click(screen.getByRole("button", { name: "Square off" }));
+    // Same DOM node throughout - its accessible name changes once busy, so grab the reference by
+    // its pre-click name and check ITS later state, rather than re-querying by a name that no
+    // longer matches.
+    const confirmBtn = screen.getByRole("button", { name: "Confirm square off" });
+    await user.click(confirmBtn);
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/positions/p1/square-off"))).toBe(true));
+    // The card itself only disappears once the parent reloads and drops the now-closed position -
+    // until then this component stays mounted, and must keep showing it is still closing.
+    expect(confirmBtn).toBeDisabled();
+    expect(confirmBtn).toHaveTextContent("Closing…");
+  });
+
   it("keeping it open cancels without calling the server", async () => {
     const user = userEvent.setup();
     render(<PositionCard kind="position" item={position()} onChanged={onChanged()} />);

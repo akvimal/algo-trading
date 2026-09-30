@@ -209,13 +209,14 @@ describe("buildOrder", () => {
   const meta = { instrument: "spot" as const, interval: "15min", trendFollowed: true };
 
   it("a market stock order goes to /positions/manual at the live price, sized by the server from the stop", () => {
-    const t = ticket({ stop: "990", target: "1030", setupTag: "Breakout", confidence: 4 });
+    const t = ticket({ stop: "990", target: "1030", setupTag: "Breakout", confidence: 4, reason: "  Retested the OB.  " });
     const o = buildOrder(t, analyzeTicket(t, ctx()), ctx(), meta);
     expect(o.kind).toBe("position");
     expect(o.path).toBe("/positions/manual");
     expect(o.body).toMatchObject({
       segment: "NSE", symbol: "RELIANCE", action: "BUY", instrument_type: "spot", price: 1000, order_type: "market",
       stop_loss_price: 990, target_price: 1030, risk_managed: true, trend_followed: true, setup_tag: "Breakout", confidence: 4, entry_interval: "15min",
+      notes: "Retested the OB.", // trimmed
     });
     expect("quantity" in o.body).toBe(false); // auto: the server sizes it
   });
@@ -249,7 +250,13 @@ describe("buildOrder", () => {
   it("omits optional fields rather than sending nulls", () => {
     const t = ticket({ stop: "990" });
     const o = buildOrder(t, analyzeTicket(t, ctx()), ctx(), meta);
-    for (const k of ["target_price", "setup_tag", "confidence"]) expect(k in o.body).toBe(false);
+    for (const k of ["target_price", "setup_tag", "confidence", "notes"]) expect(k in o.body).toBe(false);
+  });
+
+  it("omits notes for a blank or whitespace-only reason", () => {
+    const t = ticket({ stop: "990", reason: "   " });
+    const o = buildOrder(t, analyzeTicket(t, ctx()), ctx(), meta);
+    expect("notes" in o.body).toBe(false);
   });
 });
 

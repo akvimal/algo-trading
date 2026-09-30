@@ -9,7 +9,7 @@ import { PositionCard } from "../components/PositionCard";
 import { TradeTicket } from "../components/TradeTicket";
 import { useResource } from "../hooks/useResource";
 import { ScanOptionBias } from "./ScanOptionBias";
-import { EMPTY_TICKET, emptyTicketFor, instrumentFor, type Action, type DefaultInstrument, type DefaultOptionStrategy, type Ticket } from "./tradeModel";
+import { EMPTY_TICKET, emptyTicketFor, instrumentFor, optionsAvailable, type Action, type DefaultInstrument, type DefaultOptionStrategy, type Ticket } from "./tradeModel";
 import { useScanLivePrice } from "./useScanLivePrice";
 
 // The regime read is for the ticket's own "before you place" checks, not for the chart (which has
@@ -87,6 +87,25 @@ export function ScanTradePanel({ exchange, symbol, oiDefaultView }: Props) {
     );
   }
 
+  // Anything already open on this symbol (either side) - shown with its own live status and a
+  // square-off. When there IS one, that's the whole panel: no Spot/Option toggle, no Bullish/
+  // Bearish view, no ticket - a person watching an open position wants its status and a way to
+  // close it, not another order form pushed below it. (Pyramiding still works from Portfolio's own
+  // positions list; this panel just stops offering it inline.)
+  const hasActive = (openPositions.data?.length ?? 0) + (openGroups.data?.length ?? 0) > 0;
+  if (hasActive) {
+    return (
+      <>
+        {(openPositions.data ?? []).map((p) => (
+          <PositionCard key={p.id} kind="position" item={p} onChanged={() => openPositions.reload()} compact />
+        ))}
+        {(openGroups.data ?? []).map((g) => (
+          <PositionCard key={g.id} kind="group" item={g} onChanged={() => openGroups.reload()} compact />
+        ))}
+      </>
+    );
+  }
+
   const ctx = {
     price,
     lotSize: 1, // every OI-buildup row is a plain NSE stock - shares, never a lot-sized contract
@@ -99,21 +118,26 @@ export function ScanTradePanel({ exchange, symbol, oiDefaultView }: Props) {
   };
   const trendFollowed = regime.data ? regime.data.trend !== "range" && (regime.data.trend === "up") === (ticket.action === "BUY") : false;
   const isOption = ticket.strategy !== "future";
+  // OI-buildup rows are guaranteed real F&O (the scan itself is built from option-chain data);
+  // Screener/Custom rows aren't, so fall back to optionsAvailable's own PRESETS check. When false,
+  // a plain cash-equity stock: no Option side to switch to (the toggle stays hidden, strategy
+  // stays "future"), and no Sell either - shorting a stock needs margin/derivatives this platform
+  // doesn't offer, so only a long (BUY) position is ever placeable.
+  const isFno = oiDefaultView != null || optionsAvailable(symbol);
 
   return (
     <>
-      <div className="chips" role="group" aria-label="Instrument" style={{ marginBottom: 12 }}>
-        <button aria-pressed={!isOption} onClick={() => setTicket((cur) => ({ ...cur, strategy: "future" }))}>
-          Spot
-        </button>
-        <button aria-pressed={isOption} onClick={() => setTicket((cur) => (cur.strategy === "future" ? { ...cur, strategy: defaultOptionStrategy } : cur))}>
-          Option
-        </button>
-      </div>
-      {isOption
-        ? (openGroups.data ?? []).map((g) => <PositionCard key={g.id} kind="group" item={g} onChanged={() => openGroups.reload()} compact />)
-        : (openPositions.data ?? []).map((p) => <PositionCard key={p.id} kind="position" item={p} onChanged={() => openPositions.reload()} compact />)}
-      {isOption && <ScanOptionBias exchange={exchange} symbol={symbol} ticket={ticket} onChange={setTicket} />}
+      {isFno && (
+        <div className="chips" role="group" aria-label="Instrument" style={{ marginBottom: 12 }}>
+          <button aria-pressed={!isOption} onClick={() => setTicket((cur) => ({ ...cur, strategy: "future" }))}>
+            Spot
+          </button>
+          <button aria-pressed={isOption} onClick={() => setTicket((cur) => (cur.strategy === "future" ? { ...cur, strategy: defaultOptionStrategy } : cur))}>
+            Option
+          </button>
+        </div>
+      )}
+      {isFno && isOption && <ScanOptionBias exchange={exchange} symbol={symbol} ticket={ticket} onChange={setTicket} />}
       <TradeTicket
         ticket={ticket}
         onChange={setTicket}
@@ -123,6 +147,7 @@ export function ScanTradePanel({ exchange, symbol, oiDefaultView }: Props) {
         budget={null}
         optionsForced
         hideStrategyChips
+        hideSideChips={!isFno}
         hideMoneynessField={isOption}
         hideOptionExtras={isOption}
         onPlaced={() => {

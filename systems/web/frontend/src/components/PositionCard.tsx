@@ -3,6 +3,7 @@ import { api, ApiError } from "../api/http";
 import { moveOpenLevel } from "../api/trade";
 import type { OptionGroup, Position } from "../api/types";
 import { formatPct, formatPnl, formatPrice, formatTime } from "../format";
+import { ScanChartPanel } from "../pages/ScanChartPanel";
 import { isNakedOption, isSpreadOption, nakedMetrics, spreadMetrics } from "./positionMetrics";
 import { Signed } from "./bits";
 
@@ -16,10 +17,13 @@ type Field = "stop" | "target";
  * small inline editor (moveOpenLevel, the same route a chart-line drag already uses). An option
  * group also gets a second economics line - naked shows % move of the underlying and of the
  * option's own premium since entry; a spread shows how far its live P&L is toward its own defined
- * max profit, and against the capital actually committed to it (see positionMetrics.ts). Squaring
- * off is a deliberate two-step (tap, then confirm in place): an accidental tap on a phone must not
- * close a position, and a browser confirm() dialog is both ugly and blocked in installed PWAs on
- * some platforms. `compact` trims it to fit a narrow sidebar (the trade ticket) - same information,
+ * max profit, and against the capital actually committed to it (see positionMetrics.ts) - and a
+ * "Chart" toggle (option groups only - a spot/future row has no strike/expiry decision riding on
+ * the underlying's own shape) that drops in ScanChartPanel inline, so squaring off is an informed
+ * decision rather than a guess from the P&L number alone. Squaring off is a deliberate two-step
+ * (tap, then confirm in place): an accidental tap on a phone must not close a position, and a
+ * browser confirm() dialog is both ugly and blocked in installed PWAs on some platforms. `compact`
+ * trims it to fit a narrow sidebar (the trade ticket) - same information,
  * tighter spacing, no entry-time line. */
 export function PositionCard(props: Props) {
   const [confirming, setConfirming] = useState(false);
@@ -27,6 +31,7 @@ export function PositionCard(props: Props) {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Field | null>(null);
   const [draft, setDraft] = useState("");
+  const [chartOpen, setChartOpen] = useState(false);
 
   const isPos = props.kind === "position";
   const { item, compact } = props;
@@ -54,11 +59,14 @@ export function PositionCard(props: Props) {
     try {
       const path = isPos ? `/positions/${item.id}/square-off` : `/option-groups/${item.id}/square-off`;
       await api("execution", path, { method: "POST" });
+      // Stay disabled/"Closing…" on success - props.onChanged() reloads the parent's list, which
+      // is what actually makes this card go away (it's now CLOSED). Flipping busy back to false
+      // here would re-enable "Confirm square off" for the moment before that reload lands,
+      // wrongly suggesting the close hadn't taken.
       props.onChanged();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not square off");
       setConfirming(false);
-    } finally {
       setBusy(false);
     }
   }
@@ -178,6 +186,13 @@ export function PositionCard(props: Props) {
         </div>
       )}
       <div className="row" style={{ justifyContent: "flex-end" }}>
+        {/* Option positions only, per the card's own docstring - a spot/future row has no strike/
+            expiry decision riding on the underlying's shape the way an option position does. */}
+        {g && (
+          <button className="btn btn-small" aria-pressed={chartOpen} onClick={() => setChartOpen((v) => !v)}>
+            {chartOpen ? "Hide chart" : "Chart"}
+          </button>
+        )}
         {confirming ? (
           <>
             <button className="btn btn-small" disabled={busy} onClick={() => setConfirming(false)}>
@@ -193,6 +208,11 @@ export function PositionCard(props: Props) {
           </button>
         )}
       </div>
+      {chartOpen && g && (
+        <div style={{ marginTop: 12 }}>
+          <ScanChartPanel exchange={g.segment ?? "NSE"} symbol={g.underlying_symbol} />
+        </div>
+      )}
     </div>
   );
 }

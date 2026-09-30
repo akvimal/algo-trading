@@ -4,7 +4,7 @@ import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
 import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
-import { SETUP_TAGS } from "../pages/journalModel";
+import { NOTES_MAX, SETUP_TAGS } from "../pages/journalModel";
 import {
   ACTION_WORD, analyzeTicket, buildOrder, checkList, favorable, optionsAvailable,
   type Action, type BuildMeta, type DayBudget, type Moneyness, type PeerRead, type RegimeRead, type Ticket, type TicketContext,
@@ -63,12 +63,17 @@ type Props = {
    * a stop-loss for an option regardless of this flag - every option position here is already
    * risk-capped by construction (premium paid, or strike width), unlike a spot/future position. */
   hideOptionExtras?: boolean;
+  /** Hides the "Side" (Buy/Sell) chips outright, regardless of hideStrategyChips/isOption, and
+   * forces the caller to keep ticket.action at "BUY" itself (nothing here changes it back) - for a
+   * plain NSE stock with no F&O, which cannot be shorted without margin/derivatives: only a long
+   * (BUY) position is ever placeable there, so offering Sell would just invite a rejection later. */
+  hideSideChips?: boolean;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -128,7 +133,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         <span className="pill">Paper</span>
       </div>
 
-      {!(hideStrategyChips && isOption) && (
+      {!hideSideChips && !(hideStrategyChips && isOption) && (
         <div className="chips seg" role="group" aria-label="Side" style={{ margin: "12px 0" }}>
           {(["BUY", "SELL"] as Action[]).map((s) => (
             <button key={s} className={s === "BUY" ? "buy" : "sell"} aria-pressed={t.action === s} onClick={() => set("action", s)}>
@@ -281,6 +286,17 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
             </option>
           ))}
         </select>
+      </label>
+      <label className="field" style={{ marginBottom: 12 }}>
+        <span className="dim">Reason (optional)</span>
+        <textarea
+          className="textarea"
+          value={t.reason}
+          maxLength={NOTES_MAX}
+          rows={2}
+          onChange={(e) => set("reason", e.target.value)}
+          placeholder="What made you take this trade?"
+        />
       </label>
       {!simplifiedOption && (
         <>

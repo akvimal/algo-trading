@@ -317,12 +317,14 @@ describe("placing", () => {
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
     await user.selectOptions(t.getByLabelText(/Why this trade/), "Breakout");
+    await user.type(t.getByLabelText(/Reason/), "Retested the daily OB and held.");
     await user.click(t.getByRole("button", { name: "4" }));
     await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
     await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
     expect(posts("/positions/manual")[0].body).toMatchObject({
       segment: "NSE", symbol: "RELIANCE", action: "BUY", instrument_type: "spot", price: 1000, order_type: "market",
       stop_loss_price: 990, target_price: 1030, setup_tag: "Breakout", confidence: 4, risk_managed: true, trend_followed: true, entry_interval: "15min",
+      notes: "Retested the daily OB and held.",
     });
     expect("quantity" in posts("/positions/manual")[0].body).toBe(false);
     expect(await t.findByText("Paper order placed.")).toBeInTheDocument();

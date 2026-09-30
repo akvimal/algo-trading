@@ -88,12 +88,16 @@ export type Ticket = {
   lots: string; // "" = size it from my risk
   setupTag: string | null;
   confidence: number | null;
+  // Free-text reason captured alongside setupTag, at order time - "why THIS trade", not just which
+  // category. Sent as the order's own `notes` (positions.notes/option_position_groups.notes),
+  // editable later the same way any other journal note is.
+  reason: string;
 };
 
 export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
   combinedStopLossPrice: null, combinedTargetPrice: null,
-  orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null,
+  orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null, reason: "",
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -324,6 +328,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
   const journal = {
     ...(t.setupTag ? { setup_tag: t.setupTag } : {}),
     ...(t.confidence != null ? { confidence: t.confidence } : {}),
+    ...(t.reason.trim() ? { notes: t.reason.trim() } : {}),
   };
   const riskManaged = a.lotsAuto && a.stop !== null;
   const common = { segment: ctx.segment, symbol: ctx.symbol, action: t.action };

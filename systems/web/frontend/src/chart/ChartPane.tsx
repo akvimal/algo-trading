@@ -6,8 +6,8 @@ import { formatPrice } from "../format";
 import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
-  INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
-  STRUCTURE_TIMEFRAMES, type StoredDrawing, type StructureConfig,
+  DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
+  STRUCTURE_TIMEFRAMES, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
 } from "./config";
 import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
@@ -113,6 +113,9 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const pendingRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const restoringRef = useRef(false);
+  // This pane's own id, sent along with every drawings save so it can tell its OWN write apart
+  // from a sibling pane's (see DRAWINGS_CHANGED_EVENT's own comment in config.ts).
+  const instanceIdRef = useRef(`p${Math.random().toString(36).slice(2)}`);
   const panesRef = useRef<Map<string, string>>(new Map());
   const paramsAppliedRef = useRef<Map<string, string>>(new Map());
   const hoverRef = useRef<number | null>(null);
@@ -502,7 +505,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [oiLevels, status, epoch]);
 
   // ---- drawings: saved per instrument, restored after every load ----
-  const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()]);
+  const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()], instanceIdRef.current);
 
   const handlers = () => ({
     onDrawEnd: (e: OverlayEvent) => {
@@ -584,9 +587,14 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     }
   }
 
-  useEffect(() => {
+  // (Re)builds every drawing overlay from what's saved for this pane's own (exchange, symbol) -
+  // used both when THIS pane loads a genuinely new series (the [epoch] effect below) and when a
+  // SIBLING pane showing the same instrument, at whatever candle size, just changed them (the
+  // DRAWINGS_CHANGED_EVENT listener further down) - drawings are shared across every interval of
+  // one instrument by design (see drawingsKey's own comment in config.ts).
+  function reloadDrawings() {
     const chart = chartRef.current;
-    if (!chart || epoch === 0) return;
+    if (!chart) return;
     // Wipe only the drawings (by id): the plan and structure layers are theirs to manage.
     restoringRef.current = true;
     for (const id of drawnRef.current.keys()) chart.removeOverlay(id);
@@ -606,8 +614,27 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     // A restored alert starts from where the price is now, not from whichever tick happens to come next.
     if (propsRef.current.price != null) seedAlerts(propsRef.current.price);
     emitArmed();
+  }
+
+  useEffect(() => {
+    if (epoch === 0) return;
+    reloadDrawings();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers() and the saved set read refs only; a new series always bumps epoch
   }, [epoch]);
+
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const { exchange, symbol, origin } = (e as CustomEvent<DrawingsChangedDetail>).detail;
+      // Not our own write (already reflected here) and genuinely the same instrument this pane is
+      // showing right now - only interval is allowed to differ, that's the whole point.
+      if (origin === instanceIdRef.current) return;
+      if (exchange !== propsRef.current.exchange || symbol !== propsRef.current.symbol) return;
+      reloadDrawings();
+    };
+    window.addEventListener(DRAWINGS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(DRAWINGS_CHANGED_EVENT, onChanged);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadDrawings reads refs/propsRef only, stable enough not to need re-subscribing
+  }, []);
 
   useEffect(() => {
     const chart = chartRef.current;

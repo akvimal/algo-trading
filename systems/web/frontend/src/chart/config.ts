@@ -219,4 +219,22 @@ export const loadDrawings = (exchange: string, symbol: string): StoredDrawing[] 
     const { alert, ...rest } = d;
     return alert && (alert.trigger === "cross" || alert.trigger === "close") ? { ...rest, alert: { trigger: alert.trigger } } : rest;
   });
-export const saveDrawings = (exchange: string, symbol: string, d: StoredDrawing[]) => write(drawingsKey(exchange, symbol), d);
+
+// Saving is the only signal a SIBLING ChartPane showing the same instrument (a two-chart layout,
+// same symbol at two different candle sizes) has that it needs to re-read and redraw - drawings
+// are keyed only by (exchange, symbol), deliberately shared across every interval (see
+// drawingsKey's own comment), but writing to localStorage from one pane does not by itself notify
+// another still-mounted pane reading the same key in the same document: the browser's own
+// `storage` event only fires in OTHER tabs/windows, never the one that made the write. `origin`
+// (each ChartPane's own instance id) lets a pane recognise and skip its OWN write - reacting to it
+// too would wipe and rebuild its own overlays on every draw/move/delete, losing whatever was
+// selected for no reason, not just resync a peer.
+export const DRAWINGS_CHANGED_EVENT = "web:chart:drawings-changed";
+export type DrawingsChangedDetail = { exchange: string; symbol: string; origin: string };
+
+export function saveDrawings(exchange: string, symbol: string, d: StoredDrawing[], origin = ""): void {
+  write(drawingsKey(exchange, symbol), d);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent<DrawingsChangedDetail>(DRAWINGS_CHANGED_EVENT, { detail: { exchange, symbol, origin } }));
+  }
+}

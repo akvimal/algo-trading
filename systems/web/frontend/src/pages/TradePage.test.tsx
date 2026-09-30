@@ -719,6 +719,44 @@ describe("drawing tools", () => {
     ]);
   });
 
+  it("a drawing made on one chart shows up on a sibling chart of the SAME instrument at a different candle size", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    // Make the second chart NIFTY too, at a different candle size than the first (still 15m).
+    await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
+    await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(screen.getAllByText("NIFTY")).toHaveLength(2));
+    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByLabelText("Same candle size"));
+    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(within(screen.getAllByRole("group", { name: "Candle size, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+    // Clicking into chart 1's region above (to change its symbol) made IT the active pane -
+    // click back into chart 0 so the toolbar draws there instead.
+    await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
+
+    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+    await user.click(bar.getByRole("button", { name: "Trend line" }));
+    const pending = chart(0).overlaysNamed("segment");
+    expect(pending).toHaveLength(1);
+    act(() => chart(0).finishDrawing(pending[0].id, [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[10].timestamp, value: 1020 }]));
+
+    // Pane 2 remounted (a fresh FakeChart instance) when its own symbol changed to NIFTY above -
+    // same "starts a new instrument with its own drawings" precedent this file already uses, so
+    // its CURRENT chart is the latest instance, not chart(1).
+    const paneTwo = FakeChart.instances[FakeChart.instances.length - 1];
+    // The SAME drawing now exists on chart 2 (1h) too - not drawn there by the person, restored
+    // from the shared (exchange, symbol) save the moment chart 0 persisted it - and only once,
+    // not duplicated by chart 0 also reacting to its own write.
+    await waitFor(() => expect(paneTwo.overlaysNamed("segment")).toHaveLength(1));
+    expect(chart(0).overlaysNamed("segment")).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem("web.chart.drawings:NSE:NIFTY")!)).toHaveLength(1);
+  });
+
   it("choosing the same tool again, or the cursor, puts it down without drawing anything", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");

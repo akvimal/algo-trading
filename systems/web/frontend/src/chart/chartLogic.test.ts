@@ -3,7 +3,7 @@ import type { ChartStructure } from "../api/types";
 import { fractionalIndexToTs, floorBarIndex, pointTimestamp, toChartPoint, tsToFractionalIndex } from "./anchor";
 import {
   DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure,
-  loadTools, lookbackRange, parseParamList, pricePrecision, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toKLine,
+  loadTools, lookbackRange, parseParamList, pricePrecision, resetStructureForInterval, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toKLine,
 } from "./config";
 import { rollLiveBar, type Bar } from "./liveBar";
 import { liveSetups, structureOverlays } from "./structure";
@@ -121,6 +121,32 @@ describe("saved chart settings", () => {
     expect(loadStructure()).toMatchObject({ tfs: ["15min", "60min"], breakers: true, breaks: true, setups: true });
     localStorage.setItem("web.chart.structure", JSON.stringify({ tfs: ["15min", "7min", 3] }));
     expect(loadStructure().tfs).toEqual(["15min"]);
+  });
+
+  describe("resetStructureForInterval", () => {
+    it("drops timeframes finer than the new candle size and keeps coarser ones", () => {
+      expect(resetStructureForInterval(["5min", "15min", "60min"], "15min")).toEqual(["15min", "60min"]);
+    });
+
+    it("adds the new size itself if it's a valid structure timeframe and not already selected", () => {
+      expect(resetStructureForInterval(["60min", "daily"], "15min")).toEqual(["15min", "60min", "daily"]);
+    });
+
+    it("does not duplicate the new size if it's already selected", () => {
+      expect(resetStructureForInterval(["15min", "60min"], "15min")).toEqual(["15min", "60min"]);
+    });
+
+    it("drops every old selection once the new size is coarser than all of them, but still adds the new size itself", () => {
+      expect(resetStructureForInterval(["1min", "5min"], "60min")).toEqual(["60min"]);
+    });
+
+    it("weekly has no structure-timeframe entry, so nothing is added for it - and daily (finer than a week) is dropped like anything else finer than the new size", () => {
+      expect(resetStructureForInterval(["15min", "60min", "daily"], "weekly")).toEqual([]);
+    });
+
+    it("is a no-op while the structure layer is off - never turns it on by itself", () => {
+      expect(resetStructureForInterval([], "60min")).toEqual([]);
+    });
   });
 
   it("tool settings default off", () => {

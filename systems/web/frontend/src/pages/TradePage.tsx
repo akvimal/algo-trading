@@ -6,7 +6,7 @@ import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel }
 import type { OptionGroup, Position, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
-import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, saveIndicatorParams, saveIndicators, saveStructure, saveTools, type StructureConfig } from "../chart/config";
+import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, type StructureConfig } from "../chart/config";
 import { ACCENT, BUY, SELL } from "../chart/colors";
 import { AlertBar } from "../chart/AlertBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
@@ -449,7 +449,10 @@ export function TradePage() {
                   index={i}
                   symbol={spec.symbol}
                   interval={spec.interval}
-                  onInterval={(iv) => setWs((cur) => setPaneInterval(cur, i, iv))}
+                  onInterval={(iv) => {
+                    setWs((cur) => setPaneInterval(cur, i, iv));
+                    setStructure((cur) => ({ ...cur, tfs: resetStructureForInterval(cur.tfs, iv) }));
+                  }}
                   price={priceOf(i)}
                   priceShown={!tools.priceHidden}
                   live={socket.connected}

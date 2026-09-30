@@ -138,6 +138,27 @@ export const saveStructure = (s: StructureConfig) => write("structure", s);
 
 export const structureIsOn = (s: StructureConfig) => s.tfs.length > 0;
 
+const structureMinutesOf = (v: string): number => INTERVALS.find((i) => i.value === v)?.minutes ?? 0;
+
+/** After the chart's own candle size changes, the structure layer's selected detection timeframes
+ * reset to match: anything finer than the new size is dropped (a 1-minute structure read makes
+ * little sense once the chart itself is on 1-hour candles), anything coarser stays (still a
+ * meaningful "zoom out" read), and the new size itself joins the selection if it's a valid
+ * structure timeframe. STRUCTURE_TIMEFRAMES has no "weekly" entry (order-block detection doesn't
+ * go that coarse), so switching to weekly candles adds nothing - and drops every other selected
+ * timeframe too, daily included, since daily is itself finer than a week. A no-op while the layer
+ * is off (tfs empty): this never turns it on by itself, since it is opt-in by design (see
+ * loadStructure's own comment). */
+export function resetStructureForInterval(tfs: string[], newInterval: string): string[] {
+  if (tfs.length === 0) return tfs;
+  const newMinutes = structureMinutesOf(newInterval);
+  const kept = tfs.filter((tf) => structureMinutesOf(tf) >= newMinutes);
+  if (STRUCTURE_TF_VALUES.has(newInterval) && !kept.includes(newInterval)) {
+    return [...kept, newInterval].sort((a, b) => structureMinutesOf(a) - structureMinutesOf(b));
+  }
+  return kept;
+}
+
 export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean; priceHidden: boolean };
 export const loadTools = (): ToolSettings => {
   const raw = read<Record<string, unknown>>("tools", {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));

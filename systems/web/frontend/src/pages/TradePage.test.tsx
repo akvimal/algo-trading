@@ -961,6 +961,16 @@ describe("structure", () => {
     expect(JSON.parse(localStorage.getItem("web.chart.structure")!)).toMatchObject({ tfs: ["15min"], fvg: true, setups: true });
   });
 
+  it("resets to the new candle size on a change - drops finer detection timeframes, keeps coarser ones, adds the new size", async () => {
+    structure = fullStructure();
+    localStorage.setItem("web.chart.structure", JSON.stringify({ tfs: ["5min", "60min"], breakers: false, fvg: false, breaks: false, trendMarks: false, setups: false }));
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await user.click(within(screen.getByRole("group", { name: "Candle size, NIFTY" })).getByRole("button", { name: "15m" }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual(["15min", "60min"]));
+  });
+
   it("shows the structure trend beside the chart's name, and live setups in a strip", async () => {
     structure = fullStructure();
     localStorage.setItem("web.chart.structure", JSON.stringify({ tfs: ["15min"], breakers: false, fvg: false, breaks: false, trendMarks: false, setups: true }));

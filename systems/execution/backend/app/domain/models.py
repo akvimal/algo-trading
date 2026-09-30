@@ -809,19 +809,28 @@ class ManualOptionPositionCreate(BaseModel):
     # _spread_sizing_basis).
     option_position_style: Literal["spread", "naked", "credit_spread"] = "spread"
     option_strike_moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"
-    # Optional override - omitted (the normal case, no Expiry dropdown in
-    # the frontend anymore as of 2026-08-14) means open_manual_option_group
-    # picks the nearest currently-tradeable expiry itself, matching the
-    # pre-2026-08-14 Strategy-mediated path's own always-nearest behavior.
-    # A caller-supplied value is still validated against a live
-    # GET /options/expiries call in open_manual_option_group, not just
+    # Optional override - omitted means open_manual_option_group picks the nearest
+    # currently-tradeable expiry itself, matching the pre-2026-08-14 Strategy-mediated path's own
+    # always-nearest behavior (no Expiry dropdown in the frontend at all until 2026-09-30, when
+    # the Scan page's leg table got one back - other callers, e.g. TradePage's own option ticket,
+    # still omit it and get the silent default). A caller-supplied value is still validated
+    # against a live GET /options/expiries call in open_manual_option_group, not just
     # format-checked here.
     expiry: Optional[str] = None
     # Overrides the short/protection leg's own distance (in strikes) from
     # the primary leg - omitted (the normal case) means
     # option_templates.py's own SPREAD_WIDTH_STRIKES default. Ignored for
-    # option_position_style='naked' (no second leg to place).
+    # option_position_style='naked' (no second leg to place). Superseded
+    # entirely by second_strike below when that's also given.
     spread_width: Optional[int] = Field(default=None, ge=1)
+    # An explicit strike per leg (the Scan page's leg table, once it has the real chain) - each
+    # overrides option_strike_moneyness/spread_width entirely for its own leg. second_strike is
+    # ignored for option_position_style='naked' (no second leg). Rejected (422, via
+    # OptionLegPreviewError's route mapping / _reject_manual_group's own reason text) if the named
+    # strike isn't actually in the resolved chain - see option_templates.py's
+    # _resolve_primary_index/_resolve_second_index.
+    primary_strike: Optional[float] = Field(default=None, gt=0)
+    second_strike: Optional[float] = Field(default=None, gt=0)
     sl_scope: Literal["combined", "individual"] = "combined"
     # Bypasses auto-sizing entirely when given - same precedence pattern
     # as Strategy.fixed_lots in open_option_group.

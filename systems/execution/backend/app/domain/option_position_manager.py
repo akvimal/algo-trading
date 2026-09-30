@@ -730,6 +730,8 @@ def open_manual_option_group(
     resolve_symbol_by_security_id: ResolveSymbolBySecurityId,
     get_lot_size: GetLotSize,
     spread_width: Optional[int] = None,
+    primary_strike: Optional[float] = None,
+    second_strike: Optional[float] = None,
     plan_checklist: Optional[list[dict]] = None,
     order_type: Optional[str] = None,
     square_off_time: Optional[time] = None,
@@ -812,24 +814,31 @@ def open_manual_option_group(
     # spread_width overrides option_templates.py's SPREAD_WIDTH_STRIKES
     # default for the second (short/protection) leg only - the Scan page's
     # leg table lets that leg's own strike step independently of the
-    # primary leg's moneyness (see ScanOptionBias.tsx). Not meaningful for
-    # 'naked' (no second leg), so left out of those two calls entirely.
+    # primary leg's moneyness (see ScanOptionBias.tsx). primary_strike/
+    # second_strike go further: an explicit strike per leg, taking
+    # precedence over moneyness/width entirely once the Scan page has a
+    # real option chain in hand (see option_templates.py's
+    # _resolve_primary_index/_resolve_second_index). Neither is
+    # meaningful for 'naked' beyond primary_strike (no second leg), so
+    # second_strike is left out of those two calls entirely.
     width_kwargs = {"width": spread_width} if spread_width is not None else {}
+    strike_kwargs = {"primary_strike": primary_strike} if primary_strike is not None else {}
+    both_strike_kwargs = {**strike_kwargs, **({"second_strike": second_strike} if second_strike is not None else {})}
     try:
         if option_position_style == "naked":
             if action == "BUY":
-                strategy_type, legs = "naked_call", naked_call(chain, option_strike_moneyness)
+                strategy_type, legs = "naked_call", naked_call(chain, option_strike_moneyness, **strike_kwargs)
             else:
-                strategy_type, legs = "naked_put", naked_put(chain, option_strike_moneyness)
+                strategy_type, legs = "naked_put", naked_put(chain, option_strike_moneyness, **strike_kwargs)
         elif option_position_style == "credit_spread":
             if action == "BUY":
-                strategy_type, legs = "bull_put_spread", bull_put_spread(chain, option_strike_moneyness, **width_kwargs)
+                strategy_type, legs = "bull_put_spread", bull_put_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs)
             else:
-                strategy_type, legs = "bear_call_spread", bear_call_spread(chain, option_strike_moneyness, **width_kwargs)
+                strategy_type, legs = "bear_call_spread", bear_call_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs)
         elif action == "BUY":
-            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness, **width_kwargs)
+            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs)
         else:
-            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness, **width_kwargs)
+            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs)
     except ValueError as exc:
         row = _reject_manual_group(
             db, user_id, signal_id, symbol, segment, action, strategy_type_for_rejection,
@@ -1074,6 +1083,8 @@ def preview_option_legs(
     resolve_symbol_by_security_id: Optional[ResolveSymbolBySecurityId] = None,
     get_ltp_batch: Optional[GetLtpBatch] = None,
     spread_width: Optional[int] = None,
+    primary_strike: Optional[float] = None,
+    second_strike: Optional[float] = None,
 ) -> dict:
     """Read-only counterpart to open_manual_option_group's own leg-selection block above -
     the exact same resolve_underlying -> expiry -> get_option_chain -> option_templates
@@ -1114,22 +1125,28 @@ def preview_option_legs(
     if chain is None:
         raise OptionLegPreviewError(f"could not resolve option chain for '{chart_symbol}' ({resolved_expiry})")
 
-    # See open_manual_option_group's identical width_kwargs comment - not
-    # meaningful for 'naked', left out of those two calls entirely.
+    # See open_manual_option_group's identical width_kwargs/strike_kwargs comment - second_strike
+    # not meaningful for 'naked', left out of those two calls entirely.
     width_kwargs = {"width": spread_width} if spread_width is not None else {}
+    strike_kwargs = {"primary_strike": primary_strike} if primary_strike is not None else {}
+    both_strike_kwargs = {**strike_kwargs, **({"second_strike": second_strike} if second_strike is not None else {})}
     try:
         if option_position_style == "naked":
-            strategy_type, legs = ("naked_call", naked_call(chain, option_strike_moneyness)) if action == "BUY" else ("naked_put", naked_put(chain, option_strike_moneyness))
+            strategy_type, legs = (
+                ("naked_call", naked_call(chain, option_strike_moneyness, **strike_kwargs))
+                if action == "BUY"
+                else ("naked_put", naked_put(chain, option_strike_moneyness, **strike_kwargs))
+            )
         elif option_position_style == "credit_spread":
             strategy_type, legs = (
-                ("bull_put_spread", bull_put_spread(chain, option_strike_moneyness, **width_kwargs))
+                ("bull_put_spread", bull_put_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs))
                 if action == "BUY"
-                else ("bear_call_spread", bear_call_spread(chain, option_strike_moneyness, **width_kwargs))
+                else ("bear_call_spread", bear_call_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs))
             )
         elif action == "BUY":
-            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness, **width_kwargs)
+            strategy_type, legs = "bull_call_spread", bull_call_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs)
         else:
-            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness, **width_kwargs)
+            strategy_type, legs = "bear_put_spread", bear_put_spread(chain, option_strike_moneyness, **width_kwargs, **both_strike_kwargs)
     except ValueError as exc:
         raise OptionLegPreviewError(f"could not build an option strategy for '{symbol}': {exc}") from exc
 

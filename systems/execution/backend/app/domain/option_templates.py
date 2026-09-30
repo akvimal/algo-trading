@@ -40,6 +40,18 @@ def _find_atm_index(strikes: list[dict], leg_key: Literal["ce", "pe"]) -> Option
     return None
 
 
+def _find_strike_index(strikes: list[dict], strike: float, leg_key: Literal["ce", "pe"]) -> Optional[int]:
+    """The index of an EXPLICIT strike a caller picked directly (the Scan page's leg table, once
+    it has the real chain in hand - see ScanOptionBias.tsx) rather than one derived from a
+    moneyness offset. None if that strike/side isn't in this chain at all (a stale chain fetched
+    for a different expiry, say) - a small float tolerance covers ordinary JSON round-tripping,
+    not a real "which strike did you mean" ambiguity."""
+    for i, s in enumerate(strikes):
+        if abs(s["strike"] - strike) < 0.01 and s.get(leg_key) is not None:
+            return i
+    return None
+
+
 def _find_primary_leg_index(strikes: list[dict], leg_key: Literal["ce", "pe"], moneyness: str) -> Optional[int]:
     """The primary (long) leg's index for the requested moneyness - ATM
     found via _find_atm_index, then shifted by _MONEYNESS_OFFSETS[moneyness]
@@ -82,6 +94,28 @@ def _pick_short_leg_index(strikes: list[dict], atm_index: int, direction: int, l
     return ideal
 
 
+def _resolve_primary_index(strikes: list[dict], leg_key: Literal["ce", "pe"], moneyness: str, explicit_strike: Optional[float]) -> Optional[int]:
+    """The primary leg's index - an explicit_strike (the Scan page's own strike pick, once it has
+    the real chain) always wins over moneyness; moneyness is the fallback default for a caller
+    with no chain in hand yet (signal-engine's automated path, or the Scan page's own first
+    render before a chain has loaded). None if the explicit strike isn't in this chain, or (the
+    moneyness path) if there's no ATM strike to anchor off of - same failure mode either way,
+    callers raise ValueError either way."""
+    if explicit_strike is not None:
+        return _find_strike_index(strikes, explicit_strike, leg_key)
+    return _find_primary_leg_index(strikes, leg_key, moneyness)
+
+
+def _resolve_second_index(
+    strikes: list[dict], primary_index: int, direction: int, leg_key: str, width: int, explicit_strike: Optional[float]
+) -> Optional[int]:
+    """The second (short/protection) leg's index - same explicit-strike-wins-over-width
+    precedence as _resolve_primary_index above."""
+    if explicit_strike is not None:
+        return _find_strike_index(strikes, explicit_strike, leg_key)
+    return _pick_short_leg_index(strikes, primary_index, direction, leg_key, width)
+
+
 def _leg(strikes: list[dict], index: int, leg_key: str, action: str, expiry: str) -> dict:
     leg = strikes[index][leg_key]
     return {
@@ -93,99 +127,127 @@ def _leg(strikes: list[dict], index: int, leg_key: str, action: str, expiry: str
     }
 
 
-def bull_call_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
+def bull_call_spread(
+    chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES, primary_strike: Optional[float] = None, second_strike: Optional[float] = None
+) -> list[dict]:
     """BUY a call at the requested moneyness (ATM by default), SELL a call
     `width` strikes further OTM from THAT strike (not necessarily from ATM
     itself, if moneyness shifted the primary leg) - `width` defaults to
     SPREAD_WIDTH_STRIKES but is the caller's own override, letting the
     short leg's own strike step independently of the primary leg's
-    moneyness (see ScanOptionBias.tsx). Raises ValueError if the chain has
-    no ATM call to anchor off of."""
+    moneyness. `primary_strike`/`second_strike` (the Scan page's leg table,
+    once it has the real chain) each override their own leg's moneyness/
+    width-derived strike entirely with an explicit one - see
+    _resolve_primary_index/_resolve_second_index. Raises ValueError if the
+    chain has no ATM call to anchor off of (moneyness path) or an explicit
+    strike isn't in this chain."""
     strikes = chain["strikes"]
-    primary_index = _find_primary_leg_index(strikes, "ce", moneyness)
+    primary_index = _resolve_primary_index(strikes, "ce", moneyness, primary_strike)
     if primary_index is None:
-        raise ValueError("no ATM call strike found in chain")
-    short_index = _pick_short_leg_index(strikes, primary_index, +1, "ce", width)
+        raise ValueError(f"strike {primary_strike} not found in chain" if primary_strike is not None else "no ATM call strike found in chain")
+    short_index = _resolve_second_index(strikes, primary_index, +1, "ce", width, second_strike)
+    if short_index is None:
+        raise ValueError(f"strike {second_strike} not found in chain")
     return [
         _leg(strikes, primary_index, "ce", "BUY", chain["expiry"]),
         _leg(strikes, short_index, "ce", "SELL", chain["expiry"]),
     ]
 
 
-def bear_put_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
+def bear_put_spread(
+    chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES, primary_strike: Optional[float] = None, second_strike: Optional[float] = None
+) -> list[dict]:
     """BUY a put at the requested moneyness (ATM by default), SELL a put
     `width` strikes further OTM from THAT strike (see bull_call_spread's
-    own `width` note). Raises ValueError if the chain has no ATM put to
-    anchor off of."""
+    own `width`/`primary_strike`/`second_strike` notes - identical
+    precedence here). Raises ValueError if the chain has no ATM put to
+    anchor off of, or an explicit strike isn't in this chain."""
     strikes = chain["strikes"]
-    primary_index = _find_primary_leg_index(strikes, "pe", moneyness)
+    primary_index = _resolve_primary_index(strikes, "pe", moneyness, primary_strike)
     if primary_index is None:
-        raise ValueError("no ATM put strike found in chain")
-    short_index = _pick_short_leg_index(strikes, primary_index, -1, "pe", width)
+        raise ValueError(f"strike {primary_strike} not found in chain" if primary_strike is not None else "no ATM put strike found in chain")
+    short_index = _resolve_second_index(strikes, primary_index, -1, "pe", width, second_strike)
+    if short_index is None:
+        raise ValueError(f"strike {second_strike} not found in chain")
     return [
         _leg(strikes, primary_index, "pe", "BUY", chain["expiry"]),
         _leg(strikes, short_index, "pe", "SELL", chain["expiry"]),
     ]
 
 
-def bull_put_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
+def bull_put_spread(
+    chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES, primary_strike: Optional[float] = None, second_strike: Optional[float] = None
+) -> list[dict]:
     """SELL a put at the requested moneyness (ATM by default) - the credit
     leg - and BUY a put `width` strikes further OTM (lower strike) as
     protection, capping the loss at the strike width minus the credit
     received. The net-credit, bullish counterpart to bull_call_spread's
     debit construction - same anchor-then-protection shape as
-    bear_put_spread, BUY/SELL swapped (see its own `width` note too). See
-    option_position_manager's _spread_sizing_basis for how a negative
-    net_debit (this template always produces one, when quotes are sane)
-    gets sized by max loss instead of premium cost. Raises ValueError if
-    the chain has no ATM put to anchor off of."""
+    bear_put_spread, BUY/SELL swapped (see its own `width`/`primary_strike`/
+    `second_strike` notes too). See option_position_manager's
+    _spread_sizing_basis for how a negative net_debit (this template
+    always produces one, when quotes are sane) gets sized by max loss
+    instead of premium cost. Raises ValueError if the chain has no ATM put
+    to anchor off of, or an explicit strike isn't in this chain."""
     strikes = chain["strikes"]
-    primary_index = _find_primary_leg_index(strikes, "pe", moneyness)
+    primary_index = _resolve_primary_index(strikes, "pe", moneyness, primary_strike)
     if primary_index is None:
-        raise ValueError("no ATM put strike found in chain")
-    protection_index = _pick_short_leg_index(strikes, primary_index, -1, "pe", width)
+        raise ValueError(f"strike {primary_strike} not found in chain" if primary_strike is not None else "no ATM put strike found in chain")
+    protection_index = _resolve_second_index(strikes, primary_index, -1, "pe", width, second_strike)
+    if protection_index is None:
+        raise ValueError(f"strike {second_strike} not found in chain")
     return [
         _leg(strikes, primary_index, "pe", "SELL", chain["expiry"]),
         _leg(strikes, protection_index, "pe", "BUY", chain["expiry"]),
     ]
 
 
-def bear_call_spread(chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES) -> list[dict]:
+def bear_call_spread(
+    chain: dict, moneyness: str = "ATM", width: int = SPREAD_WIDTH_STRIKES, primary_strike: Optional[float] = None, second_strike: Optional[float] = None
+) -> list[dict]:
     """SELL a call at the requested moneyness (ATM by default) - the
     credit leg - and BUY a call `width` strikes further OTM (higher
     strike) as protection. The net-credit, bearish counterpart to
-    bear_put_spread's debit construction. Raises ValueError if the chain
-    has no ATM call to anchor off of."""
+    bear_put_spread's debit construction (see bull_call_spread's
+    `primary_strike`/`second_strike` notes - identical precedence here).
+    Raises ValueError if the chain has no ATM call to anchor off of, or an
+    explicit strike isn't in this chain."""
     strikes = chain["strikes"]
-    primary_index = _find_primary_leg_index(strikes, "ce", moneyness)
+    primary_index = _resolve_primary_index(strikes, "ce", moneyness, primary_strike)
     if primary_index is None:
-        raise ValueError("no ATM call strike found in chain")
-    protection_index = _pick_short_leg_index(strikes, primary_index, +1, "ce", width)
+        raise ValueError(f"strike {primary_strike} not found in chain" if primary_strike is not None else "no ATM call strike found in chain")
+    protection_index = _resolve_second_index(strikes, primary_index, +1, "ce", width, second_strike)
+    if protection_index is None:
+        raise ValueError(f"strike {second_strike} not found in chain")
     return [
         _leg(strikes, primary_index, "ce", "SELL", chain["expiry"]),
         _leg(strikes, protection_index, "ce", "BUY", chain["expiry"]),
     ]
 
 
-def naked_call(chain: dict, moneyness: str = "ATM") -> list[dict]:
+def naked_call(chain: dict, moneyness: str = "ATM", primary_strike: Optional[float] = None) -> list[dict]:
     """BUY a call at the requested moneyness (ATM by default) outright -
     no short leg. Single-leg counterpart to bull_call_spread
     (option_position_style='naked') - no SPREAD_WIDTH_STRIKES/
-    MIN_SHORT_LEG_OI concerns since there's no short leg to place. Raises
-    ValueError if the chain has no ATM call to anchor off of."""
+    MIN_SHORT_LEG_OI concerns since there's no short leg to place.
+    `primary_strike` overrides moneyness entirely, same precedence as
+    bull_call_spread's own. Raises ValueError if the chain has no ATM call
+    to anchor off of, or an explicit strike isn't in this chain."""
     strikes = chain["strikes"]
-    primary_index = _find_primary_leg_index(strikes, "ce", moneyness)
+    primary_index = _resolve_primary_index(strikes, "ce", moneyness, primary_strike)
     if primary_index is None:
-        raise ValueError("no ATM call strike found in chain")
+        raise ValueError(f"strike {primary_strike} not found in chain" if primary_strike is not None else "no ATM call strike found in chain")
     return [_leg(strikes, primary_index, "ce", "BUY", chain["expiry"])]
 
 
-def naked_put(chain: dict, moneyness: str = "ATM") -> list[dict]:
+def naked_put(chain: dict, moneyness: str = "ATM", primary_strike: Optional[float] = None) -> list[dict]:
     """BUY a put at the requested moneyness (ATM by default) outright - no
-    short leg. Single-leg counterpart to bear_put_spread. Raises
-    ValueError if the chain has no ATM put to anchor off of."""
+    short leg. Single-leg counterpart to bear_put_spread. `primary_strike`
+    overrides moneyness entirely, same precedence as bull_call_spread's
+    own. Raises ValueError if the chain has no ATM put to anchor off of,
+    or an explicit strike isn't in this chain."""
     strikes = chain["strikes"]
-    primary_index = _find_primary_leg_index(strikes, "pe", moneyness)
+    primary_index = _resolve_primary_index(strikes, "pe", moneyness, primary_strike)
     if primary_index is None:
-        raise ValueError("no ATM put strike found in chain")
+        raise ValueError(f"strike {primary_strike} not found in chain" if primary_strike is not None else "no ATM put strike found in chain")
     return [_leg(strikes, primary_index, "pe", "BUY", chain["expiry"])]

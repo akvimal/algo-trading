@@ -318,6 +318,11 @@ def preview_legs(
     # the primary leg - default (None) is option_templates.py's own
     # SPREAD_WIDTH_STRIKES. Ignored for option_position_style='naked'.
     spread_width: Optional[int] = None,
+    # An explicit strike per leg, taking precedence over
+    # option_strike_moneyness/spread_width entirely for its own leg - see
+    # ManualOptionPositionCreate's identical fields.
+    primary_strike: Optional[float] = None,
+    second_strike: Optional[float] = None,
     user: User = Depends(get_current_user),
 ):
     """Read-only: the legs a real POST /option-groups/manual with these exact params would
@@ -334,6 +339,8 @@ def preview_legs(
             resolve_symbol_by_security_id,
             functools.partial(get_ltp_batch, token=user.token),
             spread_width,
+            primary_strike,
+            second_strike,
         )
     except OptionLegPreviewError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -373,6 +380,8 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         resolve_symbol_by_security_id,
         get_lot_size,
         payload.spread_width,
+        payload.primary_strike,
+        payload.second_strike,
         [a.model_dump() for a in payload.plan_checklist],
         payload.order_type,
         payload.square_off_time,

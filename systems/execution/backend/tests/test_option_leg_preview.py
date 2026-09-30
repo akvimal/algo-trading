@@ -56,10 +56,12 @@ def preview(
     resolve_symbol_by_security_id=None,
     get_ltp_batch=None,
     spread_width=None,
+    primary_strike=None,
+    second_strike=None,
 ):
     return preview_option_legs(
         "NSE", "RELIANCE", action, style, moneyness, expiry, _resolve_underlying, _get_expiry_list, get_option_chain,
-        resolve_symbol_by_security_id, get_ltp_batch, spread_width,
+        resolve_symbol_by_security_id, get_ltp_batch, spread_width, primary_strike, second_strike,
     )
 
 
@@ -91,6 +93,18 @@ def test_spread_width_override_moves_only_the_short_leg():
     assert default_out["legs"][0]["strike"] == narrower_out["legs"][0]["strike"] == 2500.0  # primary leg untouched
     assert default_out["legs"][1]["strike"] == 2600.0  # default width 2
     assert narrower_out["legs"][1]["strike"] == 2550.0  # width override 1
+
+
+def test_explicit_strikes_override_moneyness_and_width_entirely():
+    out = preview(action="BUY", style="spread", moneyness="OTM2", spread_width=1, primary_strike=2450.0, second_strike=2600.0)
+
+    assert out["legs"][0]["strike"] == 2450.0
+    assert out["legs"][1]["strike"] == 2600.0
+
+
+def test_explicit_strike_not_in_chain_is_a_clean_rejection():
+    with pytest.raises(OptionLegPreviewError, match=r"strike 999999\.0 not found"):
+        preview(action="BUY", style="spread", primary_strike=999999.0)
 
 
 def test_bearish_credit_spread_is_a_bear_call_spread():

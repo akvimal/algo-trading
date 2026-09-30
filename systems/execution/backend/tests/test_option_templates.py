@@ -101,6 +101,31 @@ def test_bull_call_spread_raises_when_no_atm_strike():
         bull_call_spread(chain)
 
 
+def test_bull_call_spread_explicit_strikes_override_moneyness_and_width_entirely():
+    chain = _make_chain(_wide_strikes())
+
+    # Nothing to do with ATM/moneyness/width at all - a caller (the Scan page's leg table) with
+    # the real chain in hand just names both strikes directly.
+    legs = bull_call_spread(chain, moneyness="ITM2", width=1, primary_strike=24050.0, second_strike=24200.0)
+
+    assert legs[0]["strike"] == 24050.0
+    assert legs[1]["strike"] == 24200.0
+
+
+def test_bull_call_spread_explicit_primary_strike_not_in_chain_raises():
+    chain = _make_chain(_wide_strikes())
+
+    with pytest.raises(ValueError, match=r"strike 99999\.0 not found"):
+        bull_call_spread(chain, primary_strike=99999.0)
+
+
+def test_bull_call_spread_explicit_second_strike_not_in_chain_raises():
+    chain = _make_chain(_wide_strikes())
+
+    with pytest.raises(ValueError, match=r"strike 99999\.0 not found"):
+        bull_call_spread(chain, second_strike=99999.0)
+
+
 # --- bear_put_spread ----------------------------------------------------------------------------
 
 
@@ -155,6 +180,15 @@ def test_bull_put_spread_raises_when_no_atm_strike():
 
     with pytest.raises(ValueError, match="no ATM put"):
         bull_put_spread(chain)
+
+
+def test_bull_put_spread_explicit_strikes_override_moneyness_and_width():
+    chain = _make_chain(_wide_strikes())
+
+    legs = bull_put_spread(chain, moneyness="OTM1", width=1, primary_strike=24000.0, second_strike=23800.0)
+
+    assert legs[0]["strike"] == 24000.0  # SELL (credit) leg
+    assert legs[1]["strike"] == 23800.0  # BUY (protection) leg
 
 
 def test_bull_put_spread_with_otm1_moneyness_shifts_both_legs():
@@ -217,6 +251,23 @@ def test_naked_call_raises_when_no_atm_strike():
 
     with pytest.raises(ValueError, match="no ATM call"):
         naked_call(chain)
+
+
+def test_naked_call_explicit_strike_overrides_moneyness():
+    chain = _make_chain(_default_strikes())
+
+    legs = naked_call(chain, moneyness="OTM2", primary_strike=23950.0)
+
+    assert legs == [
+        {"action": "BUY", "option_type": "CE", "strike": 23950.0, "expiry": "2026-08-14", "security_id": "ce-23950"},
+    ]
+
+
+def test_naked_call_explicit_strike_not_in_chain_raises():
+    chain = _make_chain(_default_strikes())
+
+    with pytest.raises(ValueError, match=r"strike 12345\.0 not found"):
+        naked_call(chain, primary_strike=12345.0)
 
 
 def test_naked_put_picks_only_atm_long_leg():

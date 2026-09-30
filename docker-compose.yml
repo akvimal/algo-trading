@@ -82,6 +82,11 @@ services:
       # systems/accounts issues, purely for attribution (see app/auth.py's
       # own comment). Must match ACCOUNTS_JWT_SECRET exactly.
       JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
+      # Login + per-user ownership on strategies/rules/indicators/watchlists/
+      # backtests/signals (app/auth.py get_caller, app/ownership.py). Off by
+      # default; flip in .env only after migration 014 is applied AND every
+      # caller sends its token - see .env.example.
+      REQUIRE_AUTH: ${SIGNAL_ENGINE_REQUIRE_AUTH:-false}
       # Weekly Advisor fundamentals (app/domain/weekly_advisor/screener_fetch.py)
       # - same OpenRouter account market-data's news.py already uses, but
       # its own model setting (a vision model, since this call sends a
@@ -175,6 +180,13 @@ services:
       JWT_SECRET: ${ACCOUNTS_JWT_SECRET}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       ACCOUNTS_BASE_URL: http://accounts-backend:8000
+      # Own-keys data model (docs/redesign-rollout-plan.md, decision 1; see
+      # app/data_access.py). When true, live Dhan-backed data is only served to a
+      # signed-in user with their OWN saved Dhan keys and never falls back to the
+      # shared platform credential; execution and signal-engine identify as trusted
+      # services via INTERNAL_SERVICE_SECRET. Off by default; flip it when onboarding
+      # can collect keys.
+      REQUIRE_OWN_DHAN_KEYS: ${REQUIRE_OWN_DHAN_KEYS:-false}
       # Live-broker-adapter P0 (see docs/architecture.md) - DHAN_POSTBACK_SECRET
       # is the shared-secret PATH segment for Dhan's own order-update
       # postback (register https://<this-host>/dhan/order-update/<secret>
@@ -261,6 +273,21 @@ services:
       # deliberately opts an account in.
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       LIVE_TRADING_KILL_SWITCH: ${LIVE_TRADING_KILL_SWITCH:-false}
+      # Paper track-record gate on turning live trading ON for a user's own
+      # segment account (see app/domain/track_record.py). Off by default; the
+      # thresholds are product judgments to tune, not measurements.
+      REQUIRE_PAPER_TRACK_RECORD: ${REQUIRE_PAPER_TRACK_RECORD:-false}
+      # Own-keys data model, execution side: the automated jobs (exit monitor, square-off, P&L and
+      # equity snapshots, the pending-order watcher) fetch quotes per OWNER on that owner's own Dhan
+      # keys instead of one batch on the shared platform credential. Off by default. The fallback
+      # keeps an owner's stop-losses enforced when their keys are missing/expired.
+      JOB_QUOTES_USE_OWNER_KEYS: ${JOB_QUOTES_USE_OWNER_KEYS:-false}
+      JOB_QUOTES_PLATFORM_FALLBACK: ${JOB_QUOTES_PLATFORM_FALLBACK:-true}
+      TRACK_RECORD_MIN_TRADES: ${TRACK_RECORD_MIN_TRADES:-30}
+      TRACK_RECORD_MIN_DAYS: ${TRACK_RECORD_MIN_DAYS:-14}
+      TRACK_RECORD_MIN_DISCIPLINE: ${TRACK_RECORD_MIN_DISCIPLINE:-60}
+      TRACK_RECORD_MAX_DRAWDOWN_PCT: ${TRACK_RECORD_MAX_DRAWDOWN_PCT:-20}
+      TRACK_RECORD_MIN_SLIPPAGE_BPS: ${TRACK_RECORD_MIN_SLIPPAGE_BPS:-3}
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${EXECUTION_BACKEND_PORT}:8000"
     depends_on:
@@ -340,6 +367,27 @@ services:
     restart: unless-stopped
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${MANUAL_TRADING_FRONTEND_PORT}:80"
+    depends_on:
+      - execution-backend
+
+  # The redesigned, responsive app (docs/redesign-rollout-plan.md Phase 2): one
+  # frontend-only system that grows screen by screen until it replaces the
+  # per-system frontends and the iframe shell below. Same direct-from-browser CORS
+  # pattern as every other frontend; behind the execution profile because its
+  # Today screen is empty without execution running.
+  web-frontend:
+    profiles: ["execution"]
+    build:
+      context: ./systems/web/frontend
+      args:
+        VITE_SIGNAL_ENGINE_PORT: ${SIGNAL_ENGINE_BACKEND_PORT}
+        VITE_MARKET_DATA_PORT: ${MARKET_DATA_BACKEND_PORT}
+        VITE_EXECUTION_PORT: ${EXECUTION_BACKEND_PORT}
+        VITE_ACCOUNTS_PORT: ${ACCOUNTS_BACKEND_PORT}
+        VITE_SHELL_PORT: ${SHELL_PORT}
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${WEB_FRONTEND_PORT:-8095}:80"
     depends_on:
       - execution-backend
 

@@ -15,6 +15,7 @@ from app.domain.models import (
     ReviewSubmit,
     SquareOffTimeUpdate,
     StopLossUpdate,
+    TargetUpdate,
     TradeTagsUpdate,
 )
 from app.domain.position_manager import (
@@ -31,6 +32,7 @@ from app.domain.position_manager import (
     update_position_tags,
     update_square_off_time,
     update_stop_loss,
+    update_target,
 )
 
 router = APIRouter()
@@ -103,6 +105,11 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         # position.
         "open_fee": float(row.open_fee) if row.open_fee is not None else None,
         "close_fee": float(row.close_fee) if row.close_fee is not None else None,
+        # Indian brokerage/STT/exchange/SEBI/stamp/GST netted into pnl at close (NSE/MCX, when the
+        # account has apply_charges): the total and its breakdown + schedule version. None = none applied.
+        "charges": float(row.charges) if row.charges is not None else None,
+        "charges_detail": row.charges_detail,
+        "slippage_cost": float(row.slippage_cost) if row.slippage_cost is not None else None,
         "margin_posted": float(row.margin_posted) if row.margin_posted is not None else None,
         "liquidation_price": float(row.liquidation_price) if row.liquidation_price is not None else None,
         # NSE MTF only - null for every other position. See
@@ -154,12 +161,17 @@ def _query_positions(
     manual_only: bool,
     limit: int,
     with_live_pnl: bool,
+    token: Optional[str] = None,
+    strategy_id: Optional[uuid.UUID] = None,
 ):
     """Shared by GET /positions (user_id=caller) and GET /positions/platform
     (user_id=None) - identical filtering/serialization, only the ownership
     scope differs. See both routes' own docstrings for what each filter
-    means."""
-    q = db.query(db_models.Position).filter_by(user_id=user_id)
+    means. `strategy_id` replaces the ownership scope with one strategy's
+    positions: the caller (GET /accounts/strategy/{id}/trades) has already
+    proven the person may see that strategy's dedicated account."""
+    q = db.query(db_models.Position)
+    q = q.filter_by(strategy_id=strategy_id) if strategy_id is not None else q.filter_by(user_id=user_id)
     if status:
         q = q.filter_by(status=status.upper())
     if signal_id:
@@ -175,7 +187,10 @@ def _query_positions(
         q = q.filter(db_models.Position.strategy_id.is_(None))
     rows = q.order_by(db_models.Position.entry_time.desc()).limit(limit).all()
 
-    mtm = compute_unrealized_pnl(rows, get_ltp_batch) if with_live_pnl else {}
+    # A browser is polling this: value the caller's positions on THEIR OWN Dhan keys (their token),
+    # not the shared platform credential. The platform view (no token) still uses the platform's.
+    quote = functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch
+    mtm = compute_unrealized_pnl(rows, quote) if with_live_pnl else {}
 
     return [
         _position_to_out(r, live_price=mtm[r.id][0] if r.id in mtm else None, unrealized_pnl=mtm[r.id][1] if r.id in mtm else None)
@@ -214,7 +229,7 @@ def list_positions(
     default since it means extra Dhan calls on every request; the
     frontend opts in for its own polling, other callers (cross-links,
     other systems) don't pay for it unless they ask."""
-    return _query_positions(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl)
+    return _query_positions(db, user.id, status, signal_id, symbol, segment, manual_only, limit, with_live_pnl, token=user.token)
 
 
 @router.get("/positions/platform")
@@ -339,6 +354,7 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag,
         confidence=payload.confidence,
+        notes=payload.notes,
         auto_traded=payload.auto_traded,
         entry_interval=payload.entry_interval,
     )
@@ -407,6 +423,30 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         functools.partial(get_previous_candle, token=user.token),
         functools.partial(get_candle_history, token=user.token),
     )
+    if reject_reason is not None:
+        raise HTTPException(status_code=422, detail=reject_reason)
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/target")
+def edit_target(position_id: str, payload: TargetUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Moves an already-open position's take-profit (the counterpart of
+    PUT /positions/{id}/stop-loss, which had no target sibling for spot and
+    futures). 404 if missing or owned by another user, 409 if not OPEN, 422
+    if the price is on the wrong side of the entry."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
+
+    row, reject_reason = update_target(db, owner_id, parsed_id, payload.target_price)
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
     return _position_to_out(row)

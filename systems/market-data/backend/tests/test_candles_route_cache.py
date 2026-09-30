@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 import app.api.routes.candles as candles_route
+from app.auth import Caller
 from app.domain.models import Candle
 
 
@@ -21,7 +22,7 @@ class FakeProvider:
     def __init__(self):
         self.call_count = 0
 
-    def get_candle_history(self, symbol, interval, from_date, to_date, credentials=None):
+    def get_candle_history(self, symbol, interval, from_date, to_date, credentials=None, caller=Caller()):
         self.call_count += 1
         return [Candle(exchange="NSE", symbol=symbol, interval=interval, open=1, high=1, low=1, close=1, volume=1, timestamp=f"{from_date}T09:15:00", provider="fake")]
 
@@ -38,8 +39,8 @@ def test_get_candle_history_second_identical_call_hits_cache(monkeypatch):
     monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
 
     from_date, to_date = date(2026, 1, 1), date(2026, 1, 5)
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", from_date, to_date)
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", from_date, to_date)
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", from_date, to_date, caller=Caller())
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", from_date, to_date, caller=Caller())
 
     assert provider.call_count == 1
 
@@ -48,8 +49,8 @@ def test_get_candle_history_different_range_is_a_cache_miss(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
 
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 6))
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 6), caller=Caller())
 
     assert provider.call_count == 2
 
@@ -58,8 +59,8 @@ def test_get_candle_history_different_symbol_is_a_cache_miss(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
 
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
-    candles_route.get_candle_history("NSE", "TCS", "15min", date(2026, 1, 1), date(2026, 1, 5))
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
+    candles_route.get_candle_history("NSE", "TCS", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
 
     assert provider.call_count == 2
 
@@ -68,8 +69,8 @@ def test_get_candle_history_cache_returns_the_same_data(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
 
-    first = candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
-    second = candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
+    first = candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
+    second = candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
     assert first == second
 
 
@@ -121,7 +122,7 @@ def test_cache_status_reports_cached_with_a_timestamp_after_a_fetch(monkeypatch)
     provider = FakeProvider()
     monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
 
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
     status = candles_route.get_candle_cache_status("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
 
     assert status.cached is True
@@ -132,7 +133,7 @@ def test_cache_status_different_range_is_still_uncached(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
 
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
     status = candles_route.get_candle_cache_status("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 6))
 
     assert status.cached is False
@@ -142,10 +143,10 @@ def test_clear_candle_cache_entry_forces_a_real_refetch(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(candles_route, "get_provider", lambda exchange: provider)
 
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
     candles_route.clear_candle_cache_entry("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
     status = candles_route.get_candle_cache_status("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
-    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5))
+    candles_route.get_candle_history("NSE", "RELIANCE", "15min", date(2026, 1, 1), date(2026, 1, 5), caller=Caller())
 
     assert status.cached is False  # confirmed gone before the re-fetch
     assert provider.call_count == 2  # first fetch + the forced re-fetch after clear
@@ -171,7 +172,7 @@ def test_source_yahoo_never_resolves_a_quote_provider(monkeypatch):
         ],
     )
 
-    candles = candles_route.get_candle_history("NSE", "ABB", "daily", date(2026, 1, 1), date(2026, 6, 1), source="yahoo")
+    candles = candles_route.get_candle_history("NSE", "ABB", "daily", date(2026, 1, 1), date(2026, 6, 1), source="yahoo", caller=Caller())
 
     assert candles[0].provider == "yahoo"
 
@@ -188,8 +189,8 @@ def test_source_yahoo_and_default_source_are_separate_cache_entries(monkeypatch)
     )
 
     from_date, to_date = date(2026, 1, 1), date(2026, 6, 1)
-    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date, source="yahoo")
-    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date)  # no source - Dhan path
+    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date, source="yahoo", caller=Caller())
+    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date, caller=Caller())  # no source - Dhan path
 
     assert len(yahoo_calls) == 1
     assert provider.call_count == 1
@@ -205,7 +206,7 @@ def test_cache_status_and_clear_are_source_scoped(monkeypatch):
     )
 
     from_date, to_date = date(2026, 1, 1), date(2026, 6, 1)
-    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date, source="yahoo")
+    candles_route.get_candle_history("NSE", "ABB", "daily", from_date, to_date, source="yahoo", caller=Caller())
 
     assert candles_route.get_candle_cache_status("NSE", "ABB", "daily", from_date, to_date, source="yahoo").cached is True
     assert candles_route.get_candle_cache_status("NSE", "ABB", "daily", from_date, to_date).cached is False  # no source - different key

@@ -3,7 +3,8 @@ import logging
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import accounts, checklist, health, internal, option_groups, positions, trade_images
+from app.secure_config import cors_origins, enforce_secure_config
+from app.api.routes import accounts, checklist, equity_history, health, internal, live_eligibility, option_groups, pending_orders, performance, positions, trade_images
 from app.api.routes import settings as settings_routes
 from app.auth import get_current_user
 from app.consumers.orders_consumer import start_background as start_consumer
@@ -11,11 +12,15 @@ from app.scheduler import start_scheduler
 
 logging.basicConfig(level=logging.INFO)
 
+# Refuses to start with placeholder secrets / wildcard CORS when
+# REQUIRE_SECURE_CONFIG=true (see app/secure_config.py).
+enforce_secure_config()
+
 app = FastAPI(title="execution")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -36,6 +41,10 @@ app.include_router(positions.router, dependencies=_auth_dep)
 app.include_router(option_groups.router, dependencies=_auth_dep)
 app.include_router(settings_routes.router, dependencies=_auth_dep)
 app.include_router(accounts.router, dependencies=_auth_dep)
+app.include_router(equity_history.router, dependencies=_auth_dep)
+app.include_router(performance.router, dependencies=_auth_dep)
+app.include_router(live_eligibility.router, dependencies=_auth_dep)
+app.include_router(pending_orders.router, dependencies=_auth_dep)
 app.include_router(checklist.router, dependencies=_auth_dep)
 app.include_router(trade_images.router, dependencies=_auth_dep)
 

@@ -7,8 +7,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.adapters.accounts_client import get_user_dhan_credentials
-from app.auth import get_optional_user_id
+from app.data_access import data_credentials
+from app.auth import Caller, get_caller
+from app.domain.dhan_retry import interactive_retry
 from app.domain.models import Candle, CandleCacheStatus, DataAvailability
 from app.providers import yahoo
 from app.providers.router import get_provider
@@ -67,7 +68,7 @@ def _is_cache_fresh(interval: str, to_date: date, fetched_at_monotonic: float, f
 
 
 @router.get("/candles/previous", response_model=Candle)
-def get_previous_candle(exchange: str, symbol: str, interval: str, user_id: Optional[UUID] = Depends(get_optional_user_id)):
+def get_previous_candle(exchange: str, symbol: str, interval: str, caller: Caller = Depends(get_caller)):
     """The most recently completed candle only - not a historical range,
     see app/providers/dhan.py get_previous_candle for scope/rationale.
     404 if unavailable (unknown symbol, or no completed candle yet e.g.
@@ -80,8 +81,8 @@ def get_previous_candle(exchange: str, symbol: str, interval: str, user_id: Opti
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
-        candle = provider.get_previous_candle(symbol, interval, credentials=credentials)
+        credentials = data_credentials(caller, exchange)
+        candle = interactive_retry(provider.get_previous_candle, symbol, interval, credentials)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -101,7 +102,7 @@ def get_candle_history(
     from_: Optional[date] = Query(default=None, alias="from"),
     to: Optional[date] = None,
     source: Optional[str] = None,
-    user_id: Optional[UUID] = Depends(get_optional_user_id),
+    caller: Caller = Depends(get_caller),
 ):
     """A general multi-bar series over [from_, to] - used to warm up
     indicator state (signal-generation's RSI/SMA engine) and for
@@ -132,7 +133,8 @@ def get_candle_history(
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
     try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
+# source=yahoo is public data and never needs (or is gated on) Dhan keys
+        credentials = data_credentials(caller, exchange) if source != "yahoo" else None
         return fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials, source=source)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -161,7 +163,7 @@ def fetch_candle_history_cached(provider, exchange, symbol, interval, from_date,
     if source == "yahoo":
         candles = yahoo.get_candle_history(exchange, symbol, interval, from_date, to_date)
     else:
-        candles = provider.get_candle_history(symbol, interval, from_date, to_date, credentials=credentials)
+        candles = interactive_retry(provider.get_candle_history, symbol, interval, from_date, to_date, credentials)
     with _history_cache_lock:
         _history_cache[cache_key] = (candles, time.monotonic(), datetime.now(timezone.utc))
     return candles

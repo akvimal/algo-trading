@@ -1,14 +1,25 @@
+import functools
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.adapters.accounts.client import user_has_dhan_credentials
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_ltp_batch
+from app.adapters.signal_engine.client import NOT_FOUND, UNAVAILABLE, lookup_strategy
+from app.api.routes.option_groups import _query_option_groups
+from app.api.routes.positions import _query_positions
 from app.auth import User, get_current_user, require_admin
+from app.config import settings
+from app.domain.equity_history import record_reset_point
+from app.domain.live_gate import CONSENT_VERSION, LIVE_SEGMENTS, format_problems, unmet_requirements
 from app.domain.models import AccountUpdate, AdminResetAllConfirm, StrategyAccountCreate, StrategyAccountUpdate
+from app.domain.track_record import evaluate_for_account, evaluate_for_user_segment, unmet_messages
 from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
 
 router = APIRouter()
@@ -16,7 +27,60 @@ router = APIRouter()
 _SEGMENTS = ("NSE", "MCX", "CRYPTO")
 
 
-def _unrealized_pnl(db: Session, open_positions: list) -> float:
+def _as_float(v) -> Optional[float]:
+    return float(v) if v is not None else None
+
+
+def _apply_live_fields(
+    row,
+    update,
+    *,
+    segment: str,
+    token: str,
+    check_credentials: bool,
+    extra_transition_problems: Optional[list] = None,
+) -> None:
+    """Applies live_trading_enabled / max_order_value / max_daily_loss to
+    `row` through the live-trading gate (app/domain/live_gate.py), records
+    consent on the off->on transition, and raises a 422 listing EVERYTHING
+    that is unmet. Mutates `row` but never commits, so a rejected request
+    leaves nothing behind (the caller's session is discarded).
+
+    Used by the personal-account and strategy-account routes. The caps are
+    applied first because the gate judges the EFFECTIVE state after this
+    update (so a request that enables live and sets the caps in one go
+    works, and one that blanks the caps on a live account does not)."""
+    was_live = bool(row.live_trading_enabled)
+    will_be_live = was_live if update.live_trading_enabled is None else bool(update.live_trading_enabled)
+    if "max_order_value" in update.model_fields_set:
+        row.max_order_value = update.max_order_value
+    if "max_daily_loss" in update.model_fields_set:
+        row.max_daily_loss = update.max_daily_loss
+
+    if will_be_live:
+        transition = not was_live
+        has_creds = user_has_dhan_credentials(token) if (transition and check_credentials) else True
+        problems = unmet_requirements(
+            segment=segment,
+            max_order_value=_as_float(row.max_order_value),
+            max_daily_loss=_as_float(row.max_daily_loss),
+            kill_switch_on=settings.live_trading_kill_switch,
+            is_transition_to_live=transition,
+            consent_given=bool(update.live_trading_consent),
+            has_broker_credentials=has_creds,
+            check_credentials=check_credentials,
+        )
+        if transition and extra_transition_problems:
+            problems.extend(extra_transition_problems)
+        if problems:
+            raise HTTPException(status_code=422, detail=format_problems(problems))
+        if transition:
+            row.live_trading_consent_at = datetime.now(timezone.utc)
+            row.live_trading_consent_version = CONSENT_VERSION
+    row.live_trading_enabled = will_be_live
+
+
+def _unrealized_pnl(db: Session, open_positions: list, token: Optional[str] = None) -> float:
     """Live mark-to-market sum across `open_positions` (already filtered to
     status='OPEN' by the caller) - 0.0 for none, or if every quote fetch
     fails (compute_unrealized_pnl silently drops those, same convention
@@ -30,11 +94,12 @@ def _unrealized_pnl(db: Session, open_positions: list) -> float:
     own live P&L shows elsewhere."""
     if not open_positions:
         return 0.0
-    mtm = compute_unrealized_pnl(open_positions, get_ltp_batch)
+    # The caller's own token (when a user is asking): their positions are valued on THEIR keys.
+    mtm = compute_unrealized_pnl(open_positions, functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch)
     return sum(pnl for _, pnl in mtm.values())
 
 
-def _to_out(db: Session, row: db_models.Account) -> dict:
+def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) -> dict:
     open_positions = db.query(db_models.Position).filter_by(user_id=row.user_id, segment=row.segment, status="OPEN").all()
     return {
         "segment": row.segment,
@@ -44,7 +109,7 @@ def _to_out(db: Session, row: db_models.Account) -> dict:
         # separate ledger, matches the delta the Dedicated strategy
         # accounts table already computes client-side today.
         "realized_pnl": float(row.current_balance) - float(row.starting_balance),
-        "unrealized_pnl": _unrealized_pnl(db, open_positions),
+        "unrealized_pnl": _unrealized_pnl(db, open_positions, token),
         "capital_per_trade": float(row.capital_per_trade),
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "min_reward_risk_ratio": float(row.min_reward_risk_ratio),
@@ -54,6 +119,10 @@ def _to_out(db: Session, row: db_models.Account) -> dict:
         "mtf_annual_interest_rate_pct": float(row.mtf_annual_interest_rate_pct) if row.mtf_annual_interest_rate_pct is not None else None,
         "square_off_time": row.square_off_time.isoformat() if row.square_off_time is not None else None,
         "live_trading_enabled": row.live_trading_enabled,
+        "live_trading_consent_at": row.live_trading_consent_at.isoformat() if row.live_trading_consent_at is not None else None,
+        "require_stop_loss": bool(row.require_stop_loss),
+        "apply_charges": bool(row.apply_charges),
+        "slippage_bps": float(row.slippage_bps),
         "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
         "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
         # A user's own declared execution timeframe for this segment + its
@@ -71,7 +140,7 @@ def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(
     first time each is touched, so a brand-new signup always sees all 3
     immediately rather than 404ing until they've placed a trade)."""
     rows = {seg: load_account(db, user.id, seg) for seg in _SEGMENTS}
-    return [_to_out(db, rows[s]) for s in _SEGMENTS if rows[s] is not None]
+    return [_to_out(db, rows[s], token=user.token) for s in _SEGMENTS if rows[s] is not None]
 
 
 @router.put("/accounts/{segment}")
@@ -99,6 +168,8 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
     if update.starting_balance is not None:
         row.starting_balance = update.starting_balance
         row.current_balance = update.starting_balance
+        # Re-baselining starts a new equity curve (app/domain/equity_history.py).
+        record_reset_point(db, row)
     if update.capital_per_trade is not None:
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
@@ -115,19 +186,35 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
         row.square_off_time = update.square_off_time
-    if update.live_trading_enabled is not None:
-        row.live_trading_enabled = update.live_trading_enabled
-    if "max_order_value" in update.model_fields_set:
-        row.max_order_value = update.max_order_value
-    if "max_daily_loss" in update.model_fields_set:
-        row.max_daily_loss = update.max_daily_loss
+    # Real-money order placement goes through the live-trading gate
+    # (app/domain/live_gate.py): consent, caps and broker credentials.
+    # Turning live ON for a user's own segment account also needs a paper track record
+    # (app/domain/track_record.py), when enforced. Its shortfalls are listed alongside
+    # consent, caps and credentials so the user sees everything at once.
+    track_record_problems = None
+    if (
+        settings.require_paper_track_record
+        and update.live_trading_enabled
+        and not row.live_trading_enabled
+        and segment.upper() in LIVE_SEGMENTS
+    ):
+        track_record_problems = unmet_messages(evaluate_for_account(db, user.id, row))
+    _apply_live_fields(
+        row, update, segment=segment.upper(), token=user.token, check_credentials=True, extra_transition_problems=track_record_problems
+    )
+    if update.require_stop_loss is not None:
+        row.require_stop_loss = update.require_stop_loss
+    if update.apply_charges is not None:
+        row.apply_charges = update.apply_charges
+    if update.slippage_bps is not None:
+        row.slippage_bps = update.slippage_bps
     if "default_interval" in update.model_fields_set:
         row.default_interval = update.default_interval
     if "default_higher_interval" in update.model_fields_set:
         row.default_higher_interval = update.default_higher_interval
     db.commit()
     db.refresh(row)
-    return _to_out(db, row)
+    return _to_out(db, row, token=user.token)
 
 
 @router.get("/accounts/platform")
@@ -177,8 +264,18 @@ def update_platform_account(
         row.mtf_annual_interest_rate_pct = update.mtf_annual_interest_rate_pct
     if "square_off_time" in update.model_fields_set:
         row.square_off_time = update.square_off_time
+    # The platform (user_id IS NULL) account can never place real orders: the
+    # automated live path needs a live_trading_user_id, which only a dedicated
+    # strategy account has (see position_manager's capital_account handling),
+    # so enabling the flag here would be misleading at best. Turning it OFF
+    # (or leaving it) is always fine; the caps stay editable.
+    if update.live_trading_enabled:
+        raise HTTPException(
+            status_code=422,
+            detail="the platform account cannot trade live - opt a dedicated strategy account into live trading instead",
+        )
     if update.live_trading_enabled is not None:
-        row.live_trading_enabled = update.live_trading_enabled
+        row.live_trading_enabled = False
     if "max_order_value" in update.model_fields_set:
         row.max_order_value = update.max_order_value
     if "max_daily_loss" in update.model_fields_set:
@@ -253,6 +350,10 @@ def reset_user_accounts_and_trades(
         .filter_by(user_id=target_id)
         .update({db_models.Account.current_balance: db_models.Account.starting_balance}, synchronize_session=False)
     )
+    if target_id is not None:
+        # A reset starts a new equity curve for each of that user's accounts.
+        for reset_account_row in db.query(db_models.Account).filter_by(user_id=target_id).all():
+            record_reset_point(db, reset_account_row)
     strategy_accounts_reset = 0
     if target_id is None:
         strategy_accounts_reset = db.query(db_models.StrategyAccount).update(
@@ -281,9 +382,10 @@ def reset_account(segment: str, user: User = Depends(get_current_user), db: Sess
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
     row.current_balance = row.starting_balance
+    record_reset_point(db, row)
     db.commit()
     db.refresh(row)
-    return _to_out(db, row)
+    return _to_out(db, row, token=user.token)
 
 
 # --- Optional per-strategy account override (execution.strategy_accounts) -
@@ -307,37 +409,105 @@ def _strategy_account_to_out(db: Session, row: db_models.StrategyAccount) -> dic
         "risk_per_trade_pct": float(row.risk_per_trade_pct),
         "live_trading_user_id": str(row.live_trading_user_id) if row.live_trading_user_id is not None else None,
         "live_trading_enabled": row.live_trading_enabled,
+        "live_trading_consent_at": row.live_trading_consent_at.isoformat() if row.live_trading_consent_at is not None else None,
         "max_order_value": float(row.max_order_value) if row.max_order_value is not None else None,
         "max_daily_loss": float(row.max_daily_loss) if row.max_daily_loss is not None else None,
         "updated_at": row.updated_at.isoformat(),
     }
 
 
+def _can_see_strategy_account(row, user: User) -> bool:
+    """Admins see every dedicated account; anyone else sees the ones they own
+    (the strategy's creator) or are named as the live-trading user on. A row
+    with no owner (platform/legacy) is therefore admin-only, plus its live
+    user if it has one."""
+    return user.is_admin or user.id == row.owner_user_id or user.id == row.live_trading_user_id
+
+
+def _strategy_account_or_404(db: Session, strategy_id: str, user: User) -> db_models.StrategyAccount:
+    """One 404 for "no such account" and "not yours", so the existence of
+    someone else's account is not disclosed (same rule as signal-engine's
+    ownership scoping)."""
+    not_found = HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+    try:
+        strategy_uuid = uuid.UUID(strategy_id)
+    except ValueError:
+        raise not_found
+    row = db.get(db_models.StrategyAccount, strategy_uuid)
+    if row is None or not _can_see_strategy_account(row, user):
+        raise not_found
+    return row
+
+
 @router.get("/accounts/strategy")
-def list_strategy_accounts(db: Session = Depends(get_db)):
-    rows = db.query(db_models.StrategyAccount).all()
-    return [_strategy_account_to_out(db, r) for r in rows]
+def list_strategy_accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    q = db.query(db_models.StrategyAccount)
+    if not user.is_admin:
+        q = q.filter(or_(db_models.StrategyAccount.owner_user_id == user.id, db_models.StrategyAccount.live_trading_user_id == user.id))
+    return [_strategy_account_to_out(db, r) for r in q.all()]
 
 
 @router.get("/accounts/strategy/{strategy_id}")
-def get_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
-    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
-    return _strategy_account_to_out(db, row)
+def get_strategy_account(strategy_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _strategy_account_to_out(db, _strategy_account_or_404(db, strategy_id, user))
+
+
+@router.get("/accounts/strategy/{strategy_id}/trades")
+def list_strategy_account_trades(
+    strategy_id: str,
+    status: Optional[str] = None,
+    limit: int = 100,
+    with_live_pnl: bool = False,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The trades a strategy has made on its dedicated account, for the person who owns that account.
+
+    A strategy's positions belong to the platform (user_id IS NULL), so GET /positions never shows them
+    to anyone but an admin (see GET /positions/platform). This is the owner's own way to see them:
+    the same 404 as the account itself for a stranger, and only that one strategy's rows. Futures and
+    spot come back as `positions` (option legs, which belong to their group, are left out), naked and
+    spread options as `groups`."""
+    row = _strategy_account_or_404(db, strategy_id, user)
+    limit = max(1, min(limit, 500))
+    args = dict(status=status, signal_id=None, symbol=None, segment=None, manual_only=False, limit=limit, with_live_pnl=with_live_pnl, token=user.token)
+    positions = _query_positions(db, None, strategy_id=row.strategy_id, **args)
+    groups = _query_option_groups(db, None, strategy_id=row.strategy_id, **args)
+    return {"positions": [p for p in positions if p.get("option_group_id") is None], "groups": groups}
 
 
 @router.post("/accounts/strategy/{strategy_id}")
-def create_strategy_account(strategy_id: str, create: StrategyAccountCreate, db: Session = Depends(get_db)):
+def create_strategy_account(
+    strategy_id: str, create: StrategyAccountCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
     """starting_balance seeds current_balance too, same as
     execution.accounts' own seed INSERT does for the segment accounts.
     409s on an existing row - PUT is how you edit one, this is create-only,
-    same split GET/POST/PUT has for the segment routes above."""
-    strategy_uuid = uuid.UUID(strategy_id)
+    same split GET/POST/PUT has for the segment routes above.
+
+    A dedicated account changes how a strategy's trades are sized, so it may
+    only be created for a strategy the caller can see - checked with
+    signal-engine using the caller's own token (never a client-supplied
+    claim). The row is owned by the strategy's creator; fails closed (503)
+    when signal-engine cannot be asked."""
+    try:
+        strategy_uuid = uuid.UUID(strategy_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    lookup = lookup_strategy(strategy_id, user.token)
+    if lookup.status == UNAVAILABLE:
+        raise HTTPException(status_code=503, detail="could not verify the strategy with signal-engine - try again shortly")
+    if lookup.status == NOT_FOUND:
+        raise HTTPException(status_code=404, detail="strategy not found")
+    # A platform strategy has no creator: an admin's account for it stays
+    # unowned (admin-only), anyone else who could see it becomes the owner so
+    # they can still reach what they just created.
+    owner = uuid.UUID(lookup.created_by) if lookup.created_by else (None if user.is_admin else user.id)
     if db.get(db_models.StrategyAccount, strategy_uuid) is not None:
         raise HTTPException(status_code=409, detail=f"strategy {strategy_id} already has a dedicated account")
     row = db_models.StrategyAccount(
         strategy_id=strategy_uuid,
+        owner_user_id=owner,
         segment=create.segment,
         starting_balance=create.starting_balance,
         current_balance=create.starting_balance,
@@ -351,7 +521,12 @@ def create_strategy_account(strategy_id: str, create: StrategyAccountCreate, db:
 
 
 @router.put("/accounts/strategy/{strategy_id}")
-def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db: Session = Depends(get_db)):
+def update_strategy_account(
+    strategy_id: str,
+    update: StrategyAccountUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Live-broker-adapter P3 item 14 (see docs/architecture.md) -
     live_trading_user_id/live_trading_enabled/max_order_value/
     max_daily_loss are the only way to opt an automated Strategy into
@@ -361,48 +536,64 @@ def update_strategy_account(strategy_id: str, update: StrategyAccountUpdate, db:
     here too, with a clean 422 - considers both what's already stored AND
     what this same request is changing, so either order (set the user id
     first, or in the same call as enabling) works."""
-    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+    row = _strategy_account_or_404(db, strategy_id, user)
     if update.capital_per_trade is not None:
         row.capital_per_trade = update.capital_per_trade
     if update.risk_per_trade_pct is not None:
         row.risk_per_trade_pct = update.risk_per_trade_pct
+    previous_live_user = row.live_trading_user_id
     if "live_trading_user_id" in update.model_fields_set:
         row.live_trading_user_id = uuid.UUID(update.live_trading_user_id) if update.live_trading_user_id else None
-    if update.live_trading_enabled is not None:
-        row.live_trading_enabled = update.live_trading_enabled
-    if "max_order_value" in update.model_fields_set:
-        row.max_order_value = update.max_order_value
-    if "max_daily_loss" in update.model_fields_set:
-        row.max_daily_loss = update.max_daily_loss
-    if row.live_trading_enabled and row.live_trading_user_id is None:
+    will_be_live = row.live_trading_enabled if update.live_trading_enabled is None else bool(update.live_trading_enabled)
+    turning_on = will_be_live and not row.live_trading_enabled
+    retargeting = row.live_trading_user_id is not None and row.live_trading_user_id != previous_live_user
+    live_edit = will_be_live and any(
+        k in update.model_fields_set for k in ("live_trading_enabled", "live_trading_user_id", "max_order_value", "max_daily_loss")
+    )
+    # Real orders on someone's broker account: only that person (or, for
+    # edits to an ALREADY-live account, an admin) may touch the live settings.
+    # And turning live ON, or pointing it at a different person, must be done
+    # by that person themselves - only they can consent, and only their own
+    # saved broker credentials can be verified from here.
+    if (turning_on or retargeting) and row.live_trading_user_id != user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="real orders can only be pointed at your own broker account - the person named as live_trading_user_id must enable live trading themselves",
+        )
+    if live_edit and not turning_on and not user.is_admin and row.live_trading_user_id != user.id:
+        raise HTTPException(status_code=403, detail="only the live trading user or an admin can change live-trading settings on this account")
+    if will_be_live and row.live_trading_user_id is None:
         raise HTTPException(status_code=422, detail="live_trading_enabled requires live_trading_user_id to be set")
+    # Unattended automated live trading also needs the live user to have earned a paper track
+    # record on this segment (app/domain/track_record.py), when enforced. The caller IS the live
+    # user here (checked above). The strategy's own record is not measured yet: a known gap.
+    track_record_problems = None
+    if settings.require_paper_track_record and turning_on and row.segment in LIVE_SEGMENTS:
+        track_record_problems = unmet_messages(evaluate_for_user_segment(db, user.id, row.segment))
+    _apply_live_fields(
+        row, update, segment=row.segment, token=user.token, check_credentials=True, extra_transition_problems=track_record_problems
+    )
     db.commit()
     db.refresh(row)
     return _strategy_account_to_out(db, row)
 
 
 @router.delete("/accounts/strategy/{strategy_id}")
-def delete_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
+def delete_strategy_account(strategy_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Removing the override doesn't touch any already-open position/group
     - they keep resolving against whatever account they were opened
     against (load_capital_account is called fresh at open/close time, not
     stored on the position) only going forward does the strategy fall back
     to sharing its segment account again."""
-    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+    row = _strategy_account_or_404(db, strategy_id, user)
     db.delete(row)
     db.commit()
     return {"status": "deleted", "strategy_id": strategy_id}
 
 
 @router.post("/accounts/strategy/{strategy_id}/reset")
-def reset_strategy_account(strategy_id: str, db: Session = Depends(get_db)):
-    row = db.get(db_models.StrategyAccount, uuid.UUID(strategy_id))
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"no dedicated account for strategy {strategy_id}")
+def reset_strategy_account(strategy_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    row = _strategy_account_or_404(db, strategy_id, user)
     row.current_balance = row.starting_balance
     db.commit()
     db.refresh(row)

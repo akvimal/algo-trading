@@ -1,0 +1,22 @@
+-- The two legs' own strike difference for a spread (bull_call_spread/bear_put_spread/
+-- bull_put_spread/bear_call_spread), computed once at open time from the already-resolved leg
+-- dicts and frozen - strikes never change after a position opens. NULL for a naked (single-leg)
+-- group, which has no second strike to take a width from.
+--
+-- Backs the Portfolio positions list's new per-position economics (2026-09-30): a spread's
+-- theoretical max profit/loss needs this (max_profit = width - net_debit for a debit spread,
+-- width - |net_debit| for a credit spread's max loss - see option_position_manager.py's
+-- _spread_sizing_basis for the identical debit/credit split) and there was previously no way to
+-- recover it after open without re-deriving it from a fresh option chain (fragile: the position's
+-- own legs record a resolved TRADING SYMBOL, not a strike number or security_id, on
+-- execution.positions).
+--
+-- Existing open groups (before this migration ran) simply have strike_width=NULL forever - safe
+-- to re-run, and the frontend already treats it as "not computable for this position" the same
+-- way it treats any other null economics figure.
+--
+-- Run manually against a populated volume (BEFORE deploying execution code that reads/writes it;
+-- test DB first):
+--   scripts/migrate.sh apply
+
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS strike_width NUMERIC;

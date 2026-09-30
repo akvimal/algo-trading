@@ -42,8 +42,10 @@ def _reset_dhan_throttle_state():
     dhan._last_candle_call_at.clear()
     dhan._last_option_chain_call_at.clear()
     dhan._last_order_call_at.clear()
+    dhan._last_any_call_at.clear()
     yield
     dhan._last_ltp_call_at.clear()
     dhan._last_candle_call_at.clear()
     dhan._last_option_chain_call_at.clear()
     dhan._last_order_call_at.clear()
+    dhan._last_any_call_at.clear()

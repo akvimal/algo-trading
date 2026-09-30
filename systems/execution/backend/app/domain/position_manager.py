@@ -18,6 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings as app_settings
+from app.config import settings as app_settings
+from app.domain.india_charges import kind_for, round_trip_charges
+from app.domain.slippage import slippage_cost
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
 from app.domain.exit_condition import evaluate_exit_condition, exit_condition_warmup
 from app.domain.live_broker import (
@@ -535,6 +538,61 @@ def _net_pnl_with_costs(pos, exit_price: float, raw_pnl: float) -> float:
     return raw_pnl
 
 
+def _apply_position_charges(pos, account) -> float:
+    """Indian charges (brokerage, STT/CTT, exchange, SEBI, stamp, GST) for one
+    closing NSE/MCX Position, recorded on it (charges/charges_detail) and
+    returned so the caller can net them out of the P&L. 0.0, touching nothing,
+    when they do not apply: no account, the account's apply_charges is off,
+    crypto (own fee simulation), an option LEG (its group is charged as a whole
+    by option_position_manager), an option group object (no instrument_type
+    here), or a position with no exit price yet. Called from
+    _apply_realized_pnl, the one place every close credits the balance, so no
+    close path needs to remember it. See app/domain/india_charges.py."""
+    if account is None or not getattr(account, "apply_charges", False):
+        return 0.0
+    if getattr(pos, "option_group_id", None) is not None:
+        return 0.0
+    instrument_type = getattr(pos, "instrument_type", None)
+    if instrument_type is None or pos.exit_price is None:
+        return 0.0
+    kind = kind_for(pos.segment, instrument_type, getattr(pos, "horizon", None))
+    if kind is None:
+        return 0.0
+    breakdown = round_trip_charges(kind, pos.action, float(pos.entry_price), float(pos.exit_price), float(pos.quantity))
+    pos.charges = breakdown.total
+    pos.charges_detail = breakdown.as_dict()
+    return breakdown.total
+
+
+def _apply_position_slippage(pos, account) -> float:
+    """Slippage on one closing Position: the account's slippage_bps on the
+    turnover of each market-type leg (see app/domain/slippage.py), recorded on
+    pos.slippage_cost and returned so _apply_realized_pnl can net it out. A
+    COST, not a repriced fill. 0.0, touching nothing, when it does not apply:
+    no account, slippage_bps <= 0, an option LEG (its group is handled by
+    option_position_manager), an option group object (no instrument_type here),
+    or no exit price yet. Every segment, in the position's own currency."""
+    bps = float(getattr(account, "slippage_bps", 0) or 0) if account is not None else 0.0
+    if bps <= 0:
+        return 0.0
+    if getattr(pos, "option_group_id", None) is not None:
+        return 0.0
+    if getattr(pos, "instrument_type", None) is None or pos.exit_price is None:
+        return 0.0
+    quantity = float(pos.quantity)
+    cost = slippage_cost(
+        bps,
+        float(pos.entry_price) * quantity,
+        float(pos.exit_price) * quantity,
+        getattr(pos, "order_type", None),
+        getattr(pos, "exit_reason", None),
+    )
+    if cost <= 0:
+        return 0.0
+    pos.slippage_cost = cost
+    return cost
+
+
 def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] = None) -> None:
     """Sets pos.pnl (always in the position's own native currency - raw
     USD for CRYPTO, INR for NSE/MCX, matching entry_price/exit_price so
@@ -554,6 +612,8 @@ def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] =
     crediting the raw USD figure unconverted, same as this bug's pre-fix
     behavior) rather than leaving a position permanently stuck OPEN over a
     rate that was cleared out from under it after it opened."""
+    pnl -= _apply_position_charges(pos, account)
+    pnl -= _apply_position_slippage(pos, account)
     pos.pnl = pnl
     if account is None:
         logger.error("no account found for segment %s - position %s closed without a balance update", pos.segment, pos.id)
@@ -1705,6 +1765,7 @@ def open_manual_position(
     risk_managed: Optional[bool] = None,
     setup_tag: Optional[str] = None,
     confidence: Optional[int] = None,
+    notes: Optional[str] = None,
     auto_traded: bool = False,
     entry_interval: Optional[str] = None,
 ) -> db_models.Position:
@@ -1821,6 +1882,19 @@ def open_manual_position(
         row = _reject_manual(
             db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
             f"no paper-trading account configured for segment {segment}",
+        )
+        db.commit()
+        return row
+
+    # Per-account risk guard (accounts.require_stop_loss - off for accounts
+    # that predate it, on for new ones). A stop given as a price OR as a
+    # method both count; only "no stop at all" is refused. Spot/future only:
+    # option groups take their stop after entry (open_manual_option_group).
+    if account.require_stop_loss and stop_loss_price is None and stop_loss_method is None:
+        row = _reject_manual(
+            db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
+            "a stop-loss is required by your account settings - set a stop-loss price or method, "
+            "or turn off 'Require a stop-loss' for this account",
         )
         db.commit()
         return row
@@ -2025,6 +2099,7 @@ def open_manual_position(
         risk_managed=risk_managed,
         setup_tag=setup_tag or None,
         confidence=confidence,
+        notes=notes or None,
         # Immutable entry snapshot - see OptionPositionGroup's identical pair.
         entry_setup_tag=setup_tag or None,
         entry_confidence=confidence,
@@ -2081,6 +2156,28 @@ def update_square_off_time(
     row.square_off_time = square_off_time
     db.commit()
     return row
+
+
+def update_target(
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float
+) -> tuple[Optional[db_models.Position], Optional[str]]:
+    """Moves an open position's take-profit. Returns (row, reject_reason):
+    (None, None) for a missing or someone else's row, (row, reason) with the
+    row untouched when the price is on the wrong side of the entry (a buy's
+    target above it, a sell's below, the rule open-time validation applies),
+    else (row, None). Only the price changes: the position's stop-loss and
+    every other setting are left alone."""
+    row = db.get(db_models.Position, position_id)
+    if row is None or row.user_id != user_id:
+        return None, None
+    entry = float(row.entry_price)
+    if row.action == "BUY" and target_price <= entry:
+        return row, f"target ({target_price}) must be above entry ({entry}) for a BUY"
+    if row.action == "SELL" and target_price >= entry:
+        return row, f"target ({target_price}) must be below entry ({entry}) for a SELL"
+    row.target_price = target_price
+    db.commit()
+    return row, None
 
 
 def update_stop_loss(
@@ -2160,20 +2257,41 @@ def update_stop_loss(
     return row, None
 
 
+def _fetch_prices(get_ltp_batch: GetLtpBatch, exchange: str, symbols: list[str], owner: Optional[uuid.UUID]) -> dict[str, float]:
+    """One batch. With an owner, on THAT owner's own Dhan keys (X-On-Behalf-Of); if that comes
+    back empty (no keys saved, or an expired Dhan token) and the fallback is on, once more on the
+    platform credential so their stop-losses and square-offs keep being enforced."""
+    if owner is None:
+        return get_ltp_batch(exchange, symbols)
+    prices = get_ltp_batch(exchange, symbols, on_behalf_of=owner)
+    if not prices and app_settings.job_quotes_platform_fallback:
+        logger.warning("quotes for %s on user %s's own keys came back empty: falling back to the platform credential", exchange, owner)
+        prices = get_ltp_batch(exchange, symbols)
+    return prices
+
+
 def _quotes_by_exchange(positions: list, get_ltp_batch: GetLtpBatch) -> dict[tuple[str, str], float]:
     """One get_ltp_batch call per distinct exchange among `positions`,
     covering every distinct symbol on that exchange - this is what turns
     N open positions into (at most) len(distinct exchanges) provider
     calls instead of N. A failed batch for one exchange doesn't affect
-    others; its symbols are just absent from the result."""
-    symbols_by_exchange: dict[str, set[str]] = {}
+    others; its symbols are just absent from the result.
+
+    With JOB_QUOTES_USE_OWNER_KEYS on (off by default) the batches are per (owner, exchange)
+    instead, each on that owner's own Dhan keys - so the shared platform credential stops being
+    spent on users' positions (the own-keys data model). Positions with no owner (the automated
+    Strategy-driven flow's platform account) still use the platform credential. More calls, but
+    each on its own user's rate budget."""
+    per_owner = app_settings.job_quotes_use_owner_keys
+    wanted: dict[tuple[Optional[uuid.UUID], str], set[str]] = {}
     for pos in positions:
-        symbols_by_exchange.setdefault(pos.exchange, set()).add(pos.symbol)
+        owner = getattr(pos, "user_id", None) if per_owner else None
+        wanted.setdefault((owner, pos.exchange), set()).add(pos.symbol)
 
     quotes: dict[tuple[str, str], float] = {}
-    for exchange, symbols in symbols_by_exchange.items():
+    for (owner, exchange), symbols in wanted.items():
         try:
-            prices = get_ltp_batch(exchange, list(symbols))
+            prices = _fetch_prices(get_ltp_batch, exchange, list(symbols), owner)
         except Exception:
             logger.exception("failed to fetch CMP batch for %s (%d symbols)", exchange, len(symbols))
             continue

@@ -1,0 +1,323 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "DesktopPositional.dc.html": {
+      "h": 900,
+      "title": "Today - Positional (Guided mode)",
+      "w": 1440,
+      "x": 1520,
+      "y": 300,
+      "is_interactive": true
+    },
+    "Main.dc.html": {
+      "h": 900,
+      "title": "Today - Intraday (Pro mode)",
+      "w": 1440,
+      "x": 0,
+      "y": 300,
+      "is_interactive": true
+    },
+    "MobileNav.dc.html": {
+      "h": 76,
+      "title": "Component - Mobile tab bar",
+      "w": 390,
+      "x": 2662,
+      "y": 6300
+    },
+    "MobileScan.dc.html": {
+      "h": 844,
+      "title": "Mobile - Scan (OI Buildup cards)",
+      "w": 390,
+      "x": 470,
+      "y": 6300,
+      "is_interactive": true
+    },
+    "MobileToday.dc.html": {
+      "h": 844,
+      "title": "Mobile - Today",
+      "w": 390,
+      "x": 0,
+      "y": 6300,
+      "is_interactive": true
+    },
+    "MobileTrade.dc.html": {
+      "h": 844,
+      "title": "Mobile - Guided trade ticket",
+      "w": 390,
+      "x": 940,
+      "y": 6300,
+      "is_interactive": true
+    },
+    "PaperAccount.dc.html": {
+      "h": 900,
+      "title": "Portfolio - Paper account",
+      "w": 1440,
+      "x": 0,
+      "y": 1500,
+      "is_interactive": true
+    },
+    "Plans.dc.html": {
+      "h": 820,
+      "title": "Plans and billing",
+      "w": 1440,
+      "x": 1520,
+      "y": 1500
+    },
+    "Sidebar.dc.html": {
+      "h": 900,
+      "title": "Component - Sidebar",
+      "w": 232,
+      "x": 2350,
+      "y": 6300
+    },
+    "DesktopOptions.dc.html": {
+      "x": 3040,
+      "y": 300,
+      "w": 1440,
+      "h": 900,
+      "title": "Today - Options (Pro mode)",
+      "is_interactive": true
+    },
+    "DesktopTrade.dc.html": {
+      "x": 3040,
+      "y": 1500,
+      "w": 1440,
+      "h": 900,
+      "title": "Trade - Chart, ticket and decision support",
+      "is_interactive": true
+    },
+    "DesktopScan.dc.html": {
+      "x": 0,
+      "y": 2700,
+      "w": 1440,
+      "h": 900,
+      "title": "Scan - OI Buildup and Screener",
+      "is_interactive": true
+    },
+    "DesktopReview.dc.html": {
+      "x": 1520,
+      "y": 2700,
+      "w": 1440,
+      "h": 900,
+      "title": "Review - Discipline, performance and journal",
+      "is_interactive": true
+    },
+    "Placeholder.dc.html": {
+      "x": 3040,
+      "y": 2700,
+      "w": 1440,
+      "h": 900,
+      "title": "Still to design",
+      "is_interactive": true
+    },
+    "MobilePortfolio.dc.html": {
+      "x": 1410,
+      "y": 6300,
+      "w": 390,
+      "h": 844,
+      "title": "Mobile - Portfolio",
+      "is_interactive": true
+    },
+    "MobileMore.dc.html": {
+      "x": 1880,
+      "y": 6300,
+      "w": 390,
+      "h": 844,
+      "title": "Mobile - More",
+      "is_interactive": true
+    },
+    "DesktopAutomate.dc.html": {
+      "x": 0,
+      "y": 3900,
+      "w": 1440,
+      "h": 900,
+      "title": "Automate - Strategies and backtests",
+      "is_interactive": true
+    },
+    "DesktopAlerts.dc.html": {
+      "x": 1520,
+      "y": 3900,
+      "w": 1440,
+      "h": 900,
+      "title": "Alerts",
+      "is_interactive": true
+    },
+    "DesktopSettings.dc.html": {
+      "x": 3040,
+      "y": 3900,
+      "w": 1440,
+      "h": 900,
+      "title": "Settings - Risk limits, live trading, billing",
+      "is_interactive": true
+    },
+    "SignIn.dc.html": {
+      "x": 0,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "title": "Sign in and create account",
+      "is_interactive": true
+    },
+    "OnboardMode.dc.html": {
+      "x": 1520,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "title": "First run 1 - Experience",
+      "is_interactive": true
+    },
+    "OnboardAccount.dc.html": {
+      "x": 3040,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "title": "First run 2 - Paper account",
+      "is_interactive": true
+    },
+    "OnboardFirstTrade.dc.html": {
+      "x": 4560,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "title": "First run 3 - First planned trade",
+      "is_interactive": true
+    },
+    "MobileSignIn.dc.html": {
+      "x": 3150,
+      "y": 6300,
+      "w": 390,
+      "h": 844,
+      "title": "Mobile - Sign in",
+      "is_interactive": true
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-09-25T04:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "n1": {
+      "fill": "blue",
+      "text": "Left: Intraday view in Pro mode. Numbers first: regime, OI lean, open risk, loss budget and the day's plan on one screen.\n\nMiddle: Positional view in Guided mode. Same shell, plus a first-week coach, plain-English hints and a legend for LB, SB, SC and LU.\n\nRight: Options view. OI walls by strike, open spread groups with their legs, Weekly Advisor picks, and expiry and margin checks.\n\nThe sidebar replaces today's 10 flat tabs.",
+      "w": 360,
+      "x": 4560,
+      "y": 300
+    },
+    "n2": {
+      "fill": "teal",
+      "text": "Trade: the chart, the plan-first ticket and the pre-trade checks share one screen. Structure overlays are on demand, and the ticket will not place without a stop-loss.\n\nPaper account: realistic fills, slippage and charges, plus a graduation gate that unlocks live trading only after a repeatable process is shown.\n\nPlan prices are placeholders. Discipline and risk tools stay on every plan.",
+      "w": 360,
+      "x": 4560,
+      "y": 1500
+    },
+    "n3": {
+      "fill": "orange",
+      "text": "Mobile is for monitoring and acting, not analysing. Tables become cards, the ticket is a bottom sheet, touch targets are 44px, and the same 5-item bar appears on every screen.\n\nThe last two artboards are the shared components the screens import.",
+      "w": 360,
+      "x": 3620,
+      "y": 6300
+    },
+    "t1": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Today: one dashboard per trading horizon",
+      "w": 240,
+      "x": 0,
+      "y": 40
+    },
+    "t2": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Trade, paper account and plans",
+      "w": 240,
+      "x": 0,
+      "y": 1260
+    },
+    "t3": {
+      "kind": "title1",
+      "maxW": 3540,
+      "text": "Mobile: monitor and act",
+      "w": 240,
+      "x": 0,
+      "y": 6060
+    },
+    "t4": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Scan, review and what comes next",
+      "w": 240,
+      "x": 0,
+      "y": 2460
+    },
+    "n4": {
+      "fill": "purple",
+      "w": 360,
+      "x": 4560,
+      "y": 2700,
+      "text": "Clickable prototype: press Play on any artboard.\n\nTry: the sidebar and the Intraday, Positional and Options switch; Guided and Pro at the bottom of the sidebar; on Trade, Buy and Sell, Market, Limit and Stop, then Place; on Scan, the LB, SB, SC and LU filters and the Screener tab; the phone tab bar.\n\nAutomate, Alerts and Settings are now full screens. The last page lists what is still to design."
+    },
+    "t5": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Automate, alerts and settings",
+      "w": 240,
+      "x": 0,
+      "y": 3660
+    },
+    "n5": {
+      "fill": "red",
+      "w": 360,
+      "x": 4560,
+      "y": 3900,
+      "text": "Graduation flow: Settings, Live trading and broker. Press the dashed prototype button to mark every requirement met, then connect the broker, tick the acknowledgement and enable live trading. Live shows in red and can be switched back to paper.\n\nAutomate: pick a strategy, read its rule in plain English, review the backtest, and start paper trading. Live stays locked until graduation."
+    },
+    "t6": {
+      "kind": "title1",
+      "maxW": 6000,
+      "text": "Sign in and first run",
+      "w": 240,
+      "x": 0,
+      "y": 4860
+    },
+    "n6": {
+      "fill": "green",
+      "w": 360,
+      "x": 6080,
+      "y": 5100,
+      "text": "Start here: press Play on Sign in.\n\nCreate account needs the risk acknowledgement ticked. Then: pick your experience (Guided or Pro is suggested and can be changed), create the paper account (the starting rules update with the capital you pick), and place a first planned trade in five steps. Finish lands on the Guided Today screen.\n\nSign in with an existing account goes straight to Today. On the phone, More has a Sign out that returns to the phone sign-in."
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "DesktopPositional.dc.html",
+    "DesktopOptions.dc.html",
+    "PaperAccount.dc.html",
+    "DesktopTrade.dc.html",
+    "Plans.dc.html",
+    "DesktopScan.dc.html",
+    "DesktopReview.dc.html",
+    "Placeholder.dc.html",
+    "DesktopAutomate.dc.html",
+    "DesktopAlerts.dc.html",
+    "DesktopSettings.dc.html",
+    "SignIn.dc.html",
+    "OnboardMode.dc.html",
+    "OnboardAccount.dc.html",
+    "OnboardFirstTrade.dc.html",
+    "MobileToday.dc.html",
+    "MobileScan.dc.html",
+    "MobileTrade.dc.html",
+    "MobilePortfolio.dc.html",
+    "MobileMore.dc.html",
+    "MobileSignIn.dc.html",
+    "Sidebar.dc.html",
+    "MobileNav.dc.html"
+  ],
+  "pages": [],
+  "title": "Trading Platform Redesign Mockup"
+}

@@ -9,6 +9,7 @@ tests/test_candles_route_cache.py already uses for this backend."""
 from datetime import date
 
 import app.api.routes.candles as candles_route
+from app.auth import Caller
 import app.api.routes.order_blocks as order_blocks_route
 from app.domain.models import Candle
 
@@ -30,8 +31,7 @@ def test_source_yahoo_never_resolves_a_quote_provider(monkeypatch):
     candles_route._history_cache.clear()
 
     result = order_blocks_route.get_order_blocks(
-        "NSE", "ABB", "daily", from_=date(2026, 1, 1), to=date(2026, 6, 1), source="yahoo",
-    )
+        "NSE", "ABB", "daily", from_=date(2026, 1, 1), to=date(2026, 6, 1), source="yahoo", caller=Caller())
 
     assert result.order_blocks == []  # too few bars to detect anything - just checking it didn't error/touch Dhan
     candles_route._history_cache.clear()
@@ -51,7 +51,7 @@ def test_no_source_still_resolves_the_quote_provider(monkeypatch):
     monkeypatch.setattr(order_blocks_route, "get_provider", get_provider)
     candles_route._history_cache.clear()
 
-    order_blocks_route.get_order_blocks("NSE", "ABB", "15min", from_=date(2026, 1, 1), to=date(2026, 1, 5))
+    order_blocks_route.get_order_blocks("NSE", "ABB", "15min", from_=date(2026, 1, 1), to=date(2026, 1, 5), caller=Caller())
 
     assert calls == ["NSE"]
     candles_route._history_cache.clear()

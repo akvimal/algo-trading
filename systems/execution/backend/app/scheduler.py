@@ -27,6 +27,8 @@ from app.adapters.db.session import SessionLocal
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle
 from app.config import settings
 from app.domain.broker_reconciliation import reconcile_stuck_broker_orders
+from app.domain.equity_history import record_equity_snapshots
+from app.domain.pending_orders import default_deps, process_pending_orders
 from app.domain.option_position_manager import check_option_group_exits, record_option_group_pnl_snapshots, square_off_due_option_groups
 from app.domain.position_manager import check_exits, record_position_pnl_snapshots, square_off_due_positions
 
@@ -36,6 +38,8 @@ _scheduler = BackgroundScheduler()
 _SQUARE_OFF_JOB_ID = "square-off-due"
 _EXIT_MONITOR_JOB_ID = "exit-monitor"
 _BROKER_RECONCILIATION_JOB_ID = "broker-order-reconciliation"
+_EQUITY_SNAPSHOT_JOB_ID = "equity-snapshot"
+_PENDING_ORDERS_JOB_ID = "pending-orders"
 
 
 def run_square_off_due() -> dict:
@@ -74,6 +78,22 @@ def run_broker_reconciliation() -> dict:
         return reconcile_stuck_broker_orders(db)
 
 
+def run_equity_snapshots() -> dict:
+    with SessionLocal() as db:
+        result = record_equity_snapshots(db, get_ltp_batch)
+    if result["failed"]:
+        logger.warning("equity snapshot run: %s", result)
+    return result
+
+
+def run_pending_orders() -> dict:
+    with SessionLocal() as db:
+        result = process_pending_orders(db, default_deps())
+    if result["triggered"] or result["rejected"] or result["failed"] or result["expired"]:
+        logger.info("pending-orders run: %s", result)
+    return result
+
+
 def start_scheduler() -> None:
     _scheduler.add_job(
         run_square_off_due,
@@ -93,5 +113,19 @@ def start_scheduler() -> None:
         id=_BROKER_RECONCILIATION_JOB_ID,
         replace_existing=True,
     )
+    if settings.equity_snapshot_poll_seconds > 0:
+        _scheduler.add_job(
+            run_equity_snapshots,
+            IntervalTrigger(seconds=settings.equity_snapshot_poll_seconds),
+            id=_EQUITY_SNAPSHOT_JOB_ID,
+            replace_existing=True,
+        )
+    if settings.pending_order_poll_seconds > 0:
+        _scheduler.add_job(
+            run_pending_orders,
+            IntervalTrigger(seconds=settings.pending_order_poll_seconds),
+            id=_PENDING_ORDERS_JOB_ID,
+            replace_existing=True,
+        )
     if not _scheduler.running:
         _scheduler.start()

@@ -13,6 +13,13 @@ from fastapi import HTTPException
 from app.api.routes.rules import _check_watchlist_exists
 from app.domain.generation.rule import validate_rule_watchlist_fields
 from app.domain.generation.watchlist import WatchlistCreate, WatchlistUpdate, validate_watchlist_symbols_field
+from app.auth import Caller
+
+
+# Auth not enforced (settings.require_auth off): every route sees everything,
+# which is what these pre-ownership tests exercise. See tests/test_ownership.py
+# for the scoped behavior.
+UNRESTRICTED = Caller(user_id=None, is_admin=False, enforced=False)
 
 
 # --- validate_watchlist_symbols_field / WatchlistCreate/Update shape validation ---------
@@ -91,14 +98,14 @@ class FakeDb:
 
 
 def test_check_watchlist_exists_noop_for_non_watchlist_types():
-    _check_watchlist_exists(FakeDb(row=None), "symbol", "RELIANCE")  # must not raise - db never consulted
+    _check_watchlist_exists(FakeDb(row=None), "symbol", "RELIANCE", UNRESTRICTED)  # must not raise - db never consulted
 
 
 def test_check_watchlist_exists_passes_when_watchlist_found():
-    _check_watchlist_exists(FakeDb(row=object()), "watchlist", "fundamentally-strong")  # must not raise
+    _check_watchlist_exists(FakeDb(row=object()), "watchlist", "fundamentally-strong", UNRESTRICTED)  # must not raise
 
 
 def test_check_watchlist_exists_404s_when_watchlist_missing():
     with pytest.raises(HTTPException) as exc:
-        _check_watchlist_exists(FakeDb(row=None), "watchlist", "does-not-exist")
+        _check_watchlist_exists(FakeDb(row=None), "watchlist", "does-not-exist", UNRESTRICTED)
     assert exc.value.status_code == 404

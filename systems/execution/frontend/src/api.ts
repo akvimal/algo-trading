@@ -155,6 +155,9 @@ export type Account = {
   // auto-computes and locks the Lot field from risk_per_trade_pct/
   // capital_per_trade instead of leaving it free-typed.
   enforce_risk_based_lots: boolean;
+  // Refuse a spot/future manual order that has no stop-loss (server-enforced).
+  // Off for accounts that predate the setting, on for new ones.
+  require_stop_loss: boolean;
   // CRYPTO and NSE (both MTF positional spot AND intraday MIS margin, same
   // field for both) - a margin multiplier applied before sizing (Delta
   // Exchange India trades perpetual futures on margin; Dhan's MTF borrows
@@ -394,6 +397,7 @@ export async function updateAccount(
       | "risk_per_trade_pct"
       | "min_reward_risk_ratio"
       | "enforce_risk_based_lots"
+      | "require_stop_loss"
       | "leverage"
       | "leverage_buffer_pct"
       | "square_off_time"
@@ -403,7 +407,11 @@ export async function updateAccount(
       | "default_interval"
       | "default_higher_interval"
     >
-  >,
+  > & {
+    // Must be true on the request that turns live trading ON; the server
+    // records it with a timestamp (app/domain/live_gate.py).
+    live_trading_consent?: boolean;
+  },
 ): Promise<Account> {
   const res = await authFetch(`${API_BASE}/accounts/${segment}`, {
     method: "PUT",
@@ -465,7 +473,7 @@ export async function updateStrategyAccount(
       StrategyAccount,
       "capital_per_trade" | "risk_per_trade_pct" | "live_trading_user_id" | "live_trading_enabled" | "max_order_value" | "max_daily_loss"
     >
-  >,
+  > & { live_trading_consent?: boolean },
 ): Promise<StrategyAccount> {
   const res = await authFetch(`${API_BASE}/accounts/strategy/${strategyId}`, {
     method: "PUT",
@@ -630,7 +638,7 @@ export type StrategySummary = {
 };
 
 export async function fetchStrategyNames(): Promise<StrategySummary[]> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/strategies`);
   return asJson(res, "GET /strategies");
 }
 
@@ -642,7 +650,7 @@ export async function fetchStrategyNames(): Promise<StrategySummary[]> {
 export type SignalCount = { strategy_id: string; total_signals: number };
 
 export async function fetchSignalCounts(): Promise<SignalCount[]> {
-  const res = await fetch(`${SIGNAL_ENGINE_BASE_URL}/signals/counts`);
+  const res = await authFetch(`${SIGNAL_ENGINE_BASE_URL}/signals/counts`);
   return asJson(res, "GET /signals/counts");
 }
 

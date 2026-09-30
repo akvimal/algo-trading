@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.auth import Caller, get_caller
 from app.domain.generation.rule import IndicatorCreate, IndicatorOut, IndicatorUpdate, validate_indicator_params
+from app.ownership import apply_scope, get_owned_or_404, owner_for_create
 
 router = APIRouter()
 
@@ -22,8 +24,8 @@ def _to_out(row: db_models.Indicator) -> IndicatorOut:
 
 
 @router.post("/indicators", response_model=IndicatorOut, status_code=201)
-def create_indicator(payload: IndicatorCreate, db: Session = Depends(get_db)):
-    row = db_models.Indicator(name=payload.name, type=payload.type, params=payload.params)
+def create_indicator(payload: IndicatorCreate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    row = db_models.Indicator(name=payload.name, type=payload.type, params=payload.params, created_by=owner_for_create(caller))
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -31,26 +33,24 @@ def create_indicator(payload: IndicatorCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/indicators", response_model=list[IndicatorOut])
-def list_indicators(db: Session = Depends(get_db)):
-    rows = db.query(db_models.Indicator).order_by(db_models.Indicator.created_at.desc()).all()
+def list_indicators(db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    rows = apply_scope(db.query(db_models.Indicator), db_models.Indicator, caller).order_by(db_models.Indicator.created_at.desc()).all()
     return [_to_out(r) for r in rows]
 
 
 @router.get("/indicators/{indicator_id}", response_model=IndicatorOut)
-def get_indicator(indicator_id: str, db: Session = Depends(get_db)):
+def get_indicator(indicator_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     try:
         parsed_id = uuid.UUID(indicator_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="indicator not found")
 
-    row = db.get(db_models.Indicator, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="indicator not found")
+    row = get_owned_or_404(db, db_models.Indicator, parsed_id, caller, "indicator not found")
     return _to_out(row)
 
 
 @router.patch("/indicators/{indicator_id}", response_model=IndicatorOut)
-def update_indicator(indicator_id: str, payload: IndicatorUpdate, db: Session = Depends(get_db)):
+def update_indicator(indicator_id: str, payload: IndicatorUpdate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """`type` isn't editable after creation (same pattern as
     Strategy.source_type/exchange) - delete and recreate if it needs to
     change."""
@@ -59,9 +59,7 @@ def update_indicator(indicator_id: str, payload: IndicatorUpdate, db: Session = 
     except ValueError:
         raise HTTPException(status_code=404, detail="indicator not found")
 
-    row = db.get(db_models.Indicator, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="indicator not found")
+    row = get_owned_or_404(db, db_models.Indicator, parsed_id, caller, "indicator not found")
 
     if payload.name is not None:
         row.name = payload.name
@@ -78,7 +76,7 @@ def update_indicator(indicator_id: str, payload: IndicatorUpdate, db: Session = 
 
 
 @router.delete("/indicators/{indicator_id}", status_code=204)
-def delete_indicator(indicator_id: str, db: Session = Depends(get_db)):
+def delete_indicator(indicator_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Hard delete, unprotected - matches Strategy's own delete, which
     also isn't guarded against being referenced elsewhere. A strategy
     still referencing this indicator gets a defensive skip on its next
@@ -88,9 +86,7 @@ def delete_indicator(indicator_id: str, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=404, detail="indicator not found")
 
-    row = db.get(db_models.Indicator, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="indicator not found")
+    row = get_owned_or_404(db, db_models.Indicator, parsed_id, caller, "indicator not found")
 
     db.delete(row)
     db.commit()

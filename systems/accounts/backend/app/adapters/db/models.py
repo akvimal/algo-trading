@@ -7,8 +7,8 @@ column, update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Text, func
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy import Boolean, Column, ForeignKey, Text, func, text
+from sqlalchemy.dialects.postgresql import ARRAY, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
 from app.config import settings
@@ -27,6 +27,20 @@ class User(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     is_admin = Column(Boolean, nullable=False, server_default="false")
     name = Column(Text, nullable=False, server_default="")
+    # When the person confirmed the risk disclosure at signup, and which wording
+    # (app/domain/risk_ack.py). NULL for accounts that predate it.
+    risk_acknowledged_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    risk_acknowledged_version = Column(Text, nullable=True)
+    # First-run onboarding (migrations/024): 'guided' adds hints and a first-week checklist, 'pro'
+    # is denser; onboarded_at is when the first-run flow was finished or skipped (NULL = not yet).
+    experience = Column(Text, nullable=False, server_default="guided")
+    onboarded_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    # The markets picked at first-run setup (migrations/025); all three until the person chooses.
+    markets = Column(ARRAY(Text), nullable=False, server_default=text("ARRAY['NSE', 'MCX', 'CRYPTO']"))
+    # What the web frontend's manual trade ticket pre-selects on a fresh instrument (migrations/028)
+    # - see UserOut's own comment in app/domain/models.py for why these are two separate columns.
+    default_instrument = Column(Text, nullable=False, server_default="future")
+    default_option_strategy = Column(Text, nullable=False, server_default="naked")
 
 
 class BrokerCredentials(Base):

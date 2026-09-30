@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getAuthToken } from "./auth";
 
 // Live LTP push (2026-09-16, Phase 1 of the SaaS scaling work - see
 // docs/architecture.md) - the first WebSocket client anywhere in this
@@ -86,6 +87,12 @@ export function useQuoteSocket(subscriptions: QuoteSubscription[], onTick: (tick
       ws.onopen = () => {
         if (cancelled) return;
         setConnected(true);
+        // With market-data's REQUIRE_OWN_DHAN_KEYS on, Dhan symbols are only served to a
+        // signed-in user with their own keys, and a WebSocket handshake cannot carry an
+        // Authorization header (a token in the URL would land in access logs), so identify
+        // ourselves with a first frame. Harmless when the flag is off: the server ignores it.
+        const token = getAuthToken();
+        if (token) ws.send(JSON.stringify({ action: "auth", token }));
         const current = subscriptionsRef.current;
         joinedRef.current = new Set(current.map(keyOf));
         for (const s of current) {

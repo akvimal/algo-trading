@@ -12,7 +12,8 @@ from app.adapters.db import models as db_models
 from app.adapters.db import processing_models
 from app.adapters.db.session import get_db
 from app.adapters.market_data.client import get_candle_history, resolve_underlying
-from app.auth import get_optional_user_id
+from app.auth import Caller, get_caller
+from app.ownership import apply_scope, get_owned_or_404, is_visible, owner_for_create
 from app.domain.generation.backtest import expand_stop_loss_grid, max_drawdown, win_rate
 from app.domain.generation.engine import history_window
 from app.domain.generation.external_backtest import (
@@ -115,13 +116,16 @@ def _to_out(
     )
 
 
-def _load_rule_or_404(db: Session, rule_id: str) -> db_models.Rule:
+def _load_rule_or_404(db: Session, rule_id: str, caller: Caller) -> db_models.Rule:
     try:
         parsed_id = uuid.UUID(rule_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="rule not found")
 
+    # Someone else's rule is reported exactly like a missing one.
     row = db.get(db_models.Rule, parsed_id)
+    if row is not None and not is_visible(row, caller):
+        row = None
     if row is None:
         raise HTTPException(status_code=404, detail="rule not found")
     return row
@@ -204,11 +208,11 @@ def _stop_loss_fields_for_rule(
 def create_strategy(
     payload: StrategyCreate,
     db: Session = Depends(get_db),
-    created_by: Optional[uuid.UUID] = Depends(get_optional_user_id),
+    caller: Caller = Depends(get_caller),
 ):
     # payload.rule_id is required iff source_type=='in_house' (enforced by
     # StrategyCreate's own validator) - external strategies carry no Rule.
-    rule_row = _load_rule_or_404(db, payload.rule_id) if payload.rule_id is not None else None
+    rule_row = _load_rule_or_404(db, payload.rule_id, caller) if payload.rule_id is not None else None
 
     stop_loss_method, stop_loss_interval, stop_loss_percent, trailing_stop_enabled, stop_loss_indicator_type, stop_loss_indicator_params = (
         _stop_loss_fields_for_rule(
@@ -231,7 +235,7 @@ def create_strategy(
         horizon=payload.horizon,
         instrument_type=payload.instrument_type,
         rule_id=rule_row.id if rule_row is not None else None,
-        created_by=created_by,
+        created_by=owner_for_create(caller),
         stop_loss_method=stop_loss_method,
         stop_loss_interval=stop_loss_interval,
         stop_loss_percent=stop_loss_percent,
@@ -261,7 +265,7 @@ def create_strategy(
 
 
 @router.delete("/strategies/{strategy_id}", status_code=204)
-def delete_strategy(strategy_id: str, db: Session = Depends(get_db)):
+def delete_strategy(strategy_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Hard delete - historical signals/positions elsewhere keep their
     strategy_id as a plain reference (no cross-schema FK, see
     docs/architecture.md), so this doesn't break past records, only stops
@@ -271,21 +275,20 @@ def delete_strategy(strategy_id: str, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=404, detail="strategy not found")
 
-    row = db.get(db_models.Strategy, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="strategy not found")
+    row = get_owned_or_404(db, db_models.Strategy, parsed_id, caller, "strategy not found")
 
     db.delete(row)
     db.commit()
 
 
 @router.get("/strategies", response_model=list[StrategyOut])
-def list_strategies(source_type: str | None = None, db: Session = Depends(get_db)):
+def list_strategies(source_type: str | None = None, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     # outerjoin, not join - an external strategy has no rule_id at all, an
     # inner join would silently drop every one of them from this list.
     q = db.query(db_models.Strategy, db_models.Rule).outerjoin(
         db_models.Rule, db_models.Strategy.rule_id == db_models.Rule.id
     )
+    q = apply_scope(q, db_models.Strategy, caller)
     if source_type:
         q = q.filter(db_models.Strategy.source_type == source_type)
     rows = q.order_by(db_models.Strategy.created_at.desc()).all()
@@ -311,7 +314,7 @@ def list_strategies(source_type: str | None = None, db: Session = Depends(get_db
 
 
 @router.get("/strategies/{strategy_id}", response_model=StrategyOut)
-def get_strategy(strategy_id: str, db: Session = Depends(get_db)):
+def get_strategy(strategy_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Called by signal-processing during resolution, and by the frontend
     to display a single strategy's config/webhook URLs."""
     try:
@@ -319,23 +322,19 @@ def get_strategy(strategy_id: str, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=404, detail="strategy not found")
 
-    row = db.get(db_models.Strategy, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="strategy not found")
+    row = get_owned_or_404(db, db_models.Strategy, parsed_id, caller, "strategy not found")
     rule_row = db.get(db_models.Rule, row.rule_id) if row.rule_id is not None else None
     return _to_out(row, rule_row, _last_scan_at(db, parsed_id), _last_signal_at(db, parsed_id))
 
 
 @router.patch("/strategies/{strategy_id}", response_model=StrategyOut)
-def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Depends(get_db)):
+def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     try:
         parsed_id = uuid.UUID(strategy_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="strategy not found")
 
-    row = db.get(db_models.Strategy, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="strategy not found")
+    row = get_owned_or_404(db, db_models.Strategy, parsed_id, caller, "strategy not found")
 
     if payload.name is not None:
         row.name = payload.name
@@ -357,7 +356,7 @@ def update_strategy(strategy_id: str, payload: StrategyUpdate, db: Session = Dep
     if payload.rule_id is not None:
         if row.source_type != "in_house":
             raise HTTPException(status_code=422, detail="rule_id only applies to source_type='in_house' strategies")
-        new_rule_row = _load_rule_or_404(db, payload.rule_id)
+        new_rule_row = _load_rule_or_404(db, payload.rule_id, caller)
         row.rule_id = new_rule_row.id
 
     if "stop_loss_method" in payload.model_fields_set:
@@ -603,6 +602,7 @@ def backtest_strategy_signals(
     payload: ExternalBacktestRequest,
     to: date = date.today(),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_caller),
 ):
     """Backtests an externally-supplied (symbol, timestamp) signal list -
     e.g. a Chartink alert-history CSV export, which has no price/action
@@ -637,9 +637,7 @@ def backtest_strategy_signals(
         parsed_id = uuid.UUID(strategy_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="strategy not found")
-    strategy = db.get(db_models.Strategy, parsed_id)
-    if strategy is None:
-        raise HTTPException(status_code=404, detail="strategy not found")
+    strategy = get_owned_or_404(db, db_models.Strategy, parsed_id, caller, "strategy not found")
 
     stop_loss_values: list = [None]
     if payload.stop_loss_method == "percent":
@@ -720,6 +718,7 @@ def backtest_strategy_signals_trades(
     payload: ExternalBacktestTradeRequest,
     to: date = date.today(),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_caller),
 ):
     """The individual-trade drill-down for ONE exit config, sibling of
     /backtest-signals above (which sweeps a whole grid and only returns
@@ -732,9 +731,7 @@ def backtest_strategy_signals_trades(
         parsed_id = uuid.UUID(strategy_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="strategy not found")
-    strategy = db.get(db_models.Strategy, parsed_id)
-    if strategy is None:
-        raise HTTPException(status_code=404, detail="strategy not found")
+    strategy = get_owned_or_404(db, db_models.Strategy, parsed_id, caller, "strategy not found")
 
     if payload.stop_loss_method == "percent" and payload.stop_loss_percent is None:
         raise HTTPException(status_code=422, detail="stop_loss_method='percent' requires stop_loss_percent")

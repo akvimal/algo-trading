@@ -168,6 +168,170 @@ class ExecutionSettingsUpdate(BaseModel):
 ChartInterval = Literal["1min", "3min", "5min", "15min", "30min", "60min"]
 
 
+class EquityPointOut(BaseModel):
+    snapshot_date: date
+    balance: float
+    unrealized_pnl: float
+    equity: float
+    is_reset_point: bool
+
+
+class EquityStatsOut(BaseModel):
+    """Measured over the CURRENT curve only - from the latest reset marker on
+    (a reset starts a new curve). Close-of-day granularity, so max_drawdown_pct
+    understates intraday swings."""
+
+    since: date
+    baseline: float
+    latest_equity: float
+    return_pct: float
+    peak_equity: float
+    max_drawdown_pct: float
+    days_tracked: int
+    points: int
+
+
+class DisciplineComponentOut(BaseModel):
+    rate: Optional[float] = None  # 0-1; None = no data for this dimension in the window
+    trades: int = 0
+
+
+class DisciplinePlanReviewOut(DisciplineComponentOut):
+    before_rate: Optional[float] = None
+    after_rate: Optional[float] = None
+
+
+class DisciplineOutcomeOut(DisciplineComponentOut):
+    win_rate: Optional[float] = None  # 0-1
+    avg_r: Optional[float] = None
+
+
+class DisciplineOut(BaseModel):
+    """Server-side port of the frontend's discipline score (discipline.ts): four
+    weighted components over a rolling window of the last `window_days` days with a
+    trade. `score` is None below 5 trades in the window."""
+
+    score: Optional[int] = None
+    window_days: int
+    window_start: Optional[str] = None
+    trade_count: int
+    planned: DisciplineComponentOut
+    plan_adherence: DisciplineComponentOut
+    plan_review: DisciplinePlanReviewOut
+    outcome: DisciplineOutcomeOut
+
+
+class PerformanceStatsOut(BaseModel):
+    trades: int
+    wins: int
+    losses: int
+    breakeven: int
+    win_rate_pct: Optional[float] = None
+    total_pnl: float  # net of charges and slippage where the account applied them
+    gross_pnl: float  # before those costs
+    total_charges: float
+    total_slippage: float
+    avg_pnl: Optional[float] = None
+    avg_win: Optional[float] = None
+    avg_loss: Optional[float] = None
+    profit_factor: Optional[float] = None  # None when there are no losses
+    avg_r: Optional[float] = None
+    best_trade: Optional[float] = None
+    worst_trade: Optional[float] = None
+    max_consecutive_losses: int
+
+
+class PerformanceOut(BaseModel):
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    scope: Literal["epoch", "all"]
+    # The IST date the counted trades start from (the latest reset marker) when scope='epoch'.
+    since: Optional[date] = None
+    performance: Optional[PerformanceStatsOut] = None
+    discipline: DisciplineOut
+    equity: Optional[EquityStatsOut] = None
+
+
+class PendingOrderCreate(BaseModel):
+    """POST /pending-orders - arm a limit order that the SERVER watches, so it works
+    with the tab closed and on a phone. `trigger_price` is a level of the
+    UNDERLYING's own price (for an option order too: legs are resolved at the
+    premium that is live when it fires). The starting side is taken from the live
+    price at arm time, never from the client. Paper accounts only."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str = Field(min_length=1, max_length=64)  # the logical underlying, e.g. NIFTY
+    action: Literal["BUY", "SELL"]
+    strategy: Literal["future", "naked", "spread"] = "future"
+    moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"  # options only
+    trigger_price: float = Field(gt=0)
+    stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    target_price: Optional[float] = Field(default=None, gt=0)
+    quantity: Optional[float] = Field(default=None, gt=0)  # None = risk-size at fill
+    trend_followed: bool = False
+    risk_managed: bool = False
+    setup_tag: Optional[str] = Field(default=None, max_length=64)
+    confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    entry_interval: Optional[str] = Field(default=None, max_length=8)
+    # Minutes until it expires unrecognised; None = the server default (24h). Capped by config.
+    expires_in_minutes: Optional[int] = Field(default=None, ge=1)
+
+
+class PendingOrderOut(BaseModel):
+    id: str
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str
+    action: Literal["BUY", "SELL"]
+    strategy: Literal["future", "naked", "spread"]
+    moneyness: Optional[str] = None
+    trigger_price: float
+    started_above: bool
+    stop_loss_price: Optional[float] = None
+    target_price: Optional[float] = None
+    quantity: Optional[float] = None
+    trend_followed: bool
+    risk_managed: bool
+    setup_tag: Optional[str] = None
+    confidence: Optional[int] = None
+    entry_interval: Optional[str] = None
+    status: Literal["pending", "triggered", "rejected", "failed", "cancelled", "expired"]
+    status_reason: Optional[str] = None
+    expires_at: datetime
+    created_at: Optional[datetime] = None
+    triggered_at: Optional[datetime] = None
+    last_price: Optional[float] = None
+    last_checked_at: Optional[datetime] = None
+    position_id: Optional[str] = None
+    option_group_id: Optional[str] = None
+
+
+class RequirementOut(BaseModel):
+    key: str
+    label: str
+    required: str
+    actual: str
+    met: bool
+
+
+class LiveEligibilityOut(BaseModel):
+    """Progress toward live trading for one segment: each track-record
+    requirement with the required and actual value. `enforced` says whether
+    turning live on is actually blocked by it (REQUIRE_PAPER_TRACK_RECORD);
+    when false this is informational."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    enforced: bool
+    eligible: bool
+    requirements: list[RequirementOut]
+
+
+class EquityHistoryOut(BaseModel):
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    days: int
+    # Sparse (a day with nothing open and no balance change has no row): consumers forward-fill.
+    points: list[EquityPointOut]
+    stats: Optional[EquityStatsOut] = None
+
+
 class AccountOut(BaseModel):
     """One row per segment (NSE/MCX/CRYPTO) - see execution.accounts.
     current_balance moves only on realized P&L (square-off/stop-loss/
@@ -275,6 +439,16 @@ class AccountUpdate(BaseModel):
     live_trading_enabled: Optional[bool] = None
     max_order_value: Optional[float] = Field(default=None, gt=0)
     max_daily_loss: Optional[float] = Field(default=None, gt=0)
+    # Must be true on the request that turns live trading ON (recorded with a
+    # timestamp - see app/domain/live_gate.py). Ignored otherwise.
+    live_trading_consent: Optional[bool] = None
+    # Personal risk guard: refuse a spot/future manual order with no stop-loss.
+    # A plain bool toggle (None = leave unchanged).
+    require_stop_loss: Optional[bool] = None
+    # Net Indian charges (brokerage, STT, ...) into NSE/MCX P&L on close. None = leave unchanged.
+    apply_charges: Optional[bool] = None
+    # Slippage in basis points on market-type fills, netted on close. 0 = off. None = leave unchanged.
+    slippage_bps: Optional[float] = Field(default=None, ge=0, le=500)
     # NULL is meaningful here too (clears a previously-set default, rather
     # than "leave unchanged") - same model_fields_set-distinguished pattern
     # square_off_time above already uses.
@@ -343,6 +517,9 @@ class StrategyAccountUpdate(BaseModel):
     live_trading_enabled: Optional[bool] = None
     max_order_value: Optional[float] = Field(default=None, gt=0)
     max_daily_loss: Optional[float] = Field(default=None, gt=0)
+    # Must be true on the request that turns live trading ON (recorded with a
+    # timestamp - see app/domain/live_gate.py). Ignored otherwise.
+    live_trading_consent: Optional[bool] = None
 
 
 class ChecklistItemOut(BaseModel):
@@ -527,6 +704,10 @@ class ManualPositionCreate(BaseModel):
     # editable later via PUT /positions/{id}/tags. Feed Trading Performance.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # Free-text reason captured at order time, alongside setup_tag - written straight to
+    # positions.notes (the same column PUT /positions/{id}/notes edits later), so a person can say
+    # WHY beyond picking a category. Optional; None leaves notes unset.
+    notes: Optional[str] = Field(default=None, max_length=2000)
     # This fill came from the Intraday SuperTrend auto-trader (AutoTradePanel),
     # not a discretionary decision - open_manual_position records it on the
     # row so the Discipline score can exclude it. None/False from every
@@ -625,16 +806,35 @@ class ManualOptionPositionCreate(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str  # the logical underlying (e.g. "NIFTY", "GOLDM", "BTCUSD"), not a leg's own symbol
     action: Literal["BUY", "SELL"]
-    option_position_style: Literal["spread", "naked"] = "spread"
+    # 'spread' = a debit spread (bull_call_spread/bear_put_spread - pays a
+    # net premium). 'credit_spread' = the net-credit counterpart
+    # (bull_put_spread/bear_call_spread - receives a net premium, sized by
+    # max loss instead of cost - see option_position_manager's
+    # _spread_sizing_basis).
+    option_position_style: Literal["spread", "naked", "credit_spread"] = "spread"
     option_strike_moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"
-    # Optional override - omitted (the normal case, no Expiry dropdown in
-    # the frontend anymore as of 2026-08-14) means open_manual_option_group
-    # picks the nearest currently-tradeable expiry itself, matching the
-    # pre-2026-08-14 Strategy-mediated path's own always-nearest behavior.
-    # A caller-supplied value is still validated against a live
-    # GET /options/expiries call in open_manual_option_group, not just
+    # Optional override - omitted means open_manual_option_group picks the nearest
+    # currently-tradeable expiry itself, matching the pre-2026-08-14 Strategy-mediated path's own
+    # always-nearest behavior (no Expiry dropdown in the frontend at all until 2026-09-30, when
+    # the Scan page's leg table got one back - other callers, e.g. TradePage's own option ticket,
+    # still omit it and get the silent default). A caller-supplied value is still validated
+    # against a live GET /options/expiries call in open_manual_option_group, not just
     # format-checked here.
     expiry: Optional[str] = None
+    # Overrides the short/protection leg's own distance (in strikes) from
+    # the primary leg - omitted (the normal case) means
+    # option_templates.py's own SPREAD_WIDTH_STRIKES default. Ignored for
+    # option_position_style='naked' (no second leg to place). Superseded
+    # entirely by second_strike below when that's also given.
+    spread_width: Optional[int] = Field(default=None, ge=1)
+    # An explicit strike per leg (the Scan page's leg table, once it has the real chain) - each
+    # overrides option_strike_moneyness/spread_width entirely for its own leg. second_strike is
+    # ignored for option_position_style='naked' (no second leg). Rejected (422, via
+    # OptionLegPreviewError's route mapping / _reject_manual_group's own reason text) if the named
+    # strike isn't actually in the resolved chain - see option_templates.py's
+    # _resolve_primary_index/_resolve_second_index.
+    primary_strike: Optional[float] = Field(default=None, gt=0)
+    second_strike: Optional[float] = Field(default=None, gt=0)
     sl_scope: Literal["combined", "individual"] = "combined"
     # Bypasses auto-sizing entirely when given - same precedence pattern
     # as Strategy.fixed_lots in open_option_group.
@@ -663,6 +863,8 @@ class ManualOptionPositionCreate(BaseModel):
     # Structured trade journal set at order time - see ManualPositionCreate.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # See ManualPositionCreate.notes's own comment - written to option_position_groups.notes.
+    notes: Optional[str] = Field(default=None, max_length=2000)
     # See ManualPositionCreate.auto_traded's own comment.
     auto_traded: bool = False
     # See ManualPositionCreate.entry_interval's own comment.
@@ -709,6 +911,40 @@ class StopLossUpdate(BaseModel):
         return self
 
 
+class TargetUpdate(BaseModel):
+    """PUT /positions/{id}/target - moves an already-open spot/futures
+    position's take-profit, the sibling of StopLossUpdate. Same side rule
+    ManualPositionCreate applies at order time, checked against the
+    position's own entry price in update_target (the model does not know
+    it). A real spot/futures price is always positive, hence gt=0 - NOT
+    reused for the option-group combined target (see CombinedTargetUpdate
+    below), whose price can legitimately be negative."""
+
+    target_price: float = Field(gt=0)
+
+
+class CombinedStopLossUpdate(BaseModel):
+    """PUT /option-groups/{id}/stop-loss's own shape - deliberately NOT StopLossUpdate (shared
+    with spot/future positions, where a stop price must be positive - a real market price never
+    isn't). A COMBINED option premium can legitimately be negative: a credit spread's net_debit
+    (its own entry combined price) is negative by construction (see option_position_manager's
+    _spread_sizing_basis), and a stop/target computed as a fraction of its own max loss/profit
+    stays in that same negative range - see ScanOptionBias.tsx's stopPct/targetPct. No
+    stop_loss_method/trailing concept exists for options (open_option_group's own
+    'percent'-only stop-loss, set once at open) - just the one flat field."""
+
+    stop_loss_price: float
+
+
+class CombinedTargetUpdate(BaseModel):
+    """PUT /option-groups/{id}/target's own shape - CombinedStopLossUpdate's identical reasoning
+    for why this is its own model rather than reusing TargetUpdate's gt=0. An option group's
+    SPOT-price target is the separate SpotTargetUpdate; this is the COMBINED-premium one,
+    sl_scope='combined' groups only - see update_group_target."""
+
+    target_price: float
+
+
 class SquareOffTimeUpdate(BaseModel):
     """PUT /positions/{id}/square-off-time and PUT /option-groups/{id}/
     square-off-time - edits an already-open position's/group's own
@@ -743,6 +979,28 @@ class SpotTargetUpdate(BaseModel):
     option order."""
 
     spot_target_price: float = Field(gt=0)
+
+
+class OptionLegPreviewLeg(BaseModel):
+    action: Literal["BUY", "SELL"]
+    option_type: Literal["CE", "PE"]
+    strike: float
+    expiry: str
+    # Live per-leg premium, best-effort (see preview_option_legs's own docstring) - None when
+    # the caller didn't ask for quotes, or the quote lookup itself failed.
+    premium: Optional[float] = None
+
+
+class OptionLegPreview(BaseModel):
+    """GET /option-groups/preview-legs - the legs a real POST /option-groups/manual with the
+    same params would use, without placing anything. Backs the Scan page's bias-driven
+    option-strategy panel (see option_position_manager.preview_option_legs's own docstring).
+    security_id (present on the underlying leg dicts) is deliberately not carried through -
+    this is a display-only preview, not something a caller re-submits verbatim."""
+
+    strategy_type: str
+    expiry: str
+    legs: list[OptionLegPreviewLeg]
 
 
 class NotesUpdate(BaseModel):

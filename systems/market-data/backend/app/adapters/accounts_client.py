@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 # doesn't each pay their own round trip to accounts.
 _CACHE_TTL_SECONDS = 300.0
 
+# "This user has no keys" is cached far more briefly than "here are their keys". Under
+# REQUIRE_OWN_DHAN_KEYS a user with no keys is refused (own_dhan_keys_required); if that
+# answer stuck for the full 5 minutes, someone who had JUST saved their keys would keep
+# being told to add them and it would look broken. 10s still absorbs a burst of calls.
+_NEGATIVE_CACHE_TTL_SECONDS = 10.0
+
 _cache_lock = threading.Lock()
 # user_id -> (DhanCredentials or None, cached_at) - None is cached too
 # (a user with no Dhan credentials saved yet), so a request from them
@@ -40,7 +46,11 @@ _openrouter_cache_lock = threading.Lock()
 _openrouter_cache: dict[UUID, tuple[Optional[str], float]] = {}
 
 
-def get_user_dhan_credentials(user_id: UUID) -> Optional[DhanCredentials]:
+class CredentialLookupFailed(Exception):
+    """accounts could not be reached, so we do NOT know whether the user has keys."""
+
+
+def get_user_dhan_credentials(user_id: UUID, raise_on_failure: bool = False) -> Optional[DhanCredentials]:
     """None if accounts has nothing stored for this user, or the internal
     call fails for any reason - callers already treat a missing
     DhanCredentials as "fall back to the platform-default credential",
@@ -49,7 +59,7 @@ def get_user_dhan_credentials(user_id: UUID) -> Optional[DhanCredentials]:
     reaching accounts must never break quote lookups outright."""
     with _cache_lock:
         cached = _cache.get(user_id)
-    if cached is not None and (time.monotonic() - cached[1]) < _CACHE_TTL_SECONDS:
+    if cached is not None and (time.monotonic() - cached[1]) < (_CACHE_TTL_SECONDS if cached[0] is not None else _NEGATIVE_CACHE_TTL_SECONDS):
         return cached[0]
 
     try:
@@ -60,7 +70,11 @@ def get_user_dhan_credentials(user_id: UUID) -> Optional[DhanCredentials]:
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as exc:
+        if raise_on_failure:
+            # The own-keys policy (app/data_access.py) must not mistake an accounts
+            # outage for "this user has no keys" - and must not fall back to the platform.
+            raise CredentialLookupFailed(str(exc)) from exc
         logger.warning("could not fetch Dhan credentials for user %s from accounts - falling back to platform default", user_id)
         return None
 

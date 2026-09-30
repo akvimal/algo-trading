@@ -4,9 +4,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.adapters.accounts_client import get_user_dhan_credentials
+from app.data_access import data_credentials
 from app.api.routes.candles import fetch_candle_history_cached
-from app.auth import get_optional_user_id
+from app.auth import Caller, get_caller
 from app.domain.models import MarketRegime
 from app.domain.regime import assess_regime
 from app.providers.router import get_provider
@@ -21,7 +21,7 @@ def get_regime(
     interval: str,
     from_: Optional[date] = Query(default=None, alias="from"),
     to: Optional[date] = None,
-    user_id: Optional[UUID] = Depends(get_optional_user_id),
+    caller: Caller = Depends(get_caller),
 ):
     """Coarse trend-vs-chop read for one candle series - the Live Chart's
     regime badge. Wilder ADX (strength) + the BOS/CHoCH structure trend
@@ -37,7 +37,7 @@ def get_regime(
     from_date = from_ or date.fromordinal(to_date.toordinal() - 14)
 
     try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
+        credentials = data_credentials(caller, exchange)
         candles = fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -62,3 +62,36 @@ CREATE TABLE IF NOT EXISTS accounts.broker_credentials (
 -- same "never break, just skip the AI step" convention news.py/
 -- screener_fetch.py already use for a missing key).
 ALTER TABLE accounts.broker_credentials ADD COLUMN IF NOT EXISTS openrouter_api_key_encrypted TEXT;
+
+-- Risk acknowledgement recorded at signup (2026-09-25): when, and the wording version.
+-- NULL for accounts created before this existed. See migrations/019-risk-acknowledgement.sql.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS risk_acknowledged_at TIMESTAMPTZ;
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS risk_acknowledged_version TEXT;
+
+-- First-run onboarding state (2026-09-26): chosen experience and when the first-run flow was
+-- finished or skipped. See migrations/024-onboarding.sql (which also backfills existing users).
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS experience TEXT NOT NULL DEFAULT 'guided';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_experience_check') THEN
+        ALTER TABLE accounts.users ADD CONSTRAINT users_experience_check CHECK (experience IN ('guided', 'pro'));
+    END IF;
+END $$;
+
+-- Markets chosen at first-run setup (2026-09-26); all three until the person picks. See migrations/025-user-markets.sql.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS markets TEXT[] NOT NULL DEFAULT ARRAY['NSE', 'MCX', 'CRYPTO'];
+
+-- What the web frontend's manual trade ticket pre-selects on a fresh instrument (2026-09-29). See
+-- migrations/028-default-trade-instrument.sql and UserOut's own comment in app/domain/models.py.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS default_instrument TEXT NOT NULL DEFAULT 'future';
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS default_option_strategy TEXT NOT NULL DEFAULT 'naked';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_default_instrument_check') THEN
+        ALTER TABLE accounts.users ADD CONSTRAINT users_default_instrument_check CHECK (default_instrument IN ('future', 'option'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_default_option_strategy_check') THEN
+        ALTER TABLE accounts.users ADD CONSTRAINT users_default_option_strategy_check CHECK (default_option_strategy IN ('naked', 'spread'));
+    END IF;
+END $$;

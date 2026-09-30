@@ -20,6 +20,7 @@ from app.domain.option_position_manager import (
     _evaluate_option_group_exits,
     _evaluate_option_group_square_off_due,
     _open_delta_option_fee,
+    _spread_sizing_basis,
     compute_group_unrealized_pnl,
 )
 from app.domain.position_manager import _resolve_capital_account, _resolve_signal_conflicts
@@ -577,6 +578,42 @@ def test_compute_group_unrealized_pnl_naked_group_has_no_short_leg_entry():
     assert set(leg_mtm) == {"long"}
 
 
+def test_compute_group_unrealized_pnl_credit_spread_profits_as_both_legs_decay():
+    # bull_put_spread/bear_call_spread (option_position_style='credit_spread'):
+    # the BUY leg is the cheap protection leg, the SELL leg is the expensive
+    # credit leg - long_entry < short_entry, so net_debit is negative (a net
+    # credit). No special-casing needed - see option_position_manager's
+    # module docstring and _spread_sizing_basis: profit is still
+    # (combined_price - net_debit) * quantity.
+    group = _group(net_debit=-8.0)  # entered for a net credit of 8 (10 received - 2 paid)
+    long_leg, short_leg = _legs(net_debit_entry=(2.0, 10.0))  # BUY protection at 2, SELL credit leg at 10
+    legs = {"group-1": {"BUY": long_leg, "SELL": short_leg}}
+
+    # Both legs have decayed toward 0 (the thesis played out) - combined_price
+    # rises from -8 toward -3, i.e. profit, exactly like a debit spread's
+    # combined_price rising from a positive net_debit.
+    result = compute_group_unrealized_pnl([group], legs, lambda ex, syms: {"NIFTY-CE": 0.5, "NIFTY-CE-OTM": 3.5})
+
+    mtm = result["group-1"]
+    assert mtm["combined_price"] == -3.0  # 0.5 - 3.5
+    assert mtm["unrealized_pnl"] == (-3.0 - -8.0) * 75  # +5 per unit - the credit spread is winning
+    assert mtm["unrealized_pnl"] > 0
+
+
+def test_close_group_at_cmp_credit_spread_computes_combined_pnl():
+    group = _group(net_debit=-8.0, quantity=75)
+    long_leg, short_leg = _legs(net_debit_entry=(2.0, 10.0))
+    account = FakeAccount(segment="NSE", starting_balance=100_000.0, current_balance=100_000.0)
+
+    closed = _close_group_at_cmp(
+        group, long_leg, short_leg, lambda ex, syms: {"NIFTY-CE": 0.5, "NIFTY-CE-OTM": 3.5}, account, "manual_close", None
+    )
+
+    assert closed is True
+    assert group.pnl == (-3.0 - -8.0) * 75
+    assert account.current_balance == 100_000.0 + group.pnl
+
+
 # --- _resolve_signal_conflicts reused against option groups ---------------------------------------
 
 
@@ -775,3 +812,55 @@ def test_close_group_at_cmp_unaffected_for_non_crypto_group():
 
     assert group.close_fee is None
     assert group.pnl == pytest.approx((45.0 - 15.0 - 20.0) * 75)
+
+
+# --- _spread_sizing_basis --------------------------------------------------------------------------
+
+
+def test_spread_sizing_basis_debit_spread_sizes_against_its_own_cost():
+    long_leg = {"strike": 24000.0}
+    short_leg = {"strike": 24100.0}
+    assert _spread_sizing_basis(20.0, long_leg, short_leg) == 20.0  # net_debit unchanged
+
+
+def test_spread_sizing_basis_naked_sizes_against_the_single_legs_premium():
+    long_leg = {"strike": 24000.0}
+    assert _spread_sizing_basis(30.0, long_leg, None) == 30.0
+
+
+def test_spread_sizing_basis_credit_spread_sizes_against_max_loss():
+    # bull_put_spread: SELL 24000 PE for 10, BUY 23900 PE (protection) for 2 -
+    # net_debit = 2 - 10 = -8 (a credit of 8). Strike width = 100, so max
+    # loss = 100 - 8 = 92, not the raw (negative, meaningless-as-a-cost) -8.
+    long_leg = {"strike": 23900.0}
+    short_leg = {"strike": 24000.0}
+    assert _spread_sizing_basis(-8.0, long_leg, short_leg) == 92.0
+
+
+def test_spread_sizing_basis_credit_spread_with_wider_protection_gap():
+    # bear_call_spread with SPREAD_WIDTH_STRIKES further out - width 200,
+    # credit of 15 -> max loss 185.
+    long_leg = {"strike": 24200.0}
+    short_leg = {"strike": 24000.0}
+    assert _spread_sizing_basis(-15.0, long_leg, short_leg) == 185.0
+
+
+def test_spread_sizing_basis_none_when_credit_exceeds_strike_width():
+    # A stale/crossed quote making the credit received bigger than the
+    # width itself - not a real defined-risk spread, refuse to size it.
+    long_leg = {"strike": 23990.0}
+    short_leg = {"strike": 24000.0}  # width 10
+    assert _spread_sizing_basis(-15.0, long_leg, short_leg) is None  # credit 15 > width 10
+
+
+def test_spread_sizing_basis_none_when_credit_exactly_equals_strike_width():
+    long_leg = {"strike": 23900.0}
+    short_leg = {"strike": 24000.0}  # width 100
+    assert _spread_sizing_basis(-100.0, long_leg, short_leg) is None  # max_loss would be exactly 0
+
+
+def test_spread_sizing_basis_none_for_a_negative_naked_with_no_short_leg():
+    # Shouldn't happen by construction (only a credit template ever
+    # produces net_debit < 0, and those always have a short leg) - defensive
+    # only, so a caller gets a clean rejection instead of a crash.
+    assert _spread_sizing_basis(-5.0, {"strike": 24000.0}, None) is None

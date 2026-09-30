@@ -146,6 +146,7 @@ export default function AccountsPage() {
   const [myDraftRisk, setMyDraftRisk] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftRR, setMyDraftRR] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftEnforceLots, setMyDraftEnforceLots] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
+  const [myDraftRequireSL, setMyDraftRequireSL] = useState<Record<Segment, boolean>>({ NSE: false, MCX: false, CRYPTO: false });
   const [myDraftCapital, setMyDraftCapital] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftStartingBalance, setMyDraftStartingBalance] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
   const [myDraftLeverage, setMyDraftLeverage] = useState<Record<Segment, string>>({ NSE: "", MCX: "", CRYPTO: "" });
@@ -316,6 +317,11 @@ export default function AccountsPage() {
         for (const a of data) next[a.segment] = a.enforce_risk_based_lots;
         return next;
       });
+      setMyDraftRequireSL((prev) => {
+        const next = { ...prev };
+        for (const a of data) next[a.segment] = a.require_stop_loss;
+        return next;
+      });
       setMyDraftCapital((prev) => {
         const next = { ...prev };
         for (const a of data) next[a.segment] = String(a.capital_per_trade);
@@ -454,8 +460,9 @@ export default function AccountsPage() {
       const confirmed = window.confirm(
         `Turn ON real order placement for your ${segment} account?\n\n` +
           "Every order you place here from now on will be a REAL order sent to Dhan using your own saved " +
-          "credentials, not a paper trade. Make sure your Dhan credentials are saved (Credentials section " +
-          "below) and this is really what you want before confirming.",
+          "credentials, not a paper trade. Turning this on requires a max order value, a max daily loss and " +
+          "saved Dhan credentials (Credentials section below) - the server refuses otherwise. Confirming " +
+          "records your acknowledgement of this risk, with a timestamp.",
       );
       if (!confirmed) return;
     }
@@ -467,6 +474,7 @@ export default function AccountsPage() {
         risk_per_trade_pct,
         min_reward_risk_ratio,
         enforce_risk_based_lots: myDraftEnforceLots[segment],
+        require_stop_loss: myDraftRequireSL[segment],
         capital_per_trade,
         ...(leverage !== undefined ? { leverage } : {}),
         ...(leverageBufferPct !== undefined ? { leverage_buffer_pct: leverageBufferPct } : {}),
@@ -476,6 +484,8 @@ export default function AccountsPage() {
           : {}),
         default_interval: (myDraftDefaultInterval[segment] || null) as Account["default_interval"],
         default_higher_interval: (myDraftDefaultHigherInterval[segment] || null) as Account["default_higher_interval"],
+        // Only sent on the off->on transition, after the confirmation above.
+        ...(turningLiveOn ? { live_trading_consent: true } : {}),
       });
       await refreshMyAccounts();
       setMyJustSavedSegment(segment);
@@ -499,6 +509,7 @@ export default function AccountsPage() {
     setMyDraftRisk((prev) => ({ ...prev, [segment]: String(account.risk_per_trade_pct) }));
     setMyDraftRR((prev) => ({ ...prev, [segment]: String(account.min_reward_risk_ratio) }));
     setMyDraftEnforceLots((prev) => ({ ...prev, [segment]: account.enforce_risk_based_lots }));
+    setMyDraftRequireSL((prev) => ({ ...prev, [segment]: account.require_stop_loss }));
     setMyDraftCapital((prev) => ({ ...prev, [segment]: String(account.capital_per_trade) }));
     setMyDraftStartingBalance((prev) => ({ ...prev, [segment]: String(account.starting_balance) }));
     setMyDraftLeverage((prev) => ({ ...prev, [segment]: String(account.leverage) }));
@@ -806,6 +817,8 @@ export default function AccountsPage() {
         live_trading_enabled: draft.liveEnabled,
         max_order_value: draft.maxOrderValue === "" ? null : draft.maxOrderValue,
         max_daily_loss: draft.maxDailyLoss === "" ? null : draft.maxDailyLoss,
+        // Only sent on the off->on transition, after the confirmation above.
+        ...(turningLiveOn ? { live_trading_consent: true } : {}),
       });
       setStrategyAccounts((prev) => prev.map((a) => (a.strategy_id === strategyId ? updated : a)));
       setStrategyAccountMessage(`${strategyName(strategyId)}'s dedicated account saved.`);
@@ -1255,6 +1268,18 @@ export default function AccountsPage() {
                           onChange={(e) => setMyDraftEnforceLots((prev) => ({ ...prev, [seg]: e.target.checked }))}
                         />
                         Enforce risk-based Lot
+                      </label>
+                      <label
+                        className="checkbox-label tiny manual-risk-card-checkbox"
+                        title="Refuses a spot/future manual order that has no stop-loss (price or method). Option orders take their stop after entry, so they are not affected. On by default for new accounts."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={myDraftRequireSL[seg]}
+                          disabled={!account}
+                          onChange={(e) => setMyDraftRequireSL((prev) => ({ ...prev, [seg]: e.target.checked }))}
+                        />
+                        Require a stop-loss
                       </label>
                       {seg !== "CRYPTO" && (
                         <div className="manual-risk-card-live">

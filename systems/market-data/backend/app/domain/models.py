@@ -725,6 +725,56 @@ class PriceAlertOut(BaseModel):
     trigger_count: int
 
 
+class CustomScreenCreate(BaseModel):
+    """POST/PUT for a saved custom equity screen - see app/domain/
+    screener_expr.py for the expression grammar. Not validated for actually
+    PARSING here (a Field regex can't check that) - the route parses it
+    itself and returns a 422 with the parser's own plain-language reason on
+    anything that does not. is_fno/index_membership/min_price/max_price
+    omitted (None) each mean "no filter on that dimension"."""
+
+    label: str = Field(min_length=1, max_length=80)
+    expression: str = Field(min_length=1, max_length=500)
+    is_fno: Optional[bool] = None
+    index_membership: Optional[str] = Field(default=None, max_length=40)
+    min_price: Optional[float] = Field(default=None, gt=0)
+    max_price: Optional[float] = Field(default=None, gt=0)
+
+
+class CustomScreenOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    label: str
+    expression: str
+    is_fno: Optional[bool] = None
+    index_membership: Optional[str] = None
+    min_price: Optional[float] = None
+    max_price: Optional[float] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CustomScreenMatchOut(BaseModel):
+    symbol: str
+    exchange: str
+    close: float
+
+
+class CustomScreenRunResult(BaseModel):
+    """GET /custom-screens/{id}/run and POST /custom-screens/preview both
+    return this - snapshot_date is the EOD date the universe/close prices
+    were read as of (None if equity_screener_snapshot has no rows yet -
+    the EOD job hasn't run), candidates is how many stocks passed the
+    base-universe filters before the expression was evaluated against
+    them (for "3 of 214 F&O stocks matched" type framing), matches is
+    who actually matched the expression."""
+
+    snapshot_date: Optional[date] = None
+    candidates: int
+    matches: list[CustomScreenMatchOut]
+
+
 class OiEodSnapshotHistoryPoint(BaseModel):
     """One earlier day's totals for the sparkline on GET /oi-buildup - a
     trimmed view of market_data.oi_eod_snapshot (no PCR/buildup/changes,

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alerts</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.dn{color:var(--dn)}.mu{color:var(--mu)}
+.card{background:var(--s1);border:1px solid var(--line);border-radius:12px}
+.h{font-size:13px;font-weight:600;letter-spacing:.01em}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.up{background:#0f2a24;border-color:#1d4a3e}.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}.chip.ac{background:#16304f;border-color:#3d6ba3;color:#cfe3ff}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{height:34px;padding:0 14px;border-radius:8px;border:1px solid var(--line);background:var(--s2);font-size:13px;font-weight:500}
+.btn.pri{background:var(--ac);border-color:var(--ac);color:#08111f;font-weight:600}
+.seg{display:inline-flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{height:28px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--mu);font-size:12px;font-weight:500}
+.seg button.on{background:#26344a;color:#fff}
+.tog{width:38px;height:22px;border-radius:11px;background:#26344a;position:relative;flex-shrink:0;border:0;padding:0}
+.tog.on{background:#3d6ba3}
+.tog i{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#e9eef5}
+.tog.on i{left:19px}
+input{font:inherit;width:100%;height:38px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--tx);padding:0 10px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: var(--bg)">
+  <dc-import name="Sidebar" active="alerts" mode="pro" hint-size="232px,900px"></dc-import>
+
+  <main style="flex-grow: 1; min-width: 0; padding: 20px 28px 24px; display: flex; flex-direction: column; gap: 16px">
+    <header style="display: flex; align-items: center; gap: 20px; height: 48px">
+      <div>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; line-height: 1.2">Alerts</h1>
+        <div class="lbl">Price levels, zones drawn on the chart, and sentiment changes</div>
+      </div>
+      <div style="flex-grow: 1"></div>
+      <span class="chip warn">Illustrative data</span>
+    </header>
+
+    <div style="display: flex; gap: 16px; flex-grow: 1; min-height: 0">
+      <div style="flex: 1.5; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+        <section class="card" style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <div class="h">New alert</div>
+            <div class="seg"><button class="{{ui.pCls}}" onClick="{{ui.setPrice}}">Price</button><button class="{{ui.zCls}}" onClick="{{ui.setZone}}">Zone</button><button class="{{ui.sCls}}" onClick="{{ui.setSent}}">Sentiment</button></div>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: flex-end">
+            <label style="flex: 0 0 150px"><div class="lbl" style="margin-bottom: 3px">Symbol</div><input value="NIFTY"></label>
+            <label style="flex: 1"><div class="lbl" style="margin-bottom: 3px">{{ui.condLabel}}</div><input class="num" value="{{ui.condValue}}"></label>
+            <div style="display: flex; gap: 6px; align-items: center; height: 38px"><span class="chip ac">Bell</span><span class="chip ac">Telegram</span></div>
+            <button class="btn pri" onClick="{{ui.create}}">Create alert</button>
+          </div>
+        </section>
+
+        <section class="card" style="flex-grow: 1; min-height: 0; overflow: hidden; padding: 4px 16px">
+          <sc-for list="{{ui.rows}}" as="a" hint-placeholder-count="6">
+            <div style="display: flex; align-items: center; gap: 12px; height: 56px; border-top: 1px solid {{a.line}}">
+              <span class="chip" style="width: 78px; justify-content: center">{{a.type}}</span>
+              <div style="flex-grow: 1; min-width: 0">
+                <div style="font-size: 14px"><b>{{a.sym}}</b> {{a.cond}}</div>
+                <div class="lbl" style="margin-top: 2px">{{a.channels}}</div>
+              </div>
+              <span class="chip {{a.stCls}}">{{a.status}}</span>
+              <button class="{{a.togCls}}" onClick="{{a.flip}}" aria-label="Turn alert on or off"><i></i></button>
+            </div>
+          </sc-for>
+        </section>
+      </div>
+
+      <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+        <section class="card" style="padding: 14px 16px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <div class="h">Telegram</div><span class="chip up">Connected</span>
+          </div>
+          <div class="lbl" style="margin-top: 6px; line-height: 1.5">Alerts also arrive in your Telegram chat, so you see them when the app is closed.</div>
+          <div style="display: flex; align-items: center; gap: 10px; margin-top: 12px">
+            <button class="btn" onClick="{{ui.sendTest}}">Send test message</button>
+            <div class="lbl">{{ui.testNote}}</div>
+          </div>
+        </section>
+
+        <section class="card" style="flex-grow: 1; min-height: 0; padding: 14px 16px; overflow: hidden">
+          <div class="h">Fired today</div>
+          <sc-for list="{{fired}}" as="f" hint-placeholder-count="4">
+            <div style="display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); margin-top: 8px">
+              <div class="lbl num" style="width: 42px; padding-top: 1px">{{f.time}}</div>
+              <div style="font-size: 13px; line-height: 1.4">{{f.text}}</div>
+            </div>
+          </sc-for>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = Object.assign({ kind: 'price', off: {}, added: false, tested: false }, this.state || {});
+    const base = [
+      { type: 'Price', sym: 'NIFTY', cond: 'crosses above 24,900', ch: 'Bell and Telegram', fired: false },
+      { type: 'Price', sym: 'BTCUSD', cond: 'touches 98,500', ch: 'Bell', fired: true, at: '10:48' },
+      { type: 'Zone', sym: 'BANKNIFTY', cond: 'enters the 15m demand block 53,095 to 53,180', ch: 'Bell and Telegram', fired: false },
+      { type: 'Sentiment', sym: 'NIFTY', cond: 'OI lean changes direction or strength', ch: 'Bell', fired: false },
+      { type: 'Price', sym: 'RELIANCE', cond: 'falls below 1,398 (your stop-loss)', ch: 'Telegram', fired: false },
+      { type: 'Zone', sym: 'NIFTY', cond: 'leaves the 24,800 to 25,000 range', ch: 'Bell', fired: false, startsOff: true }
+    ];
+    const all = st.added ? [{ type: 'Price', sym: 'NIFTY', cond: 'crosses above 25,000', ch: 'Bell and Telegram', fired: false }].concat(base) : base;
+    const rows = all.map((a, i) => {
+      const key = a.sym + a.cond;
+      const isOff = st.off[key] !== undefined ? st.off[key] : !!a.startsOff;
+      const status = a.fired ? 'Fired ' + a.at : (isOff ? 'Paused' : 'Active');
+      return { type: a.type, sym: a.sym, cond: a.cond, channels: a.ch,
+        status: status, stCls: a.fired ? 'warn' : (isOff ? '' : 'up'),
+        togCls: 'tog' + (isOff ? '' : ' on'), line: i === 0 ? 'transparent' : '#2a3442',
+        flip: () => { const o = Object.assign({}, st.off); o[key] = !isOff; this.setState({ off: o }); } };
+    });
+    const kinds = { price: ['Price level', '24,900'], zone: ['Zone', 'Enters 53,095 to 53,180'], sent: ['Change to watch', 'Lean or strength changes'] };
+    const k = kinds[st.kind];
+    return {
+      ui: {
+        pCls: st.kind === 'price' ? 'on' : '', zCls: st.kind === 'zone' ? 'on' : '', sCls: st.kind === 'sent' ? 'on' : '',
+        setPrice: () => this.setState({ kind: 'price' }), setZone: () => this.setState({ kind: 'zone' }), setSent: () => this.setState({ kind: 'sent' }),
+        condLabel: k[0], condValue: k[1],
+        create: () => this.setState({ added: true }),
+        rows: rows,
+        sendTest: () => this.setState({ tested: true }),
+        testNote: st.tested ? 'Sent at 09:14. Check your Telegram.' : 'Last test: 09 Sep'
+      },
+      fired: [
+        { time: '11:31', text: 'NIFTY crossed above 24,880' },
+        { time: '11:12', text: 'NIFTY OI lean moved from Mild to Strong Bullish' },
+        { time: '10:48', text: 'BTCUSD touched 98,500' },
+        { time: '09:52', text: 'BANKNIFTY left the 53,400 to 53,600 zone' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

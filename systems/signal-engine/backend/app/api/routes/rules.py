@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
+from app.auth import Caller, get_caller
 from app.adapters.market_data.client import (
     get_candle_history,
     get_option_leg_history,
@@ -53,6 +54,7 @@ from app.domain.generation.rule import (
     validate_rule_watchlist_fields,
 )
 from app.domain.generation.rules import bars_needed, build_crossover_bias_fn, evaluate
+from app.ownership import apply_scope, get_owned_or_404, is_visible, owner_for_create
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -74,7 +76,7 @@ def _to_out(row: db_models.Rule) -> RuleOut:
     )
 
 
-def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict]) -> None:
+def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict], caller: Caller) -> None:
     """CrossoverRuleConfig rules must reference a real Indicator at
     create/update time - validate_rule_config only checks rule_config's
     shape, not that indicator_id resolves to anything (that needs a DB
@@ -96,7 +98,8 @@ def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict])
     if not isinstance(rule, CrossoverRuleConfig):
         return
     indicator = db.get(db_models.Indicator, uuid.UUID(rule.indicator_id))
-    if indicator is None:
+    # Someone else's indicator counts as nonexistent (see app/ownership.py).
+    if indicator is None or not is_visible(indicator, caller):
         raise HTTPException(status_code=422, detail=f"no indicator with id '{rule.indicator_id}'")
     if indicator.type not in CROSSOVER_INDICATOR_TYPES:
         raise HTTPException(
@@ -104,7 +107,7 @@ def _check_referenced_indicator_exists(db: Session, rule_config: Optional[dict])
         )
 
 
-def _check_regime_indicator_ids(db: Session, regime_indicator_ids: list[str]) -> None:
+def _check_regime_indicator_ids(db: Session, regime_indicator_ids: list[str], caller: Caller) -> None:
     """Each id in Rule.regime_indicator_ids must resolve to a real
     Indicator, AND that Indicator's own `type` must be one of the 5
     regime types (REGIME_INDICATOR_TYPES) - "rsi" is a crossover-only
@@ -118,7 +121,7 @@ def _check_regime_indicator_ids(db: Session, regime_indicator_ids: list[str]) ->
         except ValueError:
             raise HTTPException(status_code=422, detail=f"invalid indicator id '{raw_id}'")
         indicator = db.get(db_models.Indicator, parsed_id)
-        if indicator is None:
+        if indicator is None or not is_visible(indicator, caller):
             raise HTTPException(status_code=422, detail=f"no indicator with id '{raw_id}'")
         if indicator.type not in REGIME_INDICATOR_TYPES:
             raise HTTPException(
@@ -127,7 +130,7 @@ def _check_regime_indicator_ids(db: Session, regime_indicator_ids: list[str]) ->
             )
 
 
-def _check_watchlist_exists(db: Session, underlying_type: str, underlying: Optional[str]) -> None:
+def _check_watchlist_exists(db: Session, underlying_type: str, underlying: Optional[str], caller: Caller) -> None:
     """underlying_type='watchlist' must name a real signal_generation.watchlists
     row at create/update time - unlike 'universe' (no equivalent check
     today, fails silently at scan time instead), this is cheap to verify
@@ -137,7 +140,7 @@ def _check_watchlist_exists(db: Session, underlying_type: str, underlying: Optio
     existence is checked here where a DB session is available."""
     if underlying_type != "watchlist":
         return
-    exists = db.query(db_models.Watchlist).filter_by(name=underlying).first() is not None
+    exists = apply_scope(db.query(db_models.Watchlist), db_models.Watchlist, caller).filter_by(name=underlying).first() is not None
     if not exists:
         raise HTTPException(status_code=404, detail=f"no watchlist named '{underlying}'")
 
@@ -167,10 +170,10 @@ def _regime_warmup_bars(regime_indicators: RegimeIndicators) -> int:
 
 
 @router.post("/rules", response_model=RuleOut, status_code=201)
-def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
-    _check_referenced_indicator_exists(db, payload.rule_config)
-    _check_regime_indicator_ids(db, payload.regime_indicator_ids)
-    _check_watchlist_exists(db, payload.underlying_type, payload.underlying)
+def create_rule(payload: RuleCreate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    _check_referenced_indicator_exists(db, payload.rule_config, caller)
+    _check_regime_indicator_ids(db, payload.regime_indicator_ids, caller)
+    _check_watchlist_exists(db, payload.underlying_type, payload.underlying, caller)
     row = db_models.Rule(
         name=payload.name,
         description=payload.description,
@@ -180,6 +183,7 @@ def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
         interval=payload.interval,
         rule_config=payload.rule_config,
         regime_indicator_ids=payload.regime_indicator_ids,
+        created_by=owner_for_create(caller),
     )
     db.add(row)
     db.commit()
@@ -188,34 +192,30 @@ def create_rule(payload: RuleCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/rules", response_model=list[RuleOut])
-def list_rules(db: Session = Depends(get_db)):
-    rows = db.query(db_models.Rule).order_by(db_models.Rule.created_at.desc()).all()
+def list_rules(db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
+    rows = apply_scope(db.query(db_models.Rule), db_models.Rule, caller).order_by(db_models.Rule.created_at.desc()).all()
     return [_to_out(r) for r in rows]
 
 
 @router.get("/rules/{rule_id}", response_model=RuleOut)
-def get_rule(rule_id: str, db: Session = Depends(get_db)):
+def get_rule(rule_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     try:
         parsed_id = uuid.UUID(rule_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="rule not found")
 
-    row = db.get(db_models.Rule, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="rule not found")
+    row = get_owned_or_404(db, db_models.Rule, parsed_id, caller, "rule not found")
     return _to_out(row)
 
 
 @router.patch("/rules/{rule_id}", response_model=RuleOut)
-def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)):
+def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     try:
         parsed_id = uuid.UUID(rule_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="rule not found")
 
-    row = db.get(db_models.Rule, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="rule not found")
+    row = get_owned_or_404(db, db_models.Rule, parsed_id, caller, "rule not found")
 
     if payload.name is not None:
         row.name = payload.name
@@ -243,9 +243,9 @@ def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)
         validate_multi_condition_interval_consistency(row.interval, row.rule_config)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    _check_referenced_indicator_exists(db, row.rule_config)
-    _check_regime_indicator_ids(db, row.regime_indicator_ids)
-    _check_watchlist_exists(db, row.underlying_type, row.underlying)
+    _check_referenced_indicator_exists(db, row.rule_config, caller)
+    _check_regime_indicator_ids(db, row.regime_indicator_ids, caller)
+    _check_watchlist_exists(db, row.underlying_type, row.underlying, caller)
 
     db.commit()
     db.refresh(row)
@@ -253,7 +253,7 @@ def update_rule(rule_id: str, payload: RuleUpdate, db: Session = Depends(get_db)
 
 
 @router.delete("/rules/{rule_id}", status_code=204)
-def delete_rule(rule_id: str, db: Session = Depends(get_db)):
+def delete_rule(rule_id: str, db: Session = Depends(get_db), caller: Caller = Depends(get_caller)):
     """Guarded (unlike Strategy's own hard delete) - a Rule can back many
     Strategies (see app/domain/models.py), so silently orphaning them
     would leave live strategies referencing a nonexistent rule_id. Delete
@@ -264,9 +264,7 @@ def delete_rule(rule_id: str, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=404, detail="rule not found")
 
-    row = db.get(db_models.Rule, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="rule not found")
+    row = get_owned_or_404(db, db_models.Rule, parsed_id, caller, "rule not found")
 
     referencing = db.query(db_models.Strategy).filter_by(rule_id=parsed_id).count()
     if referencing:
@@ -282,15 +280,13 @@ def delete_rule(rule_id: str, db: Session = Depends(get_db)):
 # --- Backtest (relocated from app/api/routes/strategies.py's Strategy-scoped route) ---------
 
 
-def _load_rule_for_backtest(db: Session, rule_id: str) -> db_models.Rule:
+def _load_rule_for_backtest(db: Session, rule_id: str, caller: Caller) -> db_models.Rule:
     try:
         parsed_id = uuid.UUID(rule_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="rule not found")
 
-    row = db.get(db_models.Rule, parsed_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="rule not found")
+    row = get_owned_or_404(db, db_models.Rule, parsed_id, caller, "rule not found")
     return row
 
 
@@ -693,6 +689,7 @@ def backtest_rule(
     from_: date = Query(alias="from"),
     to: date = date.today(),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_caller),
 ):
     """Lightweight signal replay over [from_, to] - reuses the exact same
     rule the live engine tick runs (app/domain/rules.py), so a backtest
@@ -707,7 +704,7 @@ def backtest_rule(
     Rule.regime_indicator_ids (if any) are resolved once here and applied
     for real - see _backtest_one_symbol's own docstring for which rule
     types/instrument types that does and doesn't cover."""
-    rule_row = _load_rule_for_backtest(db, rule_id)
+    rule_row = _load_rule_for_backtest(db, rule_id, caller)
     rule = validate_rule_config(rule_row.rule_config)
     regime_indicators = _resolve_regime_indicators(db, rule_row)
 
@@ -727,6 +724,7 @@ def backtest_rule_grid(
     from_: date = Query(alias="from"),
     to: date = date.today(),
     db: Session = Depends(get_db),
+    caller: Caller = Depends(get_caller),
 ):
     """Grid search over the rule's referenced indicator's params - runs
     the same replay() as /backtest once per combination in the cartesian
@@ -744,7 +742,7 @@ def backtest_rule_grid(
     grid_search. The total combination count (indicator combos x
     stop-loss combos) is capped at MAX_GRID_COMBINATIONS same as either
     dimension alone."""
-    rule_row = _load_rule_for_backtest(db, rule_id)
+    rule_row = _load_rule_for_backtest(db, rule_id, caller)
     rule = validate_rule_config(rule_row.rule_config)
     if not isinstance(rule, CrossoverRuleConfig):
         raise HTTPException(status_code=422, detail="this operation only applies to crossover-rule rules")

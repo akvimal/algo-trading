@@ -6,7 +6,7 @@ update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func
+from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -85,6 +85,23 @@ class Account(Base):
     # (alongside LIVE_TRADING_KILL_SWITCH, app/config.py) that must both
     # pass before any real order reaches Dhan for this account.
     live_trading_enabled = Column(Boolean, nullable=False, default=False)
+    # When/what the person acknowledged when last turning live trading ON
+    # (see app/domain/live_gate.py's CONSENT_VERSION). Kept after it is
+    # turned off, as an audit trail; a fresh consent is demanded on every
+    # re-enable.
+    live_trading_consent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    live_trading_consent_version = Column(Text, nullable=True)
+    # Refuse a spot/future manual order that has no stop-loss (see
+    # position_manager.open_manual_position). Existing accounts were added
+    # with this OFF (migration 016); accounts created from now on default to
+    # ON. Option groups take their stop after entry, so they are not covered.
+    require_stop_loss = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Nets Indian brokerage/STT/exchange/SEBI/stamp/GST into P&L on close (NSE/MCX) - see
+    # app/domain/india_charges.py and migrations/021-india-charges.sql. Off for pre-existing accounts.
+    apply_charges = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Basis points of slippage netted into P&L on close for market-type fills - see app/domain/slippage.py
+    # and migrations/022-slippage.sql. 0 = off (pre-existing accounts); new accounts default to 5.
+    slippage_bps = Column(Numeric, nullable=False, default=5, server_default=text("5"))
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
     # A user's own declared execution timeframe for this segment
@@ -119,8 +136,18 @@ class StrategyAccount(Base):
     # 02-execution.sql's own comment on this column.
     live_trading_user_id = Column(UUID(as_uuid=True), nullable=True)
     live_trading_enabled = Column(Boolean, nullable=False, default=False)
+    # When/what the person acknowledged when last turning live trading ON
+    # (see app/domain/live_gate.py's CONSENT_VERSION). Kept after it is
+    # turned off, as an audit trail; a fresh consent is demanded on every
+    # re-enable.
+    live_trading_consent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    live_trading_consent_version = Column(Text, nullable=True)
     max_order_value = Column(Numeric, nullable=True)
     max_daily_loss = Column(Numeric, nullable=True)
+    # The strategy's creator (from signal-engine, at create time). NULL =
+    # platform/legacy: admins and the named live user only. See
+    # infra/postgres/migrations/018-strategy-account-owner.sql.
+    owner_user_id = Column(UUID(as_uuid=True), nullable=True)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
@@ -241,6 +268,9 @@ class OptionPositionGroup(Base):
     horizon = Column(Text, nullable=False)
     quantity = Column(Numeric)
     net_debit = Column(Numeric)
+    # The two legs' own strike difference, frozen at open - NULL for a naked (single-leg) group.
+    # See infra/postgres/init/02-execution.sql's own comment on this column.
+    strike_width = Column(Numeric)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
     sl_scope = Column(Text, nullable=False, default="combined")
@@ -265,6 +295,12 @@ class OptionPositionGroup(Base):
     # 02-execution.sql's own comment on this column group.
     open_fee = Column(Numeric)
     close_fee = Column(Numeric)
+    # Indian charges netted into pnl at close (NSE/MCX, when the account has apply_charges): the
+    # total and the breakdown + schedule version. NULL = none applied. See app/domain/india_charges.py.
+    charges = Column(Numeric)
+    charges_detail = Column(JSONB(none_as_null=True))
+    # Slippage netted into pnl at close (own currency); NULL = none applied. See app/domain/slippage.py.
+    slippage_cost = Column(Numeric)
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
     exit_reason = Column(Text)
@@ -383,6 +419,12 @@ class Position(Base):
     # infra/postgres/init/02-execution.sql's own comment on this column group.
     open_fee = Column(Numeric)
     close_fee = Column(Numeric)
+    # Indian charges netted into pnl at close (NSE/MCX, when the account has apply_charges): the
+    # total and the breakdown + schedule version. NULL = none applied. See app/domain/india_charges.py.
+    charges = Column(Numeric)
+    charges_detail = Column(JSONB(none_as_null=True))
+    # Slippage netted into pnl at close (own currency); NULL = none applied. See app/domain/slippage.py.
+    slippage_cost = Column(Numeric)
     # Also reused (not CRYPTO-only) for an NSE MTF positional spot position's
     # own capital posted - see infra/postgres/init/02-execution.sql.
     margin_posted = Column(Numeric)
@@ -449,6 +491,66 @@ class PositionPnlSnapshot(Base):
     cmp = Column(Numeric, nullable=False)
     unrealized_pnl = Column(Numeric, nullable=False)
     recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class AccountEquitySnapshot(Base):
+    """One row per account per day (see infra/postgres/migrations/
+    020-account-equity-snapshots.sql for the full design): the day's last
+    recorded balance / unrealized P&L / equity. Sparse; is_reset_point starts
+    a new curve."""
+
+    __tablename__ = "account_equity_snapshots"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id = Column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.accounts.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=True)
+    segment = Column(Text, nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    starting_balance = Column(Numeric, nullable=False)
+    balance = Column(Numeric, nullable=False)
+    unrealized_pnl = Column(Numeric, nullable=False, default=0)
+    equity = Column(Numeric, nullable=False)
+    open_positions = Column(Integer, nullable=False, default=0)
+    is_reset_point = Column(Boolean, nullable=False, default=False)
+    taken_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class PendingOrder(Base):
+    """A server-side pending (limit) order: armed now, fired by a scheduler job
+    when the underlying crosses trigger_price. Paper only. See
+    infra/postgres/migrations/023-pending-orders.sql and
+    app/domain/pending_orders.py."""
+
+    __tablename__ = "pending_orders"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    segment = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    action = Column(Text, nullable=False)
+    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread'
+    moneyness = Column(Text)
+    trigger_price = Column(Numeric, nullable=False)
+    started_above = Column(Boolean, nullable=False)
+    stop_loss_price = Column(Numeric)
+    target_price = Column(Numeric)
+    quantity = Column(Numeric)
+    trend_followed = Column(Boolean, nullable=False, default=False)
+    risk_managed = Column(Boolean, nullable=False, default=False)
+    setup_tag = Column(Text)
+    confidence = Column(SmallInteger)
+    entry_interval = Column(Text)
+    status = Column(Text, nullable=False, default="pending")
+    status_reason = Column(Text)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    triggered_at = Column(TIMESTAMP(timezone=True))
+    last_price = Column(Numeric)
+    last_checked_at = Column(TIMESTAMP(timezone=True))
+    position_id = Column(UUID(as_uuid=True))
+    option_group_id = Column(UUID(as_uuid=True))
 
 
 class OptionGroupPnlSnapshot(Base):

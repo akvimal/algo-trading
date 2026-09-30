@@ -372,6 +372,13 @@ CREATE TABLE IF NOT EXISTS execution.option_position_groups (
     horizon                  TEXT NOT NULL,
     quantity                 NUMERIC,  -- lots*lot_size, same units as positions.quantity - NULL if REJECTED
     net_debit                NUMERIC,  -- combined entry premium (long leg - short leg), per unit
+    -- The two legs' own strike difference, frozen at open (strikes never change after) - NULL for
+    -- a naked (single-leg) group. Lets a spread's theoretical max profit/max loss be recovered
+    -- later without a strike/security_id stored anywhere on positions.symbol to re-derive it from
+    -- - see option_position_manager.py's _spread_sizing_basis for the debit/credit width math
+    -- this backs, and migrations/029-option-group-strike-width.sql for the same column added to
+    -- an existing volume.
+    strike_width              NUMERIC,
     combined_stop_loss_price NUMERIC,
     combined_target_price    NUMERIC,
     -- 'combined' (default): combined_stop_loss_price/combined_target_price
@@ -976,3 +983,95 @@ ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_po
 ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_entry_confidence_check
     CHECK (entry_confidence IS NULL OR entry_confidence BETWEEN 1 AND 5);
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS auto_traded BOOLEAN NOT NULL DEFAULT false;
+
+-- Live-trading gate (2026-09-25, Phase 0 of docs/redesign-rollout-plan.md) - when and
+-- against which disclosure version live trading was last turned ON. Idempotent, same
+-- convention as the other ALTERs here. See migrations/015-live-trading-consent.sql and
+-- app/domain/live_gate.py.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS live_trading_consent_at TIMESTAMPTZ;
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS live_trading_consent_version TEXT;
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_consent_at TIMESTAMPTZ;
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS live_trading_consent_version TEXT;
+
+-- Per-account require-stop-loss switch (2026-09-25). Existing rows (incl. the seeded
+-- platform accounts above) get false; the default then flips to true for every account
+-- created afterwards. See migrations/016-require-stop-loss.sql.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS require_stop_loss BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.accounts ALTER COLUMN require_stop_loss SET DEFAULT true;
+
+-- Owner of a dedicated per-strategy account (2026-09-25): the strategy's creator, taken from
+-- signal-engine when the row is created. NULL = platform/legacy (admins and the named live
+-- user only). See migrations/018-strategy-account-owner.sql.
+ALTER TABLE execution.strategy_accounts ADD COLUMN IF NOT EXISTS owner_user_id UUID;
+CREATE INDEX IF NOT EXISTS idx_strategy_accounts_owner_user_id ON execution.strategy_accounts (owner_user_id);
+
+-- Balance and equity history (2026-09-25): one row per account per day, updated in place;
+-- sparse; is_reset_point starts a new curve. See migrations/020-account-equity-snapshots.sql.
+CREATE TABLE IF NOT EXISTS execution.account_equity_snapshots (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id        UUID NOT NULL REFERENCES execution.accounts (id) ON DELETE CASCADE,
+    user_id           UUID,
+    segment           TEXT NOT NULL,
+    snapshot_date     DATE NOT NULL,
+    starting_balance  NUMERIC NOT NULL,
+    balance           NUMERIC NOT NULL,
+    unrealized_pnl    NUMERIC NOT NULL DEFAULT 0,
+    equity            NUMERIC NOT NULL,
+    open_positions    INTEGER NOT NULL DEFAULT 0,
+    is_reset_point    BOOLEAN NOT NULL DEFAULT false,
+    taken_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_account_equity_snapshots_day UNIQUE (account_id, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_account_equity_snapshots_user_segment
+    ON execution.account_equity_snapshots (user_id, segment, snapshot_date);
+
+-- Indian charges on paper P&L (2026-09-25): per-account switch (existing rows false, new default true)
+-- and per-position/group totals. See migrations/021-india-charges.sql and app/domain/india_charges.py.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS apply_charges BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE execution.accounts ALTER COLUMN apply_charges SET DEFAULT true;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS charges NUMERIC;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS charges_detail JSONB;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS charges NUMERIC;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS charges_detail JSONB;
+
+-- Slippage on paper fills (2026-09-25): per-account bps (existing rows 0, new default 5) and the
+-- cost netted per position/group. See migrations/022-slippage.sql and app/domain/slippage.py.
+ALTER TABLE execution.accounts ADD COLUMN IF NOT EXISTS slippage_bps NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE execution.accounts ALTER COLUMN slippage_bps SET DEFAULT 5;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS slippage_cost NUMERIC;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS slippage_cost NUMERIC;
+
+-- Server-side pending (limit) orders (2026-09-25): paper only, one live per (user, segment, symbol).
+-- See migrations/023-pending-orders.sql and app/domain/pending_orders.py.
+CREATE TABLE IF NOT EXISTS execution.pending_orders (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL,
+    segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    symbol           TEXT NOT NULL,
+    action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
+    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread')),
+    moneyness        TEXT CHECK (moneyness IN ('ITM2', 'ITM1', 'ATM', 'OTM1', 'OTM2')),
+    trigger_price    NUMERIC NOT NULL CHECK (trigger_price > 0),
+    started_above    BOOLEAN NOT NULL,
+    stop_loss_price  NUMERIC CHECK (stop_loss_price > 0),
+    target_price     NUMERIC CHECK (target_price > 0),
+    quantity         NUMERIC CHECK (quantity > 0),
+    trend_followed   BOOLEAN NOT NULL DEFAULT false,
+    risk_managed     BOOLEAN NOT NULL DEFAULT false,
+    setup_tag        TEXT,
+    confidence       SMALLINT CHECK (confidence BETWEEN 1 AND 5),
+    entry_interval   TEXT,
+    status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'triggered', 'rejected', 'failed', 'cancelled', 'expired')),
+    status_reason    TEXT,
+    expires_at       TIMESTAMPTZ NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    triggered_at     TIMESTAMPTZ,
+    last_price       NUMERIC,
+    last_checked_at  TIMESTAMPTZ,
+    position_id      UUID,
+    option_group_id  UUID
+);
+CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_orders_one_live_per_symbol
+    ON execution.pending_orders (user_id, segment, symbol) WHERE status = 'pending';

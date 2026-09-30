@@ -4,9 +4,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.adapters.accounts_client import get_user_dhan_credentials
+from app.data_access import data_credentials
 from app.api.routes.candles import fetch_candle_history_cached
-from app.auth import get_optional_user_id
+from app.auth import Caller, get_caller
 from app.domain.models import ChartStructure
 from app.domain.order_blocks import detect_fvgs, detect_order_blocks, detect_setups, structure_state
 from app.providers.router import get_provider
@@ -32,7 +32,7 @@ def get_order_blocks(
     min_risk_reward: float = 1.5,
     max_zones: int = 8,
     source: Optional[str] = None,
-    user_id: Optional[UUID] = Depends(get_optional_user_id),
+    caller: Caller = Depends(get_caller),
 ):
     """SMC structure for one (exchange, symbol, interval) candle series:
     order blocks (+ breakers, when `breakers=true`), fair value gaps (when
@@ -62,7 +62,8 @@ def get_order_blocks(
     from_date = from_ or date.fromordinal(to_date.toordinal() - 7)
 
     try:
-        credentials = get_user_dhan_credentials(user_id) if user_id else None
+# source=yahoo is public data and never needs (or is gated on) Dhan keys
+        credentials = data_credentials(caller, exchange) if source != "yahoo" else None
         candles = fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials, source=source)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

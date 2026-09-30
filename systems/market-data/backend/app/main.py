@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.secure_config import cors_origins, enforce_secure_config
 from app.api.routes import (
     calendar,
     candles,
+    custom_screens,
     delta,
     dhan,
     equity_screener,
@@ -22,11 +24,15 @@ from app.providers.delta_feed import start_feed as start_delta_feed
 from app.providers.dhan import load_persisted_credentials
 from app.scheduler import start_scheduler
 
+# Refuses to start with placeholder secrets / wildcard CORS when
+# REQUIRE_SECURE_CONFIG=true (see app/secure_config.py).
+enforce_secure_config()
+
 app = FastAPI(title="market-data")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -44,6 +50,7 @@ app.include_router(delta.router)
 app.include_router(options.router)
 app.include_router(oi_buildup.router)
 app.include_router(equity_screener.router)
+app.include_router(custom_screens.router)
 app.include_router(news.router)
 app.include_router(calendar.router)
 

@@ -29,6 +29,42 @@ class Settings(BaseSettings):
     # can run more often than square-off without scanning every position.
     exit_monitor_poll_seconds: int = 30
 
+    # Balance/equity history (app/domain/equity_history.py): how often the
+    # scheduled job samples every user account, and the timezone that decides
+    # which calendar day a sample belongs to. 0 disables the job (resets still
+    # record their own marker).
+    equity_snapshot_poll_seconds: int = 300
+
+    # Own-keys data model, execution side (docs/architecture.md, "Own-keys data model"). When
+    # true, the automated jobs that mark or watch users' positions fetch quotes in one batch
+    # PER OWNER on that owner's own Dhan keys (market-data's X-On-Behalf-Of) instead of one
+    # batch for everyone on the shared platform credential. Off by default.
+    job_quotes_use_owner_keys: bool = False
+    # ...and when an owner's own batch comes back empty (no keys saved, or an expired Dhan
+    # token, which lasts 24h), fall back to the platform credential for that batch so their
+    # stop-losses and square-offs keep being enforced. Turn off to be strict.
+    job_quotes_platform_fallback: bool = True
+
+    # Server-side pending (limit) orders (app/domain/pending_orders.py). How often the
+    # watcher checks armed orders against the underlying's price (0 disables the job),
+    # how long an order lives if the caller gives no expiry, the longest expiry allowed,
+    # and how many a user may have armed at once. Paper accounts only.
+    pending_order_poll_seconds: int = 10
+    pending_order_default_ttl_minutes: int = 1440
+    pending_order_max_ttl_minutes: int = 10080
+    max_pending_orders_per_user: int = 20
+
+    # Paper track-record gate on turning live trading ON (app/domain/track_record.py).
+    # Off unless REQUIRE_PAPER_TRACK_RECORD=true. The thresholds are product judgments,
+    # not measurements - tune them.
+    require_paper_track_record: bool = False
+    track_record_min_trades: int = 30
+    track_record_min_days: int = 14
+    track_record_min_discipline: int = 60
+    track_record_max_drawdown_pct: float = 20.0
+    track_record_min_slippage_bps: float = 3.0
+    equity_history_timezone: str = "Asia/Kolkata"
+
     # How often the square-off job checks each OPEN position's own
     # stored square_off_time (copied from its segment's execution.accounts
     # row at open time) against local time. Replaced a single daily
@@ -65,6 +101,16 @@ class Settings(BaseSettings):
     # in via its own live_trading_enabled.
     live_trading_kill_switch: bool = False
 
+    # accounts service - only used by the live-trading gate
+    # (app/domain/live_gate.py) to check that a user has saved broker
+    # credentials before real orders can be enabled for them.
+    accounts_base_url: str = "http://accounts-backend:8000"
+
+    # signal-engine, asked (with the caller's own token) whether a user may see
+    # a strategy and who created it - see app/adapters/signal_engine/client.py.
+    # Used when creating a dedicated per-strategy account.
+    signal_engine_base_url: str = "http://signal-engine-backend:8000"
+
     # How often the reconciliation job (scheduler.py) checks for
     # broker_orders rows stuck in SUBMITTING past broker_order_submit_timeout_seconds -
     # a crash between writing that row and recording Dhan's place_order
@@ -73,6 +119,14 @@ class Settings(BaseSettings):
     # than ever retrying the submission blind.
     broker_order_reconciliation_poll_seconds: int = 30
     broker_order_submit_timeout_seconds: int = 60
+
+    # Browser origins allowed by CORS, comma-separated. "*" (the default) is
+    # for local dev only; docker-compose.prod.yml sets the real origins. See
+    # app/secure_config.py.
+    cors_allow_origins: str = "*"
+    # When true the service refuses to start with placeholder secrets or
+    # wildcard CORS (set by docker-compose.prod.yml). Off by default.
+    require_secure_config: bool = False
 
 
 settings = Settings()

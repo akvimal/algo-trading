@@ -28,5 +28,25 @@ class Settings(BaseSettings):
     # any frontend.
     internal_service_secret: str = "change-me-in-production"
 
+    # Browser origins allowed by CORS, comma-separated. "*" (the default) is
+    # for local dev only; docker-compose.prod.yml sets the real origins. See
+    # app/secure_config.py.
+    cors_allow_origins: str = "*"
+    # When true the service refuses to start with placeholder secrets or
+    # wildcard CORS (set by docker-compose.prod.yml). Off by default.
+    require_secure_config: bool = False
+
+    # Auth rate limits (app/rate_limit.py). Failed logins are counted per
+    # email and per client IP over the window; signups per IP.
+    login_max_failures_per_email: int = 10
+    login_max_failures_per_ip: int = 20
+    login_window_seconds: int = 15 * 60
+    signup_max_per_ip: int = 10
+    signup_window_seconds: int = 60 * 60
+    # Read the client IP from X-Forwarded-For (first hop). Only turn on behind
+    # a proxy that sets it (Caddy on the VPS) - otherwise the header is
+    # attacker-controlled and would let anyone dodge the per-IP limits.
+    trust_forwarded_for: bool = False
+
 
 settings = Settings()

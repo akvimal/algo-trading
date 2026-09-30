@@ -144,7 +144,7 @@ def test_get_previous_candle_fails_fast_when_throttle_queue_too_deep(monkeypatch
 
     provider = DhanProvider()
     provider._symbol_to_security_id = {"RELIANCE": "2885"}
-    dhan._last_candle_call_at[None] = time.monotonic() + 3.0
+    dhan._last_candle_call_at[None] = time.monotonic() + 9.0
 
     try:
         provider.get_previous_candle("RELIANCE", "5min")

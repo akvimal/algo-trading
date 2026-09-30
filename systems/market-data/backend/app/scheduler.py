@@ -1,15 +1,16 @@
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.adapters.db.models import EquityScreenerSnapshot, OiEodSnapshot, SentimentHistory
+from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, SentimentHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
+from app.domain.dhan_retry import dhan_retry_delay
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.oi_buildup import PreviousSnapshot, compute_eod_buildup
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
@@ -61,17 +62,16 @@ def _retry_when_throttled(fn, *args):
       to refill, and only then gives up.
 
     Anything else (bad symbol, auth, HTTP error) propagates to the caller's
-    own per-symbol handling unchanged."""
+    own per-symbol handling unchanged. The message-sniffing itself
+    (dhan_retry_delay) is shared with app/domain/dhan_retry.py's own
+    interactive_retry - the interactive Dhan-backed routes' much shorter-
+    budget version of this same retry, for the same two transient shapes."""
     for attempt in range(THROTTLE_RETRY_ATTEMPTS):
         try:
             return fn(*args)
         except RuntimeError as e:
-            message = str(e)
-            if "rate limit hit (429)" in message:
-                sleep_seconds = DHAN_429_RETRY_SLEEP_SECONDS
-            elif "queue is backed up" in message:
-                sleep_seconds = THROTTLE_RETRY_SLEEP_SECONDS
-            else:
+            sleep_seconds = dhan_retry_delay(str(e), THROTTLE_RETRY_SLEEP_SECONDS, DHAN_429_RETRY_SLEEP_SECONDS)
+            if sleep_seconds is None:
                 raise
             if attempt == THROTTLE_RETRY_ATTEMPTS - 1:
                 raise
@@ -295,7 +295,18 @@ def _record_equity_screener_snapshot() -> None:
     (one symbol's fetch failing never aborts the rest of the ~2000-symbol
     batch, commits per-symbol not once at the end) - see that function's
     own docstring for the full reasoning, which applies here unchanged.
-    Also NOT run once immediately on boot, same reasoning."""
+    Also NOT run once immediately on boot, same reasoning.
+
+    Also tags each row with is_fno/index_memberships (DhanProvider.
+    list_fno_stock_underlyings + nse_indices' synced constituent lists -
+    both already-cached lookups, built once here rather than per symbol)
+    and upserts the SAME already-fetched candles into equity_daily_bar,
+    a rolling raw-OHLCV cache - see app/adapters/db/models.py's
+    EquityDailyBar for why the (upcoming) custom screener needs raw bars,
+    not only more derived columns. Append-only per symbol (only bar_dates
+    past whatever is already stored are inserted - a full day's ~2000
+    symbols only ever add ~2000 new rows, not re-write the whole window),
+    then prunes anything older than `from_date` below."""
     now = datetime.now(ZoneInfo(settings.timezone))
     if now.weekday() >= 5:
         return
@@ -307,17 +318,51 @@ def _record_equity_screener_snapshot() -> None:
         logger.exception("scheduled equity screener snapshot: could not list NSE equities")
         return
 
+    try:
+        fno_symbols = set(provider.list_fno_stock_underlyings())
+    except Exception:
+        logger.exception("scheduled equity screener snapshot: could not list F&O underlyings - is_fno left false for this run")
+        fno_symbols = set()
+    # symbol -> the index keys (NIFTY50, NIFTY100, ...) it belongs to, inverted
+    # once from nse_indices' own per-index constituent lists rather than a
+    # per-symbol lookup across every known index.
+    symbol_indices: dict[str, list[str]] = {}
+    for key in nse_indices.list_universes():
+        for symbol in nse_indices.get_constituents(key) or []:
+            symbol_indices.setdefault(symbol, []).append(key)
+
     today = now.date()
     # ~380 calendar days comfortably covers 252 TRADING days (the 52-week
-    # window equity_screener.py needs) even across weekends/holidays.
+    # window equity_screener.py needs) even across weekends/holidays - also
+    # equity_daily_bar's own retention window, pruned to the same cutoff below.
     from_date = today - timedelta(days=380)
     db = SessionLocal()
     try:
         for symbol in symbols:
             try:
                 candles = _retry_when_throttled(provider.get_candle_history, symbol, "daily", from_date, today)
+
+                # Cache the raw bars regardless of whether there's enough history for the
+                # regime/ADX read below - a symbol too young/thin for a real ADX read can
+                # still have perfectly good bars for the custom screener to evaluate a
+                # short-lookback expression against (or none at all yet, which is a
+                # correct, informative absence - not a reason to skip caching what DOES
+                # exist). Must run BEFORE the `result is None: continue` below, not after -
+                # a thin symbol would otherwise never get cached at all.
+                existing = (
+                    db.query(EquityDailyBar.bar_date).filter(EquityDailyBar.symbol == symbol).order_by(EquityDailyBar.bar_date.desc()).first()
+                )
+                existing_max = existing[0] if existing else None
+                for c in candles:
+                    bar_date = date.fromisoformat(c.timestamp[:10])
+                    if existing_max is not None and bar_date <= existing_max:
+                        continue
+                    db.add(EquityDailyBar(symbol=symbol, exchange=c.exchange, bar_date=bar_date, open=c.open, high=c.high, low=c.low, close=c.close, volume=c.volume))
+                db.query(EquityDailyBar).filter(EquityDailyBar.symbol == symbol, EquityDailyBar.bar_date < from_date).delete()
+
                 result = compute_equity_screener_row(candles)
                 if result is None:
+                    db.commit()  # the bar cache above still needs to be saved even with nothing else to write
                     continue  # not enough history yet - see equity_screener.py's own MIN_BARS floor
 
                 row = (
@@ -338,6 +383,9 @@ def _record_equity_screener_snapshot() -> None:
                 row.pct_from_52w_high = result.pct_from_52w_high
                 row.pct_from_52w_low = result.pct_from_52w_low
                 row.proximity = result.proximity
+                row.is_fno = symbol in fno_symbols
+                row.index_memberships = ",".join(sorted(symbol_indices.get(symbol, []))) or None
+
                 db.commit()
             except Exception:
                 logger.exception("scheduled equity screener snapshot failed for %s", symbol)

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scan - OI Buildup and Screener</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e1319;--s1:#151b23;--s2:#1c2430;--line:#2a3442;--tx:#e9eef5;--mu:#95a3b5;--ac:#6aa9ff;--up:#4fd3a8;--dn:#ff8b6e;--warn:#f4c15a}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px}
+*{box-sizing:border-box}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.dn{color:var(--dn)}.mu{color:var(--mu)}
+.card{background:var(--s1);border:1px solid var(--line);border-radius:12px}
+.h{font-size:13px;font-weight:600;letter-spacing:.01em}
+.lbl{font-size:12px;color:var(--mu)}
+.chip{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:600;background:var(--s2);border:1px solid var(--line);white-space:nowrap}
+.chip.up{background:#0f2a24;border-color:#1d4a3e}.chip.dn{background:#331a14;border-color:#5a2c20}.chip.warn{background:#332a12;border-color:#5b4a1c;color:var(--warn)}
+button{font:inherit;color:inherit;cursor:pointer}
+.seg{display:inline-flex;background:var(--s1);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg button{height:30px;padding:0 16px;border:0;border-radius:7px;background:transparent;color:var(--mu);font-size:13px;font-weight:500}
+.seg button.on{background:#26344a;color:#fff}
+.seg a{display:inline-flex;align-items:center;height:30px;padding:0 16px;border-radius:7px;color:var(--mu);font-size:13px;font-weight:500;text-decoration:none}
+.fchip{height:28px;padding:0 12px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--mu);font-size:12px;font-weight:600}
+.fchip.on{background:#26344a;border-color:#3d6ba3;color:#fff}
+.sp{fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}.sp.up{stroke:var(--up)}.sp.dn{stroke:var(--dn)}
+table{border-collapse:collapse;width:100%}
+th{font-weight:500;font-size:11px;color:var(--mu);text-align:left;padding:8px 14px;letter-spacing:.05em;text-transform:uppercase}
+td{padding:0 14px;height:40px;border-top:1px solid var(--line)}
+.r{text-align:right}
+input{font:inherit}
+.ib{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--s2);display:inline-flex;align-items:center;justify-content:center;color:var(--mu);text-decoration:none}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: var(--bg)">
+  <dc-import name="Sidebar" active="scan" mode="pro" hint-size="232px,900px"></dc-import>
+
+  <main style="flex-grow: 1; min-width: 0; padding: 20px 28px 24px; display: flex; flex-direction: column; gap: 14px">
+    <header style="display: flex; align-items: center; gap: 20px; height: 48px">
+      <div>
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; line-height: 1.2">Scan</h1>
+        <div class="lbl">{{ui.subtitle}}</div>
+      </div>
+      <div class="seg" style="margin-left: 8px">
+        <button class="{{ui.oiCls}}" onClick="{{ui.showOi}}">OI Buildup</button>
+        <button class="{{ui.eqCls}}" onClick="{{ui.showEq}}">Equity Screener</button>
+        <a href="DesktopOptions.dc.html">Live OI</a>
+        <a href="DesktopOptions.dc.html">Weekly Advisor</a>
+      </div>
+      <div style="flex-grow: 1"></div>
+      <span class="chip warn">Illustrative data</span>
+      <input aria-label="Filter symbol" placeholder="Filter symbol" style="width: 200px; height: 34px; border-radius: 8px; border: 1px solid var(--line); background: var(--s1); color: var(--tx); padding: 0 12px">
+    </header>
+
+    <sc-if value="{{ui.isOi}}" hint-placeholder-val="{{ true }}">
+      <section class="card" style="padding: 10px 14px; display: flex; align-items: center; gap: 22px">
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span class="lbl">Call buildup</span>
+          <sc-for list="{{ui.callChips}}" as="c" hint-placeholder-count="5"><button class="fchip {{c.cls}}" onClick="{{c.tap}}">{{c.label}}</button></sc-for>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span class="lbl">Put buildup</span>
+          <sc-for list="{{ui.putChips}}" as="c" hint-placeholder-count="5"><button class="fchip {{c.cls}}" onClick="{{c.tap}}">{{c.label}}</button></sc-for>
+        </div>
+        <div style="flex-grow: 1"></div>
+        <div class="lbl">LB long buildup · SB short buildup · SC short covering · LU long unwinding</div>
+      </section>
+
+      <section class="card" style="flex-grow: 1; min-height: 0; overflow: hidden">
+        <table>
+          <thead><tr><th>Symbol</th><th class="r">Spot</th><th class="r">Price Δ</th><th class="r">Call OI Δ</th><th>Call buildup</th><th class="r">Put OI Δ</th><th>Put buildup</th><th class="r">PCR</th><th>Trend</th><th></th></tr></thead>
+          <tbody>
+            <sc-for list="{{ui.oiRows}}" as="r" hint-placeholder-count="10">
+              <tr>
+                <td style="font-weight: 600">{{r.sym}}</td>
+                <td class="r num">{{r.spot}}</td>
+                <td class="r num {{r.pCls}}">{{r.pchg}}</td>
+                <td class="r num {{r.cCls}}">{{r.call}}</td>
+                <td><span class="chip {{r.cbCls}}">{{r.cb}}</span></td>
+                <td class="r num {{r.ptCls}}">{{r.put}}</td>
+                <td><span class="chip {{r.pbCls}}">{{r.pb}}</span></td>
+                <td class="r num">{{r.pcr}}</td>
+                <td><svg width="64" height="22" viewBox="0 0 64 22"><polyline class="sp {{r.pCls}}" points="{{r.spark}}"/></svg></td>
+                <td class="r"><a class="ib" href="DesktopTrade.dc.html" aria-label="Open chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="4" height="8"/><path d="M7 4v4M7 16v4"/><rect x="15" y="5" width="4" height="10"/><path d="M17 2v3M17 15v5"/></svg></a></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+        <sc-if value="{{ui.oiEmpty}}" hint-placeholder-val="{{ false }}"><div class="lbl" style="padding: 24px 14px">No symbols match these filters.</div></sc-if>
+      </section>
+    </sc-if>
+
+    <sc-if value="{{ui.isEq}}" hint-placeholder-val="{{ false }}">
+      <section class="card" style="padding: 10px 14px; display: flex; align-items: center; gap: 8px">
+        <span class="lbl">Show</span>
+        <sc-for list="{{ui.eqChips}}" as="c" hint-placeholder-count="4"><button class="fchip {{c.cls}}" onClick="{{c.tap}}">{{c.label}}</button></sc-for>
+        <div style="flex-grow: 1"></div>
+        <div class="lbl">Trend from ADX/DMI · 52-week range from daily bars</div>
+      </section>
+
+      <section class="card" style="flex-grow: 1; min-height: 0; overflow: hidden">
+        <table>
+          <thead><tr><th>Symbol</th><th class="r">Close</th><th class="r">5-day</th><th class="r">20-day</th><th>Trend</th><th>52-week</th><th>Chart</th><th></th></tr></thead>
+          <tbody>
+            <sc-for list="{{ui.eqRows}}" as="r" hint-placeholder-count="8">
+              <tr>
+                <td style="font-weight: 600">{{r.sym}}</td>
+                <td class="r num">{{r.close}}</td>
+                <td class="r num {{r.d5Cls}}">{{r.d5}}</td>
+                <td class="r num {{r.d20Cls}}">{{r.d20}}</td>
+                <td><span class="chip {{r.trCls}}">{{r.trend}}</span> <span class="lbl num">ADX {{r.adx}}</span></td>
+                <td><span class="chip">{{r.prox}}</span></td>
+                <td><svg width="64" height="22" viewBox="0 0 64 22"><polyline class="sp {{r.d20Cls}}" points="{{r.spark}}"/></svg></td>
+                <td class="r"><a class="ib" href="DesktopTrade.dc.html" aria-label="Open chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="4" height="8"/><path d="M7 4v4M7 16v4"/><rect x="15" y="5" width="4" height="10"/><path d="M17 2v3M17 15v5"/></svg></a></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+        <sc-if value="{{ui.eqEmpty}}" hint-placeholder-val="{{ false }}"><div class="lbl" style="padding: 24px 14px">No symbols match this filter.</div></sc-if>
+      </section>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = Object.assign({ tab: 'oi', callF: 'All', putF: 'All', eqF: 'all' }, this.state || {});
+    const UP = '0,18 10,15 20,16 30,10 40,12 50,6 64,3';
+    const DN = '0,4 10,7 20,6 30,12 40,10 50,17 64,19';
+    const classify = (oi, px) => (oi > 0 ? (px > 0 ? 'LB' : 'SB') : (px > 0 ? 'SC' : 'LU'));
+    const bcls = (b) => (b === 'LB' || b === 'SC' ? 'up' : 'dn');
+    const sign = (v) => (v > 0 ? '+' : '−') + Math.abs(v).toFixed(1) + '%';
+    const raw = [
+      ['360ONE', '1,108.00', 1.4, 12.4, -6.1, '0.65'], ['ABB', '7,120.00', -0.8, 9.3, -4.2, '0.63'],
+      ['ABCAPITAL', '402.45', 0.5, -7.2, 3.4, '0.97'], ['ADANIENT', '2,993.20', -1.9, 14.8, 6.5, '0.53'],
+      ['ADANIGREEN', '1,300.90', 2.1, 5.1, 11.7, '0.59'], ['ADANIPORTS', '1,807.30', -1.2, 3.9, -8.8, '0.90'],
+      ['ALKEM', '5,417.50', 0.3, -4.6, -2.2, '0.85'], ['AMBER', '7,064.50', -2.4, -6.0, 9.9, '0.59'],
+      ['AMBUJACEM', '392.75', 1.1, 8.2, -3.3, '0.61'], ['ANGELONE', '300.00', -0.6, -2.8, -5.4, '0.49'],
+      ['APLAPOLLO', '2,195.00', 0.9, 6.7, 4.1, '0.56'], ['AXISBANK', '1,180.50', 0.6, -5.5, 10.2, '0.71']
+    ];
+    const oiAll = raw.map((r) => {
+      const cb = classify(r[3], r[2]), pb = classify(r[4], r[2]);
+      return { sym: r[0], spot: r[1], pchg: (r[2] > 0 ? '▲ ' : '▼ ') + sign(r[2]), pCls: r[2] > 0 ? 'up' : 'dn',
+        call: sign(r[3]), cCls: r[3] > 0 ? 'up' : 'dn', cb: cb, cbCls: bcls(cb),
+        put: sign(r[4]), ptCls: r[4] > 0 ? 'up' : 'dn', pb: pb, pbCls: bcls(pb), pcr: r[5], spark: r[2] > 0 ? UP : DN };
+    });
+    const oiRows = oiAll.filter((r) => (st.callF === 'All' || r.cb === st.callF) && (st.putF === 'All' || r.pb === st.putF));
+    const chips = (list, cur, key) => list.map((l) => ({ label: l, cls: cur === l ? 'on' : '', tap: () => this.setState({ [key]: l }) }));
+    const b = ['All', 'LB', 'SB', 'SC', 'LU'];
+
+    const eqRaw = [
+      ['PERSISTENT', '6,218.40', 3.1, 9.1, 34, 'Strong', 'up', '1.2% below high', 'high'], ['TRENT', '7,905.00', 2.2, 7.4, 32, 'Strong', 'up', '0.8% below high', 'high'],
+      ['POLYCAB', '7,412.15', 1.4, 6.2, 29, 'Strong', 'up', '2.1% below high', 'high'], ['DIVISLAB', '6,388.90', 1.9, 4.9, 26, 'Strong', 'up', 'At 52-week high', 'high'],
+      ['BAJFINANCE', '1,024.60', 0.8, 5.5, 27, 'Strong', 'up', '1.8% below high', 'high'], ['IDEA', '7.20', -4.1, -12.5, 28, 'Strong down', 'dn', '3.5% above low', 'low'],
+      ['YESBANK', '19.80', -2.5, -8.2, 22, 'Weak down', 'dn', '4.1% above low', 'low'], ['WIPRO', '251.40', -0.5, -1.1, 13, 'Ranging', '', 'Mid-range', 'mid'],
+      ['ITC', '402.10', 0.1, 0.6, 12, 'Ranging', '', 'Mid-range', 'mid']
+    ];
+    const eqAll = eqRaw.map((r) => ({ sym: r[0], close: r[1], d5: sign(r[2]), d5Cls: r[2] >= 0 ? 'up' : 'dn', d20: sign(r[3]), d20Cls: r[3] >= 0 ? 'up' : 'dn',
+      adx: String(r[4]), trend: r[5], trCls: r[6], prox: r[7], zone: r[8], spark: r[3] >= 0 ? UP : DN, strong: r[4] >= 25 }));
+    const eqRows = eqAll.filter((r) => st.eqF === 'all' || (st.eqF === 'high' && r.zone === 'high') || (st.eqF === 'low' && r.zone === 'low') || (st.eqF === 'trend' && r.strong));
+    const eqDefs = [['all', 'All'], ['high', 'Near 52-week high'], ['low', 'Near 52-week low'], ['trend', 'Strong trend (ADX 25+)']];
+
+    return {
+      ui: {
+        isOi: st.tab === 'oi', isEq: st.tab === 'eq',
+        oiCls: st.tab === 'oi' ? 'on' : '', eqCls: st.tab === 'eq' ? 'on' : '',
+        showOi: () => this.setState({ tab: 'oi' }), showEq: () => this.setState({ tab: 'eq' }),
+        subtitle: st.tab === 'oi' ? 'End-of-day options OI for NSE F&O stocks · 25 Sep vs previous trading day' : 'Momentum and 52-week range for NSE equities · refreshed after the close',
+        callChips: chips(b, st.callF, 'callF'), putChips: chips(b, st.putF, 'putF'),
+        oiRows: oiRows, oiEmpty: oiRows.length === 0,
+        eqChips: eqDefs.map((d) => ({ label: d[1], cls: st.eqF === d[0] ? 'on' : '', tap: () => this.setState({ eqF: d[0] }) })),
+        eqRows: eqRows, eqEmpty: eqRows.length === 0
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -454,6 +454,18 @@ CREATE INDEX IF NOT EXISTS idx_saved_backtests_rule_id ON signal_generation.save
 -- strategies.created_by's own comment near its CREATE TABLE definition.
 ALTER TABLE signal_generation.strategies ADD COLUMN IF NOT EXISTS created_by UUID;
 
+-- Per-user ownership for the other core tables (2026-09-25, Phase 0 of
+-- docs/redesign-rollout-plan.md) - idempotent, same convention as above.
+-- NULL = platform / legacy row. Saved backtests inherit their rule's owner.
+-- See app/ownership.py and migrations/014-signal-engine-ownership.sql.
+ALTER TABLE signal_generation.rules ADD COLUMN IF NOT EXISTS created_by UUID;
+ALTER TABLE signal_generation.watchlists ADD COLUMN IF NOT EXISTS created_by UUID;
+ALTER TABLE signal_generation.indicators ADD COLUMN IF NOT EXISTS created_by UUID;
+CREATE INDEX IF NOT EXISTS idx_rules_created_by ON signal_generation.rules (created_by);
+CREATE INDEX IF NOT EXISTS idx_watchlists_created_by ON signal_generation.watchlists (created_by);
+CREATE INDEX IF NOT EXISTS idx_indicators_created_by ON signal_generation.indicators (created_by);
+CREATE INDEX IF NOT EXISTS idx_strategies_created_by ON signal_generation.strategies (created_by);
+
 -- Weekly Options Advisor (app/domain/weekly_advisor) - a saved, point-in-time
 -- snapshot of one symbol's recommendation, same "freeze the result, don't
 -- replay the request later" reasoning as saved_backtests above (the
@@ -616,3 +628,10 @@ CREATE TABLE IF NOT EXISTS signal_generation.weekly_advisor_fundamentals (
     ai_model    TEXT,
     analyzed_at TIMESTAMPTZ
 );
+
+-- Per-user ownership for the Weekly Advisor (2026-09-25). Trades inherit their
+-- recommendation's owner; the fundamentals cache stays shared. See
+-- migrations/017-weekly-advisor-ownership.sql and app/ownership.py.
+ALTER TABLE signal_generation.weekly_advisor_recommendations ADD COLUMN IF NOT EXISTS created_by UUID;
+CREATE INDEX IF NOT EXISTS idx_weekly_advisor_recommendations_created_by
+    ON signal_generation.weekly_advisor_recommendations (created_by);

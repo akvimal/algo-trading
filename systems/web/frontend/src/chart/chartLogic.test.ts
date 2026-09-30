@@ -3,7 +3,7 @@ import type { ChartStructure } from "../api/types";
 import { fractionalIndexToTs, floorBarIndex, pointTimestamp, toChartPoint, tsToFractionalIndex } from "./anchor";
 import {
   DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure,
-  loadTools, lookbackRange, parseParamList, pricePrecision, resetStructureForInterval, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toKLine,
+  loadTools, lookbackRange, parseParamList, pricePrecision, resetStructureForInterval, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toggleStructureOn, toKLine,
 } from "./config";
 import { rollLiveBar, type Bar } from "./liveBar";
 import { liveSetups, structureOverlays } from "./structure";
@@ -146,6 +146,21 @@ describe("saved chart settings", () => {
 
     it("is a no-op while the structure layer is off - never turns it on by itself", () => {
       expect(resetStructureForInterval([], "60min")).toEqual([]);
+    });
+  });
+
+  describe("toggleStructureOn", () => {
+    it("off clears every ticked timeframe, regardless of what was selected", () => {
+      expect(toggleStructureOn(false, "15min")).toEqual([]);
+      expect(toggleStructureOn(false, "60min")).toEqual([]);
+    });
+
+    it("on seeds a single fresh timeframe - the active chart's own candle size", () => {
+      expect(toggleStructureOn(true, "60min")).toEqual(["60min"]);
+    });
+
+    it("on falls back to the coarsest structure timeframe (daily) for a candle size with no structure-timeframe equivalent (weekly)", () => {
+      expect(toggleStructureOn(true, "weekly")).toEqual(["daily"]);
     });
   });
 

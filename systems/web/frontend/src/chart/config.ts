@@ -159,6 +159,19 @@ export function resetStructureForInterval(tfs: string[], newInterval: string): s
   return kept;
 }
 
+/** The Indicators menu's own quick "Structure" switch, alongside "Hide all indicators" - since
+ * ticking/unticking every "Detect on" timeframe by hand is the only way there was to turn the
+ * whole layer off before this existed. Off clears every ticked timeframe (which is also what hides
+ * the Structure dropdown itself - see structureIsOn); on seeds a single fresh one - the active
+ * chart's own candle size, or the coarsest structure timeframe available if that size has none
+ * (weekly candles, same gap resetStructureForInterval's own comment notes). Never restores
+ * whatever mix was ticked before switching off - a clean slate is the whole point of a quick
+ * toggle, not resurrecting an accumulated list. */
+export function toggleStructureOn(on: boolean, activeInterval: string): string[] {
+  if (!on) return [];
+  return STRUCTURE_TF_VALUES.has(activeInterval) ? [activeInterval] : [STRUCTURE_TIMEFRAMES[STRUCTURE_TIMEFRAMES.length - 1].value];
+}
+
 export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean; priceHidden: boolean };
 export const loadTools = (): ToolSettings => {
   const raw = read<Record<string, unknown>>("tools", {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));

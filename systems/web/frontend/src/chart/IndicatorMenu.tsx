@@ -9,17 +9,29 @@ type Props = {
   onParams: (p: Record<string, number[]>) => void;
   hidden: boolean;
   onHidden: (h: boolean) => void;
+  /** The structure layer's own on/off - a quick switch beside "Hide all indicators", so turning it
+   * off (and its own toolbar dropdown, which has nothing to show once no timeframe is ticked) does
+   * not mean unticking every "Detect on" timeframe by hand. Turning it back on re-seeds a single,
+   * fresh timeframe (the active chart's own candle size) rather than restoring whatever mix was
+   * ticked before - the whole point of a quick off/on is a clean slate, not resurrecting a stale
+   * accumulated list. */
+  structureOn: boolean;
+  onStructureOn: (on: boolean) => void;
 };
 
 /** Which indicators are on the chart, and their numbers. Indicators that draw on the price pane sit
  * first; the rest each get a pane of their own beneath. "Hide all" keeps the choices but clears the chart. */
-export function IndicatorMenu({ selected, onSelected, params, onParams, hidden, onHidden }: Props) {
+export function IndicatorMenu({ selected, onSelected, params, onParams, hidden, onHidden, structureOn, onStructureOn }: Props) {
   const toggle = (name: string) => onSelected(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
   return (
     <Popover label="Indicators" badge={selected.length}>
       <label className="check menu-check">
         <input type="checkbox" checked={hidden} onChange={(e) => onHidden(e.target.checked)} />
         <span>Hide all indicators</span>
+      </label>
+      <label className="check menu-check" title="Order blocks, FVGs, BOS/CHoCH, trend marks and setups - the Structure dropdown itself shows once this is on">
+        <input type="checkbox" checked={structureOn} onChange={(e) => onStructureOn(e.target.checked)} />
+        <span>Structure</span>
       </label>
       <div className="menu-list">
         {INDICATORS.map((ind) => (

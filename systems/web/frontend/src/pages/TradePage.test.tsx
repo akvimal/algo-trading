@@ -922,7 +922,14 @@ describe("structure", () => {
     setups: [{ direction: "long", status: "triggered", entry: 106, stop_loss: 103, target: 112, risk_reward: 2, zone_proximal: 100, zone_distal: 95, confirmed_timestamp: "2026-09-25T11:30:00+05:30", resolved_timestamp: null }],
   });
   const open = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.click(screen.getByRole("button", { name: /Structure/ }));
+    // The Structure dropdown itself only exists once at least one timeframe is ticked - off by
+    // default, so most tests here have to turn it on first via the Indicators menu's own switch.
+    if (!screen.queryByRole("button", { name: /^Structure/ })) {
+      await user.click(screen.getByRole("button", { name: /Indicators/ }));
+      await user.click(screen.getByLabelText("Structure"));
+      await user.click(screen.getByRole("button", { name: /Indicators/ })); // close it again
+    }
+    await user.click(screen.getByRole("button", { name: /^Structure/ }));
     return within(screen.getByRole("group", { name: "Structure" }));
   };
 
@@ -933,13 +940,38 @@ describe("structure", () => {
     expect(calls.some((x) => x.url.includes("/order-blocks"))).toBe(false);
   });
 
+  it("the Structure dropdown itself only exists once the Indicators menu's own switch turns the layer on, and disappears again when it's switched off", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("button", { name: /^Structure/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    const indicators = within(screen.getByRole("group", { name: "Indicators" }));
+    expect(indicators.getByLabelText("Structure")).not.toBeChecked();
+    await user.click(indicators.getByLabelText("Structure"));
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+
+    // Seeded with the active chart's own candle size (15m, the default) - not a stale accumulated list.
+    expect(screen.getByRole("button", { name: "Structure 1" })).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual(["15min"]);
+
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    await user.click(within(screen.getByRole("group", { name: "Indicators" })).getByLabelText("Structure"));
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+
+    expect(screen.queryByRole("button", { name: /^Structure/ })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual([]);
+  });
+
   it("draws zones for the ticked timeframe, asking the server for the optional layers only when they are on", async () => {
     structure = fullStructure();
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
     const m = await open(user);
-    await user.click(within(m.getByRole("group", { name: "Detection timeframes" })).getByRole("button", { name: "15m" }));
+    // Turning Structure on (inside open()) already ticks 15m - the active chart's own candle size.
+    expect(within(m.getByRole("group", { name: "Detection timeframes" })).getByRole("button", { name: "15m" })).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(c.overlaysNamed("htfOrderBlock")).toHaveLength(1));
     expect(c.overlaysNamed("htfFvg")).toHaveLength(0); // not asked for
     const first = calls.filter((x) => x.url.includes("/order-blocks")).pop()!;

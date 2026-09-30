@@ -6,7 +6,7 @@ import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel }
 import type { OptionGroup, Position, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
-import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, type StructureConfig } from "../chart/config";
+import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, structureIsOn, toggleStructureOn, type StructureConfig } from "../chart/config";
 import { ACCENT, BUY, SELL } from "../chart/colors";
 import { AlertBar } from "../chart/AlertBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
@@ -86,6 +86,7 @@ export function TradePage() {
   // ---- data per chart ----
   const twoUp = wide && paneCount(ws) === 2;
   const active = (twoUp ? ws.active : 0) as 0 | 1;
+  const setStructureOn = (on: boolean) => setStructure((s) => ({ ...s, tfs: toggleStructureOn(on, ws.panes[active].interval) }));
   const [socketUp, setSocketUp] = useState(false);
   const dataA = usePaneData(ws.panes[0], true, socketUp);
   const dataB = usePaneData(twoUp ? ws.panes[1] : null, twoUp, socketUp);
@@ -364,8 +365,10 @@ export function TradePage() {
             onParams={setIndicatorParams}
             hidden={tools.indicatorsHidden}
             onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
+            structureOn={structureIsOn(structure)}
+            onStructureOn={setStructureOn}
           />
-          <StructureMenu config={structure} onChange={setStructure} />
+          {structureIsOn(structure) && <StructureMenu config={structure} onChange={setStructure} />}
           {twoUp && (
             <LinksMenu
               crosshair={ws.links.crosshair}

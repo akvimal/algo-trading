@@ -69,6 +69,47 @@ describe("display", () => {
     expect(screen.getByText(/naked call/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Edit sl" })).toHaveTextContent("SL 22,900");
   });
+
+  it("a naked option group shows % move of the underlying and of the premium", () => {
+    render(
+      <PositionCard
+        kind="group"
+        item={group({ strategy_type: "naked_call", entry_spot_price: 23000, live_spot_price: 23230, net_debit: 40, live_combined_price: 52 })}
+        onChanged={onChanged()}
+      />,
+    );
+    const metrics = screen.getByTestId("pos-option-metrics");
+    expect(metrics).toHaveTextContent("Spot");
+    expect(metrics).toHaveTextContent("+1.0%"); // (23230-23000)/23000
+    expect(metrics).toHaveTextContent("Premium");
+    expect(metrics).toHaveTextContent("+30.0%"); // (52-40)/40
+  });
+
+  it("a spread group shows % of max profit and % gain/loss on the fund used", () => {
+    render(
+      <PositionCard
+        kind="group"
+        item={group({ strategy_type: "bull_call_spread", net_debit: 30, strike_width: 100, unrealized_pnl: 700, quantity: 20 })}
+        onChanged={onChanged()}
+      />,
+    );
+    const metrics = screen.getByTestId("pos-option-metrics");
+    expect(metrics).toHaveTextContent("Max profit");
+    expect(metrics).toHaveTextContent("+50.0%"); // 700 / ((100-30)*20)
+    expect(metrics).toHaveTextContent("Fund used");
+    expect(metrics).toHaveTextContent(`+${((700 / 600) * 100).toFixed(1)}%`); // 700 / (30*20)
+  });
+
+  it("shows – for either metric when the position was opened before strike_width existed", () => {
+    render(<PositionCard kind="group" item={group({ strategy_type: "bull_call_spread", net_debit: 30, strike_width: null, unrealized_pnl: 700, quantity: 20 })} onChanged={onChanged()} />);
+    const metrics = screen.getByTestId("pos-option-metrics");
+    expect(metrics).toHaveTextContent("–");
+  });
+
+  it("no economics line at all for a plain spot/future position", () => {
+    render(<PositionCard kind="position" item={position()} onChanged={onChanged()} />);
+    expect(screen.queryByTestId("pos-option-metrics")).not.toBeInTheDocument();
+  });
 });
 
 describe("editing the stop-loss and target", () => {

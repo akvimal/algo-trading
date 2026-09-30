@@ -67,6 +67,10 @@ export type OptionGroup = {
   horizon: string | null;
   quantity: number;
   net_debit: number | null;
+  /** The two legs' own strike difference, frozen at open - null for naked, and for any group
+   * opened before this field existed. Lets a spread's theoretical max profit/loss be shown - see
+   * execution's _spread_sizing_basis for the identical debit/credit split. */
+  strike_width?: number | null;
   combined_stop_loss_price: number | null;
   spot_stop_loss_price: number | null;
   spot_target_price: number | null;

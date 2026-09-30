@@ -54,6 +54,9 @@ let account: Record<string, any>;
 let regimeRead: Record<string, any>;
 let placeManual: (body: any) => Response;
 let placeOption: (body: any) => Response;
+let openPositionsFor: Record<string, any[]>; // keyed by symbol - GET /positions?symbol=...&status=OPEN
+let openGroupsFor: Record<string, any[]>; // keyed by symbol - GET /option-groups?symbol=...&status=OPEN
+let squareOffFails: boolean;
 
 beforeEach(() => {
   calls = [];
@@ -72,6 +75,9 @@ beforeEach(() => {
   regimeRead = { regime: "trending_up", trend: "up", adx: 28 };
   placeManual = () => json({ id: "p1", status: "OPEN" });
   placeOption = () => json({ id: "g1", status: "OPEN" });
+  openPositionsFor = {};
+  openGroupsFor = {};
+  squareOffFails = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -87,6 +93,10 @@ beforeEach(() => {
       if (url.includes("/regime")) return json(regimeRead);
       if (url.endsWith("/positions/manual")) return placeManual(init?.body ? JSON.parse(init.body as string) : {});
       if (url.endsWith("/option-groups/manual")) return placeOption(init?.body ? JSON.parse(init.body as string) : {});
+      if (url.includes("/positions?") && method === "GET") return json(openPositionsFor[new URL(url).searchParams.get("symbol") ?? ""] ?? []);
+      if (url.includes("/option-groups?") && method === "GET") return json(openGroupsFor[new URL(url).searchParams.get("symbol") ?? ""] ?? []);
+      if (/\/positions\/[^/]+\/square-off$/.test(url)) return squareOffFails ? json({ detail: "Could not reach the broker." }, 502) : json({ ok: true });
+      if (/\/option-groups\/[^/]+\/square-off$/.test(url)) return squareOffFails ? json({ detail: "Could not reach the broker." }, 502) : json({ ok: true });
       if (url.includes("/options/expiries")) return json({ expiries: [OPTION_EXPIRY, "2026-11-06"] });
       if (url.includes("/options/chain")) {
         const expiry = new URL(url).searchParams.get("expiry") ?? OPTION_EXPIRY;
@@ -275,6 +285,53 @@ describe("OI buildup", () => {
       expect(tcs.queryByRole("button", { name: "Option spread" })).not.toBeInTheDocument();
       await user.click(tcs.getByRole("button", { name: "Close trade" }));
       expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
+    });
+
+    it("shows an already-open spot position with its own status and a square-off, above the ticket", async () => {
+      openPositionsFor.TCS = [
+        {
+          id: "ep1", symbol: "TCS", exchange: "NSE", segment: "NSE", action: "BUY", horizon: "intraday", instrument_type: "spot", quantity: 10,
+          entry_price: 2400, entry_time: "2026-09-25T04:00:00Z", exit_price: null, exit_time: null, pnl: null, unrealized_pnl: 500,
+          status: "OPEN", stop_loss_price: 2350, target_price: 2600, option_group_id: null, trailing_stop_enabled: false,
+        },
+      ];
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(tcs.getByRole("button", { name: "Trade" }));
+      await tcs.findByTestId("ticket");
+      await user.click(tcs.getByRole("button", { name: "Spot" })); // defaults to Option - switch to see the spot position
+      const card = await tcs.findByTestId("position-card");
+      expect(within(card).getByText("TCS")).toBeInTheDocument();
+      expect(within(card).getByText("+₹500")).toBeInTheDocument();
+      await user.click(within(card).getByRole("button", { name: "Square off" }));
+      await user.click(within(card).getByRole("button", { name: "Confirm square off" }));
+      await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.includes("/positions/ep1/square-off"))).toBe(true));
+      expect(tcs.getByTestId("ticket")).toBeInTheDocument(); // still there underneath, for pyramiding
+    });
+
+    it("shows an already-open option group with its own status, economics and a square-off", async () => {
+      openGroupsFor.TCS = [
+        {
+          id: "eg1", underlying_symbol: "TCS", action: "BUY", strategy_type: "naked_call", quantity: 500, unrealized_pnl: 1200,
+          status: "OPEN", entry_spot_price: 2500, entry_time: "2026-09-25T04:00:00Z", spot_stop_loss_trailing_enabled: false,
+          net_debit: 100, live_combined_price: 110,
+        },
+      ];
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const tcs = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(tcs.getByRole("button", { name: "Trade" })); // defaults to Option already
+      await tcs.findByTestId("ticket");
+      const card = await tcs.findByTestId("position-card");
+      expect(within(card).getByText("TCS")).toBeInTheDocument();
+      expect(within(card).getByText(/naked call/)).toBeInTheDocument();
+      expect(within(card).getByTestId("pos-option-metrics")).toHaveTextContent("Premium");
+      await user.click(within(card).getByRole("button", { name: "Square off" }));
+      await user.click(within(card).getByRole("button", { name: "Confirm square off" }));
+      await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.includes("/option-groups/eg1/square-off"))).toBe(true));
     });
 
     it("picking Option shows a Bullish/Bearish view instead of naked/spread jargon, with the real recommended legs - not a PRESETS symbol, but every OI-buildup row has an option chain by definition", async () => {
@@ -484,10 +541,23 @@ describe("Screener", () => {
     await user.click(sbin.getByRole("button", { name: "Chart" }));
     expect(await sbin.findByTestId("chart-pane")).toBeInTheDocument();
     expect(sbin.getByRole("button", { name: "1d" })).toHaveAttribute("aria-pressed", "true");
-    expect(sbin.getByRole("link", { name: /Open in Trade/ })).toHaveAttribute("href", "/trade?symbol=SBIN&segment=NSE");
+    expect(sbin.getByRole("link", { name: /Open the full Trade page/ })).toHaveAttribute("href", "/trade?symbol=SBIN&segment=NSE");
     await user.click(itc.getByRole("button", { name: "Chart" })); // opening the second closes the first
     expect(sbin.queryByTestId("chart-pane")).not.toBeInTheDocument();
     expect(await itc.findByTestId("chart-pane")).toBeInTheDocument();
+  });
+
+  it("also has its own Trade panel now, independent of Chart - defaults to Spot (a Screener row's F&O eligibility isn't known)", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=screener");
+    const list = await screen.findByTestId("screener-list");
+    const sbin = within(within(list).getAllByTestId("screener-card")[0]);
+    await user.click(sbin.getByRole("button", { name: "Trade" }));
+    expect(await sbin.findByTestId("ticket")).toBeInTheDocument();
+    expect(sbin.getByRole("button", { name: "Spot" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(sbin.getByRole("button", { name: "Chart" }));
+    expect(await sbin.findByTestId("chart-pane")).toBeInTheDocument();
+    expect(sbin.getByTestId("ticket")).toBeInTheDocument(); // Chart and Trade are independent here too
   });
 });
 
@@ -528,6 +598,21 @@ describe("Custom screen", () => {
     expect(match.getByRole("button", { name: "1d" })).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "Preview" })); // a fresh run drops any open chart
     expect(within(await screen.findByTestId("custom-screen-matches")).queryByTestId("chart-pane")).not.toBeInTheDocument();
+  });
+
+  it("also has its own Trade panel now, independent of Chart", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByLabelText("Condition");
+    await user.type(screen.getByLabelText("Label"), "Bearish breakout");
+    await user.type(screen.getByLabelText("Condition"), "close > 100");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    const match = within(await screen.findByTestId("custom-screen-matches"));
+    await user.click(match.getByRole("button", { name: "Trade" }));
+    expect(await match.findByTestId("ticket")).toBeInTheDocument();
+    await user.click(match.getByRole("button", { name: "Chart" }));
+    expect(await match.findByTestId("chart-pane")).toBeInTheDocument();
+    expect(match.getByTestId("ticket")).toBeInTheDocument(); // still open - Chart and Trade are independent
   });
 
   it("shows the server's own parse error in words, not a generic failure", async () => {

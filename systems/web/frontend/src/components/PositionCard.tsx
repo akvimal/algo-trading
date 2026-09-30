@@ -2,7 +2,8 @@ import { useState } from "react";
 import { api, ApiError } from "../api/http";
 import { moveOpenLevel } from "../api/trade";
 import type { OptionGroup, Position } from "../api/types";
-import { formatPnl, formatPrice, formatTime } from "../format";
+import { formatPct, formatPnl, formatPrice, formatTime } from "../format";
+import { isNakedOption, isSpreadOption, nakedMetrics, spreadMetrics } from "./positionMetrics";
 import { Signed } from "./bits";
 
 type Props =
@@ -12,8 +13,11 @@ type Props =
 type Field = "stop" | "target";
 
 /** One open trade: what it is, its P&L, and its stop/target - either as plain text or, tapped, a
- * small inline editor (moveOpenLevel, the same route a chart-line drag already uses). Squaring off
- * is a deliberate two-step (tap, then confirm in place): an accidental tap on a phone must not
+ * small inline editor (moveOpenLevel, the same route a chart-line drag already uses). An option
+ * group also gets a second economics line - naked shows % move of the underlying and of the
+ * option's own premium since entry; a spread shows how far its live P&L is toward its own defined
+ * max profit, and against the capital actually committed to it (see positionMetrics.ts). Squaring
+ * off is a deliberate two-step (tap, then confirm in place): an accidental tap on a phone must not
  * close a position, and a browser confirm() dialog is both ugly and blocked in installed PWAs on
  * some platforms. `compact` trims it to fit a narrow sidebar (the trade ticket) - same information,
  * tighter spacing, no entry-time line. */
@@ -37,6 +41,12 @@ export function PositionCard(props: Props) {
   const stop = p ? p.stop_loss_price : (g!.spot_stop_loss_price ?? g!.combined_stop_loss_price);
   const target = p ? p.target_price : g!.spot_target_price;
   const stopTrailing = (p ? p.trailing_stop_enabled : g!.spot_stop_loss_trailing_enabled) === true;
+  // Naked: % move of the underlying and of the option's own premium, since entry. Spread: how far
+  // the live P&L is toward the position's own defined max profit, and against the capital
+  // actually committed to it - see positionMetrics.ts for the debit/credit math either needs.
+  const naked = g && isNakedOption(g.strategy_type) ? nakedMetrics(g) : null;
+  const spread = g && isSpreadOption(g.strategy_type) ? spreadMetrics(g) : null;
+  const pctText = (v: number | null) => (v == null ? "–" : formatPct(v, 1, true));
 
   async function squareOff() {
     setBusy(true);
@@ -138,6 +148,26 @@ export function PositionCard(props: Props) {
         <span>{detail}</span>
         {!compact && <span>since {formatTime(item.entry_time)}</span>}
       </div>
+      {naked && (
+        <div className="pos-sub" data-testid="pos-option-metrics">
+          <span>
+            Spot <Signed value={naked.spotPct} text={pctText(naked.spotPct)} />
+          </span>
+          <span>
+            Premium <Signed value={naked.premiumPct} text={pctText(naked.premiumPct)} />
+          </span>
+        </div>
+      )}
+      {spread && (
+        <div className="pos-sub" data-testid="pos-option-metrics">
+          <span>
+            Max profit <Signed value={spread.maxProfitPct} text={pctText(spread.maxProfitPct)} />
+          </span>
+          <span>
+            Fund used <Signed value={spread.fundUsedPct} text={pctText(spread.fundUsedPct)} />
+          </span>
+        </div>
+      )}
       <div className="pos-sub">
         {level("stop", stop)}
         {level("target", target)}

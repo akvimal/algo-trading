@@ -6,6 +6,16 @@ import type { OpenLevel } from "../chart/trades";
 export const resolveUnderlying = (segment: Segment, symbol: string) =>
   api<ResolvedUnderlying>("marketData", `/instruments/resolve?segment=${segment}&underlying=${encodeURIComponent(symbol)}`);
 
+/** Any OPEN spot/future position or option group already on this (segment, symbol) - backs the
+ * Scan page's inline trade panel showing an existing position's own status (with a square-off)
+ * instead of, or alongside, a blank ticket. Small limit: pyramiding (Strategy.duplicate_signal_
+ * policy='add_position', or any manual order - manual orders always allow it) can leave more than
+ * one open, but never many. */
+export const getOpenPositionsFor = (exchange: Segment, symbol: string) =>
+  api<Position[]>("execution", `/positions?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&status=OPEN&with_live_pnl=true&limit=10`);
+export const getOpenOptionGroupsFor = (exchange: Segment, symbol: string) =>
+  api<OptionGroup[]>("execution", `/option-groups?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&status=OPEN&with_live_pnl=true&limit=10`);
+
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
 /** Recent candles for one series. `days` reaches back far enough to cover a weekend or holiday. */

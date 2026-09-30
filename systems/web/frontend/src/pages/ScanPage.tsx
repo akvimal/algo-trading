@@ -221,7 +221,7 @@ function OiCard({
       {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
       {tradeOpen && (
         <div className="scan-chart">
-          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} defaultView={defaultViewFromOi(r)} />
+          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} oiDefaultView={defaultViewFromOi(r)} />
         </div>
       )}
       {(expanded || tradeOpen) && (
@@ -241,9 +241,10 @@ function ScreenerScan() {
   const [f, setF] = useState<ScreenerFilters>(SCREENER_DEFAULTS);
   const rows = data.data ? filterScreener(data.data.rows, f) : [];
   const [shown, more] = useShown(JSON.stringify(f));
-  // Same one-at-a-time inline chart as OI buildup (see OiScan) - its own accordion, not shared
-  // with the OI tab's, since switching tabs unmounts this component anyway.
+  // Same one-at-a-time inline chart/trade accordions as OI buildup (see OiScan) - each its own,
+  // not shared with the OI tab's, since switching tabs unmounts this component anyway.
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [tradeOpen, setTradeOpen] = useState<string | null>(null);
 
   return (
     <div className="stack">
@@ -278,7 +279,14 @@ function ScreenerScan() {
             <>
               <div className="stack" data-testid="screener-list">
                 {visible(rows, shown).map((r) => (
-                  <ScreenerCard key={r.symbol} row={r} expanded={expanded === r.symbol} onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))} />
+                  <ScreenerCard
+                    key={r.symbol}
+                    row={r}
+                    expanded={expanded === r.symbol}
+                    onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))}
+                    tradeOpen={tradeOpen === r.symbol}
+                    onToggleTrade={() => setTradeOpen((cur) => (cur === r.symbol ? null : r.symbol))}
+                  />
                 ))}
               </div>
               {shown < rows.length && (
@@ -294,7 +302,19 @@ function ScreenerScan() {
   );
 }
 
-function ScreenerCard({ row: r, expanded, onToggle }: { row: ScreenerRow; expanded: boolean; onToggle: () => void }) {
+function ScreenerCard({
+  row: r,
+  expanded,
+  onToggle,
+  tradeOpen,
+  onToggleTrade,
+}: {
+  row: ScreenerRow;
+  expanded: boolean;
+  onToggle: () => void;
+  tradeOpen: boolean;
+  onToggleTrade: () => void;
+}) {
   return (
     <div className="card scan-card" data-testid="screener-card">
       <div className="row">
@@ -322,17 +342,25 @@ function ScreenerCard({ row: r, expanded, onToggle }: { row: ScreenerRow; expand
             </span>
           )}
         </span>
-        <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
-          {expanded ? "Close chart" : "Chart"}
-        </button>
+        <span className="field-actions">
+          <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
+            {expanded ? "Close chart" : "Chart"}
+          </button>
+          <button className="link-btn" aria-expanded={tradeOpen} onClick={onToggleTrade}>
+            {tradeOpen ? "Close trade" : "Trade"}
+          </button>
+        </span>
       </div>
-      {expanded && (
-        <>
-          <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />
-          <p style={{ margin: "2px 0 0" }}>
-            <Link to={tradeLink(r.symbol)}>Open in Trade, to place an order →</Link>
-          </p>
-        </>
+      {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
+      {tradeOpen && (
+        <div className="scan-chart">
+          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} />
+        </div>
+      )}
+      {(expanded || tradeOpen) && (
+        <p style={{ margin: "2px 0 0" }}>
+          <Link to={tradeLink(r.symbol)}>Open the full Trade page →</Link>
+        </p>
       )}
     </div>
   );
@@ -356,8 +384,9 @@ function CustomScreenScan() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Same one-at-a-time inline chart as OI buildup/Screener - its own accordion.
+  // Same one-at-a-time inline chart/trade accordions as OI buildup/Screener - their own.
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [tradeOpen, setTradeOpen] = useState<string | null>(null);
 
   const errors = validateForm(form);
 
@@ -365,6 +394,7 @@ function CustomScreenScan() {
     setRunError(null);
     setResult(null);
     setExpanded(null);
+    setTradeOpen(null);
     setBusy(true);
     try {
       setResult(await previewCustomScreen(formToDef(form)));
@@ -379,6 +409,7 @@ function CustomScreenScan() {
     setRunError(null);
     setResult(null);
     setExpanded(null);
+    setTradeOpen(null);
     setBusy(true);
     try {
       setResult(await runCustomScreen(s.id));
@@ -503,22 +534,31 @@ function CustomScreenScan() {
             <div className="stack" data-testid="custom-screen-matches">
               {result.matches.map((m) => {
                 const isExpanded = expanded === m.symbol;
+                const isTradeOpen = tradeOpen === m.symbol;
                 return (
                   <div className="card scan-card" key={m.symbol}>
                     <div className="row">
                       <strong>{m.symbol}</strong>
                       <span className="num">{formatPrice(m.close)}</span>
-                      <button className="link-btn" aria-expanded={isExpanded} onClick={() => setExpanded((cur) => (cur === m.symbol ? null : m.symbol))}>
-                        {isExpanded ? "Close chart" : "Chart"}
-                      </button>
+                      <span className="field-actions">
+                        <button className="link-btn" aria-expanded={isExpanded} onClick={() => setExpanded((cur) => (cur === m.symbol ? null : m.symbol))}>
+                          {isExpanded ? "Close chart" : "Chart"}
+                        </button>
+                        <button className="link-btn" aria-expanded={isTradeOpen} onClick={() => setTradeOpen((cur) => (cur === m.symbol ? null : m.symbol))}>
+                          {isTradeOpen ? "Close trade" : "Trade"}
+                        </button>
+                      </span>
                     </div>
-                    {isExpanded && (
-                      <>
-                        <ScanChartPanel exchange={m.exchange} symbol={m.symbol} />
-                        <p style={{ margin: "2px 0 0" }}>
-                          <Link to={tradeLink(m.symbol)}>Open in Trade, to place an order →</Link>
-                        </p>
-                      </>
+                    {isExpanded && <ScanChartPanel exchange={m.exchange} symbol={m.symbol} />}
+                    {isTradeOpen && (
+                      <div className="scan-chart">
+                        <ScanTradePanel exchange={m.exchange} symbol={m.symbol} />
+                      </div>
+                    )}
+                    {(isExpanded || isTradeOpen) && (
+                      <p style={{ margin: "2px 0 0" }}>
+                        <Link to={tradeLink(m.symbol)}>Open the full Trade page →</Link>
+                      </p>
                     )}
                   </div>
                 );

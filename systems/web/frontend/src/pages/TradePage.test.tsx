@@ -1186,9 +1186,12 @@ describe("two linked charts", () => {
     expect(chart(1).overlaysNamed("peerCursor")).toHaveLength(0);
   });
 
-  it("makes the other chart follow scrolling and zoom, once, without the two chasing each other", async () => {
+  it("makes the other chart follow scrolling and zoom, once, without the two chasing each other, once that link is switched on", async () => {
     const user = userEvent.setup();
     await pair(user);
+    // Off by default (see "does not link scrolling by default" below) - switch it on for this test.
+    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByLabelText("Sync scrolling and zoom"));
     const [a, b] = [chart(0), chart(1)];
     b.barSpace = 8;
     a.barSpace = 12; // the person zoomed chart A
@@ -1204,11 +1207,9 @@ describe("two linked charts", () => {
     expect(a.barSpace).toBe(3);
   });
 
-  it("does not link scrolling when that is switched off", async () => {
+  it("does not link scrolling by default", async () => {
     const user = userEvent.setup();
     await pair(user);
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
-    await user.click(screen.getByLabelText("Sync scrolling and zoom"));
     chart(0).barSpace = 15;
     act(() => chart(0).emit("onVisibleRangeChange"));
     expect(chart(1).barSpace).toBe(8);

@@ -47,8 +47,8 @@ describe("agreement", () => {
 });
 
 describe("workstation state", () => {
-  it("starts as one chart on Nifty, ticket open, everything linked", () => {
-    expect(DEFAULT_STATE).toMatchObject({ layout: "single", active: 0, ticketOpen: true, links: { crosshair: true, scale: true, interval: true } });
+  it("starts as one chart on Nifty, ticket open, crosshair and candle size linked but not scrolling/zoom", () => {
+    expect(DEFAULT_STATE).toMatchObject({ layout: "single", active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } });
     expect(paneCount(DEFAULT_STATE)).toBe(1);
   });
 

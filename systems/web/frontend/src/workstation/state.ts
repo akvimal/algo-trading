@@ -18,7 +18,7 @@ export type WorkstationState = {
   ticketOpen: boolean;
 };
 
-export const DEFAULT_LINKS: Links = { crosshair: true, scale: true, interval: true };
+export const DEFAULT_LINKS: Links = { crosshair: true, scale: false, interval: true };
 
 const pane = (symbol: string, segment: Segment, interval = DEFAULT_INTERVAL): PaneSpec => ({ symbol, segment, interval });
 

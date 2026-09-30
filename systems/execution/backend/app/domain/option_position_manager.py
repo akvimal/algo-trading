@@ -1414,6 +1414,26 @@ def update_group_stop_loss(
     return row
 
 
+def update_group_target(
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+) -> Optional[db_models.OptionPositionGroup]:
+    """update_group_stop_loss's identical counterpart for combined_target_price - same
+    sl_scope='combined'-only scoping, same "return the group unchanged, let the caller check
+    status/sl_scope" contract. Backs the Scan page's %-of-max-profit target (a defined-risk
+    spread's max profit is bounded and known up front - see ScanOptionBias.tsx - so "close at
+    70% of max profit" translates to one concrete combined price, set here right after open, the
+    same way spot_stop_loss/spot_target already get attached post-open for a manual option
+    order)."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None or row.user_id != user_id:
+        return None
+    if row.sl_scope != "combined":
+        return row
+    row.combined_target_price = new_price
+    db.commit()
+    return row
+
+
 def update_group_spot_stop_loss(
     db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
 ) -> Optional[db_models.OptionPositionGroup]:

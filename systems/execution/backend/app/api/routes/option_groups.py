@@ -23,6 +23,8 @@ from app.adapters.quotes.client import (
 )
 from app.auth import User, get_current_user, require_admin
 from app.domain.models import (
+    CombinedStopLossUpdate,
+    CombinedTargetUpdate,
     ManualOptionPositionCreate,
     NotesUpdate,
     OptionLegPreview,
@@ -30,7 +32,6 @@ from app.domain.models import (
     SpotStopLossUpdate,
     SpotTargetUpdate,
     SquareOffTimeUpdate,
-    StopLossUpdate,
     TradeTagsUpdate,
 )
 from app.domain.option_position_manager import (
@@ -50,6 +51,7 @@ from app.domain.option_position_manager import (
     update_group_spot_target,
     update_group_square_off_time,
     update_group_stop_loss,
+    update_group_target,
 )
 from app.domain.position_manager import load_settings
 
@@ -420,7 +422,7 @@ def review_group(group_id: str, payload: ReviewSubmit, user: User = Depends(get_
 
 @router.put("/option-groups/{group_id}/stop-loss")
 def edit_group_stop_loss(
-    group_id: str, payload: StopLossUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    group_id: str, payload: CombinedStopLossUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """Generically useful, not manual-only - editing combined SL on any
     already-open option group. 404 if missing or owned by another user,
@@ -439,10 +441,33 @@ def edit_group_stop_loss(
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
     if row.sl_scope != "combined":
         raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing SL here")
-    if payload.stop_loss_method is not None:
-        raise HTTPException(status_code=422, detail="stop_loss_method is not supported for options - use stop_loss_price")
 
     row = update_group_stop_loss(db, owner_id, parsed_id, payload.stop_loss_price)
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/target")
+def edit_group_target(group_id: str, payload: CombinedTargetUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """edit_group_stop_loss's identical counterpart for combined_target_price - same
+    404/409 shape. Backs the Scan page's %-of-max-profit target (see
+    option_position_manager.update_group_target's own docstring) - attached right after a manual
+    option order opens, the same post-open PUT pattern spot_stop_loss/spot_target already use."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
+    if row.sl_scope != "combined":
+        raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing target here")
+
+    row = update_group_target(db, owner_id, parsed_id, payload.target_price)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 

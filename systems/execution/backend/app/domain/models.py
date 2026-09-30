@@ -907,12 +907,36 @@ class StopLossUpdate(BaseModel):
 
 class TargetUpdate(BaseModel):
     """PUT /positions/{id}/target - moves an already-open spot/futures
-    position's take-profit, the sibling of StopLossUpdate (an option group's
-    own is SpotTargetUpdate). Same side rule ManualPositionCreate applies at
-    order time, checked against the position's own entry price in
-    update_target (the model does not know it)."""
+    position's take-profit, the sibling of StopLossUpdate. Same side rule
+    ManualPositionCreate applies at order time, checked against the
+    position's own entry price in update_target (the model does not know
+    it). A real spot/futures price is always positive, hence gt=0 - NOT
+    reused for the option-group combined target (see CombinedTargetUpdate
+    below), whose price can legitimately be negative."""
 
     target_price: float = Field(gt=0)
+
+
+class CombinedStopLossUpdate(BaseModel):
+    """PUT /option-groups/{id}/stop-loss's own shape - deliberately NOT StopLossUpdate (shared
+    with spot/future positions, where a stop price must be positive - a real market price never
+    isn't). A COMBINED option premium can legitimately be negative: a credit spread's net_debit
+    (its own entry combined price) is negative by construction (see option_position_manager's
+    _spread_sizing_basis), and a stop/target computed as a fraction of its own max loss/profit
+    stays in that same negative range - see ScanOptionBias.tsx's stopPct/targetPct. No
+    stop_loss_method/trailing concept exists for options (open_option_group's own
+    'percent'-only stop-loss, set once at open) - just the one flat field."""
+
+    stop_loss_price: float
+
+
+class CombinedTargetUpdate(BaseModel):
+    """PUT /option-groups/{id}/target's own shape - CombinedStopLossUpdate's identical reasoning
+    for why this is its own model rather than reusing TargetUpdate's gt=0. An option group's
+    SPOT-price target is the separate SpotTargetUpdate; this is the COMBINED-premium one,
+    sl_scope='combined' groups only - see update_group_target."""
+
+    target_price: float
 
 
 class SquareOffTimeUpdate(BaseModel):

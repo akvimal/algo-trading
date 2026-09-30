@@ -1325,6 +1325,33 @@ describe("saved combos", () => {
     expect(screen.getByText("No saved combos yet.")).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toEqual([]);
   });
+
+  it("saves the same symbol at two different candle sizes as its own combo, with a disambiguated label", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" })); // two-up
+    await loaded(1);
+
+    // Make the second chart NIFTY too, then give it its own candle size (unlinked first, or the
+    // interval link would just snap it straight back to chart 1's own size).
+    await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
+    await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(screen.getAllByText("NIFTY")[0]).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByLabelText("Same candle size"));
+    await user.click(within(screen.getAllByRole("group", { name: "Candle size, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "+ Save NIFTY 15m + NIFTY 1h" }));
+    expect(await screen.findByRole("button", { name: "NIFTY 15m + NIFTY 1h" })).toBeInTheDocument();
+    const saved = JSON.parse(localStorage.getItem("web.workstation.combos")!);
+    expect(saved).toHaveLength(2);
+    expect(saved[1]).toMatchObject({ a: { symbol: "NIFTY", interval: "15min" }, b: { symbol: "NIFTY", interval: "60min" } });
+  });
 });
 
 describe("when candles will not load", () => {

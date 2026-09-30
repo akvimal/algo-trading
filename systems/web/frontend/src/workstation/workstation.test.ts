@@ -6,7 +6,7 @@ import {
   DEFAULT_STATE, loadWorkstation, paneCount, saveWorkstation, setInterval as setIv, setLayout, setLinks, setSymbol, withUrlSymbol,
 } from "./state";
 
-const NIFTY_BANKNIFTY: Combo = { id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: { symbol: "NIFTY", segment: "NSE" }, b: { symbol: "BANKNIFTY", segment: "NSE" } };
+const NIFTY_BANKNIFTY: Combo = { id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: { symbol: "NIFTY", segment: "NSE", interval: "15min" }, b: { symbol: "BANKNIFTY", segment: "NSE", interval: "15min" } };
 const applyPair = (s: Parameters<typeof applyCombo>[0]) => applyCombo(s, NIFTY_BANKNIFTY);
 const isPair = (s: Parameters<typeof isActiveCombo>[0]) => isActiveCombo(s, NIFTY_BANKNIFTY);
 
@@ -76,11 +76,11 @@ describe("workstation state", () => {
     expect(withUrlSymbol(saved, null, null)).toBe(saved);
   });
 
-  it("the pair puts the two indices side by side at the first chart's candle size", () => {
+  it("the pair puts the two indices side by side at the combo's own saved candle size, not whatever the workstation was already showing", () => {
     const start = setIv(DEFAULT_STATE, 0, "5min");
     const s = applyPair(start);
     expect(s.layout).toBe("side");
-    expect(s.panes.map((p) => `${p.symbol}@${p.interval}`)).toEqual(["NIFTY@5min", "BANKNIFTY@5min"]);
+    expect(s.panes.map((p) => `${p.symbol}@${p.interval}`)).toEqual(["NIFTY@15min", "BANKNIFTY@15min"]); // the combo's own 15min, not the pre-existing 5min
     expect(isPair(s)).toBe(true);
     expect(isPair(DEFAULT_STATE)).toBe(false);
     expect(applyPair(setLayout(s, "stack")).layout).toBe("stack"); // an existing two-chart layout is kept

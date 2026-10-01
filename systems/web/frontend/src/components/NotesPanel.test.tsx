@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import type { NoteContext, StudyNote } from "../api/types";
@@ -34,7 +35,9 @@ const note = (over: Partial<StudyNote> = {}): StudyNote => ({
 
 function panel(over: Partial<React.ComponentProps<typeof NotesPanel>> = {}) {
   return render(
-    <NotesPanel segment="NSE" symbol="NIFTY" interval="5min" getContext={() => CTX} getChartImage={() => ({ url: "data:image/png;base64,CHART" })} aiRead={null} {...over} />,
+    <MemoryRouter>
+      <NotesPanel segment="NSE" symbol="NIFTY" interval="5min" getContext={() => CTX} getChartImage={() => ({ url: "data:image/png;base64,CHART" })} aiRead={null} {...over} />
+    </MemoryRouter>,
   );
 }
 const openIt = async (user: ReturnType<typeof userEvent.setup>) => user.click(screen.getByTestId("notes-toggle"));
@@ -54,7 +57,7 @@ describe("NotesPanel", () => {
     expect(listNotes).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Note")).not.toBeInTheDocument();
     await openIt(user);
-    expect(listNotes).toHaveBeenCalledWith("NSE", "NIFTY");
+    expect(listNotes).toHaveBeenCalledWith({ segment: "NSE", symbol: "NIFTY", limit: 3 });
     expect(await screen.findByText(/No notes on NIFTY yet/)).toBeInTheDocument();
   });
 
@@ -214,8 +217,29 @@ describe("NotesPanel", () => {
     const { rerender } = panel();
     await openIt(user);
     await user.type(screen.getByLabelText("Note"), "about nifty");
-    rerender(<NotesPanel segment="NSE" symbol="BANKNIFTY" interval="5min" getContext={() => CTX} getChartImage={() => ({ problem: "x" })} aiRead={null} />);
+    rerender(
+      <MemoryRouter>
+        <NotesPanel segment="NSE" symbol="BANKNIFTY" interval="5min" getContext={() => CTX} getChartImage={() => ({ problem: "x" })} aiRead={null} />
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByLabelText("Note")).toHaveValue(""));
-    expect(listNotes).toHaveBeenLastCalledWith("NSE", "BANKNIFTY");
+    expect(listNotes).toHaveBeenLastCalledWith({ segment: "NSE", symbol: "BANKNIFTY", limit: 3 });
+  });
+
+  it("links to the whole history of this instrument on the notes page", async () => {
+    const user = userEvent.setup();
+    panel({ symbol: "GOLDM", segment: "MCX" });
+    await openIt(user);
+    const link = await screen.findByTestId("notes-history-link");
+    expect(link).toHaveTextContent("All notes on GOLDM");
+    expect(link).toHaveAttribute("href", "/more/notes?segment=MCX&symbol=GOLDM");
+  });
+
+  it("shows only the latest few under the chart and says so when there may be more", async () => {
+    listNotes.mockResolvedValue([note({ id: "a", text: "one" }), note({ id: "b", text: "two" }), note({ id: "c", text: "three" })]);
+    const user = userEvent.setup();
+    panel();
+    await openIt(user);
+    expect(await screen.findByText("Showing the latest 3.")).toBeInTheDocument();
   });
 });

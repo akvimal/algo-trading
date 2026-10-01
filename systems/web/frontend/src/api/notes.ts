@@ -1,11 +1,35 @@
 import { SERVICE_URLS } from "../config";
 import { getToken } from "../auth/token";
 import { ApiError, api } from "./http";
-import type { NoteContext, NoteTag, Segment, StudyNote } from "./types";
+import type { NoteContext, NoteInstrument, NoteTag, Segment, StudyNote } from "./types";
 
-/** The person's own notes on one instrument, oldest first. */
-export const listNotes = (segment: Segment, symbol: string) =>
-  api<StudyNote[]>("execution", `/study-notes?segment=${segment}&symbol=${encodeURIComponent(symbol)}&limit=200`);
+export type NoteFilter = {
+  segment?: Segment;
+  symbol?: string;
+  tag?: NoteTag;
+  /** Only notes whose text contains this. */
+  q?: string;
+  /** Newest first, paged with `offset` - what the history page uses. Without it: the latest `limit`, oldest first. */
+  newestFirst?: boolean;
+  offset?: number;
+  limit?: number;
+};
+
+/** The person's own notes, optionally narrowed to one instrument, a tag, or some text. */
+export function listNotes(filter: NoteFilter = {}) {
+  const params = new URLSearchParams();
+  if (filter.segment) params.set("segment", filter.segment);
+  if (filter.symbol) params.set("symbol", filter.symbol);
+  if (filter.tag) params.set("tag", filter.tag);
+  if (filter.q?.trim()) params.set("q", filter.q.trim());
+  if (filter.newestFirst) params.set("newest_first", "true");
+  if (filter.offset) params.set("offset", String(filter.offset));
+  params.set("limit", String(filter.limit ?? 200));
+  return api<StudyNote[]>("execution", `/study-notes?${params.toString()}`);
+}
+
+/** Every instrument the person has notes on, most recently written first, with a count. */
+export const listNoteInstruments = () => api<NoteInstrument[]>("execution", "/study-notes/instruments");
 
 export type NewNote = {
   segment: Segment;

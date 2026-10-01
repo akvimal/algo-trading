@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { addNote, deleteNote, fetchSnapshotUrl, listNotes } from "../api/notes";
+import { Link } from "react-router-dom";
+import { addNote, listNotes } from "../api/notes";
 import { ApiError } from "../api/http";
-import type { AiRead, NoteContext, NoteTag, Segment, StudyNote } from "../api/types";
+import type { AiRead, NoteContext, NoteTag, Segment } from "../api/types";
 import type { ChartImage } from "../chart/ChartPane";
 import { composeSnapshot, copyDataUrl, downloadDataUrl, snapshotFileName } from "../chart/snapshot";
 import { formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
-import { NOTE_MAX, NOTE_TAGS, contextChips, groupByDay } from "./notesModel";
+import { NoteRow } from "./NoteRow";
+import { NOTE_MAX, NOTE_TAGS, groupByDay } from "./notesModel";
+
+/** How many of the latest notes on the instrument are shown under the chart. */
+const RECENT = 3;
 
 type Props = {
   segment: Segment;
@@ -21,8 +26,6 @@ type Props = {
   aiRead: AiRead | null;
 };
 
-const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "");
-
 /** The thoughts-and-plans panel under the chart: write what you are seeing and what you plan to do, tagged, with the
  * market's state stored beside it, and optionally a picture of the chart with the note on it. Private to the
  * person; a record for studying their own process, and for handing to an AI later. Not sent anywhere. */
@@ -33,7 +36,8 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
   const [attach, setAttach] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
-  const notes = useResource(() => listNotes(segment, symbol), [segment, symbol], { enabled: open });
+  // Only the latest few sit under the chart; the whole history, by instrument, is on its own page.
+  const notes = useResource(() => listNotes({ segment, symbol, limit: RECENT }), [segment, symbol], { enabled: open });
   const list = notes.data ?? [];
   const threadEnd = useRef<HTMLDivElement>(null);
 
@@ -115,7 +119,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
     <div className="notes" data-testid="notes">
       <div className="notes-bar">
         <button className="chip-btn notes-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)} data-testid="notes-toggle">
-          ✎ Notes{notes.data ? ` · ${notes.data.length}` : ""}
+          ✎ Notes
           <span aria-hidden="true"> {open ? "▴" : "▾"}</span>
         </button>
         {!open && <span className="faint">Your thoughts and plans on {symbol}, kept with the market's state at the time.</span>}
@@ -127,6 +131,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
             {notes.loading && <p className="faint">Loading…</p>}
             {notes.error && <p className="error-text">Could not load your notes. {notes.error.message}</p>}
             {!notes.loading && !notes.error && list.length === 0 && <p className="faint">No notes on {symbol} yet. Write what you see and what you plan to do.</p>}
+            {list.length >= RECENT && <p className="faint">Showing the latest {RECENT}.</p>}
             {groupByDay(list).map((g) => (
               <div key={g.label}>
                 <div className="notes-day">{g.label}</div>
@@ -137,6 +142,9 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
             ))}
             <div ref={threadEnd} />
           </div>
+          <Link className="notes-history-link" to={`/more/notes?segment=${segment}&symbol=${encodeURIComponent(symbol)}`} data-testid="notes-history-link">
+            All notes on {symbol} →
+          </Link>
 
           <div className="notes-composer">
             <label className="sr-only" htmlFor="note-text">
@@ -188,74 +196,6 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function NoteRow({ note, onDeleted }: { note: StudyNote; onDeleted: () => void }) {
-  const [image, setImage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState(false);
-  const chips = contextChips(note.context);
-
-  useEffect(() => () => (image ? URL.revokeObjectURL?.(image) : undefined), [image]);
-
-  async function toggleImage() {
-    if (image) {
-      setImage(null);
-      return;
-    }
-    setError(null);
-    try {
-      setImage(await fetchSnapshotUrl(note.id));
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not load the snapshot.");
-    }
-  }
-
-  async function remove() {
-    if (!confirm) {
-      setConfirm(true);
-      window.setTimeout(() => setConfirm(false), 4000);
-      return;
-    }
-    try {
-      await deleteNote(note.id);
-      onDeleted();
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Could not delete the note.");
-      setConfirm(false);
-    }
-  }
-
-  return (
-    <div className="note" data-testid="note">
-      <div className="note-head">
-        <span className="faint">{hhmm(note.created_at)}</span>
-        {note.tag && <span className="pill">{note.tag}</span>}
-        {note.interval && <span className="faint">{note.interval.replace("min", "m")}</span>}
-        <span className="notes-spacer" />
-        {note.has_snapshot && (
-          <button className="link-btn" aria-expanded={image != null} onClick={() => void toggleImage()}>
-            {image ? "Hide snapshot" : "View snapshot"}
-          </button>
-        )}
-        <button className="link-btn" aria-label={confirm ? "Confirm delete note" : "Delete note"} onClick={() => void remove()}>
-          {confirm ? "Delete?" : "✕"}
-        </button>
-      </div>
-      <p className="note-text">{note.text}</p>
-      {chips.length > 0 && (
-        <div className="note-chips" aria-label="Market when written">
-          {chips.map((c, i) => (
-            <span key={i} className="faint note-chip">
-              {c}
-            </span>
-          ))}
-        </div>
-      )}
-      {error && <p className="error-text">{error}</p>}
-      {image && <img className="note-image" src={image} alt={`Chart snapshot with the note from ${hhmm(note.created_at)}`} />}
     </div>
   );
 }

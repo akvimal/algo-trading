@@ -394,3 +394,6 @@ export type StudyNote = {
   has_snapshot: boolean;
   created_at: string | null;
 };
+
+/** One instrument the person has written notes on (GET /study-notes/instruments). */
+export type NoteInstrument = { segment: Segment; symbol: string; count: number; last_at: string | null };

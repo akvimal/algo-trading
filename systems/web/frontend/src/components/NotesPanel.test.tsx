@@ -34,7 +34,7 @@ const note = (over: Partial<StudyNote> = {}): StudyNote => ({
 
 function panel(over: Partial<React.ComponentProps<typeof NotesPanel>> = {}) {
   return render(
-    <NotesPanel segment="NSE" symbol="NIFTY" interval="5min" getContext={() => CTX} getChartImage={() => "data:image/png;base64,CHART"} aiRead={null} {...over} />,
+    <NotesPanel segment="NSE" symbol="NIFTY" interval="5min" getContext={() => CTX} getChartImage={() => ({ url: "data:image/png;base64,CHART" })} aiRead={null} {...over} />,
   );
 }
 const openIt = async (user: ReturnType<typeof userEvent.setup>) => user.click(screen.getByTestId("notes-toggle"));
@@ -116,13 +116,32 @@ describe("NotesPanel", () => {
 
   it("still saves the words when the chart is not ready for a snapshot, and says so", async () => {
     const user = userEvent.setup();
-    panel({ getChartImage: () => null });
+    panel({ getChartImage: () => ({ problem: "the chart is still loading its candles" }) });
     await openIt(user);
     await user.type(screen.getByLabelText("Note"), "thought");
     await user.click(screen.getByLabelText(/Attach a snapshot/));
     await user.click(screen.getByRole("button", { name: "Save note" }));
     await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1));
     expect(addNote.mock.calls[0][0]).not.toHaveProperty("snapshot_png_base64");
+    expect(await screen.findByTestId("notes-status")).toHaveTextContent("The note was saved without a snapshot: the chart is still loading its candles.");
+  });
+
+  it("says why when a snapshot is asked for on its own and cannot be taken", async () => {
+    const user = userEvent.setup();
+    panel({ getChartImage: () => ({ problem: "the chart has not loaded - fix the message shown on it first" }) });
+    await openIt(user);
+    await user.click(screen.getByRole("button", { name: "Download snapshot" }));
+    expect(await screen.findByTestId("notes-status")).toHaveTextContent("No snapshot taken: the chart has not loaded");
+    expect(downloadDataUrl).not.toHaveBeenCalled();
+  });
+
+  it("names the browser when it cannot build the picture", async () => {
+    composeSnapshot.mockResolvedValue(null);
+    const user = userEvent.setup();
+    panel();
+    await openIt(user);
+    await user.click(screen.getByRole("button", { name: "Copy snapshot" }));
+    expect(await screen.findByTestId("notes-status")).toHaveTextContent("this browser could not build the picture");
   });
 
   it("shows the server's message when saving fails and keeps what was typed", async () => {
@@ -195,7 +214,7 @@ describe("NotesPanel", () => {
     const { rerender } = panel();
     await openIt(user);
     await user.type(screen.getByLabelText("Note"), "about nifty");
-    rerender(<NotesPanel segment="NSE" symbol="BANKNIFTY" interval="5min" getContext={() => CTX} getChartImage={() => null} aiRead={null} />);
+    rerender(<NotesPanel segment="NSE" symbol="BANKNIFTY" interval="5min" getContext={() => CTX} getChartImage={() => ({ problem: "x" })} aiRead={null} />);
     await waitFor(() => expect(screen.getByLabelText("Note")).toHaveValue(""));
     expect(listNotes).toHaveBeenLastCalledWith("NSE", "BANKNIFTY");
   });

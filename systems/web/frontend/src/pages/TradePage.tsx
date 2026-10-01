@@ -566,7 +566,7 @@ export function TradePage() {
             symbol={ws.panes[active].symbol}
             interval={ws.panes[active].interval}
             getContext={noteContextFor}
-            getChartImage={() => paneRefs[active].current?.snapshot() ?? null}
+            getChartImage={() => paneRefs[active].current?.snapshot() ?? { problem: datas[active].error ? `the chart did not load (${datas[active].error!.message})` : "the chart is not on screen yet" }}
             aiRead={aiReadFor(active)}
           />
           {structure.tfs.length > 0 && structure.setups && (reports[active]?.setups.length ?? 0) > 0 && (

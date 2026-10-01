@@ -33,9 +33,11 @@ export type ChartPaneHandle = {
    * what a starting stop or target line is measured in, so it lands inside the part of the chart on screen. */
   typicalMove: () => number | null;
   /** The chart as it is on screen (candles, indicators, drawings, structure, trade markers) as a PNG data URL, or
-   * null when it is not ready. */
-  snapshot: () => string | null;
+   * the reason there is no picture to take (still loading, failed to load, the browser could not draw it). */
+  snapshot: () => ChartImage;
 };
+
+export type ChartImage = { url: string } | { problem: string };
 
 /** The visible window of a chart, in terms another chart can follow: the size of a bar and the time at the
  * right-hand edge. `seq` makes each message distinct. */
@@ -102,6 +104,9 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const [status, setStatus] = useState<Status>("loading");
+  // The imperative handle below is built once, so it reads the live status through a ref.
+  const statusRef = useRef<Status>("loading");
+  statusRef.current = status;
   const [message, setMessage] = useState<string | null>(null);
   // Bumped after every full (re)load of the series; later effects re-apply their overlays against it.
   const [epoch, setEpoch] = useState(0);
@@ -674,14 +679,22 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     typicalMove() {
       return averageTrueRange(barsRef.current);
     },
-    snapshot() {
+    snapshot(): ChartImage {
       const chart = chartRef.current;
-      if (!chart) return null;
-      try {
-        return chart.getConvertPictureUrl(true, "png", getComputedStyle(document.body).backgroundColor || "#0f1216");
-      } catch {
-        return null;
+      if (!chart) return { problem: "the chart is not on screen" };
+      if (statusRef.current === "loading") return { problem: "the chart is still loading its candles" };
+      if (statusRef.current === "error") return { problem: "the chart has not loaded - fix the message shown on it first (for example a Dhan token problem)" };
+      const background = getComputedStyle(document.body).backgroundColor || "#0f1216";
+      // With everything on it first; if the library cannot draw one of the overlays, the bare candles still make a picture.
+      for (const withOverlays of [true, false]) {
+        try {
+          const url = chart.getConvertPictureUrl(withOverlays, "png", background);
+          if (url && url.startsWith("data:image")) return { url };
+        } catch (e) {
+          console.warn(`chart snapshot ${withOverlays ? "with" : "without"} overlays failed`, e);
+        }
       }
+      return { problem: "the browser could not draw the chart as an image" };
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);

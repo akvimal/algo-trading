@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { addNote, deleteNote, fetchSnapshotUrl, listNotes } from "../api/notes";
 import { ApiError } from "../api/http";
 import type { AiRead, NoteContext, NoteTag, Segment, StudyNote } from "../api/types";
+import type { ChartImage } from "../chart/ChartPane";
 import { composeSnapshot, copyDataUrl, downloadDataUrl, snapshotFileName } from "../chart/snapshot";
 import { formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
@@ -14,8 +15,8 @@ type Props = {
   interval: string;
   /** The market as it is on screen right now. A function, so it is read at the moment a note is sent. */
   getContext: () => NoteContext;
-  /** The chart as a PNG data URL, or null when it is not ready. */
-  getChartImage: () => string | null;
+  /** The chart as a PNG data URL, or the reason there is none to take. */
+  getChartImage: () => ChartImage;
   /** The latest AI read for this instrument, if one has been run - its one-liner goes on the snapshot. */
   aiRead: AiRead | null;
 };
@@ -46,18 +47,26 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
     if (open) threadEnd.current?.scrollIntoView?.({ block: "nearest" });
   }, [open, list.length]);
 
+  // Why the last attempt to take a picture failed, so the message says what to do rather than "not ready".
+  const lastProblem = useRef("the chart is not ready");
+
   async function snapshot(): Promise<string | null> {
-    const chart = getChartImage();
-    if (!chart) return null;
+    const image = getChartImage();
+    if ("problem" in image) {
+      lastProblem.current = image.problem;
+      return null;
+    }
     const ctx = getContext();
-    return composeSnapshot({
-      chart,
+    const composed = await composeSnapshot({
+      chart: image.url,
       title: `${symbol} · ${interval.replace("min", "m")}`,
       subtitle: `${new Date().toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}${ctx.price != null ? ` · ${formatPrice(ctx.price)}` : ""}`,
       note: draft,
       tag,
       aiLine: aiRead?.one_liner ?? null,
     });
+    if (!composed) lastProblem.current = "this browser could not build the picture";
+    return composed;
   }
 
   async function send() {
@@ -69,7 +78,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
       let png: string | null = null;
       if (attach) {
         png = await snapshot();
-        if (!png) setStatus({ text: "The note was saved without a snapshot: the chart is not ready.", error: true });
+        if (!png) setStatus({ text: `The note was saved without a snapshot: ${lastProblem.current}.`, error: true });
       }
       await addNote({ segment, symbol, interval, text, tag, context: getContext(), ...(png ? { snapshot_png_base64: png } : {}) });
       setDraft("");
@@ -86,7 +95,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
     setStatus(null);
     const png = await snapshot();
     if (!png) {
-      setStatus({ text: "The chart is not ready to capture yet.", error: true });
+      setStatus({ text: `No snapshot taken: ${lastProblem.current}.`, error: true });
       return;
     }
     if (action === "download") {

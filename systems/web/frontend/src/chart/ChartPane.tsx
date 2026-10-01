@@ -12,6 +12,7 @@ import {
 import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
 import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
+import { withDevicePixelRatio } from "./snapshot";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
@@ -685,16 +686,30 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (statusRef.current === "loading") return { problem: "the chart is still loading its candles" };
       if (statusRef.current === "error") return { problem: "the chart has not loaded - fix the message shown on it first (for example a Dhan token problem)" };
       const background = getComputedStyle(document.body).backgroundColor || "#0f1216";
-      // With everything on it first; if the library cannot draw one of the overlays, the bare candles still make a picture.
-      for (const withOverlays of [true, false]) {
+      const tried: string[] = [];
+      // The library's own export (the chart's DOM canvases cannot be read back instead: it paints them off-screen, so they
+      // come out blank). Everything on it first; then without overlays in case one of them cannot be drawn; then both again
+      // at a pixel ratio of 1, for a chart too large (or a screen too dense) for the browser to allocate the full-size
+      // canvas, which makes it return an empty "data:,".
+      const attempts: { overlays: boolean; ratio1: boolean }[] = [
+        { overlays: true, ratio1: false },
+        { overlays: false, ratio1: false },
+        { overlays: true, ratio1: true },
+        { overlays: false, ratio1: true },
+      ];
+      for (const a of attempts) {
+        const label = `${a.overlays ? "with" : "without"} overlays${a.ratio1 ? " at ratio 1" : ""}`;
         try {
-          const url = chart.getConvertPictureUrl(withOverlays, "png", background);
+          const run = () => chart.getConvertPictureUrl(a.overlays, "png", background);
+          const url = a.ratio1 ? withDevicePixelRatio(1, run) : run();
           if (url && url.startsWith("data:image")) return { url };
+          tried.push(`export ${label} gave no image`);
         } catch (e) {
-          console.warn(`chart snapshot ${withOverlays ? "with" : "without"} overlays failed`, e);
+          console.warn(`chart snapshot ${label} failed`, e);
+          tried.push(`export ${label}: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
-      return { problem: "the browser could not draw the chart as an image" };
+      return { problem: `the browser could not draw the chart as an image (${tried.join("; ")})` };
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);

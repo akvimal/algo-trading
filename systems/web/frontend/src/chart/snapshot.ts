@@ -66,6 +66,25 @@ export function snapshotFileName(symbol: string, interval: string, when: Date): 
   return `${safe(symbol)}-${safe(interval)}-${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}-${pad(when.getHours())}${pad(when.getMinutes())}.png`;
 }
 
+/** Runs `fn` with the page reporting a device pixel ratio of `ratio`, then puts the real one back (even if `fn`
+ * throws). The chart library sizes its export canvas as the chart's size times this ratio, so on a large chart or a
+ * high-density screen the canvas can exceed what the browser allows and come back as an empty "data:," - asking for a
+ * ratio of 1 makes it a fraction of the size. */
+export function withDevicePixelRatio<T>(ratio: number, fn: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  try {
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => ratio });
+  } catch {
+    return fn(); // the browser will not let the page change it: try at the real ratio
+  }
+  try {
+    return fn();
+  } finally {
+    if (original) Object.defineProperty(window, "devicePixelRatio", original);
+    else delete (window as unknown as Record<string, unknown>).devicePixelRatio;
+  }
+}
+
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyDataUrl, snapshotFileName, wrapText } from "./snapshot";
+import { copyDataUrl, snapshotFileName, withDevicePixelRatio, wrapText } from "./snapshot";
 
 // one pixel per character keeps the arithmetic obvious
 const px = (s: string) => s.length;
@@ -40,5 +40,28 @@ describe("copyDataUrl", () => {
   it("says so when the browser cannot put an image on the clipboard", async () => {
     // jsdom has no ClipboardItem
     expect(await copyDataUrl("data:image/png;base64,AAAA")).toBe("unsupported");
+  });
+});
+
+describe("withDevicePixelRatio", () => {
+  it("reports the asked-for ratio inside, and the real one again after", () => {
+    const real = window.devicePixelRatio;
+    expect(withDevicePixelRatio(1, () => window.devicePixelRatio)).toBe(1);
+    expect(withDevicePixelRatio(0.5, () => window.devicePixelRatio)).toBe(0.5);
+    expect(window.devicePixelRatio).toBe(real);
+  });
+
+  it("puts the real ratio back even when the work throws", () => {
+    const real = window.devicePixelRatio;
+    expect(() =>
+      withDevicePixelRatio(1, () => {
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+    expect(window.devicePixelRatio).toBe(real);
+  });
+
+  it("returns what the work returns", () => {
+    expect(withDevicePixelRatio(1, () => "done")).toBe("done");
   });
 });

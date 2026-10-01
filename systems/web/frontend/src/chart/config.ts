@@ -42,11 +42,49 @@ export const INTERVALS: IntervalDef[] = [
   { label: "1w", value: "weekly", minutes: 10080, lookbackDays: 1095, source: "yahoo" },
 ];
 
-/** The candle sizes the trade view's live charts offer: the ones a trade is actually taken on. 30m, daily
- * and weekly are left out there (they stay in INTERVALS, which the Scan page's inline chart and the
- * strategy rules still draw from). A saved layout or chart combo holding a size that is not in this list
- * falls back to the default size on load. */
-export const TRADE_INTERVALS: IntervalDef[] = INTERVALS.filter((i) => ["1min", "3min", "5min", "15min", "60min"].includes(i.value));
+/** The candle sizes shown as quick buttons on a chart until the person picks their own favourites (the star
+ * menu next to them lists every size). */
+export const DEFAULT_FAVORITE_INTERVALS = ["1min", "3min", "5min", "15min", "60min"];
+
+const INTERVAL_VALUES = new Set(INTERVALS.map((i) => i.value));
+const FAVORITES_KEY = "favoriteIntervals";
+export const FAVORITE_INTERVALS_CHANGED_EVENT = "web:chart:favorite-intervals-changed";
+
+/** The favourite candle sizes, finest first. Anything unknown is dropped, and an empty or unreadable
+ * saved list falls back to the defaults - there is always at least one quick button. */
+export function parseFavoriteIntervals(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string" && INTERVAL_VALUES.has(v)) : [];
+  if (list.length === 0) return DEFAULT_FAVORITE_INTERVALS;
+  return INTERVALS.filter((i) => list.includes(i.value)).map((i) => i.value);
+}
+
+/** The saved favourites as stored text (or null), so a component can subscribe to it as a plain value. */
+export function favoriteIntervalsRaw(): string | null {
+  try {
+    return localStorage.getItem(PREFIX + FAVORITES_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function favoriteIntervals(): string[] {
+  const raw = favoriteIntervalsRaw();
+  try {
+    return parseFavoriteIntervals(raw == null ? null : JSON.parse(raw));
+  } catch {
+    return DEFAULT_FAVORITE_INTERVALS;
+  }
+}
+
+/** Star or un-star one size, for every chart at once. The last favourite cannot be removed. */
+export function toggleFavoriteInterval(value: string): void {
+  if (!INTERVAL_VALUES.has(value)) return;
+  const current = favoriteIntervals();
+  const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+  if (next.length === 0) return;
+  write(FAVORITES_KEY, parseFavoriteIntervals(next));
+  window.dispatchEvent(new Event(FAVORITE_INTERVALS_CHANGED_EVENT));
+}
 
 export const DEFAULT_INTERVAL = "15min";
 export const intervalDef = (value: string): IntervalDef => INTERVALS.find((i) => i.value === value) ?? INTERVALS.find((i) => i.value === DEFAULT_INTERVAL)!;

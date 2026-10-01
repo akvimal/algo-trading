@@ -1,5 +1,5 @@
 import type { Segment } from "../api/types";
-import { DEFAULT_INTERVAL, TRADE_INTERVALS } from "../chart/config";
+import { DEFAULT_INTERVAL, INTERVALS } from "../chart/config";
 import { parseTradeParams, presetFor } from "../pages/tradeModel";
 
 // The shape of the trading workstation: one or two charts, which instrument each shows, at which
@@ -31,7 +31,7 @@ export const DEFAULT_STATE: WorkstationState = {
 };
 
 const KEY = "web.workstation";
-const VALID_INTERVALS = new Set(TRADE_INTERVALS.map((i) => i.value));
+const VALID_INTERVALS = new Set(INTERVALS.map((i) => i.value));
 const LAYOUTS: Layout[] = ["single", "side", "stack"];
 
 function cleanPane(v: unknown, fallback: PaneSpec): PaneSpec {

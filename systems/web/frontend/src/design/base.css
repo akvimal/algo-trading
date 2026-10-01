@@ -1508,3 +1508,73 @@ table.t th {
   margin-top: 6px;
   cursor: pointer;
 }
+
+.interval-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+}
+.interval-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.interval-pick {
+  flex: 1;
+  text-align: left;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.interval-pick:hover,
+.interval-pick[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.interval-star {
+  min-height: 30px;
+  width: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+}
+.interval-star.on {
+  color: #ffc83d;
+}
+.interval-star:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* the size menu sits inside the .chips group, whose pill-button styling must not reach into it */
+.chips .interval-pick,
+.chips .interval-star {
+  border-radius: 6px;
+  border-color: transparent;
+  background: transparent;
+  min-height: 30px;
+}
+.chips .interval-pick:hover,
+.chips .interval-pick[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.chips .interval-star {
+  width: 30px;
+  padding: 0;
+  color: var(--text-dim);
+}
+.chips .interval-star.on {
+  color: #ffc83d;
+}
+.chips .interval-star[aria-pressed="true"] {
+  border-color: transparent;
+  background: transparent;
+}

@@ -1237,12 +1237,15 @@ describe("layout and the ticket panel", () => {
     expect(JSON.parse(localStorage.getItem("web.workstation")!).panes[0].interval).toBe("5min");
   });
 
-  it("does not offer 30m, 1d or 1w candles on the live charts, nor 30m/1d as structure detection timeframes", async () => {
+  it("shows only the favourite candle sizes by default, with every size in the Sizes menu; structure keeps its own shorter list", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     for (const hidden of ["30m", "1d", "1w"]) expect(screen.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
     for (const shown of ["1m", "3m", "5m", "15m", "1h"]) expect(screen.getAllByRole("button", { name: shown }).length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: /Sizes/ })[0]);
+    expect(within(screen.getByRole("group", { name: "Sizes" })).getByRole("button", { name: "30m" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: /Sizes/ })[0]); // close it again
     // the Structure dropdown only exists once the layer is switched on, from the Indicators menu
     await user.click(screen.getByRole("button", { name: /Indicators/ }));
     await user.click(screen.getByLabelText("Structure"));
@@ -1253,11 +1256,12 @@ describe("layout and the ticket panel", () => {
     for (const hidden of ["30m", "1d"]) expect(menu.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
   });
 
-  it("brings a saved layout that holds a size no longer offered back to the default size", async () => {
-    localStorage.setItem("web.workstation", JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "weekly" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "30min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } }));
+  it("opens a saved layout on a size that is not a favourite, and shows that size's button while it is on screen", async () => {
+    localStorage.setItem("web.workstation", JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "30min" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "30min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } }));
     renderAt("/trade");
     await loaded(0);
-    expect(screen.getByTestId("chart-summary")).toHaveTextContent("NIFTY, 15m candles");
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent("NIFTY, 30m candles");
+    expect(screen.getAllByRole("button", { name: "30m", pressed: true }).length).toBeGreaterThan(0);
   });
 
   it("restores the saved layout on the next visit", async () => {

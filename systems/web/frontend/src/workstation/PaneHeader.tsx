@@ -1,7 +1,9 @@
 import type { MarketRegime } from "../api/types";
-import { TRADE_INTERVALS, type IntervalDef } from "../chart/config";
+import { INTERVALS, toggleFavoriteInterval, type IntervalDef } from "../chart/config";
+import { Popover } from "../chart/Popover";
 import { formatPrice } from "../format";
 import { directionOf } from "./confluence";
+import { useFavoriteIntervals } from "./useFavoriteIntervals";
 
 const REGIME_WORD = { trending_up: "Trending up", trending_down: "Trending down", ranging: "Ranging", transitional: "Changing" } as const;
 
@@ -18,14 +20,18 @@ type Props = {
   structureTrend?: Record<string, "up" | "down" | "range">;
   active: boolean;
   showActive: boolean;
-  /** Which candle sizes to offer - the full set by default; a caller with narrower needs (the
-   * Scan page's inline chart) can pass a shorter list instead. */
+  /** A fixed list of candle sizes to show as buttons (the Scan page's inline chart). Left out, the chart shows
+   * the person's FAVOURITE sizes as buttons, plus a star menu that lists every size. */
   intervals?: IntervalDef[];
 };
 
 /** The title bar of one chart: which instrument, its price, whether it is live, the candle size, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
-export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals = TRADE_INTERVALS }: Props) {
+export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals }: Props) {
+  const favorites = useFavoriteIntervals();
+  // A fixed list wins; otherwise the favourites, in size order, plus the size on screen when it is not one of them
+  // (so the active size is never invisible).
+  const buttons: IntervalDef[] = intervals ?? INTERVALS.filter((i) => favorites.includes(i.value) || i.value === interval);
   const dir = directionOf(regime);
   const trends = Object.entries(structureTrend ?? {});
   return (
@@ -35,11 +41,41 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
         {showActive && active && <span className="pill" title="Orders and drawing tools apply to this chart">Trading</span>}
       </div>
       <div className="chips" role="group" aria-label={`Candle size, ${symbol}`}>
-        {intervals.map((i) => (
+        {buttons.map((i) => (
           <button key={i.value} aria-pressed={interval === i.value} onClick={() => onInterval(i.value)}>
             {i.label}
           </button>
         ))}
+        {!intervals && (
+          <Popover label="Sizes" align="left">
+            <div className="menu-heading">Candle size</div>
+            <div className="interval-list">
+              {INTERVALS.map((i) => {
+                const starred = favorites.includes(i.value);
+                return (
+                  <div className="interval-row" key={i.value}>
+                    <button className="interval-pick" aria-pressed={interval === i.value} onClick={() => onInterval(i.value)}>
+                      {i.label}
+                    </button>
+                    <button
+                      className={`interval-star ${starred ? "on" : ""}`}
+                      aria-label={starred ? `Remove ${i.label} from favourites` : `Add ${i.label} to favourites`}
+                      aria-pressed={starred}
+                      disabled={starred && favorites.length === 1}
+                      title={starred ? (favorites.length === 1 ? "At least one favourite is kept" : "Remove from the quick buttons") : "Show as a quick button"}
+                      onClick={() => toggleFavoriteInterval(i.value)}
+                    >
+                      {starred ? "★" : "☆"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }}>
+              Starred sizes are the buttons shown on every chart.
+            </p>
+          </Popover>
+        )}
       </div>
       {regime && (
         <span className={`pill ${dir === "up" ? "up" : dir === "down" ? "dn" : ""}`} data-testid={`regime-${index}`}>

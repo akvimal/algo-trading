@@ -1,5 +1,5 @@
 import type { Segment } from "../api/types";
-import { DEFAULT_INTERVAL, INTERVALS, TRADE_INTERVALS } from "../chart/config";
+import { DEFAULT_INTERVAL, INTERVALS } from "../chart/config";
 import { DEFAULT_LINKS, paneCount, type PaneSpec, type WorkstationState } from "./state";
 
 // User-saved instrument pairs for the "side by side"/"stacked" two-chart layouts. NIFTY + BANKNIFTY
@@ -13,7 +13,7 @@ export type ComboSide = { symbol: string; segment: Segment; interval: string };
 export type Combo = { id: string; label: string; a: ComboSide; b: ComboSide };
 
 const KEY = "web.workstation.combos";
-const VALID_INTERVALS = new Set(TRADE_INTERVALS.map((i) => i.value));
+const VALID_INTERVALS = new Set(INTERVALS.map((i) => i.value));
 
 const DEFAULT_COMBOS: Combo[] = [
   { id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: { symbol: "NIFTY", segment: "NSE", interval: DEFAULT_INTERVAL }, b: { symbol: "BANKNIFTY", segment: "NSE", interval: DEFAULT_INTERVAL } },

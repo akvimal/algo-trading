@@ -147,8 +147,8 @@ export function PositionCard(props: Props) {
           {trailing ? " (trailing)" : ""}
         </button>
         {help && value == null && (
-          <button type="button" className="link-btn" aria-label={`Add ${field} line`} title="Put a starting line on the chart and save it - then drag it where you want it" onClick={() => help.onAddLine(field)}>
-            Add line
+          <button type="button" className="link-btn" aria-label={`Add ${field} line`} title="Suggest a price from the chart's typical move, save it and put its line on the chart - then drag it where you want it" onClick={() => help.onAddLine(field)}>
+            Suggest
           </button>
         )}
         {help && (

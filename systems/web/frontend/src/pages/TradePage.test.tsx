@@ -560,32 +560,7 @@ describe("the plan on the ticket", () => {
     await waitFor(() => expect(chip()).toHaveTextContent(/Planned · R:R 3\.0/));
   });
 
-  it("fills an empty stop and target in one click, on the right side of the price", async () => {
-    const user = userEvent.setup();
-    renderAt("/trade?symbol=RELIANCE");
-    const t = await ticket();
-    await loaded();
-    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
-    const stop = Number((t.getByLabelText("Stop-loss") as HTMLInputElement).value);
-    const target = Number((t.getByLabelText("Target") as HTMLInputElement).value);
-    expect(stop).toBeLessThan(1000);
-    expect(target).toBeGreaterThan(1000);
-    expect(t.queryByRole("button", { name: "Suggest stop & target" })).not.toBeInTheDocument(); // nothing left to fill
-    expect(t.getByTestId("plan-chip")).toHaveTextContent(/Planned/);
-  });
-
-  it("keeps a stop that was already typed and only fills the target", async () => {
-    const user = userEvent.setup();
-    renderAt("/trade?symbol=RELIANCE");
-    const t = await ticket();
-    await loaded();
-    await user.type(t.getByLabelText("Stop-loss"), "980");
-    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
-    expect(t.getByLabelText("Stop-loss")).toHaveValue("980");
-    expect(Number((t.getByLabelText("Target") as HTMLInputElement).value)).toBeGreaterThan(1039);
-  });
-
-  it("suggests a plan for an option order too, from the underlying's price", async () => {
+  it("adds a line for an option order too, from the underlying's price, and the chip follows", async () => {
     profilePrefs = { default_instrument: "option", default_option_strategy: "naked" };
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
@@ -593,32 +568,30 @@ describe("the plan on the ticket", () => {
     await loaded();
     await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
     expect(t.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
-    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
-    const stop = Number((t.getByLabelText("Stop-loss") as HTMLInputElement).value);
-    const target = Number((t.getByLabelText("Target") as HTMLInputElement).value);
-    expect(stop).toBeLessThan(1000); // a buy is bullish: its stop is below the underlying
-    expect(target).toBeGreaterThan(1000);
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    await user.click(t.getByRole("button", { name: "Add target line" }));
+    expect(Number((t.getByLabelText("Stop-loss") as HTMLInputElement).value)).toBeLessThan(1000); // a buy is bullish: its stop is below the underlying
+    expect(Number((t.getByLabelText("Target") as HTMLInputElement).value)).toBeGreaterThan(1000);
     expect(t.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R/);
   });
 
-  it("goes back to the first suggestion after the stop or target was changed", async () => {
+  it("offers a way back to the price Add line first suggested, only once it has been changed", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
     await loaded();
-    expect(t.queryByRole("button", { name: "Reset to suggestion" })).not.toBeInTheDocument();
-    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
-    const stop = (t.getByLabelText("Stop-loss") as HTMLInputElement).value;
-    const target = (t.getByLabelText("Target") as HTMLInputElement).value;
-    expect(t.queryByRole("button", { name: "Reset to suggestion" })).not.toBeInTheDocument(); // nothing changed yet
+    expect(t.queryByRole("button", { name: "Back to suggested stop" })).not.toBeInTheDocument();
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    const first = (t.getByLabelText("Stop-loss") as HTMLInputElement).value;
+    expect(t.queryByRole("button", { name: "Back to suggested stop" })).not.toBeInTheDocument(); // nothing changed yet
     await user.clear(t.getByLabelText("Stop-loss"));
     await user.type(t.getByLabelText("Stop-loss"), "950");
-    await user.clear(t.getByLabelText("Target"));
+    await user.click(t.getByRole("button", { name: "Back to suggested stop" }));
+    expect(t.getByLabelText("Stop-loss")).toHaveValue(first);
+    expect(t.queryByRole("button", { name: "Back to suggested stop" })).not.toBeInTheDocument();
+    // a field that was never suggested has nothing to go back to
     await user.type(t.getByLabelText("Target"), "1100");
-    await user.click(t.getByRole("button", { name: "Reset to suggestion" }));
-    expect(t.getByLabelText("Stop-loss")).toHaveValue(stop);
-    expect(t.getByLabelText("Target")).toHaveValue(target);
-    expect(t.queryByRole("button", { name: "Reset to suggestion" })).not.toBeInTheDocument();
+    expect(t.queryByRole("button", { name: "Back to suggested target" })).not.toBeInTheDocument();
   });
 
   it("shows the size as worked out from the risk, quietly, and typing over it can be undone", async () => {

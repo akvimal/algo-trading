@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, planStatus, riskLots, suggestPlan, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, planStatus, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -315,25 +315,6 @@ describe("isFresh", () => {
     expect(isFresh(now - (PRICE_STALE_MS - 1), now)).toBe(true);
     expect(isFresh(now - PRICE_STALE_MS, now)).toBe(false);
     expect(isFresh(now, now)).toBe(true); // just arrived
-  });
-});
-
-describe("suggestPlan", () => {
-  it("puts the stop one typical move against the trade and the target as far as the minimum reward-to-risk asks", () => {
-    expect(suggestPlan("BUY", 1000, 10, 3)).toEqual({ stop: 990, target: 1030 });
-    expect(suggestPlan("SELL", 1000, 10, 3)).toEqual({ stop: 1010, target: 970 });
-  });
-
-  it("never plans under 2:1, whatever the minimum says", () => {
-    expect(suggestPlan("BUY", 1000, 10, 1)).toEqual({ stop: 990, target: 1020 });
-  });
-
-  it("keeps a stop already typed and measures the target from it", () => {
-    expect(suggestPlan("BUY", 1000, 10, 2, 980)).toEqual({ stop: 980, target: 1040 });
-  });
-
-  it("has nothing to suggest without a price", () => {
-    expect(suggestPlan("BUY", null, 10, 2)).toBeNull();
   });
 });
 

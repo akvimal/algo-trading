@@ -387,27 +387,6 @@ export function defaultLevel(field: "entry" | "stop" | "target", action: Action,
 /** The server refuses to move a live stop away from price; the page says the same before asking. */
 export const STOP_WIDEN_MESSAGE = "The stop can only move toward price once the order is live.";
 
-/** A starting stop and target for a trade at `price`: the stop one typical bar-move against it (see defaultLevel), the
- * target as far the other way as the person's minimum reward-to-risk asks (never under 2:1). A stop already typed is
- * kept and the target is measured from it. Null when there is no price to work from. */
-export function suggestPlan(
-  action: Action,
-  price: number | null,
-  typicalMove: number | null,
-  minRR: number,
-  typedStop: number | null = null,
-): { stop: number; target: number } | null {
-  if (price == null || !Number.isFinite(price) || price <= 0) return null;
-  const buy = action === "BUY";
-  const stop = typedStop != null && Number.isFinite(typedStop) && typedStop > 0 ? typedStop : defaultLevel("stop", action, price, typicalMove);
-  if (stop == null) return null;
-  const distance = Math.abs(price - stop);
-  if (!(distance > 0)) return null;
-  const decimals = price >= 100 ? 2 : price >= 1 ? 3 : 6;
-  const target = Number((price + (buy ? 1 : -1) * distance * Math.max(minRR, 2)).toFixed(decimals));
-  return { stop, target };
-}
-
 export type PlanStatus = { tone: "empty" | "partial" | "ready" | "warn"; text: string };
 
 /** One quiet line saying how complete the plan is, for a spot/future ticket. It never blocks anything. */

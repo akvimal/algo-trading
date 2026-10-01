@@ -47,7 +47,7 @@ import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
-import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, isFresh, suggestPlan, type Ticket } from "./tradeModel";
+import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, isFresh, type Ticket } from "./tradeModel";
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
@@ -217,7 +217,7 @@ export function TradePage() {
   const [showFormAnyway, setShowFormAnyway] = useState(false);
   useEffect(() => {
     setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
-    setSuggestion(null);
+    setSuggested({});
     setPickField(null);
     setLevelPick(null);
     setShowFormAnyway(false);
@@ -272,11 +272,11 @@ export function TradePage() {
     setPickField(null);
   }
 
-  // A plan line dragged on the chart (or added with "Add line") sets the ticket's price for that field.
+  // A plan line dragged on the chart (or suggested with "Suggest") sets the ticket's price for that field.
   function setLevel(field: PriceField, price: number) {
     setTicket((t) => ({ ...t, [field]: String(price), ...(field === "entry" ? { orderType: "limit" as const } : {}) }));
   }
-  // "Add line" on an open trade: save a starting stop/target at the usual distance, then it is a line to drag.
+  // "Suggest" on an open trade: save a starting stop/target at the usual distance, then it is a line to drag.
   function addOpenLevel(kind: "position" | "group", tradeId: string, long: boolean, field: "stop" | "target") {
     const level = defaultLevel(field, long ? "BUY" : "SELL", activePrice, paneRefs[active].current?.typicalMove() ?? null);
     if (level != null) void moveLevel(active, { kind, tradeId, long, field }, level);
@@ -290,19 +290,14 @@ export function TradePage() {
     },
   });
   // One click fills the stop and target that are still empty from the chart's typical move and the person's minimum reward-to-risk.
-  const [suggestion, setSuggestion] = useState<{ stop: number; target: number } | null>(null);
-  function suggestTicketPlan() {
-    const typedStop = Number(ticket.stop);
-    const plan = suggestPlan(ticket.action, analysis?.entry ?? activePrice, paneRefs[active].current?.typicalMove() ?? null, ctx?.minRR ?? 2, ticket.stop.trim() !== "" && Number.isFinite(typedStop) ? typedStop : null);
-    if (!plan) return;
-    setSuggestion(plan);
-    setTicket((t) => ({ ...t, stop: t.stop.trim() === "" ? String(plan.stop) : t.stop, target: t.target.trim() === "" ? String(plan.target) : t.target }));
-  }
-  // Back to the first suggestion, whatever has been changed since.
-  const resetToSuggestion = () => suggestion && setTicket((t) => ({ ...t, stop: String(suggestion.stop), target: String(suggestion.target) }));
+  // The price "Suggest" first put on each field, so the ticket can offer a way back to it after the person has dragged or typed over it.
+  const [suggested, setSuggested] = useState<Partial<Record<PriceField, number>>>({});
   function addLine(field: PriceField) {
     const level = defaultLevel(field, ticket.action, activePrice, paneRefs[active].current?.typicalMove() ?? null);
-    if (level != null) setLevel(field, level);
+    if (level != null) {
+      setSuggested((cur) => ({ ...cur, [field]: level }));
+      setLevel(field, level);
+    }
   }
 
   // ---- drawing tools act on the active chart ----
@@ -740,9 +735,7 @@ export function TradePage() {
                   setPickField(f);
                 }}
                 onAddLine={addLine}
-                onSuggestPlan={suggestTicketPlan}
-                suggestion={suggestion}
-                onResetToSuggestion={resetToSuggestion}
+                suggested={suggested}
                 holding={hasOpenForInstrument ? openHolding : null}
                 onPlaced={() => {
                   waiting.reload();
@@ -753,7 +746,7 @@ export function TradePage() {
                   // indefinitely (nothing else ever cleared them; the ticket itself only resets
                   // on a symbol/segment change, not on a successful placement).
                   setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
-                  setSuggestion(null);
+                  setSuggested({});
                   setPickField(null);
                 }}
               />

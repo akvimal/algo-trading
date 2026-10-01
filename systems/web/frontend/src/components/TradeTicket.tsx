@@ -10,6 +10,7 @@ import {
   type Action, type BuildMeta, type DayBudget, type Moneyness, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
 import type { PriceField } from "../chart/ChartPane";
+import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import type { Pretrade } from "../api/types";
 import { TextField } from "./Field";
 
@@ -104,7 +105,8 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
     onPickField ? (
       <span className="field-actions">
         {onAddLine && fieldValue[f].trim() === "" && ctx.price != null && (
-          <button className="link-btn" aria-label={`Add ${f} line`} title="Suggest a price from the chart's typical move and put its line on the chart, then drag it" onClick={() => onAddLine(f)}>
+          <button className="link-btn with-icon" aria-label={`Add ${f} line`} title="Suggest a price from the chart's typical move and put its line on the chart, then drag it" onClick={() => onAddLine(f)}>
+            <SparkIcon />
             Suggest
           </button>
         )}
@@ -118,8 +120,9 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
             Reset
           </button>
         )}
-        <button className="link-btn" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
-          {pickField === f ? "Click the chart…" : "Pick on chart"}
+        <button className="link-btn with-icon" aria-label={pickField === f ? "Click the chart…" : "Pick on chart"} title="Click the chart to set it there" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
+          <CrosshairIcon />
+          {pickField === f ? "Click chart…" : "Pick"}
         </button>
       </span>
     ) : undefined;

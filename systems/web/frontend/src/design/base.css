@@ -2024,3 +2024,18 @@ table.t th {
 .mark.info {
   color: var(--text-dim);
 }
+
+/* A small action with an icon in front (Suggest, Pick): the icon and its word stay together, and the groups beside them keep their distance. */
+.link-btn.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 0;
+  white-space: nowrap;
+}
+.pos-level-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+}

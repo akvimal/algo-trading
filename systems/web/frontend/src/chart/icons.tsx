@@ -40,3 +40,18 @@ export const EyeOffIcon = () => wrap(<><path d="M3 3l18 18" /><path d="M10.6 6.1
 export const TrashIcon = () => wrap(<><path d="M4 7h16" /><path d="M9 7V4h6v3" /><path d="M6 7l1 13h10l1-13" /></>);
 export const XIcon = () => wrap(<path d="M6 6l12 12M18 6L6 18" />);
 export const ExpandIcon = () => wrap(<><path d="M4 9V4h5" /><path d="M20 9V4h-5" /><path d="M4 15v5h5" /><path d="M20 15v5h-5" /></>);
+
+const small = { ...props, width: 13, height: 13 } as const;
+/** A small sparkle: "suggest a price for me". */
+export const SparkIcon = () => (
+  <svg {...small}>
+    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />
+  </svg>
+);
+/** A small crosshair: "pick the price on the chart". */
+export const CrosshairIcon = () => (
+  <svg {...small}>
+    <circle cx="12" cy="12" r="6" />
+    <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
+  </svg>
+);

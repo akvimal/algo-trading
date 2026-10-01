@@ -216,17 +216,14 @@ export function TradePage() {
   // The same chart click can instead set the stop or target of an OPEN trade (saved straight away, like
   // dragging its line) - never both at once.
   const [levelPick, setLevelPick] = useState<{ kind: "position" | "group"; tradeId: string; long: boolean; field: "stop" | "target" } | null>(null);
-  // The order form is hidden once something is already open on this instrument - the open
-  // position(s) are almost always what the person came to look at then, and a bare order form
-  // above them just pushes that down. "+ Place another order" reveals it again for pyramiding, and
-  // resets with everything else the moment the instrument changes.
-  const [showFormAnyway, setShowFormAnyway] = useState(false);
+  // The order form is hidden once something is already open on this instrument: the open position(s) are what the person came to
+  // look at, and a second order on top of one is how a plan turns into averaging in. To add, close it first or let its stop or target
+  // do it. (There used to be a "+ Place another order" link here; it is gone by decision.)
   useEffect(() => {
     setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
     setSuggested({});
     setPickField(null);
     setLevelPick(null);
-    setShowFormAnyway(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- defaultInstrument/defaultOptionStrategy
     // intentionally excluded: changing the preference mid-session (e.g. from another tab) should
     // not yank a ticket already in progress here; it takes effect on the next instrument change.
@@ -247,8 +244,6 @@ export function TradePage() {
     };
   }, [tradeRows.data, activeSpec.symbol]);
   const hasOpenForInstrument = activeTrades.positions.length > 0 || activeTrades.groups.length > 0;
-  const openCount = activeTrades.positions.length + activeTrades.groups.length;
-  const openHolding = `${openCount} open ${activeSpec.symbol} position${openCount === 1 ? "" : "s"}`;
   const ctx = account
     ? {
         price: activePrice, lotSize: activeData.resolved?.lot_size ?? 1, capital: account.capital_per_trade, riskPct: account.risk_per_trade_pct,
@@ -723,7 +718,7 @@ export function TradePage() {
                 </p>
               </div>
             )}
-            {ctx && !live && (!hasOpenForInstrument || showFormAnyway) && (
+            {ctx && !live && !hasOpenForInstrument && (
               <TradeTicket
                 ticket={ticket}
                 onChange={setTicket}
@@ -751,7 +746,6 @@ export function TradePage() {
                     : null
                 }
                 suggested={suggested}
-                holding={hasOpenForInstrument ? openHolding : null}
                 onPlaced={() => {
                   waiting.reload();
                   today.reload();
@@ -769,14 +763,10 @@ export function TradePage() {
             )}
             {hasOpenForInstrument && (
               <>
-                <div className="row">
-                  <h2 className="section-title">Open positions</h2>
-                  {ctx && !live && !showFormAnyway && (
-                    <button className="link-btn" onClick={() => setShowFormAnyway(true)}>
-                      + Place another order
-                    </button>
-                  )}
-                </div>
+                <h2 className="section-title" style={{ marginBottom: 2 }}>Open positions</h2>
+                <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }} data-testid="no-second-order">
+                  To add to it, close it first or let its stop or target do it.
+                </p>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
                     <PositionCard key={p.id} kind="position" item={p} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} />

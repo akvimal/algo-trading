@@ -5,6 +5,7 @@ import type { OptionGroup, Position } from "../api/types";
 import { formatPct, formatPnl, formatPrice, formatTime } from "../format";
 import { ScanChartPanel } from "../pages/ScanChartPanel";
 import { isNakedOption, isSpreadOption, nakedMetrics, spreadMetrics } from "./positionMetrics";
+import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import { Signed } from "./bits";
 
 type Field = "stop" | "target";
@@ -164,13 +165,15 @@ export function PositionCard(props: Props) {
           {trailing ? (autoTrail ? " (auto-trail)" : " (trailing)") : ""}
         </button>
         {help && value == null && (
-          <button type="button" className="link-btn" aria-label={`Add ${field} line`} title="Suggest a price from the chart's typical move, save it and put its line on the chart - then drag it where you want it" onClick={() => help.onAddLine(field)}>
+          <button type="button" className="link-btn with-icon" aria-label={`Add ${field} line`} title="Suggest a price from the chart's typical move, save it and put its line on the chart - then drag it where you want it" onClick={() => help.onAddLine(field)}>
+            <SparkIcon />
             Suggest
           </button>
         )}
         {help && (
-          <button type="button" className="link-btn" aria-label={`Pick ${field} on chart`} aria-pressed={help.pickingField === field} onClick={() => help.onPick(help.pickingField === field ? null : field)}>
-            {help.pickingField === field ? "Click the chart…" : "Pick on chart"}
+          <button type="button" className="link-btn with-icon" aria-label={`Pick ${field} on chart`} title="Click the chart to set it there" aria-pressed={help.pickingField === field} onClick={() => help.onPick(help.pickingField === field ? null : field)}>
+            <CrosshairIcon />
+            {help.pickingField === field ? "Click chart…" : "Pick"}
           </button>
         )}
       </span>
@@ -239,7 +242,7 @@ export function PositionCard(props: Props) {
       <div className="row" style={{ justifyContent: "flex-end" }}>
         {/* Option positions only, per the card's own docstring - a spot/future row has no strike/
             expiry decision riding on the underlying's shape the way an option position does. */}
-        {g && (
+        {g && !props.chart && (
           <button className="btn btn-small" aria-pressed={chartOpen} onClick={() => setChartOpen((v) => !v)}>
             {chartOpen ? "Hide chart" : "Chart"}
           </button>
@@ -259,7 +262,7 @@ export function PositionCard(props: Props) {
           </button>
         )}
       </div>
-      {chartOpen && g && (
+      {chartOpen && g && !props.chart && (
         <div style={{ marginTop: 12 }}>
           <ScanChartPanel exchange={g.segment ?? "NSE"} symbol={g.underlying_symbol} />
         </div>

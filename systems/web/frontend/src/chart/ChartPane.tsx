@@ -9,7 +9,7 @@ import {
   DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
   STRUCTURE_TIMEFRAMES, TEXT_DRAWING_MAX, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
 } from "./config";
-import { PEER_GROUP, TIMEMARK_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
+import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
 import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
 import { mergeStyle, sanitizeStyle, toOverlayStyles, type DrawingStyle } from "./drawingStyle";
@@ -94,8 +94,6 @@ type Props = {
   peerRange?: RangeMsg | null;
   /** The person clicked the chart: the time of the bar under the pointer. Not reported while a drawing tool or a price pick is armed, or after a drag. */
   onTimeClick?: (ts: number) => void;
-  /** A time to mark with a vertical line (the one clicked on this or a linked chart). */
-  markedTime?: number | null;
   /** Centre this chart on a time (a click on the linked chart); `seq` makes each request distinct, so clicking the same time again pans back. */
   panTo?: { ts: number; seq: number } | null;
 };
@@ -157,7 +155,6 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   // Which side of each armed drawing the price was on at the last check, by overlay id.
   const sidesRef = useRef<Map<string, Side>>(new Map());
   const peerCursorId = useRef<string | null>(null);
-  const timeMarkId = useRef<string | null>(null);
   const hoverTsRef = useRef<number | null>(null);
   const applyingPeer = useRef(false);
   const seqRef = useRef(0);
@@ -384,27 +381,6 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       el.removeEventListener("click", onClick);
     };
   }, [status, epoch]);
-
-  // ---- the marked time: a vertical line, on this chart and on the one linked to it ----
-  const markedTime = props.markedTime ?? null;
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart || status !== "ready") return;
-    if (markedTime == null) {
-      if (timeMarkId.current) chart.removeOverlay(timeMarkId.current);
-      timeMarkId.current = null;
-      return;
-    }
-    const value = barsRef.current[barsRef.current.length - 1]?.close ?? 0;
-    const label = new Date(markedTime).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-    const points = [{ timestamp: markedTime, value }];
-    if (timeMarkId.current) {
-      chart.overrideOverlay({ id: timeMarkId.current, points, extendData: { label } });
-    } else {
-      const id = chart.createOverlay({ name: "timeMark", groupId: TIMEMARK_GROUP, lock: true, points, extendData: { label } });
-      timeMarkId.current = typeof id === "string" ? id : null;
-    }
-  }, [markedTime, status, epoch]);
 
   // ---- pan to a time clicked on the linked chart: centre it, or as near as the loaded bars allow ----
   const panTo = props.panTo ?? null;

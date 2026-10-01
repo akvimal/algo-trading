@@ -1644,31 +1644,27 @@ describe("two linked charts", () => {
       fireEvent.click(canvasOf(i), { clientX: to.x, clientY: to.y });
     };
 
-    it("marks that time on both charts, and pans the other one to it", async () => {
+    it("pans the other chart to the clicked time, without drawing a line", async () => {
       const user = userEvent.setup();
       await pair(user);
       const [a, b] = [chart(0), chart(1)];
       const ts = a.data[5].timestamp;
       click(0, ts);
-      await waitFor(() => expect(a.overlaysNamed("timeMark")).toHaveLength(1));
-      expect(b.overlaysNamed("timeMark")).toHaveLength(1);
-      expect(a.overlaysNamed("timeMark")[0].points[0].timestamp).toBe(ts);
-      expect(b.overlaysNamed("timeMark")[0].points[0].timestamp).toBe(ts);
-      expect(b.overlaysNamed("timeMark")[0].extendData.label).toBeTruthy();
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(1));
+      expect(a.overlaysNamed("timeMark")).toHaveLength(0); // no line is drawn: the click only pans
+      expect(b.overlaysNamed("timeMark")).toHaveLength(0);
       expect(b.scrolledIndex).toHaveLength(1); // the other chart was panned...
       expect(a.scrolledIndex).toHaveLength(0); // ...the one that was clicked stays where it is
     });
 
-    it("moves the mark, not adds one, when another time is clicked - from either chart", async () => {
+    it("pans whichever chart was not clicked - from either chart", async () => {
       const user = userEvent.setup();
       await pair(user);
       const [a, b] = [chart(0), chart(1)];
       click(0, a.data[5].timestamp);
-      await waitFor(() => expect(b.overlaysNamed("timeMark")).toHaveLength(1));
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(1));
       click(1, b.data[9].timestamp);
-      await waitFor(() => expect(a.overlaysNamed("timeMark")[0].points[0].timestamp).toBe(b.data[9].timestamp));
-      expect(a.overlaysNamed("timeMark")).toHaveLength(1);
-      expect(b.overlaysNamed("timeMark")).toHaveLength(1);
+      await waitFor(() => expect(a.scrolledIndex).toHaveLength(1));
       expect(a.scrolledIndex).toHaveLength(1); // now chart A is the one that follows
     });
 
@@ -1699,17 +1695,15 @@ describe("two linked charts", () => {
       expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
     });
 
-    it("does nothing when the crosshair link is switched off, and clears the mark when it is", async () => {
+    it("does nothing when the crosshair link is switched off", async () => {
       const user = userEvent.setup();
       await pair(user);
       click(0, chart(0).data[5].timestamp);
-      await waitFor(() => expect(chart(1).overlaysNamed("timeMark")).toHaveLength(1));
+      await waitFor(() => expect(chart(1).scrolledIndex).toHaveLength(1));
       await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
       await user.click(screen.getByLabelText("Sync crosshair"));
-      await waitFor(() => expect(chart(1).overlaysNamed("timeMark")).toHaveLength(0));
-      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
       click(0, chart(0).data[6].timestamp);
-      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
+      expect(chart(1).scrolledIndex).toHaveLength(1); // no further pan once the link is off
     });
 
     it("is not there with one chart", async () => {

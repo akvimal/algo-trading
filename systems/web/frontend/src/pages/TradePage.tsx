@@ -613,7 +613,6 @@ export function TradePage() {
                       onCursor={linkCrosshair ? (ts) => setCursor({ from: i, ts }) : undefined}
                       peerCursor={linkCrosshair && cursor.from !== i ? cursor.ts : null}
                       onTimeClick={twoUp && linkCrosshair ? (ts) => setPicked((p) => ({ ts, seq: (p?.seq ?? 0) + 1, from: i })) : undefined}
-                      markedTime={twoUp && linkCrosshair ? (picked?.ts ?? null) : null}
                       panTo={twoUp && linkCrosshair && picked && picked.from !== i ? { ts: picked.ts, seq: picked.seq } : null}
                       onRange={linkScale ? (msg) => setRange({ from: i, msg }) : undefined}
                       peerRange={linkScale && range && range.from !== i ? range.msg : null}

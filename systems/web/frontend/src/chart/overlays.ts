@@ -16,6 +16,7 @@ const INK = "#0f1216";
 export const STRUCTURE_GROUP = "structure";
 export const PLAN_GROUP = "plan";
 export const PEER_GROUP = "peer";
+export const TIMEMARK_GROUP = "time-mark";
 export const TRADES_GROUP = "trades";
 export const OI_GROUP = "oi-levels";
 export const LEVELS_GROUP = "open-levels";
@@ -124,6 +125,28 @@ export function registerChartExtensions(): void {
       const x = coordinates[0]?.x;
       if (x == null || !Number.isFinite(x)) return [];
       return [{ type: "line", attrs: { coordinates: [{ x, y: 0 }, { x, y: bounding.height }] }, styles: { color: "rgba(147, 161, 177, 0.8)", size: 1, style: "dashed", dashedValue: [3, 3] }, ignoreEvent: true }];
+    },
+  });
+
+  // The time the person clicked, on every linked chart: a solid vertical line with its time on a tag at the top.
+  registerOverlay({
+    name: "timeMark",
+    totalStep: 2,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ overlay, coordinates, bounding }) => {
+      const x = coordinates[0]?.x;
+      if (x == null || !Number.isFinite(x)) return [];
+      const label = (overlay.extendData as { label?: string } | undefined)?.label;
+      const figures: OverlayFigure[] = [{ type: "line", attrs: { coordinates: [{ x, y: 0 }, { x, y: bounding.height }] }, styles: { color: ACCENT, size: 1.5, style: "solid" }, ignoreEvent: true }];
+      if (label) {
+        figures.push({
+          type: "text",
+          attrs: { x, y: 4, text: label, align: "center", baseline: "top" },
+          styles: { color: INK, size: 11, weight: "bold", backgroundColor: ACCENT, borderRadius: 3, paddingLeft: 5, paddingRight: 5, paddingTop: 2, paddingBottom: 2 },
+          ignoreEvent: true,
+        });
+      }
+      return figures;
     },
   });
 

@@ -49,6 +49,7 @@ export class FakeChart {
   subs = new Map<string, Set<(d?: unknown) => void>>();
   barSpace = 8;
   scrolledTo: number[] = [];
+  scrolledIndex: number[] = [];
   precision: [number, number] | null = null;
   private seq = 0;
 
@@ -95,6 +96,9 @@ export class FakeChart {
   }
   setBarSpace(n: number) {
     this.barSpace = n;
+  }
+  scrollToDataIndex(i: number) {
+    this.scrolledIndex.push(i);
   }
   scrollToTimestamp(ts: number) {
     this.scrolledTo.push(ts);

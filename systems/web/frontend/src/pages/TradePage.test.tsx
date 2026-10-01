@@ -1636,6 +1636,92 @@ describe("two linked charts", () => {
     await waitFor(() => expect(b.overlaysNamed("peerCursor")).toHaveLength(0));
   });
 
+  describe("clicking a time on one of two linked charts", () => {
+    const canvasOf = (i: number) => screen.getAllByTestId("chart-pane")[i].querySelector(".chart-canvas")! as HTMLElement;
+    const click = (i: number, ts: number, from = { x: 100, y: 100 }, to = from) => {
+      act(() => chart(i).emit("onCrosshairChange", { paneId: "candle_pane", kLineData: { timestamp: ts } }));
+      fireEvent.mouseDown(canvasOf(i), { clientX: from.x, clientY: from.y });
+      fireEvent.click(canvasOf(i), { clientX: to.x, clientY: to.y });
+    };
+
+    it("marks that time on both charts, and pans the other one to it", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      const [a, b] = [chart(0), chart(1)];
+      const ts = a.data[5].timestamp;
+      click(0, ts);
+      await waitFor(() => expect(a.overlaysNamed("timeMark")).toHaveLength(1));
+      expect(b.overlaysNamed("timeMark")).toHaveLength(1);
+      expect(a.overlaysNamed("timeMark")[0].points[0].timestamp).toBe(ts);
+      expect(b.overlaysNamed("timeMark")[0].points[0].timestamp).toBe(ts);
+      expect(b.overlaysNamed("timeMark")[0].extendData.label).toBeTruthy();
+      expect(b.scrolledIndex).toHaveLength(1); // the other chart was panned...
+      expect(a.scrolledIndex).toHaveLength(0); // ...the one that was clicked stays where it is
+    });
+
+    it("moves the mark, not adds one, when another time is clicked - from either chart", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      const [a, b] = [chart(0), chart(1)];
+      click(0, a.data[5].timestamp);
+      await waitFor(() => expect(b.overlaysNamed("timeMark")).toHaveLength(1));
+      click(1, b.data[9].timestamp);
+      await waitFor(() => expect(a.overlaysNamed("timeMark")[0].points[0].timestamp).toBe(b.data[9].timestamp));
+      expect(a.overlaysNamed("timeMark")).toHaveLength(1);
+      expect(b.overlaysNamed("timeMark")).toHaveLength(1);
+      expect(a.scrolledIndex).toHaveLength(1); // now chart A is the one that follows
+    });
+
+    it("pans again when the same time is clicked after the other chart was moved away", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      const [a, b] = [chart(0), chart(1)];
+      const ts = a.data[5].timestamp;
+      click(0, ts);
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(1));
+      click(0, ts);
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(2));
+    });
+
+    it("treats a drag as panning, not a click", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      click(0, chart(0).data[5].timestamp, { x: 100, y: 100 }, { x: 160, y: 104 });
+      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
+      expect(chart(1).scrolledIndex).toHaveLength(0);
+    });
+
+    it("does nothing while a drawing tool is armed - that click places a drawing", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Trend line" }));
+      click(0, chart(0).data[5].timestamp);
+      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
+    });
+
+    it("does nothing when the crosshair link is switched off, and clears the mark when it is", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      click(0, chart(0).data[5].timestamp);
+      await waitFor(() => expect(chart(1).overlaysNamed("timeMark")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+      await user.click(screen.getByLabelText("Sync crosshair"));
+      await waitFor(() => expect(chart(1).overlaysNamed("timeMark")).toHaveLength(0));
+      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
+      click(0, chart(0).data[6].timestamp);
+      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
+    });
+
+    it("is not there with one chart", async () => {
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      act(() => c.emit("onCrosshairChange", { paneId: "candle_pane", kLineData: { timestamp: c.data[5].timestamp } }));
+      fireEvent.mouseDown(canvasOf(0), { clientX: 10, clientY: 10 });
+      fireEvent.click(canvasOf(0), { clientX: 10, clientY: 10 });
+      expect(c.overlaysNamed("timeMark")).toHaveLength(0);
+    });
+  });
+
   it("does not link the crosshair when that is switched off", async () => {
     const user = userEvent.setup();
     await pair(user);

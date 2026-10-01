@@ -324,6 +324,8 @@ export function TradePage() {
 
   // ---- linked crosshair and scrolling ----
   const [cursor, setCursor] = useState<{ from: 0 | 1; ts: number | null }>({ from: 0, ts: null });
+  // The time clicked on either chart, while two are linked: marked on both, and the other one pans to it.
+  const [picked, setPicked] = useState<{ ts: number; seq: number; from: 0 | 1 } | null>(null);
   const [range, setRange] = useState<{ from: 0 | 1; msg: RangeMsg } | null>(null);
 
   // ---- structure readout per chart ----
@@ -361,6 +363,9 @@ export function TradePage() {
 
   const shown: (0 | 1)[] = twoUp ? [0, 1] : [0];
   const linkCrosshair = twoUp && ws.links.crosshair;
+  useEffect(() => {
+    if (!twoUp || !linkCrosshair) setPicked(null);
+  }, [twoUp, linkCrosshair]);
   const linkScale = twoUp && ws.links.scale;
 
   return (
@@ -578,6 +583,9 @@ export function TradePage() {
                       onStructure={(r) => setReports((cur) => (i === 0 ? [r, cur[1]] : [cur[0], r]))}
                       onCursor={linkCrosshair ? (ts) => setCursor({ from: i, ts }) : undefined}
                       peerCursor={linkCrosshair && cursor.from !== i ? cursor.ts : null}
+                      onTimeClick={twoUp && linkCrosshair ? (ts) => setPicked((p) => ({ ts, seq: (p?.seq ?? 0) + 1, from: i })) : undefined}
+                      markedTime={twoUp && linkCrosshair ? (picked?.ts ?? null) : null}
+                      panTo={twoUp && linkCrosshair && picked && picked.from !== i ? { ts: picked.ts, seq: picked.seq } : null}
                       onRange={linkScale ? (msg) => setRange({ from: i, msg }) : undefined}
                       peerRange={linkScale && range && range.from !== i ? range.msg : null}
                     />

@@ -2,7 +2,7 @@ import type { MarketRegime } from "../api/types";
 import { INTERVALS, toggleFavoriteInterval, type IntervalDef } from "../chart/config";
 import { Popover } from "../chart/Popover";
 import { formatPrice } from "../format";
-import { directionOf } from "./confluence";
+import { directionOf } from "./direction";
 import { useFavoriteIntervals } from "./useFavoriteIntervals";
 
 /** "5 Oct · 4d" for a contract that expires on `iso` (a YYYY-MM-DD date), and how many days are left (0 = today, negative = gone). */

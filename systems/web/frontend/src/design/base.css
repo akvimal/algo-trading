@@ -986,18 +986,6 @@ table.t th {
   border-radius: var(--radius-sm);
   color: var(--text);
 }
-.ws-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  align-items: center;
-}
-.ws-links .check {
-  margin: 0;
-}
-.pill.confluence {
-  white-space: normal;
-}
 .ws-body {
   flex: 1;
   display: flex;
@@ -1888,4 +1876,13 @@ table.t th {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* the view switches at the end of the top bar */
+.view-toggles {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
 }

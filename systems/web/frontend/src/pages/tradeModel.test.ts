@@ -260,28 +260,6 @@ describe("buildOrder", () => {
   });
 });
 
-describe("peer confirmation", () => {
-  const find = (checks: ReturnType<typeof checkList>) => checks.find((c) => c.key === "peer");
-  const an = () => analyzeTicket(ticket({ stop: "990", target: "1030" }), ctx());
-  const run = (t: Ticket, peer: Parameters<typeof checkList>[5]) => find(checkList(t, analyzeTicket(t, ctx()), ctx(), null, null, peer));
-
-  it("is absent when there is no second chart", () => {
-    expect(find(checkList(ticket(), an(), ctx(), null, null))).toBeUndefined();
-  });
-
-  it("is in favour when the other index moves the same way as the order, against when it does not", () => {
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: "up" })).toMatchObject({ status: "good", label: "Confirmed by BANKNIFTY" });
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: "down" })?.status).toBe("bad");
-    expect(run(ticket({ action: "SELL", stop: "1010" }), { symbol: "BANKNIFTY", direction: "down" })?.status).toBe("good");
-    expect(run(ticket({ action: "SELL", stop: "1010" }), { symbol: "BANKNIFTY", direction: "up" })?.status).toBe("bad");
-  });
-
-  it("is a caution when the other index is going sideways, and not applicable before it loads", () => {
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: "neutral" })?.status).toBe("warn");
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: null })?.status).toBe("na");
-  });
-});
-
 describe("defaultLevel", () => {
   it("puts a stop against the trade, a target in its favour, and a waiting entry back from the price", () => {
     expect(defaultLevel("stop", "BUY", 1000)).toBe(998.5);

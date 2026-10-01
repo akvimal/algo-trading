@@ -26,6 +26,10 @@ export const GridIcon = ({ cols, rows }: { cols: 1 | 2; rows: 1 | 2 }) => {
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push(<rect key={`${r}${c}`} x={x0 + c * (cw + gap)} y={y0 + r * (ch + gap)} width={cw} height={ch} rx="1.5" />);
   return wrap(<>{cells}</>);
 };
+export const OiLevelsIcon = () => wrap(<><path d="M3 6h18" /><path d="M3 18h18" /><path d="M8 10v4M12 9v6M16 10v4" /></>);
+export const TradesIcon = () => wrap(<><path d="M12 5l5.5 8h-11z" /><path d="M4 18h16" /></>);
+export const PriceTagIcon = () => wrap(<><path d="M4 12l8-8h8v8l-8 8z" /><circle cx="16" cy="8" r="1.3" /></>);
+export const TicketPanelIcon = () => wrap(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>);
 export const MagnetIcon = () => wrap(<><path d="M6 4v8a6 6 0 0012 0V4" /><path d="M6 8h4M14 8h4" /></>);
 export const EyeIcon = () => wrap(<><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
 export const EyeOffIcon = () => wrap(<><path d="M3 3l18 18" /><path d="M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3 3.6M6.6 6.6A16 16 0 002 12s4 7 10 7c1.6 0 3-.4 4.3-1" /></>);

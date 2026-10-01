@@ -245,12 +245,10 @@ export type Check = { key: string; label: string; status: CheckStatus; detail: s
 
 export type RegimeRead = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; trend: "up" | "down" | "range"; adx: number };
 export type DayBudget = { limit: number; lostToday: number } | null;
-/** The other chart on the desk, when there is one: which way it is pointing. */
-export type PeerRead = { symbol: string; direction: "up" | "down" | "neutral" | null } | null;
 
 /** The "before you place" list: each item is a fact about this trade, marked in favour of it,
  * against it, or not applicable. It informs the decision; it never blocks the order. */
-export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: RegimeRead | null, budget: DayBudget, peer: PeerRead = null): Check[] {
+export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: RegimeRead | null, budget: DayBudget): Check[] {
   const buy = t.action === "BUY";
   const checks: Check[] = [];
 
@@ -281,19 +279,6 @@ export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: Re
       checks.push({
         key: "trend", label: `Structure: ${regime.trend === "up" ? "higher highs" : "lower lows"}`, status: aligned ? "good" : "warn",
         detail: aligned ? "Recent structure agrees with your side." : "Recent structure points the other way.",
-      });
-    }
-  }
-
-  if (peer) {
-    const label = `Confirmed by ${peer.symbol}`;
-    if (peer.direction === null) checks.push({ key: "peer", label, status: "na", detail: `${peer.symbol} has not loaded yet.` });
-    else if (peer.direction === "neutral") checks.push({ key: "peer", label, status: "warn", detail: `${peer.symbol} is going sideways, so it does not confirm either side.` });
-    else {
-      const with_ = (peer.direction === "up") === buy;
-      checks.push({
-        key: "peer", label, status: with_ ? "good" : "bad",
-        detail: with_ ? `${peer.symbol} is moving the same way.` : `${peer.symbol} is moving the other way.`,
       });
     }
   }

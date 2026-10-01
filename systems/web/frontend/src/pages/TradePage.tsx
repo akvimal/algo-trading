@@ -13,7 +13,7 @@ import { StyleBar } from "../chart/StyleBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
-import { LayersMenu } from "../chart/LayersMenu";
+import { ViewToggles } from "../chart/ViewToggles";
 import { LinksMenu } from "../workstation/LinksMenu";
 import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
@@ -31,7 +31,6 @@ import { CLASSIC_APP_URL } from "../config";
 import { formatPnl, formatPrice } from "../format";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
-import { agreement, directionOf } from "../workstation/confluence";
 import { LayoutMenu } from "../workstation/LayoutMenu";
 import { PaneHeader } from "../workstation/PaneHeader";
 import { CombosMenu } from "../workstation/CombosMenu";
@@ -327,12 +326,6 @@ export function TradePage() {
   const tfLabel = (tf: string) => STRUCTURE_TIMEFRAMES.find((t) => t.value === tf)?.label ?? tf;
   const trendFor = (i: 0 | 1) => Object.fromEntries(Object.entries(reports[i]?.trendByTf ?? {}).map(([tf, t]) => [tfLabel(tf), t]));
 
-  // ---- confluence between the two charts ----
-  const peerIndex = (active === 0 ? 1 : 0) as 0 | 1;
-  const havePeer = twoUp && ws.panes[peerIndex].symbol !== activeSpec.symbol;
-  const peer = havePeer ? { symbol: ws.panes[peerIndex].symbol, direction: directionOf(datas[peerIndex].regime) } : null;
-  const agree = twoUp ? agreement({ symbol: ws.panes[0].symbol, regime: dataA.regime }, { symbol: ws.panes[1].symbol, regime: dataB.regime }) : null;
-
   // Which panel the aside shows when the auto-trader is visible at all - otherwise there is
   // nothing to switch between, the aside is just the ticket, same as before. Not persisted:
   // starting back on Manual every visit is the safer default (an accidental view of an
@@ -419,7 +412,7 @@ export function TradePage() {
               onInterval={(v) => setWs((cur) => setLinks(cur, { ...cur.links, interval: v }))}
             />
           )}
-          <LayersMenu
+          <ViewToggles
             tradesOn={tools.tradesOn}
             onTradesOn={(on) => setTools((t) => ({ ...t, tradesOn: on }))}
             oiLevelsOn={tools.oiLevelsOn}
@@ -435,14 +428,6 @@ export function TradePage() {
           )}
         </div>
       </div>
-
-      {twoUp && agree && (
-        <div className="ws-links" role="group" aria-label="Linked charts">
-          <span className={`pill confluence ${agree.verdict === "aligned-up" ? "up" : agree.verdict === "aligned-down" ? "dn" : agree.verdict === "mixed" ? "warn" : ""}`} data-testid="agreement">
-            {agree.text}
-          </span>
-        </div>
-      )}
 
       <div className="ws-body">
         {wide && (
@@ -631,7 +616,6 @@ export function TradePage() {
                 }}
                 regime={activeData.regime}
                 budget={account?.max_daily_loss != null && today.data ? { limit: account.max_daily_loss, lostToday: Math.max(0, -today.data.realized) } : null}
-                peer={peer}
                 pickField={pickField}
                 onPickField={(f) => {
                   setLevelPick(null);

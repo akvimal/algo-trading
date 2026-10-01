@@ -1503,9 +1503,8 @@ describe("layout and the ticket panel", () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     expect(screen.getByTestId("ticket")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    const box = screen.getByRole("checkbox", { name: "Show ticket" });
-    expect(box).toBeChecked();
+    const box = screen.getByRole("button", { name: "Show ticket" });
+    expect(box).toHaveAttribute("aria-pressed", "true");
     await user.click(box);
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("web.workstation")!).ticketOpen).toBe(false);
@@ -1603,17 +1602,6 @@ describe("two linked charts", () => {
     expect(FakeChart.instances).toHaveLength(2);
   });
 
-  it("says whether the two agree, and calls it mixed when they do not", async () => {
-    regimes = { default: { regime: "trending_up", adx: 30, atr_percentile: 40, trend: "up", advice: "" }, BANKNIFTY: { regime: "ranging", adx: 12, atr_percentile: 40, trend: "range", advice: "" } };
-    const user = userEvent.setup();
-    await pair(user);
-    expect(await screen.findByText(/Mixed: NIFTY is up, BANKNIFTY is sideways/)).toBeInTheDocument();
-    regimes.BANKNIFTY = { regime: "trending_up", adx: 28, atr_percentile: 40, trend: "up", advice: "" };
-    // the read refreshes on its own timer; changing the interval asks again straight away
-    await user.click(within(screen.getByRole("group", { name: "Interval, NIFTY" })).getByRole("button", { name: "5m" }));
-    expect(await screen.findByText(/Aligned: NIFTY and BANKNIFTY are both moving up/)).toBeInTheDocument();
-  });
-
   it("draws the other chart's pointer when the crosshair is linked, follows it, and removes it when the pointer leaves", async () => {
     const user = userEvent.setup();
     await pair(user);
@@ -1703,23 +1691,11 @@ describe("two linked charts", () => {
     expect(chart(1).overlaysNamed("planLine")).toHaveLength(0);
   });
 
-  it("adds a 'confirmed by the other index' check to the ticket, and it follows what the other chart says", async () => {
-    regimes = { default: { regime: "trending_up", adx: 30, atr_percentile: 40, trend: "up", advice: "" }, BANKNIFTY: { regime: "trending_down", adx: 30, atr_percentile: 40, trend: "down", advice: "" } };
-    const user = userEvent.setup();
-    await pair(user);
-    const checks = within(await screen.findByTestId("checks"));
-    expect(await checks.findByText("Confirmed by BANKNIFTY")).toBeInTheDocument();
-    expect(checks.getByText("BANKNIFTY is moving the other way.")).toBeInTheDocument();
-    await user.click(within(screen.getByTestId("ticket")).getByRole("button", { name: "Sell" }));
-    expect(await checks.findByText("BANKNIFTY is moving the same way.")).toBeInTheDocument();
-  });
-
-  it("goes back to one chart, drops the peer check, and keeps the first chart", async () => {
+  it("goes back to one chart, and keeps the first chart", async () => {
     const user = userEvent.setup();
     await pair(user);
     await pickLayout(user, "One chart");
     await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(1));
-    expect(screen.queryByText(/Confirmed by/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Sync crosshair")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Trade NIFTY" })).toBeInTheDocument();
   });
@@ -2133,18 +2109,17 @@ describe("your trades on the chart", () => {
     expect(markers(c)[0].extendData.state).toBe("closed");
   });
 
-  it("the My trades checkbox takes them off the chart and back, and remembers the choice", async () => {
+  it("the My trades toggle takes them off the chart and back, and remembers the choice", async () => {
     const user = userEvent.setup();
     positionRows = [position({})];
     renderAt("/trade?symbol=RELIANCE");
     const c = await loaded();
     await waitFor(() => expect(markers(c)).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    const box = screen.getByRole("checkbox", { name: "My trades" });
-    expect(box).toBeChecked();
+    const box = screen.getByRole("button", { name: "My trades" });
+    expect(box).toHaveAttribute("aria-pressed", "true");
     await user.click(box);
     await waitFor(() => expect(markers(c)).toHaveLength(0));
-    expect(box).not.toBeChecked();
+    expect(box).toHaveAttribute("aria-pressed", "false");
     expect(JSON.parse(localStorage.getItem("web.chart.tools") ?? "{}").tradesOn).toBe(false);
     await user.click(box);
     await waitFor(() => expect(markers(c)).toHaveLength(1));
@@ -2165,43 +2140,59 @@ describe("your trades on the chart", () => {
   });
 });
 
-describe("the Layers menu", () => {
+describe("the view toggles at the end of the top bar", () => {
   beforeEach(() => screenIs(true));
+  const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
 
-  it("folds trades, OI levels and the ticket into one menu, badged with how many are on", async () => {
+  it("are icon buttons, each named for what it switches and pressed when on - trades and the ticket on by default, OI levels off", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const group = within(screen.getByRole("group", { name: "View" }));
+    expect(group.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI levels", "My trades", "Price in header", "Show ticket"]);
+    expect(group.getAllByRole("button").every((b) => b.textContent === "")).toBe(true); // icons, not words
+    expect([pressed("OI levels"), pressed("My trades"), pressed("Price in header"), pressed("Show ticket")]).toEqual(["false", "true", "true", "true"]);
+  });
+
+  it("say on or off in their tooltips, and flip when clicked", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    // My trades and the ticket are on by default; OI levels is not.
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers2 ▾");
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers3 ▾");
-    await user.click(screen.getByRole("checkbox", { name: "Show ticket" }));
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers2 ▾");
+    expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("title", expect.stringMatching(/\(off\)$/));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
+    expect(pressed("OI levels")).toBe("true");
+    expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("title", expect.stringMatching(/\(on\)$/));
+    await user.click(screen.getByRole("button", { name: "Show ticket" }));
+    expect(pressed("Show ticket")).toBe("false");
   });
 
-  it("hides the header's live price from Layers, and it comes back the same way", async () => {
+  it("hides the header's live price, and it comes back the same way", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     expect(screen.getByTestId("price-0")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "Price in header" }));
+    await user.click(screen.getByRole("button", { name: "Price in header" }));
     expect(screen.queryByTestId("price-0")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers3 ▾"); // trades + ticket + hidden price
-    await user.click(screen.getByRole("checkbox", { name: "Price in header" }));
+    expect(pressed("Price in header")).toBe("false");
+    await user.click(screen.getByRole("button", { name: "Price in header" }));
     expect(screen.getByTestId("price-0")).toBeInTheDocument();
   });
 
-  it("has no ticket row on a phone: there is nothing to toggle, the ticket is always shown", async () => {
-    screenIs(false);
+  it("are one row with the rest of the top bar - there is no second row any more", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    expect(screen.queryByRole("checkbox", { name: "Show ticket" })).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "My trades" })).toBeInTheDocument();
+    await pickLayout(user, "Side by side");
+    expect(screen.queryByTestId("agreement")).not.toBeInTheDocument();
+    expect(document.querySelector(".ws-links")).toBeNull();
+    expect(screen.getByRole("group", { name: "View" }).closest(".ws-bar")).not.toBeNull();
+  });
+
+  it("have no ticket switch on a phone: there is nothing to toggle, the ticket is always shown", async () => {
+    screenIs(false);
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("button", { name: "Show ticket" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "My trades" })).toBeInTheDocument();
   });
 });
 
@@ -2211,11 +2202,9 @@ describe("option-chain levels on the chart", () => {
   const oiCalls = () => calls.filter((c) => c.url.includes("/options/"));
 
   it("draws no lines on the chart until asked for, even though the strip below already reads the chain", async () => {
-    const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    expect(screen.getByRole("checkbox", { name: "OI levels" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("aria-pressed", "false");
     expect(levels(c)).toHaveLength(0);
     await waitFor(() => expect(oiCalls().length).toBeGreaterThan(0)); // the always-on strip below the chart
     expect(await screen.findByTestId("oi-strip")).toBeInTheDocument();
@@ -2225,8 +2214,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
     const lines = levels(c).map((o) => o.extendData);
     expect(lines.find((l) => l.kind === "resistance" && l.rank === 1)).toMatchObject({ price: 1020, label: "R1 1020 · 80.00L OI" });
@@ -2241,8 +2229,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    const box = screen.getByRole("checkbox", { name: "OI levels" });
+    const box = screen.getByRole("button", { name: "OI levels" });
     await user.click(box);
     await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
     await user.click(box);
@@ -2253,8 +2240,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await new Promise((r) => setTimeout(r, 200));
     expect(levels(c)).toHaveLength(0);
     expect(oiCalls()).toHaveLength(0);
@@ -2267,8 +2253,7 @@ describe("option-chain levels on the chart", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderAt("/trade?symbol=NIFTY");
       const c = await loaded();
-      await user.click(screen.getByRole("button", { name: /Layers/ }));
-      await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+      await user.click(screen.getByRole("button", { name: "OI levels" }));
       await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
       await act(async () => void vi.advanceTimersByTime(60_500));
       await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/oi-summary")).length).toBe(2));
@@ -2288,8 +2273,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
     const n = levels(c).length;
     oiFails = true;
@@ -2304,8 +2288,7 @@ describe("option-chain levels on the chart", () => {
     await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(levels(chart(0)).length).toBeGreaterThan(0));
     await waitFor(() => expect(levels(chart(1)).length).toBeGreaterThan(0));
     const asked = calls.filter((x) => x.url.includes("/options/oi-summary")).map((x) => new URL(x.url).searchParams.get("symbol"));
@@ -2334,8 +2317,7 @@ describe("the OI strip under the chart", () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     expect(strip().getByText(/1,020/)).toBeInTheDocument(); // resistance, shown by default
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(strip().queryByText(/1,020/)).not.toBeInTheDocument());
     expect(strip().queryByText(/960/)).not.toBeInTheDocument(); // support, same
     expect(strip().getByText(/CE OI/)).toBeInTheDocument(); // everything else stays
@@ -2845,8 +2827,7 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
     expect(lines(c).every((o) => o.extendData.key.startsWith("position:p1:"))).toBe(true);
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "My trades" }));
+    await user.click(screen.getByRole("button", { name: "My trades" }));
     await waitFor(() => expect(lines(c)).toHaveLength(0));
   });
 

@@ -7,7 +7,7 @@ import { formatInr, formatPrice } from "../format";
 import { NOTES_MAX, SETUP_TAGS } from "../pages/journalModel";
 import {
   ACTION_WORD, analyzeTicket, buildOrder, checkList, favorable, optionsAvailable,
-  type Action, type BuildMeta, type DayBudget, type Moneyness, type PeerRead, type RegimeRead, type Ticket, type TicketContext,
+  type Action, type BuildMeta, type DayBudget, type Moneyness, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
 import type { PriceField } from "../chart/ChartPane";
 import { TextField } from "./Field";
@@ -30,7 +30,6 @@ type Props = {
   meta: BuildMeta;
   regime: RegimeRead | null;
   budget: DayBudget;
-  peer?: PeerRead;
   /** Which field the person is picking a price for on the chart, if any. */
   pickField?: PriceField | null;
   onPickField?: (f: PriceField | null) => void;
@@ -76,7 +75,7 @@ type Props = {
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -87,7 +86,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
     onChange({ ...t, [key]: value });
   };
   const a = analyzeTicket(t, ctx);
-  const checks = checkList(t, a, ctx, regime, budget, peer);
+  const checks = checkList(t, a, ctx, regime, budget);
   const fieldValue: Record<PriceField, string> = { entry: t.entry, stop: t.stop, target: t.target };
   const pickAction = (f: PriceField) =>
     onPickField ? (

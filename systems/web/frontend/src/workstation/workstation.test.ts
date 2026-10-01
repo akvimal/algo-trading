@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MarketRegime } from "../api/types";
-import { agreement, directionOf } from "./confluence";
+import { directionOf } from "./direction";
 import { applyCombo, isActiveCombo, type Combo } from "./combos";
 import {
   DEFAULT_STATE, loadWorkstation, paneCount, saveWorkstation, setInterval as setIv, setLayout, setLinks, setSymbol, withUrlSymbol,
@@ -22,27 +22,6 @@ describe("directionOf", () => {
     expect(directionOf(regime("transitional", "down"))).toBe("down");
     expect(directionOf(regime("ranging", "range"))).toBe("neutral");
     expect(directionOf(null)).toBeNull();
-  });
-});
-
-describe("agreement", () => {
-  const a = (r: MarketRegime | null) => ({ symbol: "NIFTY", regime: r });
-  const b = (r: MarketRegime | null) => ({ symbol: "BANKNIFTY", regime: r });
-
-  it("aligned when both point the same way", () => {
-    expect(agreement(a(regime("trending_up")), b(regime("ranging", "up"))).verdict).toBe("aligned-up");
-    expect(agreement(a(regime("trending_down")), b(regime("trending_down"))).verdict).toBe("aligned-down");
-    expect(agreement(a(regime("trending_up")), b(regime("trending_up"))).text).toMatch(/both moving up/);
-  });
-  it("mixed when they disagree, including one going nowhere", () => {
-    expect(agreement(a(regime("trending_up")), b(regime("trending_down"))).verdict).toBe("mixed");
-    const one = agreement(a(regime("trending_up")), b(regime("ranging")));
-    expect(one.verdict).toBe("mixed");
-    expect(one.text).toMatch(/NIFTY is up, BANKNIFTY is sideways/);
-  });
-  it("unclear while either has not loaded, or both go nowhere", () => {
-    expect(agreement(a(null), b(regime("trending_up"))).verdict).toBe("unclear");
-    expect(agreement(a(regime("ranging")), b(regime("ranging"))).verdict).toBe("unclear");
   });
 });
 

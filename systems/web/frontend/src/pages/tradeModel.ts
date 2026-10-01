@@ -416,8 +416,9 @@ export function planStatus(t: Ticket, a: Analysis, ctx: TicketContext): PlanStat
   const risk = a.riskAmount != null && ctx.capital > 0 ? `risk ${((a.riskAmount / ctx.capital) * 100).toFixed(1)}%` : null;
   const parts = (...p: (string | null)[]) => p.filter(Boolean).join(" · ");
   if (a.stop == null) return { tone: "empty", text: "No plan yet · set a stop to size the trade" };
-  if (!a.lotsAuto && a.riskAmount != null && a.riskAmount > (ctx.capital * ctx.riskPct) / 100) {
-    return { tone: "warn", text: parts("Size above your plan", risk, `plan is ${ctx.riskPct}%`) };
+  if (a.riskAmount != null && a.riskAmount > (ctx.capital * ctx.riskPct) / 100) {
+    // Sized by the system but still over: the smallest order (one lot) already risks more than the plan allows.
+    return { tone: "warn", text: parts(a.lotsAuto ? "Even the smallest size is over your plan" : "Size above your plan", risk, `plan is ${ctx.riskPct}%`) };
   }
   if (a.target == null) return { tone: "partial", text: parts("Stop set", "reward unplanned", risk) };
   if (a.rr != null && a.rr + 1e-6 < ctx.minRR) return { tone: "warn", text: parts(`R:R ${a.rr.toFixed(1)} is under your ${ctx.minRR} minimum`, risk) };

@@ -363,6 +363,11 @@ describe("planStatus", () => {
     expect(status({ stop: "990", target: "1030", lots: "500" })).toMatchObject({ tone: "warn", text: expect.stringContaining("Size above your plan") });
   });
 
+  it("warns when even the system's smallest size (one lot) risks more than the plan", () => {
+    // 65-unit lots, a 20-point stop: one lot risks 1300 of a 100000 capital at a 1% plan (1000)
+    expect(status({ stop: "980", target: "1040" }, ctx({ lotSize: 65 }))).toMatchObject({ tone: "warn", text: expect.stringContaining("Even the smallest size is over your plan") });
+  });
+
   it("is not shown for an option order", () => {
     expect(status({ strategy: "naked", stop: "990" })).toBeNull();
   });

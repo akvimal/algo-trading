@@ -421,6 +421,65 @@ describe("placing", () => {
   });
 
 
+  describe("placing on top of something already open", () => {
+    const held = () => [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
+
+    it("warns that a market order would open a second position, and has no allow-adding switch for it", async () => {
+      positionRows = held();
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=RELIANCE");
+      await screen.findByTestId("ticket-positions");
+      await user.click(screen.getByRole("button", { name: "+ Place another order" }));
+      const t = within(await screen.findByTestId("ticket"));
+      expect(t.getByTestId("stacking-notice")).toHaveTextContent("You already hold 1 open RELIANCE position.");
+      expect(t.getByTestId("stacking-notice")).toHaveTextContent("opens a second position on top of it");
+      expect(t.queryByRole("checkbox", { name: /Allow adding/ })).not.toBeInTheDocument();
+    });
+
+    it("says a waiting order will be skipped, and sends allow_stacking only when the person ticks the box", async () => {
+      positionRows = held();
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=RELIANCE");
+      await screen.findByTestId("ticket-positions");
+      await user.click(screen.getByRole("button", { name: "+ Place another order" }));
+      const t = within(await screen.findByTestId("ticket"));
+      await user.click(t.getByRole("button", { name: "Wait for a price" }));
+      expect(t.getByTestId("stacking-notice")).toHaveTextContent("will be skipped when its price is hit");
+      const box = t.getByRole("checkbox", { name: /Allow adding to my open position/ });
+      expect(box).not.toBeChecked();
+      await user.type(t.getByLabelText("Enter when the price reaches"), "980");
+      await user.type(t.getByLabelText("Stop-loss"), "970");
+      await user.click(t.getByRole("button", { name: /Buy RELIANCE, wait for price/ }));
+      await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
+      expect(posts("/pending-orders")[0].body.allow_stacking).toBe(false);
+
+      await user.click(box);
+      expect(box).toBeChecked();
+    });
+
+    it("sends allow_stacking true when ticked", async () => {
+      positionRows = held();
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=RELIANCE");
+      await screen.findByTestId("ticket-positions");
+      await user.click(screen.getByRole("button", { name: "+ Place another order" }));
+      const t = within(await screen.findByTestId("ticket"));
+      await user.click(t.getByRole("button", { name: "Wait for a price" }));
+      await user.click(t.getByRole("checkbox", { name: /Allow adding to my open position/ }));
+      await user.type(t.getByLabelText("Enter when the price reaches"), "980");
+      await user.type(t.getByLabelText("Stop-loss"), "970");
+      await user.click(t.getByRole("button", { name: /Buy RELIANCE, wait for price/ }));
+      await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
+      expect(posts("/pending-orders")[0].body.allow_stacking).toBe(true);
+    });
+
+    it("shows no warning when nothing is open on the instrument", async () => {
+      renderAt("/trade?symbol=RELIANCE");
+      const t = await ticket();
+      expect(t.queryByTestId("stacking-notice")).not.toBeInTheDocument();
+    });
+  });
+
   it("will not place without a stop-loss when the account requires one, and says why", async () => {
     account.require_stop_loss = true;
     const user = userEvent.setup();
@@ -1594,9 +1653,9 @@ describe("dragging the plan lines", () => {
     const t = await ticket();
     const c = await loaded();
     await user.click(t.getByRole("button", { name: "Add stop line" }));
-    expect(t.getByLabelText("Stop-loss")).toHaveValue("995");
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("988.29"); // one typical bar-move (11.71 on these candles) against the trade
     await user.click(t.getByRole("button", { name: "Add target line" }));
-    expect(t.getByLabelText("Target")).toHaveValue("1010");
+    expect(t.getByLabelText("Target")).toHaveValue("1023.43"); // two in its favour
     await waitFor(() => expect(c.overlaysNamed("planLine").map((o) => o.extendData.label).sort()).toEqual(["Stop", "Target"]));
     // the button goes away once the field has a value: there is a line to drag
     expect(t.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument();
@@ -1608,10 +1667,10 @@ describe("dragging the plan lines", () => {
     const t = await ticket();
     await user.click(t.getByRole("button", { name: "Sell" }));
     await user.click(t.getByRole("button", { name: "Add stop line" }));
-    expect(t.getByLabelText("Stop-loss")).toHaveValue("1005");
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("1011.71");
     await user.click(t.getByRole("button", { name: "Wait for a price" }));
     await user.click(t.getByRole("button", { name: "Add entry line" }));
-    expect(t.getByLabelText("Enter when the price reaches")).toHaveValue("1003");
+    expect(t.getByLabelText("Enter when the price reaches")).toHaveValue("1005.86"); // half a bar-move back
   });
 
   it("offers no starting line until there is a price to base it on", async () => {
@@ -1621,6 +1680,24 @@ describe("dragging the plan lines", () => {
     await waitFor(() => expect(calls.some((x) => x.url.includes("/quotes/ltp"))).toBe(true));
     expect(screen.getByTestId("price-0")).toHaveTextContent("–");
     expect(screen.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument();
+  });
+
+  it("resets a price once it is set: the field empties, its line leaves the chart, and Add line comes back", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    expect(t.queryByRole("button", { name: "Reset stop" })).not.toBeInTheDocument(); // nothing to reset yet
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    await user.click(t.getByRole("button", { name: "Add target line" }));
+    await waitFor(() => expect(c.overlaysNamed("planLine")).toHaveLength(2));
+
+    await user.click(t.getByRole("button", { name: "Reset stop" }));
+
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("");
+    await waitFor(() => expect(c.overlaysNamed("planLine").map((o) => o.extendData.label)).toEqual(["Target"]));
+    expect(t.getByRole("button", { name: "Add stop line" })).toBeInTheDocument();
+    expect(t.getByLabelText("Target")).not.toHaveValue(""); // the other price is left alone
   });
 
   it("lines exist only on the active chart, so a drag on one cannot touch the other's ticket", async () => {
@@ -1927,8 +2004,8 @@ describe("the OI strip under the chart", () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     const s = strip();
-    expect(s.getByText(/CE long buildup/)).toBeInTheDocument();
-    expect(s.getByText(/PE short covering/)).toBeInTheDocument();
+    expect(s.getByText(/CE LB/)).toBeInTheDocument();
+    expect(s.getByText(/PE SC/)).toBeInTheDocument();
   });
 
   it("shows the OI-trend sparklines once there is sentiment history, and not before", async () => {
@@ -2278,6 +2355,57 @@ describe("moving the stop and target of open trades", () => {
     expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 985.12.");
     await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(985.12)); // the reload confirms it
     expect(line(c, "position:p1:stop").id).toBe(id); // the same line, not a new one
+  });
+
+  it("an open trade with no target offers Add line and Pick on chart, and Add line saves a target on the winning side", async () => {
+    positionRows = [long({ target_price: null })];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument(); // the stop is set: nothing to add
+    expect(card.getByRole("button", { name: "Pick stop on chart" })).toBeInTheDocument();
+
+    await user.click(card.getByRole("button", { name: "Add target line" }));
+
+    await waitFor(() => expect(puts("/positions/p1/target")).toHaveLength(1));
+    const saved = (puts("/positions/p1/target")[0].body as { target_price: number }).target_price;
+    expect(saved).toBe(1023.43); // a long's target above the price, two typical bar-moves (11.71 on these candles) away
+  });
+
+  it("Pick on chart arms the chart, and the next click saves that price as the open trade's target", async () => {
+    positionRows = [long({ target_price: null })];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+
+    await user.click(card.getByRole("button", { name: "Pick target on chart" }));
+    expect(card.getByRole("button", { name: "Pick target on chart" })).toHaveTextContent("Click the chart…");
+    act(() => c.emit("onCrosshairChange", { paneId: "candle_pane", y: -20 })); // the stand-in maps y to 1000 - y: 1020
+    await user.click(screen.getAllByTestId("chart-pane")[0].querySelector(".chart-canvas")!);
+
+    await waitFor(() => expect(puts("/positions/p1/target")).toHaveLength(1));
+    expect(puts("/positions/p1/target")[0].body).toEqual({ target_price: 1020 });
+    expect(card.getByRole("button", { name: "Pick target on chart" })).not.toHaveTextContent("Click the chart…"); // picking is over
+  });
+
+  it("a target picked on the wrong side of the price is refused in words, and nothing is saved", async () => {
+    positionRows = [long({ target_price: null })];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+
+    await user.click(card.getByRole("button", { name: "Pick target on chart" }));
+    act(() => c.emit("onCrosshairChange", { paneId: "candle_pane", y: 40 })); // 960: below a long's price
+    await user.click(screen.getAllByTestId("chart-pane")[0].querySelector(".chart-canvas")!);
+
+    expect(await screen.findByTestId("level-note")).toHaveTextContent(/target/i);
+    expect(puts("/positions/p1/target")).toHaveLength(0);
   });
 
   it("dragging the target uses the position's target route", async () => {

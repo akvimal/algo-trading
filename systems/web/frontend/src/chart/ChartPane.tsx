@@ -11,7 +11,7 @@ import {
 } from "./config";
 import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
-import { rollLiveBar, type Bar } from "./liveBar";
+import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
@@ -29,6 +29,9 @@ export type ChartPaneHandle = {
   removeSelected: () => void;
   /** Arm the selected drawing (or, with null, disarm it). Only lines and zones can be armed. */
   setSelectedAlert: (trigger: Trigger | null) => void;
+  /** How far the instrument typically moves in one bar of this chart (null until enough bars have loaded) -
+   * what a starting stop or target line is measured in, so it lands inside the part of the chart on screen. */
+  typicalMove: () => number | null;
 };
 
 /** The visible window of a chart, in terms another chart can follow: the size of a bar and the time at the
@@ -664,6 +667,9 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       sidesRef.current.clear();
       persist();
       emitArmed();
+    },
+    typicalMove() {
+      return averageTrueRange(barsRef.current);
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);

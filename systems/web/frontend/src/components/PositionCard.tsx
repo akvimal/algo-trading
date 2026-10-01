@@ -7,11 +7,15 @@ import { ScanChartPanel } from "../pages/ScanChartPanel";
 import { isNakedOption, isSpreadOption, nakedMetrics, spreadMetrics } from "./positionMetrics";
 import { Signed } from "./bits";
 
-type Props =
-  | { kind: "position"; item: Position; onChanged: () => void; compact?: boolean }
-  | { kind: "group"; item: OptionGroup; onChanged: () => void; compact?: boolean };
-
 type Field = "stop" | "target";
+
+/** Chart help for an open trade's stop/target, offered when the card sits next to a chart (the trade
+ * ticket): put a starting line on the chart, or arm the chart so the next click sets the price. */
+type ChartHelp = { pickingField: Field | null; onAddLine: (field: Field) => void; onPick: (field: Field | null) => void };
+
+type Props =
+  | { kind: "position"; item: Position; onChanged: () => void; compact?: boolean; chart?: ChartHelp }
+  | { kind: "group"; item: OptionGroup; onChanged: () => void; compact?: boolean; chart?: ChartHelp };
 
 /** One open trade: what it is, its P&L, and its stop/target - either as plain text or, tapped, a
  * small inline editor (moveOpenLevel, the same route a chart-line drag already uses). An option
@@ -128,19 +132,31 @@ export function PositionCard(props: Props) {
         </span>
       );
     }
+    const help = props.chart && !trailing ? props.chart : null;
     return (
-      <button
-        key={field}
-        type="button"
-        className="link-btn pos-level"
-        disabled={trailing}
-        aria-label={`Edit ${label.toLowerCase()}`}
-        title={trailing ? "Trailing stop - cannot be edited by hand" : `Edit ${label.toLowerCase()}`}
-        onClick={() => startEdit(field, value)}
-      >
-        {label} {value == null ? "not set" : formatPrice(value)}
-        {trailing ? " (trailing)" : ""}
-      </button>
+      <span className="pos-level-group" key={field}>
+        <button
+          type="button"
+          className="link-btn pos-level"
+          disabled={trailing}
+          aria-label={`Edit ${label.toLowerCase()}`}
+          title={trailing ? "Trailing stop - cannot be edited by hand" : `Edit ${label.toLowerCase()}`}
+          onClick={() => startEdit(field, value)}
+        >
+          {label} {value == null ? "not set" : formatPrice(value)}
+          {trailing ? " (trailing)" : ""}
+        </button>
+        {help && value == null && (
+          <button type="button" className="link-btn" aria-label={`Add ${field} line`} title="Put a starting line on the chart and save it - then drag it where you want it" onClick={() => help.onAddLine(field)}>
+            Add line
+          </button>
+        )}
+        {help && (
+          <button type="button" className="link-btn" aria-label={`Pick ${field} on chart`} aria-pressed={help.pickingField === field} onClick={() => help.onPick(help.pickingField === field ? null : field)}>
+            {help.pickingField === field ? "Click the chart…" : "Pick on chart"}
+          </button>
+        )}
+      </span>
     );
   }
 

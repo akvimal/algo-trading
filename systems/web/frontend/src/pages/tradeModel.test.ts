@@ -284,12 +284,12 @@ describe("peer confirmation", () => {
 
 describe("defaultLevel", () => {
   it("puts a stop against the trade, a target in its favour, and a waiting entry back from the price", () => {
-    expect(defaultLevel("stop", "BUY", 1000)).toBe(995);
-    expect(defaultLevel("target", "BUY", 1000)).toBe(1010);
-    expect(defaultLevel("entry", "BUY", 1000)).toBe(997);
-    expect(defaultLevel("stop", "SELL", 1000)).toBe(1005);
-    expect(defaultLevel("target", "SELL", 1000)).toBe(990);
-    expect(defaultLevel("entry", "SELL", 1000)).toBe(1003);
+    expect(defaultLevel("stop", "BUY", 1000)).toBe(998.5);
+    expect(defaultLevel("target", "BUY", 1000)).toBe(1003);
+    expect(defaultLevel("entry", "BUY", 1000)).toBe(999);
+    expect(defaultLevel("stop", "SELL", 1000)).toBe(1001.5);
+    expect(defaultLevel("target", "SELL", 1000)).toBe(997);
+    expect(defaultLevel("entry", "SELL", 1000)).toBe(1001);
   });
 
   it("gives levels on the right side for the order, which the ticket accepts", () => {
@@ -300,9 +300,24 @@ describe("defaultLevel", () => {
   });
 
   it("rounds to the decimals the chart shows", () => {
-    expect(defaultLevel("stop", "BUY", 23140.5)).toBe(23024.8);
-    expect(defaultLevel("stop", "BUY", 12.5)).toBe(12.438);
-    expect(defaultLevel("target", "BUY", 0.5)).toBe(0.505);
+    expect(defaultLevel("stop", "BUY", 23140.5)).toBe(23105.79);
+    expect(defaultLevel("stop", "BUY", 12.5)).toBe(12.481);
+    expect(defaultLevel("target", "BUY", 0.5)).toBe(0.5015);
+  });
+
+  it("measures in the chart's typical bar move when it is known, so the line lands on screen", () => {
+    // NIFTY near 22,540 on 1-minute bars moves about 6 points a bar: stop 6 away, target 12, entry 3 back
+    expect(defaultLevel("stop", "BUY", 22540, 6)).toBe(22534);
+    expect(defaultLevel("target", "BUY", 22540, 6)).toBe(22552);
+    expect(defaultLevel("entry", "BUY", 22540, 6)).toBe(22537);
+    expect(defaultLevel("stop", "SELL", 22540, 6)).toBe(22546);
+    expect(defaultLevel("target", "SELL", 22540, 6)).toBe(22528);
+  });
+
+  it("ignores an unusable typical move and falls back to a share of the price", () => {
+    expect(defaultLevel("stop", "BUY", 1000, 0)).toBe(998.5);
+    expect(defaultLevel("stop", "BUY", 1000, Number.NaN)).toBe(998.5);
+    expect(defaultLevel("stop", "BUY", 1000, null)).toBe(998.5);
   });
 
   it("has nothing to offer without a usable price", () => {

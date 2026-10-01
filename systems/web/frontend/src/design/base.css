@@ -1381,3 +1381,130 @@ table.t th {
 .oi-strip-spark-bar.is-major {
   outline: 1px solid var(--accent);
 }
+
+.ai-read-btn {
+  margin-left: auto;
+  /* the same size as the buildup pills beside it (.pill), not the taller chip button */
+  min-height: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: inherit;
+  color: #c4b5fd;
+  border-color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.14);
+}
+.ai-read-btn:hover:not(:disabled),
+.ai-read-btn[aria-expanded="true"] {
+  background: rgba(139, 92, 246, 0.28);
+}
+.ai-read-btn:disabled {
+  opacity: 0.6;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .ai-read-btn {
+    color: #6d28d9;
+  }
+}
+.ai-read {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text, #e6e9ee);
+}
+.ai-read-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ai-read-line {
+  flex: 1 1 280px;
+  font-weight: 600;
+}
+.ai-read-meta {
+  font-size: 11px;
+}
+.ai-read-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ai-read-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.ai-read-risks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ai-read-foot {
+  font-size: 11px;
+}
+
+.oi-skew {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.oi-skew-bar {
+  position: relative;
+  width: 56px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+}
+.oi-skew-bar::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--text-dim, #93a1b1);
+}
+.oi-skew-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--text-dim, #93a1b1);
+}
+.oi-skew.up .oi-skew-fill {
+  background: var(--up);
+}
+.oi-skew.dn .oi-skew-fill {
+  background: var(--dn);
+}
+.oi-strip .oi-skew.up b {
+  color: var(--up);
+}
+.oi-strip .oi-skew.dn b {
+  color: var(--dn);
+}
+.warn-text {
+  color: var(--warn);
+}
+
+.stack-notice {
+  padding: 8px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: rgba(240, 180, 41, 0.1);
+  font-size: 12px;
+}
+.stack-notice .check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  cursor: pointer;
+}

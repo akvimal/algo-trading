@@ -36,6 +36,9 @@ type Props = {
   onPickField?: (f: PriceField | null) => void;
   /** Put a starting line for this field on the chart, to drag to the right price. */
   onAddLine?: (f: PriceField) => void;
+  /** What the person already holds open on this instrument (e.g. "1 open NIFTY position"), if anything:
+   * the ticket warns before a second order is placed on top of it. */
+  holding?: string | null;
   onPlaced: () => void;
   /** Overrides the usual optionsAvailable(symbol) check (which only knows about the handful of
    * index/commodity/crypto PRESETS) for a caller that already knows options exist for this symbol
@@ -73,7 +76,7 @@ type Props = {
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -92,6 +95,11 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         {onAddLine && fieldValue[f].trim() === "" && ctx.price != null && (
           <button className="link-btn" aria-label={`Add ${f} line`} title="Put a starting line on the chart, then drag it" onClick={() => onAddLine(f)}>
             Add line
+          </button>
+        )}
+        {fieldValue[f].trim() !== "" && pickField !== f && (
+          <button className="link-btn" aria-label={`Reset ${f}`} title="Clear this price and take its line off the chart" onClick={() => set(f, "")}>
+            Reset
           </button>
         )}
         <button className="link-btn" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
@@ -187,6 +195,18 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
           <button aria-pressed={limit} disabled={t.strategy === "credit_spread"} title={t.strategy === "credit_spread" ? "Not yet supported for a credit spread - place at the market price instead." : undefined} onClick={() => set("orderType", "limit")}>
             Wait for a price
           </button>
+        </div>
+      )}
+
+      {holding && (
+        <div className="stack-notice" role="note" data-testid="stacking-notice">
+          <b>You already hold {holding}.</b>{" "}
+          {limit ? "This waiting order will be skipped when its price is hit, unless you allow adding." : "This order opens a second position on top of it."}
+          {limit && (
+            <label className="check-row">
+              <input type="checkbox" checked={t.allowStacking} onChange={(e) => set("allowStacking", e.target.checked)} /> Allow adding to my open position
+            </label>
+          )}
         </div>
       )}
 

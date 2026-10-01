@@ -140,7 +140,7 @@ export function TradePage() {
     [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const [levelNote, setLevelNote] = useState<{ text: string; error: boolean } | null>(null);
-  async function moveLevel(pane: 0 | 1, level: OpenLevel, price: number): Promise<boolean> {
+  async function moveLevel(pane: 0 | 1, level: Pick<OpenLevel, "kind" | "field" | "tradeId" | "long">, price: number): Promise<boolean> {
     const word = level.field === "stop" ? "Stop-loss" : "Target";
     const problem = checkLevelMove(level, price, priceOf(pane));
     if (problem) {
@@ -179,6 +179,9 @@ export function TradePage() {
   // ---- the ticket belongs to the active chart ----
   const [ticket, setTicket] = useState<Ticket>(() => emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
   const [pickField, setPickField] = useState<PriceField | null>(null);
+  // The same chart click can instead set the stop or target of an OPEN trade (saved straight away, like
+  // dragging its line) - never both at once.
+  const [levelPick, setLevelPick] = useState<{ kind: "position" | "group"; tradeId: string; long: boolean; field: "stop" | "target" } | null>(null);
   // The order form is hidden once something is already open on this instrument - the open
   // position(s) are almost always what the person came to look at then, and a bare order form
   // above them just pushes that down. "+ Place another order" reveals it again for pyramiding, and
@@ -187,6 +190,7 @@ export function TradePage() {
   useEffect(() => {
     setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
     setPickField(null);
+    setLevelPick(null);
     setShowFormAnyway(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- defaultInstrument/defaultOptionStrategy
     // intentionally excluded: changing the preference mid-session (e.g. from another tab) should
@@ -208,6 +212,8 @@ export function TradePage() {
     };
   }, [tradeRows.data, activeSpec.symbol]);
   const hasOpenForInstrument = activeTrades.positions.length > 0 || activeTrades.groups.length > 0;
+  const openCount = activeTrades.positions.length + activeTrades.groups.length;
+  const openHolding = `${openCount} open ${activeSpec.symbol} position${openCount === 1 ? "" : "s"}`;
   const ctx = account
     ? {
         price: activePrice, lotSize: activeData.resolved?.lot_size ?? 1, capital: account.capital_per_trade, riskPct: account.risk_per_trade_pct,
@@ -226,6 +232,12 @@ export function TradePage() {
   }, [analysis?.entry, analysis?.stop, analysis?.target, ticket.orderType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function onPick(price: number) {
+    if (levelPick) {
+      const level = levelPick;
+      setLevelPick(null);
+      void moveLevel(active, level, price);
+      return;
+    }
     if (!pickField) return;
     setTicket((t) => ({ ...t, [pickField]: String(price), ...(pickField === "entry" ? { orderType: "limit" as const } : {}) }));
     setPickField(null);
@@ -235,8 +247,21 @@ export function TradePage() {
   function setLevel(field: PriceField, price: number) {
     setTicket((t) => ({ ...t, [field]: String(price), ...(field === "entry" ? { orderType: "limit" as const } : {}) }));
   }
+  // "Add line" on an open trade: save a starting stop/target at the usual distance, then it is a line to drag.
+  function addOpenLevel(kind: "position" | "group", tradeId: string, long: boolean, field: "stop" | "target") {
+    const level = defaultLevel(field, long ? "BUY" : "SELL", activePrice, paneRefs[active].current?.typicalMove() ?? null);
+    if (level != null) void moveLevel(active, { kind, tradeId, long, field }, level);
+  }
+  const openTradeHelp = (kind: "position" | "group", tradeId: string, long: boolean) => ({
+    pickingField: levelPick && levelPick.tradeId === tradeId ? levelPick.field : null,
+    onAddLine: (field: "stop" | "target") => addOpenLevel(kind, tradeId, long, field),
+    onPick: (field: "stop" | "target" | null) => {
+      setPickField(null);
+      setLevelPick(field ? { kind, tradeId, long, field } : null);
+    },
+  });
   function addLine(field: PriceField) {
-    const level = defaultLevel(field, ticket.action, activePrice);
+    const level = defaultLevel(field, ticket.action, activePrice, paneRefs[active].current?.typicalMove() ?? null);
     if (level != null) setLevel(field, level);
   }
 
@@ -485,7 +510,7 @@ export function TradePage() {
                       oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
                       drawingsHidden={tools.drawingsHidden}
-                      pickField={active === i ? pickField : null}
+                      pickField={active === i ? (levelPick?.field ?? pickField) : null}
                       onPick={onPick}
                       onPlanMove={setLevel}
                       onDrawingChange={(s) => {
@@ -576,8 +601,12 @@ export function TradePage() {
                 budget={account?.max_daily_loss != null && today.data ? { limit: account.max_daily_loss, lostToday: Math.max(0, -today.data.realized) } : null}
                 peer={peer}
                 pickField={pickField}
-                onPickField={setPickField}
+                onPickField={(f) => {
+                  setLevelPick(null);
+                  setPickField(f);
+                }}
                 onAddLine={addLine}
+                holding={hasOpenForInstrument ? openHolding : null}
                 onPlaced={() => {
                   waiting.reload();
                   today.reload();
@@ -603,10 +632,10 @@ export function TradePage() {
                 </div>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
-                    <PositionCard key={p.id} kind="position" item={p} compact onChanged={tradeRows.reload} />
+                    <PositionCard key={p.id} kind="position" item={p} compact onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} />
                   ))}
                   {activeTrades.groups.map((g) => (
-                    <PositionCard key={g.id} kind="group" item={g} compact onChanged={tradeRows.reload} />
+                    <PositionCard key={g.id} kind="group" item={g} compact onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} />
                   ))}
                 </div>
               </>

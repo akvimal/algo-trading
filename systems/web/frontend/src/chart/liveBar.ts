@@ -1,3 +1,20 @@
+/** Average true range of the last `period` bars (a plain mean of the true ranges): how far the instrument
+ * typically moves in one bar of this chart. Null when there are too few bars to say. */
+export function averageTrueRange(bars: Bar[], period = 14): number | null {
+  if (bars.length < 3) return null;
+  const recent = bars.slice(-(period + 1));
+  let sum = 0;
+  let n = 0;
+  for (let i = 1; i < recent.length; i++) {
+    const b = recent[i];
+    const prev = recent[i - 1].close;
+    sum += Math.max(b.high - b.low, Math.abs(b.high - prev), Math.abs(b.low - prev));
+    n++;
+  }
+  const atr = n > 0 ? sum / n : 0;
+  return atr > 0 && Number.isFinite(atr) ? atr : null;
+}
+
 export type Bar = { timestamp: number; open: number; high: number; low: number; close: number; volume: number };
 
 /** The bar to show after a price tick. While the newest bar's window is open the tick just moves its

@@ -41,6 +41,19 @@ export function flowSkew(callOiChange5m: number | null, callOiTotal: number, put
   return { pct: Math.abs(gap), leader: gap > 0 ? "PE" : "CE" };
 }
 
+/** A gap this wide fills the whole skew bar; anything beyond just stays full. */
+export const SKEW_BAR_FULL_PP = 5;
+
+/** How the flow-skew reads on the strip: which side is leading, how much of the bar to fill (0-1), and a
+ * tone following the same convention as the PCR — put-led reads bullish (put writers adding support),
+ * call-led bearish (call writers adding resistance). That is only the usual reading: OI alone can't say
+ * whether the leading side is being written or bought, which the tooltip says. */
+export function skewView(skew: { pct: number; leader: "CE" | "PE" }): { leader: "CE" | "PE"; fill: number; tone: "up" | "dn" } {
+  return { leader: skew.leader, fill: Math.min(1, skew.pct / SKEW_BAR_FULL_PP), tone: skew.leader === "PE" ? "up" : "dn" };
+}
+
+/** Short form for the strip's pills (the full wording stays in each pill's tooltip). */
+export const BUILDUP_ABBR: Record<Buildup, string> = { long_buildup: "LB", short_buildup: "SB", short_covering: "SC", long_unwinding: "LU" };
 export const BUILDUP_ICON: Record<Buildup, string> = { long_buildup: "▲", short_buildup: "▼", short_covering: "△", long_unwinding: "▽" };
 export const BUILDUP_LABEL: Record<Buildup, string> = {
   long_buildup: "Long Buildup — price up, OI up (fresh longs)", short_buildup: "Short Buildup — price down, OI up (fresh shorts)",

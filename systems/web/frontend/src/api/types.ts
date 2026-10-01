@@ -279,6 +279,24 @@ export type SentimentHistoryDay = { exchange: string; session_start: string; ses
 
 export type MarketRegime = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; adx: number; atr_percentile: number; trend: "up" | "down" | "range"; advice: string };
 
+/** GET /ai-read — an on-demand model read of the OI strip's own data plus price, regime, VIX and news context. */
+export type AiRead = {
+  underlying: string;
+  expiry: string;
+  model: string;
+  generated_at: string;
+  bias: "bullish" | "bearish" | "neutral";
+  confidence: number;
+  one_liner: string;
+  reasoning: string[];
+  support: number[];
+  resistance: number[];
+  risks: string[];
+  wait_for: string;
+  /** What the model was NOT given (e.g. futures OI, breadth, or an extra that failed to load). */
+  data_gaps: string[];
+};
+
 export type PendingOrder = {
   id: string;
   segment: Segment;
@@ -292,6 +310,7 @@ export type PendingOrder = {
   status_reason: string | null;
   expires_at: string;
   last_price: number | null;
+  allow_stacking: boolean;
 };
 
 export type Profile = {

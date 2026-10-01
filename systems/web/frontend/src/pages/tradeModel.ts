@@ -82,6 +82,9 @@ export type Ticket = {
   combinedStopLossPrice: number | null;
   combinedTargetPrice: number | null;
   orderType: OrderType;
+  // A WAITING order only: may it open a second position on an instrument already held? Off by default - the
+  // server then skips it, with a reason, if something is open on that instrument when its price is hit.
+  allowStacking: boolean;
   entry: string;
   stop: string;
   target: string;
@@ -97,7 +100,7 @@ export type Ticket = {
 export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
   combinedStopLossPrice: null, combinedTargetPrice: null,
-  orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null, reason: "",
+  orderType: "market", allowStacking: false, entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null, reason: "",
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -341,7 +344,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, strategy: t.strategy, moneyness: t.moneyness, trigger_price: a.entry,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, ...journal,
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, allow_stacking: t.allowStacking, ...journal,
       },
     };
   }
@@ -378,14 +381,19 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
 }
 
 /** A sensible first position for a plan level, from the live price, so a line can be put on the chart and
- * then dragged to where the person really wants it: a stop half a percent against the trade, a target a
- * percent in its favour, a waiting entry a third of a percent back from the price. Rounded to the
- * decimals the chart shows. Null when there is no price to work from. */
-export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null): number | null {
+ * then dragged to where the person really wants it. When the chart can say how far one bar typically moves
+ * (`typicalMove`), the line is measured in that: a stop one bar-move against the trade, a target two in its
+ * favour (a 2:1 plan), a waiting entry half one back - so it lands inside the part of the chart on screen
+ * whatever the instrument or candle size. Without it, a small share of the price instead (0.15% stop, 0.3%
+ * target, 0.1% entry). Rounded to the decimals the chart shows. Null when there is no price to work from. */
+export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null, typicalMove: number | null = null): number | null {
   if (price == null || !Number.isFinite(price) || price <= 0) return null;
   const buy = action === "BUY";
-  const pct = field === "stop" ? (buy ? -0.005 : 0.005) : field === "target" ? (buy ? 0.01 : -0.01) : buy ? -0.003 : 0.003;
-  const raw = price * (1 + pct);
+  const sign = field === "target" ? (buy ? 1 : -1) : buy ? -1 : 1; // stop and entry sit against the trade's direction
+  const away = typicalMove != null && Number.isFinite(typicalMove) && typicalMove > 0
+    ? typicalMove * (field === "stop" ? 1 : field === "target" ? 2 : 0.5)
+    : price * (field === "stop" ? 0.0015 : field === "target" ? 0.003 : 0.001);
+  const raw = price + sign * away;
   const decimals = price >= 100 ? 2 : price >= 1 ? 3 : 6;
   return Number(raw.toFixed(decimals));
 }

@@ -203,6 +203,23 @@ describe("NotesPanel", () => {
     expect(await screen.findByAltText(/Chart snapshot/)).toHaveAttribute("src", "blob:snap");
   });
 
+  it("opens the snapshot large when it is clicked, and closes it again", async () => {
+    listNotes.mockResolvedValue([note({ has_snapshot: true })]);
+    fetchSnapshotUrl.mockResolvedValue("blob:snap");
+    const user = userEvent.setup();
+    panel();
+    await openIt(user);
+    await user.click(await screen.findByRole("button", { name: "View snapshot" }));
+    expect(screen.queryByTestId("lightbox")).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "View the snapshot larger" }));
+    const box = within(screen.getByTestId("lightbox"));
+    expect(box.getByRole("img")).toHaveAttribute("src", "blob:snap");
+    expect(box.getByRole("link", { name: "Download" })).toHaveAttribute("download", "NIFTY-5min-note.png");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("lightbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hide snapshot" })).toBeInTheDocument(); // the small one stays
+  });
+
   it("gives a note without a snapshot no snapshot button", async () => {
     listNotes.mockResolvedValue([note({ has_snapshot: false })]);
     const user = userEvent.setup();

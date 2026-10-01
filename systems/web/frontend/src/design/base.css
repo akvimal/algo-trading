@@ -1734,3 +1734,58 @@ table.t th {
   flex-direction: column;
   gap: 6px;
 }
+
+.note-image-button {
+  display: block;
+  padding: 0;
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  max-width: 100%;
+}
+.note-image-button .note-image {
+  margin-top: 0;
+}
+/* a snapshot shown large over the page */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 10, 13, 0.92);
+}
+.lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  font-size: 13px;
+}
+.lightbox-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px 16px;
+  overflow: auto;
+}
+.lightbox-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+  border-radius: 6px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+.lightbox-stage.actual {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.lightbox-stage.actual .lightbox-image {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}

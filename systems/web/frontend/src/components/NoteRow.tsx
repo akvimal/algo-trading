@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { deleteNote, fetchSnapshotUrl } from "../api/notes";
 import { ApiError } from "../api/http";
 import type { StudyNote } from "../api/types";
+import { ImageLightbox } from "./ImageLightbox";
 import { contextChips } from "./notesModel";
 
 const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "");
@@ -13,6 +14,7 @@ export function NoteRow({ note, onDeleted, showInstrument = false }: { note: Stu
   const [image, setImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
+  const [large, setLarge] = useState(false);
   const chips = contextChips(note.context);
 
   useEffect(() => () => (image ? URL.revokeObjectURL?.(image) : undefined), [image]);
@@ -73,7 +75,19 @@ export function NoteRow({ note, onDeleted, showInstrument = false }: { note: Stu
         </div>
       )}
       {error && <p className="error-text">{error}</p>}
-      {image && <img className="note-image" src={image} alt={`Chart snapshot with the note from ${hhmm(note.created_at)}`} />}
+      {image && (
+        <button className="note-image-button" onClick={() => setLarge(true)} aria-label="View the snapshot larger" title="Click to view larger">
+          <img className="note-image" src={image} alt={`Chart snapshot with the note from ${hhmm(note.created_at)}`} />
+        </button>
+      )}
+      {image && large && (
+        <ImageLightbox
+          src={image}
+          alt={`Chart snapshot with the note from ${hhmm(note.created_at)}`}
+          fileName={`${note.symbol}-${note.interval ?? "chart"}-note.png`}
+          onClose={() => setLarge(false)}
+        />
+      )}
     </div>
   );
 }

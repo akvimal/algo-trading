@@ -126,6 +126,8 @@ def test_an_oversized_snapshot_is_refused(monkeypatch):
     [
         ("POST", "/study-notes"),
         ("GET", "/study-notes?segment=NSE&symbol=NIFTY"),
+        ("GET", "/study-notes"),
+        ("GET", "/study-notes/instruments"),
         ("GET", f"/study-notes/{uuid.uuid4()}/snapshot"),
         ("DELETE", f"/study-notes/{uuid.uuid4()}"),
     ],
@@ -147,3 +149,26 @@ def test_a_malformed_note_id_is_a_404_not_a_server_error():
         with pytest.raises(HTTPException) as exc:
             call()
         assert exc.value.status_code == 404
+
+
+# --- the history filters ----------------------------------------------------------------------------------------------------------------
+
+
+def test_search_text_is_matched_literally_so_wildcards_in_it_match_nothing_extra():
+    assert sn._like_pattern("retest") == "%retest%"
+    assert sn._like_pattern("50%_off") == r"%50\%\_off%"
+    assert sn._like_pattern("a" + chr(92) + "b") == "%a" + chr(92) * 2 + "b%"  # a backslash is doubled
+
+
+@pytest.mark.parametrize("query", ["tag=rant", "segment=BSE", "limit=0", "limit=501", "offset=-1", "q=" + "x" * 201])
+def test_the_history_filters_are_validated(query):
+    from fastapi.testclient import TestClient
+
+    from app.auth import get_current_user
+    from app.main import app
+
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=ALICE)
+    try:
+        assert TestClient(app).get(f"/study-notes?{query}").status_code == 422
+    finally:
+        app.dependency_overrides.clear()

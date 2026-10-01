@@ -13,11 +13,12 @@ from datetime import date, datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings
-from app.domain.models import StudyNoteCreate, StudyNoteOut
+from app.domain.models import StudyNoteCreate, StudyNoteInstrumentOut, StudyNoteOut
 
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024  # a composed chart image, not a photo
 MAX_CONTEXT_BYTES = 16 * 1024
@@ -96,17 +97,58 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def list_notes(db: Session, user_id: uuid.UUID, segment: str, symbol: str, day: Optional[date] = None, limit: int = 200) -> list[StudyNoteOut]:
-    """The person's notes on one instrument, oldest first (a conversation reads top-down). `day` limits it to one
-    calendar day in the platform's trading timezone."""
+def _like_pattern(text: str) -> str:
+    """`text` as a substring pattern with the LIKE wildcards in it taken literally."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def list_notes(
+    db: Session,
+    user_id: uuid.UUID,
+    segment: Optional[str] = None,
+    symbol: Optional[str] = None,
+    day: Optional[date] = None,
+    limit: int = 200,
+    *,
+    tag: Optional[str] = None,
+    q: Optional[str] = None,
+    newest_first: bool = False,
+    offset: int = 0,
+) -> list[StudyNoteOut]:
+    """The person's notes, optionally narrowed to one instrument, a tag, a day (the platform's trading timezone) or text
+    they contain. Default order is oldest first within the latest `limit` (a conversation reads top-down); with
+    `newest_first` it is newest first and `offset` pages back through the history."""
     N = db_models.StudyNote
-    q = db.query(N).filter(N.user_id == user_id, N.segment == segment, N.symbol == symbol.strip().upper())
+    query = db.query(N).filter(N.user_id == user_id)
+    if segment:
+        query = query.filter(N.segment == segment)
+    if symbol:
+        query = query.filter(N.symbol == symbol.strip().upper())
+    if tag:
+        query = query.filter(N.tag == tag)
+    if q and q.strip():
+        query = query.filter(N.text.ilike(_like_pattern(q.strip()), escape="\\"))
     if day is not None:
         start, end = _day_bounds(day)
-        q = q.filter(N.created_at >= start, N.created_at < end)
-    rows = q.order_by(N.created_at.desc()).limit(limit).all()
+        query = query.filter(N.created_at >= start, N.created_at < end)
+    rows = query.order_by(N.created_at.desc()).offset(max(0, offset)).limit(limit).all()
     ids_with_image = _ids_with_snapshot(db, user_id, [r.id for r in rows])
-    return [to_out(r, r.id in ids_with_image) for r in reversed(rows)]
+    ordered = rows if newest_first else list(reversed(rows))
+    return [to_out(r, r.id in ids_with_image) for r in ordered]
+
+
+def list_instruments(db: Session, user_id: uuid.UUID) -> list[StudyNoteInstrumentOut]:
+    """Every instrument the person has notes on, most recently written first, with how many."""
+    N = db_models.StudyNote
+    rows = (
+        db.query(N.segment, N.symbol, func.count(N.id), func.max(N.created_at))
+        .filter(N.user_id == user_id)
+        .group_by(N.segment, N.symbol)
+        .order_by(func.max(N.created_at).desc())
+        .all()
+    )
+    return [StudyNoteInstrumentOut(segment=r[0], symbol=r[1], count=int(r[2]), last_at=r[3]) for r in rows]
 
 
 def _ids_with_snapshot(db: Session, user_id: uuid.UUID, ids: list[uuid.UUID]) -> set[uuid.UUID]:

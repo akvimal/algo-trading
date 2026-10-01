@@ -338,6 +338,15 @@ class StudyNoteOut(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class StudyNoteInstrumentOut(BaseModel):
+    """One instrument the person has written notes on, for the notes history page's instrument list."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str
+    count: int
+    last_at: Optional[datetime] = None
+
+
 class RequirementOut(BaseModel):
     key: str
     label: str

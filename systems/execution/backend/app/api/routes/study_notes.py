@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user
-from app.domain.models import StudyNoteCreate, StudyNoteOut
-from app.domain.study_notes import StudyNoteError, create_note, delete_note, get_snapshot, list_notes
+from app.domain.models import StudyNoteCreate, StudyNoteInstrumentOut, StudyNoteOut
+from app.domain.study_notes import StudyNoteError, create_note, delete_note, get_snapshot, list_instruments, list_notes
 
 router = APIRouter()
 
@@ -34,14 +34,26 @@ def add_note(payload: StudyNoteCreate, user: User = Depends(get_current_user), d
 
 @router.get("/study-notes", response_model=list[StudyNoteOut])
 def get_notes(
-    segment: str = Query(pattern="^(NSE|MCX|CRYPTO)$"),
-    symbol: str = Query(min_length=1, max_length=64),
+    segment: Optional[str] = Query(default=None, pattern="^(NSE|MCX|CRYPTO)$"),
+    symbol: Optional[str] = Query(default=None, min_length=1, max_length=64),
     day: Optional[date] = Query(default=None, description="One calendar day (trading timezone); omit for the latest notes"),
+    tag: Optional[str] = Query(default=None, pattern="^(plan|observation|mistake|review)$"),
+    q: Optional[str] = Query(default=None, max_length=200, description="Only notes whose text contains this"),
+    newest_first: bool = Query(default=False),
+    offset: int = Query(default=0, ge=0, le=100000),
     limit: int = Query(default=200, ge=1, le=500),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return list_notes(db, user.id, segment, symbol, day, limit)
+    """The caller's notes. Narrow by instrument (segment + symbol), tag, day or text; `newest_first` with `offset` pages
+    back through the whole history, which is what the notes history page does."""
+    return list_notes(db, user.id, segment, symbol, day, limit, tag=tag, q=q, newest_first=newest_first, offset=offset)
+
+
+@router.get("/study-notes/instruments", response_model=list[StudyNoteInstrumentOut])
+def get_note_instruments(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Every instrument the caller has notes on, most recently written first, with a count."""
+    return list_instruments(db, user.id)
 
 
 @router.get("/study-notes/{note_id}/snapshot")

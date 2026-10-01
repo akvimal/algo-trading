@@ -20,12 +20,12 @@ type Props = {
   structureTrend?: Record<string, "up" | "down" | "range">;
   active: boolean;
   showActive: boolean;
-  /** A fixed list of candle sizes to show as buttons (the Scan page's inline chart). Left out, the chart shows
-   * the person's FAVOURITE sizes as buttons, plus a star menu that lists every size. */
+  /** A fixed list of intervals to show as buttons (the Scan page's inline chart). Left out, the chart shows
+   * the person's FAVOURITE intervals as buttons, plus a star menu that lists every interval. */
   intervals?: IntervalDef[];
 };
 
-/** The title bar of one chart: which instrument, its price, whether it is live, the candle size, and a
+/** The title bar of one chart: which instrument, its price, whether it is live, the interval, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
 export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals }: Props) {
   const favorites = useFavoriteIntervals();
@@ -40,15 +40,15 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
         <strong>{symbol}</strong>
         {showActive && active && <span className="pill" title="Orders and drawing tools apply to this chart">Trading</span>}
       </div>
-      <div className="chips" role="group" aria-label={`Candle size, ${symbol}`}>
+      <div className="chips" role="group" aria-label={`Interval, ${symbol}`}>
         {buttons.map((i) => (
           <button key={i.value} aria-pressed={interval === i.value} onClick={() => onInterval(i.value)}>
             {i.label}
           </button>
         ))}
         {!intervals && (
-          <Popover label="Sizes" align="left">
-            <div className="menu-heading">Candle size</div>
+          <Popover label="Intervals" align="left">
+            <div className="menu-heading">Interval</div>
             <div className="interval-list">
               {INTERVALS.map((i) => {
                 const starred = favorites.includes(i.value);
@@ -72,7 +72,7 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
               })}
             </div>
             <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }}>
-              Starred sizes are the buttons shown on every chart.
+              Starred intervals are the buttons shown on every chart.
             </p>
           </Popover>
         )}
@@ -89,7 +89,7 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
       ))}
       {/* Pinned to the far right (margin-left: auto), after everything else - its own width changes
           on every tick (more digits, a comma appearing/disappearing, ...), and sitting ahead of the
-          candle-size buttons made them visibly jump sideways on every update. Nothing sits after it,
+          interval buttons made them visibly jump sideways on every update. Nothing sits after it,
           so its own reflow no longer moves anything else. Hidden entirely (Layers ▾ > Price in
           header) rather than just blanked, so it doesn't leave a dead gap in its place. */}
       {priceShown && (

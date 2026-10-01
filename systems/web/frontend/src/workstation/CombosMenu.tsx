@@ -13,7 +13,7 @@ type Props = {
 /** Saved instrument pairs for the two-chart layouts - replaces the old single hardcoded
  * "NIFTY + BANKNIFTY" button. Applying one switches to a two-chart layout (or keeps the current
  * one, if already two-up); saving offers the two charts on screen right now, once the two sides
- * genuinely differ (a different instrument, OR the same one at two different candle sizes - a
+ * genuinely differ (a different instrument, OR the same one at two different intervals - a
  * multi-timeframe combo) and that exact pair is not already saved. */
 export function CombosMenu({ ws, combos, onApply, onRemove, onSave }: Props) {
   const canSave = paneCount(ws) === 2 && !sameSide(ws.panes[0], ws.panes[1]) && !hasCombo(combos, ws.panes[0], ws.panes[1]);

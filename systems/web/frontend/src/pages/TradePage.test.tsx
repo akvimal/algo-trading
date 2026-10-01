@@ -778,22 +778,22 @@ describe("drawing tools", () => {
     ]);
   });
 
-  it("a drawing made on one chart shows up on a sibling chart of the SAME instrument at a different candle size", async () => {
+  it("a drawing made on one chart shows up on a sibling chart of the SAME instrument at a different interval", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
     await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
-    // Make the second chart NIFTY too, at a different candle size than the first (still 15m).
+    // Make the second chart NIFTY too, at a different interval than the first (still 15m).
     await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
     await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
     await user.click(screen.getByRole("button", { name: "Go" }));
     await waitFor(() => expect(screen.getAllByText("NIFTY")).toHaveLength(2));
     await user.click(screen.getByRole("button", { name: /Sync/ }));
-    await user.click(screen.getByLabelText("Same candle size"));
+    await user.click(screen.getByLabelText("Same interval"));
     await user.click(screen.getByRole("button", { name: /Sync/ }));
-    await user.click(within(screen.getAllByRole("group", { name: "Candle size, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+    await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
     // Clicking into chart 1's region above (to change its symbol) made IT the active pane -
     // click back into chart 0 so the toolbar draws there instead.
     await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
@@ -844,7 +844,7 @@ describe("drawing tools", () => {
     expect(a.value).toBe(1010);
   });
 
-  it("re-places each drawing once when the candle size changes, never doubling them up", async () => {
+  it("re-places each drawing once when the interval changes, never doubling them up", async () => {
     const user = userEvent.setup();
     localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([{ name: "priceLine", points: [{ value: 1030 }] }, { name: "segment", points: [{ timestamp: Date.now() - 3 * 3_600_000, value: 1010 }, { timestamp: Date.now() - 3_600_000, value: 1020 }] }]));
     renderAt("/trade?symbol=NIFTY");
@@ -1049,7 +1049,7 @@ describe("structure", () => {
     await user.click(indicators.getByLabelText("Structure"));
     await user.click(screen.getByRole("button", { name: /Indicators/ }));
 
-    // Seeded with the active chart's own candle size (15m, the default) - not a stale accumulated list.
+    // Seeded with the active chart's own interval (15m, the default) - not a stale accumulated list.
     expect(screen.getByRole("button", { name: "Structure 1" })).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual(["15min"]);
 
@@ -1067,7 +1067,7 @@ describe("structure", () => {
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
     const m = await open(user);
-    // Turning Structure on (inside open()) already ticks 15m - the active chart's own candle size.
+    // Turning Structure on (inside open()) already ticks 15m - the active chart's own interval.
     expect(within(m.getByRole("group", { name: "Detection timeframes" })).getByRole("button", { name: "15m" })).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(c.overlaysNamed("htfOrderBlock")).toHaveLength(1));
     expect(c.overlaysNamed("htfFvg")).toHaveLength(0); // not asked for
@@ -1090,13 +1090,13 @@ describe("structure", () => {
     expect(JSON.parse(localStorage.getItem("web.chart.structure")!)).toMatchObject({ tfs: ["15min"], fvg: true, setups: true });
   });
 
-  it("resets to the new candle size on a change - drops finer detection timeframes, keeps coarser ones, adds the new size", async () => {
+  it("resets to the new interval on a change - drops finer detection timeframes, keeps coarser ones, adds the new size", async () => {
     structure = fullStructure();
     localStorage.setItem("web.chart.structure", JSON.stringify({ tfs: ["5min", "60min"], breakers: false, fvg: false, breaks: false, trendMarks: false, setups: false }));
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    await user.click(within(screen.getByRole("group", { name: "Candle size, NIFTY" })).getByRole("button", { name: "15m" }));
+    await user.click(within(screen.getByRole("group", { name: "Interval, NIFTY" })).getByRole("button", { name: "15m" }));
     await waitFor(() => expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual(["15min", "60min"]));
   });
 
@@ -1227,7 +1227,7 @@ describe("layout and the ticket panel", () => {
     Object.defineProperty(document, "fullscreenElement", { value: null, configurable: true });
   });
 
-  it("changes candle size on the chart and reloads the candles at that size", async () => {
+  it("changes interval on the chart and reloads the candles at that size", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
@@ -1237,23 +1237,23 @@ describe("layout and the ticket panel", () => {
     expect(JSON.parse(localStorage.getItem("web.workstation")!).panes[0].interval).toBe("5min");
   });
 
-  it("shows only the favourite candle sizes by default, with every size in the Sizes menu; structure keeps its own shorter list", async () => {
+  it("shows only the favourite intervals by default, with every interval in the Intervals menu, and structure detects on all but weekly", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     for (const hidden of ["30m", "1d", "1w"]) expect(screen.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
     for (const shown of ["1m", "3m", "5m", "15m", "1h"]) expect(screen.getAllByRole("button", { name: shown }).length).toBeGreaterThan(0);
-    await user.click(screen.getAllByRole("button", { name: /Sizes/ })[0]);
-    expect(within(screen.getByRole("group", { name: "Sizes" })).getByRole("button", { name: "30m" })).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: /Sizes/ })[0]); // close it again
+    await user.click(screen.getAllByRole("button", { name: /Intervals/ })[0]);
+    expect(within(screen.getByRole("group", { name: "Intervals" })).getByRole("button", { name: "30m" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: /Intervals/ })[0]); // close it again
     // the Structure dropdown only exists once the layer is switched on, from the Indicators menu
     await user.click(screen.getByRole("button", { name: /Indicators/ }));
     await user.click(screen.getByLabelText("Structure"));
     await user.click(screen.getByRole("button", { name: /Indicators/ }));
     await user.click(screen.getByRole("button", { name: /^Structure/ }));
     const menu = within(screen.getByRole("group", { name: "Structure" }));
-    expect(menu.getAllByRole("button").map((b) => b.textContent).slice(0, 5)).toEqual(["1m", "3m", "5m", "15m", "1h"]);
-    for (const hidden of ["30m", "1d"]) expect(menu.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
+    expect(menu.getAllByRole("button").map((b) => b.textContent).slice(0, 7)).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d"]);
+    expect(menu.queryByRole("button", { name: "1w" })).not.toBeInTheDocument(); // order blocks are not detected that coarsely
   });
 
   it("opens a saved layout on a size that is not a favourite, and shows that size's button while it is on screen", async () => {
@@ -1304,8 +1304,8 @@ describe("two linked charts", () => {
     await pair(user);
     expect(await screen.findByText(/Mixed: NIFTY is up, BANKNIFTY is sideways/)).toBeInTheDocument();
     regimes.BANKNIFTY = { regime: "trending_up", adx: 28, atr_percentile: 40, trend: "up", advice: "" };
-    // the read refreshes on its own timer; changing the candle size asks again straight away
-    await user.click(within(screen.getByRole("group", { name: "Candle size, NIFTY" })).getByRole("button", { name: "5m" }));
+    // the read refreshes on its own timer; changing the interval asks again straight away
+    await user.click(within(screen.getByRole("group", { name: "Interval, NIFTY" })).getByRole("button", { name: "5m" }));
     expect(await screen.findByText(/Aligned: NIFTY and BANKNIFTY are both moving up/)).toBeInTheDocument();
   });
 
@@ -1363,18 +1363,18 @@ describe("two linked charts", () => {
     expect(chart(1).barSpace).toBe(8);
   });
 
-  it("puts both charts on the same candle size while that link is on, and lets them differ when it is off", async () => {
+  it("puts both charts on the same interval while that link is on, and lets them differ when it is off", async () => {
     const user = userEvent.setup();
     await pair(user);
     const size = (i: number) => within(screen.getAllByRole("region")[i]).getByRole("button", { pressed: true, name: /^(1m|3m|5m|15m|30m|1h|1d)$/ });
-    await user.click(within(screen.getByRole("group", { name: "Candle size, BANKNIFTY" })).getByRole("button", { name: "5m" }));
-    await waitFor(() => expect(screen.getByRole("group", { name: "Candle size, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m"));
+    await user.click(within(screen.getByRole("group", { name: "Interval, BANKNIFTY" })).getByRole("button", { name: "5m" }));
+    await waitFor(() => expect(screen.getByRole("group", { name: "Interval, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m"));
     expect(size).toBeDefined();
     await user.click(screen.getByRole("button", { name: /Sync/ }));
-    await user.click(screen.getByLabelText("Same candle size"));
-    await user.click(within(screen.getByRole("group", { name: "Candle size, BANKNIFTY" })).getByRole("button", { name: "1h" }));
-    expect(screen.getByRole("group", { name: "Candle size, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m");
-    expect(screen.getByRole("group", { name: "Candle size, BANKNIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("1h");
+    await user.click(screen.getByLabelText("Same interval"));
+    await user.click(within(screen.getByRole("group", { name: "Interval, BANKNIFTY" })).getByRole("button", { name: "1h" }));
+    expect(screen.getByRole("group", { name: "Interval, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m");
+    expect(screen.getByRole("group", { name: "Interval, BANKNIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("1h");
   });
 
   it("orders and drawing tools go to the chart you last clicked, and the ticket follows", async () => {
@@ -1475,7 +1475,7 @@ describe("saved combos", () => {
     expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toEqual([]);
   });
 
-  it("saves the same symbol at two different candle sizes as its own combo, with a disambiguated label", async () => {
+  it("saves the same symbol at two different intervals as its own combo, with a disambiguated label", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded(0);
@@ -1483,7 +1483,7 @@ describe("saved combos", () => {
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" })); // two-up
     await loaded(1);
 
-    // Make the second chart NIFTY too, then give it its own candle size (unlinked first, or the
+    // Make the second chart NIFTY too, then give it its own interval (unlinked first, or the
     // interval link would just snap it straight back to chart 1's own size).
     await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
     await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
@@ -1491,8 +1491,8 @@ describe("saved combos", () => {
     await waitFor(() => expect(screen.getAllByText("NIFTY")[0]).toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: /Sync/ }));
-    await user.click(screen.getByLabelText("Same candle size"));
-    await user.click(within(screen.getAllByRole("group", { name: "Candle size, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+    await user.click(screen.getByLabelText("Same interval"));
+    await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
 
     await openCombos(user);
     await user.click(screen.getByRole("button", { name: "+ Save NIFTY 15m + NIFTY 1h" }));
@@ -1652,7 +1652,7 @@ describe("dragging the plan lines", () => {
     await waitFor(() => expect(c.overlaysNamed("planLine")).toHaveLength(0)); // a cleared field removes its line
   });
 
-  it("draws the lines again, once each, when the candle size changes", async () => {
+  it("draws the lines again, once each, when the interval changes", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();

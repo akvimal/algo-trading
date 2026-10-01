@@ -3,7 +3,7 @@ import { DEFAULT_INTERVAL, INTERVALS } from "../chart/config";
 import { parseTradeParams, presetFor } from "../pages/tradeModel";
 
 // The shape of the trading workstation: one or two charts, which instrument each shows, at which
-// candle size, and how the two are linked. It is plain data so it can be saved, restored and tested
+// interval, and how the two are linked. It is plain data so it can be saved, restored and tested
 // without a screen.
 
 export type Layout = "single" | "side" | "stack";
@@ -81,8 +81,8 @@ export function setLayout(s: WorkstationState, layout: Layout): WorkstationState
   return { ...s, layout, active: layout === "single" ? 0 : s.active };
 }
 
-/** Change one chart's candle size. With the interval link on, the other follows: comparing two charts
- * at different candle sizes is rarely what someone wants. */
+/** Change one chart's interval. With the interval link on, the other follows: comparing two charts
+ * at different intervals is rarely what someone wants. */
 export function setInterval(s: WorkstationState, index: 0 | 1, interval: string): WorkstationState {
   if (!VALID_INTERVALS.has(interval)) return s;
   const panes: [PaneSpec, PaneSpec] = [{ ...s.panes[0] }, { ...s.panes[1] }];
@@ -98,7 +98,7 @@ export function setSymbol(s: WorkstationState, index: 0 | 1, symbol: string, seg
   return { ...s, panes };
 }
 
-/** Turning the interval link on brings the second chart to the active chart's candle size at once. */
+/** Turning the interval link on brings the second chart to the active chart's interval at once. */
 export function setLinks(s: WorkstationState, links: Links): WorkstationState {
   const next = { ...s, links };
   if (links.interval && !s.links.interval && paneCount(s) === 2) {

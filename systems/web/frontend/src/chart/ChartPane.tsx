@@ -194,7 +194,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     };
   }, []);
 
-  // ---- candles: load on a new series or candle size, then top up on a timer ----
+  // ---- candles: load on a new series or interval, then top up on a timer ----
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -592,7 +592,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
 
   // (Re)builds every drawing overlay from what's saved for this pane's own (exchange, symbol) -
   // used both when THIS pane loads a genuinely new series (the [epoch] effect below) and when a
-  // SIBLING pane showing the same instrument, at whatever candle size, just changed them (the
+  // SIBLING pane showing the same instrument, at whatever interval, just changed them (the
   // DRAWINGS_CHANGED_EVENT listener further down) - drawings are shared across every interval of
   // one instrument by design (see drawingsKey's own comment in config.ts).
   function reloadDrawings() {

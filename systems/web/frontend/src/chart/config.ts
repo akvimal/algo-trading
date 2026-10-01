@@ -1,6 +1,6 @@
 import type { Candle } from "../api/types";
 
-// Everything about the chart that is plain data: which candle sizes exist, which indicators can be
+// Everything about the chart that is plain data: which intervals exist, which indicators can be
 // added, what the person has switched on. Kept apart from the chart component so it can be tested
 // without a canvas. Settings live in localStorage under one prefix: they are per-browser
 // conveniences, and every read and write is guarded because storage can be blocked.
@@ -28,7 +28,7 @@ function write(key: string, value: unknown): void {
 
 export type IntervalDef = { label: string; value: string; minutes: number; lookbackDays: number; source?: string };
 
-/** Candle sizes, in the vocabulary market-data speaks. `lookbackDays` keeps the first download to a
+/** Intervals, in the vocabulary market-data speaks. `lookbackDays` keeps the first download to a
  * few hundred bars whatever the size. Daily and weekly come from a different provider (Yahoo, NSE
  * only), so they work even when a Dhan token has lapsed; every intraday size needs Dhan. */
 export const INTERVALS: IntervalDef[] = [
@@ -42,7 +42,7 @@ export const INTERVALS: IntervalDef[] = [
   { label: "1w", value: "weekly", minutes: 10080, lookbackDays: 1095, source: "yahoo" },
 ];
 
-/** The candle sizes shown as quick buttons on a chart until the person picks their own favourites (the star
+/** The intervals shown as quick buttons on a chart until the person picks their own favourites (the star
  * menu next to them lists every size). */
 export const DEFAULT_FAVORITE_INTERVALS = ["1min", "3min", "5min", "15min", "60min"];
 
@@ -50,7 +50,7 @@ const INTERVAL_VALUES = new Set(INTERVALS.map((i) => i.value));
 const FAVORITES_KEY = "favoriteIntervals";
 export const FAVORITE_INTERVALS_CHANGED_EVENT = "web:chart:favorite-intervals-changed";
 
-/** The favourite candle sizes, finest first. Anything unknown is dropped, and an empty or unreadable
+/** The favourite intervals, finest first. Anything unknown is dropped, and an empty or unreadable
  * saved list falls back to the defaults - there is always at least one quick button. */
 export function parseFavoriteIntervals(raw: unknown): string[] {
   const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string" && INTERVAL_VALUES.has(v)) : [];
@@ -143,14 +143,16 @@ export function effectiveParams(name: string, overrides: Record<string, number[]
   return INDICATOR_BY_NAME.get(name)?.params;
 }
 
-/** Detection timeframes for the structure layer, chosen independently of the candle size on screen.
+/** Detection timeframes for the structure layer, chosen independently of the interval on screen.
  * Each has its own, wider look-back so a coarse timeframe has enough bars to find structure. */
 export const STRUCTURE_TIMEFRAMES: { label: string; value: string; lookbackDays: number; source?: string }[] = [
   { label: "1m", value: "1min", lookbackDays: 4 },
   { label: "3m", value: "3min", lookbackDays: 8 },
   { label: "5m", value: "5min", lookbackDays: 12 },
   { label: "15m", value: "15min", lookbackDays: 30 },
+  { label: "30m", value: "30min", lookbackDays: 50 },
   { label: "1h", value: "60min", lookbackDays: 90 },
+  { label: "1d", value: "daily", lookbackDays: 365, source: "yahoo" },
 ];
 const STRUCTURE_TF_VALUES = new Set(STRUCTURE_TIMEFRAMES.map((t) => t.value));
 
@@ -182,7 +184,7 @@ export const structureIsOn = (s: StructureConfig) => s.tfs.length > 0;
 
 const structureMinutesOf = (v: string): number => INTERVALS.find((i) => i.value === v)?.minutes ?? 0;
 
-/** After the chart's own candle size changes, the structure layer's selected detection timeframes
+/** After the chart's own interval changes, the structure layer's selected detection timeframes
  * reset to match: anything finer than the new size is dropped (a 1-minute structure read makes
  * little sense once the chart itself is on 1-hour candles), anything coarser stays (still a
  * meaningful "zoom out" read), and the new size itself joins the selection if it's a valid
@@ -205,7 +207,7 @@ export function resetStructureForInterval(tfs: string[], newInterval: string): s
  * ticking/unticking every "Detect on" timeframe by hand is the only way there was to turn the
  * whole layer off before this existed. Off clears every ticked timeframe (which is also what hides
  * the Structure dropdown itself - see structureIsOn); on seeds a single fresh one - the active
- * chart's own candle size, or the coarsest structure timeframe available if that size has none
+ * chart's own interval, or the coarsest structure timeframe available if that size has none
  * (weekly candles, same gap resetStructureForInterval's own comment notes). Never restores
  * whatever mix was ticked before switching off - a clean slate is the whole point of a quick
  * toggle, not resurrecting an accumulated list. */
@@ -239,12 +241,12 @@ export function pricePrecision(p: number): number {
 
 export const ymd = (d: Date): string => d.toISOString().slice(0, 10);
 
-/** The date range to download for a candle size, ending today. */
+/** The date range to download for an interval, ending today. */
 export function lookbackRange(days: number, now: Date = new Date()): { from: string; to: string } {
   return { from: ymd(new Date(now.getTime() - days * 86_400_000)), to: ymd(now) };
 }
 
-/** Drawings are anchored in price and time, so they belong to the instrument, not the candle size:
+/** Drawings are anchored in price and time, so they belong to the instrument, not the interval:
  * one saved set per (exchange, symbol), shared by every interval. */
 export const drawingsKey = (exchange: string, symbol: string) => `drawings:${exchange}:${symbol}`;
 
@@ -263,7 +265,7 @@ export const loadDrawings = (exchange: string, symbol: string): StoredDrawing[] 
   });
 
 // Saving is the only signal a SIBLING ChartPane showing the same instrument (a two-chart layout,
-// same symbol at two different candle sizes) has that it needs to re-read and redraw - drawings
+// same symbol at two different intervals) has that it needs to re-read and redraw - drawings
 // are keyed only by (exchange, symbol), deliberately shared across every interval (see
 // drawingsKey's own comment), but writing to localStorage from one pane does not by itself notify
 // another still-mounted pane reading the same key in the same document: the browser's own

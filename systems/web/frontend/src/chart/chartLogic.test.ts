@@ -8,7 +8,7 @@ import {
 import { rollLiveBar, type Bar } from "./liveBar";
 import { liveSetups, structureOverlays } from "./structure";
 
-describe("anchor: drawings stay put when the candle size changes", () => {
+describe("anchor: drawings stay put when the interval changes", () => {
   // Market hours only: a gap from 15:15 to 09:15 next day, not evenly spaced.
   const t = [1000, 2000, 3000, 10_000, 11_000];
 
@@ -124,7 +124,7 @@ describe("saved chart settings", () => {
   });
 
   describe("resetStructureForInterval", () => {
-    it("drops timeframes finer than the new candle size and keeps coarser ones", () => {
+    it("drops timeframes finer than the new interval and keeps coarser ones", () => {
       expect(resetStructureForInterval(["5min", "15min", "60min"], "15min")).toEqual(["15min", "60min"]);
     });
 
@@ -155,12 +155,12 @@ describe("saved chart settings", () => {
       expect(toggleStructureOn(false, "60min")).toEqual([]);
     });
 
-    it("on seeds a single fresh timeframe - the active chart's own candle size", () => {
+    it("on seeds a single fresh timeframe - the active chart's own interval", () => {
       expect(toggleStructureOn(true, "60min")).toEqual(["60min"]);
     });
 
-    it("on falls back to the coarsest structure timeframe (1h) for a candle size with no structure-timeframe equivalent (weekly)", () => {
-      expect(toggleStructureOn(true, "weekly")).toEqual(["60min"]);
+    it("on falls back to the coarsest structure timeframe (daily) for an interval with no structure-timeframe equivalent (weekly)", () => {
+      expect(toggleStructureOn(true, "weekly")).toEqual(["daily"]);
     });
   });
 
@@ -170,7 +170,7 @@ describe("saved chart settings", () => {
     expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, priceHidden: true });
   });
 
-  it("drawings are kept per instrument, shared by every candle size", () => {
+  it("drawings are kept per instrument, shared by every interval", () => {
     saveDrawings("NSE", "NIFTY", [{ name: "segment", points: [{ timestamp: 1, value: 2 }] }]);
     expect(loadDrawings("NSE", "NIFTY")).toHaveLength(1);
     expect(loadDrawings("NSE", "BANKNIFTY")).toEqual([]);
@@ -191,7 +191,7 @@ describe("saved chart settings", () => {
   });
 });
 
-describe("candle sizes and precision", () => {
+describe("intervals and precision", () => {
   it("knows each size, and falls back to 15 minutes for an unknown one", () => {
     expect(INTERVALS.map((i) => i.label)).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d", "1w"]);
     expect(intervalDef("60min").label).toBe("1h");

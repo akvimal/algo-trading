@@ -26,7 +26,7 @@ export function LinksMenu({ crosshair, onCrosshair, scale, onScale, interval, on
       </label>
       <label className="check menu-check">
         <input type="checkbox" checked={interval} onChange={(e) => onInterval(e.target.checked)} />
-        <span>Same candle size</span>
+        <span>Same interval</span>
       </label>
     </Popover>
   );

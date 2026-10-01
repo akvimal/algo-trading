@@ -19,7 +19,7 @@ const SCAN_INTERVALS = INTERVALS.filter((i) => ["15min", "daily", "weekly"].incl
 type Props = { exchange: string; symbol: string };
 
 /** The chart inside an expanded OI-buildup card (ScanPage.tsx's OiCard) - a single chart with its
- * own candle-size switch and the same drawing toolbar the Trade page uses, without the ticket or
+ * own interval switch and the same drawing toolbar the Trade page uses, without the ticket or
  * the rest of the workstation around it. OiScan only ever expands one card at a time, so this is
  * also the only quote socket/chart instance the Scan page opens. Starts on daily - an OI-buildup
  * read is an end-of-day snapshot, so daily is the size that actually matches what is being shown,

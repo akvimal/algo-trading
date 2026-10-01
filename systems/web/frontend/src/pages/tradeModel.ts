@@ -384,7 +384,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
  * then dragged to where the person really wants it. When the chart can say how far one bar typically moves
  * (`typicalMove`), the line is measured in that: a stop one bar-move against the trade, a target two in its
  * favour (a 2:1 plan), a waiting entry half one back - so it lands inside the part of the chart on screen
- * whatever the instrument or candle size. Without it, a small share of the price instead (0.15% stop, 0.3%
+ * whatever the instrument or interval. Without it, a small share of the price instead (0.15% stop, 0.3%
  * target, 0.1% entry). Rounded to the decimals the chart shows. Null when there is no price to work from. */
 export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null, typicalMove: number | null = null): number | null {
   if (price == null || !Number.isFinite(price) || price <= 0) return null;

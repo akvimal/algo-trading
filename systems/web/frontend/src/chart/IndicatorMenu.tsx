@@ -12,7 +12,7 @@ type Props = {
   /** The structure layer's own on/off - a quick switch beside "Hide all indicators", so turning it
    * off (and its own toolbar dropdown, which has nothing to show once no timeframe is ticked) does
    * not mean unticking every "Detect on" timeframe by hand. Turning it back on re-seeds a single,
-   * fresh timeframe (the active chart's own candle size) rather than restoring whatever mix was
+   * fresh timeframe (the active chart's own interval) rather than restoring whatever mix was
    * ticked before - the whole point of a quick off/on is a clean slate, not resurrecting a stale
    * accumulated list. */
   structureOn: boolean;

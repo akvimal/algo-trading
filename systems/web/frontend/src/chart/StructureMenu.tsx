@@ -3,7 +3,7 @@ import { Popover } from "./Popover";
 
 /** The structure layer: order blocks (and breakers), fair value gaps, breaks of structure, trend marks
  * and rejection-confirmed setups, detected on whichever timeframes are ticked, independently of the
- * candle size on screen. Off until at least one timeframe is chosen. */
+ * interval on screen. Off until at least one timeframe is chosen. */
 export function StructureMenu({ config, onChange }: { config: StructureConfig; onChange: (c: StructureConfig) => void }) {
   const toggleTf = (tf: string) => onChange({ ...config, tfs: config.tfs.includes(tf) ? config.tfs.filter((t) => t !== tf) : [...config.tfs, tf] });
   const flag = (key: "breakers" | "fvg" | "breaks" | "trendMarks" | "setups", label: string, hint: string) => (

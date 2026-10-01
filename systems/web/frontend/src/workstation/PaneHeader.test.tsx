@@ -17,7 +17,7 @@ function header(price: number | null = 1000, priceShown = true) {
 beforeEach(() => localStorage.clear());
 
 describe("PaneHeader", () => {
-  it("puts the price last in the header row, after the candle-size buttons", () => {
+  it("puts the price last in the header row, after the interval buttons", () => {
     render(header());
     const panel = screen.getByTestId("price-0").closest(".pane-header")!;
     const children = [...panel.children];
@@ -41,28 +41,28 @@ describe("PaneHeader", () => {
     expect(screen.queryByTestId("feed-0")).not.toBeInTheDocument();
   });
 
-  // only the quick buttons themselves: the Sizes menu, once open, holds every size inside the same group
-  const quick = () => [...screen.getByRole("group", { name: /Candle size/ }).children].filter((c) => c.tagName === "BUTTON").map((b) => b.textContent);
+  // only the quick buttons themselves: the Intervals menu, once open, holds every size inside the same group
+  const quick = () => [...screen.getByRole("group", { name: /^Interval, / }).children].filter((c) => c.tagName === "BUTTON").map((b) => b.textContent);
 
-  it("shows only the favourite candle sizes as buttons by default - not 30m, 1d or 1w", () => {
+  it("shows only the favourite intervals as buttons by default - not 30m, 1d or 1w", () => {
     render(header());
     expect(quick()).toEqual(["1m", "3m", "5m", "15m", "1h"]);
     expect(DEFAULT_FAVORITE_INTERVALS).toEqual(["1min", "3min", "5min", "15min", "60min"]);
   });
 
-  it("lists every size in the Sizes menu, with a star on the favourites", async () => {
+  it("lists every interval in the Intervals menu, with a star on the favourites", async () => {
     render(header());
-    await userEvent.setup().click(screen.getByRole("button", { name: /Sizes/ }));
-    const menu = within(screen.getByRole("group", { name: "Sizes" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /Intervals/ }));
+    const menu = within(screen.getByRole("group", { name: "Intervals" }));
     for (const i of INTERVALS) expect(menu.getByRole("button", { name: i.label })).toBeInTheDocument();
     expect(menu.getByRole("button", { name: "Remove 5m from favourites" })).toHaveAttribute("aria-pressed", "true");
     expect(menu.getByRole("button", { name: "Add 30m to favourites" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("starring a size adds its button, keeps size order, and remembers it", async () => {
+  it("starring an interval adds its button, keeps size order, and remembers it", async () => {
     const user = userEvent.setup();
     render(header());
-    await user.click(screen.getByRole("button", { name: /Sizes/ }));
+    await user.click(screen.getByRole("button", { name: /Intervals/ }));
     await user.click(screen.getByRole("button", { name: "Add 30m to favourites" }));
     await user.click(screen.getByRole("button", { name: "Add 1d to favourites" }));
     expect(quick()).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d"]);
@@ -73,22 +73,22 @@ describe("PaneHeader", () => {
     const user = userEvent.setup();
     localStorage.setItem("web.chart.favoriteIntervals", JSON.stringify(["5min", "15min"]));
     render(header());
-    await user.click(screen.getByRole("button", { name: /Sizes/ }));
+    await user.click(screen.getByRole("button", { name: /Intervals/ }));
     await user.click(screen.getByRole("button", { name: "Remove 5m from favourites" }));
     expect(quick()).toEqual(["15m"]);
     expect(screen.getByRole("button", { name: "Remove 15m from favourites" })).toBeDisabled();
   });
 
-  it("picking a size from the menu switches to it, and a size that is not a favourite is still shown while it is on screen", async () => {
+  it("picking an interval from the menu switches to it, and an interval that is not a favourite is still shown while it is on screen", async () => {
     const picked: string[] = [];
     const user = userEvent.setup();
     const { rerender } = render(<PaneHeader index={0} symbol="X" interval="15min" onInterval={(v) => picked.push(v)} price={1} priceShown live={false} regime={null} active showActive={false} />);
-    await user.click(screen.getByRole("button", { name: /Sizes/ }));
-    await user.click(within(screen.getByRole("group", { name: "Sizes" })).getByRole("button", { name: "1w" }));
+    await user.click(screen.getByRole("button", { name: /Intervals/ }));
+    await user.click(within(screen.getByRole("group", { name: "Intervals" })).getByRole("button", { name: "1w" }));
     expect(picked).toEqual(["weekly"]);
     rerender(<PaneHeader index={0} symbol="X" interval="weekly" onInterval={() => {}} price={1} priceShown live={false} regime={null} active showActive={false} />);
     expect(quick()).toEqual(["1m", "3m", "5m", "15m", "1h", "1w"]);
-    const weekly = [...screen.getByRole("group", { name: /Candle size/ }).children].find((c) => c.tagName === "BUTTON" && c.textContent === "1w");
+    const weekly = [...screen.getByRole("group", { name: /^Interval, / }).children].find((c) => c.tagName === "BUTTON" && c.textContent === "1w");
     expect(weekly).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -99,11 +99,11 @@ describe("PaneHeader", () => {
     expect(favoriteIntervals()).toEqual(DEFAULT_FAVORITE_INTERVALS);
   });
 
-  it("offers only a caller-given shorter list when one is passed (the Scan page's inline chart), with no Sizes menu", () => {
+  it("offers only a caller-given shorter list when one is passed (the Scan page's inline chart), with no Intervals menu", () => {
     render(<PaneHeader index={0} symbol="RELIANCE" interval="daily" onInterval={() => {}} price={1000} priceShown live={false} regime={null} active showActive={false} intervals={INTERVALS.filter((i) => ["15min", "daily", "weekly"].includes(i.value))} />);
     expect(screen.getByRole("button", { name: "1d" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1w" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "1m" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Sizes/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Intervals/ })).not.toBeInTheDocument();
   });
 });

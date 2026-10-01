@@ -39,7 +39,7 @@ describe("loadCombos", () => {
     expect(loadCombos()).toEqual([{ id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: NIFTY, b: BANKNIFTY }]);
   });
 
-  it("a combo saved before interval existed here falls back to the workstation's own default candle size", () => {
+  it("a combo saved before interval existed here falls back to the workstation's own default interval", () => {
     localStorage.setItem("web.workstation.combos", JSON.stringify([{ id: "c1", a: { symbol: "CRUDEOILM", segment: "MCX" }, b: { symbol: "GOLDM", segment: "MCX" } }]));
     expect(loadCombos()).toEqual([{ id: "c1", label: "CRUDEOILM + GOLDM", a: CRUDE, b: GOLD }]);
   });
@@ -77,7 +77,7 @@ describe("addCombo / hasCombo / removeCombo", () => {
     expect(left[0].a.symbol).toBe("NIFTY");
   });
 
-  it("the same symbol at two different candle sizes is a legitimate, distinct combo - not blocked as a duplicate", () => {
+  it("the same symbol at two different intervals is a legitimate, distinct combo - not blocked as a duplicate", () => {
     const withFiveMin = addCombo([], NIFTY_5M, NIFTY_1H);
     expect(withFiveMin).toHaveLength(1);
     expect(hasCombo(withFiveMin, NIFTY_5M, NIFTY_1H)).toBe(true);
@@ -88,7 +88,7 @@ describe("addCombo / hasCombo / removeCombo", () => {
 });
 
 describe("sameSide", () => {
-  it("compares symbol, segment AND interval - the same instrument at two sizes is not the same side", () => {
+  it("compares symbol, segment AND interval - the same instrument at two intervals is not the same side", () => {
     expect(sameSide(NIFTY, { ...NIFTY })).toBe(true);
     expect(sameSide(NIFTY, NIFTY_5M)).toBe(false);
     expect(sameSide(NIFTY, BANKNIFTY)).toBe(false);
@@ -100,11 +100,11 @@ describe("comboLabel", () => {
     expect(comboLabel(CRUDE, GOLD)).toBe("CRUDEOILM + GOLDM");
   });
 
-  it("names both candle sizes when the symbol is the same on both sides, to stay unambiguous", () => {
+  it("names both intervals when the symbol is the same on both sides, to stay unambiguous", () => {
     expect(comboLabel(NIFTY_5M, NIFTY_1H)).toBe("NIFTY 5m + NIFTY 1h");
   });
 
-  it("stays plain for a same-symbol pair that (unusually) also shares one candle size", () => {
+  it("stays plain for a same-symbol pair that (unusually) also shares one interval", () => {
     expect(comboLabel(NIFTY, { ...NIFTY })).toBe("NIFTY + NIFTY");
   });
 });
@@ -112,7 +112,7 @@ describe("comboLabel", () => {
 describe("applyCombo / isActiveCombo", () => {
   const combo: Combo = { id: "c1", label: "Oil + Gold", a: CRUDE, b: GOLD };
 
-  it("puts the two sides on the two charts, side by side, each at its own saved candle size", () => {
+  it("puts the two sides on the two charts, side by side, each at its own saved interval", () => {
     const s = applyCombo(DEFAULT_STATE, combo);
     expect(s.layout).toBe("side");
     expect(s.panes.map((p) => `${p.symbol}@${p.segment}@${p.interval}`)).toEqual(["CRUDEOILM@MCX@15min", "GOLDM@MCX@15min"]);
@@ -130,7 +130,7 @@ describe("applyCombo / isActiveCombo", () => {
     expect(isActiveCombo(s, reversed)).toBe(false);
   });
 
-  it("a combo saved at two different candle sizes keeps each side's own size, and starts with the interval link off", () => {
+  it("a combo saved at two different intervals keeps each side's own size, and starts with the interval link off", () => {
     const mtf: Combo = { id: "c3", label: "NIFTY 5m + NIFTY 1h", a: NIFTY_5M, b: NIFTY_1H };
     const s = applyCombo(DEFAULT_STATE, mtf);
     expect(s.panes.map((p) => p.interval)).toEqual(["5min", "60min"]); // NOT snapped to match each other
@@ -138,7 +138,7 @@ describe("applyCombo / isActiveCombo", () => {
     expect(isActiveCombo(s, mtf)).toBe(true);
   });
 
-  it("a combo saved at the SAME candle size on both sides still starts with the interval link on", () => {
+  it("a combo saved at the SAME interval on both sides still starts with the interval link on", () => {
     const s = applyCombo(DEFAULT_STATE, combo); // CRUDE and GOLD both 15min
     expect(s.links.interval).toBe(true);
   });

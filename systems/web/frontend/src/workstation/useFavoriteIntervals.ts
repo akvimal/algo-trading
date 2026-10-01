@@ -10,7 +10,7 @@ function subscribe(onChange: () => void): () => void {
   };
 }
 
-/** The favourite candle sizes, kept in step across both charts (and other tabs): starring a size on one
+/** The favourite intervals, kept in step across both charts (and other tabs): starring a size on one
  * chart's menu changes the buttons on the other at once. */
 export function useFavoriteIntervals(): string[] {
   const raw = useSyncExternalStore(subscribe, favoriteIntervalsRaw, () => null);

@@ -47,7 +47,7 @@ describe("agreement", () => {
 });
 
 describe("workstation state", () => {
-  it("starts as one chart on Nifty, ticket open, crosshair and candle size linked but not scrolling/zoom", () => {
+  it("starts as one chart on Nifty, ticket open, crosshair and interval linked but not scrolling/zoom", () => {
     expect(DEFAULT_STATE).toMatchObject({ layout: "single", active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } });
     expect(paneCount(DEFAULT_STATE)).toBe(1);
   });
@@ -76,7 +76,7 @@ describe("workstation state", () => {
     expect(withUrlSymbol(saved, null, null)).toBe(saved);
   });
 
-  it("the pair puts the two indices side by side at the combo's own saved candle size, not whatever the workstation was already showing", () => {
+  it("the pair puts the two indices side by side at the combo's own saved interval, not whatever the workstation was already showing", () => {
     const start = setIv(DEFAULT_STATE, 0, "5min");
     const s = applyPair(start);
     expect(s.layout).toBe("side");
@@ -86,7 +86,7 @@ describe("workstation state", () => {
     expect(applyPair(setLayout(s, "stack")).layout).toBe("stack"); // an existing two-chart layout is kept
   });
 
-  it("changing one chart's candle size moves the other only while linked", () => {
+  it("changing one chart's interval moves the other only while linked", () => {
     const s = applyPair(DEFAULT_STATE);
     expect(setIv(s, 1, "60min").panes.map((p) => p.interval)).toEqual(["60min", "60min"]);
     const free = setLinks(s, { ...s.links, interval: false });

@@ -15,7 +15,7 @@ export type AutoConfig = {
   /** SuperTrend: how many candles the average range covers, and how many times it is multiplied. */
   period: number;
   multiplier: number;
-  /** The candle size a flip is judged on. */
+  /** The interval a flip is judged on. */
   interval: AutoInterval;
   lots: number;
   /** Only act on a flip when trend strength (ADX) and direction (DMI) agree with it. */

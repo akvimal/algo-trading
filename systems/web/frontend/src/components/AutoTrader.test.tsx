@@ -198,14 +198,14 @@ describe("turning it on", () => {
     expect(sent("POST", "/")).toHaveLength(0);
   });
 
-  it("uses the chosen settings: candle size, numbers, lots, practice money, strike, gate and windows", async () => {
+  it("uses the chosen settings: interval, numbers, lots, practice money, strike, gate and windows", async () => {
     const user = userEvent.setup();
     renderCard();
     await settled();
     await user.click(card().getByRole("button", { name: "Settings" }));
     await user.selectOptions(card().getByLabelText("What it trades"), "option");
     await user.selectOptions(card().getByLabelText("Strike"), "OTM1");
-    await user.selectOptions(card().getByLabelText("Candle size"), "15min");
+    await user.selectOptions(card().getByLabelText("Interval"), "15min");
     await user.clear(card().getByLabelText("Average range (candles)"));
     await user.type(card().getByLabelText("Average range (candles)"), "14");
     await user.clear(card().getByLabelText("Multiplier"));

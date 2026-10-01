@@ -12,6 +12,7 @@ from app.auth import User, get_current_user, require_admin
 from app.domain import stop_rules
 from app.domain.stop_rules import DEFAULT_ATR_INTERVAL
 from app.domain.models import (
+    AutoTrailUpdate,
     ManualPositionCreate,
     NotesUpdate,
     ReviewSubmit,
@@ -28,6 +29,7 @@ from app.domain.position_manager import (
     open_manual_position,
     square_off_all_open,
     square_off_due_positions,
+    set_auto_trail,
     square_off_position,
     submit_position_review,
     update_position_notes,
@@ -435,6 +437,28 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         context=context,
         atr_interval=atr_interval,
     )
+    if reject_reason is not None:
+        raise HTTPException(status_code=422, detail=reject_reason)
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/auto-trail")
+def edit_auto_trail(position_id: str, payload: AutoTrailUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Switches the one-tap auto-trail (breakeven at +1R, then an ATR trail) on or off for an open position. 404 if missing
+    or owned by another user, 409 if not OPEN, 422 if it cannot start (no stop yet, or another trailing method is on)."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
+
+    row, reject_reason = set_auto_trail(db, owner_id, parsed_id, payload.enabled, payload.interval, payload.multiple)
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
     return _position_to_out(row)

@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- execution never calls signal-generation directly) so the
     -- exit-monitor job's trailing logic knows HOW to recompute a
     -- candidate stop without needing the strategy again.
-    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven')),
+    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven', 'atr_trail')),
     stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent       NUMERIC,
     -- stop_loss_method='indicator' only - 'ema'/'supertrend' today. MUST be
@@ -812,7 +812,7 @@ ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS interest_charged NUMERI
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS breakeven_triggered BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_stop_loss_method_check;
 ALTER TABLE execution.positions ADD CONSTRAINT positions_stop_loss_method_check
-    CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven'));
+    CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven', 'atr_trail'));
 
 -- Live-broker-adapter P0 (see docs/architecture.md) - pre-existing volumes
 -- need these ALTERs even though the CREATE TABLE above was also edited,
@@ -1128,3 +1128,8 @@ CREATE TABLE IF NOT EXISTS execution.position_events (
 CREATE INDEX IF NOT EXISTS idx_position_events_position ON execution.position_events (position_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_position_events_group ON execution.position_events (option_group_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_position_events_user ON execution.position_events (user_id, created_at DESC);
+
+-- Discipline v2 auto-trail (migration 033): the new trailing method / indicator type.
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_spot_stop_loss_indicator_type_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_spot_stop_loss_indicator_type_check
+    CHECK (spot_stop_loss_indicator_type IN ('supertrend', 'atr_trail'));

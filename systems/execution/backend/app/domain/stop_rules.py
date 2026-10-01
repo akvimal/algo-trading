@@ -170,3 +170,54 @@ def record_event(
     )
     db.add(event)
     return event
+
+
+# ---- auto-trail -----------------------------------------------------------------------------------------------------------------
+# One tap, no hand-trailing: once price has moved one initial risk (+1R) in the trade's favour the stop goes to breakeven,
+# and from then it follows price by a multiple of ATR. The stop only ever moves toward price (the caller keeps the existing
+# "only if more favourable" guard); this just proposes the next level.
+
+TRAIL_BREAKEVEN_R = 1.0
+DEFAULT_TRAIL_MULTIPLE = 1.5  # wider than the 1.0 x ATR "tight trail" line, so a planned trail is never flagged tight
+DEFAULT_TRAIL_PERIOD = 14
+
+
+def latest_atr(candles: list, period: int) -> Optional[float]:
+    """The most recent ATR value of `candles`, or None when there are not enough bars."""
+    from app.domain.position_manager import compute_atr  # lazy: position_manager imports this module
+
+    series = compute_atr(candles, period) if candles else []
+    last = next((v for v in reversed(series) if v is not None), None)
+    return float(last) if last is not None else None
+
+
+def atr_trail_step(
+    action: str,
+    entry: float,
+    initial_stop: Optional[float],
+    price: float,
+    atr: Optional[float],
+    multiple: float,
+    breakeven_done: bool,
+) -> tuple[Optional[float], bool]:
+    """The next stop an auto-trail proposes, and whether the breakeven step has now happened.
+
+    Before +1R: nothing (the stop stays where the person put it). At +1R: breakeven, i.e. the entry. After that: price
+    minus `multiple` x ATR for a BUY (plus, for a SELL), kept on the protective side of price. When both apply in one tick the
+    more favourable wins. Returns (None, flag) when there is no proposal this tick."""
+    buy = action == "BUY"
+    risk = abs(entry - initial_stop) if initial_stop is not None else 0.0
+    gained = (price - entry) if buy else (entry - price)
+    candidate: Optional[float] = None
+    done = breakeven_done
+    if not done and risk > 0 and gained >= TRAIL_BREAKEVEN_R * risk:
+        done = True
+        candidate = entry
+    if done and atr is not None and atr > 0:
+        trail = price - multiple * atr if buy else price + multiple * atr
+        if (buy and trail < price) or (not buy and trail > price):
+            if candidate is None or (trail > candidate if buy else trail < candidate):
+                candidate = trail
+    if candidate is not None and not ((buy and candidate < price) or (not buy and candidate > price)):
+        candidate = None  # never on the wrong side of the price it protects
+    return candidate, done

@@ -155,6 +155,16 @@ beforeEach(() => {
       if (url.endsWith("/option-groups/manual")) return placeOption(body);
       if (url.includes("/spot-stop-loss") || url.includes("/spot-target")) return attachFails ? json({ detail: "no" }, 409) : json({ ok: true });
       // moving the stop or target of an open trade
+      const trail = /\/(positions|option-groups)\/([^/?]+)\/auto-trail/.exec(url);
+      if (method === "PUT" && trail) {
+        if (levelFails) return json({ detail: levelFails }, 422);
+        const row = (trail[1] === "positions" ? positionRows : groupRows).find((r) => r.id === trail[2]);
+        if (row) {
+          if (trail[1] === "positions") Object.assign(row, { trailing_stop_enabled: body.enabled, stop_loss_method: body.enabled ? "atr_trail" : null });
+          else Object.assign(row, { spot_stop_loss_trailing_enabled: body.enabled, spot_stop_loss_indicator_type: body.enabled ? "atr_trail" : null });
+        }
+        return json(row ?? {});
+      }
       const moved = /\/(positions|option-groups)\/([^/?]+)\/(stop-loss|target|spot-stop-loss|spot-target)/.exec(url);
       if (method === "PUT" && moved) {
         if (levelFails) return json({ detail: levelFails }, 422);
@@ -3097,6 +3107,69 @@ describe("moving the stop and target of open trades", () => {
     await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(990));
     drag(c, "position:p1:stop", 995); // toward the price is fine
     await waitFor(() => expect(puts("/positions/p1/stop-loss")).toHaveLength(1));
+  });
+
+  it("switches the auto-trail on for an open position, sending the interval the person trades on, and shows it on", async () => {
+    positionRows = [long()];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.getByRole("button", { name: "Auto-trail off" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(card.getByRole("button", { name: "Auto-trail off" }));
+    await waitFor(() => expect(puts("/positions/p1/auto-trail")).toHaveLength(1));
+    expect(puts("/positions/p1/auto-trail")[0].body).toEqual({ enabled: true, interval: "15min" });
+    expect(await card.findByRole("button", { name: "Auto-trail on" })).toHaveAttribute("aria-pressed", "true");
+    expect(card.getByRole("button", { name: "Edit sl" })).toBeDisabled(); // it moves by itself now
+    expect(card.getByRole("button", { name: "Edit sl" })).toHaveTextContent("(auto-trail)");
+    await user.click(card.getByRole("button", { name: "Auto-trail on" }));
+    await waitFor(() => expect(puts("/positions/p1/auto-trail")[1].body).toEqual({ enabled: false, interval: "15min" }));
+    expect(await card.findByRole("button", { name: "Auto-trail off" })).toBeInTheDocument();
+  });
+
+  it("offers no auto-trail without a stop to start from, or where another kind of trailing is already running", async () => {
+    positionRows = [long({ stop_loss_price: null })];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.queryByRole("button", { name: /Auto-trail/ })).not.toBeInTheDocument();
+  });
+
+  it("does not offer to switch off a trailing stop that is not the auto-trail", async () => {
+    positionRows = [long({ trailing_stop_enabled: true, stop_loss_method: "indicator" })];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.queryByRole("button", { name: /Auto-trail/ })).not.toBeInTheDocument();
+    expect(card.getByRole("button", { name: "Edit sl" })).toHaveTextContent("(trailing)");
+  });
+
+  it("switches the auto-trail on for an option trade too, on its own route", async () => {
+    groupRows = [{
+      id: "g1", underlying_symbol: "NIFTY", strategy_type: "naked_call", action: "BUY", quantity: 1, status: "OPEN", pnl: null, unrealized_pnl: 0, entry_time: iso(6),
+      exit_time: null, entry_spot_price: 1000, segment: "NSE", spot_stop_loss_price: 985, spot_target_price: 1030, spot_stop_loss_trailing_enabled: false,
+    }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+    await user.click(card.getByRole("button", { name: "Auto-trail off" }));
+    await waitFor(() => expect(puts("/option-groups/g1/auto-trail")).toHaveLength(1));
+    expect(puts("/option-groups/g1/auto-trail")[0].body).toEqual({ enabled: true, interval: "15min" });
+    expect(await card.findByRole("button", { name: "Auto-trail on" })).toBeInTheDocument();
+  });
+
+  it("says why when the server will not start the auto-trail", async () => {
+    positionRows = [long()];
+    levelFails = "this position already trails its stop by 'indicator'";
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const card = within(await screen.findByTestId("position-card"));
+    await user.click(card.getByRole("button", { name: "Auto-trail off" }));
+    expect(await card.findByRole("alert")).toHaveTextContent("already trails its stop");
   });
 
   it("a short is the other way round: its stop belongs above the price and its target below", async () => {

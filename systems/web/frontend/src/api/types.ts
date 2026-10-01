@@ -46,6 +46,8 @@ export type Position = {
   option_group_id: string | null;
   /** A stop that follows the price (or a method such as previous candle) rather than a fixed level. */
   trailing_stop_enabled?: boolean;
+  /** How the stop trails, if it does: 'atr_trail' is the one-tap auto-trail. */
+  stop_loss_method?: string | null;
   charges?: number | null;
   slippage_cost?: number | null;
   exit_reason?: string | null;
@@ -77,6 +79,7 @@ export type OptionGroup = {
   /** The underlying's price when the group opened. */
   entry_spot_price?: number | null;
   spot_stop_loss_trailing_enabled?: boolean;
+  spot_stop_loss_indicator_type?: string | null;
   live_combined_price?: number | null;
   live_spot_price?: number | null;
   unrealized_pnl?: number | null;

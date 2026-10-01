@@ -35,3 +35,4 @@
 030-pending-order-allow-stacking.sql|execution.pending_orders|allow_stacking
 031-study-notes.sql|execution.study_notes|
 032-position-events.sql|execution.position_events|
+033-auto-trail.sql|execution.positions|stop_loss_method

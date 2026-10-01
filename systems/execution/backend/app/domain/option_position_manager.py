@@ -1532,6 +1532,42 @@ def update_group_spot_stop_loss(
     return row
 
 
+def set_group_auto_trail(
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, enabled: bool, interval: str, multiple: float
+) -> tuple[Optional[db_models.OptionPositionGroup], Optional[str]]:
+    """The option-group counterpart of position_manager.set_auto_trail, on the underlying's spot stop: switched on it keeps the
+    stop where it is until the underlying is +1R from its entry, then moves it to breakeven and trails it by `multiple` x ATR at
+    `interval`. (None, None) for a missing or someone else's group."""
+    row = db.get(db_models.OptionPositionGroup, group_id)
+    if row is None or row.user_id != user_id:
+        return None, None
+    if not enabled:
+        if row.spot_stop_loss_indicator_type == "atr_trail":
+            row.spot_stop_loss_indicator_type = None
+            row.spot_stop_loss_indicator_params = None
+            row.spot_stop_loss_interval = None
+            row.spot_stop_loss_trailing_enabled = False
+            db.commit()
+        return row, None
+    if row.spot_stop_loss_price is None:
+        return row, "set a stop-loss first: the auto-trail starts from it"
+    if row.spot_stop_loss_indicator_type not in (None, "atr_trail"):
+        return row, f"this position already trails its stop by '{row.spot_stop_loss_indicator_type}'"
+    if row.entry_spot_price is None:
+        return row, "the underlying's price at entry was not recorded, so +1R cannot be measured"
+    row.spot_stop_loss_indicator_type = "atr_trail"
+    row.spot_stop_loss_interval = interval
+    row.spot_stop_loss_indicator_params = {
+        "period": stop_rules.DEFAULT_TRAIL_PERIOD,
+        "multiple": multiple,
+        "initial_stop": float(row.spot_stop_loss_price),
+        "breakeven_done": False,
+    }
+    row.spot_stop_loss_trailing_enabled = True
+    db.commit()
+    return row, None
+
+
 def update_group_spot_target(
     db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float, source: str = "user"
 ) -> Optional[db_models.OptionPositionGroup]:
@@ -1793,6 +1829,41 @@ def _evaluate_option_group_exits(
         )
         if not (sl_hit or target_hit or spot_sl_hit or spot_target_hit):
             if (
+                group.spot_stop_loss_trailing_enabled
+                and group.spot_stop_loss_indicator_type == "atr_trail"
+                and group.spot_stop_loss_price is not None
+                and spot_cmp is not None
+                and get_candle_history is not None
+            ):
+                # Discipline v2 auto-trail on the underlying (see stop_rules.atr_trail_step): breakeven at +1R, then N x ATR behind it.
+                params = group.spot_stop_loss_indicator_params or {}
+                period = int(params.get("period", stop_rules.DEFAULT_TRAIL_PERIOD))
+                multiple = float(params.get("multiple", stop_rules.DEFAULT_TRAIL_MULTIPLE))
+                hist_exchange = group.stop_loss_future_exchange or group.exchange
+                hist_symbol = group.stop_loss_future_symbol or group.underlying_symbol
+                key = (hist_exchange, hist_symbol, f"{group.spot_stop_loss_interval}:atr{period}")
+                if key not in candle_history_cache:
+                    try:
+                        warmup_from, warmup_to = _indicator_history_window(period * 3, group.spot_stop_loss_interval)
+                        candle_history_cache[key] = get_candle_history(hist_exchange, hist_symbol, group.spot_stop_loss_interval, warmup_from, warmup_to)
+                    except Exception:
+                        logger.exception("failed to fetch auto-trail candle history for option group %s", group.id)
+                        candle_history_cache[key] = []
+                entry_spot = float(group.entry_spot_price) if group.entry_spot_price is not None else None
+                initial = params.get("initial_stop", float(group.spot_stop_loss_price))
+                if entry_spot is not None:
+                    candidate, done = stop_rules.atr_trail_step(
+                        group.action, entry_spot, float(initial), spot_cmp,
+                        stop_rules.latest_atr(candle_history_cache[key], period), multiple, bool(params.get("breakeven_done", False)),
+                    )
+                    if done != bool(params.get("breakeven_done", False)):
+                        group.spot_stop_loss_indicator_params = {**params, "breakeven_done": done}
+                    current_stop = float(group.spot_stop_loss_price)
+                    if candidate is not None and (candidate > current_stop if group.action == "BUY" else candidate < current_stop):
+                        trail_events.append({"group": group, "old_price": current_stop, "new_price": candidate, "price_at_event": spot_cmp})
+                        group.spot_stop_loss_price = candidate
+                        trailed += 1
+            elif (
                 group.spot_stop_loss_trailing_enabled
                 and group.spot_stop_loss_price is not None
                 and group.spot_stop_loss_indicator_type is not None

@@ -2195,6 +2195,41 @@ def _num(v) -> Optional[float]:
     return None if v is None else float(v)
 
 
+def set_auto_trail(
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, enabled: bool, interval: str, multiple: float
+) -> tuple[Optional[db_models.Position], Optional[str]]:
+    """Switches the discipline v2 auto-trail on or off for an open position (stop_loss_method='atr_trail'). On: the
+    stop stays exactly where it is until price is +1R, then moves to breakeven and trails by `multiple` x ATR at `interval`.
+    Needs a stop to start from, and refuses to replace a different trailing method the position already has. Off: back to
+    a plain fixed stop at its current price. (None, None) for a missing or someone else's row."""
+    row = db.get(db_models.Position, position_id)
+    if row is None or row.user_id != user_id:
+        return None, None
+    if not enabled:
+        if row.stop_loss_method == "atr_trail":
+            row.stop_loss_method = None
+            row.stop_loss_interval = None
+            row.stop_loss_indicator_params = None
+            row.trailing_stop_enabled = False
+            db.commit()
+        return row, None
+    if row.stop_loss_price is None:
+        return row, "set a stop-loss first: the auto-trail starts from it"
+    if row.stop_loss_method not in (None, "atr_trail"):
+        return row, f"this position already trails its stop by '{row.stop_loss_method}'"
+    row.stop_loss_method = "atr_trail"
+    row.stop_loss_interval = interval
+    row.stop_loss_percent = None
+    row.stop_loss_indicator_type = None
+    row.stop_loss_indicator_params = {"period": stop_rules.DEFAULT_TRAIL_PERIOD, "multiple": multiple}
+    row.trailing_stop_enabled = True
+    if row.initial_stop_loss_price is None:
+        row.initial_stop_loss_price = row.stop_loss_price
+    row.breakeven_triggered = False
+    db.commit()
+    return row, None
+
+
 def update_stop_loss(
     db: Session,
     user_id: uuid.UUID,
@@ -2947,6 +2982,26 @@ def _evaluate_exits(
                         (pos.action == "BUY" and raw_candidate < cmp_price) or (pos.action == "SELL" and raw_candidate > cmp_price)
                     ):
                         candidate_stop = raw_candidate
+            elif pos.stop_loss_method == "atr_trail" and get_candle_history is not None and pos.stop_loss_price is not None:
+                # Discipline v2 auto-trail (see stop_rules.atr_trail_step): breakeven at +1R, then N x ATR behind price.
+                params = pos.stop_loss_indicator_params or {}
+                period = int(params.get("period", stop_rules.DEFAULT_TRAIL_PERIOD))
+                multiple = float(params.get("multiple", stop_rules.DEFAULT_TRAIL_MULTIPLE))
+                key = (pos.exchange, pos.symbol, pos.stop_loss_interval, f"atr{period}")
+                if key not in candle_history_cache:
+                    try:
+                        warmup_from, warmup_to = _indicator_history_window(period * 3, pos.stop_loss_interval)
+                        candle_history_cache[key] = get_candle_history(pos.exchange, pos.symbol, pos.stop_loss_interval, warmup_from, warmup_to)
+                    except Exception:
+                        logger.exception("failed to fetch auto-trail candle history for %s:%s", pos.exchange, pos.symbol)
+                        candle_history_cache[key] = []
+                initial_stop = getattr(pos, "initial_stop_loss_price", None)
+                initial = initial_stop if initial_stop is not None else pos.stop_loss_price
+                candidate_stop, triggered = stop_rules.atr_trail_step(
+                    pos.action, float(pos.entry_price), float(initial), cmp_price,
+                    stop_rules.latest_atr(candle_history_cache[key], period), multiple, bool(pos.breakeven_triggered),
+                )
+                pos.breakeven_triggered = triggered
             elif pos.stop_loss_method == "breakeven" and not pos.breakeven_triggered:
                 # One-shot: once price has moved stop_loss_percent%
                 # favorably from entry, snap the stop to entry_price and

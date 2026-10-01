@@ -126,6 +126,13 @@ export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "t
   await api("execution", path, { method: "PUT", json: body });
 }
 
+/** Switches the one-tap auto-trail of an open trade on or off: the stop stays put until the trade is one initial risk in profit,
+ * then moves to breakeven and trails by an ATR multiple. `interval` is the chart interval the person trades on. */
+export async function setAutoTrail(kind: "position" | "group", tradeId: string, enabled: boolean, interval?: string): Promise<void> {
+  const base = kind === "position" ? `/positions/${tradeId}` : `/option-groups/${tradeId}`;
+  await api("execution", `${base}/auto-trail`, { method: "PUT", json: { enabled, ...(interval && ATR_INTERVALS.has(interval) ? { interval } : {}) } });
+}
+
 export const listWaitingOrders = () => api<PendingOrder[]>("execution", "/pending-orders?status=pending");
 export const cancelWaitingOrder = (id: string) => api<PendingOrder>("execution", `/pending-orders/${id}`, { method: "DELETE" });
 

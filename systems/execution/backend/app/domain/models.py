@@ -1017,6 +1017,16 @@ class SpotStopLossUpdate(BaseModel):
     atr_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
 
 
+class AutoTrailUpdate(BaseModel):
+    """PUT /positions/{id}/auto-trail and PUT /option-groups/{id}/auto-trail - the one-tap auto-trail (discipline v2): once
+    price is one initial risk in profit the stop moves to breakeven, then trails `multiple` x ATR behind price, at the chart
+    `interval` the person trades on. `enabled=false` switches it off and leaves a plain stop at its current price."""
+
+    enabled: bool = True
+    interval: Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"] = "15min"
+    multiple: float = Field(default=1.5, ge=0.5, le=5)
+
+
 class SpotTargetUpdate(BaseModel):
     """PUT /option-groups/{id}/spot-target - a take-profit expressed on the
     underlying's own price, the sibling of SpotStopLossUpdate above and

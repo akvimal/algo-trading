@@ -763,10 +763,10 @@ export function TradePage() {
                 </div>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
-                    <PositionCard key={p.id} kind="position" item={p} compact onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} />
+                    <PositionCard key={p.id} kind="position" item={p} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} />
                   ))}
                   {activeTrades.groups.map((g) => (
-                    <PositionCard key={g.id} kind="group" item={g} compact onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} />
+                    <PositionCard key={g.id} kind="group" item={g} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} />
                   ))}
                 </div>
               </>

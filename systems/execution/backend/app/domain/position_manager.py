@@ -2066,6 +2066,12 @@ def open_manual_position(
         segment, instrument_type, "intraday", action, price, final_quantity, account, account, settings.usdinr_rate, use_margin=False
     )
 
+    # Discipline v2: what the system's own risk sizing would have bought here, kept next to what was actually bought so a
+    # sized-up (greed) or sized-down (fear) order can be told from one taken at the plan.
+    system_quantity = None
+    if stop_loss_price is not None and abs(price - stop_loss_price) > 0:
+        system_quantity = compute_risk_based_quantity(effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size)
+
     row = db_models.Position(
         user_id=user_id,
         signal_id=signal_id,
@@ -2077,6 +2083,7 @@ def open_manual_position(
         horizon="intraday",
         instrument_type=instrument_type,
         quantity=final_quantity,
+        system_quantity=system_quantity,
         entry_price=price,
         status="OPEN",
         is_live_broker_order=broker_order is not None,

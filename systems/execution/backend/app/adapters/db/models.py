@@ -271,6 +271,8 @@ class OptionPositionGroup(Base):
     # The two legs' own strike difference, frozen at open - NULL for a naked (single-leg) group.
     # See infra/postgres/init/02-execution.sql's own comment on this column.
     strike_width = Column(Numeric)
+    # Discipline v2: what the system's own sizing would have bought at open (NULL = not worked out). See migration 034.
+    system_quantity = Column(Numeric)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
     sl_scope = Column(Text, nullable=False, default="combined")
@@ -383,6 +385,8 @@ class Position(Base):
     live_trading_user_id = Column(UUID(as_uuid=True), nullable=True)
     stop_loss_price = Column(Numeric)  # current (may trail) - null if the strategy set no stop-loss method
     initial_stop_loss_price = Column(Numeric)  # audit trail - the stop as computed at open, never changes
+    # Discipline v2: what the system's risk sizing would have bought at open, same unit as quantity (NULL = not worked out).
+    system_quantity = Column(Numeric)
     target_price = Column(Numeric)
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
     # Copied from the Strategy at open time - the exit-monitor job's

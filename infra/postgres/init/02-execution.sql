@@ -1133,3 +1133,7 @@ CREATE INDEX IF NOT EXISTS idx_position_events_user ON execution.position_events
 ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_spot_stop_loss_indicator_type_check;
 ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_spot_stop_loss_indicator_type_check
     CHECK (spot_stop_loss_indicator_type IN ('supertrend', 'atr_trail'));
+
+-- Discipline v2 step 3 (migration 034): the quantity the system's own risk sizing would have used at open. See docs/discipline-v2-spec.md.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS system_quantity NUMERIC;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS system_quantity NUMERIC;

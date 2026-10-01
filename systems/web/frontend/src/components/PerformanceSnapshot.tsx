@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/http";
-import type { EquityHistory, Performance, Segment } from "../api/types";
+import type { DisciplineV2, EquityHistory, Performance, Segment } from "../api/types";
 import { SEGMENTS } from "../config";
 import { formatDay, formatInr, formatPct, formatPnl, formatR } from "../format";
 import { useResource } from "../hooks/useResource";
@@ -23,12 +23,13 @@ export function PerformanceSnapshot({ markets }: { markets: Segment[] }) {
   const [segment, setSegment] = useState<Segment>(markets.includes("NSE") ? "NSE" : markets[0]);
   const equity = useResource(() => api<EquityHistory>("execution", `/equity-history/${segment}?days=30`), [segment]);
   const perf = useResource(() => api<Performance>("execution", `/performance/${segment}`), [segment]);
+  const discipline = useResource(() => api<DisciplineV2>("execution", `/discipline/${segment}`), [segment]);
 
   const stats = equity.data?.stats ?? null;
   const change = curveChange(stats);
   const curve = equity.data ? fillEquityCurve(equity.data.points, stats?.since) : [];
   const p = perf.data?.performance ?? null;
-  const d = perf.data?.discipline ?? null;
+  const d = discipline.data;
   const band = d ? disciplineBand(d.score) : "none";
 
   return (

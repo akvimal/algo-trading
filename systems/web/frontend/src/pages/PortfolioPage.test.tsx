@@ -56,6 +56,17 @@ const perf = (score: number | null) => ({
     plan_review: { rate: null, trades: 0, before_rate: null, after_rate: null }, outcome: { rate: 0.75, trades: 8, win_rate: 0.75, avg_r: 0.4 },
   },
 });
+
+const dv2 = (score: number | null) => ({
+  segment: "NSE", scope: "epoch", score, trade_count: score == null ? 3 : 8,
+  emotions: { greed: 88, fear: 64, patience: 71 }, categories: { risk: 90, entry: 70, management: 75, day: 80 },
+  mistakes: { oversized: 2, tight_trail: 1, untagged: 1 }, week_mistakes: { oversized: 2 }, target_and_stop_moved: 0,
+  coaching: { mistake: "oversized", emotion: "greed", count: 2, line: "This week you took more size than the system's risk sizing allowed (2 times in 4 trades). That is the one habit to work on next." },
+  trades: [
+    { id: "t1", kind: "position", symbol: "TCS", action: "BUY", exit_time: "2026-09-26T05:00:00Z", exit_reason: "stop_loss", exit_kind: "tight_trail", planned_rr: 2, exit_r: 0.6, score: 72, pnl: 180, mistakes: ["tight_trail"], flags: [], checks: [], what_if: { extra_r: 1.4, target_reached: true } },
+    { id: "t2", kind: "position", symbol: "INFY", action: "BUY", exit_time: "2026-09-26T04:30:00Z", exit_reason: "stop_loss", exit_kind: "clean_stop", planned_rr: 2, exit_r: -1, score: 100, pnl: -450, mistakes: [], flags: [], checks: [], what_if: null },
+  ],
+});
 const elig = {
   segment: "NSE", enforced: false, eligible: false,
   requirements: [
@@ -73,6 +84,7 @@ const happy = (score: number | null = 62) =>
   mockFetch({
     "/equity-history/": () => json(equity),
     "/performance/": () => json(perf(score)),
+    "/discipline/": () => json(dv2(score)),
     "/live-eligibility/": () => json(elig),
     "/option-groups": () => json([{ id: "g1", underlying_symbol: "BANKNIFTY", strategy_type: "naked_call", action: "BUY", horizon: "intraday", quantity: 1, net_debit: 1, combined_stop_loss_price: null, spot_stop_loss_price: null, spot_target_price: null, status: "CLOSED", pnl: 1100, entry_time: "2026-09-26T02:00:00Z", exit_time: "2026-09-26T05:30:00Z" }]),
     "/positions": (url) =>
@@ -178,8 +190,11 @@ describe("Review", () => {
     renderAt("/portfolio?tab=review");
     expect(await screen.findByText("62")).toBeInTheDocument();
     expect(screen.getByText("Getting there")).toBeInTheDocument();
-    expect(screen.getByRole("meter", { name: "Planned" })).toHaveAttribute("aria-valuenow", "50");
-    expect(screen.getByText(/No trades to judge yet/)).toBeInTheDocument(); // plan-review has no data
+    expect(screen.getByRole("meter", { name: "Greed" })).toHaveAttribute("aria-valuenow", "88");
+    expect(screen.getByRole("meter", { name: "Fear" })).toHaveAttribute("aria-valuenow", "64");
+    expect(screen.getByRole("meter", { name: "Patience" })).toHaveAttribute("aria-valuenow", "71");
+    expect(screen.getByTestId("coaching-line")).toHaveTextContent("took more size than the system's risk sizing allowed");
+    expect(screen.getByText("Sized above plan · 2")).toBeInTheDocument(); // the costliest habits, in plain words
     expect(within(screen.getByRole("table")).getByText("Breakout")).toBeInTheDocument();
     expect(screen.getByText(/3 of 3 closed trades still need a review/)).toBeInTheDocument();
     expect(screen.getByText("₹50")).toBeInTheDocument(); // charges
@@ -189,6 +204,16 @@ describe("Review", () => {
     happy(null);
     renderAt("/portfolio?tab=review");
     expect(await screen.findByText("Not enough trades yet")).toBeInTheDocument();
-    expect(screen.getByText(/at least 5 trades/)).toBeInTheDocument();
+    expect(screen.getByText(/at least 5 closed trades/)).toBeInTheDocument();
+  });
+
+  it("shows what price did after an early exit, and each trade's exit in plain words", async () => {
+    happy(62);
+    renderAt("/portfolio?tab=review");
+    await screen.findByText("62");
+    const list = within(screen.getByTestId("discipline-trades"));
+    expect(list.getByText(/Trailed too tight/)).toBeInTheDocument();
+    expect(list.getByText(/Stopped out as planned/)).toBeInTheDocument();
+    expect(list.getByTestId("what-if")).toHaveTextContent("Price went another 1.4R your way after you left, and reached your target.");
   });
 });

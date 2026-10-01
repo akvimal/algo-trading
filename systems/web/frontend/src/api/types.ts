@@ -400,3 +400,36 @@ export type StudyNote = {
 
 /** One instrument the person has written notes on (GET /study-notes/instruments). */
 export type NoteInstrument = { segment: Segment; symbol: string; count: number; last_at: string | null };
+
+/** Discipline v2: a behaviour score over the last 20 closed manual trades, split into greed, fear and patience. Never a function of profit. */
+export type DisciplineCheck = { key: string; category: string; emotion: string; score: number; mistake: string | null };
+export type DisciplineTrade = {
+  id: string;
+  kind: "position" | "group";
+  symbol: string;
+  action: "BUY" | "SELL";
+  exit_time: string;
+  exit_reason: string | null;
+  exit_kind: string | null;
+  planned_rr: number | null;
+  exit_r: number | null;
+  score: number | null;
+  pnl: number | null;
+  mistakes: string[];
+  flags: string[];
+  checks: DisciplineCheck[];
+  what_if: { extra_r: number; target_reached: boolean | null } | null;
+};
+export type DisciplineV2 = {
+  segment: Segment;
+  scope: "epoch" | "all";
+  score: number | null;
+  trade_count: number;
+  emotions: { greed: number | null; fear: number | null; patience: number | null };
+  categories: Record<string, number | null>;
+  mistakes: Record<string, number>;
+  week_mistakes: Record<string, number>;
+  target_and_stop_moved: number;
+  coaching: { mistake: string | null; emotion: string | null; count: number; line: string } | null;
+  trades: DisciplineTrade[];
+};

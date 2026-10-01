@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
-import type { EquityHistory, LiveEligibility, OptionGroup, Performance, Position, Segment } from "../api/types";
+import type { DisciplineV2, EquityHistory, LiveEligibility, OptionGroup, Performance, Position, Segment } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { SEGMENTS } from "../config";
 import { useProfile } from "../auth/ProfileContext";
@@ -55,12 +55,14 @@ export function PortfolioPage() {
   // Each block loads on its own so one failing endpoint never blanks the others.
   const equity = useResource(() => api<EquityHistory>("execution", `/equity-history/${segment}?days=90`), [segment]);
   const perf = useResource(() => api<Performance>("execution", `/performance/${segment}`), [segment]);
+  const discipline = useResource(() => api<DisciplineV2>("execution", `/discipline/${segment}`), [segment]);
   const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment]);
   const closed = useResource(() => loadClosed(segment), [segment]);
   // A saved tag, note or review changes both the trade list and the numbers derived from it.
   const saved = () => {
     closed.reload();
     perf.reload();
+    discipline.reload();
   };
   const open = useResource(() => loadOpen(segment), [segment], { pollMs: 15_000, enabled: tab === "positions" });
   const live = useLivePositions(tab === "positions" ? open.data?.positions : undefined);
@@ -88,7 +90,7 @@ export function PortfolioPage() {
       {(tab === "history" || tab === "review") && closed.loading && <Skeleton lines={4} />}
       {(tab === "history" || tab === "review") && closed.error && <ErrorNotice error={closed.error} onRetry={closed.reload} />}
       {tab === "history" && closed.data && <HistoryTab trades={closed.data} onSaved={saved} />}
-      {tab === "review" && closed.data && <ReviewTab perf={perf} trades={closed.data} onSaved={saved} />}
+      {tab === "review" && closed.data && <ReviewTab perf={perf} discipline={discipline} trades={closed.data} onSaved={saved} />}
     </div>
   );
 }

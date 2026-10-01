@@ -36,3 +36,4 @@
 031-study-notes.sql|execution.study_notes|
 032-position-events.sql|execution.position_events|
 033-auto-trail.sql|execution.positions|stop_loss_method
+034-system-quantity.sql|execution.positions|system_quantity

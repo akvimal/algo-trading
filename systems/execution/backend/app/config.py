@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     tight_trail_atr_multiple: float = 1.0
     tight_trail_atr_period: int = 14
 
+    # Discipline v2 score (app/domain/discipline_v2.py): re-entering the same instrument within this many minutes of a loss is
+    # a cooldown breach (revenge), and more than this many trades in a day is overtrading.
+    discipline_cooldown_minutes: int = 15
+    discipline_max_trades_per_day: int = 6
+
     # Server-side pending (limit) orders (app/domain/pending_orders.py). How often the
     # watcher checks armed orders against the underlying's price (0 disables the job),
     # how long an order lives if the caller gives no expiry, the longest expiry allowed,

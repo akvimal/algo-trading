@@ -981,7 +981,8 @@ def open_manual_option_group(
     # pre-2026-08-14 auto-provisioned-Strategy path, which never set one
     # either) - use PUT /option-groups/{id}/stop-loss afterward, same as
     # any other already-open group.
-    quantity = option_fixed_lots * lot_size if option_fixed_lots is not None else compute_quantity(effective_capital, sizing_basis, lot_size)
+    system_quantity = compute_quantity(effective_capital, sizing_basis, lot_size)  # discipline v2: what the system would have bought
+    quantity = option_fixed_lots * lot_size if option_fixed_lots is not None else system_quantity
 
     open_fee = _open_delta_option_fee(segment, entry_spot_price, quantity, long_premium, short_premium)
     if open_fee is not None:
@@ -1004,6 +1005,7 @@ def open_manual_option_group(
         action=action,
         horizon="intraday",
         quantity=quantity,
+        system_quantity=system_quantity,
         net_debit=net_debit,
         strike_width=abs(long_leg_dict["strike"] - short_leg_dict["strike"]) if short_leg_dict else None,
         sl_scope=sl_scope,

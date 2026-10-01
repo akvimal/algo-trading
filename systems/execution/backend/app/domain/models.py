@@ -1096,3 +1096,60 @@ class AdminResetAllConfirm(BaseModel):
         if self.confirm != "RESET":
             raise ValueError("confirm must be exactly 'RESET'")
         return self
+
+
+class DisciplineCheckOut(BaseModel):
+    key: str
+    category: str
+    emotion: str
+    score: float  # 0-1
+    mistake: Optional[str] = None
+
+
+class WhatIfOut(BaseModel):
+    """After an early exit: how much further price went in the trade's favour that day."""
+
+    extra_r: float
+    target_reached: Optional[bool] = None
+
+
+class DisciplineTradeOut(BaseModel):
+    id: str
+    kind: str  # position | group
+    symbol: str
+    action: str
+    exit_time: datetime
+    exit_reason: Optional[str] = None
+    exit_kind: Optional[str] = None  # target, clean_stop, rule_trail, tight_trail, early_exit, ...
+    planned_rr: Optional[float] = None
+    exit_r: Optional[float] = None
+    score: Optional[int] = None
+    pnl: Optional[float] = None
+    mistakes: list[str] = []
+    flags: list[str] = []
+    checks: list[DisciplineCheckOut] = []
+    what_if: Optional[WhatIfOut] = None
+
+
+class DisciplineCoachingOut(BaseModel):
+    mistake: Optional[str] = None
+    emotion: Optional[str] = None
+    count: int = 0
+    line: str
+
+
+class DisciplineV2Out(BaseModel):
+    """Discipline v2: a behaviour score over the last 20 closed manual trades, split into greed, fear and patience. `score` is
+    None below 5 trades. Never a function of profit."""
+
+    segment: str
+    scope: str
+    score: Optional[int] = None
+    trade_count: int
+    emotions: dict[str, Optional[int]]
+    categories: dict[str, Optional[int]]
+    mistakes: dict[str, int]
+    week_mistakes: dict[str, int]
+    target_and_stop_moved: int = 0
+    coaching: Optional[DisciplineCoachingOut] = None
+    trades: list[DisciplineTradeOut]

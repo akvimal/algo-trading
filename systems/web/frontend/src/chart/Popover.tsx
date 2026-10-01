@@ -9,6 +9,7 @@ export function Popover({
   align = "left",
   icon,
   text,
+  buttonLabel,
 }: {
   label: string;
   badge?: string | number;
@@ -19,6 +20,8 @@ export function Popover({
   icon?: ReactNode;
   /** What the button says (default: `label`, which is also the panel's accessible name) - e.g. the current choice. */
   text?: string;
+  /** The button's accessible name, when its visible text alone would not say what it opens. */
+  buttonLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -45,9 +48,9 @@ export function Popover({
 
   return (
     <div className="popover" ref={root}>
-      <button ref={button} className="chip-btn" aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
+      <button ref={button} className="chip-btn" aria-label={buttonLabel} aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
         {icon}
-        {text ?? label}
+        <span className="popover-text">{text ?? label}</span>
         {badge != null && badge !== 0 && <span className="badge">{badge}</span>}
         <span aria-hidden="true"> ▾</span>
       </button>

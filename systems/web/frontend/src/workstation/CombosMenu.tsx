@@ -17,8 +17,12 @@ type Props = {
  * multi-timeframe combo) and that exact pair is not already saved. */
 export function CombosMenu({ ws, combos, onApply, onRemove, onSave }: Props) {
   const canSave = paneCount(ws) === 2 && !sameSide(ws.panes[0], ws.panes[1]) && !hasCombo(combos, ws.panes[0], ws.panes[1]);
+  // The button says which saved pair is on screen right now (and how many are saved); with none of them on screen it
+  // just says Combos. The accessible name keeps "Combos" so it is still recognisable as this menu.
+  const active = combos.find((c) => isActiveCombo(ws, c));
+  const buttonLabel = `Combos${active ? `: ${active.label}` : ""}${combos.length ? `, ${combos.length} saved` : ""}`;
   return (
-    <Popover label="Combos" badge={combos.length || undefined}>
+    <Popover label="Combos" text={active?.label} buttonLabel={buttonLabel} badge={combos.length || undefined}>
       {combos.length === 0 && (
         <p className="faint" style={{ margin: "0 0 8px" }}>
           No saved combos yet.

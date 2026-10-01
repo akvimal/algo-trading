@@ -1881,3 +1881,11 @@ table.t th {
   font-weight: 600;
   min-width: 28px;
 }
+
+/* a long label on a dropdown button (a saved combo's name) is cut short rather than pushing the bar wider */
+.popover-text {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

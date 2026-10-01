@@ -1744,6 +1744,24 @@ describe("saved combos", () => {
     expect(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" })).toBeInTheDocument();
   });
 
+  it("says Combos with the saved count until one of them is on screen, then shows that pair's name with the count", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    const button = () => screen.getByRole("button", { name: /Combos/ });
+    expect(button()).toHaveTextContent(/^Combos1 ▾$/);
+    expect(button()).toHaveAccessibleName("Combos, 1 saved");
+
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    expect(button()).toHaveTextContent(/^NIFTY \+ BANKNIFTY1 ▾$/);
+    expect(button()).toHaveAccessibleName("Combos: NIFTY + BANKNIFTY, 1 saved");
+
+    await pickLayout(user, "One chart"); // one chart is no longer that pair
+    expect(button()).toHaveTextContent(/^Combos1 ▾$/);
+  });
+
   it("offers to save the two charts on screen once they show two different instruments, applies and removes it", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");

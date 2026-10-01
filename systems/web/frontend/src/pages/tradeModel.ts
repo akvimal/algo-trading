@@ -412,10 +412,10 @@ export type PlanStatus = { tone: "empty" | "partial" | "ready" | "warn"; text: s
 
 /** One quiet line saying how complete the plan is, for a spot/future ticket. It never blocks anything. */
 export function planStatus(t: Ticket, a: Analysis, ctx: TicketContext): PlanStatus | null {
-  if (t.strategy !== "future") return null;
+  const option = t.strategy !== "future";
   const risk = a.riskAmount != null && ctx.capital > 0 ? `risk ${((a.riskAmount / ctx.capital) * 100).toFixed(1)}%` : null;
   const parts = (...p: (string | null)[]) => p.filter(Boolean).join(" · ");
-  if (a.stop == null) return { tone: "empty", text: "No plan yet · set a stop to size the trade" };
+  if (a.stop == null) return { tone: "empty", text: option ? "No plan yet · set a stop and a target on the underlying" : "No plan yet · set a stop to size the trade" };
   if (a.riskAmount != null && a.riskAmount > (ctx.capital * ctx.riskPct) / 100) {
     // Sized by the system but still over: the smallest order (one lot) already risks more than the plan allows.
     return { tone: "warn", text: parts(a.lotsAuto ? "Even the smallest size is over your plan" : "Size above your plan", risk, `plan is ${ctx.riskPct}%`) };

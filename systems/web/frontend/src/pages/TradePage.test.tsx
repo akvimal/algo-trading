@@ -585,6 +585,42 @@ describe("the plan on the ticket", () => {
     expect(Number((t.getByLabelText("Target") as HTMLInputElement).value)).toBeGreaterThan(1039);
   });
 
+  it("suggests a plan for an option order too, from the underlying's price", async () => {
+    profilePrefs = { default_instrument: "option", default_option_strategy: "naked" };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const t = await ticket();
+    await loaded();
+    await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
+    expect(t.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
+    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
+    const stop = Number((t.getByLabelText("Stop-loss") as HTMLInputElement).value);
+    const target = Number((t.getByLabelText("Target") as HTMLInputElement).value);
+    expect(stop).toBeLessThan(1000); // a buy is bullish: its stop is below the underlying
+    expect(target).toBeGreaterThan(1000);
+    expect(t.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R/);
+  });
+
+  it("goes back to the first suggestion after the stop or target was changed", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await loaded();
+    expect(t.queryByRole("button", { name: "Reset to suggestion" })).not.toBeInTheDocument();
+    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
+    const stop = (t.getByLabelText("Stop-loss") as HTMLInputElement).value;
+    const target = (t.getByLabelText("Target") as HTMLInputElement).value;
+    expect(t.queryByRole("button", { name: "Reset to suggestion" })).not.toBeInTheDocument(); // nothing changed yet
+    await user.clear(t.getByLabelText("Stop-loss"));
+    await user.type(t.getByLabelText("Stop-loss"), "950");
+    await user.clear(t.getByLabelText("Target"));
+    await user.type(t.getByLabelText("Target"), "1100");
+    await user.click(t.getByRole("button", { name: "Reset to suggestion" }));
+    expect(t.getByLabelText("Stop-loss")).toHaveValue(stop);
+    expect(t.getByLabelText("Target")).toHaveValue(target);
+    expect(t.queryByRole("button", { name: "Reset to suggestion" })).not.toBeInTheDocument();
+  });
+
   it("shows the size as worked out from the risk, quietly, and typing over it can be undone", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");

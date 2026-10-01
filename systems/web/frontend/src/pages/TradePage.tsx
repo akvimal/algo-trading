@@ -217,6 +217,7 @@ export function TradePage() {
   const [showFormAnyway, setShowFormAnyway] = useState(false);
   useEffect(() => {
     setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
+    setSuggestion(null);
     setPickField(null);
     setLevelPick(null);
     setShowFormAnyway(false);
@@ -289,12 +290,16 @@ export function TradePage() {
     },
   });
   // One click fills the stop and target that are still empty from the chart's typical move and the person's minimum reward-to-risk.
+  const [suggestion, setSuggestion] = useState<{ stop: number; target: number } | null>(null);
   function suggestTicketPlan() {
     const typedStop = Number(ticket.stop);
     const plan = suggestPlan(ticket.action, analysis?.entry ?? activePrice, paneRefs[active].current?.typicalMove() ?? null, ctx?.minRR ?? 2, ticket.stop.trim() !== "" && Number.isFinite(typedStop) ? typedStop : null);
     if (!plan) return;
+    setSuggestion(plan);
     setTicket((t) => ({ ...t, stop: t.stop.trim() === "" ? String(plan.stop) : t.stop, target: t.target.trim() === "" ? String(plan.target) : t.target }));
   }
+  // Back to the first suggestion, whatever has been changed since.
+  const resetToSuggestion = () => suggestion && setTicket((t) => ({ ...t, stop: String(suggestion.stop), target: String(suggestion.target) }));
   function addLine(field: PriceField) {
     const level = defaultLevel(field, ticket.action, activePrice, paneRefs[active].current?.typicalMove() ?? null);
     if (level != null) setLevel(field, level);
@@ -736,6 +741,8 @@ export function TradePage() {
                 }}
                 onAddLine={addLine}
                 onSuggestPlan={suggestTicketPlan}
+                suggestion={suggestion}
+                onResetToSuggestion={resetToSuggestion}
                 holding={hasOpenForInstrument ? openHolding : null}
                 onPlaced={() => {
                   waiting.reload();
@@ -746,6 +753,7 @@ export function TradePage() {
                   // indefinitely (nothing else ever cleared them; the ticket itself only resets
                   // on a symbol/segment change, not on a successful placement).
                   setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
+                  setSuggestion(null);
                   setPickField(null);
                 }}
               />

@@ -37,6 +37,9 @@ type Props = {
   onAddLine?: (f: PriceField) => void;
   /** Fill whichever of stop and target is still empty with a suggested level (one click to accept, then drag to taste). */
   onSuggestPlan?: () => void;
+  /** The suggestion that was first filled in, and a way back to it after the person has changed the stop or target. */
+  suggestion?: { stop: number; target: number } | null;
+  onResetToSuggestion?: () => void;
   /** What the person already holds open on this instrument (e.g. "1 open NIFTY position"), if anything:
    * the ticket warns before a second order is placed on top of it. */
   holding?: string | null;
@@ -77,7 +80,7 @@ type Props = {
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, onSuggestPlan, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, onSuggestPlan, suggestion = null, onResetToSuggestion, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -221,13 +224,29 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           placeholder ("Auto from your risk"/"Sized for you"), so it gets the full row below
           instead of a cramped third column. No hints here (unlike Entry above): the label and
           placeholder already say what is needed, and dropping them is what kept this compact. */}
-      {!simplifiedOption && onSuggestPlan && !isOption && ctx.price != null && (t.stop.trim() === "" || t.target.trim() === "") && (
-        <div style={{ marginBottom: 6 }}>
-          <button className="link-btn" onClick={onSuggestPlan} title="Fill the empty stop and target from the chart's typical move and your minimum reward-to-risk">
-            Suggest stop &amp; target
-          </button>
-        </div>
-      )}
+      {!simplifiedOption && onSuggestPlan && ctx.price != null && (() => {
+        const someEmpty = t.stop.trim() === "" || t.target.trim() === "";
+        const changed = suggestion != null && (t.stop !== String(suggestion.stop) || t.target !== String(suggestion.target));
+        if (!someEmpty && !(changed && onResetToSuggestion)) return null;
+        return (
+          <div className="field-actions" style={{ marginBottom: 6 }}>
+            {someEmpty && (
+              <button className="link-btn" onClick={onSuggestPlan} title="Fill the empty stop and target from the chart's typical move and your minimum reward-to-risk">
+                Suggest stop &amp; target
+              </button>
+            )}
+            {!someEmpty && changed && (
+              <button
+                className="link-btn"
+                onClick={onResetToSuggestion}
+                title={`Put the stop and target back to the first suggestion (${formatPrice(suggestion!.stop)} and ${formatPrice(suggestion!.target)})`}
+              >
+                Reset to suggestion
+              </button>
+            )}
+          </div>
+        );
+      })()}
       {!simplifiedOption && (
         <div className="field-row">
           <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />

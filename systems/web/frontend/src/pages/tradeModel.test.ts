@@ -368,8 +368,10 @@ describe("planStatus", () => {
     expect(status({ stop: "980", target: "1040" }, ctx({ lotSize: 65 }))).toMatchObject({ tone: "warn", text: expect.stringContaining("Even the smallest size is over your plan") });
   });
 
-  it("is not shown for an option order", () => {
-    expect(status({ strategy: "naked", stop: "990" })).toBeNull();
+  it("covers an option order too, on the underlying's levels, with no risk figure (the server sizes it)", () => {
+    expect(status({ strategy: "naked" })).toMatchObject({ tone: "empty", text: expect.stringContaining("on the underlying") });
+    expect(status({ strategy: "naked", stop: "990", target: "1030" })).toEqual({ tone: "ready", text: "Planned · R:R 3.0" });
+    expect(status({ strategy: "spread", stop: "990" })).toMatchObject({ tone: "partial", text: "Stop set · reward unplanned" });
   });
 });
 

@@ -141,6 +141,8 @@ beforeEach(() => {
       if (url.includes("/indicators") || url.includes("/rules") || url.includes("/strategies?")) return json([]);
       if (url.includes("/regime")) return json(regimes[q("symbol")] ?? regimes.default);
       if (url.endsWith("/accounts")) return json([account]);
+      if (url.includes("/study-notes") && method === "POST") return json({ id: "note1", segment: body.segment, symbol: body.symbol, interval: body.interval, text: body.text, tag: body.tag ?? null, context: body.context ?? null, position_id: null, option_group_id: null, has_snapshot: false, created_at: new Date().toISOString() }, 201);
+      if (url.includes("/study-notes")) return json([]);
       if (url.includes("/pending-orders") && method === "POST")
         return json({ id: "w1", segment: "NSE", symbol: body.symbol, action: body.action, strategy: body.strategy, trigger_price: body.trigger_price, stop_loss_price: body.stop_loss_price ?? null, target_price: body.target_price ?? null, status: "pending", status_reason: null, expires_at: "2026-09-27T00:00:00Z", last_price: null }, 201);
       if (url.includes("/pending-orders") && method === "DELETE") {
@@ -533,6 +535,36 @@ describe("placing", () => {
     await user.click(t.getByRole("button", { name: /Buy RELIANCE/ }));
     await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
     expect(posts("/positions/manual")[0].body).toMatchObject({ quantity: 7, risk_managed: false });
+  });
+});
+
+describe("the notes panel under the chart", () => {
+  beforeEach(() => screenIs(true));
+
+  it("sits under the charts for the active instrument, closed until opened", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.getByTestId("notes")).toBeInTheDocument();
+    expect(calls.some((c) => c.url.includes("/study-notes"))).toBe(false); // nothing is fetched while it is shut
+    await userEvent.setup().click(screen.getByTestId("notes-toggle"));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/study-notes?segment=NSE&symbol=NIFTY"))).toBe(true));
+  });
+
+  it("saves a note under the active chart's instrument and interval, with the market as it was on screen", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await user.click(screen.getByTestId("notes-toggle"));
+    await user.type(await screen.findByLabelText("Note"), "Range day, wait for a break");
+    await user.click(screen.getByRole("button", { name: "observation" }));
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    await waitFor(() => expect(posts("/study-notes")).toHaveLength(1));
+    const sent = posts("/study-notes")[0].body;
+    expect(sent).toMatchObject({ segment: "NSE", symbol: "NIFTY", interval: "15min", text: "Range day, wait for a break", tag: "observation" });
+    expect(sent.context.price).toBe(1000);
+    expect(sent.context.interval).toBe("15min");
+    expect(sent).not.toHaveProperty("snapshot_png_base64");
   });
 });
 

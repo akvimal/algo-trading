@@ -32,6 +32,9 @@ export type ChartPaneHandle = {
   /** How far the instrument typically moves in one bar of this chart (null until enough bars have loaded) -
    * what a starting stop or target line is measured in, so it lands inside the part of the chart on screen. */
   typicalMove: () => number | null;
+  /** The chart as it is on screen (candles, indicators, drawings, structure, trade markers) as a PNG data URL, or
+   * null when it is not ready. */
+  snapshot: () => string | null;
 };
 
 /** The visible window of a chart, in terms another chart can follow: the size of a bar and the time at the
@@ -670,6 +673,15 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     },
     typicalMove() {
       return averageTrueRange(barsRef.current);
+    },
+    snapshot() {
+      const chart = chartRef.current;
+      if (!chart) return null;
+      try {
+        return chart.getConvertPictureUrl(true, "png", getComputedStyle(document.body).backgroundColor || "#0f1216");
+      } catch {
+        return null;
+      }
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);

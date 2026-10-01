@@ -21,6 +21,9 @@ import { loadAutoTraderVisible } from "../autotrader/model";
 import { ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
 import { checkLevelMove, isContractOf, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
+import { NotesPanel } from "../components/NotesPanel";
+import { buildNoteContext } from "../components/notesModel";
+import { loadAiRead } from "../chart/aiReadStore";
 import { PositionCard } from "../components/PositionCard";
 import { TradeTicket } from "../components/TradeTicket";
 import { CLASSIC_APP_URL } from "../config";
@@ -139,6 +142,28 @@ export function TradePage() {
     () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? openLevels(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups) : [])),
     [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // ---- the notes panel: what the market looks like on the active chart, read when a note is sent ----
+  function aiReadFor(i: 0 | 1) {
+    const s = oi[i].summary;
+    return s ? loadAiRead(`${s.underlying_exchange}:${s.underlying_symbol}:${s.expiry}`) : null;
+  }
+  function noteContextFor() {
+    const i = active;
+    const base = ws.panes[i].symbol.trim().toUpperCase();
+    const open = tradeRows.data
+      ? tradeRows.data.positions.filter((p) => p.status === "OPEN" && p.option_group_id == null && isContractOf(p.symbol, base)).length +
+        tradeRows.data.groups.filter((g) => g.status === "OPEN" && g.underlying_symbol.toUpperCase() === base).length
+      : 0;
+    return buildNoteContext({
+      price: priceOf(i),
+      interval: ws.panes[i].interval,
+      regime: datas[i].regime,
+      structure: trendFor(i),
+      oi: oi[i].summary,
+      aiRead: aiReadFor(i),
+      holding: open > 0 ? `${open} open ${base} position${open === 1 ? "" : "s"}` : null,
+    });
+  }
   const [levelNote, setLevelNote] = useState<{ text: string; error: boolean } | null>(null);
   async function moveLevel(pane: 0 | 1, level: Pick<OpenLevel, "kind" | "field" | "tradeId" | "long">, price: number): Promise<boolean> {
     const word = level.field === "stop" ? "Stop-loss" : "Target";
@@ -535,6 +560,15 @@ export function TradePage() {
             );
           })}
           </div>
+          <NotesPanel
+            key={`${ws.panes[active].segment}:${ws.panes[active].symbol}`}
+            segment={ws.panes[active].segment}
+            symbol={ws.panes[active].symbol}
+            interval={ws.panes[active].interval}
+            getContext={noteContextFor}
+            getChartImage={() => paneRefs[active].current?.snapshot() ?? null}
+            aiRead={aiReadFor(active)}
+          />
           {structure.tfs.length > 0 && structure.setups && (reports[active]?.setups.length ?? 0) > 0 && (
             <div className="ws-setups" data-testid="setups">
               {reports[active]!.setups.map((s) => (

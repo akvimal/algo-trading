@@ -357,3 +357,40 @@ export type ChartStructure = {
   trend_changes: TrendChange[];
   setups: Setup[];
 };
+
+/** What the market looked like when a note was written - kept with the note so a later study (or a model) can read
+ * what the person thought against what they were looking at. Every part is optional: only what was on screen. */
+export type NoteContext = {
+  price: number | null;
+  interval: string;
+  regime?: { regime: string; adx: number; atr_percentile: number };
+  structure_trend?: Record<string, string>;
+  oi?: {
+    expiry: string;
+    pcr: number | null;
+    vol_pcr: number | null;
+    call_oi_change_5m: number | null;
+    put_oi_change_5m: number | null;
+    call_buildup: string | null;
+    put_buildup: string | null;
+  };
+  ai_read?: { bias: string; confidence: number; one_liner: string; generated_at: string };
+  holding?: string | null;
+};
+
+export type NoteTag = "plan" | "observation" | "mistake" | "review";
+
+/** One note from the thoughts-and-plans panel (GET /study-notes). */
+export type StudyNote = {
+  id: string;
+  segment: Segment;
+  symbol: string;
+  interval: string | null;
+  text: string;
+  tag: NoteTag | null;
+  context: NoteContext | null;
+  position_id: string | null;
+  option_group_id: string | null;
+  has_snapshot: boolean;
+  created_at: string | null;
+};

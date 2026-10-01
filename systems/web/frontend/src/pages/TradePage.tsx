@@ -284,7 +284,7 @@ export function TradePage() {
   }
   // "Suggest" on an open trade: save a starting stop/target at the usual distance, then it is a line to drag.
   function addOpenLevel(kind: "position" | "group", tradeId: string, long: boolean, field: "stop" | "target") {
-    const level = defaultLevel(field, long ? "BUY" : "SELL", activePrice, paneRefs[active].current?.typicalMove() ?? null);
+    const level = defaultLevel(field, long ? "BUY" : "SELL", activePrice, paneRefs[active].current?.typicalMove() ?? null, ctx?.minRR);
     if (level != null) void moveLevel(active, { kind, tradeId, long, field }, level);
   }
   const openTradeHelp = (kind: "position" | "group", tradeId: string, long: boolean) => ({
@@ -299,7 +299,7 @@ export function TradePage() {
   // The price "Suggest" first put on each field, so the ticket can offer a way back to it after the person has dragged or typed over it.
   const [suggested, setSuggested] = useState<Partial<Record<PriceField, number>>>({});
   function addLine(field: PriceField) {
-    const level = defaultLevel(field, ticket.action, activePrice, paneRefs[active].current?.typicalMove() ?? null);
+    const level = defaultLevel(field, ticket.action, activePrice, paneRefs[active].current?.typicalMove() ?? null, ctx?.minRR);
     if (level != null) {
       setSuggested((cur) => ({ ...cur, [field]: level }));
       setLevel(field, level);

@@ -162,7 +162,7 @@ def _calm(ordered: list[TradeScore]) -> CredentialStatus:
     detail = None
     if ordered:
         size = min(len(ordered), 30)
-        detail = f"Fear mistakes in your last {size} trades: {round(_fear_rate(ordered[-size:]) * 100)}%"
+        detail = f"Fear mistakes in your last {size} trade{'s' if size != 1 else ''}: {round(_fear_rate(ordered[-size:]) * 100)}%"
     return CredentialStatus(
         key="calm_under_pressure", label="Calm Under Pressure", unit="recent trades measured", count=min(len(ordered), 100),
         blurb="Few fear mistakes - tight trails, closing by hand early, pulling a target in, sizing down - and fewer lately than before.",

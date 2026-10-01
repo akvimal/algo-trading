@@ -373,13 +373,16 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
  * favour (a 2:1 plan), a waiting entry half one back - so it lands inside the part of the chart on screen
  * whatever the instrument or interval. Without it, a small share of the price instead (0.15% stop, 0.3%
  * target, 0.1% entry). Rounded to the decimals the chart shows. Null when there is no price to work from. */
-export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null, typicalMove: number | null = null): number | null {
+export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null, typicalMove: number | null = null, minRR = 2): number | null {
   if (price == null || !Number.isFinite(price) || price <= 0) return null;
   const buy = action === "BUY";
   const sign = field === "target" ? (buy ? 1 : -1) : buy ? -1 : 1; // stop and entry sit against the trade's direction
+  // The target is as many stop-distances away as the person's minimum reward-to-risk asks (never under 2), so a suggestion does not
+  // arrive already under their own rule.
+  const reach = Math.max(2, Number.isFinite(minRR) ? minRR : 2);
   const away = typicalMove != null && Number.isFinite(typicalMove) && typicalMove > 0
-    ? typicalMove * (field === "stop" ? 1 : field === "target" ? 2 : 0.5)
-    : price * (field === "stop" ? 0.0015 : field === "target" ? 0.003 : 0.001);
+    ? typicalMove * (field === "stop" ? 1 : field === "target" ? reach : 0.5)
+    : price * (field === "stop" ? 0.0015 : field === "target" ? 0.0015 * reach : 0.001);
   const raw = price + sign * away;
   const decimals = price >= 100 ? 2 : price >= 1 ? 3 : 6;
   return Number(raw.toFixed(decimals));

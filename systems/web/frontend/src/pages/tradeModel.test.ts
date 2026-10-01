@@ -270,6 +270,14 @@ describe("defaultLevel", () => {
     expect(defaultLevel("entry", "SELL", 1000)).toBe(1001);
   });
 
+  it("puts the target as far as the minimum reward-to-risk asks, never under two stop-distances", () => {
+    expect(defaultLevel("target", "BUY", 1000, 10, 4)).toBe(1040);
+    expect(defaultLevel("target", "SELL", 1000, 10, 3)).toBe(970);
+    expect(defaultLevel("target", "BUY", 1000, 10, 1)).toBe(1020); // a lower minimum still plans 2:1
+    expect(defaultLevel("target", "BUY", 1000, null, 4)).toBe(1006); // no bar-move to measure by: a share of the price, scaled the same way
+    expect(defaultLevel("stop", "BUY", 1000, 10, 4)).toBe(990); // the stop is unchanged
+  });
+
   it("gives levels on the right side for the order, which the ticket accepts", () => {
     for (const action of ["BUY", "SELL"] as const) {
       const t = ticket({ action, stop: String(defaultLevel("stop", action, 1000)), target: String(defaultLevel("target", action, 1000)) });

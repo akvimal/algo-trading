@@ -9,6 +9,7 @@ import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, Structu
 import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, structureIsOn, toggleStructureOn, type StructureConfig } from "../chart/config";
 import { ACCENT, BUY, SELL } from "../chart/colors";
 import { AlertBar } from "../chart/AlertBar";
+import { AnalysisTools } from "../chart/AnalysisTools";
 import { StyleBar } from "../chart/StyleBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
@@ -396,17 +397,21 @@ export function TradePage() {
               onSave={() => setCombos((cur) => addCombo(cur, ws.panes[0], ws.panes[1]))}
             />
           )}
-          <IndicatorMenu
-            selected={indicators}
-            onSelected={setIndicators}
-            params={indicatorParams}
-            onParams={setIndicatorParams}
-            hidden={tools.indicatorsHidden}
-            onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
-            structureOn={structureIsOn(structure)}
-            onStructureOn={setStructureOn}
-          />
-          {structureIsOn(structure) && <StructureMenu config={structure} onChange={setStructure} />}
+          {!wide && (
+            <>
+              <IndicatorMenu
+                selected={indicators}
+                onSelected={setIndicators}
+                params={indicatorParams}
+                onParams={setIndicatorParams}
+                hidden={tools.indicatorsHidden}
+                onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
+                structureOn={structureIsOn(structure)}
+                onStructureOn={setStructureOn}
+              />
+              {structureIsOn(structure) && <StructureMenu config={structure} onChange={setStructure} />}
+            </>
+          )}
           <ViewToggles
             tradesOn={tools.tradesOn}
             onTradesOn={(on) => setTools((t) => ({ ...t, tradesOn: on }))}
@@ -436,6 +441,20 @@ export function TradePage() {
             onClear={() => paneRefs[active].current?.clearDrawings()}
             hasSelection={hasSelection}
             onDeleteSelected={() => paneRefs[active].current?.removeSelected()}
+            analysis={
+              <AnalysisTools
+                selected={indicators}
+                onSelected={setIndicators}
+                params={indicatorParams}
+                onParams={setIndicatorParams}
+                indicatorsHidden={tools.indicatorsHidden}
+                onIndicatorsHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
+                structure={structure}
+                onStructure={setStructure}
+                structureOn={structureIsOn(structure)}
+                onStructureOn={setStructureOn}
+              />
+            }
           />
         )}
 

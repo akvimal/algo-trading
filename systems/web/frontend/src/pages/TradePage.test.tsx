@@ -1324,15 +1324,12 @@ describe("structure", () => {
     setups: [{ direction: "long", status: "triggered", entry: 106, stop_loss: 103, target: 112, risk_reward: 2, zone_proximal: 100, zone_distal: 95, confirmed_timestamp: "2026-09-25T11:30:00+05:30", resolved_timestamp: null }],
   });
   const open = async (user: ReturnType<typeof userEvent.setup>) => {
-    // The Structure dropdown itself only exists once at least one timeframe is ticked - off by
-    // default, so most tests here have to turn it on first via the Indicators menu's own switch.
-    if (!screen.queryByRole("button", { name: /^Structure/ })) {
-      await user.click(screen.getByRole("button", { name: /Indicators/ }));
-      await user.click(screen.getByLabelText("Structure"));
-      await user.click(screen.getByRole("button", { name: /Indicators/ })); // close it again
-    }
-    await user.click(screen.getByRole("button", { name: /^Structure/ }));
-    return within(screen.getByRole("group", { name: "Structure" }));
+    // Structure is off by default: open its panel on the rail and switch the layer on from there (a no-op if it is on already).
+    const group = () => screen.queryByRole("group", { name: "Structure" });
+    if (!group()) await user.click(screen.getByRole("button", { name: /^Structure/ }));
+    const on = screen.getByLabelText("Show structure");
+    if (!(on as HTMLInputElement).checked) await user.click(on);
+    return within(group()!);
   };
 
   it("is off until a timeframe is ticked, and downloads nothing", async () => {
@@ -1342,28 +1339,50 @@ describe("structure", () => {
     expect(calls.some((x) => x.url.includes("/order-blocks"))).toBe(false);
   });
 
-  it("the Structure dropdown itself only exists once the Indicators menu's own switch turns the layer on, and disappears again when it's switched off", async () => {
+  it("has its own button on the rail, whose panel switches the layer on (seeded with the chart's own interval) and off again", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    expect(screen.queryByRole("button", { name: /^Structure/ })).not.toBeInTheDocument();
+    const button = () => screen.getByRole("button", { name: /^Structure/ });
+    expect(button()).toHaveAttribute("aria-pressed", "false");
 
-    await user.click(screen.getByRole("button", { name: /Indicators/ }));
-    const indicators = within(screen.getByRole("group", { name: "Indicators" }));
-    expect(indicators.getByLabelText("Structure")).not.toBeChecked();
-    await user.click(indicators.getByLabelText("Structure"));
-    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    await user.click(button());
+    const panel = within(screen.getByRole("group", { name: "Structure" }));
+    expect(panel.getByLabelText("Show structure")).not.toBeChecked();
+    expect(panel.queryByText("Detect on")).not.toBeInTheDocument(); // nothing to configure while it is off
+    await user.click(panel.getByLabelText("Show structure"));
 
     // Seeded with the active chart's own interval (15m, the default) - not a stale accumulated list.
-    expect(screen.getByRole("button", { name: "Structure 1" })).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual(["15min"]);
+    expect(screen.getByText("Detect on")).toBeInTheDocument();
+    expect(button()).toHaveAttribute("aria-pressed", "true");
+    expect(within(button()).getByText("1")).toBeInTheDocument(); // the count of detection intervals
 
-    await user.click(screen.getByRole("button", { name: /Indicators/ }));
-    await user.click(within(screen.getByRole("group", { name: "Indicators" })).getByLabelText("Structure"));
-    await user.click(screen.getByRole("button", { name: /Indicators/ }));
-
-    expect(screen.queryByRole("button", { name: /^Structure/ })).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("Show structure"));
     expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual([]);
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("is not in the top bar on a wide screen, and keeps its own dropdown there on a phone", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const top = document.querySelector(".ws-bar")!;
+    expect(within(top as HTMLElement).queryByRole("button", { name: /Indicators/ })).not.toBeInTheDocument();
+    expect(within(top as HTMLElement).queryByRole("button", { name: /^Structure/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: /Indicators/ })).toBeInTheDocument();
+  });
+
+  it("on a phone the Indicators dropdown stays in the top bar, with Structure as a switch inside it", async () => {
+    screenIs(false);
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("toolbar", { name: "Drawing tools" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    const panel = within(screen.getByRole("group", { name: "Indicators" }));
+    await user.click(panel.getByLabelText("Structure"));
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    expect(screen.getByRole("button", { name: "Structure 1" })).toBeInTheDocument();
   });
 
   it("draws zones for the ticked timeframe, asking the server for the optional layers only when they are on", async () => {
@@ -1550,11 +1569,9 @@ describe("layout and the ticket panel", () => {
     await user.click(screen.getAllByRole("button", { name: /Intervals/ })[0]);
     expect(within(screen.getByRole("group", { name: "Intervals" })).getByRole("button", { name: "30m" })).toBeInTheDocument();
     await user.click(screen.getAllByRole("button", { name: /Intervals/ })[0]); // close it again
-    // the Structure dropdown only exists once the layer is switched on, from the Indicators menu
-    await user.click(screen.getByRole("button", { name: /Indicators/ }));
-    await user.click(screen.getByLabelText("Structure"));
-    await user.click(screen.getByRole("button", { name: /Indicators/ }));
-    await user.click(screen.getByRole("button", { name: /^Structure/ }));
+    // the Structure button on the rail opens its panel; the layer is switched on from there
+    await user.click(screen.getByRole("button", { name: "Structure" }));
+    await user.click(screen.getByLabelText("Show structure"));
     const menu = within(screen.getByRole("group", { name: "Structure" }));
     expect(menu.getAllByRole("button").map((b) => b.textContent).slice(0, 7)).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d"]);
     expect(menu.queryByRole("button", { name: "1w" })).not.toBeInTheDocument(); // order blocks are not detected that coarsely

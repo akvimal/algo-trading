@@ -23,11 +23,13 @@ type Props = {
   onClear: () => void;
   hasSelection: boolean;
   onDeleteSelected: () => void;
+  /** Further groups of tools shown beneath the drawing tools (the Indicators and Structure buttons). */
+  analysis?: ReactNode;
 };
 
 /** The vertical strip of drawing tools down the chart's left edge. Picking a tool arms it for the next
  * drag on the chart; picking it again, or the cursor, puts it down. Drawings are saved per instrument. */
-export function DrawToolbar({ active, onTool, magnet, onMagnet, hidden, onHidden, onClear, hasSelection, onDeleteSelected }: Props) {
+export function DrawToolbar({ active, onTool, magnet, onMagnet, hidden, onHidden, onClear, hasSelection, onDeleteSelected, analysis }: Props) {
   return (
     <div className="draw-toolbar" role="toolbar" aria-label="Drawing tools" aria-orientation="vertical">
       <button className="tool" aria-label="Cursor" title="Cursor (stop drawing)" aria-pressed={active === null} onClick={() => onTool(null)}>
@@ -51,6 +53,12 @@ export function DrawToolbar({ active, onTool, magnet, onMagnet, hidden, onHidden
       <button className="tool" aria-label="Clear all drawings" title="Clear all drawings on this instrument" onClick={onClear}>
         <TrashIcon />
       </button>
+      {analysis && (
+        <>
+          <span className="tool-sep" role="separator" />
+          {analysis}
+        </>
+      )}
     </div>
   );
 }

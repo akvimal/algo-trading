@@ -10,6 +10,10 @@ export function Popover({
   icon,
   text,
   buttonLabel,
+  variant = "chip",
+  side = "below",
+  pressed,
+  title,
 }: {
   label: string;
   badge?: string | number;
@@ -22,6 +26,14 @@ export function Popover({
   text?: string;
   /** The button's accessible name, when its visible text alone would not say what it opens. */
   buttonLabel?: string;
+  /** "chip" (default) is a text button for the top bar; "tool" is an icon-only square for the left rail. */
+  variant?: "chip" | "tool";
+  /** Where the panel opens: under the button (default) or beside it, to the right - for the rail. */
+  side?: "below" | "beside";
+  /** For a tool button: whether what it opens is switched on, shown by highlighting it. */
+  pressed?: boolean;
+  /** A tool button's tooltip. */
+  title?: string;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -48,14 +60,30 @@ export function Popover({
 
   return (
     <div className="popover" ref={root}>
-      <button ref={button} className="chip-btn" aria-label={buttonLabel} aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
-        {icon}
-        <span className="popover-text">{text ?? label}</span>
-        {badge != null && badge !== 0 && <span className="badge">{badge}</span>}
-        <span aria-hidden="true"> ▾</span>
-      </button>
+      {variant === "tool" ? (
+        <button
+          ref={button}
+          className="tool popover-tool"
+          aria-label={buttonLabel ?? label}
+          title={title ?? label}
+          aria-pressed={pressed}
+          aria-expanded={open}
+          aria-haspopup="true"
+          onClick={() => setOpen(!open)}
+        >
+          {icon}
+          {badge != null && badge !== 0 && <span className="tool-count">{badge}</span>}
+        </button>
+      ) : (
+        <button ref={button} className="chip-btn" aria-label={buttonLabel} aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
+          {icon}
+          <span className="popover-text">{text ?? label}</span>
+          {badge != null && badge !== 0 && <span className="badge">{badge}</span>}
+          <span aria-hidden="true"> ▾</span>
+        </button>
+      )}
       {open && (
-        <div className={`popover-panel ${align}`} role="group" aria-label={label}>
+        <div className={`popover-panel ${side === "beside" ? "beside" : align}`} role="group" aria-label={label}>
           {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}

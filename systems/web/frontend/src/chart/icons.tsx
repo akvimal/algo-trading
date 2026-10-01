@@ -30,6 +30,8 @@ export const OiLevelsIcon = () => wrap(<><path d="M3 6h18" /><path d="M3 18h18" 
 export const TradesIcon = () => wrap(<><path d="M12 5l5.5 8h-11z" /><path d="M4 18h16" /></>);
 export const PriceTagIcon = () => wrap(<><path d="M4 12l8-8h8v8l-8 8z" /><circle cx="16" cy="8" r="1.3" /></>);
 export const TicketPanelIcon = () => wrap(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>);
+export const IndicatorsIcon = () => wrap(<><path d="M3 17l5-6 4 3 5-8 4 5" /><path d="M3 21h18" /></>);
+export const StructureIcon = () => wrap(<><rect x="4" y="4" width="16" height="5" rx="1" /><rect x="4" y="11" width="10" height="4" rx="1" /><rect x="4" y="17" width="14" height="3" rx="1" /></>);
 export const MagnetIcon = () => wrap(<><path d="M6 4v8a6 6 0 0012 0V4" /><path d="M6 8h4M14 8h4" /></>);
 export const EyeIcon = () => wrap(<><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
 export const EyeOffIcon = () => wrap(<><path d="M3 3l18 18" /><path d="M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3 3.6M6.6 6.6A16 16 0 002 12s4 7 10 7c1.6 0 3-.4 4.3-1" /></>);

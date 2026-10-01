@@ -1896,3 +1896,34 @@ table.t th {
   margin: 4px 0 0;
   font-size: 12px;
 }
+
+/* the left rail's analysis group, and the flyouts that open beside it */
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.popover-tool {
+  position: relative;
+}
+.tool-count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+/* The analysis buttons sit at the foot of the rail, so their panels grow upward from the button instead of running off the bottom of the screen. */
+.popover-panel.beside {
+  top: auto;
+  bottom: -6px;
+  left: calc(100% + 10px);
+  max-height: 60vh;
+}

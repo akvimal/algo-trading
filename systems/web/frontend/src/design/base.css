@@ -1848,3 +1848,36 @@ table.t th {
   padding: 0 10px;
   font-size: 12px;
 }
+
+/* the layout dropdown: each arrangement as a picture of its grid */
+.layout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+}
+.layout-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.layout-option:hover,
+.layout-option[aria-checked="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.layout-option[aria-checked="true"] svg {
+  color: var(--accent);
+}
+.layout-grid {
+  font-weight: 600;
+  min-width: 28px;
+}

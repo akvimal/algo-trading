@@ -538,6 +538,52 @@ describe("placing", () => {
   });
 });
 
+/** Opens the layout dropdown and picks an arrangement by its name. */
+async function pickLayout(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)$/ }));
+  await user.click(within(screen.getByRole("group", { name: "Layout" })).getByRole("radio", { name: new RegExp(name) }));
+}
+
+describe("the layout dropdown", () => {
+  beforeEach(() => screenIs(true));
+
+  it("shows the current grid on its button, with the three arrangements listed when opened", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const button = screen.getByRole("button", { name: /^(1×1|2×1|1×2)$/ });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    await user.click(button);
+    const list = within(screen.getByRole("radiogroup", { name: "Chart layout" }));
+    expect(list.getAllByRole("radio").map((r) => r.textContent)).toEqual(["1×1One chart", "2×1Side by side", "1×2Stacked"]);
+    expect(list.getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(1);
+  });
+
+  it("changes the layout, closes itself, and the button shows the new grid", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await pickLayout(user, "Stacked");
+    expect(document.querySelector(".ws-grid")!.className).toContain("layout-stack");
+    expect(screen.queryByRole("radiogroup", { name: "Chart layout" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1×2" })).toBeInTheDocument();
+    await pickLayout(user, "Side by side");
+    expect(document.querySelector(".ws-grid")!.className).toContain("layout-side");
+    expect(screen.getByRole("button", { name: "2×1" })).toBeInTheDocument();
+  });
+
+  it("closes with Escape, keeping the layout", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const before = document.querySelector(".ws-grid")!.className;
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)$/ }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("radiogroup", { name: "Chart layout" })).not.toBeInTheDocument();
+    expect(document.querySelector(".ws-grid")!.className).toBe(before);
+  });
+});
+
 describe("the notes panel under the chart", () => {
   beforeEach(() => screenIs(true));
 
@@ -1551,7 +1597,7 @@ describe("two linked charts", () => {
     await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("23,140.5"));
     await waitFor(() => expect(screen.getByTestId("price-1")).toHaveTextContent("55,580.4"));
     expect(screen.getAllByTestId("chart-pane")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Side by side" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "2×1" })).toBeInTheDocument(); // the layout button names the current grid
     const symbols = calls.filter((x) => x.url.includes("/candles/history")).map((x) => new URL(x.url).searchParams.get("symbol"));
     expect(symbols).toContain("BANKNIFTY");
     expect(FakeChart.instances).toHaveLength(2);
@@ -1671,7 +1717,7 @@ describe("two linked charts", () => {
   it("goes back to one chart, drops the peer check, and keeps the first chart", async () => {
     const user = userEvent.setup();
     await pair(user);
-    await user.click(screen.getByRole("button", { name: "One chart" }));
+    await pickLayout(user, "One chart");
     await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(1));
     expect(screen.queryByText(/Confirmed by/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Sync crosshair")).not.toBeInTheDocument();
@@ -1681,7 +1727,7 @@ describe("two linked charts", () => {
   it("stacks the charts on request", async () => {
     const user = userEvent.setup();
     await pair(user);
-    await user.click(screen.getByRole("button", { name: "Stacked" }));
+    await pickLayout(user, "Stacked");
     expect(document.querySelector(".ws-grid")!.className).toContain("layout-stack");
   });
 });
@@ -2538,7 +2584,7 @@ describe("alerts on drawings", () => {
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("3 alerts armed"));
-    await user.click(screen.getByRole("button", { name: "One chart" }));
+    await pickLayout(user, "One chart");
     await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed")); // the hidden chart's are not counted
   });
 });

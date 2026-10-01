@@ -2,7 +2,24 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /** A button that opens a small panel beneath it. Closes on a click elsewhere or Escape, returns focus
  * to the button, and tells assistive tech whether it is open. */
-export function Popover({ label, badge, children, align = "left" }: { label: string; badge?: string | number; children: ReactNode; align?: "left" | "right" }) {
+export function Popover({
+  label,
+  badge,
+  children,
+  align = "left",
+  icon,
+  text,
+}: {
+  label: string;
+  badge?: string | number;
+  /** The panel's content; a function gets a `close` to call once a choice is made. */
+  children: ReactNode | ((close: () => void) => ReactNode);
+  align?: "left" | "right";
+  /** Shown on the button before its text. */
+  icon?: ReactNode;
+  /** What the button says (default: `label`, which is also the panel's accessible name) - e.g. the current choice. */
+  text?: string;
+}) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -29,13 +46,14 @@ export function Popover({ label, badge, children, align = "left" }: { label: str
   return (
     <div className="popover" ref={root}>
       <button ref={button} className="chip-btn" aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
-        {label}
+        {icon}
+        {text ?? label}
         {badge != null && badge !== 0 && <span className="badge">{badge}</span>}
         <span aria-hidden="true"> ▾</span>
       </button>
       {open && (
         <div className={`popover-panel ${align}`} role="group" aria-label={label}>
-          {children}
+          {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}
     </div>

@@ -13,6 +13,19 @@ export const ChannelIcon = () => wrap(<><path d="M4 15L18 7" /><path d="M6 20L20
 export const ZoneIcon = () => wrap(<rect x="4" y="7" width="16" height="10" rx="1" />);
 export const FibIcon = () => wrap(<><path d="M3 5h18" /><path d="M3 10h18" /><path d="M3 15h18" /><path d="M3 20h18" /></>);
 export const TextIcon = () => wrap(<><path d="M5 6V4h14v2" /><path d="M12 4v16" /><path d="M9 20h6" /></>);
+/** A small picture of a chart grid: 1x1 one chart, 2x1 two side by side (two columns), 1x2 two stacked (two rows). */
+export const GridIcon = ({ cols, rows }: { cols: 1 | 2; rows: 1 | 2 }) => {
+  const gap = 2;
+  const x0 = 3;
+  const y0 = 4;
+  const w = 18;
+  const h = 16;
+  const cw = (w - gap * (cols - 1)) / cols;
+  const ch = (h - gap * (rows - 1)) / rows;
+  const cells = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push(<rect key={`${r}${c}`} x={x0 + c * (cw + gap)} y={y0 + r * (ch + gap)} width={cw} height={ch} rx="1.5" />);
+  return wrap(<>{cells}</>);
+};
 export const MagnetIcon = () => wrap(<><path d="M6 4v8a6 6 0 0012 0V4" /><path d="M6 8h4M14 8h4" /></>);
 export const EyeIcon = () => wrap(<><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
 export const EyeOffIcon = () => wrap(<><path d="M3 3l18 18" /><path d="M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3 3.6M6.6 6.6A16 16 0 002 12s4 7 10 7c1.6 0 3-.4 4.3-1" /></>);

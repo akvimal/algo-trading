@@ -32,12 +32,13 @@ import { formatPnl, formatPrice } from "../format";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
 import { agreement, directionOf } from "../workstation/confluence";
+import { LayoutMenu } from "../workstation/LayoutMenu";
 import { PaneHeader } from "../workstation/PaneHeader";
 import { CombosMenu } from "../workstation/CombosMenu";
 import { addCombo, applyCombo, loadCombos, removeCombo, saveCombos, type Combo } from "../workstation/combos";
 import {
   loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSymbol,
-  withUrlSymbol, type Layout, type WorkstationState,
+  withUrlSymbol, type WorkstationState,
 } from "../workstation/state";
 import { OiStrip } from "../chart/OiStrip";
 import { useOiData } from "../workstation/useOiData";
@@ -48,12 +49,6 @@ import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, is
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
-
-const LAYOUTS: { id: Layout; label: string }[] = [
-  { id: "single", label: "One chart" },
-  { id: "side", label: "Side by side" },
-  { id: "stack", label: "Stacked" },
-];
 
 export function TradePage() {
   const [params] = useSearchParams();
@@ -392,13 +387,7 @@ export function TradePage() {
 
         <div className="ws-tools">
           {wide && (
-            <div className="chips" role="group" aria-label="Layout">
-              {LAYOUTS.map((l) => (
-                <button key={l.id} aria-pressed={ws.layout === l.id} onClick={() => setWs((cur) => setLayout(cur, l.id))}>
-                  {l.label}
-                </button>
-              ))}
-            </div>
+            <LayoutMenu layout={ws.layout} onChange={(layout) => setWs((cur) => setLayout(cur, layout))} />
           )}
           {wide && (
             <CombosMenu

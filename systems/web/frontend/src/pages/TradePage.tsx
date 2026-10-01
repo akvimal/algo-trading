@@ -10,6 +10,9 @@ import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructur
 import { ACCENT, BUY, SELL } from "../chart/colors";
 import { AlertBar } from "../chart/AlertBar";
 import { AnalysisTools } from "../chart/AnalysisTools";
+import type { AiReadHandle } from "../chart/AiReadPanel";
+import { OiTools } from "../chart/OiTools";
+import { hasOiChain } from "../chart/oiLevels";
 import { StyleBar } from "../chart/StyleBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
@@ -93,8 +96,9 @@ export function TradePage() {
   // decides whether the derived lines are also drawn on the chart itself. Called unconditionally for
   // both panes, same as usePaneData above: dataB's own fields are null while the second pane is not
   // shown, so its own `enabled` check inside useOiData already costs nothing.
-  const oiA = useOiData(dataA, ws.panes[0].symbol);
-  const oiB = useOiData(dataB, ws.panes[1].symbol);
+  const oiWanted = tools.oiStripOn || tools.oiLevelsOn; // with both off nothing reads the option chain, so it is not polled
+  const oiA = useOiData(dataA, ws.panes[0].symbol, oiWanted);
+  const oiB = useOiData(dataB, ws.panes[1].symbol, oiWanted);
   const oi = [oiA, oiB];
   const oiLevels = [tools.oiLevelsOn ? oiA.levels : [], tools.oiLevelsOn && twoUp ? oiB.levels : []];
 
@@ -287,6 +291,7 @@ export function TradePage() {
 
   // ---- drawing tools act on the active chart ----
   const paneRefs = [useRef<ChartPaneHandle>(null), useRef<ChartPaneHandle>(null)];
+  const aiRefs = [useRef<AiReadHandle>(null), useRef<AiReadHandle>(null)];
   const [tool, setTool] = useState<DrawTool | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
@@ -415,8 +420,16 @@ export function TradePage() {
           <ViewToggles
             tradesOn={tools.tradesOn}
             onTradesOn={(on) => setTools((t) => ({ ...t, tradesOn: on }))}
-            oiLevelsOn={tools.oiLevelsOn}
-            onOiLevelsOn={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
+            oi={
+              wide
+                ? undefined
+                : {
+                    stripOn: tools.oiStripOn,
+                    onStripOn: (on) => setTools((t) => ({ ...t, oiStripOn: on })),
+                    levelsOn: tools.oiLevelsOn,
+                    onLevelsOn: (on) => setTools((t) => ({ ...t, oiLevelsOn: on })),
+                  }
+            }
             priceShown={!tools.priceHidden}
             onPriceShown={(shown) => setTools((t) => ({ ...t, priceHidden: !shown }))}
             ticket={wide ? { open: ws.ticketOpen, onToggle: (open) => setWs((cur) => ({ ...cur, ticketOpen: open })) } : undefined}
@@ -442,6 +455,7 @@ export function TradePage() {
             hasSelection={hasSelection}
             onDeleteSelected={() => paneRefs[active].current?.removeSelected()}
             analysis={
+              <>
               <AnalysisTools
                 selected={indicators}
                 onSelected={setIndicators}
@@ -454,6 +468,16 @@ export function TradePage() {
                 structureOn={structureIsOn(structure)}
                 onStructureOn={setStructureOn}
               />
+              <span className="tool-sep" role="separator" />
+              <OiTools
+                available={hasOiChain(activeSpec.symbol)}
+                stripOn={tools.oiStripOn}
+                onStrip={(on) => setTools((t) => ({ ...t, oiStripOn: on }))}
+                levelsOn={tools.oiLevelsOn}
+                onLevels={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
+                onAiRead={() => aiRefs[active].current?.activate()}
+              />
+              </>
             }
           />
         )}
@@ -512,7 +536,15 @@ export function TradePage() {
                   showActive={twoUp}
                 />
                 {d.error && !d.exchange && <ErrorNotice error={d.error as never} onRetry={d.reloadResolve} />}
-                <OiStrip summary={oi[i].summary} sentiment={oi[i].sentiment} levels={oi[i].levels} onChartLevelsOn={tools.oiLevelsOn} />
+                <OiStrip
+                  summary={oi[i].summary}
+                  sentiment={oi[i].sentiment}
+                  levels={oi[i].levels}
+                  onChartLevelsOn={tools.oiLevelsOn}
+                  stripOn={tools.oiStripOn}
+                  aiTarget={hasOiChain(spec.symbol) && d.exchange && d.symbol ? { exchange: d.exchange, symbol: d.symbol } : null}
+                  aiRef={aiRefs[i]}
+                />
                 {d.exchange && d.symbol ? (
                   <Suspense fallback={<div className="chart-status">Loading chart…</div>}>
                     <ChartPane

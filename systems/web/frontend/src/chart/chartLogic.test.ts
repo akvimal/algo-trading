@@ -164,10 +164,15 @@ describe("saved chart settings", () => {
     });
   });
 
-  it("tool settings default off", () => {
-    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false, priceHidden: false });
-    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, priceHidden: true });
-    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, priceHidden: true });
+  it("tool settings default off - except the trades and the OI strip, which start on", () => {
+    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false, oiStripOn: true, priceHidden: false });
+    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
+    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
+  });
+
+  it("an older saved settings record, from before the OI strip had a switch, keeps the strip on", () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ magnet: true, tradesOn: true, oiLevelsOn: false }));
+    expect(loadTools().oiStripOn).toBe(true);
   });
 
   it("drawings are kept per instrument, shared by every interval", () => {

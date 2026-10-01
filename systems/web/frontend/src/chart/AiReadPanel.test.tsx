@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import type { AiRead } from "../api/types";
-import { AiReadButton } from "./AiReadPanel";
+import { createRef } from "react";
+import { AiReadButton, type AiReadHandle } from "./AiReadPanel";
 
 const getAiRead = vi.fn();
 vi.mock("../api/trade", () => ({ getAiRead: (...a: unknown[]) => getAiRead(...a) }));
@@ -113,5 +114,30 @@ describe("AiReadButton", () => {
     expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId("ai-read-btn"));
     expect(await screen.findByTestId("ai-read")).toBeInTheDocument();
+  });
+
+  it("can be started from outside, like its own button: runs a read, then shows and hides the one that is there", async () => {
+    getAiRead.mockResolvedValue(READ);
+    const ref = createRef<AiReadHandle>();
+    render(<AiReadButton ref={ref} exchange="NSE" symbol="NIFTY" />);
+    await act(async () => ref.current!.activate());
+    expect(await screen.findByTestId("ai-read")).toBeInTheDocument();
+    await act(async () => ref.current!.activate()); // hide
+    expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument();
+    await act(async () => ref.current!.activate()); // show again
+    expect(screen.getByTestId("ai-read")).toBeInTheDocument();
+    expect(getAiRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks without an expiry when the page has none, and saves the read per instrument rather than per expiry", async () => {
+    getAiRead.mockResolvedValue(READ);
+    const first = render(<AiReadButton exchange="NSE" symbol="NIFTY" />);
+    await userEvent.click(screen.getByTestId("ai-read-btn"));
+    await screen.findByTestId("ai-read");
+    expect(getAiRead).toHaveBeenCalledWith("NSE", "NIFTY", undefined);
+    first.unmount();
+    // the same instrument with an expiry (the strip is on and its chain has loaded) finds the same read
+    render(<AiReadButton exchange="NSE" symbol="NIFTY" expiry="2026-10-06" />);
+    expect(screen.getByTestId("ai-read-btn")).toHaveTextContent("Show AI read");
   });
 });

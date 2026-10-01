@@ -1,5 +1,6 @@
 import type { OiSummary, SentimentHistoryPoint } from "../api/types";
-import { AiReadButton } from "./AiReadPanel";
+import type { Ref } from "react";
+import { AiReadButton, type AiReadHandle } from "./AiReadPanel";
 import { formatPrice } from "../format";
 import type { OiLevelLine } from "./oiLevels";
 import {
@@ -100,7 +101,33 @@ function FlowSkew({ skew, summary }: { skew: { pct: number; leader: "CE" | "PE" 
  * on-chart lines are a separate, opt-in layer (see the "OI levels" toggle). Renders nothing without data.
  * The R/S text below is skipped when that same layer is already drawing them on the chart - the same
  * numbers, so showing both just duplicates the space rather than the information. */
-export function OiStrip({ summary, sentiment, levels, onChartLevelsOn }: { summary: OiSummary | null; sentiment: SentimentHistoryPoint[]; levels: OiLevelLine[]; onChartLevelsOn: boolean }) {
+export function OiStrip({
+  summary,
+  sentiment,
+  levels,
+  onChartLevelsOn,
+  stripOn = true,
+  aiTarget = null,
+  aiRef,
+}: {
+  summary: OiSummary | null;
+  sentiment: SentimentHistoryPoint[];
+  levels: OiLevelLine[];
+  onChartLevelsOn: boolean;
+  /** False when the person has hidden the strip: only a slim row with the AI read stays (see `aiTarget`). */
+  stripOn?: boolean;
+  /** The instrument to read for the AI read when the strip is hidden and there is no option-chain summary; null: nothing to show. */
+  aiTarget?: { exchange: string; symbol: string } | null;
+  /** Lets the screen start the AI read from outside (the rail's AI read button). */
+  aiRef?: Ref<AiReadHandle>;
+}) {
+  if (!stripOn) {
+    return aiTarget ? (
+      <div className="oi-strip oi-strip-slim" data-testid="oi-strip-slim">
+        <AiReadButton ref={aiRef} exchange={aiTarget.exchange} symbol={aiTarget.symbol} />
+      </div>
+    ) : null;
+  }
   if (!summary) return null;
   const crypto = summary.underlying_exchange === "CRYPTO";
   const volPcr = volumePcr(summary.strikes);
@@ -154,7 +181,7 @@ export function OiStrip({ summary, sentiment, levels, onChartLevelsOn }: { summa
       {hasSentimentTrend(sentiment) && <span className="faint oi-strip-trend-label">OI trend</span>}
       <Sentiment points={sentiment} window="15m" />
       <Sentiment points={sentiment} window="5m" />
-      <AiReadButton exchange={summary.underlying_exchange} symbol={summary.underlying_symbol} expiry={summary.expiry} />
+      <AiReadButton ref={aiRef} exchange={summary.underlying_exchange} symbol={summary.underlying_symbol} expiry={summary.expiry} />
     </div>
   );
 }

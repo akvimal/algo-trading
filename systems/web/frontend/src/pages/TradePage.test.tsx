@@ -141,6 +141,7 @@ beforeEach(() => {
       if (url.includes("/indicators") || url.includes("/rules") || url.includes("/strategies?")) return json([]);
       if (url.includes("/regime")) return json(regimes[q("symbol")] ?? regimes.default);
       if (url.endsWith("/accounts")) return json([account]);
+      if (url.includes("/ai-read")) return json({ underlying: q("symbol"), expiry: q("expiry") || "2026-10-06", model: "m", generated_at: new Date().toISOString(), bias: "bearish", confidence: 70, one_liner: "Sell rallies.", reasoning: ["r1"], support: [], resistance: [], risks: [], wait_for: "x", data_gaps: [] });
       if (url.includes("/study-notes") && method === "POST") return json({ id: "note1", segment: body.segment, symbol: body.symbol, interval: body.interval, text: body.text, tag: body.tag ?? null, context: body.context ?? null, position_id: null, option_group_id: null, has_snapshot: false, created_at: new Date().toISOString() }, 201);
       if (url.includes("/study-notes")) return json([]);
       if (url.includes("/pending-orders") && method === "POST")
@@ -2157,27 +2158,125 @@ describe("your trades on the chart", () => {
   });
 });
 
+describe("the OI group on the rail", () => {
+  beforeEach(() => screenIs(true));
+  const rail = () => within(screen.getByRole("group", { name: "Open interest" }));
+  const aiCalls = () => calls.filter((c) => c.url.includes("/ai-read"));
+  const chainCalls = () => calls.filter((c) => c.url.includes("/options/"));
+
+  it("has the OI strip, the OI levels and the AI read, with the strip on and the levels off to start", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(rail().getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI strip", "OI levels", "AI read"]);
+    expect(rail().getByRole("button", { name: "OI strip" })).toHaveAttribute("aria-pressed", "true");
+    expect(rail().getByRole("button", { name: "OI levels" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("is greyed out for an instrument with no option chain, saying why", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await loaded();
+    for (const name of ["OI strip", "OI levels", "AI read"]) {
+      expect(rail().getByRole("button", { name })).toBeDisabled();
+      expect(rail().getByRole("button", { name })).toHaveAttribute("title", "No option chain for this instrument");
+    }
+  });
+
+  it("hides the strip, remembering the choice, and puts it back", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await screen.findByTestId("oi-strip");
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    expect(screen.queryByTestId("oi-strip")).not.toBeInTheDocument();
+    expect(rail().getByRole("button", { name: "OI strip" })).toHaveAttribute("aria-pressed", "false");
+    expect(JSON.parse(localStorage.getItem("web.chart.tools") ?? "{}").oiStripOn).toBe(false);
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    expect(await screen.findByTestId("oi-strip")).toBeInTheDocument();
+  });
+
+  it("keeps the AI read reachable with the strip hidden: a slim row with just its button", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    const slim = within(screen.getByTestId("oi-strip-slim"));
+    expect(slim.getByTestId("ai-read-btn")).toBeInTheDocument();
+    expect(screen.queryByText(/PCR/)).not.toBeInTheDocument(); // none of the readings
+  });
+
+  it("starts the AI read from the rail, even with the strip hidden - for the chart's own instrument, with no expiry of its own", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    await user.click(rail().getByRole("button", { name: "AI read" }));
+    expect(await screen.findByTestId("ai-read-bias")).toHaveTextContent("bearish · 70%");
+    const url = new URL(aiCalls()[0].url);
+    expect(url.searchParams.get("symbol")).toBe("NIFTY");
+    expect(url.searchParams.get("expiry")).toBeNull(); // the server picks the nearest
+  });
+
+  it("starts the strip's own AI read from the rail too, and a second press hides what it showed", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await screen.findByTestId("oi-strip");
+    await user.click(rail().getByRole("button", { name: "AI read" }));
+    expect(await screen.findByTestId("ai-read")).toBeInTheDocument();
+    await user.click(rail().getByRole("button", { name: "AI read" }));
+    expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument();
+    expect(aiCalls()).toHaveLength(1); // hiding it did not ask the model again
+  });
+
+  it("does not read the option chain at all while neither the strip nor the levels are on", async () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ oiStripOn: false, oiLevelsOn: false }));
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    expect(chainCalls()).toHaveLength(0);
+    expect(calls.some((c) => c.url.includes("/options/sentiment-history"))).toBe(false);
+  });
+
+  it("still reads the chain for the levels alone, with the strip hidden", async () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ oiStripOn: false, oiLevelsOn: true }));
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    await waitFor(() => expect(chainCalls().length).toBeGreaterThan(0));
+    await waitFor(() => expect(c.overlaysNamed("oiLevel").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("oi-strip")).not.toBeInTheDocument();
+  });
+
+  it("is in the top bar instead on a phone, which has no rail", async () => {
+    screenIs(false);
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("group", { name: "Open interest" })).not.toBeInTheDocument();
+    const view = within(screen.getByRole("group", { name: "View" }));
+    expect(view.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI strip", "OI levels", "My trades", "Price in header"]);
+  });
+});
+
 describe("the view toggles at the end of the top bar", () => {
   beforeEach(() => screenIs(true));
   const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
 
-  it("are icon buttons, each named for what it switches and pressed when on - trades and the ticket on by default, OI levels off", async () => {
+  it("are icon buttons, each named for what it switches and pressed when on - trades, the price and the ticket on by default", async () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     const group = within(screen.getByRole("group", { name: "View" }));
-    expect(group.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI levels", "My trades", "Price in header", "Show ticket"]);
+    expect(group.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["My trades", "Price in header", "Show ticket"]);
     expect(group.getAllByRole("button").every((b) => b.textContent === "")).toBe(true); // icons, not words
-    expect([pressed("OI levels"), pressed("My trades"), pressed("Price in header"), pressed("Show ticket")]).toEqual(["false", "true", "true", "true"]);
+    expect([pressed("My trades"), pressed("Price in header"), pressed("Show ticket")]).toEqual(["true", "true", "true"]);
   });
 
   it("say on or off in their tooltips, and flip when clicked", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("title", expect.stringMatching(/\(off\)$/));
-    await user.click(screen.getByRole("button", { name: "OI levels" }));
-    expect(pressed("OI levels")).toBe("true");
-    expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("title", expect.stringMatching(/\(on\)$/));
+    expect(screen.getByRole("button", { name: "My trades" })).toHaveAttribute("title", expect.stringMatching(/\(on\)$/));
+    await user.click(screen.getByRole("button", { name: "My trades" }));
+    expect(pressed("My trades")).toBe("false");
+    expect(screen.getByRole("button", { name: "My trades" })).toHaveAttribute("title", expect.stringMatching(/\(off\)$/));
     await user.click(screen.getByRole("button", { name: "Show ticket" }));
     expect(pressed("Show ticket")).toBe("false");
   });

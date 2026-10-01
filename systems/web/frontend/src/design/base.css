@@ -1329,7 +1329,7 @@ table.t th {
   gap: 4px 14px;
   align-items: center;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: 13px;
   border-top: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   color: var(--text-dim, #93a1b1);
 }
@@ -1351,14 +1351,15 @@ table.t th {
 .oi-strip-trend-label {
   font-size: 13px;
 }
+/* The OI trend bars are about as tall as the text beside them, not twice as tall. */
 .oi-strip-spark {
   display: inline-flex;
   align-items: flex-end;
   gap: 2px;
-  height: 28px;
+  height: 18px;
 }
 .oi-strip-spark-bar {
-  width: 5px;
+  width: 4px;
   min-height: 3px;
   border-radius: 1px;
   background: var(--text-dim, #93a1b1);
@@ -1926,4 +1927,20 @@ table.t th {
   bottom: -6px;
   left: calc(100% + 10px);
   max-height: 60vh;
+}
+
+/* the AI read shortcut on the rail, and the slim row that holds the AI read when the OI strip is hidden */
+.tool-ai {
+  color: #c4b5fd;
+}
+.tool-ai:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.2);
+}
+.oi-strip-slim {
+  justify-content: flex-end;
+}
+
+/* the pills inside the OI strip (CE LB, PE SB, flow skew, trend change) read at the strip's own text size */
+.oi-strip .pill {
+  font-size: 13px;
 }

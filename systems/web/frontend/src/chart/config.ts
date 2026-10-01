@@ -218,12 +218,12 @@ export function toggleStructureOn(on: boolean, activeInterval: string): string[]
   return STRUCTURE_TF_VALUES.has(activeInterval) ? [activeInterval] : [STRUCTURE_TIMEFRAMES[STRUCTURE_TIMEFRAMES.length - 1].value];
 }
 
-export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean; priceHidden: boolean };
+export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean; /** The OI strip under each chart's header. */ oiStripOn: boolean; priceHidden: boolean };
 export const loadTools = (): ToolSettings => {
   const raw = read<Record<string, unknown>>("tools", {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));
   return {
     magnet: raw.magnet === true, drawingsHidden: raw.drawingsHidden === true, indicatorsHidden: raw.indicatorsHidden === true,
-    tradesOn: raw.tradesOn !== false, oiLevelsOn: raw.oiLevelsOn === true, priceHidden: raw.priceHidden === true,
+    tradesOn: raw.tradesOn !== false, oiLevelsOn: raw.oiLevelsOn === true, oiStripOn: raw.oiStripOn !== false, priceHidden: raw.priceHidden === true,
   };
 };
 export const saveTools = (t: ToolSettings) => write("tools", t);

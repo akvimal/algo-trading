@@ -28,8 +28,8 @@ export function getCandles(exchange: string, symbol: string, interval: string, d
 export const getLtp = (exchange: string, symbol: string) => api<Ltp>("marketData", `/quotes/ltp?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}`);
 
 /** The model read can take several seconds, so it is only ever fetched on a click, never polled. */
-export const getAiRead = (exchange: string, symbol: string, expiry: string) =>
-  api<AiRead>("marketData", `/ai-read?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=5min&expiry=${encodeURIComponent(expiry)}`);
+export const getAiRead = (exchange: string, symbol: string, expiry?: string) =>
+  api<AiRead>("marketData", `/ai-read?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=5min${expiry ? `&expiry=${encodeURIComponent(expiry)}` : ""}`);
 
 export const getRegime = (exchange: string, symbol: string, interval: string) =>
   api<MarketRegime>("marketData", `/regime?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=${interval}`);

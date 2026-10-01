@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { getAiRead } from "../api/trade";
 import { ApiError } from "../api/http";
 import type { AiRead } from "../api/types";
@@ -14,8 +14,14 @@ type State = { status: "idle" } | { status: "loading" } | { status: "error"; mes
  * calendar. Costs the person's own OpenRouter credit, so it only ever runs on a click — never on a timer.
  * A finished read stays on screen until they ask again, and is saved in the browser so a page reload (or
  * coming back to the instrument later today) brings it back, flagged "old" once it is 30+ minutes behind. */
-export function AiReadButton({ exchange, symbol, expiry }: { exchange: string; symbol: string; expiry: string }) {
-  const key = `${exchange}:${symbol}:${expiry}`;
+/** What the rest of the screen can ask of the AI read: do what its own button would do now (run one, or show/hide the
+ * read that is there). The rail's AI read button uses it, so the read does not depend on the OI strip being on screen. */
+export type AiReadHandle = { activate: () => void };
+
+/** `expiry` is only passed to the model's context when the page knows it (the option chain is loaded); without it the
+ * server picks the nearest. A read is saved per instrument, not per expiry. */
+export const AiReadButton = forwardRef<AiReadHandle, { exchange: string; symbol: string; expiry?: string }>(function AiReadButton({ exchange, symbol, expiry }, ref) {
+  const key = `${exchange}:${symbol}`;
   const restore = (): State => {
     const saved = loadAiRead(key);
     return saved ? { status: "done", read: saved } : { status: "idle" };
@@ -51,9 +57,11 @@ export function AiReadButton({ exchange, symbol, expiry }: { exchange: string; s
   };
 
   const loading = state.status === "loading";
+  const click = state.status === "done" && open ? () => setOpen(false) : state.status === "done" ? () => setOpen(true) : run;
+  useImperativeHandle(ref, () => ({ activate: () => (loading ? undefined : click()) }));
   return (
     <>
-      <button className="chip-btn ai-read-btn" onClick={state.status === "done" && open ? () => setOpen(false) : state.status === "done" ? () => setOpen(true) : run} disabled={loading} data-testid="ai-read-btn">
+      <button className="chip-btn ai-read-btn" onClick={click} disabled={loading} data-testid="ai-read-btn">
         {loading ? "Reading…" : state.status === "done" ? (open ? "✦ Hide AI read" : "✦ Show AI read") : "✦ AI read"}
       </button>
       {state.status === "error" && (
@@ -64,7 +72,7 @@ export function AiReadButton({ exchange, symbol, expiry }: { exchange: string; s
       {state.status === "done" && open && <AiReadBody read={state.read} onRefresh={run} />}
     </>
   );
-}
+});
 
 function AiReadBody({ read, onRefresh }: { read: AiRead; onRefresh: () => void }) {
   return (

@@ -905,6 +905,138 @@ describe("drawing tools", () => {
     });
   });
 
+  describe("the look of a drawing", () => {
+    const KEY = "web.chart.drawings:NSE:NIFTY";
+    const saved = () => JSON.parse(localStorage.getItem(KEY) ?? "[]");
+    const defaults = () => JSON.parse(localStorage.getItem("web.chart.drawingDefaults") ?? "{}");
+
+    async function drawLine(user: ReturnType<typeof userEvent.setup>, tool = "Trend line", name = "segment") {
+      const c = chart(0);
+      const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+      await user.click(bar.getByRole("button", { name: tool }));
+      const armed = c.overlaysNamed(name).filter((o) => o.points.length === 0);
+      const ov = armed[armed.length - 1];
+      act(() => c.finishDrawing(ov.id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[10].timestamp, value: 1020 }]));
+      act(() => c.select(ov.id));
+      return { c, id: ov.id };
+    }
+
+    it("shows the style bar only while a drawing is selected", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      expect(screen.queryByTestId("style-bar")).not.toBeInTheDocument();
+      await drawLine(user);
+      expect(await screen.findByTestId("style-bar")).toBeInTheDocument();
+    });
+
+    it("applies a colour, thickness and dash to the drawing at once and saves them with it", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      const { c, id } = await drawLine(user);
+      const bar = within(await screen.findByTestId("style-bar"));
+      await user.click(bar.getByRole("button", { name: "Colour Red" }));
+      await user.click(bar.getByRole("button", { name: "Thickness 3" }));
+      await user.click(bar.getByRole("button", { name: "Dashed" }));
+      expect(c.overlays.get(id)!.styles.line).toEqual({ color: "#e8586a", size: 3, style: "dashed", dashedValue: [6, 4] });
+      expect(saved()[0]).toMatchObject({ name: "segment", style: { color: "#e8586a", width: 3, dash: "dashed" } });
+    });
+
+    it("draws a restyled drawing the same way when the instrument is opened again", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "rect", points: [{ timestamp: Date.now() - 900_000, value: 1000 }, { timestamp: Date.now() - 300_000, value: 1020 }], style: { color: "#3ecf8e", fill: 0.5 } }]));
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("rect")).toHaveLength(1));
+      expect(c.overlaysNamed("rect")[0].styles.polygon).toMatchObject({ color: "rgba(62, 207, 142, 0.5)", borderColor: "#3ecf8e" });
+    });
+
+    it("ignores a damaged saved style instead of drawing it", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "segment", points: [{ timestamp: Date.now() - 900_000, value: 1000 }, { timestamp: Date.now() - 300_000, value: 1020 }], style: { color: "javascript:alert(1)", width: 99 } }]));
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("segment")).toHaveLength(1));
+      expect(c.overlaysNamed("segment")[0].styles).toBeUndefined();
+    });
+
+    it("resets a drawing to the chart's own look, and keeps it where it was", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      const { c } = await drawLine(user);
+      const bar = within(await screen.findByTestId("style-bar"));
+      await user.click(bar.getByRole("button", { name: "Colour Blue" }));
+      await user.click(bar.getByRole("button", { name: "Reset look" }));
+      expect(saved()[0].style).toBeUndefined();
+      expect(saved()[0].points).toHaveLength(2);
+      expect(c.overlaysNamed("segment").every((o) => o.styles === undefined)).toBe(true);
+    });
+
+    it("makes a look the default for its kind: the next drawing of that kind starts with it, other kinds do not", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      const first = await drawLine(user);
+      let bar = within(await screen.findByTestId("style-bar"));
+      await user.click(bar.getByRole("button", { name: "Colour Yellow" }));
+      await user.click(bar.getByRole("button", { name: "Use for new trend lines" }));
+      expect(defaults()).toEqual({ segment: { color: "#ffc83d" } });
+      expect(within(screen.getByTestId("style-bar")).getByRole("button", { name: "Clear default for trend lines" })).toBeInTheDocument();
+
+      // a second trend line starts yellow...
+      const second = await drawLine(user);
+      expect(second.c.overlays.get(second.id)!.styles.line.color).toBe("#ffc83d");
+      expect(saved()[1].style).toEqual({ color: "#ffc83d" });
+      // ...a ray does not
+      const ray = await drawLine(user, "Ray", "rayLine");
+      expect(ray.c.overlays.get(ray.id)!.styles).toBeUndefined();
+      void first;
+    });
+
+    it("clears a default again", async () => {
+      localStorage.setItem("web.chart.drawingDefaults", JSON.stringify({ segment: { color: "#ffc83d" } }));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      await drawLine(user);
+      await user.click(await screen.findByRole("button", { name: "Clear default for trend lines" }));
+      expect(defaults()).toEqual({});
+    });
+
+    it("changes a text label's colour, size and weight, keeping its words", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Text" }));
+      const ov = c.overlaysNamed("textNote")[0];
+      act(() => c.finishDrawing(ov.id, [{ timestamp: c.data[5].timestamp, value: 1010 }]));
+      await user.type(await screen.findByLabelText("Text on the chart"), "Supply above{Enter}");
+      act(() => c.select(ov.id));
+      const bar = within(await screen.findByTestId("style-bar"));
+      expect(bar.queryByRole("group", { name: "Thickness" })).not.toBeInTheDocument();
+      await user.click(bar.getByRole("button", { name: "Colour Orange" }));
+      await user.click(bar.getByRole("button", { name: "Large" }));
+      await user.click(bar.getByRole("button", { name: "Bold" }));
+      expect(c.overlays.get(ov.id)!.extendData).toEqual({ text: "Supply above", style: { color: "#ff9f43", textSize: 16, bold: false } });
+      expect(saved()[0]).toMatchObject({ name: "textNote", text: "Supply above", style: { color: "#ff9f43", textSize: 16, bold: false } });
+    });
+
+    it("a text label keeps its look when its words are edited", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "old", style: { color: "#a78bfa", textSize: 20 } }]));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      const ov = c.overlaysNamed("textNote")[0];
+      expect(ov.extendData).toEqual({ text: "old", style: { color: "#a78bfa", textSize: 20 } });
+      act(() => c.doubleClick(ov.id));
+      const box = await screen.findByLabelText("Text on the chart");
+      await user.clear(box);
+      await user.type(box, "new{Enter}");
+      expect(c.overlays.get(ov.id)!.extendData).toEqual({ text: "new", style: { color: "#a78bfa", textSize: 20 } });
+    });
+  });
+
   it("a drawing made on one chart shows up on a sibling chart of the SAME instrument at a different interval", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");

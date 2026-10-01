@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ChartStructure } from "../api/types";
 import { fractionalIndexToTs, floorBarIndex, pointTimestamp, toChartPoint, tsToFractionalIndex } from "./anchor";
 import {
-  DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure,
-  loadTools, lookbackRange, parseParamList, pricePrecision, resetStructureForInterval, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toggleStructureOn, toKLine,
+  DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure,
+  loadTools, lookbackRange, parseParamList, pricePrecision, resetStructureForInterval, saveDrawingDefault, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toggleStructureOn, toKLine,
 } from "./config";
 import { rollLiveBar, type Bar } from "./liveBar";
 import { liveSetups, structureOverlays } from "./structure";
@@ -176,6 +176,32 @@ describe("saved chart settings", () => {
     expect(loadDrawings("NSE", "BANKNIFTY")).toEqual([]);
     localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([{ nope: true }]));
     expect(loadDrawings("NSE", "NIFTY")).toEqual([]); // malformed is ignored, not crashed on
+  });
+
+  it("keeps a saved look with its drawing, cleaned: unknown or out-of-range values are dropped", () => {
+    localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([
+      { name: "segment", points: [{ timestamp: 1, value: 10 }], style: { color: "#E8586A", width: 3, dash: "dashed", evil: "x" } },
+      { name: "segment", points: [{ timestamp: 2, value: 11 }], style: { color: "url(x)", width: 12 } },
+    ]));
+    const loaded = loadDrawings("NSE", "NIFTY");
+    expect(loaded[0].style).toEqual({ color: "#e8586a", width: 3, dash: "dashed" });
+    expect(loaded[1]).toEqual({ name: "segment", points: [{ timestamp: 2, value: 11 }] });
+  });
+
+  it("remembers a default look per kind of drawing, and forgets it again", () => {
+    expect(loadDrawingDefaults()).toEqual({});
+    saveDrawingDefault("segment", { color: "#ffc83d", width: 2 });
+    saveDrawingDefault("rect", { fill: 0.3 });
+    expect(loadDrawingDefaults()).toEqual({ segment: { color: "#ffc83d", width: 2 }, rect: { fill: 0.3 } });
+    saveDrawingDefault("segment", undefined);
+    expect(loadDrawingDefaults()).toEqual({ rect: { fill: 0.3 } });
+  });
+
+  it("ignores a damaged defaults record", () => {
+    localStorage.setItem("web.chart.drawingDefaults", JSON.stringify({ segment: { color: "bad" }, rect: { fill: 0.5 }, junk: 5 }));
+    expect(loadDrawingDefaults()).toEqual({ rect: { fill: 0.5 } });
+    localStorage.setItem("web.chart.drawingDefaults", "[1,2]");
+    expect(loadDrawingDefaults()).toEqual({});
   });
 
   it("keeps the words of a text drawing, cut to the length a label can hold, and drops a text with no words", () => {

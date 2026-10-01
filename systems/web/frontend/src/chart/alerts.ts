@@ -1,5 +1,6 @@
 import { formatPrice } from "../format";
 import type { StoredDrawing } from "./config";
+import type { DrawingStyle } from "./drawingStyle";
 
 // Alerts on drawings: the person marks a line or a zone on the chart, arms it, and is told when the
 // price crosses it. Plain logic and no chart library, so it can be tested without a screen.
@@ -79,4 +80,10 @@ export function levelText(d: Pick<StoredDrawing, "name" | "points">, now: number
 }
 
 /** What the page needs to know about the selected drawing to offer an alert on it. */
-export type SelectionInfo = { alertable: boolean; trigger: Trigger | null; level: string | null };
+export type SelectionInfo = {
+  alertable: boolean;
+  trigger: Trigger | null;
+  level: string | null;
+  /** The selected drawing's look, for the style bar: which tool made it, what has been changed, and whether that tool has a default. */
+  look?: { name: string; style: DrawingStyle; hasDefault: boolean };
+};

@@ -5,6 +5,8 @@ import type { Candle } from "../api/types";
 // without a canvas. Settings live in localStorage under one prefix: they are per-browser
 // conveniences, and every read and write is guarded because storage can be blocked.
 
+import { sanitizeStyle, type DrawingStyle } from "./drawingStyle";
+
 const PREFIX = "web.chart.";
 
 function read<T>(key: string, fallback: T, valid: (v: unknown) => v is T): T {
@@ -252,7 +254,16 @@ export const drawingsKey = (exchange: string, symbol: string) => `drawings:${exc
 
 export type StoredPoint = { timestamp?: number; value?: number };
 /** A drawing as saved. `alert`, when set, means the page tells the person when the price crosses it. */
-export type StoredDrawing = { name: string; points: StoredPoint[]; color?: string; alert?: { trigger: "cross" | "close" }; /** The words of a text drawing. */ text?: string };
+export type StoredDrawing = {
+  name: string;
+  points: StoredPoint[];
+  color?: string;
+  alert?: { trigger: "cross" | "close" };
+  /** The words of a text drawing. */
+  text?: string;
+  /** How it looks, when the person changed that. */
+  style?: DrawingStyle;
+};
 
 /** The longest text a text drawing can hold: it is a label on a chart, not a note (those have their own panel). */
 export const TEXT_DRAWING_MAX = 120;
@@ -266,10 +277,31 @@ export const loadDrawings = (exchange: string, symbol: string): StoredDrawing[] 
     // A text drawing with no words has nothing to show (and nothing to grab): drop it rather than draw an empty label.
     .filter((d) => d.name !== "textNote" || (typeof d.text === "string" && d.text.trim() !== ""))
     .map((d) => {
-      const { alert, text, ...rest } = d;
-      const clean = typeof text === "string" && d.name === "textNote" ? { ...rest, text: text.slice(0, TEXT_DRAWING_MAX) } : rest;
+      const { alert, text, style, ...rest } = d;
+      const withText = typeof text === "string" && d.name === "textNote" ? { ...rest, text: text.slice(0, TEXT_DRAWING_MAX) } : rest;
+      const cleanStyle = sanitizeStyle(style);
+      const clean = cleanStyle ? { ...withText, style: cleanStyle } : withText;
       return alert && (alert.trigger === "cross" || alert.trigger === "close") ? { ...clean, alert: { trigger: alert.trigger } } : clean;
     });
+
+// The look the person made the default for each kind of drawing (by tool name): a new drawing of that kind starts with it.
+const DEFAULTS_KEY = "drawingDefaults";
+export function loadDrawingDefaults(): Record<string, DrawingStyle> {
+  const raw = read<Record<string, unknown>>(DEFAULTS_KEY, {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));
+  const out: Record<string, DrawingStyle> = {};
+  for (const [name, style] of Object.entries(raw)) {
+    const clean = sanitizeStyle(style);
+    if (clean) out[name] = clean;
+  }
+  return out;
+}
+/** Make `style` the default look for new drawings of `name`; `undefined` clears it. */
+export function saveDrawingDefault(name: string, style: DrawingStyle | undefined): void {
+  const all = loadDrawingDefaults();
+  if (style && sanitizeStyle(style)) all[name] = style;
+  else delete all[name];
+  write(DEFAULTS_KEY, all);
+}
 
 // Saving is the only signal a SIBLING ChartPane showing the same instrument (a two-chart layout,
 // same symbol at two different intervals) has that it needs to re-read and redraw - drawings

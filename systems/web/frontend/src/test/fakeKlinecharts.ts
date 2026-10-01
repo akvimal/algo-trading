@@ -25,7 +25,7 @@ export enum LineType {
 }
 
 export type FakeBar = { timestamp: number; open: number; high: number; low: number; close: number; volume?: number };
-export type FakeOverlay = { id: string; name: string; groupId?: string; points: any[]; extendData?: any; visible?: boolean; mode?: string; handlers: Record<string, (e: any) => any> };
+export type FakeOverlay = { id: string; name: string; groupId?: string; points: any[]; extendData?: any; visible?: boolean; mode?: string; styles?: any; handlers: Record<string, (e: any) => any> };
 
 export const registeredOverlays: string[] = [];
 export const registeredIndicators: string[] = [];
@@ -108,12 +108,17 @@ export class FakeChart {
 
   createOverlay(o: any) {
     const id = `ov${++this.seq}`;
-    this.overlays.set(id, { id, name: o.name, groupId: o.groupId, points: o.points ?? [], extendData: o.extendData, mode: o.mode, handlers: o });
+    this.overlays.set(id, { id, name: o.name, groupId: o.groupId, points: o.points ?? [], extendData: o.extendData, mode: o.mode, styles: o.styles, handlers: o });
     return id;
   }
   overrideOverlay(o: any) {
     const cur = this.overlays.get(o.id);
     if (cur) Object.assign(cur, { ...(o.points ? { points: o.points } : {}), ...(o.extendData ? { extendData: o.extendData } : {}), ...(o.visible !== undefined ? { visible: o.visible } : {}), ...(o.mode ? { mode: o.mode } : {}) });
+    if (cur && o.styles) {
+      const merged: Record<string, unknown> = { ...((cur as any).styles ?? {}) };
+      for (const k of Object.keys(o.styles)) merged[k] = { ...(merged[k] as object), ...o.styles[k] };
+      (cur as any).styles = merged;
+    }
     this.overrides.push(o);
   }
   removeOverlay(arg?: string | { groupId?: string; id?: string }) {

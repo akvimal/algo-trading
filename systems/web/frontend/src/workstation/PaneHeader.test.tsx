@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
-import { PaneHeader } from "./PaneHeader";
+import { EXPIRY_WARN_DAYS, PaneHeader, expiryLabel } from "./PaneHeader";
 import { DEFAULT_FAVORITE_INTERVALS, INTERVALS, favoriteIntervals } from "../chart/config";
 
 // The price's own text changes on every tick (more digits, a comma appearing/disappearing, ...) -
@@ -105,5 +105,42 @@ describe("PaneHeader", () => {
     expect(screen.getByRole("button", { name: "1w" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "1m" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Intervals/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("the contract's expiry", () => {
+  const withExpiry = (expiry: string | null) => <PaneHeader index={0} symbol="GOLDM" interval="15min" onInterval={() => {}} price={1} priceShown live={false} regime={null} active showActive={false} contract="GOLDM-05Oct2026-FUT" expiry={expiry} />;
+
+  it("counts the days left to an expiry date, today as 0", () => {
+    const now = new Date(2026, 9, 1, 15, 30); // 1 Oct 2026, afternoon
+    expect(expiryLabel("2026-10-05", now).days).toBe(4);
+    expect(expiryLabel("2026-10-01", now).days).toBe(0);
+    expect(expiryLabel("2026-09-30", now).days).toBe(-1);
+    expect(expiryLabel("2026-10-19", now).text).toBe(`${new Date(2026, 9, 19).toLocaleDateString(undefined, { day: "numeric", month: "short" })} · 18d`);
+  });
+
+  it("shows the expiry on the chart's header, naming the contract in its tooltip", () => {
+    const soon = new Date();
+    soon.setDate(soon.getDate() + 20);
+    const iso = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+    render(withExpiry(iso));
+    const pill = screen.getByTestId("expiry-0");
+    expect(pill).toHaveTextContent(/^Exp .* · 20d$/);
+    expect(pill).toHaveAttribute("title", `GOLDM-05Oct2026-FUT expires ${iso}`);
+    expect(pill).not.toHaveClass("warn");
+  });
+
+  it("warns when the contract is within a few days of expiring", () => {
+    const soon = new Date();
+    soon.setDate(soon.getDate() + EXPIRY_WARN_DAYS);
+    const iso = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+    render(withExpiry(iso));
+    expect(screen.getByTestId("expiry-0")).toHaveClass("warn");
+    expect(screen.getByTestId("expiry-0").getAttribute("title")).toMatch(/close to expiry/);
+  });
+
+  it("shows nothing for an instrument with no expiry (spot, crypto perpetuals)", () => {
+    render(withExpiry(null));
+    expect(screen.queryByTestId("expiry-0")).not.toBeInTheDocument();
   });
 });

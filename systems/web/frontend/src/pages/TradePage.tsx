@@ -9,6 +9,7 @@ import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, Structu
 import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, structureIsOn, toggleStructureOn, type StructureConfig } from "../chart/config";
 import { ACCENT, BUY, SELL } from "../chart/colors";
 import { AlertBar } from "../chart/AlertBar";
+import { StyleBar } from "../chart/StyleBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
@@ -470,6 +471,12 @@ export function TradePage() {
         )}
 
         <div className="ws-charts">
+          <StyleBar
+            selection={selection}
+            onStyle={(patch) => paneRefs[active].current?.setSelectedStyle(patch)}
+            onReset={() => paneRefs[active].current?.resetSelectedStyle()}
+            onDefault={(on) => paneRefs[active].current?.setSelectedStyleAsDefault(on)}
+          />
           <AlertBar selection={selection} armed={shown.reduce<number>((n, i) => n + armed[i], 0)} onSet={setAlert} />
           {levelNote && (
             <div className={`ws-flash ${levelNote.error ? "error" : ""}`} role={levelNote.error ? "alert" : "status"} data-testid="level-note">
@@ -510,6 +517,8 @@ export function TradePage() {
                   priceShown={!tools.priceHidden}
                   live={socket.connected}
                   regime={d.regime}
+                  contract={d.resolved?.trade_symbol ?? null}
+                  expiry={d.resolved?.expiry ?? null}
                   structureTrend={trendFor(i)}
                   active={active === i}
                   showActive={twoUp}

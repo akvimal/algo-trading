@@ -2,6 +2,7 @@ import { IndicatorSeries, LineType, registerIndicator, registerOverlay, type Ind
 import { ACCENT, BUY, MARK_LOSS, MARK_OPEN, MARK_PROFIT, SELL } from "./colors";
 import { computeSupertrend } from "./supertrend";
 import type { OiLevelLine } from "./oiLevels";
+import { textLook, type DrawingStyle } from "./drawingStyle";
 import { compactPnl, pnlTone, type TradeMarkerExtend } from "./trades";
 
 export { ACCENT, BUY, SELL };
@@ -75,13 +76,15 @@ export function registerChartExtensions(): void {
     needDefaultYAxisFigure: false,
     createPointFigures: ({ coordinates, overlay }) => {
       const c0 = coordinates[0];
-      const text = (overlay.extendData as { text?: string } | undefined)?.text;
+      const d = overlay.extendData as { text?: string; style?: DrawingStyle } | undefined;
+      const text = d?.text;
       if (!c0 || !text || !Number.isFinite(c0.x) || !Number.isFinite(c0.y)) return [];
+      const look = textLook(d?.style);
       return [
         {
           type: "text",
           attrs: { x: c0.x + 8, y: c0.y, text, align: "left", baseline: "middle" },
-          styles: { color: INK, size: 12, weight: "bold", backgroundColor: "#f4f6f8", borderColor: INK, borderSize: 1, borderRadius: 4, paddingLeft: 6, paddingRight: 6, paddingTop: 3, paddingBottom: 3 },
+          styles: { color: look.ink, size: look.size, weight: look.weight, backgroundColor: look.background, borderColor: INK, borderSize: 1, borderRadius: 4, paddingLeft: 6, paddingRight: 6, paddingTop: 3, paddingBottom: 3 },
         },
       ];
     },

@@ -6,12 +6,13 @@ import { formatPrice } from "../format";
 import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
-  DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
+  DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
   STRUCTURE_TIMEFRAMES, TEXT_DRAWING_MAX, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
 } from "./config";
 import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
 import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
+import { mergeStyle, sanitizeStyle, toOverlayStyles, type DrawingStyle } from "./drawingStyle";
 import { withDevicePixelRatio } from "./snapshot";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
@@ -33,6 +34,12 @@ export type ChartPaneHandle = {
   /** How far the instrument typically moves in one bar of this chart (null until enough bars have loaded) -
    * what a starting stop or target line is measured in, so it lands inside the part of the chart on screen. */
   typicalMove: () => number | null;
+  /** Change the selected drawing's look (colour, thickness, dash, fill, text size). A field set to undefined goes back to the chart's own. */
+  setSelectedStyle: (patch: DrawingStyle) => void;
+  /** Put the selected drawing back to the chart's own look. */
+  resetSelectedStyle: () => void;
+  /** Make the selected drawing's look the default for new drawings of its kind (true), or clear that default (false). */
+  setSelectedStyleAsDefault: (on: boolean) => void;
   /** The chart as it is on screen (candles, indicators, drawings, structure, trade markers) as a PNG data URL, or
    * the reason there is no picture to take (still loading, failed to load, the browser could not draw it). */
   snapshot: () => ChartImage;
@@ -122,6 +129,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const barsRef = useRef<Bar[]>([]);
   const anchorRef = useRef<BarAnchor>({ timestamps: [] });
   const drawnRef = useRef<Map<string, StoredDrawing>>(new Map());
+  // The default look a drawing being drawn right now was started with (it has no saved entry until it is finished).
+  const pendingStyleRef = useRef<DrawingStyle | undefined>(undefined);
   // A text drawing being typed (just placed, or double-clicked to change): where its box sits and what it says so far.
   const [textEdit, setTextEdit] = useState<{ id: string; x: number; y: number; value: string; isNew: boolean; draft: StoredDrawing } | null>(null);
   const textEditRef = useRef(textEdit);
@@ -580,12 +589,26 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   function serialize(o: Overlay): StoredDrawing {
     const alert = drawnRef.current.get(o.id)?.alert;
     const text = o.name === "textNote" ? ((o.extendData as { text?: string } | undefined)?.text ?? drawnRef.current.get(o.id)?.text) : undefined;
+    const saved = drawnRef.current.get(o.id);
+    const style = saved ? saved.style : pendingStyleRef.current; // a new drawing starts from the default look; a finished one keeps its own
     return {
       name: o.name,
       points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })),
       ...(alert ? { alert } : {}),
       ...(text ? { text } : {}),
+      ...(style ? { style } : {}),
     };
+  }
+
+  /** Put a drawing's look on the chart now. */
+  function applyStyle(id: string, name: string, style: DrawingStyle | undefined, text?: string) {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (name === "textNote") chart.overrideOverlay({ id, extendData: { text: text ?? "", style } });
+    else {
+      const styles = toOverlayStyles(name, style);
+      if (styles) chart.overrideOverlay({ id, styles });
+    }
   }
 
   // ---- text drawings: typed into a small box right on the chart ----
@@ -611,7 +634,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (edit.isNew) chart.removeOverlay(edit.id); // nothing typed: the label is not kept
       return;
     }
-    chart.overrideOverlay({ id: edit.id, extendData: { text: words } });
+    chart.overrideOverlay({ id: edit.id, extendData: { text: words, style: edit.draft.style } });
     drawnRef.current.set(edit.id, { ...edit.draft, text: words });
     persist();
     emitDrawing();
@@ -623,7 +646,14 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   function emitDrawing() {
     const id = selectedRef.current;
     const d = id ? drawnRef.current.get(id) : undefined;
-    const selection: SelectionInfo | null = d ? { alertable: ALERTABLE.has(d.name), trigger: d.alert?.trigger ?? null, level: levelText(d) } : null;
+    const selection: SelectionInfo | null = d
+      ? {
+          alertable: ALERTABLE.has(d.name),
+          trigger: d.alert?.trigger ?? null,
+          level: levelText(d),
+          look: { name: d.name, style: d.style ?? {}, hasDefault: loadDrawingDefaults()[d.name] !== undefined },
+        }
+      : null;
     propsRef.current.onDrawingChange?.({ drawing: pendingRef.current != null, selected: id != null, selection });
   }
   function emitArmed() {
@@ -666,7 +696,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         groupId: USER_DRAWINGS,
         points: d.points.map((p) => toChartPoint(p, anchorRef.current)),
         mode: magnetMode(propsRef.current.magnet),
-        ...(d.name === "textNote" ? { extendData: { text: d.text ?? "" } } : {}),
+        ...(d.name === "textNote" ? { extendData: { text: d.text ?? "", style: d.style } } : {}),
+        ...(toOverlayStyles(d.name, d.style) ? { styles: toOverlayStyles(d.name, d.style) } : {}),
         ...handlers(),
       });
       if (typeof id === "string") drawnRef.current.set(id, d);
@@ -709,7 +740,17 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       const chart = chartRef.current;
       if (!chart) return;
       if (pendingRef.current) chart.removeOverlay(pendingRef.current);
-      const id = chart.createOverlay({ name: tool, groupId: USER_DRAWINGS, mode: magnetMode(propsRef.current.magnet), ...handlers() });
+      // A new drawing of this kind starts with the look the person made the default for it, if they did.
+      const start = loadDrawingDefaults()[tool];
+      pendingStyleRef.current = start;
+      const id = chart.createOverlay({
+        name: tool,
+        groupId: USER_DRAWINGS,
+        mode: magnetMode(propsRef.current.magnet),
+        ...(tool === "textNote" ? { extendData: { text: "", style: start } } : {}),
+        ...(toOverlayStyles(tool, start) ? { styles: toOverlayStyles(tool, start) } : {}),
+        ...handlers(),
+      });
       pendingRef.current = typeof id === "string" ? id : null;
       emitDrawing();
     },
@@ -726,6 +767,45 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       sidesRef.current.clear();
       persist();
       emitArmed();
+    },
+    setSelectedStyle(patch) {
+      const id = selectedRef.current;
+      const chart = chartRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!id || !chart || !d) return;
+      const style = mergeStyle(d.style, patch);
+      const { style: _old, ...rest } = d;
+      void _old;
+      drawnRef.current.set(id, style ? { ...rest, style } : rest);
+      applyStyle(id, d.name, style, d.text);
+      persist();
+      emitDrawing();
+    },
+    resetSelectedStyle() {
+      const id = selectedRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!id || !d) return;
+      const { style: _old, ...rest } = d;
+      void _old;
+      drawnRef.current.set(id, rest);
+      persist();
+      // The library merges overlay styles rather than replacing them, so the way back to its own look is to build the
+      // drawing again from what is saved.
+      reloadDrawings();
+      for (const [newId, saved] of drawnRef.current) {
+        if (saved.name === d.name && JSON.stringify(saved.points) === JSON.stringify(d.points)) {
+          selectedRef.current = newId;
+          break;
+        }
+      }
+      emitDrawing();
+    },
+    setSelectedStyleAsDefault(on) {
+      const id = selectedRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!d) return;
+      saveDrawingDefault(d.name, on ? (d.style ?? sanitizeStyle({})) : undefined);
+      emitDrawing();
     },
     typicalMove() {
       return averageTrueRange(barsRef.current);

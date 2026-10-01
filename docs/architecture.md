@@ -2138,3 +2138,11 @@ The trade form's old checklist mixed your plan with market reads, scored the mar
 - **Today**, from the server so the ticket and the score cannot disagree: `GET /discipline/{segment}/today?symbol=` (`discipline_v2.pretrade_state`) gives the **cooldown** minutes left on this instrument after a loss (a futures contract and its underlying are one instrument here), **trades today against the cap**, **room under the daily loss limit** (and "this trade could take you past it"), and whether it is the first 10 / last 15 minutes of the NSE session or after hours. Polled every 30 seconds, refreshed after an order.
 - **Market read** (regime, structure) is a **collapsed** line under the block, information only, never scored, never a verdict.
 - Cooldown and the trade cap **warn only**, by decision; a confirm tap was offered and declined.
+
+### Leverage and risk-based sizing (2026-10-01 fix)
+
+Found checking CRYPTO's leverage and USD conversion: the conversion was right (margin = notional / leverage, the open fee and P&L are USD and are debited/credited to the INR balance at `settings.usdinr_rate`), but **leverage also inflated the risk budget**. `effective_capital` is multiplied by `account.leverage` (buying power), and `compute_risk_based_quantity` took its `risk_per_trade_pct` from that, so on a 10x CRYPTO account "1% risk" meant 1% of ten times the capital: a $99.60 loss at the stop on $1,052.63 of own money, 9.5%, instead of 1%.
+
+`compute_risk_based_quantity` now takes `risk_capital`, the person's **own money before leverage** (INR capital converted to USD for CRYPTO), and takes the percentage from that, while the **buying power still caps the size**. Both `open_position` (strategy-driven) and `open_manual_position` pass it, and so does the `system_quantity` recorded for the discipline score. The **one-lot floor stays**, by decision: a stop that is wide for the capital risks more than the percentage and the answer is more capital or a bigger risk percentage, not a rejected order (a $24,900 BTC stop on this account opens 0.001 BTC risking 2.4%). Open positions and past trades are untouched.
+
+NSE intraday leverage (`_apply_nse_leverage`, the MIS multiplier) takes the same fix for free, and the dev user's NSE account leverage was set back to 1 (no leverage on NSE for now).

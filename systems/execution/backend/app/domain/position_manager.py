@@ -256,7 +256,12 @@ def _indicator_history_window(period: int, interval: str) -> tuple[date, date]:
 
 
 def compute_risk_based_quantity(
-    capital_per_trade: float, risk_per_trade_pct: float, entry_price: float, stop_loss_price: float, lot_size: float = 1
+    capital_per_trade: float,
+    risk_per_trade_pct: float,
+    entry_price: float,
+    stop_loss_price: float,
+    lot_size: float = 1,
+    risk_capital: Optional[float] = None,
 ) -> float:
     """quantity = min(risk_amount / stop_distance, the existing
     capital_per_trade value cap), in whole LOTS - risk-based sizing never
@@ -265,9 +270,15 @@ def compute_risk_based_quantity(
     minimum of 1 lot rather than being rejected for undersized
     risk/capital). Caller must ensure stop_loss_price != entry_price
     first - a zero stop distance is a distinct rejection case (see
-    open_position), not handled here."""
+    open_position), not handled here.
+
+    `capital_per_trade` is what the order can BUY (with leverage, the buying power) and caps the size. `risk_capital`, when given,
+    is the person's own money the risk percentage is a share of - left out, it is `capital_per_trade`. Leverage lets an order be
+    bigger; it must not make "1% risk" mean 1% of the borrowed buying power, so callers with leverage pass the unleveraged capital
+    here. The floor stays: a position is always at least one lot, so a stop that is wide for the capital risks more than the
+    percentage and the answer is more capital or a bigger risk percentage, not a rejected order."""
     stop_distance = abs(entry_price - stop_loss_price)
-    risk_amount = capital_per_trade * risk_per_trade_pct / 100
+    risk_amount = (capital_per_trade if risk_capital is None else risk_capital) * risk_per_trade_pct / 100
     risk_based_lots = int(risk_amount // (stop_distance * lot_size))
     # Computed directly from capital/price/lot_size, NOT by calling
     # compute_quantity() and dividing back out by lot_size - that
@@ -1456,6 +1467,7 @@ def open_position(
     effective_capital = min(
         float(capital_account.capital_per_trade), float(capital_account.current_balance) + projected_close_pnl
     )
+    risk_capital = effective_capital  # the person's own money, before any leverage: what the risk percentage is a share of
     if order.segment == "CRYPTO":
         # capital_per_trade/current_balance are INR-denominated like every
         # other segment, but order.price (from Delta Exchange India) is
@@ -1473,6 +1485,7 @@ def open_position(
             db.commit()
             return row
         effective_capital = effective_capital / settings.usdinr_rate
+        risk_capital = effective_capital  # in USD now, still before leverage
         # Delta Exchange India trades perpetual futures on margin -
         # account.leverage (default 1, GET/PUT /accounts/CRYPTO) scales the
         # USD-equivalent margin into buying power, so the same capital
@@ -1603,7 +1616,7 @@ def open_position(
             return row
 
         quantity = compute_risk_based_quantity(
-            effective_capital, float(capital_account.risk_per_trade_pct), order.price, stop_loss_price, lot_size
+            effective_capital, float(capital_account.risk_per_trade_pct), order.price, stop_loss_price, lot_size, risk_capital=risk_capital
         )
     else:
         quantity = compute_quantity(effective_capital, order.price, lot_size)
@@ -1940,6 +1953,7 @@ def open_manual_position(
         projected_close_pnl += raw_pnl
 
     effective_capital = min(float(account.capital_per_trade), float(account.current_balance) + projected_close_pnl)
+    risk_capital = effective_capital  # the person's own money, before any leverage: what the risk percentage is a share of
     if segment == "CRYPTO":
         if settings.usdinr_rate is None:
             row = _reject_manual(
@@ -1949,6 +1963,7 @@ def open_manual_position(
             db.commit()
             return row
         effective_capital = effective_capital / settings.usdinr_rate
+        risk_capital = effective_capital  # in USD now, still before leverage
         effective_capital = effective_capital * float(account.leverage)
     elif segment == "NSE" and instrument_type == "spot" and float(account.leverage) > 1:
         # Intraday MIS margin - same account.leverage field/reasoning as
@@ -1999,7 +2014,7 @@ def open_manual_position(
                 db.commit()
                 return row
             final_quantity = compute_risk_based_quantity(
-                effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size
+                effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size, risk_capital=risk_capital
             )
         else:
             final_quantity = compute_quantity(effective_capital, price, lot_size)
@@ -2074,7 +2089,9 @@ def open_manual_position(
     # sized-up (greed) or sized-down (fear) order can be told from one taken at the plan.
     system_quantity = None
     if stop_loss_price is not None and abs(price - stop_loss_price) > 0:
-        system_quantity = compute_risk_based_quantity(effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size)
+        system_quantity = compute_risk_based_quantity(
+            effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size, risk_capital=risk_capital
+        )
 
     row = db_models.Position(
         user_id=user_id,

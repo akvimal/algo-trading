@@ -264,6 +264,32 @@ def test_compute_risk_based_quantity_capital_cap_binding():
     assert qty == 500
 
 
+def test_leverage_makes_the_order_bigger_but_not_the_risk_budget():
+    # 1052.63 USD of the person's own money at 10x = 10526.3 buying power; 1% risk; a 1000-point stop on BTC (lot 0.001).
+    # The risk budget is 1% of the OWN money = 10.53 USD -> 10 lots (0.01 BTC), not 1% of the 10x buying power (105 USD -> 105 lots).
+    own, power = 1052.63, 10526.3
+    lots_old = compute_risk_based_quantity(power, 1.0, 84900.0, 83900.0, 0.001)
+    lots_new = compute_risk_based_quantity(power, 1.0, 84900.0, 83900.0, 0.001, risk_capital=own)
+    assert lots_old == pytest.approx(0.105)  # what it used to do: ten times the risk
+    assert lots_new == pytest.approx(0.01)
+
+
+def test_the_buying_power_still_caps_a_leveraged_order():
+    # a huge risk budget against a tight stop would ask for more than the buying power affords: the cap binds
+    qty = compute_risk_based_quantity(1000.0, 100.0, 100.0, 99.0, 1.0, risk_capital=1000.0)
+    assert qty == 10  # floor(1000 / 100)
+
+
+def test_a_wide_stop_still_gets_the_one_lot_floor_even_with_leverage():
+    # 24900 away: 1% of 1052.63 is 10.5 USD, far under one lot's risk (24.9) - it still opens one lot, risking more than 1%
+    qty = compute_risk_based_quantity(10526.3, 1.0, 84900.0, 60000.0, 0.001, risk_capital=1052.63)
+    assert qty == pytest.approx(0.001)
+
+
+def test_without_a_separate_risk_capital_nothing_changes():
+    assert compute_risk_based_quantity(50000, 1.0, 100.0, 98.0) == compute_risk_based_quantity(50000, 1.0, 100.0, 98.0, risk_capital=50000)
+
+
 def test_compute_risk_based_quantity_floors_to_one_share_when_too_small():
     # risk_amount = 1000 * 0.1% = 1; stop_distance = 100 -> 0 shares risk-based, floors to 1
     qty = compute_risk_based_quantity(capital_per_trade=1000, risk_per_trade_pct=0.1, entry_price=1000.0, stop_loss_price=900.0)

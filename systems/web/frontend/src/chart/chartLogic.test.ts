@@ -159,8 +159,8 @@ describe("saved chart settings", () => {
       expect(toggleStructureOn(true, "60min")).toEqual(["60min"]);
     });
 
-    it("on falls back to the coarsest structure timeframe (daily) for a candle size with no structure-timeframe equivalent (weekly)", () => {
-      expect(toggleStructureOn(true, "weekly")).toEqual(["daily"]);
+    it("on falls back to the coarsest structure timeframe (1h) for a candle size with no structure-timeframe equivalent (weekly)", () => {
+      expect(toggleStructureOn(true, "weekly")).toEqual(["60min"]);
     });
   });
 

@@ -1,5 +1,5 @@
 import type { MarketRegime } from "../api/types";
-import { INTERVALS, type IntervalDef } from "../chart/config";
+import { TRADE_INTERVALS, type IntervalDef } from "../chart/config";
 import { formatPrice } from "../format";
 import { directionOf } from "./confluence";
 
@@ -25,7 +25,7 @@ type Props = {
 
 /** The title bar of one chart: which instrument, its price, whether it is live, the candle size, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
-export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals = INTERVALS }: Props) {
+export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals = TRADE_INTERVALS }: Props) {
   const dir = directionOf(regime);
   const trends = Object.entries(structureTrend ?? {});
   return (

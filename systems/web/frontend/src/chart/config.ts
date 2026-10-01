@@ -42,6 +42,12 @@ export const INTERVALS: IntervalDef[] = [
   { label: "1w", value: "weekly", minutes: 10080, lookbackDays: 1095, source: "yahoo" },
 ];
 
+/** The candle sizes the trade view's live charts offer: the ones a trade is actually taken on. 30m, daily
+ * and weekly are left out there (they stay in INTERVALS, which the Scan page's inline chart and the
+ * strategy rules still draw from). A saved layout or chart combo holding a size that is not in this list
+ * falls back to the default size on load. */
+export const TRADE_INTERVALS: IntervalDef[] = INTERVALS.filter((i) => ["1min", "3min", "5min", "15min", "60min"].includes(i.value));
+
 export const DEFAULT_INTERVAL = "15min";
 export const intervalDef = (value: string): IntervalDef => INTERVALS.find((i) => i.value === value) ?? INTERVALS.find((i) => i.value === DEFAULT_INTERVAL)!;
 
@@ -106,9 +112,7 @@ export const STRUCTURE_TIMEFRAMES: { label: string; value: string; lookbackDays:
   { label: "3m", value: "3min", lookbackDays: 8 },
   { label: "5m", value: "5min", lookbackDays: 12 },
   { label: "15m", value: "15min", lookbackDays: 30 },
-  { label: "30m", value: "30min", lookbackDays: 50 },
   { label: "1h", value: "60min", lookbackDays: 90 },
-  { label: "1d", value: "daily", lookbackDays: 365, source: "yahoo" },
 ];
 const STRUCTURE_TF_VALUES = new Set(STRUCTURE_TIMEFRAMES.map((t) => t.value));
 

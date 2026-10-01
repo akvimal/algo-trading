@@ -1237,12 +1237,27 @@ describe("layout and the ticket panel", () => {
     expect(JSON.parse(localStorage.getItem("web.workstation")!).panes[0].interval).toBe("5min");
   });
 
-  it("asks for daily candles from the provider that needs no broker token", async () => {
+  it("does not offer 30m, 1d or 1w candles on the live charts, nor 30m/1d as structure detection timeframes", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    await user.click(screen.getByRole("button", { name: "1d" }));
-    await waitFor(() => expect(calls.some((x) => x.url.includes("/candles/history") && new URL(x.url).searchParams.get("source") === "yahoo")).toBe(true));
+    for (const hidden of ["30m", "1d", "1w"]) expect(screen.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
+    for (const shown of ["1m", "3m", "5m", "15m", "1h"]) expect(screen.getAllByRole("button", { name: shown }).length).toBeGreaterThan(0);
+    // the Structure dropdown only exists once the layer is switched on, from the Indicators menu
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    await user.click(screen.getByLabelText("Structure"));
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    await user.click(screen.getByRole("button", { name: /^Structure/ }));
+    const menu = within(screen.getByRole("group", { name: "Structure" }));
+    expect(menu.getAllByRole("button").map((b) => b.textContent).slice(0, 5)).toEqual(["1m", "3m", "5m", "15m", "1h"]);
+    for (const hidden of ["30m", "1d"]) expect(menu.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
+  });
+
+  it("brings a saved layout that holds a size no longer offered back to the default size", async () => {
+    localStorage.setItem("web.workstation", JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "weekly" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "30min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } }));
+    renderAt("/trade");
+    await loaded(0);
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent("NIFTY, 15m candles");
   });
 
   it("restores the saved layout on the next visit", async () => {

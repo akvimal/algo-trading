@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { PaneHeader } from "./PaneHeader";
-import { INTERVALS } from "../chart/config";
+import { INTERVALS, TRADE_INTERVALS } from "../chart/config";
 
 // The price's own text changes on every tick (more digits, a comma appearing/disappearing, ...) -
 // it has to sit where its own reflow cannot push anything else sideways, i.e. last in the row, with
@@ -38,10 +38,11 @@ describe("PaneHeader", () => {
     expect(screen.queryByTestId("feed-0")).not.toBeInTheDocument();
   });
 
-  it("offers every candle size by default, including the just-added weekly one", () => {
+  it("offers the trade view's candle sizes by default - without 30m, 1d or 1w", () => {
     render(header());
-    expect(screen.getByRole("button", { name: "1w" })).toBeInTheDocument();
-    for (const i of INTERVALS) expect(screen.getByRole("button", { name: i.label })).toBeInTheDocument();
+    for (const i of TRADE_INTERVALS) expect(screen.getByRole("button", { name: i.label })).toBeInTheDocument();
+    expect(TRADE_INTERVALS.map((i) => i.label)).toEqual(["1m", "3m", "5m", "15m", "1h"]);
+    for (const hidden of ["30m", "1d", "1w"]) expect(screen.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
   });
 
   it("offers only a caller-given shorter list when one is passed (the Scan page's inline chart)", () => {

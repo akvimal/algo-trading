@@ -626,3 +626,28 @@ class BrokerOrder(Base):
     failure_reason = Column(Text, nullable=True)
     requested_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class PositionEvent(Base):
+    """One attempt to move a stop-loss or target on an open position or option group - accepted or refused. See
+    infra/postgres/migrations/032-position-events.sql and app/domain/stop_rules.py."""
+
+    __tablename__ = "position_events"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True))
+    position_id = Column(UUID(as_uuid=True))
+    option_group_id = Column(UUID(as_uuid=True))
+    field = Column(Text, nullable=False)
+    move = Column(Text, nullable=False)
+    old_price = Column(Numeric)
+    new_price = Column(Numeric)
+    source = Column(Text, nullable=False)
+    accepted = Column(Boolean, nullable=False, default=True)
+    refused_reason = Column(Text)
+    price_at_event = Column(Numeric)
+    atr = Column(Numeric)
+    atr_interval = Column(Text)
+    tight_trail = Column(Boolean)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

@@ -9,6 +9,8 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
 from app.auth import User, get_current_user, require_admin
+from app.domain import stop_rules
+from app.domain.stop_rules import DEFAULT_ATR_INTERVAL
 from app.domain.models import (
     ManualPositionCreate,
     NotesUpdate,
@@ -409,6 +411,14 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
+    atr_interval = payload.atr_interval or DEFAULT_ATR_INTERVAL
+    context = stop_rules.fetch_context(
+        functools.partial(get_ltp_batch, token=user.token),
+        functools.partial(get_candle_history, token=user.token),
+        row.exchange,
+        row.symbol,
+        atr_interval,
+    )
     row, reject_reason = update_stop_loss(
         db,
         owner_id,
@@ -422,6 +432,8 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         payload.trailing_stop_enabled,
         functools.partial(get_previous_candle, token=user.token),
         functools.partial(get_candle_history, token=user.token),
+        context=context,
+        atr_interval=atr_interval,
     )
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)

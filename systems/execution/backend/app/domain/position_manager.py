@@ -20,6 +20,7 @@ from app.adapters.db import models as db_models
 from app.config import settings as app_settings
 from app.config import settings as app_settings
 from app.domain.india_charges import kind_for, round_trip_charges
+from app.domain import stop_rules
 from app.domain.slippage import slippage_cost
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
 from app.domain.exit_condition import evaluate_exit_condition, exit_condition_warmup
@@ -2159,7 +2160,7 @@ def update_square_off_time(
 
 
 def update_target(
-    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float, source: str = "user"
 ) -> tuple[Optional[db_models.Position], Optional[str]]:
     """Moves an open position's take-profit. Returns (row, reject_reason):
     (None, None) for a missing or someone else's row, (row, reason) with the
@@ -2175,9 +2176,23 @@ def update_target(
         return row, f"target ({target_price}) must be above entry ({entry}) for a BUY"
     if row.action == "SELL" and target_price >= entry:
         return row, f"target ({target_price}) must be below entry ({entry}) for a SELL"
+    stop_rules.record_event(
+        db,
+        user_id=row.user_id,
+        position_id=row.id,
+        field="target",
+        move=stop_rules.classify_target_move(row.action, _num(row.target_price), target_price),
+        old_price=_num(row.target_price),
+        new_price=target_price,
+        source=source,
+    )
     row.target_price = target_price
     db.commit()
     return row, None
+
+
+def _num(v) -> Optional[float]:
+    return None if v is None else float(v)
 
 
 def update_stop_loss(
@@ -2193,6 +2208,9 @@ def update_stop_loss(
     trailing_stop_enabled: bool = False,
     get_previous_candle: Optional[GetPreviousCandle] = None,
     get_candle_history: Optional[GetCandleHistory] = None,
+    context: stop_rules.MoveContext = stop_rules.NO_CONTEXT,
+    atr_interval: Optional[str] = None,
+    source: str = "user",
 ) -> tuple[Optional[db_models.Position], Optional[str]]:
     """Generically useful, not manual-only - editing SL on any already-open
     position, including (new) attaching or replacing a trailing,
@@ -2219,7 +2237,39 @@ def update_stop_loss(
     if row is None or row.user_id != user_id:
         return None, None
 
+    def _log(new_price: Optional[float], move: str, refused: bool) -> None:
+        stop_rules.record_event(
+            db,
+            user_id=row.user_id,
+            position_id=row.id,
+            field="stop_loss",
+            move=move,
+            old_price=_num(row.stop_loss_price),
+            new_price=new_price,
+            source=source,
+            accepted=not refused,
+            refused_reason=stop_rules.STOP_WIDEN_MESSAGE if refused else None,
+            context=context,
+            atr_interval=atr_interval,
+            tight_trail=stop_rules.judge_tight_trail(
+                row.action, move, float(row.entry_price), _num(row.initial_stop_loss_price), new_price, context[0], context[1]
+            ),
+        )
+
+    def _guard(new_price: Optional[float]) -> tuple[str, Optional[str]]:
+        """Once the order is live the stop can only tighten: a widening is logged as refused and reported."""
+        move = stop_rules.classify_stop_move(row.action, _num(row.stop_loss_price), new_price)
+        if stop_rules.is_widening(move):
+            _log(new_price, move, True)
+            db.commit()
+            return move, stop_rules.STOP_WIDEN_MESSAGE
+        return move, None
+
     if stop_loss_method is None:
+        move, widen_reason = _guard(stop_loss_price)
+        if widen_reason is not None:
+            return row, widen_reason
+        _log(stop_loss_price, move, False)
         row.stop_loss_price = stop_loss_price
         row.stop_loss_method = None
         row.stop_loss_interval = None
@@ -2246,6 +2296,10 @@ def update_stop_loss(
     if reject_reason is not None:
         return row, reject_reason
 
+    move, widen_reason = _guard(resolved_price)
+    if widen_reason is not None:
+        return row, widen_reason
+    _log(resolved_price, move, False)
     row.stop_loss_price = resolved_price
     row.stop_loss_method = stop_loss_method
     row.stop_loss_interval = stop_loss_interval
@@ -2724,6 +2778,7 @@ def _evaluate_exits(
     closed_target = 0
     closed_exit_condition = 0
     trailed = 0
+    trail_events: list[dict] = []
     # Live-broker-adapter P2 - (pos, reason) pairs a live position's own
     # sl_hit/target_hit flagged, for check_exits (the DB-committing
     # wrapper) to actually close for real - see the sl_hit/target_hit
@@ -2914,6 +2969,9 @@ def _evaluate_exits(
                 current_stop = float(pos.stop_loss_price)
                 more_favorable = candidate_stop > current_stop if pos.action == "BUY" else candidate_stop < current_stop
                 if more_favorable:
+                    trail_events.append(
+                        {"position": pos, "old_price": current_stop, "new_price": candidate_stop, "price_at_event": cmp_price}
+                    )
                     pos.stop_loss_price = candidate_stop
                     trailed += 1
 
@@ -2924,6 +2982,7 @@ def _evaluate_exits(
         "trailed": trailed,
         "checked": len(positions),
         "live_exits_needed": live_exits_needed,
+        **({"trail_events": trail_events} if trail_events else {}),
     }
 
 
@@ -3068,6 +3127,19 @@ def check_exits(
     prior_live_stops = {p.id: p.stop_loss_price for p in candidates if p.is_live_broker_order}
 
     result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts, usdinr_rates)
+    for ev in result.pop("trail_events", []):
+        pos = ev["position"]
+        stop_rules.record_event(
+            db,
+            user_id=pos.user_id,
+            position_id=pos.id,
+            field="stop_loss",
+            move="tighten",
+            old_price=ev["old_price"],
+            new_price=ev["new_price"],
+            source="auto_trail",
+            context=(ev["price_at_event"], None),
+        )
     db.commit()
 
     live_exits_needed = result.pop("live_exits_needed", [])

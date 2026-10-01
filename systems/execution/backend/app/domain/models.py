@@ -937,6 +937,9 @@ class StopLossUpdate(BaseModel):
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
     trailing_stop_enabled: bool = False
+    # The chart interval the person is trading on - the ATR a "tight trail" is judged against is taken at this interval.
+    # Optional: without it the judgement uses 15min.
+    atr_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
 
     @model_validator(mode="after")
     def _check_stop_loss_config(self) -> "StopLossUpdate":
@@ -1011,6 +1014,7 @@ class SpotStopLossUpdate(BaseModel):
     flat-price-only scope StopLossUpdate has for options."""
 
     spot_stop_loss_price: float = Field(gt=0)
+    atr_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
 
 
 class SpotTargetUpdate(BaseModel):

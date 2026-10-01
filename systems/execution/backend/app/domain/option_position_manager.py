@@ -56,6 +56,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.domain.delta_fees import compute_option_trading_fee
 from app.domain.india_charges import group_charges, kind_for
+from app.domain import stop_rules
 from app.domain.slippage import slippage_cost
 from app.domain.models import ExecutionSettings, ResolvedOrder
 from app.domain.option_templates import bear_call_spread, bear_put_spread, bull_call_spread, bull_put_spread, naked_call, naked_put
@@ -1399,8 +1400,66 @@ def square_off_option_group(db: Session, user_id: uuid.UUID, group_id: uuid.UUID
     return {"status": "closed", "group_id": str(group.id), "underlying_symbol": group.underlying_symbol, "pnl": float(group.pnl)}
 
 
+def _num(v) -> Optional[float]:
+    return None if v is None else float(v)
+
+
+def _move_stop(
+    db: Session,
+    row: db_models.OptionPositionGroup,
+    field: str,
+    direction: str,
+    old: Optional[float],
+    new: float,
+    source: str,
+    context: stop_rules.MoveContext,
+    atr_interval: Optional[str],
+) -> None:
+    """The live-stop rule for an option group's stop: log the move, or - for a widening - log the refused attempt, commit
+    it and raise StopWidenRefused. The caller assigns the new price and commits."""
+    move = stop_rules.classify_stop_move(direction, old, new)
+    refused = stop_rules.is_widening(move)
+    entry = _num(row.entry_spot_price)
+    tight = None
+    if field == "spot_stop_loss" and entry is not None:
+        tight = stop_rules.judge_tight_trail(direction, move, entry, None, new, context[0], context[1])
+    stop_rules.record_event(
+        db,
+        user_id=row.user_id,
+        option_group_id=row.id,
+        field=field,
+        move=move,
+        old_price=old,
+        new_price=new,
+        source=source,
+        accepted=not refused,
+        refused_reason=stop_rules.STOP_WIDEN_MESSAGE if refused else None,
+        context=context,
+        atr_interval=atr_interval,
+        tight_trail=tight,
+    )
+    if refused:
+        db.commit()
+        raise stop_rules.StopWidenRefused()
+
+
+def _move_target(
+    db: Session, row: db_models.OptionPositionGroup, field: str, direction: str, old: Optional[float], new: float, source: str
+) -> None:
+    stop_rules.record_event(
+        db,
+        user_id=row.user_id,
+        option_group_id=row.id,
+        field=field,
+        move=stop_rules.classify_target_move(direction, old, new),
+        old_price=old,
+        new_price=new,
+        source=source,
+    )
+
+
 def update_group_stop_loss(
-    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float, source: str = "user"
 ) -> Optional[db_models.OptionPositionGroup]:
     """Generically useful, not manual-only - editing SL on any already-open
     option group. Scoped to sl_scope='combined' groups only - editing an
@@ -1413,13 +1472,15 @@ def update_group_stop_loss(
         return None
     if row.sl_scope != "combined":
         return row
+    # A combined premium stop is always a long-premium one (below the debit): higher is tighter.
+    _move_stop(db, row, "combined_stop_loss", "BUY", _num(row.combined_stop_loss_price), new_price, source, stop_rules.NO_CONTEXT, None)
     row.combined_stop_loss_price = new_price
     db.commit()
     return row
 
 
 def update_group_target(
-    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float, source: str = "user"
 ) -> Optional[db_models.OptionPositionGroup]:
     """update_group_stop_loss's identical counterpart for combined_target_price - same
     sl_scope='combined'-only scoping, same "return the group unchanged, let the caller check
@@ -1433,13 +1494,20 @@ def update_group_target(
         return None
     if row.sl_scope != "combined":
         return row
+    _move_target(db, row, "combined_target", "BUY", _num(row.combined_target_price), new_price, source)
     row.combined_target_price = new_price
     db.commit()
     return row
 
 
 def update_group_spot_stop_loss(
-    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+    db: Session,
+    user_id: uuid.UUID,
+    group_id: uuid.UUID,
+    new_price: float,
+    context: stop_rules.MoveContext = stop_rules.NO_CONTEXT,
+    atr_interval: Optional[str] = None,
+    source: str = "user",
 ) -> Optional[db_models.OptionPositionGroup]:
     """Sets the underlying-spot-price stop - independent of sl_scope and
     the premium-based combined_stop_loss_price/individual leg stops above;
@@ -1457,6 +1525,7 @@ def update_group_spot_stop_loss(
     row = db.get(db_models.OptionPositionGroup, group_id)
     if row is None or row.user_id != user_id:
         return None
+    _move_stop(db, row, "spot_stop_loss", row.action, _num(row.spot_stop_loss_price), new_price, source, context, atr_interval)
     row.spot_stop_loss_price = new_price
     row.spot_stop_loss_trailing_enabled = False
     db.commit()
@@ -1464,7 +1533,7 @@ def update_group_spot_stop_loss(
 
 
 def update_group_spot_target(
-    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float
+    db: Session, user_id: uuid.UUID, group_id: uuid.UUID, new_price: float, source: str = "user"
 ) -> Optional[db_models.OptionPositionGroup]:
     """Sets the underlying-spot-price take-profit - the sibling of
     update_group_spot_stop_loss above. _evaluate_option_group_exits checks
@@ -1474,6 +1543,7 @@ def update_group_spot_target(
     row = db.get(db_models.OptionPositionGroup, group_id)
     if row is None or row.user_id != user_id:
         return None
+    _move_target(db, row, "spot_target", row.action, _num(row.spot_target_price), new_price, source)
     row.spot_target_price = new_price
     db.commit()
     return row
@@ -1676,6 +1746,7 @@ def _evaluate_option_group_exits(
     closed_stop_loss = 0
     closed_target = 0
     trailed = 0
+    trail_events: list[dict] = []
     candle_history_cache: dict[tuple[str, str, str], list[dict]] = {}
     now = datetime.now(dt_timezone.utc)
     rates = usdinr_rate_by_user or {}
@@ -1761,6 +1832,9 @@ def _evaluate_option_group_exits(
                         current_stop = float(group.spot_stop_loss_price)
                         more_favorable = raw_candidate > current_stop if group.action == "BUY" else raw_candidate < current_stop
                         if more_favorable:
+                            trail_events.append(
+                                {"group": group, "old_price": current_stop, "new_price": raw_candidate, "price_at_event": spot_cmp}
+                            )
                             group.spot_stop_loss_price = raw_candidate
                             trailed += 1
             continue
@@ -1810,7 +1884,10 @@ def _evaluate_option_group_exits(
         else:
             closed_target += 1
 
-    return {"closed_stop_loss": closed_stop_loss, "closed_target": closed_target, "trailed": trailed, "checked": len(groups)}
+    summary = {"closed_stop_loss": closed_stop_loss, "closed_target": closed_target, "trailed": trailed, "checked": len(groups)}
+    if trail_events:  # only when there are some: the summary is compared whole in tests, and logged
+        summary["trail_events"] = trail_events
+    return summary
 
 
 def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch, get_candle_history: Optional[GetCandleHistory] = None) -> dict:
@@ -1838,5 +1915,18 @@ def check_option_group_exits(db: Session, get_ltp_batch: GetLtpBatch, get_candle
     strategy_accounts = _strategy_accounts_by_id(db, candidates)
     usdinr_rates = _usdinr_rate_by_user(db, candidates)
     result = _evaluate_option_group_exits(candidates, legs, get_ltp_batch, accounts, strategy_accounts, get_candle_history, usdinr_rates)
+    for ev in result.pop("trail_events", []):
+        group = ev["group"]
+        stop_rules.record_event(
+            db,
+            user_id=group.user_id,
+            option_group_id=group.id,
+            field="spot_stop_loss",
+            move="tighten",
+            old_price=ev["old_price"],
+            new_price=ev["new_price"],
+            source="auto_trail",
+            context=(ev["price_at_event"], None),
+        )
     db.commit()
     return result

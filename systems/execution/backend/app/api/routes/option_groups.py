@@ -22,6 +22,7 @@ from app.adapters.quotes.client import (
     resolve_underlying,
 )
 from app.auth import User, get_current_user, require_admin
+from app.domain import stop_rules
 from app.domain.models import (
     CombinedStopLossUpdate,
     CombinedTargetUpdate,
@@ -448,7 +449,10 @@ def edit_group_stop_loss(
     if row.sl_scope != "combined":
         raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing SL here")
 
-    row = update_group_stop_loss(db, owner_id, parsed_id, payload.stop_loss_price)
+    try:
+        row = update_group_stop_loss(db, owner_id, parsed_id, payload.stop_loss_price)
+    except stop_rules.StopWidenRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
@@ -499,7 +503,18 @@ def edit_group_spot_stop_loss(
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
 
-    row = update_group_spot_stop_loss(db, owner_id, parsed_id, payload.spot_stop_loss_price)
+    atr_interval = payload.atr_interval or stop_rules.DEFAULT_ATR_INTERVAL
+    context = stop_rules.fetch_context(
+        functools.partial(get_ltp_batch, token=user.token),
+        functools.partial(get_candle_history, token=user.token),
+        row.stop_loss_future_exchange or row.exchange,
+        row.stop_loss_future_symbol or row.underlying_symbol,
+        atr_interval,
+    )
+    try:
+        row = update_group_spot_stop_loss(db, owner_id, parsed_id, payload.spot_stop_loss_price, context=context, atr_interval=atr_interval)
+    except stop_rules.StopWidenRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 

@@ -421,6 +421,9 @@ def test_evaluate_exits_still_trails_a_live_position_even_though_it_never_closes
     assert result["trailed"] == 1
     assert positions[0].stop_loss_price == compute_stop_loss_percent_price("BUY", 110.0, 2.0)
     assert positions[0].status == "OPEN"
+    # and the move is handed back to be logged as an auto_trail position event
+    (ev,) = result["trail_events"]
+    assert (ev["position"], ev["old_price"], ev["new_price"], ev["price_at_event"]) == (positions[0], 95.0, positions[0].stop_loss_price, 110.0)
 
 
 def test_evaluate_exits_closes_buy_on_target_hit():

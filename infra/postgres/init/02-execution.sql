@@ -1100,3 +1100,31 @@ CREATE TABLE IF NOT EXISTS execution.study_notes (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_study_notes_user_symbol ON execution.study_notes (user_id, segment, symbol, created_at DESC);
+
+-- Discipline v2 step 1 (migration 032): every stop-loss / target change, accepted or refused. See docs/discipline-v2-spec.md.
+CREATE TABLE IF NOT EXISTS execution.position_events (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID,
+    position_id      UUID,
+    option_group_id  UUID,
+    -- What moved: the spot/future position's own stop or target, an option group's COMBINED premium stop or target, or its
+    -- SPOT (underlying) stop or target.
+    field            TEXT NOT NULL CHECK (field IN ('stop_loss', 'target', 'combined_stop_loss', 'combined_target', 'spot_stop_loss', 'spot_target')),
+    -- stop: set | tighten | widen | clear | same.   target: set | closer | further | clear | same.
+    move             TEXT NOT NULL CHECK (move IN ('set', 'tighten', 'widen', 'clear', 'closer', 'further', 'same')),
+    old_price        NUMERIC,
+    new_price        NUMERIC,
+    source           TEXT NOT NULL CHECK (source IN ('user', 'auto_trail', 'system')),
+    accepted         BOOLEAN NOT NULL DEFAULT TRUE,
+    refused_reason   TEXT,
+    price_at_event   NUMERIC,
+    atr              NUMERIC,
+    atr_interval     TEXT,
+    -- A stop tightened to within N x ATR of price, other than a move to breakeven once price is +1R. NULL = not judged.
+    tight_trail      BOOLEAN,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (position_id IS NOT NULL OR option_group_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_position_events_position ON execution.position_events (position_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_position_events_group ON execution.position_events (option_group_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_position_events_user ON execution.position_events (user_id, created_at DESC);

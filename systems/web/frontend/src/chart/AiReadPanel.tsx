@@ -21,7 +21,8 @@ export function AiReadButton({ exchange, symbol, expiry }: { exchange: string; s
     return saved ? { status: "done", read: saved } : { status: "idle" };
   };
   const [state, setState] = useState<State>(restore);
-  const [open, setOpen] = useState(true);
+  // A read that was saved earlier waits collapsed ("Show AI read") when the chart loads; one the person has just asked for opens.
+  const [open, setOpen] = useState(false);
   const request = useRef(0);
   const firstKey = useRef(key);
 
@@ -32,6 +33,7 @@ export function AiReadButton({ exchange, symbol, expiry }: { exchange: string; s
     firstKey.current = key;
     request.current += 1;
     setState(restore());
+    setOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 

@@ -79,8 +79,23 @@ describe("AiReadButton", () => {
 
     render(<AiReadButton exchange="NSE" symbol="NIFTY" expiry="2026-10-06" />);
 
+    // it is there but collapsed: opening a chart does not put a panel in the way
+    expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ai-read-btn")).toHaveTextContent("Show AI read");
+    await userEvent.click(screen.getByTestId("ai-read-btn"));
     expect(screen.getByTestId("ai-read-bias")).toHaveTextContent("bearish · 72%");
     expect(getAiRead).not.toHaveBeenCalled();
+  });
+
+  it("opens a read the person has just asked for, and collapses it again with Hide", async () => {
+    getAiRead.mockResolvedValue(READ);
+    render(<AiReadButton exchange="NSE" symbol="NIFTY" expiry="2026-10-06" />);
+    expect(screen.getByTestId("ai-read-btn")).toHaveTextContent("✦ AI read");
+    await userEvent.click(screen.getByTestId("ai-read-btn"));
+    expect(await screen.findByTestId("ai-read")).toBeInTheDocument();
+    expect(screen.getByTestId("ai-read-btn")).toHaveTextContent("Hide AI read");
+    await userEvent.click(screen.getByTestId("ai-read-btn"));
+    expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument();
   });
 
   it("restores each instrument's own saved read when switching back to it", async () => {
@@ -93,6 +108,10 @@ describe("AiReadButton", () => {
     await waitFor(() => expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument());
     rerender(<AiReadButton exchange="NSE" symbol="NIFTY" expiry="2026-10-06" />);
 
+    // brought back, but collapsed
+    await waitFor(() => expect(screen.getByTestId("ai-read-btn")).toHaveTextContent("Show AI read"));
+    expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("ai-read-btn"));
     expect(await screen.findByTestId("ai-read")).toBeInTheDocument();
   });
 });

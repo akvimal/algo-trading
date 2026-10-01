@@ -111,14 +111,18 @@ export const getOptionLegPreview = (exchange: string, symbol: string, action: "B
  * sentiment_history is keyed by the underlying). */
 export const getSentimentHistory = (symbol: string) => api<SentimentHistoryDay>("marketData", `/options/sentiment-history?symbol=${encodeURIComponent(symbol)}`);
 
+const ATR_INTERVALS = new Set(["1min", "3min", "5min", "15min", "25min", "30min", "60min"]);
+
 /** Moves the stop or target of an open trade to a new price. A position's target has its own route; an
  * option group's stop and target are levels of the underlying. */
-export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number): Promise<void> {
+export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number, interval?: string): Promise<void> {
+  // The chart interval the person trades on, so the server can judge a tight trail against that interval's ATR.
+  const atr = interval && ATR_INTERVALS.has(interval) ? { atr_interval: interval } : {};
   const base = level.kind === "position" ? `/positions/${level.tradeId}` : `/option-groups/${level.tradeId}`;
   const [path, body] =
     level.kind === "position"
-      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price }] : [`${base}/target`, { target_price: price }]
-      : level.field === "stop" ? [`${base}/spot-stop-loss`, { spot_stop_loss_price: price }] : [`${base}/spot-target`, { spot_target_price: price }];
+      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price, ...atr }] : [`${base}/target`, { target_price: price }]
+      : level.field === "stop" ? [`${base}/spot-stop-loss`, { spot_stop_loss_price: price, ...atr }] : [`${base}/spot-target`, { spot_target_price: price }];
   await api("execution", path, { method: "PUT", json: body });
 }
 

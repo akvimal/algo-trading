@@ -219,7 +219,8 @@ export function analyzeTicket(t: Ticket, ctx: TicketContext): Analysis {
   }
 
   const rr = computeRR(entry, validStop, validTarget);
-  if (rr !== null && rr < ctx.minRR) warnings.push(`Reward-to-risk is ${rr.toFixed(1)}, below your minimum of ${ctx.minRR}.`);
+  // (a tiny tolerance: a plan built to exactly the minimum can come out a hair under it in floating point)
+  if (rr !== null && rr + 1e-6 < ctx.minRR) warnings.push(`Reward-to-risk is ${rr.toFixed(1)}, below your minimum of ${ctx.minRR}.`);
 
   // Sizing. Options are sized by the server from capital (their stop is on the underlying, so a
   // rupee risk cannot be worked out here); crypto capital is rupees while its price is dollars.
@@ -381,6 +382,46 @@ export function defaultLevel(field: "entry" | "stop" | "target", action: Action,
   const raw = price + sign * away;
   const decimals = price >= 100 ? 2 : price >= 1 ? 3 : 6;
   return Number(raw.toFixed(decimals));
+}
+
+/** The server refuses to move a live stop away from price; the page says the same before asking. */
+export const STOP_WIDEN_MESSAGE = "The stop can only move toward price once the order is live.";
+
+/** A starting stop and target for a trade at `price`: the stop one typical bar-move against it (see defaultLevel), the
+ * target as far the other way as the person's minimum reward-to-risk asks (never under 2:1). A stop already typed is
+ * kept and the target is measured from it. Null when there is no price to work from. */
+export function suggestPlan(
+  action: Action,
+  price: number | null,
+  typicalMove: number | null,
+  minRR: number,
+  typedStop: number | null = null,
+): { stop: number; target: number } | null {
+  if (price == null || !Number.isFinite(price) || price <= 0) return null;
+  const buy = action === "BUY";
+  const stop = typedStop != null && Number.isFinite(typedStop) && typedStop > 0 ? typedStop : defaultLevel("stop", action, price, typicalMove);
+  if (stop == null) return null;
+  const distance = Math.abs(price - stop);
+  if (!(distance > 0)) return null;
+  const decimals = price >= 100 ? 2 : price >= 1 ? 3 : 6;
+  const target = Number((price + (buy ? 1 : -1) * distance * Math.max(minRR, 2)).toFixed(decimals));
+  return { stop, target };
+}
+
+export type PlanStatus = { tone: "empty" | "partial" | "ready" | "warn"; text: string };
+
+/** One quiet line saying how complete the plan is, for a spot/future ticket. It never blocks anything. */
+export function planStatus(t: Ticket, a: Analysis, ctx: TicketContext): PlanStatus | null {
+  if (t.strategy !== "future") return null;
+  const risk = a.riskAmount != null && ctx.capital > 0 ? `risk ${((a.riskAmount / ctx.capital) * 100).toFixed(1)}%` : null;
+  const parts = (...p: (string | null)[]) => p.filter(Boolean).join(" · ");
+  if (a.stop == null) return { tone: "empty", text: "No plan yet · set a stop to size the trade" };
+  if (!a.lotsAuto && a.riskAmount != null && a.riskAmount > (ctx.capital * ctx.riskPct) / 100) {
+    return { tone: "warn", text: parts("Size above your plan", risk, `plan is ${ctx.riskPct}%`) };
+  }
+  if (a.target == null) return { tone: "partial", text: parts("Stop set", "reward unplanned", risk) };
+  if (a.rr != null && a.rr + 1e-6 < ctx.minRR) return { tone: "warn", text: parts(`R:R ${a.rr.toFixed(1)} is under your ${ctx.minRR} minimum`, risk) };
+  return { tone: "ready", text: parts("Planned", a.rr != null ? `R:R ${a.rr.toFixed(1)}` : null, risk) };
 }
 
 export const ACTION_WORD = (a: Action) => (a === "BUY" ? "Buy" : "Sell");

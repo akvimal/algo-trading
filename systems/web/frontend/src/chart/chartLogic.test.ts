@@ -377,3 +377,17 @@ describe("open trade levels", () => {
     expect(levels.map((l) => [l.key, l.price, l.draggable])).toEqual([["position:p:stop", 100, true]]);
   });
 });
+
+describe("a live stop only moves toward price", () => {
+  it("refuses a long's stop moved down and a short's moved up, and allows the other way", () => {
+    expect(checkLevelMove({ field: "stop", long: true }, 985, 1000, 990)).toMatch(/only move toward price/);
+    expect(checkLevelMove({ field: "stop", long: true }, 995, 1000, 990)).toBeNull();
+    expect(checkLevelMove({ field: "stop", long: false }, 1015, 1000, 1010)).toMatch(/only move toward price/);
+    expect(checkLevelMove({ field: "stop", long: false }, 1005, 1000, 1010)).toBeNull();
+  });
+
+  it("does not apply to a target, or to a stop that is not set yet", () => {
+    expect(checkLevelMove({ field: "target", long: true }, 1100, 1000, 1030)).toBeNull();
+    expect(checkLevelMove({ field: "stop", long: true }, 980, 1000, null)).toBeNull();
+  });
+});

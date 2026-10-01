@@ -545,6 +545,62 @@ async function pickLayout(user: ReturnType<typeof userEvent.setup>, name: string
   await user.click(within(screen.getByRole("group", { name: "Layout" })).getByRole("radio", { name: new RegExp(name) }));
 }
 
+describe("the plan on the ticket", () => {
+  beforeEach(() => screenIs(true));
+
+  it("shows how complete the plan is as it is filled in", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const chip = () => t.getByTestId("plan-chip");
+    expect(chip()).toHaveTextContent("No plan yet");
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await waitFor(() => expect(chip()).toHaveTextContent("Stop set · reward unplanned"));
+    await user.type(t.getByLabelText("Target"), "1030");
+    await waitFor(() => expect(chip()).toHaveTextContent(/Planned · R:R 3\.0/));
+  });
+
+  it("fills an empty stop and target in one click, on the right side of the price", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await loaded();
+    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
+    const stop = Number((t.getByLabelText("Stop-loss") as HTMLInputElement).value);
+    const target = Number((t.getByLabelText("Target") as HTMLInputElement).value);
+    expect(stop).toBeLessThan(1000);
+    expect(target).toBeGreaterThan(1000);
+    expect(t.queryByRole("button", { name: "Suggest stop & target" })).not.toBeInTheDocument(); // nothing left to fill
+    expect(t.getByTestId("plan-chip")).toHaveTextContent(/Planned/);
+  });
+
+  it("keeps a stop that was already typed and only fills the target", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await loaded();
+    await user.type(t.getByLabelText("Stop-loss"), "980");
+    await user.click(t.getByRole("button", { name: "Suggest stop & target" }));
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("980");
+    expect(Number((t.getByLabelText("Target") as HTMLInputElement).value)).toBeGreaterThan(1039);
+  });
+
+  it("shows the size as worked out from the risk, quietly, and typing over it can be undone", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    const size = t.getByLabelText("Number of shares");
+    await waitFor(() => expect(size).toHaveAttribute("placeholder", expect.stringMatching(/from your .*% risk/)));
+    expect(size.closest(".field")).toHaveClass("field-auto");
+    expect(t.queryByRole("button", { name: "Use system size" })).not.toBeInTheDocument();
+    await user.type(size, "5");
+    expect(size.closest(".field")).not.toHaveClass("field-auto");
+    await user.click(t.getByRole("button", { name: "Use system size" }));
+    expect(size).toHaveValue("");
+  });
+});
+
 describe("the layout dropdown", () => {
   beforeEach(() => screenIs(true));
 
@@ -2925,11 +2981,11 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
     const id = line(c, "position:p1:stop").id;
-    drag(c, "position:p1:stop", 985.1234);
+    drag(c, "position:p1:stop", 995.1234);
     await waitFor(() => expect(puts("/positions/p1/stop-loss")).toHaveLength(1));
-    expect(puts("/positions/p1/stop-loss")[0].body).toEqual({ stop_loss_price: 985.12 });
-    expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 985.12.");
-    await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(985.12)); // the reload confirms it
+    expect(puts("/positions/p1/stop-loss")[0].body).toEqual({ stop_loss_price: 995.12, atr_interval: "15min" });
+    expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 995.12.");
+    await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(995.12)); // the reload confirms it
     expect(line(c, "position:p1:stop").id).toBe(id); // the same line, not a new one
   });
 
@@ -3020,6 +3076,20 @@ describe("moving the stop and target of open trades", () => {
     await waitFor(() => expect(line(c, "position:p1:target").points[0].value).toBe(1030));
   });
 
+  it("refuses to drag a live stop away from the price, before asking the server, and puts the line back", async () => {
+    positionRows = [long()];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    await waitFor(() => expect(lines(c)).toHaveLength(2));
+    drag(c, "position:p1:stop", 970); // a long's stop at 990 moved DOWN
+    expect(await screen.findByRole("alert")).toHaveTextContent("The stop can only move toward price once the order is live.");
+    expect(puts("/stop-loss")).toHaveLength(0);
+    await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(990));
+    drag(c, "position:p1:stop", 995); // toward the price is fine
+    await waitFor(() => expect(puts("/positions/p1/stop-loss")).toHaveLength(1));
+  });
+
   it("a short is the other way round: its stop belongs above the price and its target below", async () => {
     positionRows = [long({ action: "SELL", entry_price: 990, stop_loss_price: 1010, target_price: 970 })];
     renderAt("/trade?symbol=RELIANCE");
@@ -3064,9 +3134,9 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
     expect(line(c, "group:g1:stop").extendData.label).toBe("Stop · Naked Call");
-    drag(c, "group:g1:stop", 980);
+    drag(c, "group:g1:stop", 990);
     await waitFor(() => expect(puts("/option-groups/g1/spot-stop-loss")).toHaveLength(1));
-    expect(puts("/option-groups/g1/spot-stop-loss")[0].body).toEqual({ spot_stop_loss_price: 980 });
+    expect(puts("/option-groups/g1/spot-stop-loss")[0].body).toEqual({ spot_stop_loss_price: 990, atr_interval: "15min" });
     drag(c, "group:g1:target", 1040);
     await waitFor(() => expect(puts("/option-groups/g1/spot-target")).toHaveLength(1));
     expect(puts("/option-groups/g1/spot-target")[0].body).toEqual({ spot_target_price: 1040 });

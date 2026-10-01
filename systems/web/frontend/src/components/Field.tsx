@@ -14,6 +14,7 @@ export function TextField({
   suffix,
   id,
   action,
+  dimmed = false,
 }: {
   label: string;
   value: string;
@@ -27,10 +28,12 @@ export function TextField({
   id: string;
   /** Something to the right of the label, such as a "pick on chart" button. */
   action?: ReactNode;
+  /** Shown quietly: the value is worked out for the person, and typing here overrides it. */
+  dimmed?: boolean;
 }) {
   const describedBy = [hint ? `${id}-hint` : "", error ? `${id}-err` : ""].filter(Boolean).join(" ") || undefined;
   return (
-    <div className="field">
+    <div className={dimmed ? "field field-auto" : "field"}>
       <div className="field-head">
         <label htmlFor={id}>
           <span>{label}</span>

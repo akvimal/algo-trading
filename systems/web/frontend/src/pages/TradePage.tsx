@@ -47,7 +47,7 @@ import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
-import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, isFresh, type Ticket } from "./tradeModel";
+import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, isFresh, suggestPlan, type Ticket } from "./tradeModel";
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
@@ -169,13 +169,14 @@ export function TradePage() {
   const [levelNote, setLevelNote] = useState<{ text: string; error: boolean } | null>(null);
   async function moveLevel(pane: 0 | 1, level: Pick<OpenLevel, "kind" | "field" | "tradeId" | "long">, price: number): Promise<boolean> {
     const word = level.field === "stop" ? "Stop-loss" : "Target";
-    const problem = checkLevelMove(level, price, priceOf(pane));
+    const current = chartLevels[pane].find((l) => l.tradeId === level.tradeId && l.field === level.field)?.price ?? null;
+    const problem = checkLevelMove(level, price, priceOf(pane), current);
     if (problem) {
       setLevelNote({ text: problem, error: true });
       return false;
     }
     try {
-      await moveOpenLevel(level, price);
+      await moveOpenLevel(level, price, ws.panes[pane].interval);
     } catch (e) {
       setLevelNote({ text: e instanceof Error ? e.message : "Could not move it. Try again.", error: true });
       return false;
@@ -287,6 +288,13 @@ export function TradePage() {
       setLevelPick(field ? { kind, tradeId, long, field } : null);
     },
   });
+  // One click fills the stop and target that are still empty from the chart's typical move and the person's minimum reward-to-risk.
+  function suggestTicketPlan() {
+    const typedStop = Number(ticket.stop);
+    const plan = suggestPlan(ticket.action, analysis?.entry ?? activePrice, paneRefs[active].current?.typicalMove() ?? null, ctx?.minRR ?? 2, ticket.stop.trim() !== "" && Number.isFinite(typedStop) ? typedStop : null);
+    if (!plan) return;
+    setTicket((t) => ({ ...t, stop: t.stop.trim() === "" ? String(plan.stop) : t.stop, target: t.target.trim() === "" ? String(plan.target) : t.target }));
+  }
   function addLine(field: PriceField) {
     const level = defaultLevel(field, ticket.action, activePrice, paneRefs[active].current?.typicalMove() ?? null);
     if (level != null) setLevel(field, level);
@@ -727,6 +735,7 @@ export function TradePage() {
                   setPickField(f);
                 }}
                 onAddLine={addLine}
+                onSuggestPlan={suggestTicketPlan}
                 holding={hasOpenForInstrument ? openHolding : null}
                 onPlaced={() => {
                   waiting.reload();

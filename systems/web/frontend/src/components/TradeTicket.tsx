@@ -6,7 +6,7 @@ import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
 import { NOTES_MAX, SETUP_TAGS } from "../pages/journalModel";
 import {
-  ACTION_WORD, analyzeTicket, buildOrder, checkList, favorable, optionsAvailable,
+  ACTION_WORD, analyzeTicket, buildOrder, checkList, favorable, optionsAvailable, planStatus,
   type Action, type BuildMeta, type DayBudget, type Moneyness, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
 import type { PriceField } from "../chart/ChartPane";
@@ -35,6 +35,8 @@ type Props = {
   onPickField?: (f: PriceField | null) => void;
   /** Put a starting line for this field on the chart, to drag to the right price. */
   onAddLine?: (f: PriceField) => void;
+  /** Fill whichever of stop and target is still empty with a suggested level (one click to accept, then drag to taste). */
+  onSuggestPlan?: () => void;
   /** What the person already holds open on this instrument (e.g. "1 open NIFTY position"), if anything:
    * the ticket warns before a second order is placed on top of it. */
   holding?: string | null;
@@ -75,7 +77,7 @@ type Props = {
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, onSuggestPlan, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -219,6 +221,13 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           placeholder ("Auto from your risk"/"Sized for you"), so it gets the full row below
           instead of a cramped third column. No hints here (unlike Entry above): the label and
           placeholder already say what is needed, and dropping them is what kept this compact. */}
+      {!simplifiedOption && onSuggestPlan && !isOption && ctx.price != null && (t.stop.trim() === "" || t.target.trim() === "") && (
+        <div style={{ marginBottom: 6 }}>
+          <button className="link-btn" onClick={onSuggestPlan} title="Fill the empty stop and target from the chart's typical move and your minimum reward-to-risk">
+            Suggest stop &amp; target
+          </button>
+        </div>
+      )}
       {!simplifiedOption && (
         <div className="field-row">
           <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />
@@ -236,7 +245,19 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
           value={t.lots}
           onChange={(v) => set("lots", v)}
-          placeholder={isOption || ctx.segment === "CRYPTO" ? "Sized for you" : "Auto from your risk"}
+          placeholder={
+            isOption || ctx.segment === "CRYPTO"
+              ? "Sized for you"
+              : a.lots != null && t.lots.trim() === "" ? `${a.lots} · from your ${ctx.riskPct}% risk` : "Auto from your risk"
+          }
+          action={
+            t.lots.trim() !== "" ? (
+              <button className="link-btn" title="Go back to the size worked out from your risk" onClick={() => set("lots", "")}>
+                Use system size
+              </button>
+            ) : undefined
+          }
+          dimmed={t.lots.trim() === ""}
         />
       )}
 
@@ -332,6 +353,14 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
         </>
       )}
 
+      {!simplifiedOption && (() => {
+        const plan = planStatus(t, a, ctx);
+        return plan ? (
+          <div className={`plan-chip ${plan.tone}`} data-testid="plan-chip" role="status">
+            {plan.text}
+          </div>
+        ) : null;
+      })()}
       {[...a.errors, ...a.warnings].length > 0 && (
         <ul className="hints" aria-live="polite">
           {a.errors.map((m) => (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, planStatus, riskLots, suggestPlan, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -315,5 +315,61 @@ describe("isFresh", () => {
     expect(isFresh(now - (PRICE_STALE_MS - 1), now)).toBe(true);
     expect(isFresh(now - PRICE_STALE_MS, now)).toBe(false);
     expect(isFresh(now, now)).toBe(true); // just arrived
+  });
+});
+
+describe("suggestPlan", () => {
+  it("puts the stop one typical move against the trade and the target as far as the minimum reward-to-risk asks", () => {
+    expect(suggestPlan("BUY", 1000, 10, 3)).toEqual({ stop: 990, target: 1030 });
+    expect(suggestPlan("SELL", 1000, 10, 3)).toEqual({ stop: 1010, target: 970 });
+  });
+
+  it("never plans under 2:1, whatever the minimum says", () => {
+    expect(suggestPlan("BUY", 1000, 10, 1)).toEqual({ stop: 990, target: 1020 });
+  });
+
+  it("keeps a stop already typed and measures the target from it", () => {
+    expect(suggestPlan("BUY", 1000, 10, 2, 980)).toEqual({ stop: 980, target: 1040 });
+  });
+
+  it("has nothing to suggest without a price", () => {
+    expect(suggestPlan("BUY", null, 10, 2)).toBeNull();
+  });
+});
+
+describe("planStatus", () => {
+  const status = (over: Partial<Ticket>, c = ctx()) => {
+    const t = ticket(over);
+    return planStatus(t, analyzeTicket(t, c), c);
+  };
+
+  it("says there is no plan until a stop is set", () => {
+    expect(status({})).toMatchObject({ tone: "empty" });
+  });
+
+  it("says the reward is unplanned when there is a stop and no target", () => {
+    expect(status({ stop: "990" })).toMatchObject({ tone: "partial", text: expect.stringContaining("reward unplanned") });
+  });
+
+  it("shows reward-to-risk and the risk as a share of capital once planned", () => {
+    expect(status({ stop: "990", target: "1030" })).toEqual({ tone: "ready", text: "Planned · R:R 3.0 · risk 1.0%" });
+  });
+
+  it("warns when the reward-to-risk is under the minimum", () => {
+    expect(status({ stop: "990", target: "1010" })).toMatchObject({ tone: "warn", text: expect.stringContaining("under your 2 minimum") });
+  });
+
+  it("warns when the size was typed over the plan and risks more than it", () => {
+    expect(status({ stop: "990", target: "1030", lots: "500" })).toMatchObject({ tone: "warn", text: expect.stringContaining("Size above your plan") });
+  });
+
+  it("is not shown for an option order", () => {
+    expect(status({ strategy: "naked", stop: "990" })).toBeNull();
+  });
+});
+
+describe("the live-stop message", () => {
+  it("is the one the server sends", () => {
+    expect(STOP_WIDEN_MESSAGE).toBe("The stop can only move toward price once the order is live.");
   });
 });

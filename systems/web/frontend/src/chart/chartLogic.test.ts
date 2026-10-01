@@ -178,6 +178,19 @@ describe("saved chart settings", () => {
     expect(loadDrawings("NSE", "NIFTY")).toEqual([]); // malformed is ignored, not crashed on
   });
 
+  it("keeps the words of a text drawing, cut to the length a label can hold, and drops a text with no words", () => {
+    localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([
+      { name: "textNote", points: [{ timestamp: 1, value: 10 }], text: "x".repeat(300) },
+      { name: "textNote", points: [{ timestamp: 2, value: 11 }], text: "   " },
+      { name: "textNote", points: [{ timestamp: 3, value: 12 }] },
+      { name: "segment", points: [{ timestamp: 4, value: 13 }], text: "not a text drawing" },
+    ]));
+    const loaded = loadDrawings("NSE", "NIFTY");
+    expect(loaded).toHaveLength(2);
+    expect(loaded[0].text).toHaveLength(120);
+    expect(loaded[1]).toEqual({ name: "segment", points: [{ timestamp: 4, value: 13 }] }); // words belong only to a text drawing
+  });
+
   it("does not throw when storage is blocked", () => {
     const orig = Storage.prototype.setItem;
     Storage.prototype.setItem = () => {

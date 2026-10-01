@@ -65,6 +65,28 @@ export function registerChartExtensions(): void {
     },
   });
 
+  // A piece of text placed on the chart: one click, then the words are typed in (see ChartPane's text editor). A light
+  // label with a dark outline so it reads over candles of either colour; selecting it shows the usual handle to move it.
+  registerOverlay({
+    name: "textNote",
+    totalStep: 2,
+    needDefaultPointFigure: true,
+    needDefaultXAxisFigure: false,
+    needDefaultYAxisFigure: false,
+    createPointFigures: ({ coordinates, overlay }) => {
+      const c0 = coordinates[0];
+      const text = (overlay.extendData as { text?: string } | undefined)?.text;
+      if (!c0 || !text || !Number.isFinite(c0.x) || !Number.isFinite(c0.y)) return [];
+      return [
+        {
+          type: "text",
+          attrs: { x: c0.x + 8, y: c0.y, text, align: "left", baseline: "middle" },
+          styles: { color: INK, size: 12, weight: "bold", backgroundColor: "#f4f6f8", borderColor: INK, borderSize: 1, borderRadius: 4, paddingLeft: 6, paddingRight: 6, paddingTop: 3, paddingBottom: 3 },
+        },
+      ];
+    },
+  });
+
   // A level of the trade plan (entry, stop, target): a full-width line with a label at the price axis.
   // Its figures take pointer events, so the person can grab it and drag it to a new price; the chart
   // reports the new price when the drag ends (see ChartPane) and the ticket follows.

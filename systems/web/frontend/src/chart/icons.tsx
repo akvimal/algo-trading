@@ -12,6 +12,7 @@ export const PriceLineIcon = () => wrap(<><path d="M3 12h13" /><path d="M16 8h5v
 export const ChannelIcon = () => wrap(<><path d="M4 15L18 7" /><path d="M6 20L20 12" /></>);
 export const ZoneIcon = () => wrap(<rect x="4" y="7" width="16" height="10" rx="1" />);
 export const FibIcon = () => wrap(<><path d="M3 5h18" /><path d="M3 10h18" /><path d="M3 15h18" /><path d="M3 20h18" /></>);
+export const TextIcon = () => wrap(<><path d="M5 6V4h14v2" /><path d="M12 4v16" /><path d="M9 20h6" /></>);
 export const MagnetIcon = () => wrap(<><path d="M6 4v8a6 6 0 0012 0V4" /><path d="M6 8h4M14 8h4" /></>);
 export const EyeIcon = () => wrap(<><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
 export const EyeOffIcon = () => wrap(<><path d="M3 3l18 18" /><path d="M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3 3.6M6.6 6.6A16 16 0 002 12s4 7 10 7c1.6 0 3-.4 4.3-1" /></>);

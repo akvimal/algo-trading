@@ -99,6 +99,9 @@ export class FakeChart {
   scrollToTimestamp(ts: number) {
     this.scrolledTo.push(ts);
   }
+  convertToPixel(point: { value?: number }) {
+    return { x: 120, y: 1000 - (point.value ?? 0) };
+  }
   convertFromPixel(coords: { y?: number }[]) {
     return coords.map((c) => ({ value: 1000 - (c.y ?? 0) }));
   }
@@ -170,6 +173,10 @@ export class FakeChart {
     if (!ov) return;
     ov.points = points;
     ov.handlers.onPressedMoveEnd?.({ overlay: { id, name: ov.name, points } });
+  }
+  doubleClick(id: string) {
+    const ov = this.overlays.get(id);
+    ov?.handlers.onDoubleClick?.({ overlay: { id, name: ov.name, points: ov.points, extendData: ov.extendData } });
   }
   select(id: string) {
     const ov = this.overlays.get(id);

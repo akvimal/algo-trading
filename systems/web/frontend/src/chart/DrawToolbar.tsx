@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { DrawTool } from "./ChartPane";
-import { ChannelIcon, CursorIcon, EyeIcon, EyeOffIcon, FibIcon, HLineIcon, MagnetIcon, PriceLineIcon, RayIcon, TrashIcon, TrendLineIcon, XIcon, ZoneIcon } from "./icons";
+import { ChannelIcon, CursorIcon, EyeIcon, EyeOffIcon, FibIcon, HLineIcon, MagnetIcon, PriceLineIcon, RayIcon, TextIcon, TrashIcon, TrendLineIcon, XIcon, ZoneIcon } from "./icons";
 
 const TOOLS: { tool: DrawTool; label: string; icon: ReactNode }[] = [
   { tool: "segment", label: "Trend line", icon: <TrendLineIcon /> },
@@ -10,6 +10,7 @@ const TOOLS: { tool: DrawTool; label: string; icon: ReactNode }[] = [
   { tool: "parallelStraightLine", label: "Channel", icon: <ChannelIcon /> },
   { tool: "rect", label: "Zone (supply or demand)", icon: <ZoneIcon /> },
   { tool: "fibonacciLine", label: "Fibonacci retracement", icon: <FibIcon /> },
+  { tool: "textNote", label: "Text", icon: <TextIcon /> },
 ];
 
 type Props = {

@@ -810,6 +810,101 @@ describe("drawing tools", () => {
     ]);
   });
 
+  describe("the Text tool", () => {
+    const KEY = "web.chart.drawings:NSE:NIFTY";
+    const saved = () => JSON.parse(localStorage.getItem(KEY) ?? "[]");
+
+    async function place(user: ReturnType<typeof userEvent.setup>) {
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+      await user.click(bar.getByRole("button", { name: "Text" }));
+      expect(bar.getByRole("button", { name: "Text" })).toHaveAttribute("aria-pressed", "true");
+      const armed = c.overlaysNamed("textNote");
+      expect(armed).toHaveLength(1);
+      act(() => c.finishDrawing(armed[0].id, [{ timestamp: c.data[5].timestamp, value: 1010 }]));
+      return { c, bar, id: armed[0].id };
+    }
+
+    it("is in the tool strip, and after the click asks for the words in a box on the chart", async () => {
+      const user = userEvent.setup();
+      const { bar } = await place(user);
+      expect(await screen.findByLabelText("Text on the chart")).toHaveFocus();
+      expect(saved()).toEqual([]); // nothing is kept until there are words
+      expect(bar.getByRole("button", { name: "Cursor" })).toHaveAttribute("aria-pressed", "true"); // the tool is put down
+    });
+
+    it("keeps the words on Enter - shown on the chart and saved with the instrument's drawings", async () => {
+      const user = userEvent.setup();
+      const { c, id } = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "Support held twice{Enter}");
+      expect(screen.queryByLabelText("Text on the chart")).not.toBeInTheDocument();
+      expect(c.overlays.get(id)!.extendData).toEqual({ text: "Support held twice" });
+      expect(saved()).toEqual([{ name: "textNote", points: [{ timestamp: c.data[5].timestamp, value: 1010 }], text: "Support held twice" }]);
+    });
+
+    it("keeps nothing when Escape is pressed or the box is left empty", async () => {
+      const user = userEvent.setup();
+      const first = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "never mind{Escape}");
+      expect(first.c.overlaysNamed("textNote")).toHaveLength(0);
+      expect(saved()).toEqual([]);
+    });
+
+    it("keeps nothing for a box left empty, and trims the words it does keep", async () => {
+      const user = userEvent.setup();
+      const { c } = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "   {Enter}");
+      expect(c.overlaysNamed("textNote")).toHaveLength(0);
+      expect(saved()).toEqual([]);
+    });
+
+    it("saves the words when the person clicks away from the box", async () => {
+      const user = userEvent.setup();
+      const { c } = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "break and retest");
+      await user.click(document.body);
+      expect(saved()[0]).toMatchObject({ name: "textNote", text: "break and retest" });
+      expect(c.overlaysNamed("textNote")).toHaveLength(1);
+    });
+
+    it("draws a saved text back on the chart when the instrument is opened again", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "Gap fill target" }]));
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      expect(c.overlaysNamed("textNote")[0].extendData).toEqual({ text: "Gap fill target" });
+    });
+
+    it("double-clicking a text changes its words", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "old words" }]));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      const ov = c.overlaysNamed("textNote")[0];
+      act(() => c.doubleClick(ov.id));
+      const box = await screen.findByLabelText("Text on the chart");
+      expect(box).toHaveValue("old words");
+      await user.clear(box);
+      await user.type(box, "new words{Enter}");
+      expect(c.overlays.get(ov.id)!.extendData).toEqual({ text: "new words" });
+      expect(saved()[0].text).toBe("new words");
+    });
+
+    it("leaves a text as it was when its edit is cancelled, and never deletes it", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "keep me" }]));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      act(() => c.doubleClick(c.overlaysNamed("textNote")[0].id));
+      await user.type(await screen.findByLabelText("Text on the chart"), "xyz{Escape}");
+      expect(c.overlaysNamed("textNote")).toHaveLength(1);
+      expect(saved()[0].text).toBe("keep me");
+    });
+  });
+
   it("a drawing made on one chart shows up on a sibling chart of the SAME instrument at a different interval", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");

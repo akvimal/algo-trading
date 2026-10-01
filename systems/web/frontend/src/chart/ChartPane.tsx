@@ -7,7 +7,7 @@ import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
   DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
-  STRUCTURE_TIMEFRAMES, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
+  STRUCTURE_TIMEFRAMES, TEXT_DRAWING_MAX, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
 } from "./config";
 import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
@@ -17,7 +17,7 @@ import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
 
-export type DrawTool = "segment" | "rayLine" | "horizontalStraightLine" | "priceLine" | "rect" | "fibonacciLine" | "parallelStraightLine";
+export type DrawTool = "segment" | "rayLine" | "horizontalStraightLine" | "priceLine" | "rect" | "fibonacciLine" | "parallelStraightLine" | "textNote";
 
 export type PlanLine = { key: PriceField; price: number; label: string; color: string; dashed?: boolean };
 
@@ -122,6 +122,10 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const barsRef = useRef<Bar[]>([]);
   const anchorRef = useRef<BarAnchor>({ timestamps: [] });
   const drawnRef = useRef<Map<string, StoredDrawing>>(new Map());
+  // A text drawing being typed (just placed, or double-clicked to change): where its box sits and what it says so far.
+  const [textEdit, setTextEdit] = useState<{ id: string; x: number; y: number; value: string; isNew: boolean; draft: StoredDrawing } | null>(null);
+  const textEditRef = useRef(textEdit);
+  textEditRef.current = textEdit;
   const pendingRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const restoringRef = useRef(false);
@@ -521,10 +525,20 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
 
   const handlers = () => ({
     onDrawEnd: (e: OverlayEvent) => {
+      pendingRef.current = null;
+      if (e.overlay.name === "textNote") {
+        // Placed, but it has no words yet: ask for them, and only keep it once there are some.
+        beginTextEdit(e.overlay, true);
+        emitDrawing();
+        return false;
+      }
       drawnRef.current.set(e.overlay.id, serialize(e.overlay));
       persist();
-      pendingRef.current = null;
       emitDrawing();
+      return false;
+    },
+    onDoubleClick: (e: OverlayEvent) => {
+      if (e.overlay.name === "textNote") beginTextEdit(e.overlay, false);
       return false;
     },
     onPressedMoveEnd: (e: OverlayEvent) => {
@@ -565,7 +579,42 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
 
   function serialize(o: Overlay): StoredDrawing {
     const alert = drawnRef.current.get(o.id)?.alert;
-    return { name: o.name, points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })), ...(alert ? { alert } : {}) };
+    const text = o.name === "textNote" ? ((o.extendData as { text?: string } | undefined)?.text ?? drawnRef.current.get(o.id)?.text) : undefined;
+    return {
+      name: o.name,
+      points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })),
+      ...(alert ? { alert } : {}),
+      ...(text ? { text } : {}),
+    };
+  }
+
+  // ---- text drawings: typed into a small box right on the chart ----
+  function beginTextEdit(o: Overlay, isNew: boolean) {
+    const chart = chartRef.current;
+    const p = o.points[0];
+    if (!chart || !p) return;
+    const px = (chart as unknown as { convertToPixel?: (pt: unknown, f: unknown) => { x?: number; y?: number } | { x?: number; y?: number }[] }).convertToPixel?.(p, { paneId: "candle_pane" });
+    const at = Array.isArray(px) ? px[0] : px;
+    const current = (o.extendData as { text?: string } | undefined)?.text ?? drawnRef.current.get(o.id)?.text ?? "";
+    setTextEdit({ id: o.id, x: at?.x ?? 40, y: at?.y ?? 40, value: current, isNew, draft: serialize(o) });
+  }
+
+  function finishTextEdit(commit: boolean) {
+    const edit = textEditRef.current;
+    if (!edit) return;
+    setTextEdit(null);
+    textEditRef.current = null;
+    const chart = chartRef.current;
+    const words = edit.value.trim().slice(0, TEXT_DRAWING_MAX);
+    if (!chart) return;
+    if (!commit || words === "") {
+      if (edit.isNew) chart.removeOverlay(edit.id); // nothing typed: the label is not kept
+      return;
+    }
+    chart.overrideOverlay({ id: edit.id, extendData: { text: words } });
+    drawnRef.current.set(edit.id, { ...edit.draft, text: words });
+    persist();
+    emitDrawing();
   }
 
   // ---- alerts on drawings ----
@@ -617,6 +666,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         groupId: USER_DRAWINGS,
         points: d.points.map((p) => toChartPoint(p, anchorRef.current)),
         mode: magnetMode(propsRef.current.magnet),
+        ...(d.name === "textNote" ? { extendData: { text: d.text ?? "" } } : {}),
         ...handlers(),
       });
       if (typeof id === "string") drawnRef.current.set(id, d);
@@ -828,6 +878,24 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         {summary}
       </p>
       <div ref={containerRef} className="chart-canvas" role="img" aria-label={`${symbol} price chart`} />
+      {textEdit && (
+        <input
+          className="chart-text-input"
+          style={{ left: Math.max(4, textEdit.x), top: Math.max(4, textEdit.y - 14) }}
+          aria-label="Text on the chart"
+          placeholder="Type, then Enter"
+          maxLength={TEXT_DRAWING_MAX}
+          autoFocus
+          value={textEdit.value}
+          onChange={(e) => setTextEdit((cur) => (cur ? { ...cur, value: e.target.value } : cur))}
+          onKeyDown={(e) => {
+            e.stopPropagation(); // typing must not trigger the chart's own keys (Delete removes a drawing)
+            if (e.key === "Enter") finishTextEdit(true);
+            else if (e.key === "Escape") finishTextEdit(false);
+          }}
+          onBlur={() => finishTextEdit(true)}
+        />
+      )}
       {status !== "ready" && (
         <div className="chart-status" role={status === "error" ? "alert" : "status"}>
           {status === "loading" ? (

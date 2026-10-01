@@ -1,5 +1,5 @@
 import { IndicatorSeries, LineType, registerIndicator, registerOverlay, type IndicatorFigureStyle, type OverlayFigure } from "klinecharts";
-import { ACCENT, BUY, SELL } from "./colors";
+import { ACCENT, BUY, MARK_LOSS, MARK_OPEN, MARK_PROFIT, SELL } from "./colors";
 import { computeSupertrend } from "./supertrend";
 import type { OiLevelLine } from "./oiLevels";
 import { compactPnl, pnlTone, type TradeMarkerExtend } from "./trades";
@@ -147,13 +147,16 @@ export function registerChartExtensions(): void {
       const yE = yAxis.convertToPixel(d.entryPrice);
       if (!Number.isFinite(yE)) return [];
       const long = d.side === "long";
-      const dir = long ? BUY : SELL;
       const tone = pnlTone(d.pnl);
-      const result = tone === "up" ? BUY : tone === "dn" ? SELL : "#93a1b1";
+      // One colour per trade, by how it is doing (gold in profit, violet at a loss, sky with no result yet),
+      // so the marker, its line and its tag read as one thing and stand out from the green and red candles.
+      const result = tone === "up" ? MARK_PROFIT : tone === "dn" ? MARK_LOSS : MARK_OPEN;
+      const dir = result;
+      // A large badge with a thick white ring: the ring is what keeps it visible against any candle.
       const badge = (glyph: string, bg: string): OverlayFigure => ({
         type: "text",
         attrs: { x: 0, y: 0, text: glyph, align: "center", baseline: "middle" },
-        styles: { color: INK, size: 12, weight: "bold", backgroundColor: bg, borderColor: INK, borderSize: 1.5, borderRadius: 8, paddingLeft: 4, paddingRight: 4, paddingTop: 4, paddingBottom: 4 },
+        styles: { color: INK, size: 14, weight: "bold", backgroundColor: bg, borderColor: "#ffffff", borderSize: 2.5, borderRadius: 10, paddingLeft: 5, paddingRight: 5, paddingTop: 5, paddingBottom: 5 },
         ignoreEvent: true,
       });
       const at = (f: OverlayFigure, x: number, y: number): OverlayFigure => ({ ...f, attrs: { ...(f.attrs as object), x, y } } as OverlayFigure);
@@ -168,7 +171,7 @@ export function registerChartExtensions(): void {
 
       if (d.state === "open") {
         const right = bounding.width;
-        figs.push({ type: "line", attrs: { coordinates: [{ x: c0.x, y: yE }, { x: right, y: yE }] }, styles: { color: dir, size: 1.5, style: "dashed", dashedValue: [5, 3] }, ignoreEvent: true });
+        figs.push({ type: "line", attrs: { coordinates: [{ x: c0.x, y: yE }, { x: right, y: yE }] }, styles: { color: dir, size: 2, style: "dashed", dashedValue: [5, 3] }, ignoreEvent: true });
         figs.push(label(`${d.label} · ${compactPnl(d.pnl)}`, right - 4, yE - 9, result, "right", 11));
         return figs;
       }
@@ -179,7 +182,7 @@ export function registerChartExtensions(): void {
       const yX = hasExit ? yAxis.convertToPixel(d.exitPrice as number) : yE;
       if (!Number.isFinite(yX)) return figs;
       if (hasExit) {
-        figs.push({ type: "line", attrs: { coordinates: [{ x: c0.x, y: yE }, { x: x1, y: yX }] }, styles: { color: result, size: 2, style: "solid" }, ignoreEvent: true });
+        figs.push({ type: "line", attrs: { coordinates: [{ x: c0.x, y: yE }, { x: x1, y: yX }] }, styles: { color: result, size: 2.5, style: "solid" }, ignoreEvent: true });
         figs.push(at(badge("✕", result), x1, yX));
       }
       figs.push(label(`${compactPnl(d.pnl)}${d.reason ? ` · ${d.reason.replace(/_/g, " ")}` : ""}`, x1 + 5, yX - 9, result, "left"));

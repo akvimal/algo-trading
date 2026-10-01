@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
 import { getAccounts } from "../api/settings";
@@ -39,7 +39,7 @@ import { PaneHeader } from "../workstation/PaneHeader";
 import { CombosMenu } from "../workstation/CombosMenu";
 import { addCombo, applyCombo, loadCombos, removeCombo, saveCombos, type Combo } from "../workstation/combos";
 import {
-  loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSymbol,
+  loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSplit, setSymbol,
   withUrlSymbol, type WorkstationState,
 } from "../workstation/state";
 import { OiStrip } from "../chart/OiStrip";
@@ -86,7 +86,10 @@ export function TradePage() {
 
   // ---- data per chart ----
   const twoUp = wide && paneCount(ws) === 2;
-  const active = (twoUp ? ws.active : 0) as 0 | 1;
+  // One chart can fill the area for a closer look; the other stays loaded underneath, so coming back is instant.
+  const [maximized, setMaximized] = useState<0 | 1 | null>(null);
+  const focus = twoUp ? maximized : null;
+  const active = (twoUp ? (focus ?? ws.active) : 0) as 0 | 1;
   const setStructureOn = (on: boolean) => setStructure((s) => ({ ...s, tfs: toggleStructureOn(on, ws.panes[active].interval) }));
   const [socketUp, setSocketUp] = useState(false);
   const dataA = usePaneData(ws.panes[0], true, socketUp);
@@ -362,7 +365,27 @@ export function TradePage() {
   };
 
   const shown: (0 | 1)[] = twoUp ? [0, 1] : [0];
+  const gridRef = useRef<HTMLDivElement>(null);
+  const dragSplit = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const box = gridRef.current?.getBoundingClientRect();
+    if (!box) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const stacked = ws.layout === "stack";
+    const move = (ev: PointerEvent) => {
+      const r = stacked ? (ev.clientY - box.top) / box.height : (ev.clientX - box.left) / box.width;
+      setWs((cur) => setSplit(cur, r));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const linkCrosshair = twoUp && ws.links.crosshair;
+  useEffect(() => {
+    if (!twoUp) setMaximized(null);
+  }, [twoUp]);
   useEffect(() => {
     if (!twoUp || !linkCrosshair) setPicked(null);
   }, [twoUp, linkCrosshair]);
@@ -511,14 +534,18 @@ export function TradePage() {
               </button>
             </div>
           )}
-          <div className={`ws-grid layout-${twoUp ? ws.layout : "single"}`}>
+          <div
+            ref={gridRef}
+            className={`ws-grid layout-${twoUp ? ws.layout : "single"} ${focus != null ? "focused" : ""}`}
+            style={twoUp && focus == null ? ({ "--split-a": `${ws.split}fr`, "--split-b": `${1 - ws.split}fr` } as CSSProperties) : undefined}
+          >
           {shown.map((i) => {
             const d = datas[i];
             const spec = ws.panes[i];
             return (
               <section
                 key={i}
-                className={`ws-pane ${twoUp && active === i ? "active" : ""}`}
+                className={`ws-pane ${twoUp && active === i ? "active" : ""} ${focus != null && focus !== i ? "ws-pane-hidden" : ""}`}
                 aria-label={`${spec.symbol} chart`}
                 onMouseDownCapture={() => twoUp && ws.active !== i && setWs((cur) => ({ ...cur, active: i }))}
               >
@@ -539,6 +566,8 @@ export function TradePage() {
                   structureTrend={trendFor(i)}
                   active={active === i}
                   showActive={twoUp}
+                  maximized={focus === i}
+                  onToggleMaximize={twoUp ? () => setMaximized((m) => (m === i ? null : i)) : undefined}
                 />
                 {d.error && !d.exchange && <ErrorNotice error={d.error as never} onRetry={d.reloadResolve} />}
                 <OiStrip
@@ -596,6 +625,29 @@ export function TradePage() {
               </section>
             );
           })}
+          {twoUp && focus == null && (
+            <div
+              className="ws-splitter"
+              role="separator"
+              aria-label="Resize charts"
+              aria-orientation={ws.layout === "stack" ? "horizontal" : "vertical"}
+              aria-valuemin={20}
+              aria-valuemax={80}
+              aria-valuenow={Math.round(ws.split * 100)}
+              tabIndex={0}
+              title="Drag to resize the charts; double-click to even them out"
+              onPointerDown={dragSplit}
+              onDoubleClick={() => setWs((cur) => setSplit(cur, 0.5))}
+              onKeyDown={(e: ReactKeyboardEvent) => {
+                const back = ws.layout === "stack" ? "ArrowUp" : "ArrowLeft";
+                const fwd = ws.layout === "stack" ? "ArrowDown" : "ArrowRight";
+                if (e.key === back || e.key === fwd) {
+                  e.preventDefault();
+                  setWs((cur) => setSplit(cur, cur.split + (e.key === fwd ? 0.05 : -0.05)));
+                }
+              }}
+            />
+          )}
           </div>
           <NotesPanel
             key={`${ws.panes[active].segment}:${ws.panes[active].symbol}`}

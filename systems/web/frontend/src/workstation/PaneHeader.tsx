@@ -38,11 +38,14 @@ type Props = {
   /** A fixed list of intervals to show as buttons (the Scan page's inline chart). Left out, the chart shows
    * the person's FAVOURITE intervals as buttons, plus a star menu that lists every interval. */
   intervals?: IntervalDef[];
+  /** Fill the chart area with this chart (and back). Left out, no button. */
+  maximized?: boolean;
+  onToggleMaximize?: () => void;
 };
 
 /** The title bar of one chart: which instrument, its price, whether it is live, the interval, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
-export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals, contract = null, expiry = null }: Props) {
+export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals, contract = null, expiry = null, maximized = false, onToggleMaximize }: Props) {
   const favorites = useFavoriteIntervals();
   // A fixed list wins; otherwise the favourites, in size order, plus the size on screen when it is not one of them
   // (so the active size is never invisible).
@@ -117,6 +120,19 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
             <span className="sr-only">{live ? "Live" : "Updating every 5 seconds"}</span>
           </span>
         </span>
+      )}
+      {onToggleMaximize && (
+        <button
+          className="pane-max"
+          aria-label={maximized ? `Restore ${symbol} chart` : `Maximize ${symbol} chart`}
+          aria-pressed={maximized}
+          title={maximized ? "Back to two charts" : "Fill the chart area with this chart"}
+          onClick={onToggleMaximize}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            {maximized ? <path d="M6 2v4H2M10 14v-4h4M6 6 2 2M10 10l4 4" /> : <path d="M2 6V2h4M14 10v4h-4M2 2l4 4M14 14l-4-4" />}
+          </svg>
+        </button>
       )}
     </div>
   );

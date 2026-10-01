@@ -1063,6 +1063,49 @@ table.t th {
 .ws-grid.layout-stack {
   grid-template-columns: minmax(0, 1fr);
 }
+.ws-grid.layout-side:not(.focused) {
+  grid-template-columns: var(--split-a, 1fr) 8px var(--split-b, 1fr);
+  gap: 0;
+}
+.ws-grid.layout-stack:not(.focused) {
+  grid-template-rows: var(--split-a, 1fr) 8px var(--split-b, 1fr);
+  grid-auto-rows: auto;
+  gap: 0;
+}
+.ws-grid > .ws-pane:nth-of-type(2) {
+  order: 2;
+}
+.ws-splitter {
+  order: 1;
+  background: transparent;
+  border-radius: 4px;
+  touch-action: none;
+}
+.ws-grid.layout-side .ws-splitter {
+  cursor: col-resize;
+}
+.ws-grid.layout-stack .ws-splitter {
+  cursor: row-resize;
+}
+.ws-splitter:hover,
+.ws-splitter:focus-visible {
+  background: var(--accent, #4c8dff);
+  opacity: 0.6;
+  outline: none;
+}
+.ws-grid.focused {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.ws-grid > .ws-pane-hidden {
+  display: none;
+}
+.pane-max {
+  margin-left: 6px;
+  padding: 2px 5px;
+  display: inline-flex;
+  align-items: center;
+}
 .workstation:not(.wide) .ws-grid {
   grid-auto-rows: 420px;
   flex: none;

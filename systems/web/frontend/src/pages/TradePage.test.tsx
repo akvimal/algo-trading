@@ -2244,6 +2244,62 @@ describe("your trades on the chart", () => {
   });
 });
 
+describe("resizing and maximizing two charts", () => {
+  beforeEach(() => screenIs(true));
+  const grid = () => screen.getAllByTestId("chart-pane")[0].closest(".ws-grid") as HTMLElement;
+  const pair = async (user: ReturnType<typeof userEvent.setup>) => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+  };
+
+  it("has a divider only with two charts, and moves it with the arrow keys, remembering where it was left", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    const bar = screen.getByRole("separator", { name: "Resize charts" });
+    expect(bar).toHaveAttribute("aria-valuenow", "50");
+    bar.focus();
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(bar).toHaveAttribute("aria-valuenow", "60");
+    expect(grid().style.getPropertyValue("--split-a")).toBe("0.6fr");
+    expect(JSON.parse(localStorage.getItem("web.workstation") ?? "{}").split).toBeCloseTo(0.6);
+  });
+
+  it("keeps both charts usable: the divider stops at 20% and 80%, and double-click evens it out", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    const bar = screen.getByRole("separator", { name: "Resize charts" });
+    bar.focus();
+    await user.keyboard("{ArrowLeft>10/}");
+    expect(bar).toHaveAttribute("aria-valuenow", "20");
+    await user.dblClick(bar);
+    expect(bar).toHaveAttribute("aria-valuenow", "50");
+  });
+
+  it("maximizes one chart, hides the other without unloading it, and restores", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    await user.click(screen.getByRole("button", { name: /^Maximize BANKNIFTY chart/ }));
+    expect(grid()).toHaveClass("focused");
+    expect(screen.getAllByTestId("chart-pane")).toHaveLength(2); // both still mounted
+    expect(screen.getByRole("region", { name: "NIFTY chart" })).toHaveClass("ws-pane-hidden");
+    expect(screen.getByRole("region", { name: "BANKNIFTY chart" })).not.toHaveClass("ws-pane-hidden");
+    expect(screen.queryByRole("separator", { name: "Resize charts" })).not.toBeInTheDocument();
+    expect(FakeChart.disposed).toBe(0);
+    await user.click(screen.getByRole("button", { name: /^Restore BANKNIFTY chart/ }));
+    expect(grid()).not.toHaveClass("focused");
+    expect(screen.getByRole("separator", { name: "Resize charts" })).toBeInTheDocument();
+  });
+
+  it("has no maximize button with one chart", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("button", { name: /^Maximize/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("the OI group on the rail", () => {
   beforeEach(() => screenIs(true));
   const rail = () => within(screen.getByRole("group", { name: "Open interest" }));

@@ -424,6 +424,22 @@ export type DisciplineTrade = {
   emotion_tag: Feeling | null;
   needs_emotion: boolean;
 };
+/** One habit rewarded over a run of trades. Motivation only: it is not connected to the live-trading gate. */
+export type Credential = {
+  key: string;
+  label: string;
+  blurb: string;
+  unit: string;
+  count: number;
+  level: "bronze" | "silver" | "gold" | null;
+  next_level: "bronze" | "silver" | "gold" | null;
+  next_at: number | null;
+  best_count: number;
+  best_level: "bronze" | "silver" | "gold" | null;
+  lapsed: boolean;
+  available: boolean;
+  detail: string | null;
+};
 export type DisciplineV2 = {
   segment: Segment;
   scope: "epoch" | "all";
@@ -437,5 +453,6 @@ export type DisciplineV2 = {
   emotion_counts: Partial<Record<Feeling, number>>;
   needs_emotion: number;
   coaching: { mistake: string | null; emotion: string | null; count: number; line: string } | null;
+  credentials: Credential[];
   trades: DisciplineTrade[];
 };

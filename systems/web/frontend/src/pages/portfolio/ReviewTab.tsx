@@ -1,5 +1,6 @@
 import type { DisciplineV2, Performance } from "../../api/types";
 import type { Resource } from "../../hooks/useResource";
+import { CredentialsShelf } from "../../components/CredentialsShelf";
 import { DisciplineCard } from "../../components/DisciplineCard";
 import { Signed } from "../../components/bits";
 import { Stat } from "../../components/Stat";
@@ -18,6 +19,7 @@ export function ReviewTab({ perf, discipline, trades, onSaved }: Props) {
   return (
     <div className="stack">
       <DisciplineCard resource={discipline} />
+      {discipline.data && <CredentialsShelf credentials={discipline.data.credentials ?? []} />}
 
       {p && (
         <div className="card">

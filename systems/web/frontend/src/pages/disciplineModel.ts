@@ -1,4 +1,4 @@
-import type { DisciplineTrade, DisciplineV2, Feeling } from "../api/types";
+import type { Credential, DisciplineTrade, DisciplineV2, Feeling } from "../api/types";
 
 export const EMOTION_ROWS = [
   { key: "greed", label: "Greed", help: "Sizing up, widening a stop, pushing a target out, overtrading, trading past your loss limit" },
@@ -80,4 +80,29 @@ export function whatIfText(w: { extra_r: number; target_reached: boolean | null 
   if (!w) return null;
   if (w.extra_r <= 0) return "Price did not go further your way after you left.";
   return `Price went another ${w.extra_r.toFixed(1)}R your way after you left${w.target_reached ? ", and reached your target" : ""}.`;
+}
+
+export const LEVEL_WORD = { bronze: "Bronze", silver: "Silver", gold: "Gold" } as const;
+
+/** How far along a credential's next level is, as 0-100 (a top level reads as full). */
+export function credentialProgress(c: Credential): number {
+  if (c.next_at == null) return 100;
+  return Math.max(0, Math.min(100, Math.round((c.count / c.next_at) * 100)));
+}
+
+/** The line under a credential's bar: where the run stands, or what is needed to earn it. */
+export function credentialLine(c: Credential): string {
+  if (!c.available) return c.detail ?? "Not available yet.";
+  if (c.key === "calm_under_pressure") {
+    const next = c.next_at != null ? ` ${c.next_level ? LEVEL_WORD[c.next_level] : "The next level"} needs ${c.next_at} trades with few fear mistakes.` : "";
+    return `${c.detail ?? ""}${next}`.trim();
+  }
+  if (c.next_at == null) return `${c.count} ${c.unit}.`;
+  return `${c.count} of ${c.next_at} ${c.unit}.`;
+}
+
+/** Said once a level has been held and the run was broken, so a lapse reads as a lapse and not as nothing. */
+export function lapseLine(c: Credential): string | null {
+  if (!c.lapsed || !c.best_level) return null;
+  return `You held ${LEVEL_WORD[c.best_level]} before. The run broke at ${c.best_count}, so it starts again.`;
 }

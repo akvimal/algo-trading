@@ -1142,6 +1142,25 @@ class DisciplineCoachingOut(BaseModel):
     line: str
 
 
+class CredentialOut(BaseModel):
+    """One micro-credential: a habit rewarded over a run of trades, with Bronze/Silver/Gold levels. Motivation only - it is not
+    connected to the live-trading gate."""
+
+    key: str
+    label: str
+    blurb: str
+    unit: str
+    count: int
+    level: Optional[str] = None
+    next_level: Optional[str] = None
+    next_at: Optional[int] = None
+    best_count: int = 0
+    best_level: Optional[str] = None
+    lapsed: bool = False
+    available: bool = True
+    detail: Optional[str] = None
+
+
 class DisciplineV2Out(BaseModel):
     """Discipline v2: a behaviour score over the last 20 closed manual trades, split into greed, fear and patience. `score` is
     None below 5 trades. Never a function of profit."""
@@ -1158,4 +1177,5 @@ class DisciplineV2Out(BaseModel):
     emotion_counts: dict[str, int] = {}
     needs_emotion: int = 0
     coaching: Optional[DisciplineCoachingOut] = None
+    credentials: list[CredentialOut] = []
     trades: list[DisciplineTradeOut]

@@ -62,6 +62,12 @@ const dv2 = (score: number | null) => ({
   emotions: { greed: 88, fear: 64, patience: 71 }, categories: { risk: 90, entry: 70, management: 75, day: 80 },
   mistakes: { oversized: 2, tight_trail: 1, untagged: 1 }, week_mistakes: { oversized: 2 }, target_and_stop_moved: 0,
   emotion_counts: { fearful: 3, calm: 1 }, needs_emotion: score == null ? 0 : 1,
+  credentials: [
+    { key: "loss_acceptor", label: "Loss Acceptor", blurb: "Took the loss as planned.", unit: "losses taken as planned in a row", count: 12, level: "bronze", next_level: "silver", next_at: 25, best_count: 12, best_level: "bronze", lapsed: false, available: true, detail: null },
+    { key: "risk_keeper", label: "Risk Keeper", blurb: "Traded at the system size.", unit: "trades at the system size in a row", count: 3, level: null, next_level: "bronze", next_at: 20, best_count: 22, best_level: "bronze", lapsed: true, available: true, detail: null },
+    { key: "day_closer", label: "Day Closer", blurb: "You stopped at your loss limit.", unit: "loss-limit days respected in a row", count: 0, level: null, next_level: "bronze", next_at: 3, best_count: 0, best_level: null, lapsed: false, available: false, detail: "Set a daily loss limit on this account to earn it." },
+    { key: "calm_under_pressure", label: "Calm Under Pressure", blurb: "Few fear mistakes.", unit: "recent trades measured", count: 30, level: "bronze", next_level: "silver", next_at: 50, best_count: 30, best_level: "bronze", lapsed: false, available: true, detail: "Fear mistakes in your last 30 trades: 13%" },
+  ],
   coaching: { mistake: "oversized", emotion: "greed", count: 2, line: "This week you took more size than the system's risk sizing allowed (2 times in 4 trades). That is the one habit to work on next." },
   trades: [
     { id: "t1", kind: "position", symbol: "TCS", action: "BUY", exit_time: "2026-09-26T05:00:00Z", exit_reason: "stop_loss", exit_kind: "tight_trail", planned_rr: 2, exit_r: 0.6, score: 72, pnl: 180, mistakes: ["tight_trail"], flags: [], checks: [], what_if: { extra_r: 1.4, target_reached: true }, emotion_tag: null, needs_emotion: true },
@@ -250,6 +256,25 @@ describe("Review", () => {
     const infy = within(screen.getByRole("group", { name: "How did you feel about INFY?" }));
     expect(infy.queryByText("How did you feel?")).not.toBeInTheDocument();
     expect(infy.getByRole("button", { name: "Calm" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows the credentials shelf: levels, progress to the next, a lapse, and what needs setting up", async () => {
+    happy(62);
+    renderAt("/portfolio?tab=review");
+    await screen.findByText("62");
+    const shelf = within(screen.getByTestId("credentials-shelf"));
+    expect(shelf.getByText(/do not affect going live/)).toBeInTheDocument();
+    const acceptor = within(screen.getByTestId("credential-loss_acceptor"));
+    expect(acceptor.getByText("Bronze")).toBeInTheDocument();
+    expect(acceptor.getByRole("meter", { name: "Loss Acceptor" })).toHaveAttribute("aria-valuenow", "48"); // 12 of 25
+    expect(acceptor.getByText(/12 of 25 losses taken as planned in a row/)).toBeInTheDocument();
+    const keeper = within(screen.getByTestId("credential-risk_keeper"));
+    expect(keeper.getByText("Not yet")).toBeInTheDocument();
+    expect(keeper.getByText(/You held Bronze before. The run broke at 22/)).toBeInTheDocument();
+    const closer = within(screen.getByTestId("credential-day_closer"));
+    expect(closer.getByText(/Set a daily loss limit on this account/)).toBeInTheDocument();
+    expect(closer.queryByRole("meter")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("credential-calm_under_pressure")).getByText(/Fear mistakes in your last 30 trades: 13%/)).toBeInTheDocument();
   });
 
   it("shows what price did after an early exit, and each trade's exit in plain words", async () => {

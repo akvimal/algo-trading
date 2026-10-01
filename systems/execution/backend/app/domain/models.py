@@ -274,6 +274,9 @@ class PendingOrderCreate(BaseModel):
     entry_interval: Optional[str] = Field(default=None, max_length=8)
     # Minutes until it expires unrecognised; None = the server default (24h). Capped by config.
     expires_in_minutes: Optional[int] = Field(default=None, ge=1)
+    # False (default): if a position or option group on this instrument is open when the price is hit, the
+    # order is cancelled with a reason instead of stacking a second trade. True: add to it deliberately.
+    allow_stacking: bool = False
 
 
 class PendingOrderOut(BaseModel):
@@ -302,6 +305,7 @@ class PendingOrderOut(BaseModel):
     last_checked_at: Optional[datetime] = None
     position_id: Optional[str] = None
     option_group_id: Optional[str] = None
+    allow_stacking: bool = False
 
 
 class RequirementOut(BaseModel):

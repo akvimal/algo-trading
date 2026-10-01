@@ -1069,7 +1069,9 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     last_price       NUMERIC,
     last_checked_at  TIMESTAMPTZ,
     position_id      UUID,
-    option_group_id  UUID
+    option_group_id  UUID,
+    -- May this order open a second position on an instrument already held? Default no: see migrations/030.
+    allow_stacking   BOOLEAN NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);

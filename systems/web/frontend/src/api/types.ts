@@ -456,3 +456,17 @@ export type DisciplineV2 = {
   credentials: Credential[];
   trades: DisciplineTrade[];
 };
+
+/** GET /discipline/{segment}/today - what the ticket's plan block says about today, by the same rules the discipline score uses. */
+export type Pretrade = {
+  segment: Segment;
+  symbol: string;
+  cooldown_minutes_left: number;
+  cooldown_minutes: number;
+  trades_today: number;
+  trade_cap: number;
+  loss_limit: number | null;
+  lost_today: number;
+  loss_room: number | null;
+  off_window: boolean;
+};

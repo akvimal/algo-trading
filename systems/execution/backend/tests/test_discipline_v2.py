@@ -383,3 +383,48 @@ def test_one_answer_is_too_few_to_say_anything_about():
     now = minutes(10 * 60)
     trades = [trade(0, exit_reason="manual", exit_price=104.0, pnl=40, emotion_tag="fearful"), trade(1, exit_reason="manual", exit_price=104.0, pnl=40)]
     assert "You tagged" not in dv2.summarize(dv2.evaluate_all(trades, CFG), now=now)["coaching"]["line"]
+
+
+# ---- the ticket's "Today" row ---------------------------------------------------------------------------------------------------
+
+NOW = datetime(2026, 10, 1, 5, 20, tzinfo=timezone.utc)  # 10:50 IST
+
+
+def pre(entries=(), closed=(), symbol="RELIANCE", segment="NSE", cfg=CFG, now=NOW):
+    return dv2.pretrade_state(now, symbol, segment, list(entries), list(closed), cfg)
+
+
+def test_a_cooldown_runs_for_the_same_instrument_after_a_loss_and_counts_down():
+    out = pre(closed=[(NOW - timedelta(minutes=4), "RELIANCE", -50.0)])
+    assert out["cooldown_minutes_left"] == 11 and out["cooldown_minutes"] == 15
+
+
+def test_no_cooldown_after_a_win_after_the_wait_or_for_another_instrument():
+    assert pre(closed=[(NOW - timedelta(minutes=4), "RELIANCE", 50.0)])["cooldown_minutes_left"] == 0
+    assert pre(closed=[(NOW - timedelta(minutes=20), "RELIANCE", -50.0)])["cooldown_minutes_left"] == 0
+    assert pre(closed=[(NOW - timedelta(minutes=4), "TCS", -50.0)])["cooldown_minutes_left"] == 0
+
+
+def test_a_futures_contract_and_its_underlying_are_the_same_instrument_for_the_cooldown():
+    assert pre(closed=[(NOW - timedelta(minutes=2), "BANKNIFTY-Oct2026-FUT", -50.0)], symbol="BANKNIFTY")["cooldown_minutes_left"] == 13
+
+
+def test_trades_today_and_the_room_left_under_the_loss_limit():
+    cfg = DisciplineConfig(min_rr=2.0, cooldown_minutes=15, max_trades_per_day=6, daily_loss_limit=500.0, timezone="Asia/Kolkata")
+    entries = [(NOW - timedelta(hours=2), "A"), (NOW - timedelta(hours=1), "B"), (NOW - timedelta(days=1), "C")]
+    closed = [(NOW - timedelta(minutes=50), "A", -120.0), (NOW - timedelta(minutes=40), "B", 300.0), (NOW - timedelta(days=1), "C", -999.0)]
+    out = pre(entries, closed, cfg=cfg)
+    assert out["trades_today"] == 2 and out["trade_cap"] == 6
+    assert out["lost_today"] == 120.0 and out["loss_room"] == 380.0 and out["loss_limit"] == 500.0
+
+
+def test_no_loss_limit_means_no_room_figure():
+    out = pre()
+    assert out["loss_limit"] is None and out["loss_room"] is None
+
+
+def test_the_first_and_last_minutes_of_the_nse_session_are_flagged_and_other_markets_are_not():
+    early = datetime(2026, 10, 1, 3, 50, tzinfo=timezone.utc)  # 09:20 IST
+    assert pre(now=early)["off_window"] is True
+    assert pre(now=NOW)["off_window"] is False
+    assert pre(now=early, segment="CRYPTO")["off_window"] is False

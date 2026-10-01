@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, planStatus, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, planRows, planStatus, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -359,5 +359,54 @@ describe("planStatus", () => {
 describe("the live-stop message", () => {
   it("is the one the server sends", () => {
     expect(STOP_WIDEN_MESSAGE).toBe("The stop can only move toward price once the order is live.");
+  });
+});
+
+describe("planRows", () => {
+  const rows = (over: Partial<Ticket>, today: Parameters<typeof planRows>[3] = null, c = ctx()) => {
+    const t = ticket(over);
+    return planRows(t, analyzeTicket(t, c), c, today);
+  };
+  const row = (r: ReturnType<typeof rows>, key: string) => r.find((x) => x.key === key)!;
+  const today = (over: object = {}) => ({
+    segment: "NSE" as const, symbol: "RELIANCE", cooldown_minutes_left: 0, cooldown_minutes: 15, trades_today: 1, trade_cap: 6,
+    loss_limit: null, lost_today: 0, loss_room: null, off_window: false, ...over,
+  });
+
+  it("lists stop, size, reward, setup and entry in the order the score checks them", () => {
+    expect(rows({}).map((r) => r.key)).toEqual(["stop", "size", "reward", "setup", "entry"]);
+  });
+
+  it("calls a missing stop bad for a spot or future order and only a caution for an option", () => {
+    expect(row(rows({}), "stop")).toMatchObject({ status: "bad" });
+    expect(row(rows({ strategy: "naked" }), "stop")).toMatchObject({ status: "warn" });
+  });
+
+  it("measures size against the system size: at it good, above it a caution, far below it for information", () => {
+    expect(row(rows({ stop: "990" }), "size")).toMatchObject({ status: "good" });
+    expect(row(rows({ stop: "990", lots: "500" }), "size")).toMatchObject({ status: "warn", detail: expect.stringContaining("Above the system size (100)") });
+    expect(row(rows({ stop: "990", lots: "20" }), "size")).toMatchObject({ status: "info", detail: expect.stringContaining("Below the system size (100)") });
+    expect(row(rows({ stop: "990", lots: "90" }), "size")).toMatchObject({ status: "good" });
+    expect(row(rows({}), "size")).toMatchObject({ status: "na" });
+  });
+
+  it("warns when even the smallest size is over the plan", () => {
+    expect(row(rows({ stop: "980" }, null, ctx({ lotSize: 65 })), "size")).toMatchObject({ status: "warn", detail: expect.stringContaining("Even the smallest size") });
+  });
+
+  it("checks reward against the minimum, and says when there is no target", () => {
+    expect(row(rows({ stop: "990", target: "1030" }), "reward").status).toBe("good");
+    expect(row(rows({ stop: "990", target: "1010" }), "reward").status).toBe("warn");
+    expect(row(rows({ stop: "990" }), "reward")).toMatchObject({ status: "warn", detail: "No target: the reward is unplanned." });
+  });
+
+  it("adds the day's rows from the server: a cooldown only while it runs, the cap, the loss limit, the session edge", () => {
+    expect(rows({}, today()).map((r) => r.key)).toEqual(["stop", "size", "reward", "setup", "entry", "trades", "loss"]);
+    const busy = rows({ stop: "990", lots: "100" }, today({ cooldown_minutes_left: 7, trades_today: 6, loss_limit: 1000, lost_today: 800, loss_room: 200, off_window: true }));
+    expect(busy.map((r) => r.key)).toEqual(["stop", "size", "reward", "setup", "entry", "cooldown", "trades", "loss", "window"]);
+    expect(row(busy, "cooldown").detail).toBe("7 min left after your loss on RELIANCE.");
+    expect(row(busy, "trades")).toMatchObject({ status: "warn", detail: "This would be trade 7, over your cap of 6." });
+    expect(row(busy, "loss").status).toBe("warn"); // risking 1000 against 200 of room
+    expect(row(rows({}, today({ loss_limit: 1000, lost_today: 1000, loss_room: 0 })), "loss").status).toBe("bad");
   });
 });

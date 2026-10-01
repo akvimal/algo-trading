@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
 import { getAccounts } from "../api/settings";
 import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel } from "../api/trade";
-import type { OptionGroup, Position, Segment } from "../api/types";
+import type { OptionGroup, Position, Pretrade, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
 import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, structureIsOn, toggleStructureOn, type StructureConfig } from "../chart/config";
@@ -187,6 +187,12 @@ export function TradePage() {
   }
 
   // ---- account, budget, waiting orders ----
+  // What today looks like for the ticket's plan block (cooldown, trades so far, loss-limit room): the server's rules, the same ones the score uses.
+  const pretrade = useResource(
+    () => api<Pretrade>("execution", `/discipline/${ws.panes[active].segment}/today?symbol=${encodeURIComponent(ws.panes[active].symbol)}`),
+    [ws.panes[active].segment, ws.panes[active].symbol],
+    { pollMs: 30_000 },
+  );
   const accounts = useResource(getAccounts, []);
   const waiting = useResource(listWaitingOrders, [], { pollMs: 15_000 });
   const activeSpec = ws.panes[active];
@@ -735,12 +741,14 @@ export function TradePage() {
                   setPickField(f);
                 }}
                 onAddLine={addLine}
+                today={pretrade.data ?? null}
                 suggested={suggested}
                 holding={hasOpenForInstrument ? openHolding : null}
                 onPlaced={() => {
                   waiting.reload();
                   today.reload();
                   tradeRows.reload();
+                  pretrade.reload();
                   // The chart's "plan" lines (entry/stop/target) are drawn straight from this
                   // draft - left alone, they kept showing the just-placed order's prices
                   // indefinitely (nothing else ever cleared them; the ticket itself only resets

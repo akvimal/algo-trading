@@ -1179,3 +1179,19 @@ class DisciplineV2Out(BaseModel):
     coaching: Optional[DisciplineCoachingOut] = None
     credentials: list[CredentialOut] = []
     trades: list[DisciplineTradeOut]
+
+
+class PretradeOut(BaseModel):
+    """GET /discipline/{segment}/today - what the order ticket needs to know before an order is placed, by the same rules the
+    discipline score uses. Nothing here blocks an order."""
+
+    segment: str
+    symbol: str
+    cooldown_minutes_left: int
+    cooldown_minutes: int
+    trades_today: int
+    trade_cap: int
+    loss_limit: Optional[float] = None
+    lost_today: float
+    loss_room: Optional[float] = None
+    off_window: bool

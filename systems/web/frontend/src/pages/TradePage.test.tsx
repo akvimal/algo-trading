@@ -38,6 +38,7 @@ let oiSummaryPcr: number | null;
 let oiBuildups: { call: string | null; put: string | null } | null;
 let sentHistPoints: any[];
 let levelFails: string | null;
+let pretrade: Record<string, unknown>;
 // Unset (null) for most tests - /auth/me then falls through to the generic 404 below, same as
 // before this existed; OnboardingGate opens the app anyway on a failed profile read, and the
 // ticket's defaults (future/naked) match what an unset preference already produced.
@@ -75,6 +76,7 @@ beforeEach(() => {
   oiBuildups = null;
   sentHistPoints = [];
   levelFails = null;
+  pretrade = { segment: "NSE", symbol: "RELIANCE", cooldown_minutes_left: 0, cooldown_minutes: 15, trades_today: 1, trade_cap: 6, loss_limit: null, lost_today: 0, loss_room: null, off_window: false };
   profilePrefs = null;
   structure = { ...emptyStructure };
   waiting = [];
@@ -155,6 +157,7 @@ beforeEach(() => {
       if (url.endsWith("/option-groups/manual")) return placeOption(body);
       if (url.includes("/spot-stop-loss") || url.includes("/spot-target")) return attachFails ? json({ detail: "no" }, 409) : json({ ok: true });
       // moving the stop or target of an open trade
+      if (url.includes("/discipline/") && url.includes("/today")) return json(pretrade);
       const trail = /\/(positions|option-groups)\/([^/?]+)\/auto-trail/.exec(url);
       if (method === "PUT" && trail) {
         if (levelFails) return json({ detail: levelFails }, 422);
@@ -227,7 +230,8 @@ describe("the page", () => {
     expect(screen.getByTestId("chart-summary")).toHaveTextContent("RELIANCE, 15m candles. Last price 1,000.");
     const t = await ticket();
     expect(t.getByText("Paper order")).toBeInTheDocument();
-    expect(t.getByText("Before you place")).toBeInTheDocument();
+    expect(t.getByText("Your plan")).toBeInTheDocument();
+    expect(t.queryByText("Before you place")).not.toBeInTheDocument();
     expect(t.getByLabelText("Number of shares")).toBeInTheDocument(); // a stock: shares, not lots
     expect(t.queryByRole("button", { name: "Option" })).not.toBeInTheDocument(); // no options on a stock
   });
@@ -309,16 +313,17 @@ describe("the page", () => {
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    const checks = within(await t.findByTestId("checks"));
+    const checks = within(await t.findByTestId("plan-block"));
     await waitFor(() => expect(checks.getByText("Regime: trending up")).toBeInTheDocument());
-    expect(checks.getByText(/4 of 4 in favour/)).toBeInTheDocument();
+    expect(checks.getByText("You are trading with the trend.")).toBeInTheDocument();
+    expect(checks.queryByText(/in favour/)).not.toBeInTheDocument(); // no tally
     await user.click(t.getByRole("button", { name: "Sell" }));
     await user.clear(t.getByLabelText("Stop-loss"));
     await user.clear(t.getByLabelText("Target"));
     await user.type(t.getByLabelText("Stop-loss"), "1010");
     await user.type(t.getByLabelText("Target"), "970");
     expect(await checks.findByText("You are trading against the trend.")).toBeInTheDocument();
-    expect(checks.getByRole("img", { name: "Against" })).toBeInTheDocument();
+    expect(checks.queryByRole("img", { name: "Against" })).not.toBeInTheDocument(); // the market read is information, never a verdict
   });
 });
 
@@ -329,7 +334,7 @@ describe("placing", () => {
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    await user.selectOptions(t.getByLabelText(/Why this trade/), "Breakout");
+    await user.click(within(t.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
     await user.type(t.getByLabelText(/Reason/), "Retested the daily OB and held.");
     await user.click(t.getByRole("button", { name: "4" }));
     await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
@@ -557,6 +562,77 @@ async function pickLayout(user: ReturnType<typeof userEvent.setup>, name: string
 
 describe("the plan on the ticket", () => {
   beforeEach(() => screenIs(true));
+
+  it("is one block: the plan chip as its header, a row for each thing you control, and no tally", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const block = within(t.getByTestId("plan-block"));
+    expect(block.getByText("Your plan")).toBeInTheDocument();
+    expect(block.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
+    expect(block.getByText("No stop: your risk is open-ended.")).toBeInTheDocument();
+    expect(block.getByText("No target: the reward is unplanned.")).toBeInTheDocument();
+    expect(block.getByText("Not tagged.")).toBeInTheDocument();
+    expect(block.getByText("At the market.")).toBeInTheDocument();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Target"), "1030");
+    await user.click(within(block.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
+    expect(await block.findByText("Tagged Breakout.")).toBeInTheDocument();
+    expect(block.getByText(/At the system size/)).toBeInTheDocument();
+    expect(block.getByText(/3\.0 to 1, your minimum is/)).toBeInTheDocument();
+    expect(block.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R 3\.0/);
+    expect(block.queryByText(/in favour/)).not.toBeInTheDocument();
+  });
+
+  it("warns when the size was typed above the system size", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Number of shares"), "5000");
+    expect(await within(t.getByTestId("plan-block")).findByText(/Above the system size/)).toBeInTheDocument();
+    expect(within(t.getByTestId("plan-block")).getAllByRole("img", { name: "Caution" }).length).toBeGreaterThan(0);
+  });
+
+  it("shows today: a cooldown with its minutes, trades against the cap, and room under the loss limit", async () => {
+    pretrade = { ...pretrade, cooldown_minutes_left: 9, trades_today: 6, trade_cap: 6, loss_limit: 2000, lost_today: 1500, loss_room: 500 };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const block = within(t.getByTestId("plan-block"));
+    expect(await block.findByText("9 min left after your loss on RELIANCE.")).toBeInTheDocument();
+    expect(block.getByText("This would be trade 7, over your cap of 6.")).toBeInTheDocument();
+    expect(block.getByText(/₹500 of room left today/)).toBeInTheDocument();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Number of shares"), "100"); // risks 1000 against 500 of room
+    expect(await block.findByText(/could take you past it/)).toBeInTheDocument();
+    // none of it blocks the order
+    expect(t.getByRole("button", { name: /Buy RELIANCE, paper order/ })).toBeEnabled();
+  });
+
+  it("flags the first and last minutes of the session, and a reached loss limit", async () => {
+    pretrade = { ...pretrade, off_window: true, loss_limit: 2000, lost_today: 2000, loss_room: 0 };
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const block = within(t.getByTestId("plan-block"));
+    expect(await block.findByText("Outside the middle of the session: the first 10 minutes, the last 15, or after hours.")).toBeInTheDocument();
+    expect(block.getByText("Your daily loss limit is already reached.")).toBeInTheDocument();
+  });
+
+  it("keeps the market read under a collapsed heading, as information that is never scored", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(within(t.getByTestId("plan-block")).getByText("Regime: trending up")).toBeInTheDocument());
+    const details = within(t.getByTestId("plan-block")).getByText("Market read").closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    expect(within(details).getByText(/not scored and never blocks an order/)).toBeInTheDocument();
+  });
+
+  it("asks the server about today for the instrument being traded", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await ticket();
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/discipline/NSE/today?symbol=RELIANCE"))).toBe(true));
+  });
 
   it("shows how complete the plan is as it is filled in", async () => {
     const user = userEvent.setup();

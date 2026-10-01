@@ -6,10 +6,11 @@ import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
 import { NOTES_MAX, SETUP_TAGS } from "../pages/journalModel";
 import {
-  ACTION_WORD, analyzeTicket, buildOrder, checkList, favorable, optionsAvailable, planStatus,
+  ACTION_WORD, analyzeTicket, buildOrder, checkList, optionsAvailable, planRows, planStatus,
   type Action, type BuildMeta, type DayBudget, type Moneyness, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
 import type { PriceField } from "../chart/ChartPane";
+import type { Pretrade } from "../api/types";
 import { TextField } from "./Field";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
@@ -20,8 +21,8 @@ const MONEYNESS: { value: Moneyness; label: string }[] = [
   { value: "OTM2", label: "2 strikes out of the money" },
 ];
 
-const STATUS_MARK = { good: "✓", warn: "!", bad: "✕", na: "–" } as const;
-const STATUS_WORD = { good: "In favour", warn: "Caution", bad: "Against", na: "Not applicable" } as const;
+const STATUS_MARK = { good: "✓", warn: "!", bad: "✕", na: "–", info: "·" } as const;
+const STATUS_WORD = { good: "In favour", warn: "Caution", bad: "Against", na: "Not applicable", info: "For information" } as const;
 
 type Props = {
   ticket: Ticket;
@@ -35,6 +36,8 @@ type Props = {
   onPickField?: (f: PriceField | null) => void;
   /** Put a starting line for this field on the chart, to drag to the right price. */
   onAddLine?: (f: PriceField) => void;
+  /** What today looks like (a cooldown running, trades so far against the cap, room under the loss limit); left out where the page does not load it. */
+  today?: Pretrade | null;
   /** The price "Suggest" first put on each field: once the person has changed it, a way back to that suggestion. */
   suggested?: Partial<Record<PriceField, number>>;
   /** What the person already holds open on this instrument (e.g. "1 open NIFTY position"), if anything:
@@ -77,7 +80,7 @@ type Props = {
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, suggested = {}, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -113,7 +116,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
         </button>
       </span>
     ) : undefined;
-  const fav = favorable(checks);
+  const marketRead = checks.filter((c) => c.key === "regime" || c.key === "trend");
   const stock = meta.instrument === "spot";
   const options = optionsForced ?? optionsAvailable(ctx.symbol);
   const isOption = t.strategy !== "future";
@@ -285,28 +288,65 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
       )}
 
       {!simplifiedOption && (
-        <div className="checks" data-testid="checks">
-          <div className="row" style={{ marginBottom: 6 }}>
-            <strong>Before you place</strong>
-            <span className="dim">
-              {fav.good} of {fav.total} in favour
-            </span>
-          </div>
+        <div className="checks plan-block" data-testid="plan-block">
+          {(() => {
+            const plan = planStatus(t, a, ctx);
+            return (
+              <div className={`plan-chip plan-head ${plan?.tone ?? ""}`} data-testid="plan-chip" role="status">
+                <strong>Your plan</strong>
+                <span>{plan?.text ?? ""}</span>
+              </div>
+            );
+          })()}
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {checks.map((c) => (
-              <li key={c.key} className="check-item">
-                <span className={`mark ${c.status}`} role="img" aria-label={STATUS_WORD[c.status]}>
-                  {STATUS_MARK[c.status]}
+            {planRows(t, a, ctx, today).map((r) => (
+              <li key={r.key} className="check-item">
+                <span className={`mark ${r.status}`} role="img" aria-label={STATUS_WORD[r.status]}>
+                  {STATUS_MARK[r.status]}
                 </span>
                 <span>
-                  {c.label}
+                  {r.label}
                   <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                    {c.detail}
+                    {r.detail}
                   </span>
+                  {r.key === "setup" && (
+                    <span className="chips" role="group" aria-label="Setup" style={{ marginTop: 4 }}>
+                      {SETUP_TAGS.map((s) => (
+                        <button key={s} aria-pressed={t.setupTag === s} onClick={() => set("setupTag", t.setupTag === s ? null : s)}>
+                          {s}
+                        </button>
+                      ))}
+                    </span>
+                  )}
                 </span>
               </li>
             ))}
           </ul>
+          {marketRead.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary className="faint" style={{ fontSize: 12 }}>
+                Market read
+              </summary>
+              <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
+                {marketRead.map((c) => (
+                  <li key={c.key} className="check-item">
+                    <span className="mark info" role="img" aria-label="For information">
+                      ·
+                    </span>
+                    <span>
+                      {c.label}
+                      <span className="faint" style={{ display: "block", fontSize: 12 }}>
+                        {c.detail}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                Information only: it is not scored and never blocks an order.
+              </p>
+            </details>
+          )}
         </div>
       )}
 
@@ -314,17 +354,19 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           it (Confidence) - a person asked for this back specifically: unlike Confidence, it's the
           one place to leave an actual note on WHY, not just how sure, and that's worth keeping
           even in a quick trade. */}
-      <label className="select-field" style={{ margin: "12px 0" }}>
-        <span className="dim">Why this trade? (helps your review later)</span>
-        <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
-          <option value="">Not tagged</option>
-          {SETUP_TAGS.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </label>
+      {simplifiedOption && (
+        <label className="select-field" style={{ margin: "12px 0" }}>
+          <span className="dim">Why this trade? (helps your review later)</span>
+          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
+            <option value="">Not tagged</option>
+            {SETUP_TAGS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label className="field" style={{ marginBottom: 12 }}>
         <span className="dim">Reason (optional)</span>
         <textarea
@@ -351,14 +393,6 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
         </>
       )}
 
-      {!simplifiedOption && (() => {
-        const plan = planStatus(t, a, ctx);
-        return plan ? (
-          <div className={`plan-chip ${plan.tone}`} data-testid="plan-chip" role="status">
-            {plan.text}
-          </div>
-        ) : null;
-      })()}
       {[...a.errors, ...a.warnings].length > 0 && (
         <ul className="hints" aria-live="polite">
           {a.errors.map((m) => (

@@ -2128,3 +2128,13 @@ Seven habits, each earned over a **run** of trades, newest backwards (`app/domai
   - **Day Closer**: on a day the day's losses reached the account's `max_daily_loss`, no trade was taken past it. **Needs that limit set**, otherwise it is shown as unavailable with a line saying so.
   - **Calm Under Pressure** is a rate, not a run: the share of the last 30 / 50 / 100 trades with a fear mistake (tight trail, early exit, target pulled in, sized-down habit) must be at most 25% / 15% / 8%, and for Bronze the newer half must be no worse than the older.
 - Tests: `tests/test_credentials.py`, `disciplineModel.test.ts`, and the shelf case in `PortfolioPage.test.tsx`. No migration: everything is computed from the existing trades and event log.
+
+### The ticket's "Your plan" block (replaces "Before you place")
+
+The trade form's old checklist mixed your plan with market reads, scored the market reads "in favour / against", showed an "N of M in favour" tally, and knew nothing about the discipline score. It is now **one block, "Your plan"** (`TradeTicket.tsx`, rows from `planRows` in `tradeModel.ts`), in the order the score checks things, and it **never blocks an order**:
+
+- **Header** is the plan chip (`planStatus`): "Planned - R:R 2.0 - risk 1.0%" / "Stop set - reward unplanned" / a warning. No tally.
+- **Rows**: *Stop* (missing = bad for spot/future, a caution for an option), *Size* (against the system size: at it good, above it a caution with the % of the plan it risks, far below it for information, "even the smallest size is over your plan" for the one-lot floor), *Reward* (against the account's minimum R:R, or "no target"), *Setup* (inline chips, replacing the separate "Why this trade?" dropdown, which stays only on the simplified Scan option ticket), *Entry* (waiting for a price vs at the market).
+- **Today**, from the server so the ticket and the score cannot disagree: `GET /discipline/{segment}/today?symbol=` (`discipline_v2.pretrade_state`) gives the **cooldown** minutes left on this instrument after a loss (a futures contract and its underlying are one instrument here), **trades today against the cap**, **room under the daily loss limit** (and "this trade could take you past it"), and whether it is the first 10 / last 15 minutes of the NSE session or after hours. Polled every 30 seconds, refreshed after an order.
+- **Market read** (regime, structure) is a **collapsed** line under the block, information only, never scored, never a verdict.
+- Cooldown and the trade cap **warn only**, by decision; a confirm tap was offered and declined.

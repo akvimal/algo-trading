@@ -5,9 +5,10 @@ since the latest equity reset; 'all' counts every trade."""
 
 import functools
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
@@ -16,8 +17,8 @@ from app.adapters.quotes.client import get_candle_history
 from app.auth import User, get_current_user
 from app.domain import credentials as cred
 from app.domain import discipline_v2 as dv2
-from app.domain.discipline_load import attach_what_ifs, load_trade_facts
-from app.domain.models import CredentialOut, DisciplineCheckOut, DisciplineCoachingOut, DisciplineTradeOut, DisciplineV2Out, WhatIfOut
+from app.domain.discipline_load import attach_what_ifs, load_trade_facts, todays_activity
+from app.domain.models import CredentialOut, DisciplineCheckOut, DisciplineCoachingOut, DisciplineTradeOut, DisciplineV2Out, PretradeOut, WhatIfOut
 from app.domain.performance import epoch_start
 
 router = APIRouter()
@@ -68,3 +69,26 @@ def get_discipline(
         coaching=DisciplineCoachingOut(**summary["coaching"]) if summary["coaching"] else None, trades=trades,
         credentials=[CredentialOut(**asdict(c)) for c in cred.evaluate(scores, cfg.daily_loss_limit, cfg.timezone)],
     )
+
+
+@router.get("/discipline/{segment}/today", response_model=PretradeOut)
+def get_pretrade(
+    segment: str,
+    symbol: str = Query(..., min_length=1, max_length=60),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """What the ticket's plan block shows about today before an order is placed: a cooldown running on this instrument, trades
+    today against the cap, room under the daily loss limit, and the first and last minutes of the NSE session."""
+    seg = segment.upper()
+    if seg not in _SEGMENTS:
+        raise HTTPException(status_code=404, detail=f"unknown segment {segment}")
+    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg).first()
+    cfg = dv2.DisciplineConfig.from_settings(
+        min_rr=float(account.min_reward_risk_ratio) if account is not None else 2.0,
+        daily_loss_limit=float(account.max_daily_loss) if account is not None and account.max_daily_loss is not None else None,
+    )
+    now = datetime.now(timezone.utc)
+    entries, closed = todays_activity(db, user.id, seg, now, cfg.timezone)
+    state = dv2.pretrade_state(now, symbol.upper(), seg, entries, closed, cfg)
+    return PretradeOut(segment=seg, symbol=symbol.upper(), **state)

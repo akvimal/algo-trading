@@ -2012,3 +2012,15 @@ table.t th {
   color: var(--warn, #d9a441);
   border-color: currentColor;
 }
+
+/* The plan block's header: the plan chip, as the block's title line. */
+.plan-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0 0 6px;
+}
+.mark.info {
+  color: var(--text-dim);
+}

@@ -10,6 +10,7 @@ Pure: facts in, scores out. `app/domain/discipline_load.py` builds the facts fro
 `what_if_after_exit` is given candles by its caller.
 """
 
+import math
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -467,3 +468,45 @@ def what_if_after_exit(t: TradeFacts, risk: Optional[float], candles: list[dict]
     if t.target0 is not None:
         reached = best >= t.target0 if buy else best <= t.target0
     return {"extra_r": round(max(0.0, extra), 2), "target_reached": reached}
+
+
+# ---- what the ticket needs to know before an order is placed --------------------------------------------------------------------
+
+
+def pretrade_state(
+    now: datetime,
+    symbol: str,
+    segment: str,
+    entries_today: list[tuple[datetime, str]],
+    closed: list[tuple[datetime, str, Optional[float]]],
+    cfg: DisciplineConfig,
+) -> dict:
+    """The "Today" part of the ticket's plan block, by the same rules the score uses so the two cannot disagree: is a cooldown
+    running on this instrument, how many trades today against the cap, how much room is left under the daily loss limit, and is it
+    the first or last minutes of the NSE session. `entries_today` are (entry time, symbol) of every manual trade opened today;
+    `closed` are (exit time, symbol, pnl) of manual trades closed today."""
+    local_day = _local(now, cfg.timezone).date()
+    base = symbol.split("-")[0].upper()  # a future's contract name and the underlying are the same instrument here
+    cooldown_left = 0
+    for exit_time, sym, pnl in closed:
+        if sym.split("-")[0].upper() == base and pnl is not None and pnl < 0 and exit_time <= now:
+            left = cfg.cooldown_minutes - (now - exit_time).total_seconds() / 60.0
+            if left > 0:
+                cooldown_left = max(cooldown_left, math.ceil(left))
+    trades_today = sum(1 for t, _ in entries_today if _local(t, cfg.timezone).date() == local_day)
+    lost = -sum(p for t, _, p in closed if p is not None and p < 0 and _local(t, cfg.timezone).date() == local_day)
+    probe = TradeFacts(
+        id="", kind="position", segment=segment, symbol=symbol, action="BUY", entry_time=now, exit_time=now, exit_reason=None,
+        order_type=None, entry_price=None, exit_price=None, quantity=None, system_quantity=None, stop0=None, target0=None,
+        stop_final=None, target_final=None, pnl=None, entry_setup_tag=None, reviewed=False,
+    )
+    return {
+        "cooldown_minutes_left": cooldown_left,
+        "cooldown_minutes": cfg.cooldown_minutes,
+        "trades_today": trades_today,
+        "trade_cap": cfg.max_trades_per_day,
+        "loss_limit": cfg.daily_loss_limit,
+        "lost_today": lost,
+        "loss_room": None if cfg.daily_loss_limit is None else max(0.0, cfg.daily_loss_limit - lost),
+        "off_window": _off_window(probe, cfg.timezone) is True,
+    }

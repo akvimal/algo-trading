@@ -2,6 +2,7 @@
 segment (single spot/future positions, and whole option groups) with their stop/target move logs."""
 
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
@@ -95,3 +96,30 @@ def attach_what_ifs(scores: list[dv2.TradeScore], fetch: CandleFetch, limit: int
         if result is not None:
             out[t.id] = result
     return out
+
+
+def todays_activity(db: Session, user_id, segment: str, now: datetime, tz: str) -> tuple[list[tuple[datetime, str]], list[tuple[datetime, str, Optional[float]]]]:
+    """What a user did today (in `tz`): the entries of every manual trade opened today, and the closes (with P&L) of manual trades
+    closed today. Option groups count under their underlying. Rejected orders are not trades."""
+    P, G = db_models.Position, db_models.OptionPositionGroup
+    day = now.astimezone(ZoneInfo(tz)).date()
+    start = datetime.combine(day, datetime.min.time(), tzinfo=ZoneInfo(tz)) - timedelta(hours=1)  # a little slack; filtered below
+    positions = (
+        db.query(P)
+        .filter(P.user_id == user_id, P.strategy_id.is_(None), P.segment == segment, P.option_group_id.is_(None), P.status.in_(("OPEN", "CLOSED")), P.entry_time >= start)
+        .all()
+    )
+    groups = db.query(G).filter(G.user_id == user_id, G.strategy_id.is_(None), G.segment == segment, G.status.in_(("OPEN", "CLOSED")), G.created_at >= start).all()
+    entries: list[tuple[datetime, str]] = []
+    closed: list[tuple[datetime, str, Optional[float]]] = []
+    for p in positions:
+        if not p.auto_traded:
+            entries.append((p.entry_time, p.symbol))
+            if p.exit_time is not None:
+                closed.append((p.exit_time, p.symbol, _f(p.pnl)))
+    for g in groups:
+        if not g.auto_traded:
+            entries.append((g.created_at, g.underlying_symbol))
+            if g.exit_time is not None:
+                closed.append((g.exit_time, g.underlying_symbol, _f(g.pnl)))
+    return entries, closed

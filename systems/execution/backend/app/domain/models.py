@@ -1080,6 +1080,8 @@ class TradeTagsUpdate(BaseModel):
 
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # Discipline v2: how the person felt after a loss or an early exit. "" clears it.
+    emotion_tag: Optional[Literal["calm", "fearful", "greedy", "fomo", ""]] = None
 
 
 class AdminResetAllConfirm(BaseModel):
@@ -1129,6 +1131,8 @@ class DisciplineTradeOut(BaseModel):
     flags: list[str] = []
     checks: list[DisciplineCheckOut] = []
     what_if: Optional[WhatIfOut] = None
+    emotion_tag: Optional[str] = None
+    needs_emotion: bool = False
 
 
 class DisciplineCoachingOut(BaseModel):
@@ -1151,5 +1155,7 @@ class DisciplineV2Out(BaseModel):
     mistakes: dict[str, int]
     week_mistakes: dict[str, int]
     target_and_stop_moved: int = 0
+    emotion_counts: dict[str, int] = {}
+    needs_emotion: int = 0
     coaching: Optional[DisciplineCoachingOut] = None
     trades: list[DisciplineTradeOut]

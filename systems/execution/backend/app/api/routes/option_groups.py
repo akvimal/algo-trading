@@ -153,6 +153,7 @@ def _group_to_out(
         # Structured trade journal (PUT /option-groups/{id}/tags).
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
+        "emotion_tag": row.emotion_tag,
         # Immutable entry snapshot + auto-trade flag - see positions.py's
         # _position_to_out.
         "entry_setup_tag": row.entry_setup_tag,
@@ -621,6 +622,8 @@ def edit_group_tags(
         set_setup_tag="setup_tag" in sent,
         confidence=payload.confidence,
         set_confidence="confidence" in sent,
+        emotion_tag=payload.emotion_tag,
+        set_emotion_tag="emotion_tag" in sent,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="option group not found")

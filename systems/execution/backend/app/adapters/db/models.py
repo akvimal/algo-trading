@@ -273,6 +273,8 @@ class OptionPositionGroup(Base):
     strike_width = Column(Numeric)
     # Discipline v2: what the system's own sizing would have bought at open (NULL = not worked out). See migration 034.
     system_quantity = Column(Numeric)
+    # Discipline v2: how the person felt after a loss or an early exit (calm/fearful/greedy/fomo). See migration 035.
+    emotion_tag = Column(Text)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
     sl_scope = Column(Text, nullable=False, default="combined")
@@ -387,6 +389,8 @@ class Position(Base):
     initial_stop_loss_price = Column(Numeric)  # audit trail - the stop as computed at open, never changes
     # Discipline v2: what the system's risk sizing would have bought at open, same unit as quantity (NULL = not worked out).
     system_quantity = Column(Numeric)
+    # Discipline v2: how the person felt after a loss or an early exit (calm/fearful/greedy/fomo). See migration 035.
+    emotion_tag = Column(Text)
     target_price = Column(Numeric)
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
     # Copied from the Strategy at open time - the exit-monitor job's

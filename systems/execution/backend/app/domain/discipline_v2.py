@@ -76,6 +76,7 @@ class TradeFacts:
     reviewed: bool
     auto_traded: bool = False
     entry_interval: Optional[str] = None
+    emotion_tag: Optional[str] = None  # calm / fearful / greedy / fomo, answered after a loss or an early exit
     events: list[EventFact] = field(default_factory=list)
 
 
@@ -106,6 +107,15 @@ class TradeScore:
     @property
     def mistakes(self) -> list[str]:
         return [c.mistake for c in self.checks if c.mistake]
+
+    @property
+    def needs_emotion(self) -> bool:
+        """A loss or an early exit (closed by hand before the plan, or trailed out too tight) with no answer yet to "how did you
+        feel?". Never for an auto-traded fill, and never asked of a trade that went to plan."""
+        t = self.facts
+        if t.auto_traded or t.emotion_tag:
+            return False
+        return (t.pnl is not None and t.pnl < 0) or self.exit_kind in ("early_exit", "tight_trail")
 
 
 @dataclass
@@ -324,6 +334,8 @@ def _pct(x: Optional[float]) -> Optional[int]:
     return None if x is None else int(x * 100 + 0.5)
 
 
+FEELING_WORD = {"calm": "calm", "fearful": "fearful", "greedy": "greedy", "fomo": "FOMO"}
+
 # What a mistake costs, for choosing the one habit to coach (higher = worse), and the plain-language sentence for it.
 SEVERITY = {
     "past_loss_limit": 10, "widen_attempt": 9, "oversized": 8, "liquidated": 8, "no_stop": 8, "revenge": 7, "overtrade": 6,
@@ -384,13 +396,14 @@ def summarize(scores: list[TradeScore], now: Optional[datetime] = None) -> dict:
     score = _pct(overall) if len(window) >= MIN_TRADES_FOR_SCORE and overall is not None else None
 
     counts: Counter = Counter(m for s in window for m in s.mistakes)
+    emotion_counts = Counter(s.facts.emotion_tag for s in window if s.facts.emotion_tag)
     if flagged >= 3:
         counts["target_and_stop_moved"] += flagged
 
     week_cutoff = (now or max((s.facts.exit_time for s in scored), default=datetime.now().astimezone())) - timedelta(days=7)
     week = [s for s in scored if s.facts.exit_time >= week_cutoff]
     week_counts: Counter = Counter(m for s in week for m in s.mistakes)
-    coaching = _coaching_line(week_counts, len(week))
+    coaching = _coaching_line(week_counts, len(week), week)
 
     return {
         "score": score,
@@ -400,11 +413,13 @@ def summarize(scores: list[TradeScore], now: Optional[datetime] = None) -> dict:
         "mistakes": dict(counts),
         "week_mistakes": dict(week_counts),
         "target_and_stop_moved": flagged,
+        "emotion_counts": dict(emotion_counts),
+        "needs_emotion": sum(1 for s in window if s.needs_emotion),
         "coaching": coaching,
     }
 
 
-def _coaching_line(week_counts: Counter, week_trades: int) -> Optional[dict]:
+def _coaching_line(week_counts: Counter, week_trades: int, week: Optional[list] = None) -> Optional[dict]:
     """One sentence naming the habit that cost the most this week: how often, times how much it hurts. None when the week had
     no trades, or nothing went wrong."""
     if week_trades == 0:
@@ -414,11 +429,17 @@ def _coaching_line(week_counts: Counter, week_trades: int) -> Optional[dict]:
         return {"mistake": None, "emotion": None, "count": 0, "line": f"A clean week: {week_trades} trade{'s' if week_trades != 1 else ''}, no process mistakes."}
     _, mistake, n = ranked[0]
     times = f"{n} time{'s' if n != 1 else ''}"
+    line = f"This week you {COACHING[mistake]} ({times} in {week_trades} trade{'s' if week_trades != 1 else ''}). That is the one habit to work on next."
+    # What the person said they felt on those very trades, when they said it on at least two of them.
+    felt = Counter(s.facts.emotion_tag for s in (week or []) if mistake in s.mistakes and s.facts.emotion_tag)
+    if sum(felt.values()) >= 2:
+        feeling, k = felt.most_common(1)[0]
+        line += f" You tagged {FEELING_WORD.get(feeling, feeling)} on {k} of the {sum(felt.values())} you answered."
     return {
         "mistake": mistake,
         "emotion": MISTAKE_EMOTION.get(mistake),
         "count": n,
-        "line": f"This week you {COACHING[mistake]} ({times} in {week_trades} trade{'s' if week_trades != 1 else ''}). That is the one habit to work on next.",
+        "line": line,
     }
 
 

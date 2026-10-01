@@ -1137,3 +1137,11 @@ ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_grou
 -- Discipline v2 step 3 (migration 034): the quantity the system's own risk sizing would have used at open. See docs/discipline-v2-spec.md.
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS system_quantity NUMERIC;
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS system_quantity NUMERIC;
+
+-- Discipline v2 step 4 (migration 035): how the person felt, after a loss or an early exit.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS emotion_tag TEXT;
+ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_emotion_tag_check;
+ALTER TABLE execution.positions ADD CONSTRAINT positions_emotion_tag_check CHECK (emotion_tag IN ('calm', 'fearful', 'greedy', 'fomo'));
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS emotion_tag TEXT;
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_emotion_tag_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_emotion_tag_check CHECK (emotion_tag IN ('calm', 'fearful', 'greedy', 'fomo'));

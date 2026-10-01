@@ -338,3 +338,48 @@ def test_what_if_has_nothing_to_say_without_a_risk_or_candles():
     t = trade(exit_reason="manual", exit_price=104.0)
     assert dv2.what_if_after_exit(t, None, bars(110)) is None
     assert dv2.what_if_after_exit(t, 5.0, []) is None
+
+
+# ---- the one-tap feeling check (step 4) ---------------------------------------------------------------------------------------------
+
+def test_a_loss_or_an_early_exit_asks_how_you_felt_and_a_trade_that_went_to_plan_does_not():
+    loss = one(trade(exit_reason="stop_loss", pnl=-100))
+    early = one(trade(exit_reason="manual", exit_price=104.0, pnl=40))
+    win = one(trade())
+    assert loss.needs_emotion and early.needs_emotion and not win.needs_emotion
+
+
+def test_an_answered_or_auto_traded_trade_is_not_asked_again():
+    assert not one(trade(exit_reason="stop_loss", pnl=-100, emotion_tag="fearful")).needs_emotion
+    assert not one(trade(exit_reason="stop_loss", pnl=-100, auto_traded=True)).needs_emotion
+
+
+def test_the_summary_counts_the_answers_and_the_questions_still_open():
+    trades = [
+        trade(0, exit_reason="stop_loss", pnl=-100, emotion_tag="fearful"),
+        trade(1, exit_reason="stop_loss", pnl=-100, emotion_tag="fearful"),
+        trade(2, exit_reason="stop_loss", pnl=-100, emotion_tag="calm"),
+        trade(3, exit_reason="stop_loss", pnl=-100),
+        trade(4),
+    ]
+    out = dv2.summarize(dv2.evaluate_all(trades, CFG))
+    assert out["emotion_counts"] == {"fearful": 2, "calm": 1} and out["needs_emotion"] == 1
+
+
+def test_the_feeling_never_changes_the_score():
+    plain = dv2.summarize(dv2.evaluate_all([trade(i, exit_reason="stop_loss", pnl=-100) for i in range(6)], CFG))
+    tagged = dv2.summarize(dv2.evaluate_all([trade(i, exit_reason="stop_loss", pnl=-100, emotion_tag="greedy") for i in range(6)], CFG))
+    assert plain["score"] == tagged["score"]
+
+
+def test_the_coaching_line_adds_what_you_said_you_felt_on_that_habit():
+    now = minutes(10 * 60)
+    trades = [trade(i, exit_reason="manual", exit_price=104.0, pnl=40, emotion_tag="fearful") for i in range(3)]
+    line = dv2.summarize(dv2.evaluate_all(trades, CFG), now=now)["coaching"]["line"]
+    assert "closed a trade by hand" in line and "You tagged fearful on 3 of the 3 you answered." in line
+
+
+def test_one_answer_is_too_few_to_say_anything_about():
+    now = minutes(10 * 60)
+    trades = [trade(0, exit_reason="manual", exit_price=104.0, pnl=40, emotion_tag="fearful"), trade(1, exit_reason="manual", exit_price=104.0, pnl=40)]
+    assert "You tagged" not in dv2.summarize(dv2.evaluate_all(trades, CFG), now=now)["coaching"]["line"]

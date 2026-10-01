@@ -53,7 +53,7 @@ def load_trade_facts(db: Session, user_id, segment: str, since: Optional[date] =
                 exit_time=p.exit_time, exit_reason=p.exit_reason, order_type=p.order_type, entry_price=_f(p.entry_price),
                 exit_price=_f(p.exit_price), quantity=_f(p.quantity), system_quantity=_f(p.system_quantity), stop0=stop0,
                 target0=target0, stop_final=stop_final, target_final=target_final, pnl=_f(p.pnl), entry_setup_tag=p.entry_setup_tag,
-                reviewed=_reviewed(p.reviewed_at, p.notes), auto_traded=bool(p.auto_traded), entry_interval=p.entry_interval, events=events,
+                reviewed=_reviewed(p.reviewed_at, p.notes), auto_traded=bool(p.auto_traded), entry_interval=p.entry_interval, emotion_tag=p.emotion_tag, events=events,
             )
         )
     for g in groups:
@@ -66,7 +66,7 @@ def load_trade_facts(db: Session, user_id, segment: str, since: Optional[date] =
                 exit_time=g.exit_time, exit_reason=g.exit_reason, order_type=g.order_type, entry_price=_f(g.entry_spot_price),
                 exit_price=None, quantity=_f(g.quantity), system_quantity=_f(g.system_quantity), stop0=stop0, target0=target0,
                 stop_final=stop_final, target_final=target_final, pnl=_f(g.pnl), entry_setup_tag=g.entry_setup_tag,
-                reviewed=_reviewed(g.reviewed_at, g.notes), auto_traded=bool(g.auto_traded), entry_interval=g.entry_interval, events=events,
+                reviewed=_reviewed(g.reviewed_at, g.notes), auto_traded=bool(g.auto_traded), entry_interval=g.entry_interval, emotion_tag=g.emotion_tag, events=events,
             )
         )
     if since is not None:

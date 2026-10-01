@@ -91,6 +91,11 @@ export function PerformanceSnapshot({ markets }: { markets: Segment[] }) {
                 <span className={`pill ${band === "good" ? "up" : band === "low" ? "dn" : ""}`} style={{ fontSize: 11 }}>
                   {BAND_TEXT[band]}
                 </span>
+                {d.needs_emotion > 0 && (
+                  <Link to={`/portfolio?segment=${segment}&tab=review`} className="faint" style={{ fontSize: 11 }} data-testid="feeling-link">
+                    {d.needs_emotion} to tag
+                  </Link>
+                )}
               </div>
             )}
             {p && (

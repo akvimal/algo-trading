@@ -1173,6 +1173,8 @@ def update_position_tags(
     set_setup_tag: bool = False,
     confidence: Optional[int] = None,
     set_confidence: bool = False,
+    emotion_tag: Optional[str] = None,
+    set_emotion_tag: bool = False,
 ) -> Optional[db_models.Position]:
     """PUT /positions/{id}/tags - partial edit of the structured trade
     journal. `set_*` flags say which fields the request actually carried
@@ -1185,6 +1187,8 @@ def update_position_tags(
         row.setup_tag = setup_tag or None
     if set_confidence:
         row.confidence = confidence
+    if set_emotion_tag:
+        row.emotion_tag = emotion_tag or None
     db.commit()
     return row
 

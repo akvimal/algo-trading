@@ -1610,6 +1610,8 @@ def update_group_tags(
     set_setup_tag: bool = False,
     confidence: Optional[int] = None,
     set_confidence: bool = False,
+    emotion_tag: Optional[str] = None,
+    set_emotion_tag: bool = False,
 ) -> Optional[db_models.OptionPositionGroup]:
     """PUT /option-groups/{id}/tags - option-group sibling of
     position_manager.update_position_tags. Partial: `set_*` say which
@@ -1621,6 +1623,8 @@ def update_group_tags(
         row.setup_tag = setup_tag or None
     if set_confidence:
         row.confidence = confidence
+    if set_emotion_tag:
+        row.emotion_tag = emotion_tag or None
     db.commit()
     return row
 

@@ -1,8 +1,11 @@
-import type { DisciplineV2 } from "../api/types";
+import { useState } from "react";
+import { ApiError } from "../api/http";
+import { setFeeling } from "../api/trade";
+import type { DisciplineTrade, DisciplineV2, Feeling } from "../api/types";
 import type { Resource } from "../hooks/useResource";
 import { formatDay, formatPnl } from "../format";
 import { disciplineBand } from "../pages/portfolioModel";
-import { EMOTION_ROWS, EXIT_WORDS, mistakeWord, topMistakes, whatIfText } from "../pages/disciplineModel";
+import { EMOTION_ROWS, EXIT_WORDS, FEELINGS, feelingMix, feelingWord, mistakeWord, topMistakes, tradesToShow, whatIfText } from "../pages/disciplineModel";
 import { DisciplineGauge } from "./DisciplineGauge";
 import { ErrorNotice, Signed, Skeleton } from "./bits";
 
@@ -13,6 +16,22 @@ const BAND_TEXT = { none: "Not enough trades yet", low: "Needs work", fair: "Get
 export function DisciplineCard({ resource }: { resource: Resource<DisciplineV2> }) {
   const d = resource.data;
   const band = d ? disciplineBand(d.score) : "none";
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  async function answer(t: DisciplineTrade, feeling: Feeling | null) {
+    setBusyId(t.id);
+    setProblem(null);
+    try {
+      await setFeeling(t.kind, t.id, feeling);
+      resource.reload();
+    } catch (e) {
+      setProblem(e instanceof ApiError ? e.message : "Could not save that. Try again.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="card" data-testid="discipline-card">
       <h2 className="section-title" style={{ margin: "0 0 8px" }}>
@@ -60,6 +79,22 @@ export function DisciplineCard({ resource }: { resource: Resource<DisciplineV2> 
             </div>
           )}
 
+          {d.needs_emotion > 0 && (
+            <p className="faint" style={{ fontSize: 12, margin: "10px 0 0" }} data-testid="feeling-nudge">
+              {d.needs_emotion} trade{d.needs_emotion === 1 ? " is" : "s are"} waiting for one tap on how you felt. It never changes your score, it just shows which feeling is behind the mistakes.
+            </p>
+          )}
+
+          {feelingMix(d).length > 0 && (
+            <div className="chips" aria-label="How you felt when it went wrong" style={{ marginTop: 10 }}>
+              {feelingMix(d).map((f) => (
+                <span key={f.key} className="pill">
+                  {feelingWord(f.key)} · {f.count}
+                </span>
+              ))}
+            </div>
+          )}
+
           {topMistakes(d).length > 0 && (
             <div className="chips" aria-label="Most common mistakes" style={{ marginTop: 10 }}>
               {topMistakes(d).map((m) => (
@@ -70,11 +105,16 @@ export function DisciplineCard({ resource }: { resource: Resource<DisciplineV2> 
             </div>
           )}
 
+          {problem && (
+            <div className="dn" role="alert" style={{ marginTop: 8 }}>
+              {problem}
+            </div>
+          )}
           {d.trades.length > 0 && (
-            <details style={{ marginTop: 12 }}>
+            <details style={{ marginTop: 12 }} open={d.needs_emotion > 0}>
               <summary>Recent trades</summary>
               <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0 }} data-testid="discipline-trades">
-                {d.trades.slice(0, 8).map((t) => {
+                {tradesToShow(d.trades).map((t) => {
                   const what = whatIfText(t.what_if);
                   return (
                     <li key={t.id} className="check-item" style={{ display: "block", marginBottom: 8 }}>
@@ -98,6 +138,16 @@ export function DisciplineCard({ resource }: { resource: Resource<DisciplineV2> 
                       {what && (
                         <div style={{ fontSize: 12, color: "var(--warn)" }} data-testid="what-if">
                           {what}
+                        </div>
+                      )}
+                      {(t.needs_emotion || t.emotion_tag) && (
+                        <div className="chips" role="group" aria-label={`How did you feel about ${t.symbol}?`} style={{ marginTop: 6 }}>
+                          {t.needs_emotion && <span className="faint" style={{ fontSize: 12 }}>How did you feel?</span>}
+                          {FEELINGS.map((f) => (
+                            <button key={f.key} aria-pressed={t.emotion_tag === f.key} disabled={busyId === t.id} onClick={() => void answer(t, t.emotion_tag === f.key ? null : f.key)}>
+                              {f.label}
+                            </button>
+                          ))}
                         </div>
                       )}
                     </li>

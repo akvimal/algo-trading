@@ -61,10 +61,11 @@ const dv2 = (score: number | null) => ({
   segment: "NSE", scope: "epoch", score, trade_count: score == null ? 3 : 8,
   emotions: { greed: 88, fear: 64, patience: 71 }, categories: { risk: 90, entry: 70, management: 75, day: 80 },
   mistakes: { oversized: 2, tight_trail: 1, untagged: 1 }, week_mistakes: { oversized: 2 }, target_and_stop_moved: 0,
+  emotion_counts: { fearful: 3, calm: 1 }, needs_emotion: score == null ? 0 : 1,
   coaching: { mistake: "oversized", emotion: "greed", count: 2, line: "This week you took more size than the system's risk sizing allowed (2 times in 4 trades). That is the one habit to work on next." },
   trades: [
-    { id: "t1", kind: "position", symbol: "TCS", action: "BUY", exit_time: "2026-09-26T05:00:00Z", exit_reason: "stop_loss", exit_kind: "tight_trail", planned_rr: 2, exit_r: 0.6, score: 72, pnl: 180, mistakes: ["tight_trail"], flags: [], checks: [], what_if: { extra_r: 1.4, target_reached: true } },
-    { id: "t2", kind: "position", symbol: "INFY", action: "BUY", exit_time: "2026-09-26T04:30:00Z", exit_reason: "stop_loss", exit_kind: "clean_stop", planned_rr: 2, exit_r: -1, score: 100, pnl: -450, mistakes: [], flags: [], checks: [], what_if: null },
+    { id: "t1", kind: "position", symbol: "TCS", action: "BUY", exit_time: "2026-09-26T05:00:00Z", exit_reason: "stop_loss", exit_kind: "tight_trail", planned_rr: 2, exit_r: 0.6, score: 72, pnl: 180, mistakes: ["tight_trail"], flags: [], checks: [], what_if: { extra_r: 1.4, target_reached: true }, emotion_tag: null, needs_emotion: true },
+    { id: "t2", kind: "position", symbol: "INFY", action: "BUY", exit_time: "2026-09-26T04:30:00Z", exit_reason: "stop_loss", exit_kind: "clean_stop", planned_rr: 2, exit_r: -1, score: 100, pnl: -450, mistakes: [], flags: [], checks: [], what_if: null, emotion_tag: "calm", needs_emotion: false },
   ],
 });
 const elig = {
@@ -205,6 +206,50 @@ describe("Review", () => {
     renderAt("/portfolio?tab=review");
     expect(await screen.findByText("Not enough trades yet")).toBeInTheDocument();
     expect(screen.getByText(/at least 5 closed trades/)).toBeInTheDocument();
+  });
+
+  it("asks how you felt after a loss or an early exit, saves the answer, and shows the mix", async () => {
+    const puts: { url: string; body: unknown }[] = [];
+    let answered = false;
+    const base = globalThis.fetch;
+    happy(62);
+    const routed = globalThis.fetch as unknown as (url: string, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT" && url.includes("/tags")) {
+        puts.push({ url, body: JSON.parse(String(init.body)) });
+        answered = true;
+        return json({ id: "t1" });
+      }
+      if (url.includes("/discipline/") && answered) {
+        const d = dv2(62) as any;
+        d.trades[0] = { ...d.trades[0], emotion_tag: "fearful", needs_emotion: false };
+        d.needs_emotion = 0;
+        return json(d);
+      }
+      return routed(url, init);
+    }));
+    void base;
+    const user = userEvent.setup();
+    renderAt("/portfolio?tab=review");
+    expect(await screen.findByTestId("feeling-nudge")).toHaveTextContent("1 trade is waiting for one tap on how you felt");
+    expect(screen.getByText("Fearful · 3")).toBeInTheDocument(); // the mix so far
+    const group = within(screen.getByRole("group", { name: "How did you feel about TCS?" }));
+    expect(group.getByText("How did you feel?")).toBeInTheDocument();
+    await user.click(group.getByRole("button", { name: "Fearful" }));
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0].url).toContain("/positions/t1/tags");
+    expect(puts[0].body).toEqual({ emotion_tag: "fearful" });
+    await waitFor(() => expect(screen.queryByTestId("feeling-nudge")).not.toBeInTheDocument());
+    expect(within(screen.getByRole("group", { name: "How did you feel about TCS?" })).getByRole("button", { name: "Fearful" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not ask about a trade that went to plan, but lets an answer be seen and changed", async () => {
+    happy(62);
+    renderAt("/portfolio?tab=review");
+    await screen.findByText("62");
+    const infy = within(screen.getByRole("group", { name: "How did you feel about INFY?" }));
+    expect(infy.queryByText("How did you feel?")).not.toBeInTheDocument();
+    expect(infy.getByRole("button", { name: "Calm" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows what price did after an early exit, and each trade's exit in plain words", async () => {

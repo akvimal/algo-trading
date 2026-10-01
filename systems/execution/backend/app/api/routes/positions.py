@@ -135,6 +135,7 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         # type + 1-5 confidence, for Trading Performance's by-setup slice.
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
+        "emotion_tag": row.emotion_tag,
         # Immutable entry snapshot of the two above + whether the fill was
         # auto-traded - the Discipline score's "plan review" component
         # (before vs after) and its auto-trade exclusion.
@@ -568,6 +569,8 @@ def edit_position_tags(
         set_setup_tag="setup_tag" in sent,
         confidence=payload.confidence,
         set_confidence="confidence" in sent,
+        emotion_tag=payload.emotion_tag,
+        set_emotion_tag="emotion_tag" in sent,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="position not found")

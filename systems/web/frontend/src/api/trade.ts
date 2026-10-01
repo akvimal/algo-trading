@@ -133,6 +133,12 @@ export async function setAutoTrail(kind: "position" | "group", tradeId: string, 
   await api("execution", `${base}/auto-trail`, { method: "PUT", json: { enabled, ...(interval && ATR_INTERVALS.has(interval) ? { interval } : {}) } });
 }
 
+/** Saves how the person felt about a closed trade (or clears it with null). Part of the same tags route as the setup tag. */
+export async function setFeeling(kind: "position" | "group", tradeId: string, feeling: string | null): Promise<void> {
+  const base = kind === "position" ? `/positions/${tradeId}` : `/option-groups/${tradeId}`;
+  await api("execution", `${base}/tags`, { method: "PUT", json: { emotion_tag: feeling ?? "" } });
+}
+
 export const listWaitingOrders = () => api<PendingOrder[]>("execution", "/pending-orders?status=pending");
 export const cancelWaitingOrder = (id: string) => api<PendingOrder>("execution", `/pending-orders/${id}`, { method: "DELETE" });
 

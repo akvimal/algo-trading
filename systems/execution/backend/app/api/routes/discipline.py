@@ -55,12 +55,13 @@ def get_discipline(
             pnl=s.facts.pnl, mistakes=s.mistakes, flags=s.flags,
             checks=[DisciplineCheckOut(key=c.key, category=c.category, emotion=c.emotion, score=c.score, mistake=c.mistake) for c in s.checks],
             what_if=WhatIfOut(**what_ifs[s.facts.id]) if s.facts.id in what_ifs else None,
+            emotion_tag=s.facts.emotion_tag, needs_emotion=s.needs_emotion,
         )
         for s in reversed(recent)
     ]
     return DisciplineV2Out(
         segment=seg, scope=scope, score=summary["score"], trade_count=summary["trade_count"], emotions=summary["emotions"],
         categories=summary["categories"], mistakes=summary["mistakes"], week_mistakes=summary["week_mistakes"],
-        target_and_stop_moved=summary["target_and_stop_moved"],
+        target_and_stop_moved=summary["target_and_stop_moved"], emotion_counts=summary["emotion_counts"], needs_emotion=summary["needs_emotion"],
         coaching=DisciplineCoachingOut(**summary["coaching"]) if summary["coaching"] else None, trades=trades,
     )

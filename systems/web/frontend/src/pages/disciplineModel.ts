@@ -1,10 +1,31 @@
-import type { DisciplineV2 } from "../api/types";
+import type { DisciplineTrade, DisciplineV2, Feeling } from "../api/types";
 
 export const EMOTION_ROWS = [
   { key: "greed", label: "Greed", help: "Sizing up, widening a stop, pushing a target out, overtrading, trading past your loss limit" },
   { key: "fear", label: "Fear", help: "Trailing a stop too tight, closing winners early, pulling a target in, sizing down after losses" },
   { key: "patience", label: "Patience", help: "A planned stop and target, a tagged setup, waiting for your price, not re-entering right after a loss" },
 ] as const;
+
+/** The four answers to "how did you feel?", in the order they are offered. */
+export const FEELINGS: { key: Feeling; label: string }[] = [
+  { key: "calm", label: "Calm" },
+  { key: "fearful", label: "Fearful" },
+  { key: "greedy", label: "Greedy" },
+  { key: "fomo", label: "FOMO" },
+];
+export const feelingWord = (key: string) => FEELINGS.find((f) => f.key === key)?.label ?? key;
+
+/** The trades to show: the ones still waiting for a feeling first (that is the one thing to do here), then the rest, newest first. */
+export function tradesToShow(trades: DisciplineTrade[], limit = 8): DisciplineTrade[] {
+  return [...trades.filter((t) => t.needs_emotion), ...trades.filter((t) => !t.needs_emotion)].slice(0, limit);
+}
+
+/** How the person felt when it went wrong, most common first. */
+export function feelingMix(d: DisciplineV2): { key: Feeling; count: number }[] {
+  return FEELINGS.map((f) => ({ key: f.key, count: d.emotion_counts[f.key] ?? 0 }))
+    .filter((f) => f.count > 0)
+    .sort((a, b) => b.count - a.count);
+}
 
 /** What each exit looked like, in the trader's words. */
 export const EXIT_WORDS: Record<string, string> = {

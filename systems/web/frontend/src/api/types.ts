@@ -402,6 +402,7 @@ export type StudyNote = {
 export type NoteInstrument = { segment: Segment; symbol: string; count: number; last_at: string | null };
 
 /** Discipline v2: a behaviour score over the last 20 closed manual trades, split into greed, fear and patience. Never a function of profit. */
+export type Feeling = "calm" | "fearful" | "greedy" | "fomo";
 export type DisciplineCheck = { key: string; category: string; emotion: string; score: number; mistake: string | null };
 export type DisciplineTrade = {
   id: string;
@@ -419,6 +420,9 @@ export type DisciplineTrade = {
   flags: string[];
   checks: DisciplineCheck[];
   what_if: { extra_r: number; target_reached: boolean | null } | null;
+  /** How the person said they felt after a loss or an early exit, and whether that question is still open for this trade. */
+  emotion_tag: Feeling | null;
+  needs_emotion: boolean;
 };
 export type DisciplineV2 = {
   segment: Segment;
@@ -430,6 +434,8 @@ export type DisciplineV2 = {
   mistakes: Record<string, number>;
   week_mistakes: Record<string, number>;
   target_and_stop_moved: number;
+  emotion_counts: Partial<Record<Feeling, number>>;
+  needs_emotion: number;
   coaching: { mistake: string | null; emotion: string | null; count: number; line: string } | null;
   trades: DisciplineTrade[];
 };

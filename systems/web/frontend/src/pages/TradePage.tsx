@@ -14,7 +14,6 @@ import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
 import { ViewToggles } from "../chart/ViewToggles";
-import { LinksMenu } from "../workstation/LinksMenu";
 import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
 import { AutoTrader } from "../components/AutoTrader";
@@ -380,7 +379,13 @@ export function TradePage() {
 
         <div className="ws-tools">
           {wide && (
-            <LayoutMenu layout={ws.layout} onChange={(layout) => setWs((cur) => setLayout(cur, layout))} />
+            <LayoutMenu
+              layout={ws.layout}
+              onChange={(layout) => setWs((cur) => setLayout(cur, layout))}
+              twoUp={twoUp}
+              links={ws.links}
+              onLinks={(patch) => setWs((cur) => setLinks(cur, { ...cur.links, ...patch }))}
+            />
           )}
           {wide && (
             <CombosMenu
@@ -402,16 +407,6 @@ export function TradePage() {
             onStructureOn={setStructureOn}
           />
           {structureIsOn(structure) && <StructureMenu config={structure} onChange={setStructure} />}
-          {twoUp && (
-            <LinksMenu
-              crosshair={ws.links.crosshair}
-              onCrosshair={(v) => setWs((cur) => setLinks(cur, { ...cur.links, crosshair: v }))}
-              scale={ws.links.scale}
-              onScale={(v) => setWs((cur) => setLinks(cur, { ...cur.links, scale: v }))}
-              interval={ws.links.interval}
-              onInterval={(v) => setWs((cur) => setLinks(cur, { ...cur.links, interval: v }))}
-            />
-          )}
           <ViewToggles
             tradesOn={tools.tradesOn}
             onTradesOn={(on) => setTools((t) => ({ ...t, tradesOn: on }))}

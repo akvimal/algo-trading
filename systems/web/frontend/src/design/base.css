@@ -1886,3 +1886,13 @@ table.t th {
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
 }
+
+.menu-divider {
+  height: 1px;
+  margin: 8px 0;
+  background: var(--border);
+}
+.menu-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+}

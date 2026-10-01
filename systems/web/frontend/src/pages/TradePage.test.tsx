@@ -540,7 +540,7 @@ describe("placing", () => {
 
 /** Opens the layout dropdown and picks an arrangement by its name. */
 async function pickLayout(user: ReturnType<typeof userEvent.setup>, name: string) {
-  await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)$/ }));
+  await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
   await user.click(within(screen.getByRole("group", { name: "Layout" })).getByRole("radio", { name: new RegExp(name) }));
 }
 
@@ -551,7 +551,7 @@ describe("the layout dropdown", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    const button = screen.getByRole("button", { name: /^(1×1|2×1|1×2)$/ });
+    const button = screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ });
     expect(button).toHaveAttribute("aria-expanded", "false");
     await user.click(button);
     const list = within(screen.getByRole("radiogroup", { name: "Chart layout" }));
@@ -577,7 +577,7 @@ describe("the layout dropdown", () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     const before = document.querySelector(".ws-grid")!.className;
-    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)$/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("radiogroup", { name: "Chart layout" })).not.toBeInTheDocument();
     expect(document.querySelector(".ws-grid")!.className).toBe(before);
@@ -1095,9 +1095,9 @@ describe("drawing tools", () => {
     await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
     await user.click(screen.getByRole("button", { name: "Go" }));
     await waitFor(() => expect(screen.getAllByText("NIFTY")).toHaveLength(2));
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.click(screen.getByLabelText("Same interval"));
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
     // Clicking into chart 1's region above (to change its symbol) made IT the active pane -
     // click back into chart 0 so the toolbar draws there instead.
@@ -1574,7 +1574,7 @@ describe("layout and the ticket panel", () => {
     await loaded(0);
     await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(2));
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole("button", { name: /Sync/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     expect(screen.getByLabelText("Sync crosshair")).not.toBeChecked();
   });
 });
@@ -1621,7 +1621,7 @@ describe("two linked charts", () => {
   it("does not link the crosshair when that is switched off", async () => {
     const user = userEvent.setup();
     await pair(user);
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.click(screen.getByLabelText("Sync crosshair"));
     act(() => chart(0).emit("onCrosshairChange", { paneId: "candle_pane", kLineData: { timestamp: chart(0).data[5].timestamp } }));
     expect(chart(1).overlaysNamed("peerCursor")).toHaveLength(0);
@@ -1631,7 +1631,7 @@ describe("two linked charts", () => {
     const user = userEvent.setup();
     await pair(user);
     // Off by default (see "does not link scrolling by default" below) - switch it on for this test.
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.click(screen.getByLabelText("Sync scrolling and zoom"));
     const [a, b] = [chart(0), chart(1)];
     b.barSpace = 8;
@@ -1663,7 +1663,7 @@ describe("two linked charts", () => {
     await user.click(within(screen.getByRole("group", { name: "Interval, BANKNIFTY" })).getByRole("button", { name: "5m" }));
     await waitFor(() => expect(screen.getByRole("group", { name: "Interval, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m"));
     expect(size).toBeDefined();
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.click(screen.getByLabelText("Same interval"));
     await user.click(within(screen.getByRole("group", { name: "Interval, BANKNIFTY" })).getByRole("button", { name: "1h" }));
     expect(screen.getByRole("group", { name: "Interval, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m");
@@ -1789,7 +1789,7 @@ describe("saved combos", () => {
     await user.click(screen.getByRole("button", { name: "Go" }));
     await waitFor(() => expect(screen.getAllByText("NIFTY")[0]).toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.click(screen.getByLabelText("Same interval"));
     await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
 

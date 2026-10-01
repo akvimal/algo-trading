@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
@@ -43,6 +43,8 @@ type Props = {
   /** What the person already holds open on this instrument (e.g. "1 open NIFTY position"), if anything:
    * the ticket warns before a second order is placed on top of it. */
   holding?: string | null;
+  /** A waiting order already on this instrument (a short description, and a way to cancel it): the order button stays off until the person cancels it or says they want a second one. */
+  waitingHere?: { text: string; cancel: () => void } | null;
   onPlaced: () => void;
   /** Overrides the usual optionsAvailable(symbol) check (which only knows about the handful of
    * index/commodity/crypto PRESETS) for a caller that already knows options exist for this symbol
@@ -80,11 +82,16 @@ type Props = {
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [another, setAnother] = useState(false);
+  useEffect(() => {
+    if (!waitingHere) setAnother(false);
+  }, [waitingHere]);
+  const blockedByWaiting = waitingHere != null && !another;
 
   const set = <K extends keyof Ticket>(key: K, value: Ticket[K]) => {
     setResult(null);
@@ -204,6 +211,20 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           <button aria-pressed={limit} disabled={t.strategy === "credit_spread"} title={t.strategy === "credit_spread" ? "Not yet supported for a credit spread - place at the market price instead." : undefined} onClick={() => set("orderType", "limit")}>
             Wait for a price
           </button>
+        </div>
+      )}
+
+      {waitingHere && (
+        <div className="stack-notice" role="note" data-testid="waiting-notice">
+          <b>You already have {waitingHere.text}.</b> Placing another order on top of it is usually a second thought, not part of the plan.
+          <div className="row" style={{ marginTop: 6, gap: 12, justifyContent: "flex-start" }}>
+            <button className="link-btn" onClick={waitingHere.cancel}>
+              Cancel the waiting order
+            </button>
+            <label className="check-row" style={{ margin: 0 }}>
+              <input type="checkbox" checked={another} onChange={(e) => setAnother(e.target.checked)} /> Place another anyway
+            </label>
+          </div>
         </div>
       )}
 
@@ -424,7 +445,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           )}
         </div>
       )}
-      <button className="btn btn-primary" style={{ width: "100%" }} disabled={busy || a.errors.length > 0} onClick={() => void submit()}>
+      <button className="btn btn-primary" style={{ width: "100%" }} disabled={busy || a.errors.length > 0 || blockedByWaiting} title={blockedByWaiting ? "You already have a waiting order on this instrument: cancel it, or tick Place another anyway." : undefined} onClick={() => void submit()}>
         {busy ? "Placing…" : `${ACTION_WORD(t.action)} ${ctx.symbol}${limit ? ", wait for price" : ", paper order"}`}
       </button>
     </div>

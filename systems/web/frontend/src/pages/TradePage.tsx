@@ -742,6 +742,14 @@ export function TradePage() {
                 }}
                 onAddLine={addLine}
                 today={pretrade.data ?? null}
+                waitingHere={
+                  mine.length > 0
+                    ? {
+                        text: mine.length === 1 ? `a waiting ${mine[0].action} order at ${formatPrice(mine[0].trigger_price)}` : `${mine.length} waiting orders`,
+                        cancel: () => void Promise.all(mine.map((w) => cancelWaitingOrder(w.id).catch(() => undefined))).finally(() => waiting.reload()),
+                      }
+                    : null
+                }
                 suggested={suggested}
                 holding={hasOpenForInstrument ? openHolding : null}
                 onPlaced={() => {

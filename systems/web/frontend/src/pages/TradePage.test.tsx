@@ -789,6 +789,36 @@ describe("waiting orders", () => {
     await waitFor(() => expect(screen.queryByTestId("waiting")).not.toBeInTheDocument());
   });
 
+  it("keeps the order button off while an order is already waiting on this instrument, until it is cancelled or another is asked for", async () => {
+    waiting = [{ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "BUY", strategy: "future", trigger_price: 980, stop_loss_price: 970, target_price: null, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    const notice = within(await t.findByTestId("waiting-notice"));
+    expect(notice.getByText(/You already have a waiting BUY order at 980/)).toBeInTheDocument();
+    const buy = t.getByRole("button", { name: /Buy RELIANCE, paper order/ });
+    expect(buy).toBeDisabled();
+    await user.click(notice.getByRole("checkbox", { name: /Place another anyway/ }));
+    expect(buy).toBeEnabled();
+    await user.click(notice.getByRole("checkbox", { name: /Place another anyway/ }));
+    expect(buy).toBeDisabled();
+    await user.click(notice.getByRole("button", { name: "Cancel the waiting order" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/pending-orders/w1"))).toBe(true));
+    await waitFor(() => expect(t.queryByTestId("waiting-notice")).not.toBeInTheDocument());
+    expect(t.getByRole("button", { name: /Buy RELIANCE, paper order/ })).toBeEnabled();
+  });
+
+  it("does not mind a waiting order on a different instrument", async () => {
+    waiting = [{ id: "w9", segment: "NSE", symbol: "TCS", action: "BUY", strategy: "future", trigger_price: 4000, stop_loss_price: null, target_price: null, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    expect(t.queryByTestId("waiting-notice")).not.toBeInTheDocument();
+    expect(t.getByRole("button", { name: /Buy RELIANCE, paper order/ })).toBeEnabled();
+  });
+
   it("needs a price for a limit order", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");

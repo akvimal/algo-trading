@@ -1077,3 +1077,26 @@ CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders
 CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_orders_one_live_per_symbol
     ON execution.pending_orders (user_id, segment, symbol) WHERE status = 'pending';
+
+-- See migrations/031-study-notes.sql.
+CREATE TABLE IF NOT EXISTS execution.study_notes (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL,
+    segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    symbol           TEXT NOT NULL,
+    interval         TEXT,
+    text             TEXT NOT NULL,
+    tag              TEXT CHECK (tag IN ('plan', 'observation', 'mistake', 'review')),
+    -- The market as the person saw it when they wrote this: price, regime, structure trend, OI/PCR, the AI read's
+    -- bias, whether they held the instrument. What turns a note into something a later study (or a model) can read
+    -- against what the market was doing.
+    context          JSONB,
+    -- Optional link to the trade this note is about.
+    position_id      UUID,
+    option_group_id  UUID,
+    -- A PNG of the chart (composed in the browser). bytea in its own column, like trade_images, and never
+    -- selected by the list query.
+    snapshot_png     BYTEA,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_study_notes_user_symbol ON execution.study_notes (user_id, segment, symbol, created_at DESC);

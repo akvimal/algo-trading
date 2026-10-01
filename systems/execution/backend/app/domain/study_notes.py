@@ -1,0 +1,131 @@
+"""The thoughts-and-plans panel under a chart: private free-text notes, each with the market context at the time and
+an optional chart snapshot (see infra/postgres/migrations/031-study-notes.sql).
+
+Every query is scoped to the caller's user_id; a note that is not theirs is simply not found. Nothing here reads
+the notes back into any model - they are a record for the person's own study, and for a later, explicit
+"include my plan" step in the AI read."""
+
+import base64
+import binascii
+import json
+import uuid
+from datetime import date, datetime, time, timedelta
+from typing import Optional
+from zoneinfo import ZoneInfo
+
+from sqlalchemy.orm import Session
+
+from app.adapters.db import models as db_models
+from app.config import settings
+from app.domain.models import StudyNoteCreate, StudyNoteOut
+
+MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024  # a composed chart image, not a photo
+MAX_CONTEXT_BYTES = 16 * 1024
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class StudyNoteError(Exception):
+    """A request the caller can fix; carries the HTTP status the route should use."""
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+def decode_snapshot(raw: Optional[str]) -> Optional[bytes]:
+    """The PNG bytes of a data URL or bare base64 string, or None for nothing sent. Refuses anything that is not a
+    PNG, or is too large, so the column can only ever hold a chart image of a sensible size."""
+    if raw is None or not raw.strip():
+        return None
+    body = raw.strip()
+    if body.startswith("data:"):
+        head, _, body = body.partition(",")
+        if "image/png" not in head:
+            raise StudyNoteError(422, "the snapshot must be a PNG image")
+    try:
+        data = base64.b64decode(body, validate=True)
+    except (binascii.Error, ValueError):
+        raise StudyNoteError(422, "the snapshot is not valid base64")
+    if not data.startswith(_PNG_MAGIC):
+        raise StudyNoteError(422, "the snapshot must be a PNG image")
+    if len(data) > MAX_SNAPSHOT_BYTES:
+        raise StudyNoteError(422, f"the snapshot is too large (max {MAX_SNAPSHOT_BYTES // (1024 * 1024)}MB)")
+    return data
+
+
+def _uuid_or_none(value: Optional[str], what: str) -> Optional[uuid.UUID]:
+    if value is None or not value.strip():
+        return None
+    try:
+        return uuid.UUID(value.strip())
+    except ValueError:
+        raise StudyNoteError(422, f"{what} is not a valid id")
+
+
+def to_out(row: db_models.StudyNote, has_snapshot: bool) -> StudyNoteOut:
+    return StudyNoteOut(
+        id=str(row.id), segment=row.segment, symbol=row.symbol, interval=row.interval, text=row.text, tag=row.tag,
+        context=row.context, position_id=str(row.position_id) if row.position_id is not None else None,
+        option_group_id=str(row.option_group_id) if row.option_group_id is not None else None,
+        has_snapshot=has_snapshot, created_at=row.created_at,
+    )
+
+
+def create_note(db: Session, user_id: uuid.UUID, payload: StudyNoteCreate) -> StudyNoteOut:
+    text = payload.text.strip()
+    if not text:
+        raise StudyNoteError(422, "write something first")
+    if payload.context is not None and len(json.dumps(payload.context, default=str)) > MAX_CONTEXT_BYTES:
+        raise StudyNoteError(422, "the market context attached to this note is too large")
+    png = decode_snapshot(payload.snapshot_png_base64)
+    row = db_models.StudyNote(
+        user_id=user_id, segment=payload.segment, symbol=payload.symbol.strip().upper(), interval=payload.interval,
+        text=text, tag=payload.tag, context=payload.context, snapshot_png=png,
+        position_id=_uuid_or_none(payload.position_id, "position_id"), option_group_id=_uuid_or_none(payload.option_group_id, "option_group_id"),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return to_out(row, png is not None)
+
+
+def _day_bounds(day: date) -> tuple[datetime, datetime]:
+    tz = ZoneInfo(settings.equity_history_timezone)
+    start = datetime.combine(day, time.min, tzinfo=tz)
+    return start, start + timedelta(days=1)
+
+
+def list_notes(db: Session, user_id: uuid.UUID, segment: str, symbol: str, day: Optional[date] = None, limit: int = 200) -> list[StudyNoteOut]:
+    """The person's notes on one instrument, oldest first (a conversation reads top-down). `day` limits it to one
+    calendar day in the platform's trading timezone."""
+    N = db_models.StudyNote
+    q = db.query(N).filter(N.user_id == user_id, N.segment == segment, N.symbol == symbol.strip().upper())
+    if day is not None:
+        start, end = _day_bounds(day)
+        q = q.filter(N.created_at >= start, N.created_at < end)
+    rows = q.order_by(N.created_at.desc()).limit(limit).all()
+    ids_with_image = _ids_with_snapshot(db, user_id, [r.id for r in rows])
+    return [to_out(r, r.id in ids_with_image) for r in reversed(rows)]
+
+
+def _ids_with_snapshot(db: Session, user_id: uuid.UUID, ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    if not ids:
+        return set()
+    N = db_models.StudyNote
+    rows = db.query(N.id).filter(N.user_id == user_id, N.id.in_(ids), N.snapshot_png.isnot(None)).all()
+    return {r[0] for r in rows}
+
+
+def get_snapshot(db: Session, user_id: uuid.UUID, note_id: uuid.UUID) -> Optional[bytes]:
+    row = db.get(db_models.StudyNote, note_id)
+    if row is None or row.user_id != user_id:
+        return None
+    return bytes(row.snapshot_png) if row.snapshot_png is not None else None
+
+
+def delete_note(db: Session, user_id: uuid.UUID, note_id: uuid.UUID) -> bool:
+    N = db_models.StudyNote
+    deleted = db.query(N).filter(N.id == note_id, N.user_id == user_id).delete(synchronize_session=False)
+    db.commit()
+    return deleted == 1

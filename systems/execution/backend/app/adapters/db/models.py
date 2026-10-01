@@ -8,7 +8,7 @@ import uuid
 
 from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import declarative_base, deferred
 
 from app.config import settings
 
@@ -553,6 +553,27 @@ class PendingOrder(Base):
     option_group_id = Column(UUID(as_uuid=True))
     # May this order open a second position on an instrument already held? Default no: see migrations/030.
     allow_stacking = Column(Boolean, nullable=False, default=False)
+
+
+class StudyNote(Base):
+    """One note from the thoughts-and-plans panel under a chart - see infra/postgres/migrations/031-study-notes.sql
+    and app/domain/study_notes.py. `snapshot_png` is deferred so listing notes never pulls the images."""
+
+    __tablename__ = "study_notes"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    segment = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    interval = Column(Text)
+    text = Column(Text, nullable=False)
+    tag = Column(Text)
+    context = Column(JSONB(none_as_null=True))
+    position_id = Column(UUID(as_uuid=True))
+    option_group_id = Column(UUID(as_uuid=True))
+    snapshot_png = deferred(Column(LargeBinary))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class OptionGroupPnlSnapshot(Base):

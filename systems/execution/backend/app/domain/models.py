@@ -308,6 +308,36 @@ class PendingOrderOut(BaseModel):
     allow_stacking: bool = False
 
 
+class StudyNoteCreate(BaseModel):
+    """POST /study-notes - one note from the thoughts-and-plans panel. `context` is the market as the person saw
+    it (price, regime, structure, OI, the AI read's bias...), free-form but size-capped; `snapshot_png_base64` is an
+    optional chart image (a data URL or bare base64)."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str = Field(min_length=1, max_length=64)
+    interval: Optional[str] = Field(default=None, max_length=8)
+    text: str = Field(min_length=1, max_length=4000)
+    tag: Optional[Literal["plan", "observation", "mistake", "review"]] = None
+    context: Optional[dict] = None
+    position_id: Optional[str] = Field(default=None, max_length=36)
+    option_group_id: Optional[str] = Field(default=None, max_length=36)
+    snapshot_png_base64: Optional[str] = None
+
+
+class StudyNoteOut(BaseModel):
+    id: str
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str
+    interval: Optional[str] = None
+    text: str
+    tag: Optional[Literal["plan", "observation", "mistake", "review"]] = None
+    context: Optional[dict] = None
+    position_id: Optional[str] = None
+    option_group_id: Optional[str] = None
+    has_snapshot: bool = False
+    created_at: Optional[datetime] = None
+
+
 class RequirementOut(BaseModel):
     key: str
     label: str

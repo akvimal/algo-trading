@@ -92,7 +92,6 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
   useEffect(() => {
     if (!waitingHere) setAnother(false);
   }, [waitingHere]);
-  const blockedByWaiting = waitingHere != null && !another;
 
   const set = <K extends keyof Ticket>(key: K, value: Ticket[K]) => {
     setResult(null);
@@ -149,6 +148,39 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
     } finally {
       setBusy(false);
     }
+  }
+
+  // While an order is waiting on this instrument the form folds away: the waiting order is the plan, and the form only comes back
+  // when the person says they really want another.
+  if (waitingHere && !another) {
+    return (
+      <div className="card ticket" data-testid="ticket">
+        <div className="row">
+          <h2 className="section-title" style={{ margin: 0 }}>
+            Paper order
+          </h2>
+          <span className="pill">Paper</span>
+        </div>
+        {result && (
+          <div className={result.ok ? "notice" : "notice error"} role={result.ok ? "status" : "alert"} style={{ marginTop: 10 }}>
+            <strong>{result.ok ? (result.kind === "pending" ? "Waiting" : "Done") : "Not placed"}</strong>
+            <p style={{ margin: "4px 0 0" }}>{result.message}</p>
+            {result.warning && <p style={{ margin: "4px 0 0", color: "var(--warn)" }}>{result.warning}</p>}
+          </div>
+        )}
+        <div className="stack-notice" role="note" data-testid="waiting-notice" style={{ marginTop: 10 }}>
+          <b>You already have {waitingHere.text}.</b> The form is folded away so it is not a second thought away from the plan.
+          <div className="row" style={{ marginTop: 8, gap: 12, justifyContent: "flex-start" }}>
+            <button className="btn btn-small" onClick={waitingHere.cancel}>
+              Cancel the waiting order
+            </button>
+            <button className="link-btn" onClick={() => setAnother(true)}>
+              Place another order
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -218,16 +250,14 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
       )}
 
       {waitingHere && (
-        <div className="stack-notice" role="note" data-testid="waiting-notice">
-          <b>You already have {waitingHere.text}.</b> Placing another order on top of it is usually a second thought, not part of the plan.
-          <div className="row" style={{ marginTop: 6, gap: 12, justifyContent: "flex-start" }}>
-            <button className="link-btn" onClick={waitingHere.cancel}>
-              Cancel the waiting order
-            </button>
-            <label className="check-row" style={{ margin: 0 }}>
-              <input type="checkbox" checked={another} onChange={(e) => setAnother(e.target.checked)} /> Place another anyway
-            </label>
-          </div>
+        <div className="stack-notice" role="note" data-testid="waiting-reminder">
+          <b>You still have {waitingHere.text}.</b>{" "}
+          <button className="link-btn" onClick={waitingHere.cancel}>
+            Cancel it
+          </button>{" "}
+          <button className="link-btn" onClick={() => setAnother(false)}>
+            Fold the form away
+          </button>
         </div>
       )}
 
@@ -448,7 +478,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           )}
         </div>
       )}
-      <button className="btn btn-primary" style={{ width: "100%" }} disabled={busy || a.errors.length > 0 || blockedByWaiting} title={blockedByWaiting ? "You already have a waiting order on this instrument: cancel it, or tick Place another anyway." : undefined} onClick={() => void submit()}>
+      <button className="btn btn-primary" style={{ width: "100%" }} disabled={busy || a.errors.length > 0} onClick={() => void submit()}>
         {busy ? "Placing…" : `${ACTION_WORD(t.action)} ${ctx.symbol}${limit ? ", wait for price" : ", paper order"}`}
       </button>
     </div>

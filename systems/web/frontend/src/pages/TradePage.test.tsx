@@ -742,24 +742,36 @@ describe("waiting orders", () => {
     await waitFor(() => expect(screen.queryByTestId("waiting")).not.toBeInTheDocument());
   });
 
-  it("keeps the order button off while an order is already waiting on this instrument, until it is cancelled or another is asked for", async () => {
+  it("folds the order form away while an order is already waiting on this instrument, and brings it back on request", async () => {
     waiting = [{ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "BUY", strategy: "future", trigger_price: 980, stop_loss_price: 970, target_price: null, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
-    const t = await ticket();
-    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const t = within(await screen.findByTestId("ticket"));
     const notice = within(await t.findByTestId("waiting-notice"));
     expect(notice.getByText(/You already have a waiting BUY order at 980/)).toBeInTheDocument();
-    const buy = t.getByRole("button", { name: /Buy RELIANCE, paper order/ });
-    expect(buy).toBeDisabled();
-    await user.click(notice.getByRole("checkbox", { name: /Place another anyway/ }));
-    expect(buy).toBeEnabled();
-    await user.click(notice.getByRole("checkbox", { name: /Place another anyway/ }));
-    expect(buy).toBeDisabled();
-    await user.click(notice.getByRole("button", { name: "Cancel the waiting order" }));
-    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/pending-orders/w1"))).toBe(true));
-    await waitFor(() => expect(t.queryByTestId("waiting-notice")).not.toBeInTheDocument());
+    // no form: no inputs, no plan block, no order button
+    expect(t.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+    expect(t.queryByTestId("plan-block")).not.toBeInTheDocument();
+    expect(t.queryByRole("button", { name: /Buy RELIANCE/ })).not.toBeInTheDocument();
+    await user.click(notice.getByRole("button", { name: "Place another order" }));
+    expect(await t.findByLabelText("Stop-loss")).toBeInTheDocument();
+    expect(t.getByTestId("waiting-reminder")).toHaveTextContent("You still have a waiting BUY order at 980");
     expect(t.getByRole("button", { name: /Buy RELIANCE, paper order/ })).toBeEnabled();
+    await user.click(t.getByRole("button", { name: "Fold the form away" }));
+    expect(t.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+  });
+
+  it("cancelling the waiting order brings the form back", async () => {
+    waiting = [{ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "BUY", strategy: "future", trigger_price: 980, stop_loss_price: 970, target_price: null, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const t = within(await screen.findByTestId("ticket"));
+    await user.click(within(await t.findByTestId("waiting-notice")).getByRole("button", { name: "Cancel the waiting order" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/pending-orders/w1"))).toBe(true));
+    expect(await t.findByLabelText("Stop-loss")).toBeInTheDocument();
+    expect(t.queryByTestId("waiting-notice")).not.toBeInTheDocument();
   });
 
   it("does not mind a waiting order on a different instrument", async () => {

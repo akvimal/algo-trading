@@ -83,3 +83,12 @@ export const DownloadIcon = () => (
     <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
   </svg>
 );
+
+/** A small candlestick chart: "open the chart". */
+export const ChartIcon = () => (
+  <svg {...small}>
+    <path d="M7 4v16M17 4v16" />
+    <rect x="4.5" y="8" width="5" height="7" rx="1" />
+    <rect x="14.5" y="6" width="5" height="9" rx="1" />
+  </svg>
+);

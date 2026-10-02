@@ -1730,18 +1730,19 @@ table.t th {
 .notes-page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 .notes-filters {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  gap: 6px 8px;
 }
 .notes-search {
-  flex: 1 1 220px;
-  min-height: 36px;
+  flex: 1 1 200px;
+  min-height: 30px;
   padding: 0 12px;
+  font-size: 13px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface);
@@ -1751,7 +1752,7 @@ table.t th {
 .notes-instruments {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 .notes-instruments button {
   display: inline-flex;
@@ -1759,10 +1760,16 @@ table.t th {
   gap: 6px;
 }
 .notes-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 .notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* each day is a column too, so the notes in it are spaced like the days are */
+.notes-list > div {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2108,4 +2115,25 @@ table.t th {
   height: 14px;
   margin: 0;
   flex: none;
+}
+
+/* The notes page, compact: the same small chips as the panel under the chart, a tight heading, one 8px rhythm. */
+.notes-page h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.notes-intro {
+  margin: 0;
+  font-size: 12px;
+}
+.notes-page .chips {
+  gap: 4px;
+}
+.notes-page .chips button {
+  padding: 1px 10px;
+  min-height: 26px;
+  font-size: 13px;
+}
+.notes-page .notes-day {
+  margin: 4px 0 0;
 }

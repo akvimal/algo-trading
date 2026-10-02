@@ -52,6 +52,12 @@ describe("NotesPage", () => {
     expect(chips.getByRole("button", { name: /GOLDM\s*1/ })).toBeInTheDocument();
   });
 
+  it("needs no heading for today's notes", async () => {
+    page();
+    await screen.findAllByTestId("note");
+    expect(screen.queryByText("Today")).not.toBeInTheDocument();
+  });
+
   it("opens on one instrument from the link under the chart, without repeating its name on every note", async () => {
     listNotes.mockResolvedValue([note("a", "NIFTY")]);
     page("/more/notes?segment=NSE&symbol=NIFTY");

@@ -278,6 +278,32 @@ describe("NotesPanel", () => {
     expect(screen.getByTestId("notes-count")).toHaveTextContent("5/500");
   });
 
+  it("lays the composer out as types, then the box, then one footer row: count, status, actions with the attach tick before Save", async () => {
+    const user = userEvent.setup();
+    panel();
+    await openIt(user);
+    const box = screen.getByLabelText("Note");
+    const tags = screen.getByRole("group", { name: "Note type" });
+    // the types sit above the box
+    expect(tags.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const footer = box.parentElement!.querySelector(".notes-footer")!;
+    expect(box.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const order = [...footer.querySelectorAll("[data-testid='notes-count'], [aria-label='Download snapshot'], [aria-label='Copy snapshot'], input[type='checkbox'], [aria-label='Save note']")].map(
+      (el) => el.getAttribute("data-testid") ?? el.getAttribute("aria-label") ?? el.getAttribute("type"),
+    );
+    expect(order).toEqual(["notes-count", "Download snapshot", "Copy snapshot", "checkbox", "Save note"]);
+  });
+
+  it("shows a status in the footer row, in the middle, not under the box", async () => {
+    const user = userEvent.setup();
+    panel();
+    await openIt(user);
+    await user.click(screen.getByRole("button", { name: "Download snapshot" }));
+    const status = await screen.findByTestId("notes-status");
+    expect(status.closest(".notes-status-slot")?.parentElement).toHaveClass("notes-footer");
+    expect(status).toHaveTextContent("Snapshot saved to your downloads.");
+  });
+
   it("shows older days under a heading, but not today", async () => {
     const old = new Date();
     old.setDate(old.getDate() - 3);

@@ -177,6 +177,18 @@ export class FakeChart {
     ov.points = points;
     ov.handlers.onDrawEnd?.({ overlay: { id, name: ov.name, points } });
   }
+  getOverlayById(id: string) {
+    const ov = this.overlays.get(id);
+    return ov ? { id, name: ov.name, points: ov.points, extendData: ov.extendData } : null;
+  }
+  /** Press a drawing and drag it, WITHOUT the library reporting the release (the mouse was let go outside the plot area). */
+  dragOverlayWithoutRelease(id: string, points: any[]) {
+    const ov = this.overlays.get(id);
+    if (!ov) return;
+    ov.handlers.onPressedMoveStart?.({ overlay: { id, name: ov.name, points: ov.points } });
+    ov.points = points;
+    ov.handlers.onPressedMoving?.({ overlay: { id, name: ov.name, points } });
+  }
   moveOverlay(id: string, points: any[]) {
     const ov = this.overlays.get(id);
     if (!ov) return;

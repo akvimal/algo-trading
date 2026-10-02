@@ -172,6 +172,79 @@ describe("OI buildup", () => {
     expect(await screen.findByText("No stocks match")).toBeInTheDocument();
   });
 
+  describe("major two-sided shifts", () => {
+    const shifted = () => {
+      oi = {
+        snapshot_date: "2026-09-25",
+        rows: [
+          oiRow("BULLISH", { call_buildup: "long_buildup", put_buildup: "long_buildup", call_oi_change_pct: 22, put_oi_change_pct: 18 }),
+          oiRow("MILD", { call_buildup: "long_buildup", put_buildup: "long_buildup", call_oi_change_pct: 12, put_oi_change_pct: 11 }),
+          oiRow("TINY", { call_buildup: "long_buildup", put_buildup: "long_buildup", call_oi_change_pct: 4, put_oi_change_pct: 3 }),
+          oiRow("BEARISH", { call_buildup: "short_buildup", put_buildup: "short_buildup", call_oi_change_pct: 15, put_oi_change_pct: 14 }),
+          oiRow("PLAIN"),
+        ],
+      };
+    };
+    const signal = (name: string) => within(screen.getByRole("group", { name: "Signal" })).getByRole("button", { name });
+
+    it("badges a stock with a major shift in the all-stocks list, using the 10% default", async () => {
+      shifted();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const badges = within(list).getAllByTestId("oi-signal-badge").map((b) => b.textContent);
+      expect(badges.sort()).toEqual(["Strong bearish", "Strong bullish", "Strong bullish"]); // TINY (under 10%) has none
+    });
+
+    it("has a preset for each direction, sorting the biggest shift first, and the size box appears with it at 10", async () => {
+      shifted();
+      const user = userEvent.setup();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      expect(screen.queryByLabelText("Both sides up at least (%)")).not.toBeInTheDocument();
+      await user.click(signal("Strong bullish"));
+      expect(screen.getByLabelText("Both sides up at least (%)")).toHaveValue(10);
+      const cards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+      expect(cards).toHaveLength(2);
+      expect(cards[0]).toHaveTextContent("BULLISH");
+      expect(cards[1]).toHaveTextContent("MILD");
+      expect(screen.getByLabelText("Sort by")).toHaveValue("strength");
+      expect(screen.getByTestId("oi-signal-help")).toHaveTextContent(/at least 10%/);
+      await user.click(signal("Strong bearish"));
+      const bearCards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+      expect(bearCards).toHaveLength(1);
+      expect(bearCards[0]).toHaveTextContent("BEARISH");
+    });
+
+    it("lets the threshold be changed, and a lower one lets smaller shifts in", async () => {
+      shifted();
+      const user = userEvent.setup();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      await user.click(signal("Strong bullish"));
+      const box = screen.getByLabelText("Both sides up at least (%)");
+      await user.clear(box);
+      await user.type(box, "3");
+      expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(3);
+      await user.clear(box);
+      await user.type(box, "15");
+      const cards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+      expect(cards).toHaveLength(1);
+      expect(cards[0]).toHaveTextContent("BULLISH");
+    });
+
+    it("says nothing matches when no stock has a major shift, and All stocks brings the list back", async () => {
+      oi = { snapshot_date: "2026-09-25", rows: [oiRow("PLAIN")] };
+      const user = userEvent.setup();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      await user.click(signal("Strong bullish"));
+      expect(await screen.findByText("No stocks match")).toBeInTheDocument();
+      await user.click(signal("All stocks"));
+      expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(1);
+      expect(screen.queryByLabelText("Both sides up at least (%)")).not.toBeInTheDocument();
+    });
+  });
+
   it("explains the terms for a beginner", async () => {
     const user = userEvent.setup();
     renderAt("/scan");

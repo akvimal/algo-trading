@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, tradeLink, visible } from "./scanModel";
+import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, oiSignal, oiStrength, tradeLink, visible } from "./scanModel";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
   symbol, exchange: "NSE", snapshot_date: "2026-09-25", spot_price: 100, total_call_oi: 1000, total_put_oi: 1000, pcr: 1,
@@ -104,5 +104,64 @@ describe("helpers", () => {
 
   it("links a symbol to the chart, encoded", () => {
     expect(tradeLink("M&M")).toBe("/trade?symbol=M%26M&segment=NSE");
+  });
+});
+
+describe("major two-sided shifts", () => {
+  // The labels compare each side's OI with the UNDERLYING's price move, so "call buyers + put writers arriving" (price up) is a long
+  // buildup on both sides, and "call writers + put buyers arriving" (price down) is a short buildup on both.
+  const bull = (symbol: string, call: number, put: number) =>
+    oi(symbol, { call_buildup: "long_buildup", put_buildup: "long_buildup", call_oi_change_pct: call, put_oi_change_pct: put });
+  const bear = (symbol: string, call: number, put: number) =>
+    oi(symbol, { call_buildup: "short_buildup", put_buildup: "short_buildup", call_oi_change_pct: call, put_oi_change_pct: put });
+
+  it("defaults to a 10% shift on both sides", () => {
+    expect(DEFAULT_MIN_SHIFT).toBe(10);
+    expect(OI_DEFAULTS.minShift).toBe(10);
+    expect(OI_DEFAULTS.signal).toBe("all");
+  });
+
+  it("reads a long buildup on both sides as strongly bullish, and a short buildup on both sides as strongly bearish", () => {
+    expect(oiSignal(bull("A", 15, 12), 10)).toBe("strong_bull");
+    expect(oiSignal(bear("A", 15, 12), 10)).toBe("strong_bear");
+  });
+
+  it("needs the OI to have grown by the threshold on BOTH sides", () => {
+    expect(oiSignal(bull("A", 15, 9.9), 10)).toBeNull();
+    expect(oiSignal(bull("A", 9.9, 15), 10)).toBeNull();
+    expect(oiSignal(bull("A", 10, 10), 10)).toBe("strong_bull"); // exactly the threshold counts
+    expect(oiSignal(bull("A", 5, 5), 5)).toBe("strong_bull"); // a lower threshold lets a smaller shift in
+  });
+
+  it("does not count mixed or weaker readings, or a missing OI change", () => {
+    expect(oiSignal(oi("A", { call_buildup: "long_buildup", put_buildup: "short_buildup", call_oi_change_pct: 20, put_oi_change_pct: 20 }), 10)).toBeNull(); // the sides disagree
+    expect(oiSignal(oi("A", { call_buildup: "short_covering", put_buildup: "long_unwinding", call_oi_change_pct: 20, put_oi_change_pct: 20 }), 10)).toBeNull();
+    expect(oiSignal(oi("A", { call_buildup: "long_buildup", put_buildup: "long_buildup", call_oi_change_pct: null, put_oi_change_pct: 20 }), 10)).toBeNull();
+    expect(oiSignal(oi("A"), 10)).toBeNull();
+  });
+
+  const universe = [bull("BULL1", 30, 25), bull("BULL2", 12, 11), bull("SMALL", 6, 5), bear("BEAR1", 18, 14), oi("PLAIN", { call_oi_change_pct: 40 })];
+
+  it("filters to the bullish list at the threshold, biggest shift first when sorted by strength", () => {
+    const f = { ...OI_DEFAULTS, signal: "strong_bull" as const, sort: "strength" as const };
+    expect(filterOi(universe, f).map((r) => r.symbol)).toEqual(["BULL1", "BULL2"]);
+    expect(filterOi(universe, { ...f, minShift: 5 }).map((r) => r.symbol)).toEqual(["BULL1", "BULL2", "SMALL"]);
+    expect(filterOi(universe, { ...f, minShift: 20 }).map((r) => r.symbol)).toEqual(["BULL1"]);
+  });
+
+  it("filters to the bearish list", () => {
+    expect(filterOi(universe, { ...OI_DEFAULTS, signal: "strong_bear" }).map((r) => r.symbol)).toEqual(["BEAR1"]);
+  });
+
+  it("combines with the call and put filters, and ignores the threshold when no signal is chosen", () => {
+    expect(filterOi(universe, { ...OI_DEFAULTS, signal: "strong_bull", call: "short_buildup" })).toEqual([]);
+    expect(filterOi(universe, { ...OI_DEFAULTS, minShift: 99 }).map((r) => r.symbol).sort()).toEqual(["BEAR1", "BULL1", "BULL2", "PLAIN", "SMALL"]);
+  });
+
+  it("measures strength as the two OI changes together, with a missing one making it unknown (sorted last)", () => {
+    expect(oiStrength(bull("A", 30, 25))).toBe(55);
+    expect(oiStrength(oi("A", { call_oi_change_pct: null }))).toBeNull();
+    const rows = [oi("NOPE", { call_oi_change_pct: null }), bull("MID", 10, 10), bull("BIG", 30, 30)];
+    expect(filterOi(rows, { ...OI_DEFAULTS, sort: "strength" }).map((r) => r.symbol)).toEqual(["BIG", "MID", "NOPE"]);
   });
 });

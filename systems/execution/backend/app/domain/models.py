@@ -316,7 +316,7 @@ class StudyNoteCreate(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str = Field(min_length=1, max_length=64)
     interval: Optional[str] = Field(default=None, max_length=8)
-    text: str = Field(min_length=1, max_length=4000)
+    text: str = Field(min_length=1, max_length=500)  # a thought, not an essay: the panel says so with a counter
     tag: Optional[Literal["plan", "observation", "mistake", "review"]] = None
     context: Optional[dict] = None
     position_id: Optional[str] = Field(default=None, max_length=36)

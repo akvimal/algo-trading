@@ -3,7 +3,7 @@ import { formatPrice } from "../format";
 import { volumePcr } from "../chart/oiStripModel";
 
 export const NOTE_TAGS = ["plan", "observation", "mistake", "review"] as const;
-export const NOTE_MAX = 4000;
+export const NOTE_MAX = 500;
 
 /** The market as it is on screen right now, in the shape stored with a note. Only what is actually available is
  * included (no option chain, no AI read yet, ... simply leave those parts out). */

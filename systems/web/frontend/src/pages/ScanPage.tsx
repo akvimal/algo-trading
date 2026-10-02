@@ -482,7 +482,7 @@ function CustomScreenScan() {
           onChange={(expression) => setForm({ ...form, expression })}
           placeholder="weekly_close < min(weekly_low, 20) and ema(5) crosses_below ema(20)"
           inputMode="text"
-          hint="Names: close, open, high, low (daily); weekly_close ...; m5_ m15_ m30_ h1_ for intraday (m15_close, m15_ema(20)). prev(x) is one bar back, prev(x, N) is N bars back. ema(N); min(x, N), max(x, N); < <= > >= == !=, crosses_above, crosses_below; and, or, not. Put daily conditions first: intraday data is fetched live, for up to 60 stocks."
+          hint="Names: close, open, high, low (daily); weekly_close ...; m5_ m15_ m30_ h1_ for intraday (m15_close, m15_ema(20)). prev(x) is one bar back, prev(x, N) is N bars back. ema(N); min(x, N), max(x, N); < <= > >= == !=, crosses_above, crosses_below; and, or, not. Put daily conditions first: intraday data is fetched live, for up to 120 stocks (about a minute)."
         />
         <div className="chips" role="group" aria-label="Example conditions" style={{ marginBottom: 8 }}>
           {EXAMPLE_CONDITIONS.map((ex) => (

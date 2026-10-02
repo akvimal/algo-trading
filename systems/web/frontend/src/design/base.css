@@ -1628,12 +1628,12 @@ table.t th {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .notes-toggle {
   min-height: 0;
   padding: 2px 10px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .notes-body {
   display: flex;
@@ -1649,7 +1649,7 @@ table.t th {
 }
 .notes-day {
   margin: 6px 0 2px;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-dim);
@@ -1663,10 +1663,11 @@ table.t th {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .note-text {
   margin: 4px 0;
+  font-size: 14px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1674,7 +1675,7 @@ table.t th {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 10px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .note-image {
   display: block;
@@ -2052,17 +2053,17 @@ table.t th {
   background: var(--surface-2);
 }
 .pill-small {
-  padding: 0 6px;
-  font-size: 11px;
-  line-height: 16px;
+  padding: 0 7px;
+  font-size: 12px;
+  line-height: 18px;
 }
 .notes-tags {
   gap: 4px;
 }
 .notes-tags button {
-  padding: 1px 8px;
-  min-height: 22px;
-  font-size: 11px;
+  padding: 1px 10px;
+  min-height: 26px;
+  font-size: 13px;
 }
 .notes-footer .icon-btn,
 .note-head .icon-btn {
@@ -2072,7 +2073,7 @@ table.t th {
   padding: 2px 6px;
 }
 .notes-count {
-  font-size: 11px;
+  font-size: 12px;
 }
 .notes-count.at-limit {
   color: var(--warn);
@@ -2089,7 +2090,7 @@ table.t th {
   flex: 1;
   min-width: 0;
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 /* The same size as the other small controls here, not the form-field checkbox. */
@@ -2098,7 +2099,7 @@ table.t th {
   align-items: center;
   gap: 5px;
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
   cursor: pointer;
 }

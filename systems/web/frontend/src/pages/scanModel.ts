@@ -1,4 +1,4 @@
-import type { Buildup, OiRow, Proximity, Regime, ScreenerRow } from "../api/types";
+import type { Buildup, OiHistoryPoint, OiRow, Proximity, Regime, ScreenerRow } from "../api/types";
 
 export const BUILDUP_LABEL: Record<Buildup, string> = {
   long_buildup: "Long buildup",
@@ -142,3 +142,57 @@ export function compactCount(n: number): string {
 
 /** The symbol to chart for a scan row: where the Trade screen takes it. */
 export const tradeLink = (symbol: string) => `/trade?symbol=${encodeURIComponent(symbol)}&segment=NSE`;
+
+/** One day of the per-stock OI history: how call and put open interest and the price moved against the day before. */
+export type OiDay = {
+  date: string;
+  callPct: number | null;
+  putPct: number | null;
+  pricePct: number | null;
+  callBuildup: Buildup | null;
+  putBuildup: Buildup | null;
+  pcr: number | null;
+};
+
+const pctChange = (now: number | null | undefined, before: number | null | undefined): number | null =>
+  now == null || before == null || !before ? null : ((now - before) / before) * 100;
+
+/** The same OI-vs-price 2x2 read market-data uses for the badges (oi_summary._classify_buildup): a flat or unknown change reads as nothing. */
+export function classifyBuildup(oiDiff: number | null, priceDiff: number | null): Buildup | null {
+  if (!oiDiff || !priceDiff) return null;
+  if (oiDiff > 0) return priceDiff > 0 ? "long_buildup" : "short_buildup";
+  return priceDiff > 0 ? "short_covering" : "long_unwinding";
+}
+
+/** The last `days` days of change for one stock, newest first. Each day is measured against the stored day before it (the same way the
+ * server computes the badge on the latest day), so the first point of the history only serves as a reference and `days` days of change
+ * needs `days + 1` points. A stock with fewer points than that simply shows fewer days. */
+export function oiDays(history: OiHistoryPoint[], days = 5): OiDay[] {
+  const out: OiDay[] = [];
+  for (let i = 1; i < history.length; i++) {
+    const prev = history[i - 1];
+    const cur = history[i];
+    const callNow = cur.total_call_oi;
+    const putNow = cur.total_put_oi;
+    const priceDiff = cur.spot_price != null && prev.spot_price != null ? cur.spot_price - prev.spot_price : null;
+    out.push({
+      date: cur.snapshot_date,
+      callPct: pctChange(callNow, prev.total_call_oi),
+      putPct: pctChange(putNow, prev.total_put_oi),
+      pricePct: pctChange(cur.spot_price, prev.spot_price),
+      callBuildup: callNow != null && prev.total_call_oi != null ? classifyBuildup(callNow - prev.total_call_oi, priceDiff) : null,
+      putBuildup: putNow != null && prev.total_put_oi != null ? classifyBuildup(putNow - prev.total_put_oi, priceDiff) : null,
+      pcr: callNow ? (putNow ?? 0) / callNow : null,
+    });
+  }
+  return out.slice(-days).reverse();
+}
+
+/** How much call and put OI moved over the whole window shown (first day's change through the last), as one figure each. */
+export function oiWindowChange(history: OiHistoryPoint[], days = 5): { callPct: number | null; putPct: number | null; from: string | null } {
+  const used = history.slice(-(days + 1));
+  if (used.length < 2) return { callPct: null, putPct: null, from: null };
+  const first = used[0];
+  const last = used[used.length - 1];
+  return { callPct: pctChange(last.total_call_oi, first.total_call_oi), putPct: pctChange(last.total_put_oi, first.total_put_oi), from: first.snapshot_date };
+}

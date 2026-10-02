@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, oiSignal, oiStrength, tradeLink, visible } from "./scanModel";
+import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, classifyBuildup, oiDays, oiSignal, oiStrength, oiWindowChange, tradeLink, visible } from "./scanModel";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
   symbol, exchange: "NSE", snapshot_date: "2026-09-25", spot_price: 100, total_call_oi: 1000, total_put_oi: 1000, pcr: 1,
@@ -163,5 +163,80 @@ describe("major two-sided shifts", () => {
     expect(oiStrength(oi("A", { call_oi_change_pct: null }))).toBeNull();
     const rows = [oi("NOPE", { call_oi_change_pct: null }), bull("MID", 10, 10), bull("BIG", 30, 30)];
     expect(filterOi(rows, { ...OI_DEFAULTS, sort: "strength" }).map((r) => r.symbol)).toEqual(["BIG", "MID", "NOPE"]);
+  });
+});
+
+describe("per-stock OI history", () => {
+  // oldest first, the latest day last - the shape GET /oi-buildup returns
+  const hist = [
+    { snapshot_date: "2026-09-24", total_call_oi: 1000, total_put_oi: 2000, spot_price: 100 },
+    { snapshot_date: "2026-09-25", total_call_oi: 1100, total_put_oi: 1800, spot_price: 102 }, // price up, call up, put down: calls bought, puts closed
+    { snapshot_date: "2026-09-26", total_call_oi: 990, total_put_oi: 1980, spot_price: 101 }, // price down, call down, put up
+    { snapshot_date: "2026-09-29", total_call_oi: 1089, total_put_oi: 2178, spot_price: 99.99 }, // price down, both up
+  ];
+
+  it("measures each day against the stored day before it, newest first", () => {
+    const days = oiDays(hist);
+    expect(days.map((d) => d.date)).toEqual(["2026-09-29", "2026-09-26", "2026-09-25"]);
+    expect(days[2].callPct).toBeCloseTo(10, 5);
+    expect(days[2].putPct).toBeCloseTo(-10, 5);
+    expect(days[2].pricePct).toBeCloseTo(2, 5);
+    expect(days[2].pcr).toBeCloseTo(1800 / 1100, 5);
+  });
+
+  it("reads each side with the same 2x2 the badges use", () => {
+    const [latest, middle, first] = oiDays(hist);
+    expect([first.callBuildup, first.putBuildup]).toEqual(["long_buildup", "short_covering"]);
+    expect([middle.callBuildup, middle.putBuildup]).toEqual(["long_unwinding", "short_buildup"]);
+    expect([latest.callBuildup, latest.putBuildup]).toEqual(["short_buildup", "short_buildup"]);
+  });
+
+  it("classifies like market-data: flat or unknown reads as nothing", () => {
+    expect(classifyBuildup(5, 1)).toBe("long_buildup");
+    expect(classifyBuildup(5, -1)).toBe("short_buildup");
+    expect(classifyBuildup(-5, 1)).toBe("short_covering");
+    expect(classifyBuildup(-5, -1)).toBe("long_unwinding");
+    expect(classifyBuildup(0, 1)).toBeNull();
+    expect(classifyBuildup(5, 0)).toBeNull();
+    expect(classifyBuildup(null, 1)).toBeNull();
+    expect(classifyBuildup(5, null)).toBeNull();
+  });
+
+  it("shows the last five days when there are more, and needs six points for five days", () => {
+    const long = Array.from({ length: 10 }, (_, i) => ({ snapshot_date: `2026-09-${10 + i}`, total_call_oi: 1000 + i * 10, total_put_oi: 1000, spot_price: 100 + i }));
+    const days = oiDays(long);
+    expect(days).toHaveLength(5);
+    expect(days[0].date).toBe("2026-09-19");
+    expect(days[4].date).toBe("2026-09-15");
+    expect(oiDays(long.slice(-6))).toHaveLength(5);
+    expect(oiDays(long.slice(-5))).toHaveLength(4);
+  });
+
+  it("has nothing to show for a stock with a single stored day, or none", () => {
+    expect(oiDays([hist[0]])).toEqual([]);
+    expect(oiDays([])).toEqual([]);
+  });
+
+  it("leaves a figure blank rather than guessing when a total or the price is missing or zero", () => {
+    const days = oiDays([
+      { snapshot_date: "2026-09-24", total_call_oi: 0, total_put_oi: 500, spot_price: null },
+      { snapshot_date: "2026-09-25", total_call_oi: 100, total_put_oi: 500, spot_price: 100 },
+    ]);
+    expect(days[0].callPct).toBeNull(); // a zero base has no percentage
+    expect(days[0].callBuildup).toBe(null); // and no price change, so nothing to classify
+    expect(days[0].pricePct).toBeNull();
+    expect(days[0].putPct).toBeCloseTo(0, 5);
+    const bare = oiDays([{ snapshot_date: "2026-09-24" }, { snapshot_date: "2026-09-25" }]);
+    expect(bare[0].callPct).toBeNull();
+    expect(bare[0].pcr).toBeNull();
+  });
+
+  it("gives the whole-window change for call and put, from the first day shown", () => {
+    const w = oiWindowChange(hist, 5);
+    expect(w.from).toBe("2026-09-24");
+    expect(w.callPct).toBeCloseTo(8.9, 5);
+    expect(w.putPct).toBeCloseTo(8.9, 5);
+    expect(oiWindowChange([hist[0]], 5)).toEqual({ callPct: null, putPct: null, from: null });
+    expect(oiWindowChange(hist, 2).from).toBe("2026-09-25"); // two days of change start from the point before them
   });
 });

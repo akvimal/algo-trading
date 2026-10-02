@@ -172,6 +172,73 @@ describe("OI buildup", () => {
     expect(await screen.findByText("No stocks match")).toBeInTheDocument();
   });
 
+  describe("the five-day history", () => {
+    const withHistory = () => {
+      oi = {
+        snapshot_date: "2026-09-25",
+        rows: [
+          oiRow("HISTORIC", {
+            history: [
+              { snapshot_date: "2026-09-18", total_call_oi: 1000, total_put_oi: 1000, spot_price: 100 },
+              { snapshot_date: "2026-09-19", total_call_oi: 1100, total_put_oi: 900, spot_price: 102 },
+              { snapshot_date: "2026-09-22", total_call_oi: 1210, total_put_oi: 990, spot_price: 101 },
+              { snapshot_date: "2026-09-23", total_call_oi: 1089, total_put_oi: 1089, spot_price: 103 },
+              { snapshot_date: "2026-09-24", total_call_oi: 1200, total_put_oi: 1100, spot_price: 104 },
+              { snapshot_date: "2026-09-25", total_call_oi: 1300, total_put_oi: 1200, spot_price: 105 },
+            ],
+          }),
+          oiRow("NEWCOMER", { history: [{ snapshot_date: "2026-09-25", total_call_oi: 1300, total_put_oi: 1200, spot_price: 105 }] }),
+        ],
+      };
+    };
+
+    it("opens a table of the last five days, newest first, with a badge per side", async () => {
+      withHistory();
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const card = within(within(list).getAllByTestId("oi-card")[0]);
+      expect(card.queryByTestId("oi-history")).not.toBeInTheDocument();
+      await user.click(card.getByRole("button", { name: "History" }));
+      const table = card.getByTestId("oi-history");
+      const rows = within(table).getAllByRole("row").slice(1);
+      expect(rows).toHaveLength(5);
+      expect(rows[0]).toHaveTextContent("25 Sept"); // newest first
+      expect(rows[0]).toHaveTextContent("+8.3%"); // call 1200 -> 1300
+      expect(rows[0]).toHaveTextContent("+9.1%"); // put 1100 -> 1200
+      expect(rows[0]).toHaveTextContent("Long buildup"); // price up, OI up
+      expect(rows[4]).toHaveTextContent("19 Sept");
+      expect(within(table).getByText(/Since 18 Sept/)).toBeInTheDocument();
+      await user.click(card.getByRole("button", { name: "Close history" }));
+      expect(card.queryByTestId("oi-history")).not.toBeInTheDocument();
+    });
+
+    it("says so when a stock has only one stored day, instead of an empty table", async () => {
+      withHistory();
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const cards = within(list).getAllByTestId("oi-card");
+      const card = within(cards[1]);
+      expect(cards[1]).toHaveTextContent("NEWCOMER");
+      await user.click(card.getByRole("button", { name: "History" }));
+      expect(card.getByTestId("oi-history")).toHaveTextContent(/Not enough history yet/);
+      expect(card.queryByRole("table")).not.toBeInTheDocument();
+    });
+
+    it("is independent of the chart and trade toggles on the same card", async () => {
+      withHistory();
+      const user = userEvent.setup();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const card = within(within(list).getAllByTestId("oi-card")[0]);
+      await user.click(card.getByRole("button", { name: "History" }));
+      await user.click(card.getByRole("button", { name: "Chart" }));
+      expect(card.getByTestId("oi-history")).toBeInTheDocument();
+      expect(card.getByRole("button", { name: "Close chart" })).toBeInTheDocument();
+    });
+  });
+
   describe("major two-sided shifts", () => {
     const shifted = () => {
       oi = {

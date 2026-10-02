@@ -11,7 +11,7 @@ import { useResource } from "../hooks/useResource";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { ScanTradePanel } from "./ScanTradePanel";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, oiSignal, tradeLink, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, oiDays, oiSignal, oiWindowChange, tradeLink, visible,
   type OiFilters, type OiSignal, type OiSort, type ScreenerFilters, type ScreenerSort,
 } from "./scanModel";
 import {
@@ -211,6 +211,58 @@ function BuildupPill({ b }: { b: Buildup | null }) {
   );
 }
 
+/** The last five days of call and put OI change for one stock, newest first, each against the day before it. */
+function OiHistory({ row }: { row: OiRow }) {
+  const days = oiDays(row.history, 5);
+  const window = oiWindowChange(row.history, 5);
+  if (days.length === 0) {
+    return (
+      <p className="dim" style={{ margin: 0 }} data-testid="oi-history">
+        Not enough history yet: the end-of-day scan keeps one snapshot a day, so a change needs two.
+      </p>
+    );
+  }
+  return (
+    <div className="oi-history" data-testid="oi-history">
+      <table>
+        <caption className="sr-only">Last {days.length} days of open interest change for {row.symbol}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Day</th>
+            <th scope="col">Price</th>
+            <th scope="col">Call OI</th>
+            <th scope="col">Put OI</th>
+            <th scope="col">PCR</th>
+          </tr>
+        </thead>
+        <tbody>
+          {days.map((d) => (
+            <tr key={d.date}>
+              <th scope="row">{formatDay(d.date)}</th>
+              <td>
+                <Signed value={d.pricePct} text={formatPct(d.pricePct, 2, true)} />
+              </td>
+              <td>
+                <Signed value={d.callPct} text={formatPct(d.callPct, 1, true)} /> <BuildupPill b={d.callBuildup} />
+              </td>
+              <td>
+                <Signed value={d.putPct} text={formatPct(d.putPct, 1, true)} /> <BuildupPill b={d.putBuildup} />
+              </td>
+              <td className="num">{d.pcr == null ? "–" : d.pcr.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {window.from && (
+        <p className="dim" style={{ margin: "6px 0 0" }}>
+          Since {formatDay(window.from)}: call OI <Signed value={window.callPct} text={formatPct(window.callPct, 1, true)} />, put OI{" "}
+          <Signed value={window.putPct} text={formatPct(window.putPct, 1, true)} />.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function OiCard({
   row: r,
   minShift,
@@ -226,6 +278,7 @@ function OiCard({
   tradeOpen: boolean;
   onToggleTrade: () => void;
 }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   return (
     <div className="card scan-card" data-testid="oi-card">
       <div className="row">
@@ -260,6 +313,9 @@ function OiCard({
           Put/call ratio <span className="num">{r.pcr == null ? "–" : r.pcr.toFixed(2)}</span>
         </span>
         <span className="field-actions">
+          <button className="link-btn" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)}>
+            {historyOpen ? "Close history" : "History"}
+          </button>
           <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
             {expanded ? "Close chart" : "Chart"}
           </button>
@@ -268,6 +324,7 @@ function OiCard({
           </button>
         </span>
       </div>
+      {historyOpen && <OiHistory row={r} />}
       {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
       {tradeOpen && (
         <div className="scan-chart">

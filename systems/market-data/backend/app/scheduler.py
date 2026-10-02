@@ -10,7 +10,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, SentimentHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
+from app.domain import job_tracker
 from app.domain.dhan_retry import dhan_retry_delay
+from app.domain.job_tracker import tracked
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.oi_buildup import PreviousSnapshot, compute_eod_buildup
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
@@ -90,26 +92,41 @@ def _log_eod_summary(job: str, total: int, tally: dict[str, int]) -> None:
         logger.info(message)
 
 
+@tracked("instrument-sync-daily", "Instrument master sync")
 def _sync_all() -> None:
-    for provider in all_providers():
+    run = job_tracker.current()
+    providers = all_providers()
+    tally = {"ok": 0, "failed": 0}
+    run.set_total(len(providers) + 1)  # each provider, then the NSE index universes
+    for i, provider in enumerate(providers, 1):
         try:
             provider.sync_instruments()
+            tally["ok"] += 1
         except Exception:
+            tally["failed"] += 1
             logger.exception("scheduled instrument sync failed for provider %s", provider.name)
+        run.tick(i, tally)
 
     try:
         nse_indices.sync_universes()
+        tally["ok"] += 1
     except Exception:
+        tally["failed"] += 1
         logger.exception("scheduled NSE index universe sync failed")
+    run.tick(len(providers) + 1, tally)
 
 
+@tracked("dhan-token-renew", "Dhan token renewal")
 def _renew_dhan_token() -> None:
     try:
         renew_access_token()
-    except Exception:
+    except Exception as exc:
         logger.exception("scheduled Dhan token renewal failed")
+        job_tracker.current().fail(f"{type(exc).__name__}: {exc}"[:300])
 
 
+# keep a day of the five-minute recorder's runs, and drop the ones it skips: it skips every night and weekend, which is noise
+@tracked("sentiment-history-record", "Sentiment recorder", keep=288, keep_skips=False)
 def _record_sentiment_history() -> None:
     """Writes one market_data.sentiment_history row per SENTIMENT_UNDERLYINGS
     symbol whose exchange is currently in session (is_within_session) -
@@ -128,6 +145,8 @@ def _record_sentiment_history() -> None:
     that same session window regardless, so this doesn't create a visible
     gap there, just avoids a wasted Dhan option-chain call and a noisy row
     for a market that isn't even open."""
+    run = job_tracker.current()
+    tally = {"ok": 0, "failed": 0}
     db = SessionLocal()
     try:
         now = datetime.now(ZoneInfo(settings.timezone))
@@ -136,6 +155,7 @@ def _record_sentiment_history() -> None:
                 continue
             for symbol in symbols:
                 sentiment, spot_price = fetch_underlying_sentiment(exchange, symbol)
+                tally["failed" if sentiment.error else "ok"] += 1
                 db.add(
                     SentimentHistory(
                         exchange=exchange,
@@ -151,13 +171,18 @@ def _record_sentiment_history() -> None:
                     )
                 )
         db.commit()
-    except Exception:
+        if not tally["ok"] and not tally["failed"]:
+            run.skip("no market in session")
+        run.tick(tally["ok"] + tally["failed"], tally)
+    except Exception as exc:
         logger.exception("scheduled sentiment history recording failed")
         db.rollback()
+        run.fail(f"{type(exc).__name__}: {exc}"[:300])
     finally:
         db.close()
 
 
+@tracked("oi-eod-snapshot-record", "OI buildup snapshot")
 def _record_oi_eod_snapshot() -> None:
     """Writes one market_data.oi_eod_snapshot row per NSE F&O stock
     (DhanProvider.list_fno_stock_underlyings - ~150-200 symbols, NOT
@@ -188,16 +213,19 @@ def _record_oi_eod_snapshot() -> None:
     scan on every backend restart during dev iteration would be wasteful;
     missing today's snapshot just means it fills in at tomorrow's own
     scheduled run instead."""
+    run = job_tracker.current()
     now = datetime.now(ZoneInfo(settings.timezone))
     if now.weekday() >= 5:
         logger.info("scheduled OI EOD snapshot: skipped, weekend")
+        run.skip("weekend")
         return
 
     try:
         provider = get_provider("NSE")
         symbols = provider.list_fno_stock_underlyings()
-    except Exception:
+    except Exception as exc:
         logger.exception("scheduled OI EOD snapshot: could not list NSE F&O stocks")
+        run.fail(f"could not list NSE F&O stocks: {type(exc).__name__}: {exc}"[:300])
         return
 
     # Every skip below used to be a bare `continue` with no log line, so a
@@ -207,14 +235,17 @@ def _record_oi_eod_snapshot() -> None:
         logger.warning(
             "scheduled OI EOD snapshot: 0 NSE F&O stocks listed (instrument master not loaded?) - nothing to do"
         )
+        run.fail("0 NSE F&O stocks listed (instrument master not loaded?)")
         return
     logger.info("scheduled OI EOD snapshot: starting, %d symbols", len(symbols))
     tally = {"written": 0, "unresolved": 0, "no_expiry": 0, "no_chain": 0, "failed": 0}
+    run.set_total(len(symbols))
 
     today = now.date()
     db = SessionLocal()
     try:
-        for symbol in symbols:
+        for i, symbol in enumerate(symbols):
+            run.tick(i, tally)
             try:
                 resolved = provider.resolve_underlying(symbol)
                 if resolved is None:
@@ -277,9 +308,11 @@ def _record_oi_eod_snapshot() -> None:
                 db.rollback()
     finally:
         db.close()
+    run.tick(len(symbols), tally)
     _log_eod_summary("OI EOD snapshot", len(symbols), tally)
 
 
+@tracked("equity-screener-snapshot-record", "Equity screener snapshot")
 def _record_equity_screener_snapshot() -> None:
     """Writes one market_data.equity_screener_snapshot row per NSE equity
     (DhanProvider.list_nse_equities - ALL ~2000 listed equities, wider
@@ -307,15 +340,18 @@ def _record_equity_screener_snapshot() -> None:
     past whatever is already stored are inserted - a full day's ~2000
     symbols only ever add ~2000 new rows, not re-write the whole window),
     then prunes anything older than `from_date` below."""
+    run = job_tracker.current()
     now = datetime.now(ZoneInfo(settings.timezone))
     if now.weekday() >= 5:
+        run.skip("weekend")
         return
 
     try:
         provider = get_provider("NSE")
         symbols = provider.list_nse_equities()
-    except Exception:
+    except Exception as exc:
         logger.exception("scheduled equity screener snapshot: could not list NSE equities")
+        run.fail(f"could not list NSE equities: {type(exc).__name__}: {exc}"[:300])
         return
 
     try:
@@ -336,9 +372,12 @@ def _record_equity_screener_snapshot() -> None:
     # window equity_screener.py needs) even across weekends/holidays - also
     # equity_daily_bar's own retention window, pruned to the same cutoff below.
     from_date = today - timedelta(days=380)
+    tally = {"written": 0, "too_little_history": 0, "failed": 0}
+    run.set_total(len(symbols))
     db = SessionLocal()
     try:
-        for symbol in symbols:
+        for i, symbol in enumerate(symbols):
+            run.tick(i, tally)
             try:
                 candles = _retry_when_throttled(provider.get_candle_history, symbol, "daily", from_date, today)
 
@@ -363,6 +402,7 @@ def _record_equity_screener_snapshot() -> None:
                 result = compute_equity_screener_row(candles)
                 if result is None:
                     db.commit()  # the bar cache above still needs to be saved even with nothing else to write
+                    tally["too_little_history"] += 1
                     continue  # not enough history yet - see equity_screener.py's own MIN_BARS floor
 
                 row = (
@@ -387,11 +427,15 @@ def _record_equity_screener_snapshot() -> None:
                 row.index_memberships = ",".join(sorted(symbol_indices.get(symbol, []))) or None
 
                 db.commit()
+                tally["written"] += 1
             except Exception:
+                tally["failed"] += 1
                 logger.exception("scheduled equity screener snapshot failed for %s", symbol)
                 db.rollback()
     finally:
         db.close()
+    run.tick(len(symbols), tally)
+    _log_eod_summary("equity screener snapshot", len(symbols), tally)
 
 
 def _check_price_alerts() -> None:
@@ -410,7 +454,29 @@ def _check_price_alerts() -> None:
         db.close()
 
 
+def job_catalog() -> list[dict]:
+    """The jobs worth tracking, in the order they are shown: what each is, when it is due, and what is next. The price-alert
+    check (every few seconds) is deliberately absent: a run row per poll would bury the rest."""
+    s = settings
+    jobs = [
+        ("oi-eod-snapshot-record", "OI buildup snapshot", f"Weekdays {s.oi_eod_snapshot_hour:02d}:{s.oi_eod_snapshot_minute:02d}", "Stores each F&O stock's total call and put open interest for the day, which the OI buildup scan and its history read."),
+        ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches a year of daily bars for every NSE stock and stores the screener row, which the Screener and custom scans read."),
+        ("instrument-sync-daily", "Instrument master sync", f"Daily {s.instrument_sync_hour:02d}:{s.instrument_sync_minute:02d}, and at start-up", "Refreshes the broker's list of tradeable instruments and the NSE index memberships."),
+        ("sentiment-history-record", "Sentiment recorder", f"Every {s.sentiment_history_interval_minutes} minutes while a market is open", "Records the option-chain sentiment badge for the main indices."),
+    ]
+    if s.dhan_token_renew_interval_hours > 0:
+        jobs.append(("dhan-token-renew", "Dhan token renewal", f"Every {s.dhan_token_renew_interval_hours} hours, and at start-up", "Extends the platform Dhan access token."))
+    out = []
+    for job_id, label, schedule, what in jobs:
+        scheduled = _scheduler.get_job(job_id)
+        out.append({"job_id": job_id, "label": label, "schedule": schedule, "what": what, "next_run_at": getattr(scheduled, "next_run_time", None)})
+    return out
+
+
 def start_scheduler() -> None:
+    # Where runs are recorded, and close out any run the last stop cut off.
+    job_tracker.configure(job_tracker.DbStore(SessionLocal))
+    job_tracker.mark_interrupted_on_start()
     _scheduler.add_job(
         _sync_all,
         CronTrigger(hour=settings.instrument_sync_hour, minute=settings.instrument_sync_minute),

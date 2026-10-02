@@ -887,3 +887,33 @@ class EquityScreenerOut(BaseModel):
 
     snapshot_date: date
     rows: list[EquityScreenerRowOut]
+
+
+class JobRunOut(BaseModel):
+    """One run of a background job, for GET /jobs."""
+
+    id: str
+    status: Literal["running", "succeeded", "partial", "failed", "skipped", "interrupted"]
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None  # for a running one, how long it has been going
+    total: Optional[int] = None
+    done: int = 0
+    tally: dict[str, int] = {}
+    message: Optional[str] = None
+
+
+class JobOut(BaseModel):
+    job_id: str
+    label: str
+    what: str
+    schedule: str
+    next_run_at: Optional[datetime] = None
+    running: Optional[JobRunOut] = None
+    last_run: Optional[JobRunOut] = None  # the latest run that has ended, however it ended
+    last_success: Optional[JobRunOut] = None  # the latest run that ended 'succeeded'
+    recent: list[JobRunOut] = []  # newest first, including one still running
+
+
+class JobsOut(BaseModel):
+    jobs: list[JobOut]

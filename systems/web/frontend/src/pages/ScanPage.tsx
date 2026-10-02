@@ -11,8 +11,8 @@ import { useResource } from "../hooks/useResource";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { ScanTradePanel } from "./ScanTradePanel";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, OI_DEFAULTS, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, tradeLink, visible,
-  type OiFilters, type OiSort, type ScreenerFilters, type ScreenerSort,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, oiSignal, tradeLink, visible,
+  type OiFilters, type OiSignal, type OiSort, type ScreenerFilters, type ScreenerSort,
 } from "./scanModel";
 import {
   EMPTY_FORM, EXAMPLE_CONDITIONS, INDEX_OPTIONS, defToForm, filterSummary, formToDef, sortScreens, usesIntraday, validateForm, type CustomScreenForm,
@@ -95,6 +95,40 @@ function OiScan() {
 
   return (
     <div className="stack">
+      <div className="oi-signal">
+        <div className="chips" role="group" aria-label="Signal">
+          {(["all", "strong_bull", "strong_bear"] as OiSignal[]).map((s) => (
+            <button
+              key={s}
+              aria-pressed={f.signal === s}
+              title={s === "all" ? "Every stock, whatever it shows" : OI_SIGNAL_HELP[s]}
+              // a major-shift list is read biggest first
+              onClick={() => setF({ ...f, signal: s, sort: s === "all" ? (f.sort === "strength" ? "call_oi" : f.sort) : "strength" })}
+            >
+              {s === "all" ? "All stocks" : OI_SIGNAL_LABEL[s]}
+            </button>
+          ))}
+        </div>
+        {f.signal !== "all" && (
+          <label className="select-field oi-shift">
+            <span className="dim">Both sides up at least (%)</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              min={0}
+              max={1000}
+              step={1}
+              value={Number.isFinite(f.minShift) ? f.minShift : ""}
+              onChange={(e) => setF({ ...f, minShift: e.target.value === "" ? 0 : Math.max(0, Number(e.target.value)) })}
+            />
+          </label>
+        )}
+      </div>
+      {f.signal !== "all" && (
+        <p className="faint" style={{ margin: 0, fontSize: 12 }} data-testid="oi-signal-help">
+          {OI_SIGNAL_HELP[f.signal]} Both call and put open interest grew by at least {f.minShift}%. It describes today's option chain; it is not a prediction.
+        </p>
+      )}
       <div className="filters">
         <SearchBox value={f.search} onChange={(search) => setF({ ...f, search })} />
         <Select label="Call side" value={f.call} onChange={(call) => setF({ ...f, call })} options={buildupOptions} />
@@ -108,6 +142,7 @@ function OiScan() {
             { value: "put_oi", label: "Put OI change" },
             { value: "pcr", label: "Put/call ratio" },
             { value: "price", label: "Price change" },
+            { value: "strength", label: "Size of the shift" },
             { value: "symbol", label: "Symbol A to Z" },
           ]}
         />
@@ -129,6 +164,10 @@ function OiScan() {
             <div>
               <strong>Put/call ratio</strong>: put open interest divided by call open interest. Above 1 means more puts are open than calls.
             </div>
+            <div>
+              <strong>Strong bullish</strong>: {OI_SIGNAL_HELP.strong_bull} <strong>Strong bearish</strong>: {OI_SIGNAL_HELP.strong_bear} A shift counts only when open interest
+              grew by at least {DEFAULT_MIN_SHIFT}% (you can change it) on both sides.
+            </div>
           </details>
           {data.data.rows.length === 0 ? (
             <Empty title="No snapshot yet">The end-of-day scan has not run yet. Check back after the market closes.</Empty>
@@ -141,6 +180,7 @@ function OiScan() {
                   <OiCard
                     key={r.symbol}
                     row={r}
+                    minShift={f.minShift}
                     expanded={expanded === r.symbol}
                     onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))}
                     tradeOpen={tradeOpen === r.symbol}
@@ -173,12 +213,14 @@ function BuildupPill({ b }: { b: Buildup | null }) {
 
 function OiCard({
   row: r,
+  minShift,
   expanded,
   onToggle,
   tradeOpen,
   onToggleTrade,
 }: {
   row: OiRow;
+  minShift: number;
   expanded: boolean;
   onToggle: () => void;
   tradeOpen: boolean;
@@ -187,7 +229,17 @@ function OiCard({
   return (
     <div className="card scan-card" data-testid="oi-card">
       <div className="row">
-        <strong>{r.symbol}</strong>
+        <strong>
+          {r.symbol}
+          {(() => {
+            const signal = oiSignal(r, minShift);
+            return signal ? (
+              <span className={`pill pill-small ${signal === "strong_bull" ? "up" : "dn"}`} title={OI_SIGNAL_HELP[signal]} data-testid="oi-signal-badge" style={{ marginLeft: 8 }}>
+                {OI_SIGNAL_LABEL[signal]}
+              </span>
+            ) : null;
+          })()}
+        </strong>
         <span>
           <span className="num">{r.spot_price == null ? "–" : formatPrice(r.spot_price)}</span>{" "}
           <Signed value={r.price_change_pct} text={formatPct(r.price_change_pct, 2, true)} />

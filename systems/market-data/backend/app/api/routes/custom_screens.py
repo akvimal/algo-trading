@@ -34,8 +34,8 @@ router = APIRouter()
 # Intraday bars are not stored for the universe: they are fetched from the exchange feed, one call per stock per interval, paced by the
 # provider (about two a second). A run is therefore capped: at most this many stocks are fetched, in at most this long, and a feed that
 # fails this many times in a row is given up on for the rest of the run (an expired token fails them all the same way).
-INTRADAY_STOCK_LIMIT = 60
-INTRADAY_SECONDS_LIMIT = 45.0
+INTRADAY_STOCK_LIMIT = 120
+INTRADAY_SECONDS_LIMIT = 55.0
 INTRADAY_FAILURES_BEFORE_GIVING_UP = 4
 # Days of history to ask for, per interval: enough bars for an ema(20) or a rolling window, not more than a call needs.
 _INTRADAY_DAYS = {"5min": 5, "15min": 10, "30min": 20, "60min": 40}

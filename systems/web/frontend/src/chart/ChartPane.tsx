@@ -595,6 +595,36 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   // ---- drawings: saved per instrument, restored after every load ----
   const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()], instanceIdRef.current);
 
+  // A drawing being dragged. The library only reports the end of a drag when the mouse is released over the chart's own plot area: let
+  // go over the price axis, between two panes or outside the window and that report never comes, so the change was neither saved nor
+  // shown on a sibling chart. The window-level release below finishes the job in that case.
+  const draggingRef = useRef<string | null>(null);
+  useEffect(() => {
+    const released = () => {
+      const id = draggingRef.current;
+      if (!id) return;
+      window.setTimeout(() => {
+        if (draggingRef.current !== id) return; // the library saw the release itself and has already saved it
+        draggingRef.current = null;
+        const overlay = chartRef.current?.getOverlayById?.(id);
+        if (!overlay || !drawnRef.current.has(id)) return;
+        drawnRef.current.set(id, serialize(overlay));
+        sidesRef.current.delete(id);
+        persist();
+        emitDrawing();
+      }, 0);
+    };
+    window.addEventListener("mouseup", released, true);
+    window.addEventListener("pointerup", released, true);
+    window.addEventListener("touchend", released, true);
+    return () => {
+      window.removeEventListener("mouseup", released, true);
+      window.removeEventListener("pointerup", released, true);
+      window.removeEventListener("touchend", released, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- serialize/persist/emitDrawing read refs and propsRef only
+  }, []);
+
   const handlers = () => ({
     onDrawEnd: (e: OverlayEvent) => {
       pendingRef.current = null;
@@ -613,7 +643,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (e.overlay.name === "textNote") beginTextEdit(e.overlay, false);
       return false;
     },
+    onPressedMoveStart: (e: OverlayEvent) => {
+      draggingRef.current = e.overlay.id;
+      return false;
+    },
     onPressedMoveEnd: (e: OverlayEvent) => {
+      draggingRef.current = null;
       drawnRef.current.set(e.overlay.id, serialize(e.overlay));
       sidesRef.current.delete(e.overlay.id); // it moved: the next price only learns its side, it cannot cross
       persist();

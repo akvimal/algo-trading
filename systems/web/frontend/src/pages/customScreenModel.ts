@@ -64,3 +64,15 @@ export function filterSummary(f: CustomScreenForm): string {
 
 /** Sorts newest-first, same convention as every other saved-list in this app (combos, positions). */
 export const sortScreens = (screens: CustomScreen[]): CustomScreen[] => [...screens].sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+/** Starting points for a condition, one tap each: what the language can say beyond close > 100 - a lower timeframe, and a bar back. */
+export const EXAMPLE_CONDITIONS: { label: string; expression: string }[] = [
+  { label: "15m EMA cross", expression: "m15_ema(5) crosses_above m15_ema(20)" },
+  { label: "Daily trend, 15m breakout", expression: "close > ema(50) and m15_close > max(m15_high, 20)" },
+  { label: "Above previous 15m high", expression: "m15_close > prev(m15_high)" },
+  { label: "Higher than 2 days ago", expression: "close > prev(close, 2)" },
+  { label: "Weekly low break", expression: "weekly_close < min(weekly_low, 20)" },
+];
+
+/** Whether a condition reads intraday bars (m5_, m15_, m30_, h1_): they are fetched live for each stock, not read from the end-of-day data. */
+export const usesIntraday = (expression: string): boolean => /\b(m5|m15|m30|h1)_/i.test(expression);

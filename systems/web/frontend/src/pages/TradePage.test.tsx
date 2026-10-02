@@ -1268,6 +1268,103 @@ describe("drawing tools", () => {
     expect(JSON.parse(localStorage.getItem("web.chart.drawings:NSE:NIFTY")!)).toHaveLength(1);
   });
 
+  it("changing a drawing on one chart (moving or resizing it) changes it on a sibling chart of the SAME instrument too", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    // Make the second chart NIFTY too, at a different interval than the first (still 15m).
+    await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
+    await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(screen.getAllByText("NIFTY")).toHaveLength(2));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(screen.getByLabelText("Same interval"));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+    // Clicking into chart 1's region above (to change its symbol) made IT the active pane -
+    // click back into chart 0 so the toolbar draws there instead.
+    await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
+
+    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+    await user.click(bar.getByRole("button", { name: "Trend line" }));
+    const pending = chart(0).overlaysNamed("segment");
+    expect(pending).toHaveLength(1);
+    act(() => chart(0).finishDrawing(pending[0].id, [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[10].timestamp, value: 1020 }]));
+
+    // Pane 2 remounted (a fresh FakeChart instance) when its own symbol changed to NIFTY above -
+    // same "starts a new instrument with its own drawings" precedent this file already uses, so
+    // its CURRENT chart is the latest instance, not chart(1).
+    const paneTwo = FakeChart.instances[FakeChart.instances.length - 1];
+    // The SAME drawing now exists on chart 2 (1h) too - not drawn there by the person, restored
+    // from the shared (exchange, symbol) save the moment chart 0 persisted it - and only once,
+    // not duplicated by chart 0 also reacting to its own write.
+    await waitFor(() => expect(paneTwo.overlaysNamed("segment")).toHaveLength(1));
+    expect(chart(0).overlaysNamed("segment")).toHaveLength(1);
+    // Now change it on chart 0 - drag an end point to make it longer - and the sibling follows.
+    const longer = [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[20].timestamp, value: 1030 }];
+    act(() => chart(0).moveOverlay(pending[0].id, longer));
+    await waitFor(() => expect(paneTwo.overlaysNamed("segment")[0].points[1].value).toBe(1030));
+    expect(paneTwo.overlaysNamed("segment")).toHaveLength(1); // changed in place, not added again
+    expect(paneTwo.overlaysNamed("segment")[0].points[1].value).toBe(1030);
+    // and changing it on the sibling shows on chart 0
+    const back = [{ timestamp: paneTwo.data[5].timestamp, value: 1011 }, { timestamp: paneTwo.data[9].timestamp, value: 1012 }];
+    act(() => paneTwo.moveOverlay(paneTwo.overlaysNamed("segment")[0].id, back));
+    await waitFor(() => expect(chart(0).overlaysNamed("segment")[0].points[1].value).toBe(1012));
+    expect(chart(0).overlaysNamed("segment")).toHaveLength(1);
+  });
+
+  it("a drag let go outside the plot area (over the price axis, say) is still saved and still shown on the sibling chart", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    // Make the second chart NIFTY too, at a different interval than the first (still 15m).
+    await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
+    await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(screen.getAllByText("NIFTY")).toHaveLength(2));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(screen.getByLabelText("Same interval"));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+    // Clicking into chart 1's region above (to change its symbol) made IT the active pane -
+    // click back into chart 0 so the toolbar draws there instead.
+    await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
+
+    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+    await user.click(bar.getByRole("button", { name: "Trend line" }));
+    const pending = chart(0).overlaysNamed("segment");
+    expect(pending).toHaveLength(1);
+    act(() => chart(0).finishDrawing(pending[0].id, [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[10].timestamp, value: 1020 }]));
+
+    // Pane 2 remounted (a fresh FakeChart instance) when its own symbol changed to NIFTY above -
+    // same "starts a new instrument with its own drawings" precedent this file already uses, so
+    // its CURRENT chart is the latest instance, not chart(1).
+    const paneTwo = FakeChart.instances[FakeChart.instances.length - 1];
+    // The SAME drawing now exists on chart 2 (1h) too - not drawn there by the person, restored
+    // from the shared (exchange, symbol) save the moment chart 0 persisted it - and only once,
+    // not duplicated by chart 0 also reacting to its own write.
+    await waitFor(() => expect(paneTwo.overlaysNamed("segment")).toHaveLength(1));
+    expect(chart(0).overlaysNamed("segment")).toHaveLength(1);
+    // Drag an end point to make it longer, and let go where the library never hears the release.
+    const longer = [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[20].timestamp, value: 1030 }];
+    act(() => chart(0).dragOverlayWithoutRelease(pending[0].id, longer));
+    // nothing is saved while the button is still down
+    expect(paneTwo.overlaysNamed("segment")[0].points[1].value).not.toBe(1030);
+    // the release lands on the window instead
+    act(() => {
+      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await waitFor(() => expect(paneTwo.overlaysNamed("segment")[0].points[1].value).toBe(1030));
+    expect(paneTwo.overlaysNamed("segment")).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem("web.chart.drawings:NSE:NIFTY")!)[0].points[1].value).toBe(1030);
+  });
+
   it("choosing the same tool again, or the cursor, puts it down without drawing anything", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");

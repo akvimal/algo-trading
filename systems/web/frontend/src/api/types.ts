@@ -234,7 +234,14 @@ export type CustomScreenDef = {
 };
 export type CustomScreen = CustomScreenDef & { id: string; created_at: string; updated_at: string };
 export type CustomScreenMatch = { symbol: string; exchange: string; close: number };
-export type CustomScreenRunResult = { snapshot_date: string | null; candidates: number; matches: CustomScreenMatch[] };
+export type CustomScreenRunResult = {
+  snapshot_date: string | null;
+  candidates: number;
+  matches: CustomScreenMatch[];
+  /** Only for a condition that reads intraday bars: how many stocks could not be checked, and why (a sentence to show). */
+  intraday_skipped?: number;
+  intraday_note?: string | null;
+};
 
 export type Candle = { exchange: string; symbol: string; interval: string; open: number; high: number; low: number; close: number; volume: number; timestamp: string };
 

@@ -15,7 +15,7 @@ import {
   type OiFilters, type OiSort, type ScreenerFilters, type ScreenerSort,
 } from "./scanModel";
 import {
-  EMPTY_FORM, INDEX_OPTIONS, defToForm, filterSummary, formToDef, sortScreens, validateForm, type CustomScreenForm,
+  EMPTY_FORM, EXAMPLE_CONDITIONS, INDEX_OPTIONS, defToForm, filterSummary, formToDef, sortScreens, usesIntraday, validateForm, type CustomScreenForm,
 } from "./customScreenModel";
 
 const TABS = [
@@ -480,8 +480,15 @@ function CustomScreenScan() {
           onChange={(expression) => setForm({ ...form, expression })}
           placeholder="weekly_close < min(weekly_low, 20) and ema(5) crosses_below ema(20)"
           inputMode="text"
-          hint="close, open, high, low (daily); weekly_close etc (weekly); ema(N), weekly_ema(N); min(x, N), max(x, N); <, <=, >, >=, ==, !=, crosses_above, crosses_below; and, or, not."
+          hint="Names: close, open, high, low (daily); weekly_close ...; m5_ m15_ m30_ h1_ for intraday (m15_close, m15_ema(20)). prev(x) is one bar back, prev(x, N) is N bars back. ema(N); min(x, N), max(x, N); < <= > >= == !=, crosses_above, crosses_below; and, or, not. Put daily conditions first: intraday data is fetched live, for up to 60 stocks."
         />
+        <div className="chips" role="group" aria-label="Example conditions" style={{ marginBottom: 8 }}>
+          {EXAMPLE_CONDITIONS.map((ex) => (
+            <button key={ex.label} title={ex.expression} onClick={() => setForm({ ...form, expression: ex.expression })}>
+              {ex.label}
+            </button>
+          ))}
+        </div>
         <div className="filters">
           <Select<CustomScreenForm["fno"]> label="F&O" value={form.fno} onChange={(fno) => setForm({ ...form, fno })} options={FNO_OPTIONS} />
           <Select label="Index" value={form.index} onChange={(index) => setForm({ ...form, index })} options={INDEX_SELECT_OPTIONS} />
@@ -502,6 +509,11 @@ function CustomScreenScan() {
           <div className="notice error" role="alert">
             {saveError}
           </div>
+        )}
+        {busy && usesIntraday(form.expression) && (
+          <p className="faint" role="status" data-testid="intraday-wait" style={{ margin: "6px 0 0", fontSize: 12 }}>
+            Reading intraday bars live for each stock. This can take up to a minute.
+          </p>
         )}
         <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
           {editingId && (
@@ -525,7 +537,13 @@ function CustomScreenScan() {
             {result.snapshot_date ? `EOD read for ${formatDay(result.snapshot_date)}` : "No EOD data yet - the screener has not run once."}
             {result.snapshot_date && ` · ${result.matches.length} of ${result.candidates} stocks matched`}
             {filterSummary(form) && ` (${filterSummary(form)})`}
+            {usesIntraday(form.expression) && " · intraday bars read live"}
           </p>
+          {result.intraday_note && (
+            <p className="notice" role="note" data-testid="intraday-note" style={{ margin: "6px 0 0" }}>
+              {result.intraday_note}
+            </p>
+          )}
           {result.snapshot_date && result.matches.length === 0 ? (
             <Empty title="No matches">Try a different condition, or loosen the filters.</Empty>
           ) : (

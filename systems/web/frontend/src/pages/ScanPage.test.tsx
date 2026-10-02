@@ -595,6 +595,42 @@ describe("Custom screen", () => {
     expect(match.getByRole("button", { name: "Chart" })).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("offers example conditions that fill the box, including intraday ones and prev()", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByLabelText("Condition");
+    const examples = within(screen.getByRole("group", { name: "Example conditions" }));
+    await user.click(examples.getByRole("button", { name: "15m EMA cross" }));
+    expect(screen.getByLabelText("Condition")).toHaveValue("m15_ema(5) crosses_above m15_ema(20)");
+    await user.click(examples.getByRole("button", { name: "Above previous 15m high" }));
+    expect(screen.getByLabelText("Condition")).toHaveValue("m15_close > prev(m15_high)");
+  });
+
+  it("says the intraday bars are read live, and shows why some stocks were not checked", async () => {
+    previewResult = { snapshot_date: "2026-09-25", candidates: 80, matches: [{ symbol: "TCS", exchange: "NSE", close: 3500 }], intraday_skipped: 20, intraday_note: "20 of 80 stocks were not checked: intraday bars are fetched live, so a run covers at most 60 stocks." };
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByLabelText("Condition");
+    await user.type(screen.getByLabelText("Label"), "15m");
+    await user.click(screen.getByRole("button", { name: "15m EMA cross" }));
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    const result = await screen.findByTestId("custom-screen-result");
+    expect(within(result).getByText(/intraday bars read live/)).toBeInTheDocument();
+    expect(within(result).getByTestId("intraday-note")).toHaveTextContent("20 of 80 stocks were not checked");
+  });
+
+  it("shows no intraday line for a daily condition", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=custom");
+    await screen.findByLabelText("Condition");
+    await user.type(screen.getByLabelText("Label"), "x");
+    await user.type(screen.getByLabelText("Condition"), "close > 100");
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    const result = await screen.findByTestId("custom-screen-result");
+    expect(within(result).queryByText(/intraday bars read live/)).not.toBeInTheDocument();
+    expect(within(result).queryByTestId("intraday-note")).not.toBeInTheDocument();
+  });
+
   it("opens the same inline chart Chart does on OI buildup, and closes it again on the next Preview", async () => {
     const user = userEvent.setup();
     renderAt("/scan?tab=custom");

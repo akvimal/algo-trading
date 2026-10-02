@@ -7,10 +7,10 @@ equity_screener_snapshot, the batch equity_daily_bar fetch) and calls this;
 same "pure core, thin route" split equity_screener.py/oi_summary.py use."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from app.domain.models import Candle
-from app.domain.screener_expr import EvalContext, evaluate_expression, parse_expression
+from app.domain.screener_expr import EvalContext, IntradayUnavailable, evaluate_expression, expression_timeframes, is_intraday, parse_expression
 
 
 @dataclass
@@ -33,7 +33,26 @@ class ScreenMatch:
     close: float
 
 
+@dataclass
+class ScreenRun:
+    """What running one expression over the candidates came to: who matched, how many stocks were skipped because the intraday data they
+    needed could not be fetched (the run's budget was used up, or the feed failed for them), and whether the expression reads intraday
+    bars at all."""
+
+    matches: list[ScreenMatch]
+    skipped: int = 0
+    uses_intraday: bool = False
+
+
+# Fetches one candidate's intraday bars for an interval ("15min"), oldest-first; may raise IntradayUnavailable.
+IntradayFetch = Callable[[ScreenCandidate, str], list[Candle]]
+
+
 def run_custom_screen(expression: str, candidates: list[ScreenCandidate]) -> list[ScreenMatch]:
+    return run_screen(expression, candidates).matches
+
+
+def run_screen(expression: str, candidates: list[ScreenCandidate], intraday: Optional[IntradayFetch] = None) -> ScreenRun:
     """Raises screener_expr.ExpressionError (unchanged) if `expression`
     itself does not parse - the caller maps that straight to a 422 with
     the same plain-language reason, since this is exactly what the person
@@ -43,12 +62,18 @@ def run_custom_screen(expression: str, candidates: list[ScreenCandidate]) -> lis
     same "a thin symbol has nothing to report yet, skipped rather than
     aborting the batch" spirit every EOD job in this service already has."""
     condition = parse_expression(expression)  # raises up front: one clear error, not one per candidate
+    uses_intraday = any(is_intraday(tf) for tf in expression_timeframes(condition))
     matches: list[ScreenMatch] = []
+    skipped = 0
     for c in candidates:
-        ctx = EvalContext(daily_bars=c.bars)
-        if evaluate_expression(condition, ctx):
-            matches.append(ScreenMatch(symbol=c.symbol, exchange=c.exchange, close=c.close))
-    return matches
+        loader = (lambda interval, c=c: intraday(c, interval)) if intraday is not None else None
+        ctx = EvalContext(daily_bars=c.bars, load_intraday=loader)
+        try:
+            if evaluate_expression(condition, ctx):
+                matches.append(ScreenMatch(symbol=c.symbol, exchange=c.exchange, close=c.close))
+        except IntradayUnavailable:
+            skipped += 1  # not enough intraday budget (or no feed) for this one: left out, and counted, never a failed run
+    return ScreenRun(matches=matches, skipped=skipped, uses_intraday=uses_intraday)
 
 
 def matches_universe_filters(

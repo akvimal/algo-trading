@@ -17,8 +17,15 @@ Grammar (informal):
 Bare identifiers (no parens): close, open, high, low - today's latest DAILY
 bar; weekly_close, weekly_open, weekly_high, weekly_low - the latest WEEKLY
 bar (see app/domain/indicators.py's resample_weekly - may be the current,
-still-forming week). Calls: ema(N) / weekly_ema(N) (app/domain/indicators.py's
-compute_ema); min(X, N) / max(X, N) - the rolling N-period minimum/maximum of
+still-forming week). The same names take an INTRADAY prefix - m5_, m15_, m30_,
+h1_ (5, 15, 30 and 60 minute bars): m15_close, m15_high, m15_ema(20) - the latest
+bar of that size, which may still be forming. Intraday bars are not stored: they
+are fetched from the exchange feed on demand for each stock the expression
+actually gets to (see EvalContext.load_intraday) and are limited per run.
+Calls: ema(N) / weekly_ema(N) / m15_ema(N) ... (app/domain/indicators.py's
+compute_ema); prev(X) / prev(X, N) - the value N bars BACK in X's own timeframe
+(prev(m15_close) is the previous 15 minute bar's close, prev(close, 2) the close
+two days ago; N defaults to 1; prev(ema(5), 1) works too); min(X, N) / max(X, N) - the rolling N-period minimum/maximum of
 another value (a price identifier or an ema(...) call), over the N periods
 BEFORE the point being evaluated - EXCLUDING it (see RollRef's own docstring
 for why: a window that included it would make "close < min(low, 20)"
@@ -43,6 +50,21 @@ from app.domain.indicators import compute_ema
 from app.domain.models import Candle
 
 _PRICE_FIELDS = {"open", "high", "low", "close"}
+
+# The timeframes a name can be read in, by the prefix that selects them ("" = daily, the default). The intraday ones map to the interval
+# name the exchange feed understands.
+DAILY, WEEKLY = "daily", "weekly"
+INTRADAY_INTERVALS: dict[str, str] = {"m5": "5min", "m15": "15min", "m30": "30min", "h1": "60min"}
+_PREFIXES: dict[str, str] = {"weekly_": WEEKLY, "daily_": DAILY, **{f"{tf}_": tf for tf in INTRADAY_INTERVALS}}
+
+
+def is_intraday(timeframe: str) -> bool:
+    return timeframe in INTRADAY_INTERVALS
+
+
+class IntradayUnavailable(RuntimeError):
+    """Raised by an intraday loader that is not allowed (or not able) to fetch more bars for this run - the stock is skipped, not failed,
+    and reported as skipped in the result."""
 _COMPARATORS: dict[str, Callable[[float, float], bool]] = {
     "<": lambda a, b: a < b,
     "<=": lambda a, b: a <= b,
@@ -112,22 +134,32 @@ class EvalContext:
     sharing a term)."""
 
     daily_bars: list[Candle]
+    # Intraday bars are fetched lazily, only for a stock whose evaluation reaches an intraday name, by this loader: it takes the interval
+    # ("15min") and returns the bars oldest-first, or raises IntradayUnavailable. None (the default) means there is no intraday feed here.
+    load_intraday: Optional[Callable[[str], list[Candle]]] = None
     _weekly_bars: Optional[list[Candle]] = field(default=None, repr=False)
-    _ema_cache: dict[tuple[bool, int], list[Optional[float]]] = field(default_factory=dict, repr=False)
+    _intraday_bars: dict[str, list[Candle]] = field(default_factory=dict, repr=False)
+    _ema_cache: dict[tuple[str, int], list[Optional[float]]] = field(default_factory=dict, repr=False)
 
-    def bars(self, weekly: bool) -> list[Candle]:
-        if not weekly:
+    def bars(self, timeframe: str) -> list[Candle]:
+        if timeframe == DAILY:
             return self.daily_bars
-        if self._weekly_bars is None:
-            from app.domain.indicators import resample_weekly
+        if timeframe == WEEKLY:
+            if self._weekly_bars is None:
+                from app.domain.indicators import resample_weekly
 
-            self._weekly_bars = resample_weekly(self.daily_bars)
-        return self._weekly_bars
+                self._weekly_bars = resample_weekly(self.daily_bars)
+            return self._weekly_bars
+        if timeframe not in self._intraday_bars:
+            if self.load_intraday is None:
+                raise IntradayUnavailable("no intraday data is available for this screen")
+            self._intraday_bars[timeframe] = self.load_intraday(INTRADAY_INTERVALS[timeframe])
+        return self._intraday_bars[timeframe]
 
-    def ema_series(self, weekly: bool, period: int) -> list[Optional[float]]:
-        key = (weekly, period)
+    def ema_series(self, timeframe: str, period: int) -> list[Optional[float]]:
+        key = (timeframe, period)
         if key not in self._ema_cache:
-            closes = [b.close for b in self.bars(weekly)]
+            closes = [b.close for b in self.bars(timeframe)]
             self._ema_cache[key] = compute_ema(closes, period)
         return self._ema_cache[key]
 
@@ -151,10 +183,10 @@ class Literal:
 @dataclass
 class PriceRef:
     field: str  # one of _PRICE_FIELDS
-    weekly: bool
+    timeframe: str = DAILY
 
     def value_at(self, ctx: EvalContext, back: int) -> Optional[float]:
-        bars = ctx.bars(self.weekly)
+        bars = ctx.bars(self.timeframe)
         i = len(bars) - 1 - back
         return getattr(bars[i], self.field) if 0 <= i < len(bars) else None
 
@@ -162,12 +194,25 @@ class PriceRef:
 @dataclass
 class EmaRef:
     period: int
-    weekly: bool
+    timeframe: str = DAILY
 
     def value_at(self, ctx: EvalContext, back: int) -> Optional[float]:
-        series = ctx.ema_series(self.weekly, self.period)
+        series = ctx.ema_series(self.timeframe, self.period)
         i = len(series) - 1 - back
         return series[i] if 0 <= i < len(series) else None
+
+
+@dataclass
+class ShiftRef:
+    """`inner` as it was `periods` bars ago, in inner's OWN timeframe - prev(m15_close) is the previous 15 minute bar's close, prev(close, 3)
+    the close three days back. Stacks with everything else (a crossover of prev(ema(5)) and so on), since a Node is already "the value `back`
+    bars before the latest"."""
+
+    inner: Node
+    periods: int
+
+    def value_at(self, ctx: EvalContext, back: int) -> Optional[float]:
+        return self.inner.value_at(ctx, back + self.periods)
 
 
 @dataclass
@@ -342,18 +387,30 @@ class _Parser:
         if name in _KEYWORDS:
             raise ExpressionError(f"'{t.text}' can't be used as a value here.")
 
-        weekly = name.startswith("weekly_")
-        bare = name[len("weekly_"):] if weekly else name
+        timeframe = DAILY
+        bare = name
+        for prefix, tf in _PREFIXES.items():
+            if name.startswith(prefix):
+                timeframe, bare = tf, name[len(prefix):]
+                break
 
         has_args = self._peek() is not None and self._peek().kind == "lparen"  # type: ignore[union-attr]
 
         if bare in _PRICE_FIELDS and not has_args:
-            return PriceRef(bare, weekly)
+            return PriceRef(bare, timeframe)
         if bare == "ema":
             args = self._call_args(name)
             if len(args) != 1 or not isinstance(args[0], Literal):
                 raise ExpressionError(f"'{name}(...)' needs exactly one number, the EMA period - e.g. {name}(20).")
-            return EmaRef(int(args[0].number), weekly)
+            return EmaRef(int(args[0].number), timeframe)
+        if name == "prev":
+            args = self._call_args(name)
+            if len(args) not in (1, 2) or (len(args) == 2 and not isinstance(args[1], Literal)):
+                raise ExpressionError("'prev(value)' or 'prev(value, N)' - the value one bar back, or N bars back - e.g. prev(m15_close) or prev(close, 2).")
+            periods = 1 if len(args) == 1 else int(args[1].number)  # type: ignore[union-attr]
+            if periods < 1:
+                raise ExpressionError("prev(value, N) needs N of 1 or more - 1 is the previous bar.")
+            return ShiftRef(args[0], periods)
         if name in ("min", "max"):
             args = self._call_args(name)
             if len(args) != 2 or not isinstance(args[1], Literal):
@@ -361,7 +418,10 @@ class _Parser:
             return RollRef(args[0], int(args[1].number), name)
         if bare in _PRICE_FIELDS and has_args:
             raise ExpressionError(f"'{name}' does not take arguments - use '{name}' on its own.")
-        raise ExpressionError(f"Unknown name '{t.text}'. Expected one of: close, open, high, low, weekly_close, ema(N), min(x, N), max(x, N).")
+        raise ExpressionError(
+            f"Unknown name '{t.text}'. Expected one of: close, open, high, low (daily); weekly_close ...; m5_/m15_/m30_/h1_close ...; "
+            "ema(N); prev(x) or prev(x, N); min(x, N), max(x, N)."
+        )
 
     def _call_args(self, name: str) -> list[Node]:
         self._expect("lparen", f"'(' after {name}")
@@ -387,3 +447,25 @@ def parse_expression(text: str) -> Condition:
 
 def evaluate_expression(condition: Condition, ctx: EvalContext) -> bool:
     return condition.evaluate(ctx)
+
+
+def expression_timeframes(condition: Condition) -> set[str]:
+    """Every timeframe the expression reads (daily, weekly, m15 ...), so a caller can tell whether it needs intraday data at all."""
+    found: set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, (PriceRef, EmaRef)):
+            found.add(node.timeframe)
+        elif isinstance(node, (ShiftRef, RollRef)):
+            walk(node.inner)
+        elif isinstance(node, Comparison):
+            walk(node.left)
+            walk(node.right)
+        elif isinstance(node, BoolOp):
+            for operand in node.operands:
+                walk(operand)
+        elif isinstance(node, Not):
+            walk(node.inner)
+
+    walk(condition)
+    return found

@@ -40,33 +40,33 @@ def _ctx(closes: list[float]) -> EvalContext:
 def test_parses_a_plain_price_comparison():
     node = parse_expression("close > 1500")
     assert isinstance(node, Comparison)
-    assert isinstance(node.left, PriceRef) and node.left.field == "close" and node.left.weekly is False
+    assert isinstance(node.left, PriceRef) and node.left.field == "close" and node.left.timeframe == "daily"
     assert node.op == ">"
     assert isinstance(node.right, Literal) and node.right.number == 1500
 
 
 def test_parses_weekly_price_references():
     node = parse_expression("weekly_close < weekly_low")
-    assert isinstance(node.left, PriceRef) and node.left.field == "close" and node.left.weekly is True
-    assert isinstance(node.right, PriceRef) and node.right.field == "low" and node.right.weekly is True
+    assert isinstance(node.left, PriceRef) and node.left.field == "close" and node.left.timeframe == "weekly"
+    assert isinstance(node.right, PriceRef) and node.right.field == "low" and node.right.timeframe == "weekly"
 
 
 def test_parses_ema_with_a_period():
     node = parse_expression("ema(5) crosses_below ema(20)")
-    assert isinstance(node.left, EmaRef) and node.left.period == 5 and node.left.weekly is False
+    assert isinstance(node.left, EmaRef) and node.left.period == 5 and node.left.timeframe == "daily"
     assert isinstance(node.right, EmaRef) and node.right.period == 20
     assert node.op == "crosses_below"
 
 
 def test_parses_weekly_ema():
     node = parse_expression("weekly_ema(10) > close")
-    assert isinstance(node.left, EmaRef) and node.left.weekly is True and node.left.period == 10
+    assert isinstance(node.left, EmaRef) and node.left.timeframe == "weekly" and node.left.period == 10
 
 
 def test_parses_min_and_max_with_an_inner_price_ref():
     node = parse_expression("weekly_close < min(weekly_low, 20)")
     assert isinstance(node.right, RollRef) and node.right.kind == "min" and node.right.window == 20
-    assert isinstance(node.right.inner, PriceRef) and node.right.inner.field == "low" and node.right.inner.weekly is True
+    assert isinstance(node.right.inner, PriceRef) and node.right.inner.field == "low" and node.right.inner.timeframe == "weekly"
 
 
 def test_min_max_can_wrap_an_ema():
@@ -251,7 +251,7 @@ def test_rolling_min_over_weekly_lows_excludes_the_current_week_the_stated_examp
         [140, 130, 120, 110, 100],  # week 5: breaks below every prior week's low
     ]
     ctx = _ctx([c for week in weeks_closes for c in week])
-    inner = RollRef(inner=PriceRef("low", weekly=True), window=4, kind="min")
+    inner = RollRef(inner=PriceRef("low", "weekly"), window=4, kind="min")
     assert inner.value_at(ctx, back=0) == 150  # week 1's own low, the smallest of weeks 1-4
     assert evaluate_expression(parse_expression("weekly_close < min(weekly_low, 4)"), ctx) is True
 
@@ -259,12 +259,12 @@ def test_rolling_min_over_weekly_lows_excludes_the_current_week_the_stated_examp
 def test_rolling_max_over_daily_highs_excludes_the_reference_bar():
     closes = [10, 12, 9, 15, 8]
     ctx = _ctx(closes)
-    node = RollRef(inner=PriceRef("high", weekly=False), window=3, kind="max")
+    node = RollRef(inner=PriceRef("high", "daily"), window=3, kind="max")
     # at back=0 (today, close 8), the 3 PRECEDING highs are [12,9,15] - today's own 8 is excluded
     assert node.value_at(ctx, 0) == 15
 
 
 def test_rolling_window_not_yet_filled_is_none():
     ctx = _ctx([10, 20, 30])  # only 2 bars exist BEFORE "today" - window=5 needs 5
-    node = RollRef(inner=PriceRef("close", weekly=False), window=5, kind="min")
+    node = RollRef(inner=PriceRef("close", "daily"), window=5, kind="min")
     assert node.value_at(ctx, 0) is None

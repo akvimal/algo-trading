@@ -773,6 +773,10 @@ class CustomScreenRunResult(BaseModel):
     snapshot_date: Optional[date] = None
     candidates: int
     matches: list[CustomScreenMatchOut]
+    # Only for an expression that reads intraday bars (m15_close ...): how many candidates were left out because their intraday data
+    # could not be fetched (the per-run limit, or the feed refused), and why, in a sentence to show. 0 / None otherwise.
+    intraday_skipped: int = 0
+    intraday_note: Optional[str] = None
 
 
 class OiEodSnapshotHistoryPoint(BaseModel):

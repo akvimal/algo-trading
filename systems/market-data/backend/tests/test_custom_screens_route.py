@@ -169,7 +169,7 @@ def test_delete_removes_the_owners_own_screen():
 
 def test_run_before_the_eod_job_has_ever_run_is_empty_not_an_error():
     db = FakeDB(latest_date=None)
-    out = route.preview_custom_screen(_payload(), db=db)
+    out = route.preview_custom_screen(_payload(), caller=None, db=db)
     assert out.snapshot_date is None and out.candidates == 0 and out.matches == []
 
 
@@ -187,7 +187,7 @@ def test_run_applies_universe_filters_then_the_expression():
     bars = [_bar(s, today, {"HIGH": 200, "LOW": 50, "NOTFNO": 200}[s]) for s in ("HIGH", "LOW", "NOTFNO")]
     db = FakeDB(snapshots=snapshots, bars=bars, latest_date=today)
 
-    out = route.preview_custom_screen(_payload(expression="close > 100", is_fno=True), db=db)
+    out = route.preview_custom_screen(_payload(expression="close > 100", is_fno=True), caller=None, db=db)
     assert out.snapshot_date == today
     assert out.candidates == 2  # HIGH and LOW pass the F&O filter; NOTFNO does not
     assert [m.symbol for m in out.matches] == ["HIGH"]  # only HIGH also clears close > 100
@@ -196,7 +196,7 @@ def test_run_applies_universe_filters_then_the_expression():
 def test_a_symbol_with_no_daily_bars_yet_simply_does_not_match_rather_than_erroring():
     today = date(2026, 9, 28)
     db = FakeDB(snapshots=[_snap("NOBAR", 200, snapshot_date=today)], bars=[], latest_date=today)
-    out = route.preview_custom_screen(_payload(expression="close > 100"), db=db)
+    out = route.preview_custom_screen(_payload(expression="close > 100"), caller=None, db=db)
     assert out.candidates == 1 and out.matches == []
 
 
@@ -204,5 +204,83 @@ def test_run_saved_screen_uses_its_own_stored_definition():
     today = date(2026, 9, 28)
     mine = _screen(user_id=ALICE, expression="close > 100", is_fno=None)
     db = FakeDB(screens=[mine], snapshots=[_snap("HIGH", 200, snapshot_date=today)], bars=[_bar("HIGH", today, 200)], latest_date=today)
-    out = route.run_saved_screen(str(mine.id), user_id=ALICE, db=db)
+    out = route.run_saved_screen(str(mine.id), user_id=ALICE, caller=None, db=db)
     assert [m.symbol for m in out.matches] == ["HIGH"]
+
+
+# ---- intraday expressions: fetched on demand, inside a per-run budget -------------------------------------------------
+
+
+def _candles(closes, interval="15min"):
+    from app.domain.models import Candle
+
+    return [Candle(exchange="NSE", symbol="X", interval=interval, open=c, high=c, low=c, close=c, volume=1, timestamp=f"2026-10-02T09:{15 + i:02d}:00", provider="fake") for i, c in enumerate(closes)]
+
+
+@pytest.fixture
+def feed(monkeypatch):
+    """Replaces the provider, the credentials and the cached history fetch: records what the screen asked the feed for."""
+    state = SimpleNamespace(calls=[], fail_with=None)
+
+    def fake_fetch(provider, exchange, symbol, interval, from_date, to_date, credentials=None, source=None):
+        state.calls.append((symbol, interval, (to_date - from_date).days))
+        if state.fail_with is not None:
+            raise RuntimeError(state.fail_with)
+        return _candles([1, 2, 3, 4], interval)
+
+    monkeypatch.setattr(route, "fetch_candle_history_cached", fake_fetch)
+    monkeypatch.setattr(route, "get_provider", lambda exchange: object())
+    monkeypatch.setattr(route, "data_credentials", lambda caller, exchange=None: None)
+    return state
+
+
+def _universe(n):
+    today = date(2026, 9, 28)
+    names = [f"S{i:03d}" for i in range(n)]
+    return FakeDB(snapshots=[_snap(s, 200, snapshot_date=today) for s in names], bars=[_bar(s, today, 200) for s in names], latest_date=today)
+
+
+def test_an_intraday_expression_fetches_each_stock_once_for_the_interval_it_names(feed):
+    out = route.preview_custom_screen(_payload(expression="close > 100 and m15_close > prev(m15_close)"), caller=SimpleNamespace(), db=_universe(3))
+    assert [m.symbol for m in out.matches] == ["S000", "S001", "S002"]
+    assert [(s, i) for s, i, _ in feed.calls] == [("S000", "15min"), ("S001", "15min"), ("S002", "15min")]
+    assert out.intraday_skipped == 0 and out.intraday_note is None
+
+
+def test_a_daily_only_expression_never_asks_the_feed(feed):
+    route.preview_custom_screen(_payload(expression="close > 100"), caller=SimpleNamespace(), db=_universe(3))
+    assert feed.calls == []
+
+
+def test_a_run_covers_at_most_the_stock_limit_and_says_so(feed):
+    out = route.preview_custom_screen(_payload(expression="m15_close > 0"), caller=SimpleNamespace(), db=_universe(route.INTRADAY_STOCK_LIMIT + 5))
+    assert len(out.matches) == route.INTRADAY_STOCK_LIMIT
+    assert out.intraday_skipped == 5
+    assert f"at most {route.INTRADAY_STOCK_LIMIT} stocks" in out.intraday_note and "Narrow the universe" in out.intraday_note
+
+
+def test_a_stock_that_fails_the_cheap_test_does_not_use_up_the_limit(feed):
+    today = date(2026, 9, 28)
+    low = [f"L{i:03d}" for i in range(100)]
+    high = [f"H{i:03d}" for i in range(10)]
+    db = FakeDB(
+        snapshots=[_snap(s, 50, snapshot_date=today) for s in low] + [_snap(s, 200, snapshot_date=today) for s in high],
+        bars=[_bar(s, today, 50) for s in low] + [_bar(s, today, 200) for s in high],
+        latest_date=today,
+    )
+    out = route.preview_custom_screen(_payload(expression="close > 100 and m15_close > 0"), caller=SimpleNamespace(), db=db)
+    assert len(out.matches) == 10 and out.intraday_skipped == 0
+    assert len({s for s, _, _ in feed.calls}) == 10  # only the ten that got past the daily test were fetched
+
+
+def test_a_feed_that_keeps_failing_is_given_up_on_and_its_reason_is_shown(feed):
+    feed.fail_with = "Dhan API rejected the access token (401) - it may need to be regenerated"
+    out = route.preview_custom_screen(_payload(expression="m15_close > 0"), caller=SimpleNamespace(), db=_universe(10))
+    assert out.matches == [] and out.intraday_skipped == 10
+    assert len(feed.calls) == route.INTRADAY_FAILURES_BEFORE_GIVING_UP  # it stopped asking
+    assert "rejected the access token" in out.intraday_note
+
+
+def test_each_interval_asks_for_a_sensible_stretch_of_history(feed):
+    route.preview_custom_screen(_payload(expression="m5_close > 0 and m30_close > 0 and h1_close > 0"), caller=SimpleNamespace(), db=_universe(1))
+    assert {(i, d) for _, i, d in feed.calls} == {("5min", 5), ("30min", 20), ("60min", 40)}

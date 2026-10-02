@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CustomScreen, CustomScreenDef } from "../api/types";
-import { EMPTY_FORM, defToForm, filterSummary, formToDef, sortScreens, validateForm, type CustomScreenForm } from "./customScreenModel";
+import { EMPTY_FORM, EXAMPLE_CONDITIONS, defToForm, filterSummary, formToDef, sortScreens, usesIntraday, validateForm, type CustomScreenForm } from "./customScreenModel";
 
 const form = (over: Partial<CustomScreenForm> = {}): CustomScreenForm => ({ ...EMPTY_FORM, label: "Bearish breakout", expression: "close > 100", ...over });
 
@@ -90,5 +90,21 @@ describe("sortScreens", () => {
     const input = [a, b];
     sortScreens(input);
     expect(input).toEqual([a, b]);
+  });
+});
+
+describe("intraday conditions", () => {
+  it("knows when a condition reads intraday bars", () => {
+    expect(usesIntraday("m15_close > prev(m15_high)")).toBe(true);
+    expect(usesIntraday("close > 100 and h1_ema(20) > close")).toBe(true);
+    expect(usesIntraday("close > 100 and weekly_close > 90")).toBe(false);
+    expect(usesIntraday("close > prev(close, 2)")).toBe(false);
+  });
+
+  it("ships examples that each say something the plain language can", () => {
+    expect(EXAMPLE_CONDITIONS.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(EXAMPLE_CONDITIONS.map((e) => e.expression)).size).toBe(EXAMPLE_CONDITIONS.length);
+    expect(EXAMPLE_CONDITIONS.some((e) => usesIntraday(e.expression))).toBe(true);
+    expect(EXAMPLE_CONDITIONS.some((e) => e.expression.includes("prev("))).toBe(true);
   });
 });

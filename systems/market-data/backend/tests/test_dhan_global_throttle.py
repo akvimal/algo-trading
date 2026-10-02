@@ -41,7 +41,7 @@ def test_a_burst_of_different_categories_is_staggered_not_simultaneous(monkeypat
         provider.get_previous_candle("RELIANCE", "5min")  # a DIFFERENT category, same instant
 
     assert len(sleeps) == 1
-    assert 0 < sleeps[0] <= dhan.MIN_GLOBAL_CALL_GAP_SECONDS
+    assert 0 < sleeps[0] <= dhan.MIN_GLOBAL_CALL_GAP_SECONDS + 1e-6  # float noise at the boundary
 
 
 def test_two_calls_of_the_same_category_are_not_double_charged(monkeypatch):

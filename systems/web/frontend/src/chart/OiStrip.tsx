@@ -1,8 +1,10 @@
 import type { OiSummary, SentimentHistoryPoint } from "../api/types";
+import type { Ref } from "react";
+import { AiReadButton, type AiReadHandle } from "./AiReadPanel";
 import { formatPrice } from "../format";
 import type { OiLevelLine } from "./oiLevels";
 import {
-  BUILDUP_ICON, BUILDUP_LABEL, buildupTone, classifyPcr, deltaPct, flowSkew, hasSentimentTrend, isStaleAt, pcrDiverges, sentimentSteps, volumePcr,
+  BUILDUP_ABBR, BUILDUP_ICON, BUILDUP_LABEL, buildupTone, classifyPcr, deltaPct, flowSkew, hasSentimentTrend, skewView, isStaleAt, pcrDiverges, sentimentSteps, volumePcr,
   type SentStep,
 } from "./oiStripModel";
 
@@ -68,13 +70,64 @@ function Sentiment({ points, window }: { points: SentimentHistoryPoint[]; window
   );
 }
 
+/** Which side's OI is growing faster this 5-minute window: a bar from the centre (CE fills left, PE fills
+ * right, longer = a wider gap), toned green for put-led and red for call-led — the PCR's own convention. */
+function FlowSkew({ skew, summary }: { skew: { pct: number; leader: "CE" | "PE" }; summary: OiSummary }) {
+  const v = skewView(skew);
+  const ce = deltaPct(summary.total_call_oi_change_5m, summary.total_call_oi);
+  const pe = deltaPct(summary.total_put_oi_change_5m, summary.total_put_oi);
+  const signed = (d: { pct: number; up: boolean } | null) => (d ? `${d.up ? "+" : "-"}${d.pct.toFixed(1)}%` : "–");
+  return (
+    <span
+      className={`oi-skew ${v.tone}`}
+      data-testid="oi-skew"
+      title={`${v.leader === "PE" ? "Put" : "Call"} OI is growing faster over 5m: puts ${signed(pe)} vs calls ${signed(ce)} (gap ${skew.pct.toFixed(1)}pp). ${
+        v.leader === "PE" ? "Usually put writers adding support (bullish)" : "Usually call writers adding resistance (bearish)"
+      }, but OI alone can't tell writing from buying — check the ${v.leader} pill.`}
+    >
+      <span className="oi-skew-bar" aria-hidden="true">
+        <span className="oi-skew-fill" style={{ width: `${v.fill * 50}%`, [v.leader === "PE" ? "left" : "right"]: "50%" }} />
+      </span>
+      <b>
+        {v.leader} +{skew.pct.toFixed(1)}%
+      </b>
+    </span>
+  );
+}
+
 /** A compact read of the option chain under the chart of an OI-eligible instrument — PCR (open-interest
  * and volume-based), call/put OI with their 5m/15m change, resistance/support strikes, buildup badges,
  * a flow-skew read, and the "OI trend" sentiment sparklines. Always shown for an eligible instrument; the
  * on-chart lines are a separate, opt-in layer (see the "OI levels" toggle). Renders nothing without data.
  * The R/S text below is skipped when that same layer is already drawing them on the chart - the same
  * numbers, so showing both just duplicates the space rather than the information. */
-export function OiStrip({ summary, sentiment, levels, onChartLevelsOn }: { summary: OiSummary | null; sentiment: SentimentHistoryPoint[]; levels: OiLevelLine[]; onChartLevelsOn: boolean }) {
+export function OiStrip({
+  summary,
+  sentiment,
+  levels,
+  onChartLevelsOn,
+  stripOn = true,
+  aiTarget = null,
+  aiRef,
+}: {
+  summary: OiSummary | null;
+  sentiment: SentimentHistoryPoint[];
+  levels: OiLevelLine[];
+  onChartLevelsOn: boolean;
+  /** False when the person has hidden the strip: only a slim row with the AI read stays (see `aiTarget`). */
+  stripOn?: boolean;
+  /** The instrument to read for the AI read when the strip is hidden and there is no option-chain summary; null: nothing to show. */
+  aiTarget?: { exchange: string; symbol: string } | null;
+  /** Lets the screen start the AI read from outside (the rail's AI read button). */
+  aiRef?: Ref<AiReadHandle>;
+}) {
+  if (!stripOn) {
+    return aiTarget ? (
+      <div className="oi-strip oi-strip-slim" data-testid="oi-strip-slim">
+        <AiReadButton ref={aiRef} exchange={aiTarget.exchange} symbol={aiTarget.symbol} />
+      </div>
+    ) : null;
+  }
   if (!summary) return null;
   const crypto = summary.underlying_exchange === "CRYPTO";
   const volPcr = volumePcr(summary.strikes);
@@ -116,22 +169,19 @@ export function OiStrip({ summary, sentiment, levels, onChartLevelsOn }: { summa
       )}
       {summary.total_call_buildup && (
         <span className={`pill ${buildupTone(summary.total_call_buildup, "CE")}`} title={`Call OI: ${BUILDUP_LABEL[summary.total_call_buildup]}`}>
-          {BUILDUP_ICON[summary.total_call_buildup]} CE {summary.total_call_buildup.replace("_", " ")}
+          {BUILDUP_ICON[summary.total_call_buildup]} CE {BUILDUP_ABBR[summary.total_call_buildup]}
         </span>
       )}
       {summary.total_put_buildup && (
         <span className={`pill ${buildupTone(summary.total_put_buildup, "PE")}`} title={`Put OI: ${BUILDUP_LABEL[summary.total_put_buildup]}`}>
-          {BUILDUP_ICON[summary.total_put_buildup]} PE {summary.total_put_buildup.replace("_", " ")}
+          {BUILDUP_ICON[summary.total_put_buildup]} PE {BUILDUP_ABBR[summary.total_put_buildup]}
         </span>
       )}
-      {skew && (
-        <span title={`Put OI is moving ${skew.leader === "PE" ? "faster" : "slower"} than call OI this 5-minute window`}>
-          Δ{skew.pct.toFixed(1)}pp {skew.leader}-led
-        </span>
-      )}
+      {skew && <FlowSkew skew={skew} summary={summary} />}
       {hasSentimentTrend(sentiment) && <span className="faint oi-strip-trend-label">OI trend</span>}
       <Sentiment points={sentiment} window="15m" />
       <Sentiment points={sentiment} window="5m" />
+      <AiReadButton ref={aiRef} exchange={summary.underlying_exchange} symbol={summary.underlying_symbol} expiry={summary.expiry} />
     </div>
   );
 }

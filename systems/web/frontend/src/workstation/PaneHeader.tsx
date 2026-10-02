@@ -1,7 +1,21 @@
 import type { MarketRegime } from "../api/types";
-import { INTERVALS, type IntervalDef } from "../chart/config";
+import { INTERVALS, toggleFavoriteInterval, type IntervalDef } from "../chart/config";
+import { Popover } from "../chart/Popover";
 import { formatPrice } from "../format";
-import { directionOf } from "./confluence";
+import { directionOf } from "./direction";
+import { useFavoriteIntervals } from "./useFavoriteIntervals";
+
+/** "5 Oct · 4d" for a contract that expires on `iso` (a YYYY-MM-DD date), and how many days are left (0 = today, negative = gone). */
+export function expiryLabel(iso: string, now: Date = new Date()): { text: string; days: number } {
+  const [y, m, d] = iso.split("-").map(Number);
+  const end = new Date(y, m - 1, d);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((end.getTime() - today.getTime()) / 86_400_000);
+  return { text: `${end.toLocaleDateString(undefined, { day: "numeric", month: "short" })} · ${days}d`, days };
+}
+
+/** A contract this close to expiry trades thin as the market moves to the next one. */
+export const EXPIRY_WARN_DAYS = 3;
 
 const REGIME_WORD = { trending_up: "Trending up", trending_down: "Trending down", ranging: "Ranging", transitional: "Changing" } as const;
 
@@ -18,14 +32,24 @@ type Props = {
   structureTrend?: Record<string, "up" | "down" | "range">;
   active: boolean;
   showActive: boolean;
-  /** Which candle sizes to offer - the full set by default; a caller with narrower needs (the
-   * Scan page's inline chart) can pass a shorter list instead. */
+  /** The contract this chart is traded on, and when it expires (YYYY-MM-DD) - shown so which expiry is in use is never a guess. */
+  contract?: string | null;
+  expiry?: string | null;
+  /** A fixed list of intervals to show as buttons (the Scan page's inline chart). Left out, the chart shows
+   * the person's FAVOURITE intervals as buttons, plus a star menu that lists every interval. */
   intervals?: IntervalDef[];
+  /** Fill the chart area with this chart (and back). Left out, no button. */
+  maximized?: boolean;
+  onToggleMaximize?: () => void;
 };
 
-/** The title bar of one chart: which instrument, its price, whether it is live, the candle size, and a
+/** The title bar of one chart: which instrument, its price, whether it is live, the interval, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
-export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals = INTERVALS }: Props) {
+export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals, contract = null, expiry = null, maximized = false, onToggleMaximize }: Props) {
+  const favorites = useFavoriteIntervals();
+  // A fixed list wins; otherwise the favourites, in size order, plus the size on screen when it is not one of them
+  // (so the active size is never invisible).
+  const buttons: IntervalDef[] = intervals ?? INTERVALS.filter((i) => favorites.includes(i.value) || i.value === interval);
   const dir = directionOf(regime);
   const trends = Object.entries(structureTrend ?? {});
   return (
@@ -34,13 +58,44 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
         <strong>{symbol}</strong>
         {showActive && active && <span className="pill" title="Orders and drawing tools apply to this chart">Trading</span>}
       </div>
-      <div className="chips" role="group" aria-label={`Candle size, ${symbol}`}>
-        {intervals.map((i) => (
+      <div className="chips" role="group" aria-label={`Interval, ${symbol}`}>
+        {buttons.map((i) => (
           <button key={i.value} aria-pressed={interval === i.value} onClick={() => onInterval(i.value)}>
             {i.label}
           </button>
         ))}
+        {!intervals && (
+          <Popover label="Intervals" align="left">
+            <div className="menu-heading">Interval</div>
+            <div className="interval-list">
+              {INTERVALS.map((i) => {
+                const starred = favorites.includes(i.value);
+                return (
+                  <div className="interval-row" key={i.value}>
+                    <button className="interval-pick" aria-pressed={interval === i.value} onClick={() => onInterval(i.value)}>
+                      {i.label}
+                    </button>
+                    <button
+                      className={`interval-star ${starred ? "on" : ""}`}
+                      aria-label={starred ? `Remove ${i.label} from favourites` : `Add ${i.label} to favourites`}
+                      aria-pressed={starred}
+                      disabled={starred && favorites.length === 1}
+                      title={starred ? (favorites.length === 1 ? "At least one favourite is kept" : "Remove from the quick buttons") : "Show as a quick button"}
+                      onClick={() => toggleFavoriteInterval(i.value)}
+                    >
+                      {starred ? "★" : "☆"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }}>
+              Starred intervals are the buttons shown on every chart.
+            </p>
+          </Popover>
+        )}
       </div>
+      {expiry && <ExpiryPill index={index} symbol={symbol} contract={contract} expiry={expiry} />}
       {regime && (
         <span className={`pill ${dir === "up" ? "up" : dir === "down" ? "dn" : ""}`} data-testid={`regime-${index}`}>
           {REGIME_WORD[regime.regime]} · ADX {regime.adx.toFixed(0)}
@@ -53,7 +108,7 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
       ))}
       {/* Pinned to the far right (margin-left: auto), after everything else - its own width changes
           on every tick (more digits, a comma appearing/disappearing, ...), and sitting ahead of the
-          candle-size buttons made them visibly jump sideways on every update. Nothing sits after it,
+          interval buttons made them visibly jump sideways on every update. Nothing sits after it,
           so its own reflow no longer moves anything else. Hidden entirely (Layers ▾ > Price in
           header) rather than just blanked, so it doesn't leave a dead gap in its place. */}
       {priceShown && (
@@ -66,6 +121,33 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
           </span>
         </span>
       )}
+      {onToggleMaximize && (
+        <button
+          className="pane-max"
+          aria-label={maximized ? `Restore ${symbol} chart` : `Maximize ${symbol} chart`}
+          aria-pressed={maximized}
+          title={maximized ? "Back to two charts" : "Fill the chart area with this chart"}
+          onClick={onToggleMaximize}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+            {maximized ? <path d="M6 2v4H2M10 14v-4h4M6 6 2 2M10 10l4 4" /> : <path d="M2 6V2h4M14 10v4h-4M2 2l4 4M14 14l-4-4" />}
+          </svg>
+        </button>
+      )}
     </div>
+  );
+}
+
+function ExpiryPill({ index, symbol, contract, expiry }: { index: number; symbol: string; contract: string | null; expiry: string }) {
+  const e = expiryLabel(expiry);
+  const near = e.days <= EXPIRY_WARN_DAYS;
+  return (
+    <span
+      className={`pill ${near ? "warn" : ""}`}
+      data-testid={`expiry-${index}`}
+      title={`${contract ?? symbol} expires ${expiry}${near ? " - close to expiry, trading moves to the next contract" : ""}`}
+    >
+      Exp {e.text}
+    </span>
   );
 }

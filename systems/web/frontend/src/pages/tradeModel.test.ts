@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, riskLots, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, planRows, planStatus, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -260,36 +260,22 @@ describe("buildOrder", () => {
   });
 });
 
-describe("peer confirmation", () => {
-  const find = (checks: ReturnType<typeof checkList>) => checks.find((c) => c.key === "peer");
-  const an = () => analyzeTicket(ticket({ stop: "990", target: "1030" }), ctx());
-  const run = (t: Ticket, peer: Parameters<typeof checkList>[5]) => find(checkList(t, analyzeTicket(t, ctx()), ctx(), null, null, peer));
-
-  it("is absent when there is no second chart", () => {
-    expect(find(checkList(ticket(), an(), ctx(), null, null))).toBeUndefined();
-  });
-
-  it("is in favour when the other index moves the same way as the order, against when it does not", () => {
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: "up" })).toMatchObject({ status: "good", label: "Confirmed by BANKNIFTY" });
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: "down" })?.status).toBe("bad");
-    expect(run(ticket({ action: "SELL", stop: "1010" }), { symbol: "BANKNIFTY", direction: "down" })?.status).toBe("good");
-    expect(run(ticket({ action: "SELL", stop: "1010" }), { symbol: "BANKNIFTY", direction: "up" })?.status).toBe("bad");
-  });
-
-  it("is a caution when the other index is going sideways, and not applicable before it loads", () => {
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: "neutral" })?.status).toBe("warn");
-    expect(run(ticket({ stop: "990" }), { symbol: "BANKNIFTY", direction: null })?.status).toBe("na");
-  });
-});
-
 describe("defaultLevel", () => {
   it("puts a stop against the trade, a target in its favour, and a waiting entry back from the price", () => {
-    expect(defaultLevel("stop", "BUY", 1000)).toBe(995);
-    expect(defaultLevel("target", "BUY", 1000)).toBe(1010);
-    expect(defaultLevel("entry", "BUY", 1000)).toBe(997);
-    expect(defaultLevel("stop", "SELL", 1000)).toBe(1005);
-    expect(defaultLevel("target", "SELL", 1000)).toBe(990);
-    expect(defaultLevel("entry", "SELL", 1000)).toBe(1003);
+    expect(defaultLevel("stop", "BUY", 1000)).toBe(998.5);
+    expect(defaultLevel("target", "BUY", 1000)).toBe(1003);
+    expect(defaultLevel("entry", "BUY", 1000)).toBe(999);
+    expect(defaultLevel("stop", "SELL", 1000)).toBe(1001.5);
+    expect(defaultLevel("target", "SELL", 1000)).toBe(997);
+    expect(defaultLevel("entry", "SELL", 1000)).toBe(1001);
+  });
+
+  it("puts the target as far as the minimum reward-to-risk asks, never under two stop-distances", () => {
+    expect(defaultLevel("target", "BUY", 1000, 10, 4)).toBe(1040);
+    expect(defaultLevel("target", "SELL", 1000, 10, 3)).toBe(970);
+    expect(defaultLevel("target", "BUY", 1000, 10, 1)).toBe(1020); // a lower minimum still plans 2:1
+    expect(defaultLevel("target", "BUY", 1000, null, 4)).toBe(1006); // no bar-move to measure by: a share of the price, scaled the same way
+    expect(defaultLevel("stop", "BUY", 1000, 10, 4)).toBe(990); // the stop is unchanged
   });
 
   it("gives levels on the right side for the order, which the ticket accepts", () => {
@@ -300,9 +286,24 @@ describe("defaultLevel", () => {
   });
 
   it("rounds to the decimals the chart shows", () => {
-    expect(defaultLevel("stop", "BUY", 23140.5)).toBe(23024.8);
-    expect(defaultLevel("stop", "BUY", 12.5)).toBe(12.438);
-    expect(defaultLevel("target", "BUY", 0.5)).toBe(0.505);
+    expect(defaultLevel("stop", "BUY", 23140.5)).toBe(23105.79);
+    expect(defaultLevel("stop", "BUY", 12.5)).toBe(12.481);
+    expect(defaultLevel("target", "BUY", 0.5)).toBe(0.5015);
+  });
+
+  it("measures in the chart's typical bar move when it is known, so the line lands on screen", () => {
+    // NIFTY near 22,540 on 1-minute bars moves about 6 points a bar: stop 6 away, target 12, entry 3 back
+    expect(defaultLevel("stop", "BUY", 22540, 6)).toBe(22534);
+    expect(defaultLevel("target", "BUY", 22540, 6)).toBe(22552);
+    expect(defaultLevel("entry", "BUY", 22540, 6)).toBe(22537);
+    expect(defaultLevel("stop", "SELL", 22540, 6)).toBe(22546);
+    expect(defaultLevel("target", "SELL", 22540, 6)).toBe(22528);
+  });
+
+  it("ignores an unusable typical move and falls back to a share of the price", () => {
+    expect(defaultLevel("stop", "BUY", 1000, 0)).toBe(998.5);
+    expect(defaultLevel("stop", "BUY", 1000, Number.NaN)).toBe(998.5);
+    expect(defaultLevel("stop", "BUY", 1000, null)).toBe(998.5);
   });
 
   it("has nothing to offer without a usable price", () => {
@@ -322,5 +323,98 @@ describe("isFresh", () => {
     expect(isFresh(now - (PRICE_STALE_MS - 1), now)).toBe(true);
     expect(isFresh(now - PRICE_STALE_MS, now)).toBe(false);
     expect(isFresh(now, now)).toBe(true); // just arrived
+  });
+});
+
+describe("planStatus", () => {
+  const status = (over: Partial<Ticket>, c = ctx()) => {
+    const t = ticket(over);
+    return planStatus(t, analyzeTicket(t, c), c);
+  };
+
+  it("says there is no plan until a stop is set", () => {
+    expect(status({})).toMatchObject({ tone: "empty" });
+  });
+
+  it("says the reward is unplanned when there is a stop and no target", () => {
+    expect(status({ stop: "990" })).toMatchObject({ tone: "partial", text: expect.stringContaining("reward unplanned") });
+  });
+
+  it("shows reward-to-risk and the risk as a share of capital once planned", () => {
+    expect(status({ stop: "990", target: "1030" })).toEqual({ tone: "ready", text: "Planned · R:R 3.0 · risk 1.0%" });
+  });
+
+  it("warns when the reward-to-risk is under the minimum", () => {
+    expect(status({ stop: "990", target: "1010" })).toMatchObject({ tone: "warn", text: expect.stringContaining("under your 2 minimum") });
+  });
+
+  it("warns when the size was typed over the plan and risks more than it", () => {
+    expect(status({ stop: "990", target: "1030", lots: "500" })).toMatchObject({ tone: "warn", text: expect.stringContaining("Size above your plan") });
+  });
+
+  it("warns when even the system's smallest size (one lot) risks more than the plan", () => {
+    // 65-unit lots, a 20-point stop: one lot risks 1300 of a 100000 capital at a 1% plan (1000)
+    expect(status({ stop: "980", target: "1040" }, ctx({ lotSize: 65 }))).toMatchObject({ tone: "warn", text: expect.stringContaining("Even the smallest size is over your plan") });
+  });
+
+  it("covers an option order too, on the underlying's levels, with no risk figure (the server sizes it)", () => {
+    expect(status({ strategy: "naked" })).toMatchObject({ tone: "empty", text: expect.stringContaining("on the underlying") });
+    expect(status({ strategy: "naked", stop: "990", target: "1030" })).toEqual({ tone: "ready", text: "Planned · R:R 3.0" });
+    expect(status({ strategy: "spread", stop: "990" })).toMatchObject({ tone: "partial", text: "Stop set · reward unplanned" });
+  });
+});
+
+describe("the live-stop message", () => {
+  it("is the one the server sends", () => {
+    expect(STOP_WIDEN_MESSAGE).toBe("The stop can only move toward price once the order is live.");
+  });
+});
+
+describe("planRows", () => {
+  const rows = (over: Partial<Ticket>, today: Parameters<typeof planRows>[3] = null, c = ctx()) => {
+    const t = ticket(over);
+    return planRows(t, analyzeTicket(t, c), c, today);
+  };
+  const row = (r: ReturnType<typeof rows>, key: string) => r.find((x) => x.key === key)!;
+  const today = (over: object = {}) => ({
+    segment: "NSE" as const, symbol: "RELIANCE", cooldown_minutes_left: 0, cooldown_minutes: 15, trades_today: 1, trade_cap: 6,
+    loss_limit: null, lost_today: 0, loss_room: null, off_window: false, ...over,
+  });
+
+  it("lists stop, size, reward, setup and entry in the order the score checks them", () => {
+    expect(rows({}).map((r) => r.key)).toEqual(["stop", "size", "reward", "setup", "entry"]);
+  });
+
+  it("calls a missing stop bad for a spot or future order and only a caution for an option", () => {
+    expect(row(rows({}), "stop")).toMatchObject({ status: "bad" });
+    expect(row(rows({ strategy: "naked" }), "stop")).toMatchObject({ status: "warn" });
+  });
+
+  it("measures size against the system size: at it good, above it a caution, far below it for information", () => {
+    expect(row(rows({ stop: "990" }), "size")).toMatchObject({ status: "good" });
+    expect(row(rows({ stop: "990", lots: "500" }), "size")).toMatchObject({ status: "warn", detail: expect.stringContaining("Above the system size (100)") });
+    expect(row(rows({ stop: "990", lots: "20" }), "size")).toMatchObject({ status: "info", detail: expect.stringContaining("Below the system size (100)") });
+    expect(row(rows({ stop: "990", lots: "90" }), "size")).toMatchObject({ status: "good" });
+    expect(row(rows({}), "size")).toMatchObject({ status: "na" });
+  });
+
+  it("warns when even the smallest size is over the plan", () => {
+    expect(row(rows({ stop: "980" }, null, ctx({ lotSize: 65 })), "size")).toMatchObject({ status: "warn", detail: expect.stringContaining("Even the smallest size") });
+  });
+
+  it("checks reward against the minimum, and says when there is no target", () => {
+    expect(row(rows({ stop: "990", target: "1030" }), "reward").status).toBe("good");
+    expect(row(rows({ stop: "990", target: "1010" }), "reward").status).toBe("warn");
+    expect(row(rows({ stop: "990" }), "reward")).toMatchObject({ status: "warn", detail: "No target: the reward is unplanned." });
+  });
+
+  it("adds the day's rows from the server: a cooldown only while it runs, the cap, the loss limit, the session edge", () => {
+    expect(rows({}, today()).map((r) => r.key)).toEqual(["stop", "size", "reward", "setup", "entry", "trades", "loss"]);
+    const busy = rows({ stop: "990", lots: "100" }, today({ cooldown_minutes_left: 7, trades_today: 6, loss_limit: 1000, lost_today: 800, loss_room: 200, off_window: true }));
+    expect(busy.map((r) => r.key)).toEqual(["stop", "size", "reward", "setup", "entry", "cooldown", "trades", "loss", "window"]);
+    expect(row(busy, "cooldown").detail).toBe("7 min left after your loss on RELIANCE.");
+    expect(row(busy, "trades")).toMatchObject({ status: "warn", detail: "This would be trade 7, over your cap of 6." });
+    expect(row(busy, "loss").status).toBe("warn"); // risking 1000 against 200 of room
+    expect(row(rows({}, today({ loss_limit: 1000, lost_today: 1000, loss_room: 0 })), "loss").status).toBe("bad");
   });
 });

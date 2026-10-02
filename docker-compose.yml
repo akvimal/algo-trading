@@ -204,6 +204,7 @@ services:
       # raw headlines come from free RSS feeds, no key needed there) - see app/config.py.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-haiku-4.5}
+      OPENROUTER_READ_MODEL: ${OPENROUTER_READ_MODEL:-openai/gpt-6-luna-pro}
       # Live LTP push layer (2026-09-16, Phase 1 of the SaaS scaling work -
       # see docs/architecture.md) - app/providers/dhan_feed.py's shared
       # quote cache/pub-sub and app/api/routes/quotes_ws.py's fan-out, both

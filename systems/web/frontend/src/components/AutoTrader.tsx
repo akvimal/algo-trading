@@ -35,7 +35,7 @@ const textOf = (c: AutoConfig): Text => ({ period: String(c.period), multiplier:
 type Confirm = "on" | "apply" | "remove" | null;
 
 /** The intraday auto-trader for the instrument on the chart. It is a strategy on the server: it watches a
- * SuperTrend on the candle size chosen, trades a future (or a naked option) each time it flips, with the
+ * SuperTrend on the interval chosen, trades a future (or a naked option) each time it flips, with the
  * SuperTrend line as a trailing stop, and reverses on the next flip. Because it runs there and not in this
  * page, it keeps going with the page closed. It trades its own practice account, never the person's own. */
 export function AutoTrader({ segment, symbol, contracts }: { segment: Segment; symbol: string; contracts: boolean }) {
@@ -214,7 +214,7 @@ function AutoTraderCard({ segment, symbol }: { segment: Segment; symbol: string 
             </div>
           )}
           <div className="field">
-            <label htmlFor="at-interval">Candle size</label>
+            <label htmlFor="at-interval">Interval</label>
             <select id="at-interval" value={config.interval} disabled={busy} onChange={(e) => change({ interval: e.target.value as AutoInterval })}>
               {INTERVAL_CHOICES.map((i) => (
                 <option key={i.value} value={i.value}>

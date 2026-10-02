@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { PaneHeader } from "./PaneHeader";
-import { INTERVALS } from "../chart/config";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it } from "vitest";
+import { EXPIRY_WARN_DAYS, PaneHeader, expiryLabel } from "./PaneHeader";
+import { DEFAULT_FAVORITE_INTERVALS, INTERVALS, favoriteIntervals } from "../chart/config";
 
 // The price's own text changes on every tick (more digits, a comma appearing/disappearing, ...) -
 // it has to sit where its own reflow cannot push anything else sideways, i.e. last in the row, with
@@ -13,8 +14,10 @@ function header(price: number | null = 1000, priceShown = true) {
   );
 }
 
+beforeEach(() => localStorage.clear());
+
 describe("PaneHeader", () => {
-  it("puts the price last in the header row, after the candle-size buttons", () => {
+  it("puts the price last in the header row, after the interval buttons", () => {
     render(header());
     const panel = screen.getByTestId("price-0").closest(".pane-header")!;
     const children = [...panel.children];
@@ -38,16 +41,106 @@ describe("PaneHeader", () => {
     expect(screen.queryByTestId("feed-0")).not.toBeInTheDocument();
   });
 
-  it("offers every candle size by default, including the just-added weekly one", () => {
+  // only the quick buttons themselves: the Intervals menu, once open, holds every size inside the same group
+  const quick = () => [...screen.getByRole("group", { name: /^Interval, / }).children].filter((c) => c.tagName === "BUTTON").map((b) => b.textContent);
+
+  it("shows only the favourite intervals as buttons by default - not 30m, 1d or 1w", () => {
     render(header());
-    expect(screen.getByRole("button", { name: "1w" })).toBeInTheDocument();
-    for (const i of INTERVALS) expect(screen.getByRole("button", { name: i.label })).toBeInTheDocument();
+    expect(quick()).toEqual(["1m", "3m", "5m", "15m", "1h"]);
+    expect(DEFAULT_FAVORITE_INTERVALS).toEqual(["1min", "3min", "5min", "15min", "60min"]);
   });
 
-  it("offers only a caller-given shorter list when one is passed (the Scan page's inline chart)", () => {
+  it("lists every interval in the Intervals menu, with a star on the favourites", async () => {
+    render(header());
+    await userEvent.setup().click(screen.getByRole("button", { name: /Intervals/ }));
+    const menu = within(screen.getByRole("group", { name: "Intervals" }));
+    for (const i of INTERVALS) expect(menu.getByRole("button", { name: i.label })).toBeInTheDocument();
+    expect(menu.getByRole("button", { name: "Remove 5m from favourites" })).toHaveAttribute("aria-pressed", "true");
+    expect(menu.getByRole("button", { name: "Add 30m to favourites" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("starring an interval adds its button, keeps size order, and remembers it", async () => {
+    const user = userEvent.setup();
+    render(header());
+    await user.click(screen.getByRole("button", { name: /Intervals/ }));
+    await user.click(screen.getByRole("button", { name: "Add 30m to favourites" }));
+    await user.click(screen.getByRole("button", { name: "Add 1d to favourites" }));
+    expect(quick()).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d"]);
+    expect(favoriteIntervals()).toEqual(["1min", "3min", "5min", "15min", "30min", "60min", "daily"]);
+  });
+
+  it("un-starring removes the button, but the last favourite can never be removed", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("web.chart.favoriteIntervals", JSON.stringify(["5min", "15min"]));
+    render(header());
+    await user.click(screen.getByRole("button", { name: /Intervals/ }));
+    await user.click(screen.getByRole("button", { name: "Remove 5m from favourites" }));
+    expect(quick()).toEqual(["15m"]);
+    expect(screen.getByRole("button", { name: "Remove 15m from favourites" })).toBeDisabled();
+  });
+
+  it("picking an interval from the menu switches to it, and an interval that is not a favourite is still shown while it is on screen", async () => {
+    const picked: string[] = [];
+    const user = userEvent.setup();
+    const { rerender } = render(<PaneHeader index={0} symbol="X" interval="15min" onInterval={(v) => picked.push(v)} price={1} priceShown live={false} regime={null} active showActive={false} />);
+    await user.click(screen.getByRole("button", { name: /Intervals/ }));
+    await user.click(within(screen.getByRole("group", { name: "Intervals" })).getByRole("button", { name: "1w" }));
+    expect(picked).toEqual(["weekly"]);
+    rerender(<PaneHeader index={0} symbol="X" interval="weekly" onInterval={() => {}} price={1} priceShown live={false} regime={null} active showActive={false} />);
+    expect(quick()).toEqual(["1m", "3m", "5m", "15m", "1h", "1w"]);
+    const weekly = [...screen.getByRole("group", { name: /^Interval, / }).children].find((c) => c.tagName === "BUTTON" && c.textContent === "1w");
+    expect(weekly).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("falls back to the defaults for an unreadable or empty saved list", () => {
+    localStorage.setItem("web.chart.favoriteIntervals", "{broken");
+    expect(favoriteIntervals()).toEqual(DEFAULT_FAVORITE_INTERVALS);
+    localStorage.setItem("web.chart.favoriteIntervals", JSON.stringify(["bogus"]));
+    expect(favoriteIntervals()).toEqual(DEFAULT_FAVORITE_INTERVALS);
+  });
+
+  it("offers only a caller-given shorter list when one is passed (the Scan page's inline chart), with no Intervals menu", () => {
     render(<PaneHeader index={0} symbol="RELIANCE" interval="daily" onInterval={() => {}} price={1000} priceShown live={false} regime={null} active showActive={false} intervals={INTERVALS.filter((i) => ["15min", "daily", "weekly"].includes(i.value))} />);
     expect(screen.getByRole("button", { name: "1d" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1w" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "1m" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Intervals/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("the contract's expiry", () => {
+  const withExpiry = (expiry: string | null) => <PaneHeader index={0} symbol="GOLDM" interval="15min" onInterval={() => {}} price={1} priceShown live={false} regime={null} active showActive={false} contract="GOLDM-05Oct2026-FUT" expiry={expiry} />;
+
+  it("counts the days left to an expiry date, today as 0", () => {
+    const now = new Date(2026, 9, 1, 15, 30); // 1 Oct 2026, afternoon
+    expect(expiryLabel("2026-10-05", now).days).toBe(4);
+    expect(expiryLabel("2026-10-01", now).days).toBe(0);
+    expect(expiryLabel("2026-09-30", now).days).toBe(-1);
+    expect(expiryLabel("2026-10-19", now).text).toBe(`${new Date(2026, 9, 19).toLocaleDateString(undefined, { day: "numeric", month: "short" })} · 18d`);
+  });
+
+  it("shows the expiry on the chart's header, naming the contract in its tooltip", () => {
+    const soon = new Date();
+    soon.setDate(soon.getDate() + 20);
+    const iso = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+    render(withExpiry(iso));
+    const pill = screen.getByTestId("expiry-0");
+    expect(pill).toHaveTextContent(/^Exp .* · 20d$/);
+    expect(pill).toHaveAttribute("title", `GOLDM-05Oct2026-FUT expires ${iso}`);
+    expect(pill).not.toHaveClass("warn");
+  });
+
+  it("warns when the contract is within a few days of expiring", () => {
+    const soon = new Date();
+    soon.setDate(soon.getDate() + EXPIRY_WARN_DAYS);
+    const iso = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+    render(withExpiry(iso));
+    expect(screen.getByTestId("expiry-0")).toHaveClass("warn");
+    expect(screen.getByTestId("expiry-0").getAttribute("title")).toMatch(/close to expiry/);
+  });
+
+  it("shows nothing for an instrument with no expiry (spot, crypto perpetuals)", () => {
+    render(withExpiry(null));
+    expect(screen.queryByTestId("expiry-0")).not.toBeInTheDocument();
   });
 });

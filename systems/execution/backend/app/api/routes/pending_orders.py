@@ -34,6 +34,7 @@ def _to_out(row) -> PendingOrderOut:
         triggered_at=row.triggered_at, last_price=_f(row.last_price), last_checked_at=row.last_checked_at,
         position_id=str(row.position_id) if row.position_id is not None else None,
         option_group_id=str(row.option_group_id) if row.option_group_id is not None else None,
+        allow_stacking=bool(row.allow_stacking),
     )
 
 

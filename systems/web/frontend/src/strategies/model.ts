@@ -137,14 +137,14 @@ export function validateStopLoss(f: {
 }): string[] {
   const { method, interval, percent, trailing, indicatorType } = f;
   if (method == null) return [];
-  if (method === "previous_candle") return interval ? [] : ["Pick a candle size for the previous candle's high/low."];
+  if (method === "previous_candle") return interval ? [] : ["Pick an interval for the previous candle's high/low."];
   if (method === "percent" || method === "breakeven") {
     const errors: string[] = [];
     if (percent == null || !(percent > 0 && percent < 100)) errors.push("Enter a stop percent between 0 and 100.");
     if (method === "breakeven" && !trailing) errors.push("Breakeven needs trailing switched on — otherwise it never moves to entry.");
     return errors;
   }
-  if (method === "indicator") return interval && indicatorType ? [] : ["Pick a candle size and an indicator for the trailing stop."];
+  if (method === "indicator") return interval && indicatorType ? [] : ["Pick an interval and an indicator for the trailing stop."];
   return [];
 }
 

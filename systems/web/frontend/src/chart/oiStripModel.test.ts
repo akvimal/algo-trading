@@ -129,3 +129,24 @@ describe("hasSentimentTrend and isStaleAt", () => {
     expect(isStaleAt(new Date(now - 13 * 60_000).toISOString(), now)).toBe(true);
   });
 });
+
+describe("BUILDUP_ABBR", () => {
+  it("abbreviates all four buildup states distinctly", async () => {
+    const { BUILDUP_ABBR } = await import("./oiStripModel");
+    expect(BUILDUP_ABBR).toEqual({ long_buildup: "LB", short_buildup: "SB", short_covering: "SC", long_unwinding: "LU" });
+  });
+});
+
+describe("skewView", () => {
+  it("tones put-led green and call-led red, matching the PCR convention", async () => {
+    const { skewView } = await import("./oiStripModel");
+    expect(skewView({ pct: 3.2, leader: "PE" }).tone).toBe("up");
+    expect(skewView({ pct: 3.2, leader: "CE" }).tone).toBe("dn");
+  });
+
+  it("scales the bar to the gap and caps it at full", async () => {
+    const { skewView } = await import("./oiStripModel");
+    expect(skewView({ pct: 2.5, leader: "PE" }).fill).toBe(0.5);
+    expect(skewView({ pct: 12, leader: "CE" }).fill).toBe(1);
+  });
+});

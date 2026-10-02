@@ -38,6 +38,7 @@ let oiSummaryPcr: number | null;
 let oiBuildups: { call: string | null; put: string | null } | null;
 let sentHistPoints: any[];
 let levelFails: string | null;
+let pretrade: Record<string, unknown>;
 // Unset (null) for most tests - /auth/me then falls through to the generic 404 below, same as
 // before this existed; OnboardingGate opens the app anyway on a failed profile read, and the
 // ticket's defaults (future/naked) match what an unset preference already produced.
@@ -75,6 +76,7 @@ beforeEach(() => {
   oiBuildups = null;
   sentHistPoints = [];
   levelFails = null;
+  pretrade = { segment: "NSE", symbol: "RELIANCE", cooldown_minutes_left: 0, cooldown_minutes: 15, trades_today: 1, trade_cap: 6, loss_limit: null, lost_today: 0, loss_room: null, off_window: false };
   profilePrefs = null;
   structure = { ...emptyStructure };
   waiting = [];
@@ -141,6 +143,9 @@ beforeEach(() => {
       if (url.includes("/indicators") || url.includes("/rules") || url.includes("/strategies?")) return json([]);
       if (url.includes("/regime")) return json(regimes[q("symbol")] ?? regimes.default);
       if (url.endsWith("/accounts")) return json([account]);
+      if (url.includes("/ai-read")) return json({ underlying: q("symbol"), expiry: q("expiry") || "2026-10-06", model: "m", generated_at: new Date().toISOString(), bias: "bearish", confidence: 70, one_liner: "Sell rallies.", reasoning: ["r1"], support: [], resistance: [], risks: [], wait_for: "x", data_gaps: [] });
+      if (url.includes("/study-notes") && method === "POST") return json({ id: "note1", segment: body.segment, symbol: body.symbol, interval: body.interval, text: body.text, tag: body.tag ?? null, context: body.context ?? null, position_id: null, option_group_id: null, has_snapshot: false, created_at: new Date().toISOString() }, 201);
+      if (url.includes("/study-notes")) return json([]);
       if (url.includes("/pending-orders") && method === "POST")
         return json({ id: "w1", segment: "NSE", symbol: body.symbol, action: body.action, strategy: body.strategy, trigger_price: body.trigger_price, stop_loss_price: body.stop_loss_price ?? null, target_price: body.target_price ?? null, status: "pending", status_reason: null, expires_at: "2026-09-27T00:00:00Z", last_price: null }, 201);
       if (url.includes("/pending-orders") && method === "DELETE") {
@@ -152,6 +157,17 @@ beforeEach(() => {
       if (url.endsWith("/option-groups/manual")) return placeOption(body);
       if (url.includes("/spot-stop-loss") || url.includes("/spot-target")) return attachFails ? json({ detail: "no" }, 409) : json({ ok: true });
       // moving the stop or target of an open trade
+      if (url.includes("/discipline/") && url.includes("/today")) return json(pretrade);
+      const trail = /\/(positions|option-groups)\/([^/?]+)\/auto-trail/.exec(url);
+      if (method === "PUT" && trail) {
+        if (levelFails) return json({ detail: levelFails }, 422);
+        const row = (trail[1] === "positions" ? positionRows : groupRows).find((r) => r.id === trail[2]);
+        if (row) {
+          if (trail[1] === "positions") Object.assign(row, { trailing_stop_enabled: body.enabled, stop_loss_method: body.enabled ? "atr_trail" : null });
+          else Object.assign(row, { spot_stop_loss_trailing_enabled: body.enabled, spot_stop_loss_indicator_type: body.enabled ? "atr_trail" : null });
+        }
+        return json(row ?? {});
+      }
       const moved = /\/(positions|option-groups)\/([^/?]+)\/(stop-loss|target|spot-stop-loss|spot-target)/.exec(url);
       if (method === "PUT" && moved) {
         if (levelFails) return json({ detail: levelFails }, 422);
@@ -214,7 +230,8 @@ describe("the page", () => {
     expect(screen.getByTestId("chart-summary")).toHaveTextContent("RELIANCE, 15m candles. Last price 1,000.");
     const t = await ticket();
     expect(t.getByText("Paper order")).toBeInTheDocument();
-    expect(t.getByText("Before you place")).toBeInTheDocument();
+    expect(t.getByText("Your plan")).toBeInTheDocument();
+    expect(t.queryByText("Before you place")).not.toBeInTheDocument();
     expect(t.getByLabelText("Number of shares")).toBeInTheDocument(); // a stock: shares, not lots
     expect(t.queryByRole("button", { name: "Option" })).not.toBeInTheDocument(); // no options on a stock
   });
@@ -296,16 +313,17 @@ describe("the page", () => {
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    const checks = within(await t.findByTestId("checks"));
+    const checks = within(await t.findByTestId("plan-block"));
     await waitFor(() => expect(checks.getByText("Regime: trending up")).toBeInTheDocument());
-    expect(checks.getByText(/4 of 4 in favour/)).toBeInTheDocument();
+    expect(checks.getByText("You are trading with the trend.")).toBeInTheDocument();
+    expect(checks.queryByText(/in favour/)).not.toBeInTheDocument(); // no tally
     await user.click(t.getByRole("button", { name: "Sell" }));
     await user.clear(t.getByLabelText("Stop-loss"));
     await user.clear(t.getByLabelText("Target"));
     await user.type(t.getByLabelText("Stop-loss"), "1010");
     await user.type(t.getByLabelText("Target"), "970");
     expect(await checks.findByText("You are trading against the trend.")).toBeInTheDocument();
-    expect(checks.getByRole("img", { name: "Against" })).toBeInTheDocument();
+    expect(checks.queryByRole("img", { name: "Against" })).not.toBeInTheDocument(); // the market read is information, never a verdict
   });
 });
 
@@ -316,7 +334,7 @@ describe("placing", () => {
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    await user.selectOptions(t.getByLabelText(/Why this trade/), "Breakout");
+    await user.click(within(t.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
     await user.type(t.getByLabelText(/Reason/), "Retested the daily OB and held.");
     await user.click(t.getByRole("button", { name: "4" }));
     await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
@@ -406,20 +424,32 @@ describe("placing", () => {
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
   });
 
-  it("'+ Place another order' brings the form back for a deliberate second entry, and resets on a symbol change", async () => {
+  it("offers no second order while one is open: no link, no form, and the reason", async () => {
+    positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
+    renderAt("/trade?symbol=RELIANCE");
+    await screen.findByTestId("ticket-positions");
+    expect(screen.queryByRole("button", { name: /Place another order/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
+    expect(screen.getByTestId("no-second-order")).toHaveTextContent("close it first");
+  });
+
+  it("brings the form back for a different instrument, and once the position is closed", async () => {
     positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     await screen.findByTestId("ticket-positions");
-    await user.click(screen.getByRole("button", { name: "+ Place another order" }));
-    expect(await screen.findByTestId("ticket")).toBeInTheDocument();
-    expect(screen.getByTestId("ticket-positions")).toBeInTheDocument(); // still shown too, not replaced
-
     await user.click(screen.getByRole("button", { name: "Bank Nifty" })); // BANKNIFTY has nothing open
     await waitFor(() => expect(screen.getByTestId("ticket")).toBeInTheDocument());
     expect(screen.queryByTestId("ticket-positions")).not.toBeInTheDocument();
   });
 
+  describe("the ticket with nothing open", () => {
+    it("shows no warning when nothing is open on the instrument", async () => {
+      renderAt("/trade?symbol=RELIANCE");
+      const t = await ticket();
+      expect(t.queryByTestId("stacking-notice")).not.toBeInTheDocument();
+    });
+  });
 
   it("will not place without a stop-loss when the account requires one, and says why", async () => {
     account.require_stop_loss = true;
@@ -477,6 +507,218 @@ describe("placing", () => {
   });
 });
 
+/** Opens the layout dropdown and picks an arrangement by its name. */
+async function pickLayout(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+  await user.click(within(screen.getByRole("group", { name: "Layout" })).getByRole("radio", { name: new RegExp(name) }));
+}
+
+describe("the plan on the ticket", () => {
+  beforeEach(() => screenIs(true));
+
+  it("is one block: the plan chip as its header, a row for each thing you control, and no tally", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const block = within(t.getByTestId("plan-block"));
+    expect(block.getByText("Your plan")).toBeInTheDocument();
+    expect(block.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
+    expect(block.getByText("No stop: your risk is open-ended.")).toBeInTheDocument();
+    expect(block.getByText("No target: the reward is unplanned.")).toBeInTheDocument();
+    expect(block.getByText("Not tagged.")).toBeInTheDocument();
+    expect(block.getByText("At the market.")).toBeInTheDocument();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Target"), "1030");
+    await user.click(within(block.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
+    expect(await block.findByText("Tagged Breakout.")).toBeInTheDocument();
+    expect(block.getByText(/At the system size/)).toBeInTheDocument();
+    expect(block.getByText(/3\.0 to 1, your minimum is/)).toBeInTheDocument();
+    expect(block.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R 3\.0/);
+    expect(block.queryByText(/in favour/)).not.toBeInTheDocument();
+  });
+
+  it("warns when the size was typed above the system size", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Number of shares"), "5000");
+    expect(await within(t.getByTestId("plan-block")).findByText(/Above the system size/)).toBeInTheDocument();
+    expect(within(t.getByTestId("plan-block")).getAllByRole("img", { name: "Caution" }).length).toBeGreaterThan(0);
+  });
+
+  it("shows today: a cooldown with its minutes, trades against the cap, and room under the loss limit", async () => {
+    pretrade = { ...pretrade, cooldown_minutes_left: 9, trades_today: 6, trade_cap: 6, loss_limit: 2000, lost_today: 1500, loss_room: 500 };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const block = within(t.getByTestId("plan-block"));
+    expect(await block.findByText("9 min left after your loss on RELIANCE.")).toBeInTheDocument();
+    expect(block.getByText("This would be trade 7, over your cap of 6.")).toBeInTheDocument();
+    expect(block.getByText(/₹500 of room left today/)).toBeInTheDocument();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Number of shares"), "100"); // risks 1000 against 500 of room
+    expect(await block.findByText(/could take you past it/)).toBeInTheDocument();
+    // none of it blocks the order
+    expect(t.getByRole("button", { name: /Buy RELIANCE, paper order/ })).toBeEnabled();
+  });
+
+  it("flags the first and last minutes of the session, and a reached loss limit", async () => {
+    pretrade = { ...pretrade, off_window: true, loss_limit: 2000, lost_today: 2000, loss_room: 0 };
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const block = within(t.getByTestId("plan-block"));
+    expect(await block.findByText("Outside the middle of the session: the first 10 minutes, the last 15, or after hours.")).toBeInTheDocument();
+    expect(block.getByText("Your daily loss limit is already reached.")).toBeInTheDocument();
+  });
+
+  it("keeps the market read under a collapsed heading, as information that is never scored", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(within(t.getByTestId("plan-block")).getByText("Regime: trending up")).toBeInTheDocument());
+    const details = within(t.getByTestId("plan-block")).getByText("Market read").closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    expect(within(details).getByText(/not scored and never blocks an order/)).toBeInTheDocument();
+  });
+
+  it("asks the server about today for the instrument being traded", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await ticket();
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/discipline/NSE/today?symbol=RELIANCE"))).toBe(true));
+  });
+
+  it("shows how complete the plan is as it is filled in", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const chip = () => t.getByTestId("plan-chip");
+    expect(chip()).toHaveTextContent("No plan yet");
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await waitFor(() => expect(chip()).toHaveTextContent("Stop set · reward unplanned"));
+    await user.type(t.getByLabelText("Target"), "1030");
+    await waitFor(() => expect(chip()).toHaveTextContent(/Planned · R:R 3\.0/));
+  });
+
+  it("adds a line for an option order too, from the underlying's price, and the chip follows", async () => {
+    profilePrefs = { default_instrument: "option", default_option_strategy: "naked" };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const t = await ticket();
+    await loaded();
+    await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
+    expect(t.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    await user.click(t.getByRole("button", { name: "Add target line" }));
+    expect(Number((t.getByLabelText("Stop-loss") as HTMLInputElement).value)).toBeLessThan(1000); // a buy is bullish: its stop is below the underlying
+    expect(Number((t.getByLabelText("Target") as HTMLInputElement).value)).toBeGreaterThan(1000);
+    expect(t.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R/);
+  });
+
+  it("offers a way back to the price Add line first suggested, only once it has been changed", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await loaded();
+    expect(t.queryByRole("button", { name: "Back to suggested stop" })).not.toBeInTheDocument();
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    const first = (t.getByLabelText("Stop-loss") as HTMLInputElement).value;
+    expect(t.queryByRole("button", { name: "Back to suggested stop" })).not.toBeInTheDocument(); // nothing changed yet
+    await user.clear(t.getByLabelText("Stop-loss"));
+    await user.type(t.getByLabelText("Stop-loss"), "950");
+    await user.click(t.getByRole("button", { name: "Back to suggested stop" }));
+    expect(t.getByLabelText("Stop-loss")).toHaveValue(first);
+    expect(t.queryByRole("button", { name: "Back to suggested stop" })).not.toBeInTheDocument();
+    // a field that was never suggested has nothing to go back to
+    await user.type(t.getByLabelText("Target"), "1100");
+    expect(t.queryByRole("button", { name: "Back to suggested target" })).not.toBeInTheDocument();
+  });
+
+  it("shows the size as worked out from the risk, quietly, and typing over it can be undone", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    const size = t.getByLabelText("Number of shares");
+    await waitFor(() => expect(size).toHaveAttribute("placeholder", expect.stringMatching(/from your .*% risk/)));
+    expect(size.closest(".field")).toHaveClass("field-auto");
+    expect(t.queryByRole("button", { name: "Use system size" })).not.toBeInTheDocument();
+    await user.type(size, "5");
+    expect(size.closest(".field")).not.toHaveClass("field-auto");
+    await user.click(t.getByRole("button", { name: "Use system size" }));
+    expect(size).toHaveValue("");
+  });
+});
+
+describe("the layout dropdown", () => {
+  beforeEach(() => screenIs(true));
+
+  it("shows the current grid on its button, with the three arrangements listed when opened", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const button = screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    await user.click(button);
+    const list = within(screen.getByRole("radiogroup", { name: "Chart layout" }));
+    expect(list.getAllByRole("radio").map((r) => r.textContent)).toEqual(["1×1One chart", "2×1Side by side", "1×2Stacked"]);
+    expect(list.getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(1);
+  });
+
+  it("changes the layout, closes itself, and the button shows the new grid", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await pickLayout(user, "Stacked");
+    expect(document.querySelector(".ws-grid")!.className).toContain("layout-stack");
+    expect(screen.queryByRole("radiogroup", { name: "Chart layout" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1×2" })).toBeInTheDocument();
+    await pickLayout(user, "Side by side");
+    expect(document.querySelector(".ws-grid")!.className).toContain("layout-side");
+    expect(screen.getByRole("button", { name: "2×1" })).toBeInTheDocument();
+  });
+
+  it("closes with Escape, keeping the layout", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const before = document.querySelector(".ws-grid")!.className;
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("radiogroup", { name: "Chart layout" })).not.toBeInTheDocument();
+    expect(document.querySelector(".ws-grid")!.className).toBe(before);
+  });
+});
+
+describe("the notes panel under the chart", () => {
+  beforeEach(() => screenIs(true));
+
+  it("sits under the charts for the active instrument, closed until opened", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.getByTestId("notes")).toBeInTheDocument();
+    expect(calls.some((c) => c.url.includes("/study-notes"))).toBe(false); // nothing is fetched while it is shut
+    await userEvent.setup().click(screen.getByTestId("notes-toggle"));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/study-notes?segment=NSE&symbol=NIFTY"))).toBe(true));
+  });
+
+  it("saves a note under the active chart's instrument and interval, with the market as it was on screen", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await user.click(screen.getByTestId("notes-toggle"));
+    await user.type(await screen.findByLabelText("Note"), "Range day, wait for a break");
+    await user.click(screen.getByRole("button", { name: "observation" }));
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    await waitFor(() => expect(posts("/study-notes")).toHaveLength(1));
+    const sent = posts("/study-notes")[0].body;
+    expect(sent).toMatchObject({ segment: "NSE", symbol: "NIFTY", interval: "15min", text: "Range day, wait for a break", tag: "observation" });
+    expect(sent.context.price).toBe(1000);
+    expect(sent.context.interval).toBe("15min");
+    expect(sent).not.toHaveProperty("snapshot_png_base64");
+  });
+});
+
 describe("waiting orders", () => {
   it("arms a limit order on the server at the typed level, draws it on the chart, and lists it with a cancel", async () => {
     const user = userEvent.setup();
@@ -498,6 +740,48 @@ describe("waiting orders", () => {
     await user.click(list.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(calls.some((c2) => c2.method === "DELETE" && c2.url.endsWith("/pending-orders/w1"))).toBe(true));
     await waitFor(() => expect(screen.queryByTestId("waiting")).not.toBeInTheDocument());
+  });
+
+  it("folds the order form away while an order is already waiting on this instrument, and brings it back on request", async () => {
+    waiting = [{ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "BUY", strategy: "future", trigger_price: 980, stop_loss_price: 970, target_price: null, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const t = within(await screen.findByTestId("ticket"));
+    const notice = within(await t.findByTestId("waiting-notice"));
+    expect(notice.getByText(/You already have a waiting BUY order at 980/)).toBeInTheDocument();
+    // no form: no inputs, no plan block, no order button
+    expect(t.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+    expect(t.queryByTestId("plan-block")).not.toBeInTheDocument();
+    expect(t.queryByRole("button", { name: /Buy RELIANCE/ })).not.toBeInTheDocument();
+    await user.click(notice.getByRole("button", { name: "Place another order" }));
+    expect(await t.findByLabelText("Stop-loss")).toBeInTheDocument();
+    expect(t.getByTestId("waiting-reminder")).toHaveTextContent("You still have a waiting BUY order at 980");
+    expect(t.getByRole("button", { name: /Buy RELIANCE, paper order/ })).toBeEnabled();
+    await user.click(t.getByRole("button", { name: "Fold the form away" }));
+    expect(t.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+  });
+
+  it("cancelling the waiting order brings the form back", async () => {
+    waiting = [{ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "BUY", strategy: "future", trigger_price: 980, stop_loss_price: 970, target_price: null, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const t = within(await screen.findByTestId("ticket"));
+    await user.click(within(await t.findByTestId("waiting-notice")).getByRole("button", { name: "Cancel the waiting order" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith("/pending-orders/w1"))).toBe(true));
+    expect(await t.findByLabelText("Stop-loss")).toBeInTheDocument();
+    expect(t.queryByTestId("waiting-notice")).not.toBeInTheDocument();
+  });
+
+  it("does not mind a waiting order on a different instrument", async () => {
+    waiting = [{ id: "w9", segment: "NSE", symbol: "TCS", action: "BUY", strategy: "future", trigger_price: 4000, stop_loss_price: null, target_price: null, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    expect(t.queryByTestId("waiting-notice")).not.toBeInTheDocument();
+    expect(t.getByRole("button", { name: /Buy RELIANCE, paper order/ })).toBeEnabled();
   });
 
   it("needs a price for a limit order", async () => {
@@ -719,6 +1003,271 @@ describe("drawing tools", () => {
     ]);
   });
 
+  describe("the Text tool", () => {
+    const KEY = "web.chart.drawings:NSE:NIFTY";
+    const saved = () => JSON.parse(localStorage.getItem(KEY) ?? "[]");
+
+    async function place(user: ReturnType<typeof userEvent.setup>) {
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+      await user.click(bar.getByRole("button", { name: "Text" }));
+      expect(bar.getByRole("button", { name: "Text" })).toHaveAttribute("aria-pressed", "true");
+      const armed = c.overlaysNamed("textNote");
+      expect(armed).toHaveLength(1);
+      act(() => c.finishDrawing(armed[0].id, [{ timestamp: c.data[5].timestamp, value: 1010 }]));
+      return { c, bar, id: armed[0].id };
+    }
+
+    it("is in the tool strip, and after the click asks for the words in a box on the chart", async () => {
+      const user = userEvent.setup();
+      const { bar } = await place(user);
+      expect(await screen.findByLabelText("Text on the chart")).toHaveFocus();
+      expect(saved()).toEqual([]); // nothing is kept until there are words
+      expect(bar.getByRole("button", { name: "Cursor" })).toHaveAttribute("aria-pressed", "true"); // the tool is put down
+    });
+
+    it("keeps the words on Enter - shown on the chart and saved with the instrument's drawings", async () => {
+      const user = userEvent.setup();
+      const { c, id } = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "Support held twice{Enter}");
+      expect(screen.queryByLabelText("Text on the chart")).not.toBeInTheDocument();
+      expect(c.overlays.get(id)!.extendData).toEqual({ text: "Support held twice" });
+      expect(saved()).toEqual([{ name: "textNote", points: [{ timestamp: c.data[5].timestamp, value: 1010 }], text: "Support held twice" }]);
+    });
+
+    it("keeps nothing when Escape is pressed or the box is left empty", async () => {
+      const user = userEvent.setup();
+      const first = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "never mind{Escape}");
+      expect(first.c.overlaysNamed("textNote")).toHaveLength(0);
+      expect(saved()).toEqual([]);
+    });
+
+    it("keeps nothing for a box left empty, and trims the words it does keep", async () => {
+      const user = userEvent.setup();
+      const { c } = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "   {Enter}");
+      expect(c.overlaysNamed("textNote")).toHaveLength(0);
+      expect(saved()).toEqual([]);
+    });
+
+    it("saves the words when the person clicks away from the box", async () => {
+      const user = userEvent.setup();
+      const { c } = await place(user);
+      await user.type(await screen.findByLabelText("Text on the chart"), "break and retest");
+      await user.click(document.body);
+      expect(saved()[0]).toMatchObject({ name: "textNote", text: "break and retest" });
+      expect(c.overlaysNamed("textNote")).toHaveLength(1);
+    });
+
+    it("draws a saved text back on the chart when the instrument is opened again", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "Gap fill target" }]));
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      expect(c.overlaysNamed("textNote")[0].extendData).toEqual({ text: "Gap fill target" });
+    });
+
+    it("double-clicking a text changes its words", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "old words" }]));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      const ov = c.overlaysNamed("textNote")[0];
+      act(() => c.doubleClick(ov.id));
+      const box = await screen.findByLabelText("Text on the chart");
+      expect(box).toHaveValue("old words");
+      await user.clear(box);
+      await user.type(box, "new words{Enter}");
+      expect(c.overlays.get(ov.id)!.extendData).toEqual({ text: "new words" });
+      expect(saved()[0].text).toBe("new words");
+    });
+
+    it("leaves a text as it was when its edit is cancelled, and never deletes it", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "keep me" }]));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      act(() => c.doubleClick(c.overlaysNamed("textNote")[0].id));
+      await user.type(await screen.findByLabelText("Text on the chart"), "xyz{Escape}");
+      expect(c.overlaysNamed("textNote")).toHaveLength(1);
+      expect(saved()[0].text).toBe("keep me");
+    });
+  });
+
+  describe("the look of a drawing", () => {
+    const KEY = "web.chart.drawings:NSE:NIFTY";
+    const saved = () => JSON.parse(localStorage.getItem(KEY) ?? "[]");
+    const defaults = () => JSON.parse(localStorage.getItem("web.chart.drawingDefaults") ?? "{}");
+
+    async function drawLine(user: ReturnType<typeof userEvent.setup>, tool = "Trend line", name = "segment") {
+      const c = chart(0);
+      const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+      await user.click(bar.getByRole("button", { name: tool }));
+      const armed = c.overlaysNamed(name).filter((o) => o.points.length === 0);
+      const ov = armed[armed.length - 1];
+      act(() => c.finishDrawing(ov.id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[10].timestamp, value: 1020 }]));
+      act(() => c.select(ov.id));
+      return { c, id: ov.id };
+    }
+
+    it("shows the style bar only while a drawing is selected", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      expect(screen.queryByTestId("style-bar")).not.toBeInTheDocument();
+      await drawLine(user);
+      expect(await screen.findByTestId("style-bar")).toBeInTheDocument();
+    });
+
+    it("applies a colour, thickness and dash to the drawing at once and saves them with it", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      const { c, id } = await drawLine(user);
+      const bar = within(await screen.findByTestId("style-bar"));
+      await user.click(bar.getByRole("button", { name: "Colour Red" }));
+      await user.click(bar.getByRole("button", { name: "Thickness 3" }));
+      await user.click(bar.getByRole("button", { name: "Dashed" }));
+      expect(c.overlays.get(id)!.styles.line).toEqual({ color: "#e8586a", size: 3, style: "dashed", dashedValue: [6, 4] });
+      expect(saved()[0]).toMatchObject({ name: "segment", style: { color: "#e8586a", width: 3, dash: "dashed" } });
+    });
+
+    it("draws a restyled drawing the same way when the instrument is opened again", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "rect", points: [{ timestamp: Date.now() - 900_000, value: 1000 }, { timestamp: Date.now() - 300_000, value: 1020 }], style: { color: "#3ecf8e", fill: 0.5 } }]));
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("rect")).toHaveLength(1));
+      expect(c.overlaysNamed("rect")[0].styles.polygon).toMatchObject({ color: "rgba(62, 207, 142, 0.5)", borderColor: "#3ecf8e" });
+    });
+
+    it("ignores a damaged saved style instead of drawing it", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "segment", points: [{ timestamp: Date.now() - 900_000, value: 1000 }, { timestamp: Date.now() - 300_000, value: 1020 }], style: { color: "javascript:alert(1)", width: 99 } }]));
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("segment")).toHaveLength(1));
+      expect(c.overlaysNamed("segment")[0].styles).toBeUndefined();
+    });
+
+    it("resets a drawing to the chart's own look, and keeps it where it was", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      const { c } = await drawLine(user);
+      const bar = within(await screen.findByTestId("style-bar"));
+      await user.click(bar.getByRole("button", { name: "Colour Blue" }));
+      await user.click(bar.getByRole("button", { name: "Reset look" }));
+      expect(saved()[0].style).toBeUndefined();
+      expect(saved()[0].points).toHaveLength(2);
+      expect(c.overlaysNamed("segment").every((o) => o.styles === undefined)).toBe(true);
+    });
+
+    it("makes a look the default for its kind: the next drawing of that kind starts with it, other kinds do not", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      const first = await drawLine(user);
+      let bar = within(await screen.findByTestId("style-bar"));
+      await user.click(bar.getByRole("button", { name: "Colour Yellow" }));
+      await user.click(bar.getByRole("button", { name: "Use for new trend lines" }));
+      expect(defaults()).toEqual({ segment: { color: "#ffc83d" } });
+      expect(within(screen.getByTestId("style-bar")).getByRole("button", { name: "Clear default for trend lines" })).toBeInTheDocument();
+
+      // a second trend line starts yellow...
+      const second = await drawLine(user);
+      expect(second.c.overlays.get(second.id)!.styles.line.color).toBe("#ffc83d");
+      expect(saved()[1].style).toEqual({ color: "#ffc83d" });
+      // ...a ray does not
+      const ray = await drawLine(user, "Ray", "rayLine");
+      expect(ray.c.overlays.get(ray.id)!.styles).toBeUndefined();
+      void first;
+    });
+
+    it("clears a default again", async () => {
+      localStorage.setItem("web.chart.drawingDefaults", JSON.stringify({ segment: { color: "#ffc83d" } }));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      await drawLine(user);
+      await user.click(await screen.findByRole("button", { name: "Clear default for trend lines" }));
+      expect(defaults()).toEqual({});
+    });
+
+    it("changes a text label's colour, size and weight, keeping its words", async () => {
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Text" }));
+      const ov = c.overlaysNamed("textNote")[0];
+      act(() => c.finishDrawing(ov.id, [{ timestamp: c.data[5].timestamp, value: 1010 }]));
+      await user.type(await screen.findByLabelText("Text on the chart"), "Supply above{Enter}");
+      act(() => c.select(ov.id));
+      const bar = within(await screen.findByTestId("style-bar"));
+      expect(bar.queryByRole("group", { name: "Thickness" })).not.toBeInTheDocument();
+      await user.click(bar.getByRole("button", { name: "Colour Orange" }));
+      await user.click(bar.getByRole("button", { name: "Large" }));
+      await user.click(bar.getByRole("button", { name: "Bold" }));
+      expect(c.overlays.get(ov.id)!.extendData).toEqual({ text: "Supply above", style: { color: "#ff9f43", textSize: 16, bold: false } });
+      expect(saved()[0]).toMatchObject({ name: "textNote", text: "Supply above", style: { color: "#ff9f43", textSize: 16, bold: false } });
+    });
+
+    it("a text label keeps its look when its words are edited", async () => {
+      localStorage.setItem(KEY, JSON.stringify([{ name: "textNote", points: [{ timestamp: Date.now() - 600_000, value: 1005 }], text: "old", style: { color: "#a78bfa", textSize: 20 } }]));
+      const user = userEvent.setup();
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      await waitFor(() => expect(c.overlaysNamed("textNote")).toHaveLength(1));
+      const ov = c.overlaysNamed("textNote")[0];
+      expect(ov.extendData).toEqual({ text: "old", style: { color: "#a78bfa", textSize: 20 } });
+      act(() => c.doubleClick(ov.id));
+      const box = await screen.findByLabelText("Text on the chart");
+      await user.clear(box);
+      await user.type(box, "new{Enter}");
+      expect(c.overlays.get(ov.id)!.extendData).toEqual({ text: "new", style: { color: "#a78bfa", textSize: 20 } });
+    });
+  });
+
+  it("a drawing made on one chart shows up on a sibling chart of the SAME instrument at a different interval", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    // Make the second chart NIFTY too, at a different interval than the first (still 15m).
+    await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
+    await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(screen.getAllByText("NIFTY")).toHaveLength(2));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(screen.getByLabelText("Same interval"));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+    // Clicking into chart 1's region above (to change its symbol) made IT the active pane -
+    // click back into chart 0 so the toolbar draws there instead.
+    await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
+
+    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+    await user.click(bar.getByRole("button", { name: "Trend line" }));
+    const pending = chart(0).overlaysNamed("segment");
+    expect(pending).toHaveLength(1);
+    act(() => chart(0).finishDrawing(pending[0].id, [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[10].timestamp, value: 1020 }]));
+
+    // Pane 2 remounted (a fresh FakeChart instance) when its own symbol changed to NIFTY above -
+    // same "starts a new instrument with its own drawings" precedent this file already uses, so
+    // its CURRENT chart is the latest instance, not chart(1).
+    const paneTwo = FakeChart.instances[FakeChart.instances.length - 1];
+    // The SAME drawing now exists on chart 2 (1h) too - not drawn there by the person, restored
+    // from the shared (exchange, symbol) save the moment chart 0 persisted it - and only once,
+    // not duplicated by chart 0 also reacting to its own write.
+    await waitFor(() => expect(paneTwo.overlaysNamed("segment")).toHaveLength(1));
+    expect(chart(0).overlaysNamed("segment")).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem("web.chart.drawings:NSE:NIFTY")!)).toHaveLength(1);
+  });
+
   it("choosing the same tool again, or the cursor, puts it down without drawing anything", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
@@ -747,7 +1296,7 @@ describe("drawing tools", () => {
     expect(a.value).toBe(1010);
   });
 
-  it("re-places each drawing once when the candle size changes, never doubling them up", async () => {
+  it("re-places each drawing once when the interval changes, never doubling them up", async () => {
     const user = userEvent.setup();
     localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([{ name: "priceLine", points: [{ value: 1030 }] }, { name: "segment", points: [{ timestamp: Date.now() - 3 * 3_600_000, value: 1010 }, { timestamp: Date.now() - 3_600_000, value: 1020 }] }]));
     renderAt("/trade?symbol=NIFTY");
@@ -922,8 +1471,12 @@ describe("structure", () => {
     setups: [{ direction: "long", status: "triggered", entry: 106, stop_loss: 103, target: 112, risk_reward: 2, zone_proximal: 100, zone_distal: 95, confirmed_timestamp: "2026-09-25T11:30:00+05:30", resolved_timestamp: null }],
   });
   const open = async (user: ReturnType<typeof userEvent.setup>) => {
-    await user.click(screen.getByRole("button", { name: /Structure/ }));
-    return within(screen.getByRole("group", { name: "Structure" }));
+    // Structure is off by default: open its panel on the rail and switch the layer on from there (a no-op if it is on already).
+    const group = () => screen.queryByRole("group", { name: "Structure" });
+    if (!group()) await user.click(screen.getByRole("button", { name: /^Structure/ }));
+    const on = screen.getByLabelText("Show structure");
+    if (!(on as HTMLInputElement).checked) await user.click(on);
+    return within(group()!);
   };
 
   it("is off until a timeframe is ticked, and downloads nothing", async () => {
@@ -933,13 +1486,60 @@ describe("structure", () => {
     expect(calls.some((x) => x.url.includes("/order-blocks"))).toBe(false);
   });
 
+  it("has its own button on the rail, whose panel switches the layer on (seeded with the chart's own interval) and off again", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const button = () => screen.getByRole("button", { name: /^Structure/ });
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(button());
+    const panel = within(screen.getByRole("group", { name: "Structure" }));
+    expect(panel.getByLabelText("Show structure")).not.toBeChecked();
+    expect(panel.queryByText("Detect on")).not.toBeInTheDocument(); // nothing to configure while it is off
+    await user.click(panel.getByLabelText("Show structure"));
+
+    // Seeded with the active chart's own interval (15m, the default) - not a stale accumulated list.
+    expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual(["15min"]);
+    expect(screen.getByText("Detect on")).toBeInTheDocument();
+    expect(button()).toHaveAttribute("aria-pressed", "true");
+    expect(within(button()).getByText("1")).toBeInTheDocument(); // the count of detection intervals
+
+    await user.click(screen.getByLabelText("Show structure"));
+    expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual([]);
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("is not in the top bar on a wide screen, and keeps its own dropdown there on a phone", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const top = document.querySelector(".ws-bar")!;
+    expect(within(top as HTMLElement).queryByRole("button", { name: /Indicators/ })).not.toBeInTheDocument();
+    expect(within(top as HTMLElement).queryByRole("button", { name: /^Structure/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: /Indicators/ })).toBeInTheDocument();
+  });
+
+  it("on a phone the Indicators dropdown stays in the top bar, with Structure as a switch inside it", async () => {
+    screenIs(false);
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("toolbar", { name: "Drawing tools" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    const panel = within(screen.getByRole("group", { name: "Indicators" }));
+    await user.click(panel.getByLabelText("Structure"));
+    await user.click(screen.getByRole("button", { name: /Indicators/ }));
+    expect(screen.getByRole("button", { name: "Structure 1" })).toBeInTheDocument();
+  });
+
   it("draws zones for the ticked timeframe, asking the server for the optional layers only when they are on", async () => {
     structure = fullStructure();
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
     const m = await open(user);
-    await user.click(within(m.getByRole("group", { name: "Detection timeframes" })).getByRole("button", { name: "15m" }));
+    // Turning Structure on (inside open()) already ticks 15m - the active chart's own interval.
+    expect(within(m.getByRole("group", { name: "Detection timeframes" })).getByRole("button", { name: "15m" })).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(c.overlaysNamed("htfOrderBlock")).toHaveLength(1));
     expect(c.overlaysNamed("htfFvg")).toHaveLength(0); // not asked for
     const first = calls.filter((x) => x.url.includes("/order-blocks")).pop()!;
@@ -959,6 +1559,16 @@ describe("structure", () => {
     const p = new URL(last.url).searchParams;
     expect([p.get("fvg"), p.get("breakers"), p.get("setups")]).toEqual(["true", "true", "true"]);
     expect(JSON.parse(localStorage.getItem("web.chart.structure")!)).toMatchObject({ tfs: ["15min"], fvg: true, setups: true });
+  });
+
+  it("resets to the new interval on a change - drops finer detection timeframes, keeps coarser ones, adds the new size", async () => {
+    structure = fullStructure();
+    localStorage.setItem("web.chart.structure", JSON.stringify({ tfs: ["5min", "60min"], breakers: false, fvg: false, breaks: false, trendMarks: false, setups: false }));
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await user.click(within(screen.getByRole("group", { name: "Interval, NIFTY" })).getByRole("button", { name: "15m" }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("web.chart.structure")!).tfs).toEqual(["15min", "60min"]));
   });
 
   it("shows the structure trend beside the chart's name, and live setups in a strip", async () => {
@@ -1059,9 +1669,8 @@ describe("layout and the ticket panel", () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     expect(screen.getByTestId("ticket")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    const box = screen.getByRole("checkbox", { name: "Show ticket" });
-    expect(box).toBeChecked();
+    const box = screen.getByRole("button", { name: "Show ticket" });
+    expect(box).toHaveAttribute("aria-pressed", "true");
     await user.click(box);
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("web.workstation")!).ticketOpen).toBe(false);
@@ -1088,7 +1697,7 @@ describe("layout and the ticket panel", () => {
     Object.defineProperty(document, "fullscreenElement", { value: null, configurable: true });
   });
 
-  it("changes candle size on the chart and reloads the candles at that size", async () => {
+  it("changes interval on the chart and reloads the candles at that size", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
@@ -1098,12 +1707,29 @@ describe("layout and the ticket panel", () => {
     expect(JSON.parse(localStorage.getItem("web.workstation")!).panes[0].interval).toBe("5min");
   });
 
-  it("asks for daily candles from the provider that needs no broker token", async () => {
+  it("shows only the favourite intervals by default, with every interval in the Intervals menu, and structure detects on all but weekly", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    await user.click(screen.getByRole("button", { name: "1d" }));
-    await waitFor(() => expect(calls.some((x) => x.url.includes("/candles/history") && new URL(x.url).searchParams.get("source") === "yahoo")).toBe(true));
+    for (const hidden of ["30m", "1d", "1w"]) expect(screen.queryByRole("button", { name: hidden })).not.toBeInTheDocument();
+    for (const shown of ["1m", "3m", "5m", "15m", "1h"]) expect(screen.getAllByRole("button", { name: shown }).length).toBeGreaterThan(0);
+    await user.click(screen.getAllByRole("button", { name: /Intervals/ })[0]);
+    expect(within(screen.getByRole("group", { name: "Intervals" })).getByRole("button", { name: "30m" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: /Intervals/ })[0]); // close it again
+    // the Structure button on the rail opens its panel; the layer is switched on from there
+    await user.click(screen.getByRole("button", { name: "Structure" }));
+    await user.click(screen.getByLabelText("Show structure"));
+    const menu = within(screen.getByRole("group", { name: "Structure" }));
+    expect(menu.getAllByRole("button").map((b) => b.textContent).slice(0, 7)).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d"]);
+    expect(menu.queryByRole("button", { name: "1w" })).not.toBeInTheDocument(); // order blocks are not detected that coarsely
+  });
+
+  it("opens a saved layout on a size that is not a favourite, and shows that size's button while it is on screen", async () => {
+    localStorage.setItem("web.workstation", JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "30min" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "30min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } }));
+    renderAt("/trade");
+    await loaded(0);
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent("NIFTY, 30m candles");
+    expect(screen.getAllByRole("button", { name: "30m", pressed: true }).length).toBeGreaterThan(0);
   });
 
   it("restores the saved layout on the next visit", async () => {
@@ -1112,7 +1738,7 @@ describe("layout and the ticket panel", () => {
     await loaded(0);
     await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(2));
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
-    await userEvent.setup().click(screen.getByRole("button", { name: /Sync/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     expect(screen.getByLabelText("Sync crosshair")).not.toBeChecked();
   });
 });
@@ -1134,21 +1760,10 @@ describe("two linked charts", () => {
     await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("23,140.5"));
     await waitFor(() => expect(screen.getByTestId("price-1")).toHaveTextContent("55,580.4"));
     expect(screen.getAllByTestId("chart-pane")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Side by side" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "2×1" })).toBeInTheDocument(); // the layout button names the current grid
     const symbols = calls.filter((x) => x.url.includes("/candles/history")).map((x) => new URL(x.url).searchParams.get("symbol"));
     expect(symbols).toContain("BANKNIFTY");
     expect(FakeChart.instances).toHaveLength(2);
-  });
-
-  it("says whether the two agree, and calls it mixed when they do not", async () => {
-    regimes = { default: { regime: "trending_up", adx: 30, atr_percentile: 40, trend: "up", advice: "" }, BANKNIFTY: { regime: "ranging", adx: 12, atr_percentile: 40, trend: "range", advice: "" } };
-    const user = userEvent.setup();
-    await pair(user);
-    expect(await screen.findByText(/Mixed: NIFTY is up, BANKNIFTY is sideways/)).toBeInTheDocument();
-    regimes.BANKNIFTY = { regime: "trending_up", adx: 28, atr_percentile: 40, trend: "up", advice: "" };
-    // the read refreshes on its own timer; changing the candle size asks again straight away
-    await user.click(within(screen.getByRole("group", { name: "Candle size, NIFTY" })).getByRole("button", { name: "5m" }));
-    expect(await screen.findByText(/Aligned: NIFTY and BANKNIFTY are both moving up/)).toBeInTheDocument();
   });
 
   it("draws the other chart's pointer when the crosshair is linked, follows it, and removes it when the pointer leaves", async () => {
@@ -1167,18 +1782,101 @@ describe("two linked charts", () => {
     await waitFor(() => expect(b.overlaysNamed("peerCursor")).toHaveLength(0));
   });
 
+  describe("clicking a time on one of two linked charts", () => {
+    const canvasOf = (i: number) => screen.getAllByTestId("chart-pane")[i].querySelector(".chart-canvas")! as HTMLElement;
+    const click = (i: number, ts: number, from = { x: 100, y: 100 }, to = from) => {
+      act(() => chart(i).emit("onCrosshairChange", { paneId: "candle_pane", kLineData: { timestamp: ts } }));
+      fireEvent.mouseDown(canvasOf(i), { clientX: from.x, clientY: from.y });
+      fireEvent.click(canvasOf(i), { clientX: to.x, clientY: to.y });
+    };
+
+    it("pans the other chart to the clicked time, without drawing a line", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      const [a, b] = [chart(0), chart(1)];
+      const ts = a.data[5].timestamp;
+      click(0, ts);
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(1));
+      expect(a.overlaysNamed("timeMark")).toHaveLength(0); // no line is drawn: the click only pans
+      expect(b.overlaysNamed("timeMark")).toHaveLength(0);
+      expect(b.scrolledIndex).toHaveLength(1); // the other chart was panned...
+      expect(a.scrolledIndex).toHaveLength(0); // ...the one that was clicked stays where it is
+    });
+
+    it("pans whichever chart was not clicked - from either chart", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      const [a, b] = [chart(0), chart(1)];
+      click(0, a.data[5].timestamp);
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(1));
+      click(1, b.data[9].timestamp);
+      await waitFor(() => expect(a.scrolledIndex).toHaveLength(1));
+      expect(a.scrolledIndex).toHaveLength(1); // now chart A is the one that follows
+    });
+
+    it("pans again when the same time is clicked after the other chart was moved away", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      const [a, b] = [chart(0), chart(1)];
+      const ts = a.data[5].timestamp;
+      click(0, ts);
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(1));
+      click(0, ts);
+      await waitFor(() => expect(b.scrolledIndex).toHaveLength(2));
+    });
+
+    it("treats a drag as panning, not a click", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      click(0, chart(0).data[5].timestamp, { x: 100, y: 100 }, { x: 160, y: 104 });
+      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
+      expect(chart(1).scrolledIndex).toHaveLength(0);
+    });
+
+    it("does nothing while a drawing tool is armed - that click places a drawing", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Trend line" }));
+      click(0, chart(0).data[5].timestamp);
+      expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
+    });
+
+    it("does nothing when the crosshair link is switched off", async () => {
+      const user = userEvent.setup();
+      await pair(user);
+      click(0, chart(0).data[5].timestamp);
+      await waitFor(() => expect(chart(1).scrolledIndex).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+      await user.click(screen.getByLabelText("Sync crosshair"));
+      click(0, chart(0).data[6].timestamp);
+      expect(chart(1).scrolledIndex).toHaveLength(1); // no further pan once the link is off
+    });
+
+    it("is not there with one chart", async () => {
+      renderAt("/trade?symbol=NIFTY");
+      const c = await loaded();
+      act(() => c.emit("onCrosshairChange", { paneId: "candle_pane", kLineData: { timestamp: c.data[5].timestamp } }));
+      fireEvent.mouseDown(canvasOf(0), { clientX: 10, clientY: 10 });
+      fireEvent.click(canvasOf(0), { clientX: 10, clientY: 10 });
+      expect(c.overlaysNamed("timeMark")).toHaveLength(0);
+    });
+  });
+
   it("does not link the crosshair when that is switched off", async () => {
     const user = userEvent.setup();
     await pair(user);
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     await user.click(screen.getByLabelText("Sync crosshair"));
     act(() => chart(0).emit("onCrosshairChange", { paneId: "candle_pane", kLineData: { timestamp: chart(0).data[5].timestamp } }));
     expect(chart(1).overlaysNamed("peerCursor")).toHaveLength(0);
   });
 
-  it("makes the other chart follow scrolling and zoom, once, without the two chasing each other", async () => {
+  it("makes the other chart follow scrolling and zoom, once, without the two chasing each other, once that link is switched on", async () => {
     const user = userEvent.setup();
     await pair(user);
+    // Off by default (see "does not link scrolling by default" below) - switch it on for this test.
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(screen.getByLabelText("Sync scrolling and zoom"));
     const [a, b] = [chart(0), chart(1)];
     b.barSpace = 8;
     a.barSpace = 12; // the person zoomed chart A
@@ -1194,28 +1892,26 @@ describe("two linked charts", () => {
     expect(a.barSpace).toBe(3);
   });
 
-  it("does not link scrolling when that is switched off", async () => {
+  it("does not link scrolling by default", async () => {
     const user = userEvent.setup();
     await pair(user);
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
-    await user.click(screen.getByLabelText("Sync scrolling and zoom"));
     chart(0).barSpace = 15;
     act(() => chart(0).emit("onVisibleRangeChange"));
     expect(chart(1).barSpace).toBe(8);
   });
 
-  it("puts both charts on the same candle size while that link is on, and lets them differ when it is off", async () => {
+  it("puts both charts on the same interval while that link is on, and lets them differ when it is off", async () => {
     const user = userEvent.setup();
     await pair(user);
     const size = (i: number) => within(screen.getAllByRole("region")[i]).getByRole("button", { pressed: true, name: /^(1m|3m|5m|15m|30m|1h|1d)$/ });
-    await user.click(within(screen.getByRole("group", { name: "Candle size, BANKNIFTY" })).getByRole("button", { name: "5m" }));
-    await waitFor(() => expect(screen.getByRole("group", { name: "Candle size, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m"));
+    await user.click(within(screen.getByRole("group", { name: "Interval, BANKNIFTY" })).getByRole("button", { name: "5m" }));
+    await waitFor(() => expect(screen.getByRole("group", { name: "Interval, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m"));
     expect(size).toBeDefined();
-    await user.click(screen.getByRole("button", { name: /Sync/ }));
-    await user.click(screen.getByLabelText("Same candle size"));
-    await user.click(within(screen.getByRole("group", { name: "Candle size, BANKNIFTY" })).getByRole("button", { name: "1h" }));
-    expect(screen.getByRole("group", { name: "Candle size, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m");
-    expect(screen.getByRole("group", { name: "Candle size, BANKNIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("1h");
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(screen.getByLabelText("Same interval"));
+    await user.click(within(screen.getByRole("group", { name: "Interval, BANKNIFTY" })).getByRole("button", { name: "1h" }));
+    expect(screen.getByRole("group", { name: "Interval, NIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("5m");
+    expect(screen.getByRole("group", { name: "Interval, BANKNIFTY" }).querySelector('[aria-pressed="true"]')!.textContent).toBe("1h");
   });
 
   it("orders and drawing tools go to the chart you last clicked, and the ticket follows", async () => {
@@ -1239,23 +1935,11 @@ describe("two linked charts", () => {
     expect(chart(1).overlaysNamed("planLine")).toHaveLength(0);
   });
 
-  it("adds a 'confirmed by the other index' check to the ticket, and it follows what the other chart says", async () => {
-    regimes = { default: { regime: "trending_up", adx: 30, atr_percentile: 40, trend: "up", advice: "" }, BANKNIFTY: { regime: "trending_down", adx: 30, atr_percentile: 40, trend: "down", advice: "" } };
+  it("goes back to one chart, and keeps the first chart", async () => {
     const user = userEvent.setup();
     await pair(user);
-    const checks = within(await screen.findByTestId("checks"));
-    expect(await checks.findByText("Confirmed by BANKNIFTY")).toBeInTheDocument();
-    expect(checks.getByText("BANKNIFTY is moving the other way.")).toBeInTheDocument();
-    await user.click(within(screen.getByTestId("ticket")).getByRole("button", { name: "Sell" }));
-    expect(await checks.findByText("BANKNIFTY is moving the same way.")).toBeInTheDocument();
-  });
-
-  it("goes back to one chart, drops the peer check, and keeps the first chart", async () => {
-    const user = userEvent.setup();
-    await pair(user);
-    await user.click(screen.getByRole("button", { name: "One chart" }));
+    await pickLayout(user, "One chart");
     await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(1));
-    expect(screen.queryByText(/Confirmed by/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Sync crosshair")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Trade NIFTY" })).toBeInTheDocument();
   });
@@ -1263,7 +1947,7 @@ describe("two linked charts", () => {
   it("stacks the charts on request", async () => {
     const user = userEvent.setup();
     await pair(user);
-    await user.click(screen.getByRole("button", { name: "Stacked" }));
+    await pickLayout(user, "Stacked");
     expect(document.querySelector(".ws-grid")!.className).toContain("layout-stack");
   });
 });
@@ -1278,6 +1962,24 @@ describe("saved combos", () => {
     await loaded(0);
     await openCombos(user);
     expect(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" })).toBeInTheDocument();
+  });
+
+  it("says Combos with the saved count until one of them is on screen, then shows that pair's name with the count", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    const button = () => screen.getByRole("button", { name: /Combos/ });
+    expect(button()).toHaveTextContent(/^Combos1 ▾$/);
+    expect(button()).toHaveAccessibleName("Combos, 1 saved");
+
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+    expect(button()).toHaveTextContent(/^NIFTY \+ BANKNIFTY1 ▾$/);
+    expect(button()).toHaveAccessibleName("Combos: NIFTY + BANKNIFTY, 1 saved");
+
+    await pickLayout(user, "One chart"); // one chart is no longer that pair
+    expect(button()).toHaveTextContent(/^Combos1 ▾$/);
   });
 
   it("offers to save the two charts on screen once they show two different instruments, applies and removes it", async () => {
@@ -1314,6 +2016,33 @@ describe("saved combos", () => {
     await user.click(screen.getByRole("button", { name: "Remove NIFTY + BANKNIFTY" }));
     expect(screen.getByText("No saved combos yet.")).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toEqual([]);
+  });
+
+  it("saves the same symbol at two different intervals as its own combo, with a disambiguated label", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" })); // two-up
+    await loaded(1);
+
+    // Make the second chart NIFTY too, then give it its own interval (unlinked first, or the
+    // interval link would just snap it straight back to chart 1's own size).
+    await user.pointer({ target: screen.getAllByRole("region")[1], keys: "[MouseLeft]" });
+    await user.type(screen.getByRole("searchbox", { name: "Trade a stock" }), "NIFTY");
+    await user.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(screen.getAllByText("NIFTY")[0]).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
+    await user.click(screen.getByLabelText("Same interval"));
+    await user.click(within(screen.getAllByRole("group", { name: "Interval, NIFTY" })[1]).getByRole("button", { name: "1h" }));
+
+    await openCombos(user);
+    await user.click(screen.getByRole("button", { name: "+ Save NIFTY 15m + NIFTY 1h" }));
+    expect(await screen.findByRole("button", { name: "NIFTY 15m + NIFTY 1h" })).toBeInTheDocument();
+    const saved = JSON.parse(localStorage.getItem("web.workstation.combos")!);
+    expect(saved).toHaveLength(2);
+    expect(saved[1]).toMatchObject({ a: { symbol: "NIFTY", interval: "15min" }, b: { symbol: "NIFTY", interval: "60min" } });
   });
 });
 
@@ -1466,7 +2195,7 @@ describe("dragging the plan lines", () => {
     await waitFor(() => expect(c.overlaysNamed("planLine")).toHaveLength(0)); // a cleared field removes its line
   });
 
-  it("draws the lines again, once each, when the candle size changes", async () => {
+  it("draws the lines again, once each, when the interval changes", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
@@ -1486,9 +2215,9 @@ describe("dragging the plan lines", () => {
     const t = await ticket();
     const c = await loaded();
     await user.click(t.getByRole("button", { name: "Add stop line" }));
-    expect(t.getByLabelText("Stop-loss")).toHaveValue("995");
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("988.29"); // one typical bar-move (11.71 on these candles) against the trade
     await user.click(t.getByRole("button", { name: "Add target line" }));
-    expect(t.getByLabelText("Target")).toHaveValue("1010");
+    expect(t.getByLabelText("Target")).toHaveValue("1023.43"); // two in its favour
     await waitFor(() => expect(c.overlaysNamed("planLine").map((o) => o.extendData.label).sort()).toEqual(["Stop", "Target"]));
     // the button goes away once the field has a value: there is a line to drag
     expect(t.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument();
@@ -1500,10 +2229,10 @@ describe("dragging the plan lines", () => {
     const t = await ticket();
     await user.click(t.getByRole("button", { name: "Sell" }));
     await user.click(t.getByRole("button", { name: "Add stop line" }));
-    expect(t.getByLabelText("Stop-loss")).toHaveValue("1005");
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("1011.71");
     await user.click(t.getByRole("button", { name: "Wait for a price" }));
     await user.click(t.getByRole("button", { name: "Add entry line" }));
-    expect(t.getByLabelText("Enter when the price reaches")).toHaveValue("1003");
+    expect(t.getByLabelText("Enter when the price reaches")).toHaveValue("1005.86"); // half a bar-move back
   });
 
   it("offers no starting line until there is a price to base it on", async () => {
@@ -1513,6 +2242,24 @@ describe("dragging the plan lines", () => {
     await waitFor(() => expect(calls.some((x) => x.url.includes("/quotes/ltp"))).toBe(true));
     expect(screen.getByTestId("price-0")).toHaveTextContent("–");
     expect(screen.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument();
+  });
+
+  it("resets a price once it is set: the field empties, its line leaves the chart, and Add line comes back", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const c = await loaded();
+    expect(t.queryByRole("button", { name: "Reset stop" })).not.toBeInTheDocument(); // nothing to reset yet
+    await user.click(t.getByRole("button", { name: "Add stop line" }));
+    await user.click(t.getByRole("button", { name: "Add target line" }));
+    await waitFor(() => expect(c.overlaysNamed("planLine")).toHaveLength(2));
+
+    await user.click(t.getByRole("button", { name: "Reset stop" }));
+
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("");
+    await waitFor(() => expect(c.overlaysNamed("planLine").map((o) => o.extendData.label)).toEqual(["Target"]));
+    expect(t.getByRole("button", { name: "Add stop line" })).toBeInTheDocument();
+    expect(t.getByLabelText("Target")).not.toHaveValue(""); // the other price is left alone
   });
 
   it("lines exist only on the active chart, so a drag on one cannot touch the other's ticket", async () => {
@@ -1606,18 +2353,17 @@ describe("your trades on the chart", () => {
     expect(markers(c)[0].extendData.state).toBe("closed");
   });
 
-  it("the My trades checkbox takes them off the chart and back, and remembers the choice", async () => {
+  it("the My trades toggle takes them off the chart and back, and remembers the choice", async () => {
     const user = userEvent.setup();
     positionRows = [position({})];
     renderAt("/trade?symbol=RELIANCE");
     const c = await loaded();
     await waitFor(() => expect(markers(c)).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    const box = screen.getByRole("checkbox", { name: "My trades" });
-    expect(box).toBeChecked();
+    const box = screen.getByRole("button", { name: "My trades" });
+    expect(box).toHaveAttribute("aria-pressed", "true");
     await user.click(box);
     await waitFor(() => expect(markers(c)).toHaveLength(0));
-    expect(box).not.toBeChecked();
+    expect(box).toHaveAttribute("aria-pressed", "false");
     expect(JSON.parse(localStorage.getItem("web.chart.tools") ?? "{}").tradesOn).toBe(false);
     await user.click(box);
     await waitFor(() => expect(markers(c)).toHaveLength(1));
@@ -1638,43 +2384,213 @@ describe("your trades on the chart", () => {
   });
 });
 
-describe("the Layers menu", () => {
+describe("resizing and maximizing two charts", () => {
   beforeEach(() => screenIs(true));
+  const grid = () => screen.getAllByTestId("chart-pane")[0].closest(".ws-grid") as HTMLElement;
+  const pair = async (user: ReturnType<typeof userEvent.setup>) => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded(0);
+    await user.click(screen.getByRole("button", { name: /Combos/ }));
+    await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
+    await loaded(1);
+  };
 
-  it("folds trades, OI levels and the ticket into one menu, badged with how many are on", async () => {
+  it("has a divider only with two charts, and moves it with the arrow keys, remembering where it was left", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    const bar = screen.getByRole("separator", { name: "Resize charts" });
+    expect(bar).toHaveAttribute("aria-valuenow", "50");
+    bar.focus();
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(bar).toHaveAttribute("aria-valuenow", "60");
+    expect(grid().style.getPropertyValue("--split-a")).toBe("0.6fr");
+    expect(JSON.parse(localStorage.getItem("web.workstation") ?? "{}").split).toBeCloseTo(0.6);
+  });
+
+  it("keeps both charts usable: the divider stops at 20% and 80%, and double-click evens it out", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    const bar = screen.getByRole("separator", { name: "Resize charts" });
+    bar.focus();
+    await user.keyboard("{ArrowLeft>10/}");
+    expect(bar).toHaveAttribute("aria-valuenow", "20");
+    await user.dblClick(bar);
+    expect(bar).toHaveAttribute("aria-valuenow", "50");
+  });
+
+  it("maximizes one chart, hides the other without unloading it, and restores", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    await user.click(screen.getByRole("button", { name: /^Maximize BANKNIFTY chart/ }));
+    expect(grid()).toHaveClass("focused");
+    expect(screen.getAllByTestId("chart-pane")).toHaveLength(2); // both still mounted
+    expect(screen.getByRole("region", { name: "NIFTY chart" })).toHaveClass("ws-pane-hidden");
+    expect(screen.getByRole("region", { name: "BANKNIFTY chart" })).not.toHaveClass("ws-pane-hidden");
+    expect(screen.queryByRole("separator", { name: "Resize charts" })).not.toBeInTheDocument();
+    expect(FakeChart.disposed).toBe(0);
+    await user.click(screen.getByRole("button", { name: /^Restore BANKNIFTY chart/ }));
+    expect(grid()).not.toHaveClass("focused");
+    expect(screen.getByRole("separator", { name: "Resize charts" })).toBeInTheDocument();
+  });
+
+  it("has no maximize button with one chart", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("button", { name: /^Maximize/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("the OI group on the rail", () => {
+  beforeEach(() => screenIs(true));
+  const rail = () => within(screen.getByRole("group", { name: "Open interest" }));
+  const aiCalls = () => calls.filter((c) => c.url.includes("/ai-read"));
+  const chainCalls = () => calls.filter((c) => c.url.includes("/options/"));
+
+  it("has the OI strip, the OI levels and the AI read, with the strip on and the levels off to start", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(rail().getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI strip", "OI levels", "AI read"]);
+    expect(rail().getByRole("button", { name: "OI strip" })).toHaveAttribute("aria-pressed", "true");
+    expect(rail().getByRole("button", { name: "OI levels" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("is greyed out for an instrument with no option chain, saying why", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    await loaded();
+    for (const name of ["OI strip", "OI levels", "AI read"]) {
+      expect(rail().getByRole("button", { name })).toBeDisabled();
+      expect(rail().getByRole("button", { name })).toHaveAttribute("title", "No option chain for this instrument");
+    }
+  });
+
+  it("hides the strip, remembering the choice, and puts it back", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    // My trades and the ticket are on by default; OI levels is not.
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers2 ▾");
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers3 ▾");
-    await user.click(screen.getByRole("checkbox", { name: "Show ticket" }));
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers2 ▾");
+    await screen.findByTestId("oi-strip");
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    expect(screen.queryByTestId("oi-strip")).not.toBeInTheDocument();
+    expect(rail().getByRole("button", { name: "OI strip" })).toHaveAttribute("aria-pressed", "false");
+    expect(JSON.parse(localStorage.getItem("web.chart.tools") ?? "{}").oiStripOn).toBe(false);
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    expect(await screen.findByTestId("oi-strip")).toBeInTheDocument();
   });
 
-  it("hides the header's live price from Layers, and it comes back the same way", async () => {
+  it("keeps the AI read reachable with the strip hidden: a slim row with just its button", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    expect(screen.getByTestId("price-0")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "Price in header" }));
-    expect(screen.queryByTestId("price-0")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Layers/ })).toHaveTextContent("Layers3 ▾"); // trades + ticket + hidden price
-    await user.click(screen.getByRole("checkbox", { name: "Price in header" }));
-    expect(screen.getByTestId("price-0")).toBeInTheDocument();
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    const slim = within(screen.getByTestId("oi-strip-slim"));
+    expect(slim.getByTestId("ai-read-btn")).toBeInTheDocument();
+    expect(screen.queryByText(/PCR/)).not.toBeInTheDocument(); // none of the readings
   });
 
-  it("has no ticket row on a phone: there is nothing to toggle, the ticket is always shown", async () => {
+  it("starts the AI read from the rail, even with the strip hidden - for the chart's own instrument, with no expiry of its own", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await user.click(rail().getByRole("button", { name: "OI strip" }));
+    await user.click(rail().getByRole("button", { name: "AI read" }));
+    expect(await screen.findByTestId("ai-read-bias")).toHaveTextContent("bearish · 70%");
+    const url = new URL(aiCalls()[0].url);
+    expect(url.searchParams.get("symbol")).toBe("NIFTY");
+    expect(url.searchParams.get("expiry")).toBeNull(); // the server picks the nearest
+  });
+
+  it("starts the strip's own AI read from the rail too, and a second press hides what it showed", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await screen.findByTestId("oi-strip");
+    await user.click(rail().getByRole("button", { name: "AI read" }));
+    expect(await screen.findByTestId("ai-read")).toBeInTheDocument();
+    await user.click(rail().getByRole("button", { name: "AI read" }));
+    expect(screen.queryByTestId("ai-read")).not.toBeInTheDocument();
+    expect(aiCalls()).toHaveLength(1); // hiding it did not ask the model again
+  });
+
+  it("does not read the option chain at all while neither the strip nor the levels are on", async () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ oiStripOn: false, oiLevelsOn: false }));
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    expect(chainCalls()).toHaveLength(0);
+    expect(calls.some((c) => c.url.includes("/options/sentiment-history"))).toBe(false);
+  });
+
+  it("still reads the chain for the levels alone, with the strip hidden", async () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ oiStripOn: false, oiLevelsOn: true }));
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    await waitFor(() => expect(chainCalls().length).toBeGreaterThan(0));
+    await waitFor(() => expect(c.overlaysNamed("oiLevel").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("oi-strip")).not.toBeInTheDocument();
+  });
+
+  it("is in the top bar instead on a phone, which has no rail", async () => {
     screenIs(false);
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("group", { name: "Open interest" })).not.toBeInTheDocument();
+    const view = within(screen.getByRole("group", { name: "View" }));
+    expect(view.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI strip", "OI levels", "My trades", "Price in header"]);
+  });
+});
+
+describe("the view toggles at the end of the top bar", () => {
+  beforeEach(() => screenIs(true));
+  const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
+
+  it("are icon buttons, each named for what it switches and pressed when on - trades, the price and the ticket on by default", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const group = within(screen.getByRole("group", { name: "View" }));
+    expect(group.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["My trades", "Price in header", "Show ticket"]);
+    expect(group.getAllByRole("button").every((b) => b.textContent === "")).toBe(true); // icons, not words
+    expect([pressed("My trades"), pressed("Price in header"), pressed("Show ticket")]).toEqual(["true", "true", "true"]);
+  });
+
+  it("say on or off in their tooltips, and flip when clicked", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    expect(screen.queryByRole("checkbox", { name: "Show ticket" })).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "My trades" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "My trades" })).toHaveAttribute("title", expect.stringMatching(/\(on\)$/));
+    await user.click(screen.getByRole("button", { name: "My trades" }));
+    expect(pressed("My trades")).toBe("false");
+    expect(screen.getByRole("button", { name: "My trades" })).toHaveAttribute("title", expect.stringMatching(/\(off\)$/));
+    await user.click(screen.getByRole("button", { name: "Show ticket" }));
+    expect(pressed("Show ticket")).toBe("false");
+  });
+
+  it("hides the header's live price, and it comes back the same way", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.getByTestId("price-0")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Price in header" }));
+    expect(screen.queryByTestId("price-0")).not.toBeInTheDocument();
+    expect(pressed("Price in header")).toBe("false");
+    await user.click(screen.getByRole("button", { name: "Price in header" }));
+    expect(screen.getByTestId("price-0")).toBeInTheDocument();
+  });
+
+  it("are one row with the rest of the top bar - there is no second row any more", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    await pickLayout(user, "Side by side");
+    expect(screen.queryByTestId("agreement")).not.toBeInTheDocument();
+    expect(document.querySelector(".ws-links")).toBeNull();
+    expect(screen.getByRole("group", { name: "View" }).closest(".ws-bar")).not.toBeNull();
+  });
+
+  it("have no ticket switch on a phone: there is nothing to toggle, the ticket is always shown", async () => {
+    screenIs(false);
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    expect(screen.queryByRole("button", { name: "Show ticket" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "My trades" })).toBeInTheDocument();
   });
 });
 
@@ -1684,11 +2600,9 @@ describe("option-chain levels on the chart", () => {
   const oiCalls = () => calls.filter((c) => c.url.includes("/options/"));
 
   it("draws no lines on the chart until asked for, even though the strip below already reads the chain", async () => {
-    const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    expect(screen.getByRole("checkbox", { name: "OI levels" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "OI levels" })).toHaveAttribute("aria-pressed", "false");
     expect(levels(c)).toHaveLength(0);
     await waitFor(() => expect(oiCalls().length).toBeGreaterThan(0)); // the always-on strip below the chart
     expect(await screen.findByTestId("oi-strip")).toBeInTheDocument();
@@ -1698,8 +2612,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
     const lines = levels(c).map((o) => o.extendData);
     expect(lines.find((l) => l.kind === "resistance" && l.rank === 1)).toMatchObject({ price: 1020, label: "R1 1020 · 80.00L OI" });
@@ -1714,8 +2627,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    const box = screen.getByRole("checkbox", { name: "OI levels" });
+    const box = screen.getByRole("button", { name: "OI levels" });
     await user.click(box);
     await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
     await user.click(box);
@@ -1726,8 +2638,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await new Promise((r) => setTimeout(r, 200));
     expect(levels(c)).toHaveLength(0);
     expect(oiCalls()).toHaveLength(0);
@@ -1740,8 +2651,7 @@ describe("option-chain levels on the chart", () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       renderAt("/trade?symbol=NIFTY");
       const c = await loaded();
-      await user.click(screen.getByRole("button", { name: /Layers/ }));
-      await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+      await user.click(screen.getByRole("button", { name: "OI levels" }));
       await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
       await act(async () => void vi.advanceTimersByTime(60_500));
       await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/oi-summary")).length).toBe(2));
@@ -1761,8 +2671,7 @@ describe("option-chain levels on the chart", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
     const n = levels(c).length;
     oiFails = true;
@@ -1777,8 +2686,7 @@ describe("option-chain levels on the chart", () => {
     await user.click(screen.getByRole("button", { name: /Combos/ }));
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(levels(chart(0)).length).toBeGreaterThan(0));
     await waitFor(() => expect(levels(chart(1)).length).toBeGreaterThan(0));
     const asked = calls.filter((x) => x.url.includes("/options/oi-summary")).map((x) => new URL(x.url).searchParams.get("symbol"));
@@ -1807,8 +2715,7 @@ describe("the OI strip under the chart", () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     expect(strip().getByText(/1,020/)).toBeInTheDocument(); // resistance, shown by default
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "OI levels" }));
+    await user.click(screen.getByRole("button", { name: "OI levels" }));
     await waitFor(() => expect(strip().queryByText(/1,020/)).not.toBeInTheDocument());
     expect(strip().queryByText(/960/)).not.toBeInTheDocument(); // support, same
     expect(strip().getByText(/CE OI/)).toBeInTheDocument(); // everything else stays
@@ -1819,8 +2726,8 @@ describe("the OI strip under the chart", () => {
     renderAt("/trade?symbol=NIFTY");
     await loaded();
     const s = strip();
-    expect(s.getByText(/CE long buildup/)).toBeInTheDocument();
-    expect(s.getByText(/PE short covering/)).toBeInTheDocument();
+    expect(s.getByText(/CE LB/)).toBeInTheDocument();
+    expect(s.getByText(/PE SC/)).toBeInTheDocument();
   });
 
   it("shows the OI-trend sparklines once there is sentiment history, and not before", async () => {
@@ -2075,7 +2982,7 @@ describe("alerts on drawings", () => {
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
     await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("3 alerts armed"));
-    await user.click(screen.getByRole("button", { name: "One chart" }));
+    await pickLayout(user, "One chart");
     await waitFor(() => expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed")); // the hidden chart's are not counted
   });
 });
@@ -2164,12 +3071,63 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
     const id = line(c, "position:p1:stop").id;
-    drag(c, "position:p1:stop", 985.1234);
+    drag(c, "position:p1:stop", 995.1234);
     await waitFor(() => expect(puts("/positions/p1/stop-loss")).toHaveLength(1));
-    expect(puts("/positions/p1/stop-loss")[0].body).toEqual({ stop_loss_price: 985.12 });
-    expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 985.12.");
-    await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(985.12)); // the reload confirms it
+    expect(puts("/positions/p1/stop-loss")[0].body).toEqual({ stop_loss_price: 995.12, atr_interval: "15min" });
+    expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 995.12.");
+    await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(995.12)); // the reload confirms it
     expect(line(c, "position:p1:stop").id).toBe(id); // the same line, not a new one
+  });
+
+  it("an open trade with no target offers Add line and Pick on chart, and Add line saves a target on the winning side", async () => {
+    positionRows = [long({ target_price: null })];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.queryByRole("button", { name: "Add stop line" })).not.toBeInTheDocument(); // the stop is set: nothing to add
+    expect(card.getByRole("button", { name: "Pick stop on chart" })).toBeInTheDocument();
+
+    await user.click(card.getByRole("button", { name: "Add target line" }));
+
+    await waitFor(() => expect(puts("/positions/p1/target")).toHaveLength(1));
+    const saved = (puts("/positions/p1/target")[0].body as { target_price: number }).target_price;
+    expect(saved).toBe(1023.43); // a long's target above the price, two typical bar-moves (11.71 on these candles) away
+  });
+
+  it("Pick on chart arms the chart, and the next click saves that price as the open trade's target", async () => {
+    positionRows = [long({ target_price: null })];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+
+    await user.click(card.getByRole("button", { name: "Pick target on chart" }));
+    expect(card.getByRole("button", { name: "Pick target on chart" })).toHaveTextContent("Click chart…");
+    act(() => c.emit("onCrosshairChange", { paneId: "candle_pane", y: -20 })); // the stand-in maps y to 1000 - y: 1020
+    await user.click(screen.getAllByTestId("chart-pane")[0].querySelector(".chart-canvas")!);
+
+    await waitFor(() => expect(puts("/positions/p1/target")).toHaveLength(1));
+    expect(puts("/positions/p1/target")[0].body).toEqual({ target_price: 1020 });
+    expect(card.getByRole("button", { name: "Pick target on chart" })).not.toHaveTextContent("Click chart…"); // picking is over
+  });
+
+  it("a target picked on the wrong side of the price is refused in words, and nothing is saved", async () => {
+    positionRows = [long({ target_price: null })];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+
+    await user.click(card.getByRole("button", { name: "Pick target on chart" }));
+    act(() => c.emit("onCrosshairChange", { paneId: "candle_pane", y: 40 })); // 960: below a long's price
+    await user.click(screen.getAllByTestId("chart-pane")[0].querySelector(".chart-canvas")!);
+
+    expect(await screen.findByTestId("level-note")).toHaveTextContent(/target/i);
+    expect(puts("/positions/p1/target")).toHaveLength(0);
   });
 
   it("dragging the target uses the position's target route", async () => {
@@ -2206,6 +3164,95 @@ describe("moving the stop and target of open trades", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("target of a long trade has to stay above");
     expect(puts("/target")).toHaveLength(0);
     await waitFor(() => expect(line(c, "position:p1:target").points[0].value).toBe(1030));
+  });
+
+  it("refuses to drag a live stop away from the price, before asking the server, and puts the line back", async () => {
+    positionRows = [long()];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    await waitFor(() => expect(lines(c)).toHaveLength(2));
+    drag(c, "position:p1:stop", 970); // a long's stop at 990 moved DOWN
+    expect(await screen.findByRole("alert")).toHaveTextContent("The stop can only move toward price once the order is live.");
+    expect(puts("/stop-loss")).toHaveLength(0);
+    await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(990));
+    drag(c, "position:p1:stop", 995); // toward the price is fine
+    await waitFor(() => expect(puts("/positions/p1/stop-loss")).toHaveLength(1));
+  });
+
+  it("switches the auto-trail on for an open position, sending the interval the person trades on, and shows it on", async () => {
+    positionRows = [long()];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.getByRole("button", { name: "Auto-trail off" })).toHaveAttribute("aria-pressed", "false");
+    await user.click(card.getByRole("button", { name: "Auto-trail off" }));
+    await waitFor(() => expect(puts("/positions/p1/auto-trail")).toHaveLength(1));
+    expect(puts("/positions/p1/auto-trail")[0].body).toEqual({ enabled: true, interval: "15min" });
+    expect(await card.findByRole("button", { name: "Auto-trail on" })).toHaveAttribute("aria-pressed", "true");
+    expect(card.getByRole("button", { name: "Edit sl" })).toBeDisabled(); // it moves by itself now
+    expect(card.getByRole("button", { name: "Edit sl" })).toHaveTextContent("(auto-trail)");
+    await user.click(card.getByRole("button", { name: "Auto-trail on" }));
+    await waitFor(() => expect(puts("/positions/p1/auto-trail")[1].body).toEqual({ enabled: false, interval: "15min" }));
+    expect(await card.findByRole("button", { name: "Auto-trail off" })).toBeInTheDocument();
+  });
+
+  it("offers no auto-trail without a stop to start from, or where another kind of trailing is already running", async () => {
+    positionRows = [long({ stop_loss_price: null })];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.queryByRole("button", { name: /Auto-trail/ })).not.toBeInTheDocument();
+  });
+
+  it("does not offer to switch off a trailing stop that is not the auto-trail", async () => {
+    positionRows = [long({ trailing_stop_enabled: true, stop_loss_method: "indicator" })];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.queryByRole("button", { name: /Auto-trail/ })).not.toBeInTheDocument();
+    expect(card.getByRole("button", { name: "Edit sl" })).toHaveTextContent("(trailing)");
+  });
+
+  it("switches the auto-trail on for an option trade too, on its own route", async () => {
+    groupRows = [{
+      id: "g1", underlying_symbol: "NIFTY", strategy_type: "naked_call", action: "BUY", quantity: 1, status: "OPEN", pnl: null, unrealized_pnl: 0, entry_time: iso(6),
+      exit_time: null, entry_spot_price: 1000, segment: "NSE", spot_stop_loss_price: 985, spot_target_price: 1030, spot_stop_loss_trailing_enabled: false,
+    }];
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await loaded();
+    const card = within(await screen.findByTestId("position-card"));
+    await user.click(card.getByRole("button", { name: "Auto-trail off" }));
+    await waitFor(() => expect(puts("/option-groups/g1/auto-trail")).toHaveLength(1));
+    expect(puts("/option-groups/g1/auto-trail")[0].body).toEqual({ enabled: true, interval: "15min" });
+    expect(await card.findByRole("button", { name: "Auto-trail on" })).toBeInTheDocument();
+  });
+
+  it("has no Chart button on an open option trade here: the chart is already beside it", async () => {
+    groupRows = [{
+      id: "g1", underlying_symbol: "NIFTY", strategy_type: "naked_call", action: "BUY", quantity: 1, status: "OPEN", pnl: null, unrealized_pnl: 0, entry_time: iso(6),
+      exit_time: null, entry_spot_price: 1000, segment: "NSE", spot_stop_loss_price: 985, spot_target_price: 1030, spot_stop_loss_trailing_enabled: false,
+    }];
+    renderAt("/trade?symbol=NIFTY");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const card = within(await screen.findByTestId("position-card"));
+    expect(card.getByRole("button", { name: "Square off" })).toBeInTheDocument();
+    expect(card.queryByRole("button", { name: "Chart" })).not.toBeInTheDocument();
+  });
+
+  it("says why when the server will not start the auto-trail", async () => {
+    positionRows = [long()];
+    levelFails = "this position already trails its stop by 'indicator'";
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const card = within(await screen.findByTestId("position-card"));
+    await user.click(card.getByRole("button", { name: "Auto-trail off" }));
+    expect(await card.findByRole("alert")).toHaveTextContent("already trails its stop");
   });
 
   it("a short is the other way round: its stop belongs above the price and its target below", async () => {
@@ -2252,9 +3299,9 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
     expect(line(c, "group:g1:stop").extendData.label).toBe("Stop · Naked Call");
-    drag(c, "group:g1:stop", 980);
+    drag(c, "group:g1:stop", 990);
     await waitFor(() => expect(puts("/option-groups/g1/spot-stop-loss")).toHaveLength(1));
-    expect(puts("/option-groups/g1/spot-stop-loss")[0].body).toEqual({ spot_stop_loss_price: 980 });
+    expect(puts("/option-groups/g1/spot-stop-loss")[0].body).toEqual({ spot_stop_loss_price: 990, atr_interval: "15min" });
     drag(c, "group:g1:target", 1040);
     await waitFor(() => expect(puts("/option-groups/g1/spot-target")).toHaveLength(1));
     expect(puts("/option-groups/g1/spot-target")[0].body).toEqual({ spot_target_price: 1040 });
@@ -2267,8 +3314,7 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
     expect(lines(c).every((o) => o.extendData.key.startsWith("position:p1:"))).toBe(true);
-    await user.click(screen.getByRole("button", { name: /Layers/ }));
-    await user.click(screen.getByRole("checkbox", { name: "My trades" }));
+    await user.click(screen.getByRole("button", { name: "My trades" }));
     await waitFor(() => expect(lines(c)).toHaveLength(0));
   });
 

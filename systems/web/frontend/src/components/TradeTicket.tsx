@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
@@ -6,10 +6,12 @@ import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
 import { NOTES_MAX, SETUP_TAGS } from "../pages/journalModel";
 import {
-  ACTION_WORD, analyzeTicket, buildOrder, checkList, favorable, optionsAvailable,
-  type Action, type BuildMeta, type DayBudget, type Moneyness, type PeerRead, type RegimeRead, type Ticket, type TicketContext,
+  ACTION_WORD, analyzeTicket, buildOrder, checkList, optionsAvailable, planRows, planStatus,
+  type Action, type BuildMeta, type DayBudget, type Moneyness, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
 import type { PriceField } from "../chart/ChartPane";
+import { CrosshairIcon, SparkIcon } from "../chart/icons";
+import type { Pretrade } from "../api/types";
 import { TextField } from "./Field";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
@@ -20,8 +22,8 @@ const MONEYNESS: { value: Moneyness; label: string }[] = [
   { value: "OTM2", label: "2 strikes out of the money" },
 ];
 
-const STATUS_MARK = { good: "✓", warn: "!", bad: "✕", na: "–" } as const;
-const STATUS_WORD = { good: "In favour", warn: "Caution", bad: "Against", na: "Not applicable" } as const;
+const STATUS_MARK = { good: "✓", warn: "!", bad: "✕", na: "–", info: "·" } as const;
+const STATUS_WORD = { good: "In favour", warn: "Caution", bad: "Against", na: "Not applicable", info: "For information" } as const;
 
 type Props = {
   ticket: Ticket;
@@ -30,12 +32,20 @@ type Props = {
   meta: BuildMeta;
   regime: RegimeRead | null;
   budget: DayBudget;
-  peer?: PeerRead;
   /** Which field the person is picking a price for on the chart, if any. */
   pickField?: PriceField | null;
   onPickField?: (f: PriceField | null) => void;
   /** Put a starting line for this field on the chart, to drag to the right price. */
   onAddLine?: (f: PriceField) => void;
+  /** What today looks like (a cooldown running, trades so far against the cap, room under the loss limit); left out where the page does not load it. */
+  today?: Pretrade | null;
+  /** The price "Suggest" first put on each field: once the person has changed it, a way back to that suggestion. */
+  suggested?: Partial<Record<PriceField, number>>;
+  /** What the person already holds open on this instrument (e.g. "1 open NIFTY position"), if anything:
+   * the ticket warns before a second order is placed on top of it. */
+  holding?: string | null;
+  /** A waiting order already on this instrument (a short description, and a way to cancel it): the order button stays off until the person cancels it or says they want a second one. */
+  waitingHere?: { text: string; cancel: () => void } | null;
   onPlaced: () => void;
   /** Overrides the usual optionsAvailable(symbol) check (which only knows about the handful of
    * index/commodity/crypto PRESETS) for a caller that already knows options exist for this symbol
@@ -73,33 +83,49 @@ type Props = {
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, peer = null, pickField = null, onPickField, onAddLine, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [another, setAnother] = useState(false);
+  useEffect(() => {
+    if (!waitingHere) setAnother(false);
+  }, [waitingHere]);
 
   const set = <K extends keyof Ticket>(key: K, value: Ticket[K]) => {
     setResult(null);
     onChange({ ...t, [key]: value });
   };
   const a = analyzeTicket(t, ctx);
-  const checks = checkList(t, a, ctx, regime, budget, peer);
+  const checks = checkList(t, a, ctx, regime, budget);
   const fieldValue: Record<PriceField, string> = { entry: t.entry, stop: t.stop, target: t.target };
   const pickAction = (f: PriceField) =>
     onPickField ? (
       <span className="field-actions">
         {onAddLine && fieldValue[f].trim() === "" && ctx.price != null && (
-          <button className="link-btn" aria-label={`Add ${f} line`} title="Put a starting line on the chart, then drag it" onClick={() => onAddLine(f)}>
-            Add line
+          <button className="link-btn with-icon" aria-label={`Add ${f} line`} title="Suggest a price from the chart's typical move and put its line on the chart, then drag it" onClick={() => onAddLine(f)}>
+            <SparkIcon />
+            Suggest
           </button>
         )}
-        <button className="link-btn" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
-          {pickField === f ? "Click the chart…" : "Pick on chart"}
+        {suggested[f] != null && fieldValue[f].trim() !== "" && fieldValue[f] !== String(suggested[f]) && pickField !== f && (
+          <button className="link-btn" aria-label={`Back to suggested ${f}`} title={`Put it back to the price first suggested (${formatPrice(suggested[f]!)})`} onClick={() => set(f, String(suggested[f]))}>
+            Revert
+          </button>
+        )}
+        {fieldValue[f].trim() !== "" && pickField !== f && (
+          <button className="link-btn" aria-label={`Reset ${f}`} title="Clear this price and take its line off the chart" onClick={() => set(f, "")}>
+            Reset
+          </button>
+        )}
+        <button className="link-btn with-icon" aria-label={pickField === f ? "Click the chart…" : "Pick on chart"} title="Click the chart to set it there" aria-pressed={pickField === f} onClick={() => onPickField(pickField === f ? null : f)}>
+          <CrosshairIcon />
+          {pickField === f ? "Click chart…" : "Pick"}
         </button>
       </span>
     ) : undefined;
-  const fav = favorable(checks);
+  const marketRead = checks.filter((c) => c.key === "regime" || c.key === "trend");
   const stock = meta.instrument === "spot";
   const options = optionsForced ?? optionsAvailable(ctx.symbol);
   const isOption = t.strategy !== "future";
@@ -122,6 +148,39 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
     } finally {
       setBusy(false);
     }
+  }
+
+  // While an order is waiting on this instrument the form folds away: the waiting order is the plan, and the form only comes back
+  // when the person says they really want another.
+  if (waitingHere && !another) {
+    return (
+      <div className="card ticket" data-testid="ticket">
+        <div className="row">
+          <h2 className="section-title" style={{ margin: 0 }}>
+            Paper order
+          </h2>
+          <span className="pill">Paper</span>
+        </div>
+        {result && (
+          <div className={result.ok ? "notice" : "notice error"} role={result.ok ? "status" : "alert"} style={{ marginTop: 10 }}>
+            <strong>{result.ok ? (result.kind === "pending" ? "Waiting" : "Done") : "Not placed"}</strong>
+            <p style={{ margin: "4px 0 0" }}>{result.message}</p>
+            {result.warning && <p style={{ margin: "4px 0 0", color: "var(--warn)" }}>{result.warning}</p>}
+          </div>
+        )}
+        <div className="stack-notice" role="note" data-testid="waiting-notice" style={{ marginTop: 10 }}>
+          <b>You already have {waitingHere.text}.</b> The form is folded away so it is not a second thought away from the plan.
+          <div className="row" style={{ marginTop: 8, gap: 12, justifyContent: "flex-start" }}>
+            <button className="btn btn-small" onClick={waitingHere.cancel}>
+              Cancel the waiting order
+            </button>
+            <button className="link-btn" onClick={() => setAnother(true)}>
+              Place another order
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -190,6 +249,30 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
         </div>
       )}
 
+      {waitingHere && (
+        <div className="stack-notice" role="note" data-testid="waiting-reminder">
+          <b>You still have {waitingHere.text}.</b>{" "}
+          <button className="link-btn" onClick={waitingHere.cancel}>
+            Cancel it
+          </button>{" "}
+          <button className="link-btn" onClick={() => setAnother(false)}>
+            Fold the form away
+          </button>
+        </div>
+      )}
+
+      {holding && (
+        <div className="stack-notice" role="note" data-testid="stacking-notice">
+          <b>You already hold {holding}.</b>{" "}
+          {limit ? "This waiting order will be skipped when its price is hit, unless you allow adding." : "This order opens a second position on top of it."}
+          {limit && (
+            <label className="check-row">
+              <input type="checkbox" checked={t.allowStacking} onChange={(e) => set("allowStacking", e.target.checked)} /> Allow adding to my open position
+            </label>
+          )}
+        </div>
+      )}
+
       {limit && (
         <TextField id="t-entry" label="Enter when the price reaches" action={pickAction("entry")} value={t.entry} onChange={(v) => set("entry", v)} hint={guided ? `It fires the first time the price crosses this level${isOption ? " (the option is priced then)" : ""}. Watched on our servers, so it works with the app closed.` : undefined} />
       )}
@@ -217,7 +300,19 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
           label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
           value={t.lots}
           onChange={(v) => set("lots", v)}
-          placeholder={isOption || ctx.segment === "CRYPTO" ? "Sized for you" : "Auto from your risk"}
+          placeholder={
+            isOption || ctx.segment === "CRYPTO"
+              ? "Sized for you"
+              : a.lots != null && t.lots.trim() === "" ? `${a.lots} · from your ${ctx.riskPct}% risk` : "Auto from your risk"
+          }
+          action={
+            t.lots.trim() !== "" ? (
+              <button className="link-btn" title="Go back to the size worked out from your risk" onClick={() => set("lots", "")}>
+                Use system size
+              </button>
+            ) : undefined
+          }
+          dimmed={t.lots.trim() === ""}
         />
       )}
 
@@ -247,28 +342,65 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
       )}
 
       {!simplifiedOption && (
-        <div className="checks" data-testid="checks">
-          <div className="row" style={{ marginBottom: 6 }}>
-            <strong>Before you place</strong>
-            <span className="dim">
-              {fav.good} of {fav.total} in favour
-            </span>
-          </div>
+        <div className="checks plan-block" data-testid="plan-block">
+          {(() => {
+            const plan = planStatus(t, a, ctx);
+            return (
+              <div className={`plan-chip plan-head ${plan?.tone ?? ""}`} data-testid="plan-chip" role="status">
+                <strong>Your plan</strong>
+                <span>{plan?.text ?? ""}</span>
+              </div>
+            );
+          })()}
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {checks.map((c) => (
-              <li key={c.key} className="check-item">
-                <span className={`mark ${c.status}`} role="img" aria-label={STATUS_WORD[c.status]}>
-                  {STATUS_MARK[c.status]}
+            {planRows(t, a, ctx, today).map((r) => (
+              <li key={r.key} className="check-item">
+                <span className={`mark ${r.status}`} role="img" aria-label={STATUS_WORD[r.status]}>
+                  {STATUS_MARK[r.status]}
                 </span>
                 <span>
-                  {c.label}
+                  {r.label}
                   <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                    {c.detail}
+                    {r.detail}
                   </span>
+                  {r.key === "setup" && (
+                    <span className="chips" role="group" aria-label="Setup" style={{ marginTop: 4 }}>
+                      {SETUP_TAGS.map((s) => (
+                        <button key={s} aria-pressed={t.setupTag === s} onClick={() => set("setupTag", t.setupTag === s ? null : s)}>
+                          {s}
+                        </button>
+                      ))}
+                    </span>
+                  )}
                 </span>
               </li>
             ))}
           </ul>
+          {marketRead.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary className="faint" style={{ fontSize: 12 }}>
+                Market read
+              </summary>
+              <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
+                {marketRead.map((c) => (
+                  <li key={c.key} className="check-item">
+                    <span className="mark info" role="img" aria-label="For information">
+                      ·
+                    </span>
+                    <span>
+                      {c.label}
+                      <span className="faint" style={{ display: "block", fontSize: 12 }}>
+                        {c.detail}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                Information only: it is not scored and never blocks an order.
+              </p>
+            </details>
+          )}
         </div>
       )}
 
@@ -276,17 +408,19 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pe
           it (Confidence) - a person asked for this back specifically: unlike Confidence, it's the
           one place to leave an actual note on WHY, not just how sure, and that's worth keeping
           even in a quick trade. */}
-      <label className="select-field" style={{ margin: "12px 0" }}>
-        <span className="dim">Why this trade? (helps your review later)</span>
-        <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
-          <option value="">Not tagged</option>
-          {SETUP_TAGS.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-      </label>
+      {simplifiedOption && (
+        <label className="select-field" style={{ margin: "12px 0" }}>
+          <span className="dim">Why this trade? (helps your review later)</span>
+          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
+            <option value="">Not tagged</option>
+            {SETUP_TAGS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label className="field" style={{ marginBottom: 12 }}>
         <span className="dim">Reason (optional)</span>
         <textarea

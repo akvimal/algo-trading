@@ -6,6 +6,7 @@ import { AppShell } from "./layout/AppShell";
 import { MorePage } from "./pages/MorePage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { ScanPage } from "./pages/ScanPage";
+import { NotesPage } from "./pages/NotesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SignInPage } from "./pages/SignInPage";
 import { StrategiesPage } from "./pages/StrategiesPage";
@@ -57,6 +58,7 @@ export function App() {
           <Route path="more">
             <Route index element={<MorePage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="notes" element={<NotesPage />} />
             <Route path="strategies" element={<StrategiesPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

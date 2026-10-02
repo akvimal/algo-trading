@@ -78,7 +78,7 @@ describe("identity", () => {
 });
 
 describe("buildProvision", () => {
-  it("watches a SuperTrend crossover on the chosen candle size, and trails the same line as the stop", () => {
+  it("watches a SuperTrend crossover on the chosen interval, and trails the same line as the stop", () => {
     const p = buildProvision(cfg({ interval: "15min", period: 12, multiplier: 2 }), "NSE", "nifty");
     expect(p.supertrend).toEqual({ name: "Auto-trade ST: NSE:NIFTY", type: "supertrend", params: { period: 12, multiplier: 2 } });
     expect(p.rule("st1", [])).toEqual({

@@ -14,7 +14,7 @@ import { useScanLivePrice } from "./useScanLivePrice";
 
 // The regime read is for the ticket's own "before you place" checks, not for the chart (which has
 // no notion of a single interval here) - a fixed, sensible-for-intraday size, independent of
-// whatever candle size ScanChartPanel's own switch happens to be on.
+// whatever interval ScanChartPanel's own switch happens to be on.
 const REGIME_INTERVAL = "15min";
 
 type Props = {

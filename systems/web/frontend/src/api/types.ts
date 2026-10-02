@@ -46,6 +46,8 @@ export type Position = {
   option_group_id: string | null;
   /** A stop that follows the price (or a method such as previous candle) rather than a fixed level. */
   trailing_stop_enabled?: boolean;
+  /** How the stop trails, if it does: 'atr_trail' is the one-tap auto-trail. */
+  stop_loss_method?: string | null;
   charges?: number | null;
   slippage_cost?: number | null;
   exit_reason?: string | null;
@@ -77,6 +79,7 @@ export type OptionGroup = {
   /** The underlying's price when the group opened. */
   entry_spot_price?: number | null;
   spot_stop_loss_trailing_enabled?: boolean;
+  spot_stop_loss_indicator_type?: string | null;
   live_combined_price?: number | null;
   live_spot_price?: number | null;
   unrealized_pnl?: number | null;
@@ -279,6 +282,24 @@ export type SentimentHistoryDay = { exchange: string; session_start: string; ses
 
 export type MarketRegime = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; adx: number; atr_percentile: number; trend: "up" | "down" | "range"; advice: string };
 
+/** GET /ai-read — an on-demand model read of the OI strip's own data plus price, regime, VIX and news context. */
+export type AiRead = {
+  underlying: string;
+  expiry: string;
+  model: string;
+  generated_at: string;
+  bias: "bullish" | "bearish" | "neutral";
+  confidence: number;
+  one_liner: string;
+  reasoning: string[];
+  support: number[];
+  resistance: number[];
+  risks: string[];
+  wait_for: string;
+  /** What the model was NOT given (e.g. futures OI, breadth, or an extra that failed to load). */
+  data_gaps: string[];
+};
+
 export type PendingOrder = {
   id: string;
   segment: Segment;
@@ -292,6 +313,7 @@ export type PendingOrder = {
   status_reason: string | null;
   expires_at: string;
   last_price: number | null;
+  allow_stacking: boolean;
 };
 
 export type Profile = {
@@ -337,4 +359,114 @@ export type ChartStructure = {
   events: StructureEvent[];
   trend_changes: TrendChange[];
   setups: Setup[];
+};
+
+/** What the market looked like when a note was written - kept with the note so a later study (or a model) can read
+ * what the person thought against what they were looking at. Every part is optional: only what was on screen. */
+export type NoteContext = {
+  price: number | null;
+  interval: string;
+  regime?: { regime: string; adx: number; atr_percentile: number };
+  structure_trend?: Record<string, string>;
+  oi?: {
+    expiry: string;
+    pcr: number | null;
+    vol_pcr: number | null;
+    call_oi_change_5m: number | null;
+    put_oi_change_5m: number | null;
+    call_buildup: string | null;
+    put_buildup: string | null;
+  };
+  ai_read?: { bias: string; confidence: number; one_liner: string; generated_at: string };
+  holding?: string | null;
+};
+
+export type NoteTag = "plan" | "observation" | "mistake" | "review";
+
+/** One note from the thoughts-and-plans panel (GET /study-notes). */
+export type StudyNote = {
+  id: string;
+  segment: Segment;
+  symbol: string;
+  interval: string | null;
+  text: string;
+  tag: NoteTag | null;
+  context: NoteContext | null;
+  position_id: string | null;
+  option_group_id: string | null;
+  has_snapshot: boolean;
+  created_at: string | null;
+};
+
+/** One instrument the person has written notes on (GET /study-notes/instruments). */
+export type NoteInstrument = { segment: Segment; symbol: string; count: number; last_at: string | null };
+
+/** Discipline v2: a behaviour score over the last 20 closed manual trades, split into greed, fear and patience. Never a function of profit. */
+export type Feeling = "calm" | "fearful" | "greedy" | "fomo";
+export type DisciplineCheck = { key: string; category: string; emotion: string; score: number; mistake: string | null };
+export type DisciplineTrade = {
+  id: string;
+  kind: "position" | "group";
+  symbol: string;
+  action: "BUY" | "SELL";
+  exit_time: string;
+  exit_reason: string | null;
+  exit_kind: string | null;
+  planned_rr: number | null;
+  exit_r: number | null;
+  score: number | null;
+  pnl: number | null;
+  mistakes: string[];
+  flags: string[];
+  checks: DisciplineCheck[];
+  what_if: { extra_r: number; target_reached: boolean | null } | null;
+  /** How the person said they felt after a loss or an early exit, and whether that question is still open for this trade. */
+  emotion_tag: Feeling | null;
+  needs_emotion: boolean;
+};
+/** One habit rewarded over a run of trades. Motivation only: it is not connected to the live-trading gate. */
+export type Credential = {
+  key: string;
+  label: string;
+  blurb: string;
+  unit: string;
+  count: number;
+  level: "bronze" | "silver" | "gold" | null;
+  next_level: "bronze" | "silver" | "gold" | null;
+  next_at: number | null;
+  best_count: number;
+  best_level: "bronze" | "silver" | "gold" | null;
+  lapsed: boolean;
+  available: boolean;
+  detail: string | null;
+};
+export type DisciplineV2 = {
+  segment: Segment;
+  scope: "epoch" | "all";
+  score: number | null;
+  trade_count: number;
+  emotions: { greed: number | null; fear: number | null; patience: number | null };
+  categories: Record<string, number | null>;
+  mistakes: Record<string, number>;
+  week_mistakes: Record<string, number>;
+  target_and_stop_moved: number;
+  emotion_counts: Partial<Record<Feeling, number>>;
+  needs_emotion: number;
+  coaching: { mistake: string | null; emotion: string | null; count: number; line: string } | null;
+  credentials: Credential[];
+  trades: DisciplineTrade[];
+};
+
+/** GET /discipline/{segment}/today - what the ticket's plan block says about today, by the same rules the discipline score uses. */
+export type Pretrade = {
+  segment: Segment;
+  symbol: string;
+  cooldown_minutes_left: number;
+  cooldown_minutes: number;
+  trades_today: number;
+  trade_cap: number;
+  loss_limit: number | null;
+  lost_today: number;
+  loss_room: number | null;
+  off_window: boolean;
 };

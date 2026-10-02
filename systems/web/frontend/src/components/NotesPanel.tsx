@@ -155,6 +155,13 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
             <label className="sr-only" htmlFor="note-text">
               Note
             </label>
+            <div className="chips notes-tags" role="group" aria-label="Note type">
+              {NOTE_TAGS.map((t) => (
+                <button key={t} aria-pressed={tag === t} onClick={() => setTag(tag === t ? null : t)}>
+                  {t}
+                </button>
+              ))}
+            </div>
             <textarea
               id="note-text"
               className="notes-input"
@@ -171,20 +178,16 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
                 }
               }}
             />
-            <div className="notes-actions">
-              <div className="chips" role="group" aria-label="Note type">
-                {NOTE_TAGS.map((t) => (
-                  <button key={t} aria-pressed={tag === t} onClick={() => setTag(tag === t ? null : t)}>
-                    {t}
-                  </button>
-                ))}
-              </div>
-              <label className="check notes-attach" title="Keep a picture of the chart, with this note on it, with the note">
-                <input type="checkbox" checked={attach} onChange={(e) => setAttach(e.target.checked)} /> Attach snapshot
-              </label>
-              <span className="notes-spacer" />
+            <div className="notes-footer">
               <span className={`faint notes-count ${draft.length >= NOTE_MAX ? "at-limit" : ""}`} data-testid="notes-count" aria-live="off">
                 {draft.length}/{NOTE_MAX}
+              </span>
+              <span className="notes-status-slot">
+                {status && (
+                  <span className={status.error ? "error-text" : "faint"} role={status.error ? "alert" : "status"} data-testid="notes-status">
+                    {status.text}
+                  </span>
+                )}
               </span>
               <button className="icon-btn" aria-label="Download snapshot" onClick={() => void saveFile("download")} title="Download a picture of the chart with this note on it">
                 <DownloadIcon />
@@ -192,15 +195,13 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
               <button className="icon-btn" aria-label="Copy snapshot" onClick={() => void saveFile("copy")} title="Copy the picture to paste it into a chat">
                 <CopyIcon />
               </button>
+              <label className="notes-attach" title="Keep a picture of the chart, with this note on it, with the note">
+                <input type="checkbox" checked={attach} onChange={(e) => setAttach(e.target.checked)} /> Attach snapshot
+              </label>
               <button className="btn btn-small" aria-label="Save note" disabled={busy || draft.trim() === ""} onClick={() => void send()} title="Save note (Ctrl+Enter)">
                 {busy ? "Saving…" : "Save"}
               </button>
             </div>
-            {status && (
-              <p className={status.error ? "error-text" : "faint"} role={status.error ? "alert" : "status"} data-testid="notes-status">
-                {status.text}
-              </p>
-            )}
           </div>
         </div>
       )}

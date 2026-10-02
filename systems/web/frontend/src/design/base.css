@@ -2056,15 +2056,15 @@ table.t th {
   font-size: 11px;
   line-height: 16px;
 }
-.notes-actions .chips {
+.notes-tags {
   gap: 4px;
 }
-.notes-actions .chips button {
+.notes-tags button {
   padding: 1px 8px;
   min-height: 22px;
   font-size: 11px;
 }
-.notes-actions .icon-btn,
+.notes-footer .icon-btn,
 .note-head .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -2076,4 +2076,35 @@ table.t th {
 }
 .notes-count.at-limit {
   color: var(--warn);
+}
+
+/* The composer: types on top, the box, then one footer row - the count at the left, the status in the middle, the actions at the right. */
+.notes-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px 8px;
+  flex-wrap: wrap;
+}
+.notes-status-slot {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+/* The same size as the other small controls here, not the form-field checkbox. */
+.notes-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.notes-attach input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: none;
 }

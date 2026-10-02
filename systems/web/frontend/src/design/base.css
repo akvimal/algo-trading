@@ -2152,3 +2152,26 @@ table.t th {
 .oi-signal .oi-shift input {
   width: 100%;
 }
+
+/* The five-day OI history under an OI-buildup card: a small table, scrolls sideways on a narrow phone rather than wrapping the badges. */
+.oi-history {
+  overflow-x: auto;
+  font-size: 13px;
+}
+.oi-history table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.oi-history th,
+.oi-history td {
+  padding: 6px 8px 6px 0;
+  text-align: left;
+  white-space: nowrap;
+  border-top: 1px solid var(--border);
+  font-weight: 400;
+}
+.oi-history thead th {
+  color: var(--text-dim, var(--muted, inherit));
+  font-size: 12px;
+  border-top: 0;
+}

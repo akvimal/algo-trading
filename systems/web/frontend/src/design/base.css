@@ -1638,10 +1638,10 @@ table.t th {
 .notes-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 .notes-thread {
-  max-height: 200px;
+  max-height: 160px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1655,7 +1655,7 @@ table.t th {
   color: var(--text-dim);
 }
 .note {
-  padding: 8px 10px;
+  padding: 5px 8px;
   border-radius: 6px;
   background: var(--surface-2);
 }
@@ -1693,7 +1693,7 @@ table.t th {
 .notes-input {
   width: 100%;
   resize: vertical;
-  min-height: 64px;
+  min-height: 44px;
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -2038,4 +2038,42 @@ table.t th {
   align-items: center;
   flex-wrap: wrap;
   gap: 2px 12px;
+}
+
+/* The notes panel is compact: small tags, icon actions, a counter, and the history link as an icon in the header. */
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  color: var(--accent);
+  border-radius: 6px;
+}
+.icon-link:hover {
+  background: var(--surface-2);
+}
+.pill-small {
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 16px;
+}
+.notes-actions .chips {
+  gap: 4px;
+}
+.notes-actions .chips button {
+  padding: 1px 8px;
+  min-height: 22px;
+  font-size: 11px;
+}
+.notes-actions .icon-btn,
+.note-head .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 6px;
+}
+.notes-count {
+  font-size: 11px;
+}
+.notes-count.at-limit {
+  color: var(--warn);
 }

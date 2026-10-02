@@ -5,6 +5,7 @@ import { ApiError } from "../api/http";
 import type { AiRead, NoteContext, NoteTag, Segment } from "../api/types";
 import type { ChartImage } from "../chart/ChartPane";
 import { composeSnapshot, copyDataUrl, downloadDataUrl, snapshotFileName } from "../chart/snapshot";
+import { CopyIcon, DownloadIcon, ListIcon } from "../chart/icons";
 import { formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
 import { NoteRow } from "./NoteRow";
@@ -123,6 +124,16 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
           <span aria-hidden="true"> {open ? "▴" : "▾"}</span>
         </button>
         {!open && <span className="faint">Your thoughts and plans on {symbol}, kept with the market's state at the time.</span>}
+        <span className="notes-spacer" />
+        <Link
+          className="icon-link"
+          to={`/more/notes?segment=${segment}&symbol=${encodeURIComponent(symbol)}`}
+          aria-label={`All notes on ${symbol}`}
+          title={`All notes on ${symbol}${open && list.length >= RECENT ? ` (the latest ${RECENT} are shown here)` : ""}`}
+          data-testid="notes-history-link"
+        >
+          <ListIcon />
+        </Link>
       </div>
 
       {open && (
@@ -130,11 +141,9 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
           <div className="notes-thread" role="log" aria-label={`Notes on ${symbol}`} data-testid="notes-thread">
             {notes.loading && <p className="faint">Loading…</p>}
             {notes.error && <p className="error-text">Could not load your notes. {notes.error.message}</p>}
-            {!notes.loading && !notes.error && list.length === 0 && <p className="faint">No notes on {symbol} yet. Write what you see and what you plan to do.</p>}
-            {list.length >= RECENT && <p className="faint">Showing the latest {RECENT}.</p>}
             {groupByDay(list).map((g) => (
               <div key={g.label}>
-                <div className="notes-day">{g.label}</div>
+                {g.label !== "Today" && <div className="notes-day">{g.label}</div>}
                 {g.notes.map((n) => (
                   <NoteRow key={n.id} note={n} onDeleted={notes.reload} />
                 ))}
@@ -142,10 +151,6 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
             ))}
             <div ref={threadEnd} />
           </div>
-          <Link className="notes-history-link" to={`/more/notes?segment=${segment}&symbol=${encodeURIComponent(symbol)}`} data-testid="notes-history-link">
-            All notes on {symbol} →
-          </Link>
-
           <div className="notes-composer">
             <label className="sr-only" htmlFor="note-text">
               Note
@@ -153,7 +158,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
             <textarea
               id="note-text"
               className="notes-input"
-              rows={3}
+              rows={2}
               maxLength={NOTE_MAX}
               placeholder="What are you seeing? What is the plan, and what would change it?"
               value={draft}
@@ -174,18 +179,21 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
                   </button>
                 ))}
               </div>
-              <label className="check notes-attach">
-                <input type="checkbox" checked={attach} onChange={(e) => setAttach(e.target.checked)} /> Attach a snapshot of the chart
+              <label className="check notes-attach" title="Keep a picture of the chart, with this note on it, with the note">
+                <input type="checkbox" checked={attach} onChange={(e) => setAttach(e.target.checked)} /> Attach snapshot
               </label>
               <span className="notes-spacer" />
-              <button className="link-btn" onClick={() => void saveFile("download")} title="Save a picture of the chart with this note on it">
-                Download snapshot
+              <span className={`faint notes-count ${draft.length >= NOTE_MAX ? "at-limit" : ""}`} data-testid="notes-count" aria-live="off">
+                {draft.length}/{NOTE_MAX}
+              </span>
+              <button className="icon-btn" aria-label="Download snapshot" onClick={() => void saveFile("download")} title="Download a picture of the chart with this note on it">
+                <DownloadIcon />
               </button>
-              <button className="link-btn" onClick={() => void saveFile("copy")} title="Copy the picture to paste it into a chat">
-                Copy snapshot
+              <button className="icon-btn" aria-label="Copy snapshot" onClick={() => void saveFile("copy")} title="Copy the picture to paste it into a chat">
+                <CopyIcon />
               </button>
-              <button className="btn" disabled={busy || draft.trim() === ""} onClick={() => void send()} title="Ctrl+Enter">
-                {busy ? "Saving…" : "Save note"}
+              <button className="btn btn-small" aria-label="Save note" disabled={busy || draft.trim() === ""} onClick={() => void send()} title="Save note (Ctrl+Enter)">
+                {busy ? "Saving…" : "Save"}
               </button>
             </div>
             {status && (

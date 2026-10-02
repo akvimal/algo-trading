@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { deleteNote, fetchSnapshotUrl } from "../api/notes";
 import { ApiError } from "../api/http";
 import type { StudyNote } from "../api/types";
+import { ImageIcon } from "../chart/icons";
 import { ImageLightbox } from "./ImageLightbox";
 import { contextChips } from "./notesModel";
 
@@ -52,15 +53,15 @@ export function NoteRow({ note, onDeleted, showInstrument = false }: { note: Stu
       <div className="note-head">
         <span className="faint">{hhmm(note.created_at)}</span>
         {showInstrument && <strong className="note-instrument">{note.symbol}</strong>}
-        {note.tag && <span className="pill">{note.tag}</span>}
+        {note.tag && <span className="pill pill-small">{note.tag}</span>}
         {note.interval && <span className="faint">{note.interval.replace("min", "m")}</span>}
         <span className="notes-spacer" />
         {note.has_snapshot && (
-          <button className="link-btn" aria-expanded={image != null} onClick={() => void toggleImage()}>
-            {image ? "Hide snapshot" : "View snapshot"}
+          <button className="icon-btn" aria-label={image ? "Hide snapshot" : "View snapshot"} aria-expanded={image != null} title={image ? "Hide the snapshot" : "View the chart snapshot"} onClick={() => void toggleImage()}>
+            <ImageIcon />
           </button>
         )}
-        <button className="link-btn" aria-label={confirm ? "Confirm delete note" : "Delete note"} onClick={() => void remove()}>
+        <button className="icon-btn" aria-label={confirm ? "Confirm delete note" : "Delete note"} title="Delete this note" onClick={() => void remove()}>
           {confirm ? "Delete?" : "✕"}
         </button>
       </div>

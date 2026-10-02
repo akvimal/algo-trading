@@ -1645,7 +1645,7 @@ table.t th {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 .notes-day {
   margin: 6px 0 2px;
@@ -1766,13 +1766,14 @@ table.t th {
 .notes-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 /* each day is a column too, so the notes in it are spaced like the days are */
-.notes-list > div {
+.notes-list > div,
+.notes-thread > div {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .note-image-button {

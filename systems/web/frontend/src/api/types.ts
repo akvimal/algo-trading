@@ -184,6 +184,9 @@ export type Ltp = { exchange: string; symbol: string; ltp: number; provider: str
 
 export type Buildup = "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding";
 
+/** One earlier end-of-day total, oldest first in OiRow.history (the latest day is the last point). */
+export type OiHistoryPoint = { snapshot_date: string; total_call_oi?: number; total_put_oi?: number; spot_price?: number | null };
+
 export type OiRow = {
   symbol: string;
   exchange: string;
@@ -197,7 +200,7 @@ export type OiRow = {
   price_change_pct: number | null;
   call_buildup: Buildup | null;
   put_buildup: Buildup | null;
-  history: { snapshot_date: string; spot_price?: number | null }[];
+  history: OiHistoryPoint[];
 };
 export type OiBuildup = { snapshot_date: string; rows: OiRow[] };
 

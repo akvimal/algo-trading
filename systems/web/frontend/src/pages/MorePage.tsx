@@ -148,6 +148,17 @@ export function MorePage() {
         </Link>
       </div>
       <div className="card">
+        <Link to="/more/notes" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+          <span>
+            <strong>Notes</strong>
+            <span className="dim" style={{ display: "block", fontSize: 13 }}>
+              Your thoughts and plans on each instrument, with snapshots
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      </div>
+      <div className="card">
         <Link to="/more/strategies" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
           <span>
             <strong>Strategies</strong>

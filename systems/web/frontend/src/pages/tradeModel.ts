@@ -1,4 +1,5 @@
-import type { Segment } from "../api/types";
+import type { Pretrade, Segment } from "../api/types";
+import { formatInr } from "../format";
 
 export type Action = "BUY" | "SELL";
 // 'spread' = a debit spread (bull_call_spread/bear_put_spread - pays a net premium).
@@ -82,6 +83,9 @@ export type Ticket = {
   combinedStopLossPrice: number | null;
   combinedTargetPrice: number | null;
   orderType: OrderType;
+  // A WAITING order only: may it open a second position on an instrument already held? Off by default - the
+  // server then skips it, with a reason, if something is open on that instrument when its price is hit.
+  allowStacking: boolean;
   entry: string;
   stop: string;
   target: string;
@@ -97,7 +101,7 @@ export type Ticket = {
 export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
   combinedStopLossPrice: null, combinedTargetPrice: null,
-  orderType: "market", entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null, reason: "",
+  orderType: "market", allowStacking: false, entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null, reason: "",
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -216,7 +220,8 @@ export function analyzeTicket(t: Ticket, ctx: TicketContext): Analysis {
   }
 
   const rr = computeRR(entry, validStop, validTarget);
-  if (rr !== null && rr < ctx.minRR) warnings.push(`Reward-to-risk is ${rr.toFixed(1)}, below your minimum of ${ctx.minRR}.`);
+  // (a tiny tolerance: a plan built to exactly the minimum can come out a hair under it in floating point)
+  if (rr !== null && rr + 1e-6 < ctx.minRR) warnings.push(`Reward-to-risk is ${rr.toFixed(1)}, below your minimum of ${ctx.minRR}.`);
 
   // Sizing. Options are sized by the server from capital (their stop is on the underlying, so a
   // rupee risk cannot be worked out here); crypto capital is rupees while its price is dollars.
@@ -242,12 +247,10 @@ export type Check = { key: string; label: string; status: CheckStatus; detail: s
 
 export type RegimeRead = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; trend: "up" | "down" | "range"; adx: number };
 export type DayBudget = { limit: number; lostToday: number } | null;
-/** The other chart on the desk, when there is one: which way it is pointing. */
-export type PeerRead = { symbol: string; direction: "up" | "down" | "neutral" | null } | null;
 
 /** The "before you place" list: each item is a fact about this trade, marked in favour of it,
  * against it, or not applicable. It informs the decision; it never blocks the order. */
-export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: RegimeRead | null, budget: DayBudget, peer: PeerRead = null): Check[] {
+export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: RegimeRead | null, budget: DayBudget): Check[] {
   const buy = t.action === "BUY";
   const checks: Check[] = [];
 
@@ -278,19 +281,6 @@ export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: Re
       checks.push({
         key: "trend", label: `Structure: ${regime.trend === "up" ? "higher highs" : "lower lows"}`, status: aligned ? "good" : "warn",
         detail: aligned ? "Recent structure agrees with your side." : "Recent structure points the other way.",
-      });
-    }
-  }
-
-  if (peer) {
-    const label = `Confirmed by ${peer.symbol}`;
-    if (peer.direction === null) checks.push({ key: "peer", label, status: "na", detail: `${peer.symbol} has not loaded yet.` });
-    else if (peer.direction === "neutral") checks.push({ key: "peer", label, status: "warn", detail: `${peer.symbol} is going sideways, so it does not confirm either side.` });
-    else {
-      const with_ = (peer.direction === "up") === buy;
-      checks.push({
-        key: "peer", label, status: with_ ? "good" : "bad",
-        detail: with_ ? `${peer.symbol} is moving the same way.` : `${peer.symbol} is moving the other way.`,
       });
     }
   }
@@ -341,7 +331,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, strategy: t.strategy, moneyness: t.moneyness, trigger_price: a.entry,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, ...journal,
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, allow_stacking: t.allowStacking, ...journal,
       },
     };
   }
@@ -378,16 +368,108 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
 }
 
 /** A sensible first position for a plan level, from the live price, so a line can be put on the chart and
- * then dragged to where the person really wants it: a stop half a percent against the trade, a target a
- * percent in its favour, a waiting entry a third of a percent back from the price. Rounded to the
- * decimals the chart shows. Null when there is no price to work from. */
-export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null): number | null {
+ * then dragged to where the person really wants it. When the chart can say how far one bar typically moves
+ * (`typicalMove`), the line is measured in that: a stop one bar-move against the trade, a target two in its
+ * favour (a 2:1 plan), a waiting entry half one back - so it lands inside the part of the chart on screen
+ * whatever the instrument or interval. Without it, a small share of the price instead (0.15% stop, 0.3%
+ * target, 0.1% entry). Rounded to the decimals the chart shows. Null when there is no price to work from. */
+export function defaultLevel(field: "entry" | "stop" | "target", action: Action, price: number | null, typicalMove: number | null = null, minRR = 2): number | null {
   if (price == null || !Number.isFinite(price) || price <= 0) return null;
   const buy = action === "BUY";
-  const pct = field === "stop" ? (buy ? -0.005 : 0.005) : field === "target" ? (buy ? 0.01 : -0.01) : buy ? -0.003 : 0.003;
-  const raw = price * (1 + pct);
+  const sign = field === "target" ? (buy ? 1 : -1) : buy ? -1 : 1; // stop and entry sit against the trade's direction
+  // The target is as many stop-distances away as the person's minimum reward-to-risk asks (never under 2), so a suggestion does not
+  // arrive already under their own rule.
+  const reach = Math.max(2, Number.isFinite(minRR) ? minRR : 2);
+  const away = typicalMove != null && Number.isFinite(typicalMove) && typicalMove > 0
+    ? typicalMove * (field === "stop" ? 1 : field === "target" ? reach : 0.5)
+    : price * (field === "stop" ? 0.0015 : field === "target" ? 0.0015 * reach : 0.001);
+  const raw = price + sign * away;
   const decimals = price >= 100 ? 2 : price >= 1 ? 3 : 6;
   return Number(raw.toFixed(decimals));
+}
+
+/** The server refuses to move a live stop away from price; the page says the same before asking. */
+export const STOP_WIDEN_MESSAGE = "The stop can only move toward price once the order is live.";
+
+export type PlanStatus = { tone: "empty" | "partial" | "ready" | "warn"; text: string };
+
+/** One quiet line saying how complete the plan is, for a spot/future ticket. It never blocks anything. */
+export function planStatus(t: Ticket, a: Analysis, ctx: TicketContext): PlanStatus | null {
+  const option = t.strategy !== "future";
+  const risk = a.riskAmount != null && ctx.capital > 0 ? `risk ${((a.riskAmount / ctx.capital) * 100).toFixed(1)}%` : null;
+  const parts = (...p: (string | null)[]) => p.filter(Boolean).join(" · ");
+  if (a.stop == null) return { tone: "empty", text: option ? "No plan yet · set a stop and a target on the underlying" : "No plan yet · set a stop to size the trade" };
+  if (a.riskAmount != null && a.riskAmount > (ctx.capital * ctx.riskPct) / 100) {
+    // Sized by the system but still over: the smallest order (one lot) already risks more than the plan allows.
+    return { tone: "warn", text: parts(a.lotsAuto ? "Even the smallest size is over your plan" : "Size above your plan", risk, `plan is ${ctx.riskPct}%`) };
+  }
+  if (a.target == null) return { tone: "partial", text: parts("Stop set", "reward unplanned", risk) };
+  if (a.rr != null && a.rr + 1e-6 < ctx.minRR) return { tone: "warn", text: parts(`R:R ${a.rr.toFixed(1)} is under your ${ctx.minRR} minimum`, risk) };
+  return { tone: "ready", text: parts("Planned", a.rr != null ? `R:R ${a.rr.toFixed(1)}` : null, risk) };
+}
+
+export type PlanRowStatus = "good" | "warn" | "bad" | "info" | "na";
+export type PlanRow = { key: string; label: string; status: PlanRowStatus; detail: string };
+
+/** The rows of the ticket's "Your plan" block, in the order the discipline score checks them: only things the person controls before
+ * the order. Nothing here blocks an order, and there is no tally: the header chip (planStatus) is the one-line summary. */
+export function planRows(t: Ticket, a: Analysis, ctx: TicketContext, today: Pretrade | null): PlanRow[] {
+  const option = t.strategy !== "future";
+  const rows: PlanRow[] = [];
+  const budget = (ctx.capital * ctx.riskPct) / 100;
+  const pct = (amount: number) => `${((amount / ctx.capital) * 100).toFixed(1)}%`;
+
+  // stop
+  if (a.stop !== null) rows.push({ key: "stop", label: "Stop", status: "good", detail: `At ${a.stop}.` });
+  else if (option) rows.push({ key: "stop", label: "Stop", status: "warn", detail: "No stop on the underlying yet." });
+  else rows.push({ key: "stop", label: "Stop", status: "bad", detail: "No stop: your risk is open-ended." });
+
+  // size
+  if (option || ctx.segment === "CRYPTO") {
+    rows.push({ key: "size", label: "Size", status: "info", detail: t.lots.trim() === "" ? "Sized for you from your capital." : `${t.lots} lots, as you chose.` });
+  } else if (a.stop === null) {
+    rows.push({ key: "size", label: "Size", status: "na", detail: "Set a stop to size the trade." });
+  } else if (a.lotsAuto) {
+    if (a.riskAmount != null && a.riskAmount > budget) {
+      rows.push({ key: "size", label: "Size", status: "warn", detail: `Even the smallest size risks ${pct(a.riskAmount)} of your ${ctx.riskPct}% plan.` });
+    } else rows.push({ key: "size", label: "Size", status: "good", detail: `At the system size${a.lots != null ? `: ${a.lots}` : ""}.` });
+  } else {
+    const system = riskLots(ctx.capital, ctx.riskPct, a.entry, a.stop, ctx.lotSize);
+    if (system == null || a.lots == null) rows.push({ key: "size", label: "Size", status: "info", detail: "As you typed it." });
+    else if (a.lots > system) rows.push({ key: "size", label: "Size", status: "warn", detail: `Above the system size (${system})${a.riskAmount != null ? `: risks ${pct(a.riskAmount)} of your ${ctx.riskPct}% plan` : ""}.` });
+    else if (a.lots < system / 2) rows.push({ key: "size", label: "Size", status: "info", detail: `Below the system size (${system}). Fine once, but sizing down after losses is a habit to watch.` });
+    else rows.push({ key: "size", label: "Size", status: "good", detail: `Close to the system size (${system}).` });
+  }
+
+  // reward
+  if (a.target === null) rows.push({ key: "reward", label: "Reward", status: "warn", detail: "No target: the reward is unplanned." });
+  else if (a.rr === null) rows.push({ key: "reward", label: "Reward", status: "na", detail: "Set a stop to see reward-to-risk." });
+  else if (a.rr + 1e-6 >= ctx.minRR) rows.push({ key: "reward", label: "Reward", status: "good", detail: `${a.rr.toFixed(1)} to 1, your minimum is ${ctx.minRR}.` });
+  else rows.push({ key: "reward", label: "Reward", status: "warn", detail: `${a.rr.toFixed(1)} to 1 is under your minimum of ${ctx.minRR}.` });
+
+  // setup (the chips themselves are drawn by the ticket)
+  rows.push(t.setupTag ? { key: "setup", label: "Setup", status: "good", detail: `Tagged ${t.setupTag}.` } : { key: "setup", label: "Setup", status: "warn", detail: "Not tagged." });
+
+  // entry
+  rows.push(t.orderType === "limit" ? { key: "entry", label: "Entry", status: "good", detail: "Waiting for your price." } : { key: "entry", label: "Entry", status: "info", detail: "At the market." });
+
+  // today, from the server
+  if (today) {
+    if (today.cooldown_minutes_left > 0) {
+      rows.push({ key: "cooldown", label: "Cooldown", status: "warn", detail: `${today.cooldown_minutes_left} min left after your loss on ${ctx.symbol}.` });
+    }
+    rows.push(
+      today.trades_today >= today.trade_cap
+        ? { key: "trades", label: "Trades today", status: "warn", detail: `This would be trade ${today.trades_today + 1}, over your cap of ${today.trade_cap}.` }
+        : { key: "trades", label: "Trades today", status: "good", detail: `${today.trades_today} of ${today.trade_cap}.` },
+    );
+    if (today.loss_room == null) rows.push({ key: "loss", label: "Loss limit", status: "na", detail: "No daily loss limit set." });
+    else if (today.loss_room <= 0) rows.push({ key: "loss", label: "Loss limit", status: "bad", detail: "Your daily loss limit is already reached." });
+    else if (a.riskAmount != null && a.riskAmount > today.loss_room) rows.push({ key: "loss", label: "Loss limit", status: "warn", detail: `This trade could take you past it (${formatInr(today.loss_room)} of room).` });
+    else rows.push({ key: "loss", label: "Loss limit", status: "good", detail: `${formatInr(today.loss_room)} of room left today.` });
+    if (today.off_window) rows.push({ key: "window", label: "Session", status: "warn", detail: "Outside the middle of the session: the first 10 minutes, the last 15, or after hours." });
+  }
+  return rows;
 }
 
 export const ACTION_WORD = (a: Action) => (a === "BUY" ? "Buy" : "Sell");

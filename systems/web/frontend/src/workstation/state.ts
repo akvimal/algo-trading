@@ -3,7 +3,7 @@ import { DEFAULT_INTERVAL, INTERVALS } from "../chart/config";
 import { parseTradeParams, presetFor } from "../pages/tradeModel";
 
 // The shape of the trading workstation: one or two charts, which instrument each shows, at which
-// candle size, and how the two are linked. It is plain data so it can be saved, restored and tested
+// interval, and how the two are linked. It is plain data so it can be saved, restored and tested
 // without a screen.
 
 export type Layout = "single" | "side" | "stack";
@@ -16,9 +16,11 @@ export type WorkstationState = {
   active: 0 | 1;
   links: Links;
   ticketOpen: boolean;
+  /** The share of the room the FIRST chart takes when two are shown (the divider the person drags). */
+  split: number;
 };
 
-export const DEFAULT_LINKS: Links = { crosshair: true, scale: true, interval: true };
+export const DEFAULT_LINKS: Links = { crosshair: true, scale: false, interval: true };
 
 const pane = (symbol: string, segment: Segment, interval = DEFAULT_INTERVAL): PaneSpec => ({ symbol, segment, interval });
 
@@ -28,6 +30,7 @@ export const DEFAULT_STATE: WorkstationState = {
   active: 0,
   links: DEFAULT_LINKS,
   ticketOpen: true,
+  split: 0.5,
 };
 
 const KEY = "web.workstation";
@@ -38,6 +41,13 @@ function cleanPane(v: unknown, fallback: PaneSpec): PaneSpec {
   const o = (v ?? {}) as Record<string, unknown>;
   const parsed = parseTradeParams(typeof o.symbol === "string" ? o.symbol : null, typeof o.segment === "string" ? o.segment : null);
   return { symbol: parsed.symbol, segment: parsed.segment, interval: typeof o.interval === "string" && VALID_INTERVALS.has(o.interval) ? o.interval : fallback.interval };
+}
+
+export const SPLIT_MIN = 0.2;
+export const SPLIT_MAX = 0.8;
+/** A divider position kept inside the range where both charts stay usable; anything unusable means an even split. */
+export function clampSplit(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? Math.round(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, v)) * 1000) / 1000 : 0.5;
 }
 
 /** What was saved last time, made safe: anything missing or malformed falls back to the default. */
@@ -53,6 +63,7 @@ export function loadWorkstation(): WorkstationState {
       active: raw.active === 1 ? 1 : 0,
       links: { crosshair: links.crosshair !== false, scale: links.scale !== false, interval: links.interval !== false },
       ticketOpen: raw.ticketOpen !== false,
+      split: clampSplit(raw.split),
     };
   } catch {
     return DEFAULT_STATE;
@@ -77,12 +88,14 @@ export function withUrlSymbol(saved: WorkstationState, symbol: string | null, se
 
 export const paneCount = (s: WorkstationState) => (s.layout === "single" ? 1 : 2);
 
+export const setSplit = (s: WorkstationState, split: number): WorkstationState => ({ ...s, split: clampSplit(split) });
+
 export function setLayout(s: WorkstationState, layout: Layout): WorkstationState {
   return { ...s, layout, active: layout === "single" ? 0 : s.active };
 }
 
-/** Change one chart's candle size. With the interval link on, the other follows: comparing two charts
- * at different candle sizes is rarely what someone wants. */
+/** Change one chart's interval. With the interval link on, the other follows: comparing two charts
+ * at different intervals is rarely what someone wants. */
 export function setInterval(s: WorkstationState, index: 0 | 1, interval: string): WorkstationState {
   if (!VALID_INTERVALS.has(interval)) return s;
   const panes: [PaneSpec, PaneSpec] = [{ ...s.panes[0] }, { ...s.panes[1] }];
@@ -98,7 +111,7 @@ export function setSymbol(s: WorkstationState, index: 0 | 1, symbol: string, seg
   return { ...s, panes };
 }
 
-/** Turning the interval link on brings the second chart to the active chart's candle size at once. */
+/** Turning the interval link on brings the second chart to the active chart's interval at once. */
 export function setLinks(s: WorkstationState, links: Links): WorkstationState {
   const next = { ...s, links };
   if (links.interval && !s.links.interval && paneCount(s) === 2) {

@@ -6,17 +6,19 @@ import { formatPrice } from "../format";
 import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
-  INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawings, pricePrecision, saveDrawings, structureIsOn, toKLine,
-  STRUCTURE_TIMEFRAMES, type StoredDrawing, type StructureConfig,
+  DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
+  STRUCTURE_TIMEFRAMES, TEXT_DRAWING_MAX, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
 } from "./config";
 import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
-import { rollLiveBar, type Bar } from "./liveBar";
+import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
+import { mergeStyle, sanitizeStyle, toOverlayStyles, type DrawingStyle } from "./drawingStyle";
+import { withDevicePixelRatio } from "./snapshot";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
 
-export type DrawTool = "segment" | "rayLine" | "horizontalStraightLine" | "priceLine" | "rect" | "fibonacciLine" | "parallelStraightLine";
+export type DrawTool = "segment" | "rayLine" | "horizontalStraightLine" | "priceLine" | "rect" | "fibonacciLine" | "parallelStraightLine" | "textNote";
 
 export type PlanLine = { key: PriceField; price: number; label: string; color: string; dashed?: boolean };
 
@@ -29,7 +31,21 @@ export type ChartPaneHandle = {
   removeSelected: () => void;
   /** Arm the selected drawing (or, with null, disarm it). Only lines and zones can be armed. */
   setSelectedAlert: (trigger: Trigger | null) => void;
+  /** How far the instrument typically moves in one bar of this chart (null until enough bars have loaded) -
+   * what a starting stop or target line is measured in, so it lands inside the part of the chart on screen. */
+  typicalMove: () => number | null;
+  /** Change the selected drawing's look (colour, thickness, dash, fill, text size). A field set to undefined goes back to the chart's own. */
+  setSelectedStyle: (patch: DrawingStyle) => void;
+  /** Put the selected drawing back to the chart's own look. */
+  resetSelectedStyle: () => void;
+  /** Make the selected drawing's look the default for new drawings of its kind (true), or clear that default (false). */
+  setSelectedStyleAsDefault: (on: boolean) => void;
+  /** The chart as it is on screen (candles, indicators, drawings, structure, trade markers) as a PNG data URL, or
+   * the reason there is no picture to take (still loading, failed to load, the browser could not draw it). */
+  snapshot: () => ChartImage;
 };
+
+export type ChartImage = { url: string } | { problem: string };
 
 /** The visible window of a chart, in terms another chart can follow: the size of a bar and the time at the
  * right-hand edge. `seq` makes each message distinct. */
@@ -76,6 +92,10 @@ type Props = {
   peerCursor?: number | null;
   onRange?: (r: RangeMsg) => void;
   peerRange?: RangeMsg | null;
+  /** The person clicked the chart: the time of the bar under the pointer. Not reported while a drawing tool or a price pick is armed, or after a drag. */
+  onTimeClick?: (ts: number) => void;
+  /** Centre this chart on a time (a click on the linked chart); `seq` makes each request distinct, so clicking the same time again pans back. */
+  panTo?: { ts: number; seq: number } | null;
 };
 
 type Status = "loading" | "ready" | "error";
@@ -96,6 +116,9 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const [status, setStatus] = useState<Status>("loading");
+  // The imperative handle below is built once, so it reads the live status through a ref.
+  const statusRef = useRef<Status>("loading");
+  statusRef.current = status;
   const [message, setMessage] = useState<string | null>(null);
   // Bumped after every full (re)load of the series; later effects re-apply their overlays against it.
   const [epoch, setEpoch] = useState(0);
@@ -110,9 +133,18 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const barsRef = useRef<Bar[]>([]);
   const anchorRef = useRef<BarAnchor>({ timestamps: [] });
   const drawnRef = useRef<Map<string, StoredDrawing>>(new Map());
+  // The default look a drawing being drawn right now was started with (it has no saved entry until it is finished).
+  const pendingStyleRef = useRef<DrawingStyle | undefined>(undefined);
+  // A text drawing being typed (just placed, or double-clicked to change): where its box sits and what it says so far.
+  const [textEdit, setTextEdit] = useState<{ id: string; x: number; y: number; value: string; isNew: boolean; draft: StoredDrawing } | null>(null);
+  const textEditRef = useRef(textEdit);
+  textEditRef.current = textEdit;
   const pendingRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const restoringRef = useRef(false);
+  // This pane's own id, sent along with every drawings save so it can tell its OWN write apart
+  // from a sibling pane's (see DRAWINGS_CHANGED_EVENT's own comment in config.ts).
+  const instanceIdRef = useRef(`p${Math.random().toString(36).slice(2)}`);
   const panesRef = useRef<Map<string, string>>(new Map());
   const paramsAppliedRef = useRef<Map<string, string>>(new Map());
   const hoverRef = useRef<number | null>(null);
@@ -123,6 +155,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   // Which side of each armed drawing the price was on at the last check, by overlay id.
   const sidesRef = useRef<Map<string, Side>>(new Map());
   const peerCursorId = useRef<string | null>(null);
+  const hoverTsRef = useRef<number | null>(null);
   const applyingPeer = useRef(false);
   const seqRef = useRef(0);
 
@@ -161,6 +194,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const onCursor = (data?: unknown) => {
       const c = data as Crosshair | undefined;
       const ts = c?.kLineData?.timestamp;
+      hoverTsRef.current = typeof ts === "number" ? ts : null;
       propsRef.current.onCursor?.(typeof ts === "number" ? ts : null);
     };
     chart.subscribeAction(ActionType.OnCrosshairChange, onCursor);
@@ -188,7 +222,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     };
   }, []);
 
-  // ---- candles: load on a new series or candle size, then top up on a timer ----
+  // ---- candles: load on a new series or interval, then top up on a timer ----
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -314,6 +348,63 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       peerCursorId.current = typeof id === "string" ? id : null;
     }
   }, [peerCursor, status]);
+
+  // ---- a click on the chart: report its time (a drag is panning, not a click) ----
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || status !== "ready") return;
+    let down: { x: number; y: number } | null = null;
+    const onDown = (e: MouseEvent) => {
+      down = { x: e.clientX, y: e.clientY };
+    };
+    const onClick = (e: MouseEvent) => {
+      const moved = down ? Math.hypot(e.clientX - down.x, e.clientY - down.y) : 0;
+      down = null;
+      if (moved > 5) return;
+      if (pendingRef.current || propsRef.current.pickField) return; // drawing, or picking a price: the click means something else
+      // The bar under the pointer, read from where the click landed - the crosshair's last report can be a move behind.
+      let ts: number | null = null;
+      try {
+        const found = chartRef.current?.convertFromPixel([{ x: e.clientX - el.getBoundingClientRect().left, y: 0 }], { paneId: "candle_pane" });
+        const point = Array.isArray(found) ? found[0] : found;
+        if (typeof point?.timestamp === "number") ts = point.timestamp;
+      } catch {
+        /* fall back to the crosshair's own report */
+      }
+      ts ??= hoverTsRef.current;
+      if (ts != null) propsRef.current.onTimeClick?.(ts);
+    };
+    el.addEventListener("mousedown", onDown);
+    el.addEventListener("click", onClick);
+    return () => {
+      el.removeEventListener("mousedown", onDown);
+      el.removeEventListener("click", onClick);
+    };
+  }, [status, epoch]);
+
+  // ---- pan to a time clicked on the linked chart: centre it, or as near as the loaded bars allow ----
+  const panTo = props.panTo ?? null;
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || status !== "ready" || !panTo) return;
+    const list = chart.getDataList();
+    if (list.length === 0) return;
+    let lo = 0;
+    let hi = list.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid].timestamp < panTo.ts) lo = mid + 1;
+      else hi = mid;
+    }
+    const range = chart.getVisibleRange();
+    const half = Math.floor((range.to - range.from) / 2);
+    applyingPeer.current = true; // the scroll below is ours: the scroll link must not echo it back
+    chart.scrollToDataIndex(Math.min(list.length - 1, lo + half));
+    window.setTimeout(() => {
+      applyingPeer.current = false;
+    }, 60);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new request (its seq) pans; the chart's own data is read when it does
+  }, [panTo?.seq, status]);
 
   const peerRange = props.peerRange ?? null;
   useEffect(() => {
@@ -502,14 +593,24 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [oiLevels, status, epoch]);
 
   // ---- drawings: saved per instrument, restored after every load ----
-  const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()]);
+  const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()], instanceIdRef.current);
 
   const handlers = () => ({
     onDrawEnd: (e: OverlayEvent) => {
+      pendingRef.current = null;
+      if (e.overlay.name === "textNote") {
+        // Placed, but it has no words yet: ask for them, and only keep it once there are some.
+        beginTextEdit(e.overlay, true);
+        emitDrawing();
+        return false;
+      }
       drawnRef.current.set(e.overlay.id, serialize(e.overlay));
       persist();
-      pendingRef.current = null;
       emitDrawing();
+      return false;
+    },
+    onDoubleClick: (e: OverlayEvent) => {
+      if (e.overlay.name === "textNote") beginTextEdit(e.overlay, false);
       return false;
     },
     onPressedMoveEnd: (e: OverlayEvent) => {
@@ -550,7 +651,56 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
 
   function serialize(o: Overlay): StoredDrawing {
     const alert = drawnRef.current.get(o.id)?.alert;
-    return { name: o.name, points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })), ...(alert ? { alert } : {}) };
+    const text = o.name === "textNote" ? ((o.extendData as { text?: string } | undefined)?.text ?? drawnRef.current.get(o.id)?.text) : undefined;
+    const saved = drawnRef.current.get(o.id);
+    const style = saved ? saved.style : pendingStyleRef.current; // a new drawing starts from the default look; a finished one keeps its own
+    return {
+      name: o.name,
+      points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })),
+      ...(alert ? { alert } : {}),
+      ...(text ? { text } : {}),
+      ...(style ? { style } : {}),
+    };
+  }
+
+  /** Put a drawing's look on the chart now. */
+  function applyStyle(id: string, name: string, style: DrawingStyle | undefined, text?: string) {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (name === "textNote") chart.overrideOverlay({ id, extendData: { text: text ?? "", style } });
+    else {
+      const styles = toOverlayStyles(name, style);
+      if (styles) chart.overrideOverlay({ id, styles });
+    }
+  }
+
+  // ---- text drawings: typed into a small box right on the chart ----
+  function beginTextEdit(o: Overlay, isNew: boolean) {
+    const chart = chartRef.current;
+    const p = o.points[0];
+    if (!chart || !p) return;
+    const px = (chart as unknown as { convertToPixel?: (pt: unknown, f: unknown) => { x?: number; y?: number } | { x?: number; y?: number }[] }).convertToPixel?.(p, { paneId: "candle_pane" });
+    const at = Array.isArray(px) ? px[0] : px;
+    const current = (o.extendData as { text?: string } | undefined)?.text ?? drawnRef.current.get(o.id)?.text ?? "";
+    setTextEdit({ id: o.id, x: at?.x ?? 40, y: at?.y ?? 40, value: current, isNew, draft: serialize(o) });
+  }
+
+  function finishTextEdit(commit: boolean) {
+    const edit = textEditRef.current;
+    if (!edit) return;
+    setTextEdit(null);
+    textEditRef.current = null;
+    const chart = chartRef.current;
+    const words = edit.value.trim().slice(0, TEXT_DRAWING_MAX);
+    if (!chart) return;
+    if (!commit || words === "") {
+      if (edit.isNew) chart.removeOverlay(edit.id); // nothing typed: the label is not kept
+      return;
+    }
+    chart.overrideOverlay({ id: edit.id, extendData: { text: words, style: edit.draft.style } });
+    drawnRef.current.set(edit.id, { ...edit.draft, text: words });
+    persist();
+    emitDrawing();
   }
 
   // ---- alerts on drawings ----
@@ -559,7 +709,14 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   function emitDrawing() {
     const id = selectedRef.current;
     const d = id ? drawnRef.current.get(id) : undefined;
-    const selection: SelectionInfo | null = d ? { alertable: ALERTABLE.has(d.name), trigger: d.alert?.trigger ?? null, level: levelText(d) } : null;
+    const selection: SelectionInfo | null = d
+      ? {
+          alertable: ALERTABLE.has(d.name),
+          trigger: d.alert?.trigger ?? null,
+          level: levelText(d),
+          look: { name: d.name, style: d.style ?? {}, hasDefault: loadDrawingDefaults()[d.name] !== undefined },
+        }
+      : null;
     propsRef.current.onDrawingChange?.({ drawing: pendingRef.current != null, selected: id != null, selection });
   }
   function emitArmed() {
@@ -584,9 +741,14 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     }
   }
 
-  useEffect(() => {
+  // (Re)builds every drawing overlay from what's saved for this pane's own (exchange, symbol) -
+  // used both when THIS pane loads a genuinely new series (the [epoch] effect below) and when a
+  // SIBLING pane showing the same instrument, at whatever interval, just changed them (the
+  // DRAWINGS_CHANGED_EVENT listener further down) - drawings are shared across every interval of
+  // one instrument by design (see drawingsKey's own comment in config.ts).
+  function reloadDrawings() {
     const chart = chartRef.current;
-    if (!chart || epoch === 0) return;
+    if (!chart) return;
     // Wipe only the drawings (by id): the plan and structure layers are theirs to manage.
     restoringRef.current = true;
     for (const id of drawnRef.current.keys()) chart.removeOverlay(id);
@@ -597,6 +759,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         groupId: USER_DRAWINGS,
         points: d.points.map((p) => toChartPoint(p, anchorRef.current)),
         mode: magnetMode(propsRef.current.magnet),
+        ...(d.name === "textNote" ? { extendData: { text: d.text ?? "", style: d.style } } : {}),
+        ...(toOverlayStyles(d.name, d.style) ? { styles: toOverlayStyles(d.name, d.style) } : {}),
         ...handlers(),
       });
       if (typeof id === "string") drawnRef.current.set(id, d);
@@ -606,8 +770,27 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     // A restored alert starts from where the price is now, not from whichever tick happens to come next.
     if (propsRef.current.price != null) seedAlerts(propsRef.current.price);
     emitArmed();
+  }
+
+  useEffect(() => {
+    if (epoch === 0) return;
+    reloadDrawings();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handlers() and the saved set read refs only; a new series always bumps epoch
   }, [epoch]);
+
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const { exchange, symbol, origin } = (e as CustomEvent<DrawingsChangedDetail>).detail;
+      // Not our own write (already reflected here) and genuinely the same instrument this pane is
+      // showing right now - only interval is allowed to differ, that's the whole point.
+      if (origin === instanceIdRef.current) return;
+      if (exchange !== propsRef.current.exchange || symbol !== propsRef.current.symbol) return;
+      reloadDrawings();
+    };
+    window.addEventListener(DRAWINGS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(DRAWINGS_CHANGED_EVENT, onChanged);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadDrawings reads refs/propsRef only, stable enough not to need re-subscribing
+  }, []);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -620,7 +803,17 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       const chart = chartRef.current;
       if (!chart) return;
       if (pendingRef.current) chart.removeOverlay(pendingRef.current);
-      const id = chart.createOverlay({ name: tool, groupId: USER_DRAWINGS, mode: magnetMode(propsRef.current.magnet), ...handlers() });
+      // A new drawing of this kind starts with the look the person made the default for it, if they did.
+      const start = loadDrawingDefaults()[tool];
+      pendingStyleRef.current = start;
+      const id = chart.createOverlay({
+        name: tool,
+        groupId: USER_DRAWINGS,
+        mode: magnetMode(propsRef.current.magnet),
+        ...(tool === "textNote" ? { extendData: { text: "", style: start } } : {}),
+        ...(toOverlayStyles(tool, start) ? { styles: toOverlayStyles(tool, start) } : {}),
+        ...handlers(),
+      });
       pendingRef.current = typeof id === "string" ? id : null;
       emitDrawing();
     },
@@ -637,6 +830,79 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       sidesRef.current.clear();
       persist();
       emitArmed();
+    },
+    setSelectedStyle(patch) {
+      const id = selectedRef.current;
+      const chart = chartRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!id || !chart || !d) return;
+      const style = mergeStyle(d.style, patch);
+      const { style: _old, ...rest } = d;
+      void _old;
+      drawnRef.current.set(id, style ? { ...rest, style } : rest);
+      applyStyle(id, d.name, style, d.text);
+      persist();
+      emitDrawing();
+    },
+    resetSelectedStyle() {
+      const id = selectedRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!id || !d) return;
+      const { style: _old, ...rest } = d;
+      void _old;
+      drawnRef.current.set(id, rest);
+      persist();
+      // The library merges overlay styles rather than replacing them, so the way back to its own look is to build the
+      // drawing again from what is saved.
+      reloadDrawings();
+      for (const [newId, saved] of drawnRef.current) {
+        if (saved.name === d.name && JSON.stringify(saved.points) === JSON.stringify(d.points)) {
+          selectedRef.current = newId;
+          break;
+        }
+      }
+      emitDrawing();
+    },
+    setSelectedStyleAsDefault(on) {
+      const id = selectedRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!d) return;
+      saveDrawingDefault(d.name, on ? (d.style ?? sanitizeStyle({})) : undefined);
+      emitDrawing();
+    },
+    typicalMove() {
+      return averageTrueRange(barsRef.current);
+    },
+    snapshot(): ChartImage {
+      const chart = chartRef.current;
+      if (!chart) return { problem: "the chart is not on screen" };
+      if (statusRef.current === "loading") return { problem: "the chart is still loading its candles" };
+      if (statusRef.current === "error") return { problem: "the chart has not loaded - fix the message shown on it first (for example a Dhan token problem)" };
+      const background = getComputedStyle(document.body).backgroundColor || "#0f1216";
+      const tried: string[] = [];
+      // The library's own export (the chart's DOM canvases cannot be read back instead: it paints them off-screen, so they
+      // come out blank). Everything on it first; then without overlays in case one of them cannot be drawn; then both again
+      // at a pixel ratio of 1, for a chart too large (or a screen too dense) for the browser to allocate the full-size
+      // canvas, which makes it return an empty "data:,".
+      const attempts: { overlays: boolean; ratio1: boolean }[] = [
+        { overlays: true, ratio1: false },
+        { overlays: false, ratio1: false },
+        { overlays: true, ratio1: true },
+        { overlays: false, ratio1: true },
+      ];
+      for (const a of attempts) {
+        const label = `${a.overlays ? "with" : "without"} overlays${a.ratio1 ? " at ratio 1" : ""}`;
+        try {
+          const run = () => chart.getConvertPictureUrl(a.overlays, "png", background);
+          const url = a.ratio1 ? withDevicePixelRatio(1, run) : run();
+          if (url && url.startsWith("data:image")) return { url };
+          tried.push(`export ${label} gave no image`);
+        } catch (e) {
+          console.warn(`chart snapshot ${label} failed`, e);
+          tried.push(`export ${label}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      return { problem: `the browser could not draw the chart as an image (${tried.join("; ")})` };
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);
@@ -755,6 +1021,24 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         {summary}
       </p>
       <div ref={containerRef} className="chart-canvas" role="img" aria-label={`${symbol} price chart`} />
+      {textEdit && (
+        <input
+          className="chart-text-input"
+          style={{ left: Math.max(4, textEdit.x), top: Math.max(4, textEdit.y - 14) }}
+          aria-label="Text on the chart"
+          placeholder="Type, then Enter"
+          maxLength={TEXT_DRAWING_MAX}
+          autoFocus
+          value={textEdit.value}
+          onChange={(e) => setTextEdit((cur) => (cur ? { ...cur, value: e.target.value } : cur))}
+          onKeyDown={(e) => {
+            e.stopPropagation(); // typing must not trigger the chart's own keys (Delete removes a drawing)
+            if (e.key === "Enter") finishTextEdit(true);
+            else if (e.key === "Escape") finishTextEdit(false);
+          }}
+          onBlur={() => finishTextEdit(true)}
+        />
+      )}
       {status !== "ready" && (
         <div className="chart-status" role={status === "error" ? "alert" : "status"}>
           {status === "loading" ? (

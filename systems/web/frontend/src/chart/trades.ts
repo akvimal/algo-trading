@@ -1,3 +1,4 @@
+import { STOP_WIDEN_MESSAGE } from "../pages/tradeModel";
 import type { OptionGroup, Position } from "../api/types";
 
 // The person's own trades, shaped for the chart. Plain data and no chart library, so it can be tested
@@ -157,8 +158,10 @@ export function openLevels(base: string, positions: Position[], groups: OptionGr
 /** Why a level cannot be moved to `price`, or null when it can. A stop must stay on the losing side of the
  * price now and a target on the winning side: on the wrong side it would close the trade at the next check,
  * which is not what dragging a line means. The server has the last word; this saves a trip and says why. */
-export function checkLevelMove(level: Pick<OpenLevel, "field" | "long">, price: number, live: number | null): string | null {
+export function checkLevelMove(level: Pick<OpenLevel, "field" | "long">, price: number, live: number | null, current: number | null = null): string | null {
   if (!Number.isFinite(price) || price <= 0) return "That is not a price.";
+  // Once an order is live its stop only moves toward price: a long's stop up, a short's down.
+  if (level.field === "stop" && current != null && (level.long ? price < current : price > current)) return STOP_WIDEN_MESSAGE;
   if (live == null) return "There is no live price yet, so the level cannot be checked. Try again in a moment.";
   const below = level.field === "stop" ? level.long : !level.long; // the level belongs below the price now
   const word = level.field === "stop" ? "stop-loss" : "target";

@@ -20,6 +20,10 @@ Quotes come from the platform credential, like the existing exit-monitor jobs.
 Note for the own-keys data model (docs/redesign-rollout-plan.md, decision 1):
 background jobs will need a per-user credential path.
 
+Stacking: unless the order was armed with allow_stacking, firing is SKIPPED (cancelled, with a reason) when the
+person already holds an open position or option group on that underlying - manual trades are independent of the
+Strategy signal-conflict policies, so this is the only thing stopping a second waiting order from doubling up.
+
 Lifecycle: pending -> exactly one of triggered / rejected / failed / cancelled /
 expired. Firing is AT-MOST-ONCE: the row is claimed ('triggered', committed)
 BEFORE the order is placed, so a crash mid-placement can lose an order but can
@@ -91,6 +95,8 @@ class Deps:
     open_option: Callable  # (db, order, exec_settings) -> OptionPositionGroup
     set_spot_stop: Callable  # (db, user_id, group_id, price)
     set_spot_target: Callable
+    # (db, user_id, segment, symbol) -> a description of what is already held, or None. Left unset = never skip.
+    holds_open: Optional[Callable] = None
 
 
 _RESOLVE_TTL_SECONDS = 3600
@@ -152,7 +158,31 @@ def default_deps() -> Deps:
             setup_tag=o.setup_tag, confidence=o.confidence, entry_interval=o.entry_interval, auto_traded=False,
         )
 
-    return Deps(underlying_ltp, open_future, open_option, update_group_spot_stop_loss, update_group_spot_target)
+    return Deps(underlying_ltp, open_future, open_option, update_group_spot_stop_loss, update_group_spot_target, holds_open_position)
+
+
+def holds_open_position(db: Session, user_id: uuid.UUID, segment: str, symbol: str) -> Optional[str]:
+    """What the person already holds open on this underlying, or None. A future/spot position is stored under
+    its resolved contract (NIFTY-Sep2026-FUT) or the bare symbol, an option group under the bare underlying;
+    option legs (which carry an option_group_id) are left to their group so one trade is not counted twice."""
+    sym = symbol.strip().upper()
+    pos = db_models.Position
+    held = (
+        db.query(pos)
+        .filter(pos.user_id == user_id, pos.segment == segment, pos.status == "OPEN", pos.option_group_id.is_(None))
+        .all()
+    )
+    mine = [p for p in held if p.symbol.upper() == sym or p.symbol.upper().startswith(f"{sym}-")]
+    grp = db_models.OptionPositionGroup
+    groups = (
+        db.query(grp)
+        .filter(grp.user_id == user_id, grp.segment == segment, grp.underlying_symbol == sym, grp.status == "OPEN")
+        .all()
+    )
+    count = len(mine) + len(groups)
+    if count == 0:
+        return None
+    return f"{count} open {sym} position{'s' if count != 1 else ''}"
 
 
 # --- creating / cancelling / listing -----------------------------------------------------------------------------------
@@ -204,6 +234,7 @@ def create_pending_order(
         quantity=payload.quantity, trend_followed=payload.trend_followed, risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag, confidence=payload.confidence, entry_interval=payload.entry_interval,
         status="pending", expires_at=now + timedelta(minutes=ttl), last_price=ltp, last_checked_at=now,
+        allow_stacking=bool(payload.allow_stacking),
     )
     db.add(row)
     db.commit()
@@ -297,7 +328,7 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
     distinct underlying's price once, and fire what crossed."""
     now = now or _now()
     P = db_models.PendingOrder
-    counts = {"checked": 0, "expired": 0, "triggered": 0, "rejected": 0, "failed": 0, "no_price": 0}
+    counts = {"checked": 0, "expired": 0, "triggered": 0, "rejected": 0, "failed": 0, "no_price": 0, "skipped": 0}
 
     counts["expired"] = (
         db.query(P)
@@ -331,6 +362,25 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
             continue
         r.last_price, r.last_checked_at = price, now
         if not crossed(bool(r.started_above), float(r.trigger_price), price):
+            continue
+        # Manual trades are independent of the signal-conflict policies, so without this a waiting order would
+        # quietly stack a second position on one already open. Skip it (cancelled, with the reason) unless the
+        # person said adding was the point. One conditional UPDATE, like every other exit from 'pending'.
+        held = deps.holds_open(db, r.user_id, r.segment, r.symbol) if deps.holds_open is not None and not r.allow_stacking else None
+        if held:
+            skipped = (
+                db.query(P)
+                .filter(P.id == r.id, P.status == "pending")
+                .update(
+                    {
+                        P.status: "cancelled",
+                        P.status_reason: f"skipped: you already hold {held}. Place it again with 'allow adding to my open position' if you want a second one.",
+                    },
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+            counts["skipped"] += skipped
             continue
         # Claim it BEFORE placing: at-most-once. A crash in _place can lose the
         # order, never place it twice. The claim is one conditional UPDATE, so if

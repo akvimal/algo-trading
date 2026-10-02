@@ -31,6 +31,9 @@ class FakeDb:
     def get(self, model, key):
         return self.r if self.r is not None and key == PID else None
 
+    def add(self, obj):
+        pass
+
     def commit(self):
         self.commits += 1
 

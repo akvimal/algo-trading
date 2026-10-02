@@ -19,8 +19,9 @@ export type OiData = { summary: OiSummary | null; sentiment: SentimentHistoryPoi
  * The expiry is looked up once and kept between refreshes (that lookup can be slow and must not hold up
  * every reading); it is looked up again only after a failed reading. The two fetches (chain, sentiment)
  * run independently, so a slow or failing sentiment poll never takes the chain reading down with it. */
-export function useOiData(pane: PaneData, base: string): OiData {
-  const on = pane.exchange != null && pane.symbol != null && hasOiChain(base);
+export function useOiData(pane: PaneData, base: string, wanted = true): OiData {
+  // `wanted` is false when neither the strip nor the on-chart levels are showing: nothing reads the chain, so it is not polled.
+  const on = wanted && pane.exchange != null && pane.symbol != null && hasOiChain(base);
   const cached = useRef<{ key: string; expiry: string } | null>(null);
   const summary = useResource(
     async () => {

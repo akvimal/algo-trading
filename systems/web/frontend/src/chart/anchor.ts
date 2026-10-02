@@ -1,4 +1,4 @@
-// A drawing is anchored in price and TIME, and must stay put when the candle size changes. The chart
+// A drawing is anchored in price and TIME, and must stay put when the interval changes. The chart
 // library turns a bare timestamp into the nearest loaded bar, so switching 5m to 1h would snap a
 // corner drawn at 09:07 onto the 09:00 or 10:00 candle and visibly move the drawing. So a restored
 // point is handed over as a continuous, possibly fractional, bar index instead, worked out by

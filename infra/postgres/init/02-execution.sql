@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS execution.positions (
     -- execution never calls signal-generation directly) so the
     -- exit-monitor job's trailing logic knows HOW to recompute a
     -- candidate stop without needing the strategy again.
-    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven')),
+    stop_loss_method        TEXT CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven', 'atr_trail')),
     stop_loss_interval      TEXT CHECK (stop_loss_interval IN ('1min', '3min', '5min', '15min', '25min', '30min', '60min')),
     stop_loss_percent       NUMERIC,
     -- stop_loss_method='indicator' only - 'ema'/'supertrend' today. MUST be
@@ -812,7 +812,7 @@ ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS interest_charged NUMERI
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS breakeven_triggered BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_stop_loss_method_check;
 ALTER TABLE execution.positions ADD CONSTRAINT positions_stop_loss_method_check
-    CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven'));
+    CHECK (stop_loss_method IN ('previous_candle', 'percent', 'indicator', 'breakeven', 'atr_trail'));
 
 -- Live-broker-adapter P0 (see docs/architecture.md) - pre-existing volumes
 -- need these ALTERs even though the CREATE TABLE above was also edited,
@@ -1069,9 +1069,79 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     last_price       NUMERIC,
     last_checked_at  TIMESTAMPTZ,
     position_id      UUID,
-    option_group_id  UUID
+    option_group_id  UUID,
+    -- May this order open a second position on an instrument already held? Default no: see migrations/030.
+    allow_stacking   BOOLEAN NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_orders_one_live_per_symbol
     ON execution.pending_orders (user_id, segment, symbol) WHERE status = 'pending';
+
+-- See migrations/031-study-notes.sql.
+CREATE TABLE IF NOT EXISTS execution.study_notes (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL,
+    segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
+    symbol           TEXT NOT NULL,
+    interval         TEXT,
+    text             TEXT NOT NULL,
+    tag              TEXT CHECK (tag IN ('plan', 'observation', 'mistake', 'review')),
+    -- The market as the person saw it when they wrote this: price, regime, structure trend, OI/PCR, the AI read's
+    -- bias, whether they held the instrument. What turns a note into something a later study (or a model) can read
+    -- against what the market was doing.
+    context          JSONB,
+    -- Optional link to the trade this note is about.
+    position_id      UUID,
+    option_group_id  UUID,
+    -- A PNG of the chart (composed in the browser). bytea in its own column, like trade_images, and never
+    -- selected by the list query.
+    snapshot_png     BYTEA,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_study_notes_user_symbol ON execution.study_notes (user_id, segment, symbol, created_at DESC);
+
+-- Discipline v2 step 1 (migration 032): every stop-loss / target change, accepted or refused. See docs/discipline-v2-spec.md.
+CREATE TABLE IF NOT EXISTS execution.position_events (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID,
+    position_id      UUID,
+    option_group_id  UUID,
+    -- What moved: the spot/future position's own stop or target, an option group's COMBINED premium stop or target, or its
+    -- SPOT (underlying) stop or target.
+    field            TEXT NOT NULL CHECK (field IN ('stop_loss', 'target', 'combined_stop_loss', 'combined_target', 'spot_stop_loss', 'spot_target')),
+    -- stop: set | tighten | widen | clear | same.   target: set | closer | further | clear | same.
+    move             TEXT NOT NULL CHECK (move IN ('set', 'tighten', 'widen', 'clear', 'closer', 'further', 'same')),
+    old_price        NUMERIC,
+    new_price        NUMERIC,
+    source           TEXT NOT NULL CHECK (source IN ('user', 'auto_trail', 'system')),
+    accepted         BOOLEAN NOT NULL DEFAULT TRUE,
+    refused_reason   TEXT,
+    price_at_event   NUMERIC,
+    atr              NUMERIC,
+    atr_interval     TEXT,
+    -- A stop tightened to within N x ATR of price, other than a move to breakeven once price is +1R. NULL = not judged.
+    tight_trail      BOOLEAN,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (position_id IS NOT NULL OR option_group_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_position_events_position ON execution.position_events (position_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_position_events_group ON execution.position_events (option_group_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_position_events_user ON execution.position_events (user_id, created_at DESC);
+
+-- Discipline v2 auto-trail (migration 033): the new trailing method / indicator type.
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_spot_stop_loss_indicator_type_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_spot_stop_loss_indicator_type_check
+    CHECK (spot_stop_loss_indicator_type IN ('supertrend', 'atr_trail'));
+
+-- Discipline v2 step 3 (migration 034): the quantity the system's own risk sizing would have used at open. See docs/discipline-v2-spec.md.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS system_quantity NUMERIC;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS system_quantity NUMERIC;
+
+-- Discipline v2 step 4 (migration 035): how the person felt, after a loss or an early exit.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS emotion_tag TEXT;
+ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_emotion_tag_check;
+ALTER TABLE execution.positions ADD CONSTRAINT positions_emotion_tag_check CHECK (emotion_tag IN ('calm', 'fearful', 'greedy', 'fomo'));
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS emotion_tag TEXT;
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_emotion_tag_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_emotion_tag_check CHECK (emotion_tag IN ('calm', 'fearful', 'greedy', 'fomo'));

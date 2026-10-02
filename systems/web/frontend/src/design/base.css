@@ -986,18 +986,6 @@ table.t th {
   border-radius: var(--radius-sm);
   color: var(--text);
 }
-.ws-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  align-items: center;
-}
-.ws-links .check {
-  margin: 0;
-}
-.pill.confluence {
-  white-space: normal;
-}
 .ws-body {
   flex: 1;
   display: flex;
@@ -1055,10 +1043,13 @@ table.t th {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* the notes panel under the charts can be taller than the space left, and must scroll rather than squeeze them */
+  overflow-y: auto;
 }
 .ws-grid {
   flex: 1;
-  min-height: 0;
+  /* the charts keep a usable height whatever is open beneath them (notes, setups) */
+  min-height: 340px;
   display: grid;
   gap: 8px;
   grid-auto-rows: minmax(0, 1fr);
@@ -1071,6 +1062,49 @@ table.t th {
 }
 .ws-grid.layout-stack {
   grid-template-columns: minmax(0, 1fr);
+}
+.ws-grid.layout-side:not(.focused) {
+  grid-template-columns: var(--split-a, 1fr) 8px var(--split-b, 1fr);
+  gap: 0;
+}
+.ws-grid.layout-stack:not(.focused) {
+  grid-template-rows: var(--split-a, 1fr) 8px var(--split-b, 1fr);
+  grid-auto-rows: auto;
+  gap: 0;
+}
+.ws-grid > .ws-pane:nth-of-type(2) {
+  order: 2;
+}
+.ws-splitter {
+  order: 1;
+  background: transparent;
+  border-radius: 4px;
+  touch-action: none;
+}
+.ws-grid.layout-side .ws-splitter {
+  cursor: col-resize;
+}
+.ws-grid.layout-stack .ws-splitter {
+  cursor: row-resize;
+}
+.ws-splitter:hover,
+.ws-splitter:focus-visible {
+  background: var(--accent, #4c8dff);
+  opacity: 0.6;
+  outline: none;
+}
+.ws-grid.focused {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.ws-grid > .ws-pane-hidden {
+  display: none;
+}
+.pane-max {
+  margin-left: 6px;
+  padding: 2px 5px;
+  display: inline-flex;
+  align-items: center;
 }
 .workstation:not(.wide) .ws-grid {
   grid-auto-rows: 420px;
@@ -1338,7 +1372,7 @@ table.t th {
   gap: 4px 14px;
   align-items: center;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: 13px;
   border-top: 1px solid var(--border, rgba(255, 255, 255, 0.1));
   color: var(--text-dim, #93a1b1);
 }
@@ -1360,14 +1394,15 @@ table.t th {
 .oi-strip-trend-label {
   font-size: 13px;
 }
+/* The OI trend bars are about as tall as the text beside them, not twice as tall. */
 .oi-strip-spark {
   display: inline-flex;
   align-items: flex-end;
   gap: 2px;
-  height: 28px;
+  height: 18px;
 }
 .oi-strip-spark-bar {
-  width: 5px;
+  width: 4px;
   min-height: 3px;
   border-radius: 1px;
   background: var(--text-dim, #93a1b1);
@@ -1380,4 +1415,627 @@ table.t th {
 }
 .oi-strip-spark-bar.is-major {
   outline: 1px solid var(--accent);
+}
+
+.ai-read-btn {
+  margin-left: auto;
+  /* the same size as the buildup pills beside it (.pill), not the taller chip button */
+  min-height: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: inherit;
+  color: #c4b5fd;
+  border-color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.14);
+}
+.ai-read-btn:hover:not(:disabled),
+.ai-read-btn[aria-expanded="true"] {
+  background: rgba(139, 92, 246, 0.28);
+}
+.ai-read-btn:disabled {
+  opacity: 0.6;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .ai-read-btn {
+    color: #6d28d9;
+  }
+}
+.ai-read {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text, #e6e9ee);
+}
+.ai-read-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ai-read-line {
+  flex: 1 1 280px;
+  font-weight: 600;
+}
+.ai-read-meta {
+  font-size: 11px;
+}
+.ai-read-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ai-read-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.ai-read-risks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ai-read-foot {
+  font-size: 11px;
+}
+
+.oi-skew {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.oi-skew-bar {
+  position: relative;
+  width: 56px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+}
+.oi-skew-bar::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--text-dim, #93a1b1);
+}
+.oi-skew-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--text-dim, #93a1b1);
+}
+.oi-skew.up .oi-skew-fill {
+  background: var(--up);
+}
+.oi-skew.dn .oi-skew-fill {
+  background: var(--dn);
+}
+.oi-strip .oi-skew.up b {
+  color: var(--up);
+}
+.oi-strip .oi-skew.dn b {
+  color: var(--dn);
+}
+.warn-text {
+  color: var(--warn);
+}
+
+.stack-notice {
+  padding: 8px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: rgba(240, 180, 41, 0.1);
+  font-size: 12px;
+}
+.stack-notice .check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  cursor: pointer;
+}
+
+.interval-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+}
+.interval-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.interval-pick {
+  flex: 1;
+  text-align: left;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.interval-pick:hover,
+.interval-pick[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.interval-star {
+  min-height: 30px;
+  width: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+}
+.interval-star.on {
+  color: #ffc83d;
+}
+.interval-star:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* the size menu sits inside the .chips group, whose pill-button styling must not reach into it */
+.chips .interval-pick,
+.chips .interval-star {
+  border-radius: 6px;
+  border-color: transparent;
+  background: transparent;
+  min-height: 30px;
+}
+.chips .interval-pick:hover,
+.chips .interval-pick[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.chips .interval-star {
+  width: 30px;
+  padding: 0;
+  color: var(--text-dim);
+}
+.chips .interval-star.on {
+  color: #ffc83d;
+}
+.chips .interval-star[aria-pressed="true"] {
+  border-color: transparent;
+  background: transparent;
+}
+
+/* the thoughts-and-plans panel under the chart */
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  background: var(--surface);
+}
+.notes-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.notes-toggle {
+  min-height: 0;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+.notes-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.notes-thread {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.notes-day {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.note {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.note-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.note-text {
+  margin: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.note-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+}
+.note-image {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  margin-top: 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.notes-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.notes-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.notes-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.notes-spacer {
+  flex: 1;
+}
+.notes-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.notes-history-link {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--accent);
+}
+.note-instrument {
+  font-size: 12px;
+}
+/* the notes history page */
+.notes-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.notes-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.notes-search {
+  flex: 1 1 220px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.notes-instruments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.notes-instruments button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.notes-count {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.note-image-button {
+  display: block;
+  padding: 0;
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  max-width: 100%;
+}
+.note-image-button .note-image {
+  margin-top: 0;
+}
+/* a snapshot shown large over the page */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 10, 13, 0.92);
+}
+.lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  font-size: 13px;
+}
+.lightbox-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px 16px;
+  overflow: auto;
+}
+.lightbox-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+  border-radius: 6px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+.lightbox-stage.actual {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.lightbox-stage.actual .lightbox-image {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+
+.chart-text-input {
+  position: absolute;
+  z-index: 5;
+  width: 220px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  background: #f4f6f8;
+  color: #0f1216;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* the look of the selected drawing */
+.ws-style {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.style-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.swatch[aria-pressed="true"] {
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px var(--bg);
+}
+.swatch-custom {
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+.ws-style .chips button {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* the layout dropdown: each arrangement as a picture of its grid */
+.layout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+}
+.layout-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.layout-option:hover,
+.layout-option[aria-checked="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.layout-option[aria-checked="true"] svg {
+  color: var(--accent);
+}
+.layout-grid {
+  font-weight: 600;
+  min-width: 28px;
+}
+
+/* a long label on a dropdown button (a saved combo's name) is cut short rather than pushing the bar wider */
+.popover-text {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the view switches at the end of the top bar */
+.view-toggles {
+  display: flex;
+  gap: 4px;
+  padding: 0 8px;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 8px 0;
+  background: var(--border);
+}
+.menu-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+/* the left rail's analysis group, and the flyouts that open beside it */
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.popover-tool {
+  position: relative;
+}
+.tool-count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+/* The analysis buttons sit at the foot of the rail, so their panels grow upward from the button instead of running off the bottom of the screen. */
+.popover-panel.beside {
+  top: auto;
+  bottom: -6px;
+  left: calc(100% + 10px);
+  max-height: 60vh;
+}
+
+/* the AI read shortcut on the rail, and the slim row that holds the AI read when the OI strip is hidden */
+.tool-ai {
+  color: #c4b5fd;
+}
+.tool-ai:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.2);
+}
+.oi-strip-slim {
+  justify-content: flex-end;
+}
+
+/* the pills inside the OI strip (CE LB, PE SB, flow skew, trend change) read at the strip's own text size */
+.oi-strip .pill {
+  font-size: 13px;
+}
+
+/* A value the system works out (the order size): shown quietly until the person types over it. */
+.field-auto input {
+  opacity: 0.7;
+}
+.field-auto input:focus {
+  opacity: 1;
+}
+/* One quiet line on the ticket: how complete the plan is. It never blocks anything. */
+.plan-chip {
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  color: var(--text-dim, inherit);
+}
+.plan-chip.ready {
+  color: var(--up, #2faa6e);
+  border-color: currentColor;
+}
+.plan-chip.warn {
+  color: var(--warn, #d9a441);
+  border-color: currentColor;
+}
+
+/* The plan block's header: the plan chip, as the block's title line. */
+.plan-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0 0 6px;
+}
+.mark.info {
+  color: var(--text-dim);
+}
+
+/* A small action with an icon in front (Suggest, Pick): the icon and its word stay together, and the groups beside them keep their distance. */
+.link-btn.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 0;
+  white-space: nowrap;
+}
+.pos-level-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
 }

@@ -20,6 +20,7 @@ from app.adapters.db import models as db_models
 from app.config import settings as app_settings
 from app.config import settings as app_settings
 from app.domain.india_charges import kind_for, round_trip_charges
+from app.domain import stop_rules
 from app.domain.slippage import slippage_cost
 from app.domain.delta_fees import compute_futures_liquidation_fee, compute_futures_trading_fee, compute_liquidation_price, compute_margin_posted
 from app.domain.exit_condition import evaluate_exit_condition, exit_condition_warmup
@@ -255,7 +256,12 @@ def _indicator_history_window(period: int, interval: str) -> tuple[date, date]:
 
 
 def compute_risk_based_quantity(
-    capital_per_trade: float, risk_per_trade_pct: float, entry_price: float, stop_loss_price: float, lot_size: float = 1
+    capital_per_trade: float,
+    risk_per_trade_pct: float,
+    entry_price: float,
+    stop_loss_price: float,
+    lot_size: float = 1,
+    risk_capital: Optional[float] = None,
 ) -> float:
     """quantity = min(risk_amount / stop_distance, the existing
     capital_per_trade value cap), in whole LOTS - risk-based sizing never
@@ -264,9 +270,15 @@ def compute_risk_based_quantity(
     minimum of 1 lot rather than being rejected for undersized
     risk/capital). Caller must ensure stop_loss_price != entry_price
     first - a zero stop distance is a distinct rejection case (see
-    open_position), not handled here."""
+    open_position), not handled here.
+
+    `capital_per_trade` is what the order can BUY (with leverage, the buying power) and caps the size. `risk_capital`, when given,
+    is the person's own money the risk percentage is a share of - left out, it is `capital_per_trade`. Leverage lets an order be
+    bigger; it must not make "1% risk" mean 1% of the borrowed buying power, so callers with leverage pass the unleveraged capital
+    here. The floor stays: a position is always at least one lot, so a stop that is wide for the capital risks more than the
+    percentage and the answer is more capital or a bigger risk percentage, not a rejected order."""
     stop_distance = abs(entry_price - stop_loss_price)
-    risk_amount = capital_per_trade * risk_per_trade_pct / 100
+    risk_amount = (capital_per_trade if risk_capital is None else risk_capital) * risk_per_trade_pct / 100
     risk_based_lots = int(risk_amount // (stop_distance * lot_size))
     # Computed directly from capital/price/lot_size, NOT by calling
     # compute_quantity() and dividing back out by lot_size - that
@@ -1172,6 +1184,8 @@ def update_position_tags(
     set_setup_tag: bool = False,
     confidence: Optional[int] = None,
     set_confidence: bool = False,
+    emotion_tag: Optional[str] = None,
+    set_emotion_tag: bool = False,
 ) -> Optional[db_models.Position]:
     """PUT /positions/{id}/tags - partial edit of the structured trade
     journal. `set_*` flags say which fields the request actually carried
@@ -1184,6 +1198,8 @@ def update_position_tags(
         row.setup_tag = setup_tag or None
     if set_confidence:
         row.confidence = confidence
+    if set_emotion_tag:
+        row.emotion_tag = emotion_tag or None
     db.commit()
     return row
 
@@ -1451,6 +1467,7 @@ def open_position(
     effective_capital = min(
         float(capital_account.capital_per_trade), float(capital_account.current_balance) + projected_close_pnl
     )
+    risk_capital = effective_capital  # the person's own money, before any leverage: what the risk percentage is a share of
     if order.segment == "CRYPTO":
         # capital_per_trade/current_balance are INR-denominated like every
         # other segment, but order.price (from Delta Exchange India) is
@@ -1468,6 +1485,7 @@ def open_position(
             db.commit()
             return row
         effective_capital = effective_capital / settings.usdinr_rate
+        risk_capital = effective_capital  # in USD now, still before leverage
         # Delta Exchange India trades perpetual futures on margin -
         # account.leverage (default 1, GET/PUT /accounts/CRYPTO) scales the
         # USD-equivalent margin into buying power, so the same capital
@@ -1598,7 +1616,7 @@ def open_position(
             return row
 
         quantity = compute_risk_based_quantity(
-            effective_capital, float(capital_account.risk_per_trade_pct), order.price, stop_loss_price, lot_size
+            effective_capital, float(capital_account.risk_per_trade_pct), order.price, stop_loss_price, lot_size, risk_capital=risk_capital
         )
     else:
         quantity = compute_quantity(effective_capital, order.price, lot_size)
@@ -1935,6 +1953,7 @@ def open_manual_position(
         projected_close_pnl += raw_pnl
 
     effective_capital = min(float(account.capital_per_trade), float(account.current_balance) + projected_close_pnl)
+    risk_capital = effective_capital  # the person's own money, before any leverage: what the risk percentage is a share of
     if segment == "CRYPTO":
         if settings.usdinr_rate is None:
             row = _reject_manual(
@@ -1944,6 +1963,7 @@ def open_manual_position(
             db.commit()
             return row
         effective_capital = effective_capital / settings.usdinr_rate
+        risk_capital = effective_capital  # in USD now, still before leverage
         effective_capital = effective_capital * float(account.leverage)
     elif segment == "NSE" and instrument_type == "spot" and float(account.leverage) > 1:
         # Intraday MIS margin - same account.leverage field/reasoning as
@@ -1994,7 +2014,7 @@ def open_manual_position(
                 db.commit()
                 return row
             final_quantity = compute_risk_based_quantity(
-                effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size
+                effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size, risk_capital=risk_capital
             )
         else:
             final_quantity = compute_quantity(effective_capital, price, lot_size)
@@ -2065,6 +2085,14 @@ def open_manual_position(
         segment, instrument_type, "intraday", action, price, final_quantity, account, account, settings.usdinr_rate, use_margin=False
     )
 
+    # Discipline v2: what the system's own risk sizing would have bought here, kept next to what was actually bought so a
+    # sized-up (greed) or sized-down (fear) order can be told from one taken at the plan.
+    system_quantity = None
+    if stop_loss_price is not None and abs(price - stop_loss_price) > 0:
+        system_quantity = compute_risk_based_quantity(
+            effective_capital, float(account.risk_per_trade_pct), price, stop_loss_price, lot_size, risk_capital=risk_capital
+        )
+
     row = db_models.Position(
         user_id=user_id,
         signal_id=signal_id,
@@ -2076,6 +2104,7 @@ def open_manual_position(
         horizon="intraday",
         instrument_type=instrument_type,
         quantity=final_quantity,
+        system_quantity=system_quantity,
         entry_price=price,
         status="OPEN",
         is_live_broker_order=broker_order is not None,
@@ -2159,7 +2188,7 @@ def update_square_off_time(
 
 
 def update_target(
-    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float, source: str = "user"
 ) -> tuple[Optional[db_models.Position], Optional[str]]:
     """Moves an open position's take-profit. Returns (row, reject_reason):
     (None, None) for a missing or someone else's row, (row, reason) with the
@@ -2175,7 +2204,56 @@ def update_target(
         return row, f"target ({target_price}) must be above entry ({entry}) for a BUY"
     if row.action == "SELL" and target_price >= entry:
         return row, f"target ({target_price}) must be below entry ({entry}) for a SELL"
+    stop_rules.record_event(
+        db,
+        user_id=row.user_id,
+        position_id=row.id,
+        field="target",
+        move=stop_rules.classify_target_move(row.action, _num(row.target_price), target_price),
+        old_price=_num(row.target_price),
+        new_price=target_price,
+        source=source,
+    )
     row.target_price = target_price
+    db.commit()
+    return row, None
+
+
+def _num(v) -> Optional[float]:
+    return None if v is None else float(v)
+
+
+def set_auto_trail(
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, enabled: bool, interval: str, multiple: float
+) -> tuple[Optional[db_models.Position], Optional[str]]:
+    """Switches the discipline v2 auto-trail on or off for an open position (stop_loss_method='atr_trail'). On: the
+    stop stays exactly where it is until price is +1R, then moves to breakeven and trails by `multiple` x ATR at `interval`.
+    Needs a stop to start from, and refuses to replace a different trailing method the position already has. Off: back to
+    a plain fixed stop at its current price. (None, None) for a missing or someone else's row."""
+    row = db.get(db_models.Position, position_id)
+    if row is None or row.user_id != user_id:
+        return None, None
+    if not enabled:
+        if row.stop_loss_method == "atr_trail":
+            row.stop_loss_method = None
+            row.stop_loss_interval = None
+            row.stop_loss_indicator_params = None
+            row.trailing_stop_enabled = False
+            db.commit()
+        return row, None
+    if row.stop_loss_price is None:
+        return row, "set a stop-loss first: the auto-trail starts from it"
+    if row.stop_loss_method not in (None, "atr_trail"):
+        return row, f"this position already trails its stop by '{row.stop_loss_method}'"
+    row.stop_loss_method = "atr_trail"
+    row.stop_loss_interval = interval
+    row.stop_loss_percent = None
+    row.stop_loss_indicator_type = None
+    row.stop_loss_indicator_params = {"period": stop_rules.DEFAULT_TRAIL_PERIOD, "multiple": multiple}
+    row.trailing_stop_enabled = True
+    if row.initial_stop_loss_price is None:
+        row.initial_stop_loss_price = row.stop_loss_price
+    row.breakeven_triggered = False
     db.commit()
     return row, None
 
@@ -2193,6 +2271,9 @@ def update_stop_loss(
     trailing_stop_enabled: bool = False,
     get_previous_candle: Optional[GetPreviousCandle] = None,
     get_candle_history: Optional[GetCandleHistory] = None,
+    context: stop_rules.MoveContext = stop_rules.NO_CONTEXT,
+    atr_interval: Optional[str] = None,
+    source: str = "user",
 ) -> tuple[Optional[db_models.Position], Optional[str]]:
     """Generically useful, not manual-only - editing SL on any already-open
     position, including (new) attaching or replacing a trailing,
@@ -2219,7 +2300,39 @@ def update_stop_loss(
     if row is None or row.user_id != user_id:
         return None, None
 
+    def _log(new_price: Optional[float], move: str, refused: bool) -> None:
+        stop_rules.record_event(
+            db,
+            user_id=row.user_id,
+            position_id=row.id,
+            field="stop_loss",
+            move=move,
+            old_price=_num(row.stop_loss_price),
+            new_price=new_price,
+            source=source,
+            accepted=not refused,
+            refused_reason=stop_rules.STOP_WIDEN_MESSAGE if refused else None,
+            context=context,
+            atr_interval=atr_interval,
+            tight_trail=stop_rules.judge_tight_trail(
+                row.action, move, float(row.entry_price), _num(row.initial_stop_loss_price), new_price, context[0], context[1]
+            ),
+        )
+
+    def _guard(new_price: Optional[float]) -> tuple[str, Optional[str]]:
+        """Once the order is live the stop can only tighten: a widening is logged as refused and reported."""
+        move = stop_rules.classify_stop_move(row.action, _num(row.stop_loss_price), new_price)
+        if stop_rules.is_widening(move):
+            _log(new_price, move, True)
+            db.commit()
+            return move, stop_rules.STOP_WIDEN_MESSAGE
+        return move, None
+
     if stop_loss_method is None:
+        move, widen_reason = _guard(stop_loss_price)
+        if widen_reason is not None:
+            return row, widen_reason
+        _log(stop_loss_price, move, False)
         row.stop_loss_price = stop_loss_price
         row.stop_loss_method = None
         row.stop_loss_interval = None
@@ -2246,6 +2359,10 @@ def update_stop_loss(
     if reject_reason is not None:
         return row, reject_reason
 
+    move, widen_reason = _guard(resolved_price)
+    if widen_reason is not None:
+        return row, widen_reason
+    _log(resolved_price, move, False)
     row.stop_loss_price = resolved_price
     row.stop_loss_method = stop_loss_method
     row.stop_loss_interval = stop_loss_interval
@@ -2724,6 +2841,7 @@ def _evaluate_exits(
     closed_target = 0
     closed_exit_condition = 0
     trailed = 0
+    trail_events: list[dict] = []
     # Live-broker-adapter P2 - (pos, reason) pairs a live position's own
     # sl_hit/target_hit flagged, for check_exits (the DB-committing
     # wrapper) to actually close for real - see the sl_hit/target_hit
@@ -2892,6 +3010,26 @@ def _evaluate_exits(
                         (pos.action == "BUY" and raw_candidate < cmp_price) or (pos.action == "SELL" and raw_candidate > cmp_price)
                     ):
                         candidate_stop = raw_candidate
+            elif pos.stop_loss_method == "atr_trail" and get_candle_history is not None and pos.stop_loss_price is not None:
+                # Discipline v2 auto-trail (see stop_rules.atr_trail_step): breakeven at +1R, then N x ATR behind price.
+                params = pos.stop_loss_indicator_params or {}
+                period = int(params.get("period", stop_rules.DEFAULT_TRAIL_PERIOD))
+                multiple = float(params.get("multiple", stop_rules.DEFAULT_TRAIL_MULTIPLE))
+                key = (pos.exchange, pos.symbol, pos.stop_loss_interval, f"atr{period}")
+                if key not in candle_history_cache:
+                    try:
+                        warmup_from, warmup_to = _indicator_history_window(period * 3, pos.stop_loss_interval)
+                        candle_history_cache[key] = get_candle_history(pos.exchange, pos.symbol, pos.stop_loss_interval, warmup_from, warmup_to)
+                    except Exception:
+                        logger.exception("failed to fetch auto-trail candle history for %s:%s", pos.exchange, pos.symbol)
+                        candle_history_cache[key] = []
+                initial_stop = getattr(pos, "initial_stop_loss_price", None)
+                initial = initial_stop if initial_stop is not None else pos.stop_loss_price
+                candidate_stop, triggered = stop_rules.atr_trail_step(
+                    pos.action, float(pos.entry_price), float(initial), cmp_price,
+                    stop_rules.latest_atr(candle_history_cache[key], period), multiple, bool(pos.breakeven_triggered),
+                )
+                pos.breakeven_triggered = triggered
             elif pos.stop_loss_method == "breakeven" and not pos.breakeven_triggered:
                 # One-shot: once price has moved stop_loss_percent%
                 # favorably from entry, snap the stop to entry_price and
@@ -2914,6 +3052,9 @@ def _evaluate_exits(
                 current_stop = float(pos.stop_loss_price)
                 more_favorable = candidate_stop > current_stop if pos.action == "BUY" else candidate_stop < current_stop
                 if more_favorable:
+                    trail_events.append(
+                        {"position": pos, "old_price": current_stop, "new_price": candidate_stop, "price_at_event": cmp_price}
+                    )
                     pos.stop_loss_price = candidate_stop
                     trailed += 1
 
@@ -2924,6 +3065,7 @@ def _evaluate_exits(
         "trailed": trailed,
         "checked": len(positions),
         "live_exits_needed": live_exits_needed,
+        **({"trail_events": trail_events} if trail_events else {}),
     }
 
 
@@ -3068,6 +3210,19 @@ def check_exits(
     prior_live_stops = {p.id: p.stop_loss_price for p in candidates if p.is_live_broker_order}
 
     result = _evaluate_exits(candidates, get_ltp_batch, get_previous_candle, accounts, get_candle_history, strategy_accounts, usdinr_rates)
+    for ev in result.pop("trail_events", []):
+        pos = ev["position"]
+        stop_rules.record_event(
+            db,
+            user_id=pos.user_id,
+            position_id=pos.id,
+            field="stop_loss",
+            move="tighten",
+            old_price=ev["old_price"],
+            new_price=ev["new_price"],
+            source="auto_trail",
+            context=(ev["price_at_event"], None),
+        )
     db.commit()
 
     live_exits_needed = result.pop("live_exits_needed", [])

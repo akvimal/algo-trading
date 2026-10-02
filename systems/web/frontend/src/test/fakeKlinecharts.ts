@@ -25,7 +25,7 @@ export enum LineType {
 }
 
 export type FakeBar = { timestamp: number; open: number; high: number; low: number; close: number; volume?: number };
-export type FakeOverlay = { id: string; name: string; groupId?: string; points: any[]; extendData?: any; visible?: boolean; mode?: string; handlers: Record<string, (e: any) => any> };
+export type FakeOverlay = { id: string; name: string; groupId?: string; points: any[]; extendData?: any; visible?: boolean; mode?: string; styles?: any; handlers: Record<string, (e: any) => any> };
 
 export const registeredOverlays: string[] = [];
 export const registeredIndicators: string[] = [];
@@ -49,6 +49,7 @@ export class FakeChart {
   subs = new Map<string, Set<(d?: unknown) => void>>();
   barSpace = 8;
   scrolledTo: number[] = [];
+  scrolledIndex: number[] = [];
   precision: [number, number] | null = null;
   private seq = 0;
 
@@ -96,8 +97,14 @@ export class FakeChart {
   setBarSpace(n: number) {
     this.barSpace = n;
   }
+  scrollToDataIndex(i: number) {
+    this.scrolledIndex.push(i);
+  }
   scrollToTimestamp(ts: number) {
     this.scrolledTo.push(ts);
+  }
+  convertToPixel(point: { value?: number }) {
+    return { x: 120, y: 1000 - (point.value ?? 0) };
   }
   convertFromPixel(coords: { y?: number }[]) {
     return coords.map((c) => ({ value: 1000 - (c.y ?? 0) }));
@@ -105,12 +112,17 @@ export class FakeChart {
 
   createOverlay(o: any) {
     const id = `ov${++this.seq}`;
-    this.overlays.set(id, { id, name: o.name, groupId: o.groupId, points: o.points ?? [], extendData: o.extendData, mode: o.mode, handlers: o });
+    this.overlays.set(id, { id, name: o.name, groupId: o.groupId, points: o.points ?? [], extendData: o.extendData, mode: o.mode, styles: o.styles, handlers: o });
     return id;
   }
   overrideOverlay(o: any) {
     const cur = this.overlays.get(o.id);
     if (cur) Object.assign(cur, { ...(o.points ? { points: o.points } : {}), ...(o.extendData ? { extendData: o.extendData } : {}), ...(o.visible !== undefined ? { visible: o.visible } : {}), ...(o.mode ? { mode: o.mode } : {}) });
+    if (cur && o.styles) {
+      const merged: Record<string, unknown> = { ...((cur as any).styles ?? {}) };
+      for (const k of Object.keys(o.styles)) merged[k] = { ...(merged[k] as object), ...o.styles[k] };
+      (cur as any).styles = merged;
+    }
     this.overrides.push(o);
   }
   removeOverlay(arg?: string | { groupId?: string; id?: string }) {
@@ -170,6 +182,10 @@ export class FakeChart {
     if (!ov) return;
     ov.points = points;
     ov.handlers.onPressedMoveEnd?.({ overlay: { id, name: ov.name, points } });
+  }
+  doubleClick(id: string) {
+    const ov = this.overlays.get(id);
+    ov?.handlers.onDoubleClick?.({ overlay: { id, name: ov.name, points: ov.points, extendData: ov.extendData } });
   }
   select(id: string) {
     const ov = this.overlays.get(id);

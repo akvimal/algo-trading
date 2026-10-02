@@ -9,7 +9,10 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
 from app.auth import User, get_current_user, require_admin
+from app.domain import stop_rules
+from app.domain.stop_rules import DEFAULT_ATR_INTERVAL
 from app.domain.models import (
+    AutoTrailUpdate,
     ManualPositionCreate,
     NotesUpdate,
     ReviewSubmit,
@@ -26,6 +29,7 @@ from app.domain.position_manager import (
     open_manual_position,
     square_off_all_open,
     square_off_due_positions,
+    set_auto_trail,
     square_off_position,
     submit_position_review,
     update_position_notes,
@@ -131,6 +135,7 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         # type + 1-5 confidence, for Trading Performance's by-setup slice.
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
+        "emotion_tag": row.emotion_tag,
         # Immutable entry snapshot of the two above + whether the fill was
         # auto-traded - the Discipline score's "plan review" component
         # (before vs after) and its auto-trade exclusion.
@@ -409,6 +414,14 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
+    atr_interval = payload.atr_interval or DEFAULT_ATR_INTERVAL
+    context = stop_rules.fetch_context(
+        functools.partial(get_ltp_batch, token=user.token),
+        functools.partial(get_candle_history, token=user.token),
+        row.exchange,
+        row.symbol,
+        atr_interval,
+    )
     row, reject_reason = update_stop_loss(
         db,
         owner_id,
@@ -422,7 +435,31 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         payload.trailing_stop_enabled,
         functools.partial(get_previous_candle, token=user.token),
         functools.partial(get_candle_history, token=user.token),
+        context=context,
+        atr_interval=atr_interval,
     )
+    if reject_reason is not None:
+        raise HTTPException(status_code=422, detail=reject_reason)
+    return _position_to_out(row)
+
+
+@router.put("/positions/{position_id}/auto-trail")
+def edit_auto_trail(position_id: str, payload: AutoTrailUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Switches the one-tap auto-trail (breakeven at +1R, then an ATR trail) on or off for an open position. 404 if missing
+    or owned by another user, 409 if not OPEN, 422 if it cannot start (no stop yet, or another trailing method is on)."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+
+    row = db.get(db_models.Position, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
+
+    row, reject_reason = set_auto_trail(db, owner_id, parsed_id, payload.enabled, payload.interval, payload.multiple)
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
     return _position_to_out(row)
@@ -532,6 +569,8 @@ def edit_position_tags(
         set_setup_tag="setup_tag" in sent,
         confidence=payload.confidence,
         set_confidence="confidence" in sent,
+        emotion_tag=payload.emotion_tag,
+        set_emotion_tag="emotion_tag" in sent,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="position not found")

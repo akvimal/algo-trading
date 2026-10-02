@@ -152,6 +152,7 @@ describe("Today", () => {
           discipline: { score: 82, window_days: 30, window_start: "2026-08-28", trade_count: 10, planned: { rate: 0.9, trades: 10 }, plan_adherence: { rate: 0.8, trades: 10 }, plan_review: { rate: 0.7, trades: 10, before_rate: 0.7, after_rate: 0.7 }, outcome: { rate: 0.7, trades: 10, win_rate: 0.7, avg_r: 0.8 } },
           equity: null,
         }),
+      "/discipline": () => json({ segment: "NSE", scope: "epoch", score: 82, trade_count: 10, emotions: { greed: 90, fear: 80, patience: 75 }, categories: {}, mistakes: {}, week_mistakes: {}, target_and_stop_moved: 0, emotion_counts: {}, needs_emotion: 2, coaching: null, trades: [] }),
     });
     renderApp("/");
     expect(await screen.findByText("₹2,10,000")).toBeInTheDocument(); // equity headline
@@ -159,6 +160,7 @@ describe("Today", () => {
     expect(screen.getByText("+0.80R")).toBeInTheDocument(); // expectancy
     expect(screen.getByText("82")).toBeInTheDocument(); // discipline score, in the gauge
     expect(screen.getByText("Good")).toBeInTheDocument(); // discipline band
+    expect(screen.getByTestId("feeling-link")).toHaveTextContent("2 to tag"); // trades waiting for a one-tap feeling
     expect(screen.getByRole("link", { name: /full breakdown/ })).toHaveAttribute("href", "/portfolio?segment=NSE&tab=review");
   });
 

@@ -1,17 +1,22 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/http";
-import { moveOpenLevel } from "../api/trade";
+import { moveOpenLevel, setAutoTrail } from "../api/trade";
 import type { OptionGroup, Position } from "../api/types";
 import { formatPct, formatPnl, formatPrice, formatTime } from "../format";
 import { ScanChartPanel } from "../pages/ScanChartPanel";
 import { isNakedOption, isSpreadOption, nakedMetrics, spreadMetrics } from "./positionMetrics";
+import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import { Signed } from "./bits";
 
-type Props =
-  | { kind: "position"; item: Position; onChanged: () => void; compact?: boolean }
-  | { kind: "group"; item: OptionGroup; onChanged: () => void; compact?: boolean };
-
 type Field = "stop" | "target";
+
+/** Chart help for an open trade's stop/target, offered when the card sits next to a chart (the trade
+ * ticket): put a starting line on the chart, or arm the chart so the next click sets the price. */
+type ChartHelp = { pickingField: Field | null; onAddLine: (field: Field) => void; onPick: (field: Field | null) => void };
+
+type Props =
+  | { kind: "position"; item: Position; onChanged: () => void; compact?: boolean; chart?: ChartHelp; interval?: string }
+  | { kind: "group"; item: OptionGroup; onChanged: () => void; compact?: boolean; chart?: ChartHelp; interval?: string };
 
 /** One open trade: what it is, its P&L, and its stop/target - either as plain text or, tapped, a
  * small inline editor (moveOpenLevel, the same route a chart-line drag already uses). An option
@@ -46,6 +51,10 @@ export function PositionCard(props: Props) {
   const stop = p ? p.stop_loss_price : (g!.spot_stop_loss_price ?? g!.combined_stop_loss_price);
   const target = p ? p.target_price : g!.spot_target_price;
   const stopTrailing = (p ? p.trailing_stop_enabled : g!.spot_stop_loss_trailing_enabled) === true;
+  // The one-tap auto-trail (breakeven at +1R, then an ATR trail) is the one kind of trailing the person switches on and off
+  // here; any other kind (a strategy's own SuperTrend, say) is shown as trailing and left alone.
+  const autoTrail = stopTrailing && (p ? p.stop_loss_method === "atr_trail" : g!.spot_stop_loss_indicator_type === "atr_trail");
+  const canAutoTrail = stop != null && (!stopTrailing || autoTrail);
   // Naked: % move of the underlying and of the option's own premium, since entry. Spread: how far
   // the live P&L is toward the position's own defined max profit, and against the capital
   // actually committed to it - see positionMetrics.ts for the debit/credit math either needs.
@@ -67,6 +76,19 @@ export function PositionCard(props: Props) {
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not square off");
       setConfirming(false);
+      setBusy(false);
+    }
+  }
+
+  async function toggleAutoTrail() {
+    setBusy(true);
+    setError(null);
+    try {
+      await setAutoTrail(props.kind, item.id, !autoTrail, props.interval);
+      props.onChanged();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not change the auto-trail. Try again.");
+    } finally {
       setBusy(false);
     }
   }
@@ -128,19 +150,33 @@ export function PositionCard(props: Props) {
         </span>
       );
     }
+    const help = props.chart && !trailing ? props.chart : null;
     return (
-      <button
-        key={field}
-        type="button"
-        className="link-btn pos-level"
-        disabled={trailing}
-        aria-label={`Edit ${label.toLowerCase()}`}
-        title={trailing ? "Trailing stop - cannot be edited by hand" : `Edit ${label.toLowerCase()}`}
-        onClick={() => startEdit(field, value)}
-      >
-        {label} {value == null ? "not set" : formatPrice(value)}
-        {trailing ? " (trailing)" : ""}
-      </button>
+      <span className="pos-level-group" key={field}>
+        <button
+          type="button"
+          className="link-btn pos-level"
+          disabled={trailing}
+          aria-label={`Edit ${label.toLowerCase()}`}
+          title={trailing ? (autoTrail ? "Auto-trail is on - switch it off to move the stop by hand" : "Trailing stop - cannot be edited by hand") : `Edit ${label.toLowerCase()}`}
+          onClick={() => startEdit(field, value)}
+        >
+          {label} {value == null ? "not set" : formatPrice(value)}
+          {trailing ? (autoTrail ? " (auto-trail)" : " (trailing)") : ""}
+        </button>
+        {help && value == null && (
+          <button type="button" className="link-btn with-icon" aria-label={`Add ${field} line`} title="Suggest a price from the chart's typical move, save it and put its line on the chart - then drag it where you want it" onClick={() => help.onAddLine(field)}>
+            <SparkIcon />
+            Suggest
+          </button>
+        )}
+        {help && (
+          <button type="button" className="link-btn with-icon" aria-label={`Pick ${field} on chart`} title="Click the chart to set it there" aria-pressed={help.pickingField === field} onClick={() => help.onPick(help.pickingField === field ? null : field)}>
+            <CrosshairIcon />
+            {help.pickingField === field ? "Click chart…" : "Pick"}
+          </button>
+        )}
+      </span>
     );
   }
 
@@ -180,6 +216,24 @@ export function PositionCard(props: Props) {
         {level("stop", stop)}
         {level("target", target)}
       </div>
+      {canAutoTrail && (
+        <div className="pos-sub">
+          <button
+            type="button"
+            className="link-btn"
+            aria-pressed={autoTrail}
+            disabled={busy}
+            title={
+              autoTrail
+                ? "On: the stop moves to breakeven at +1R, then trails behind price by an ATR multiple. Click to switch it off."
+                : "Off. Switch on to let the stop move to breakeven at +1R and then trail behind price by an ATR multiple, so you do not trail it by hand."
+            }
+            onClick={() => void toggleAutoTrail()}
+          >
+            Auto-trail {autoTrail ? "on" : "off"}
+          </button>
+        </div>
+      )}
       {error && (
         <div className="dn" role="alert">
           {error}
@@ -188,7 +242,7 @@ export function PositionCard(props: Props) {
       <div className="row" style={{ justifyContent: "flex-end" }}>
         {/* Option positions only, per the card's own docstring - a spot/future row has no strike/
             expiry decision riding on the underlying's shape the way an option position does. */}
-        {g && (
+        {g && !props.chart && (
           <button className="btn btn-small" aria-pressed={chartOpen} onClick={() => setChartOpen((v) => !v)}>
             {chartOpen ? "Hide chart" : "Chart"}
           </button>
@@ -208,7 +262,7 @@ export function PositionCard(props: Props) {
           </button>
         )}
       </div>
-      {chartOpen && g && (
+      {chartOpen && g && !props.chart && (
         <div style={{ marginTop: 12 }}>
           <ScanChartPanel exchange={g.segment ?? "NSE"} symbol={g.underlying_symbol} />
         </div>

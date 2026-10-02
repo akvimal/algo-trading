@@ -175,7 +175,7 @@ function DraftForm({ draft, onChange, rules, prefix }: { draft: Draft; onChange:
       </div>
       {(d.stopMethod === "previous_candle" || d.stopMethod === "indicator") && (
         <div className="field">
-          <label htmlFor={`${prefix}-sl-interval`}>Stop candle size</label>
+          <label htmlFor={`${prefix}-sl-interval`}>Stop interval</label>
           <select id={`${prefix}-sl-interval`} value={d.stopInterval} onChange={(e) => onChange({ stopInterval: e.target.value })}>
             {STOP_LOSS_INTERVALS.map((i) => (
               <option key={i} value={i}>

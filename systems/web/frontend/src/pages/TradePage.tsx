@@ -1,19 +1,23 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
 import { getAccounts } from "../api/settings";
 import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel } from "../api/trade";
-import type { OptionGroup, Position, Segment } from "../api/types";
+import type { OptionGroup, Position, Pretrade, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
-import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, saveIndicatorParams, saveIndicators, saveStructure, saveTools, type StructureConfig } from "../chart/config";
+import { STRUCTURE_TIMEFRAMES, loadIndicatorParams, loadIndicators, loadStructure, loadTools, resetStructureForInterval, saveIndicatorParams, saveIndicators, saveStructure, saveTools, structureIsOn, toggleStructureOn, type StructureConfig } from "../chart/config";
 import { ACCENT, BUY, SELL } from "../chart/colors";
 import { AlertBar } from "../chart/AlertBar";
+import { AnalysisTools } from "../chart/AnalysisTools";
+import type { AiReadHandle } from "../chart/AiReadPanel";
+import { OiTools } from "../chart/OiTools";
+import { hasOiChain } from "../chart/oiLevels";
+import { StyleBar } from "../chart/StyleBar";
 import type { SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
-import { LayersMenu } from "../chart/LayersMenu";
-import { LinksMenu } from "../workstation/LinksMenu";
+import { ViewToggles } from "../chart/ViewToggles";
 import { announceAlert, prepareAlertChannel } from "../chart/notify";
 import { StructureMenu } from "../chart/StructureMenu";
 import { AutoTrader } from "../components/AutoTrader";
@@ -21,19 +25,22 @@ import { loadAutoTraderVisible } from "../autotrader/model";
 import { ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
 import { checkLevelMove, isContractOf, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
+import { NotesPanel } from "../components/NotesPanel";
+import { buildNoteContext } from "../components/notesModel";
+import { loadAiRead } from "../chart/aiReadStore";
 import { PositionCard } from "../components/PositionCard";
 import { TradeTicket } from "../components/TradeTicket";
 import { CLASSIC_APP_URL } from "../config";
 import { formatPnl, formatPrice } from "../format";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
-import { agreement, directionOf } from "../workstation/confluence";
+import { LayoutMenu } from "../workstation/LayoutMenu";
 import { PaneHeader } from "../workstation/PaneHeader";
 import { CombosMenu } from "../workstation/CombosMenu";
 import { addCombo, applyCombo, loadCombos, removeCombo, saveCombos, type Combo } from "../workstation/combos";
 import {
-  loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSymbol,
-  withUrlSymbol, type Layout, type WorkstationState,
+  loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSplit, setSymbol,
+  withUrlSymbol, type WorkstationState,
 } from "../workstation/state";
 import { OiStrip } from "../chart/OiStrip";
 import { useOiData } from "../workstation/useOiData";
@@ -44,12 +51,6 @@ import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, is
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
-
-const LAYOUTS: { id: Layout; label: string }[] = [
-  { id: "single", label: "One chart" },
-  { id: "side", label: "Side by side" },
-  { id: "stack", label: "Stacked" },
-];
 
 export function TradePage() {
   const [params] = useSearchParams();
@@ -85,7 +86,11 @@ export function TradePage() {
 
   // ---- data per chart ----
   const twoUp = wide && paneCount(ws) === 2;
-  const active = (twoUp ? ws.active : 0) as 0 | 1;
+  // One chart can fill the area for a closer look; the other stays loaded underneath, so coming back is instant.
+  const [maximized, setMaximized] = useState<0 | 1 | null>(null);
+  const focus = twoUp ? maximized : null;
+  const active = (twoUp ? (focus ?? ws.active) : 0) as 0 | 1;
+  const setStructureOn = (on: boolean) => setStructure((s) => ({ ...s, tfs: toggleStructureOn(on, ws.panes[active].interval) }));
   const [socketUp, setSocketUp] = useState(false);
   const dataA = usePaneData(ws.panes[0], true, socketUp);
   const dataB = usePaneData(twoUp ? ws.panes[1] : null, twoUp, socketUp);
@@ -94,8 +99,9 @@ export function TradePage() {
   // decides whether the derived lines are also drawn on the chart itself. Called unconditionally for
   // both panes, same as usePaneData above: dataB's own fields are null while the second pane is not
   // shown, so its own `enabled` check inside useOiData already costs nothing.
-  const oiA = useOiData(dataA, ws.panes[0].symbol);
-  const oiB = useOiData(dataB, ws.panes[1].symbol);
+  const oiWanted = tools.oiStripOn || tools.oiLevelsOn; // with both off nothing reads the option chain, so it is not polled
+  const oiA = useOiData(dataA, ws.panes[0].symbol, oiWanted);
+  const oiB = useOiData(dataB, ws.panes[1].symbol, oiWanted);
   const oi = [oiA, oiB];
   const oiLevels = [tools.oiLevelsOn ? oiA.levels : [], tools.oiLevelsOn && twoUp ? oiB.levels : []];
 
@@ -138,16 +144,39 @@ export function TradePage() {
     () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? openLevels(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups) : [])),
     [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // ---- the notes panel: what the market looks like on the active chart, read when a note is sent ----
+  function aiReadFor(i: 0 | 1) {
+    const s = oi[i].summary;
+    return s ? loadAiRead(`${s.underlying_exchange}:${s.underlying_symbol}:${s.expiry}`) : null;
+  }
+  function noteContextFor() {
+    const i = active;
+    const base = ws.panes[i].symbol.trim().toUpperCase();
+    const open = tradeRows.data
+      ? tradeRows.data.positions.filter((p) => p.status === "OPEN" && p.option_group_id == null && isContractOf(p.symbol, base)).length +
+        tradeRows.data.groups.filter((g) => g.status === "OPEN" && g.underlying_symbol.toUpperCase() === base).length
+      : 0;
+    return buildNoteContext({
+      price: priceOf(i),
+      interval: ws.panes[i].interval,
+      regime: datas[i].regime,
+      structure: trendFor(i),
+      oi: oi[i].summary,
+      aiRead: aiReadFor(i),
+      holding: open > 0 ? `${open} open ${base} position${open === 1 ? "" : "s"}` : null,
+    });
+  }
   const [levelNote, setLevelNote] = useState<{ text: string; error: boolean } | null>(null);
-  async function moveLevel(pane: 0 | 1, level: OpenLevel, price: number): Promise<boolean> {
+  async function moveLevel(pane: 0 | 1, level: Pick<OpenLevel, "kind" | "field" | "tradeId" | "long">, price: number): Promise<boolean> {
     const word = level.field === "stop" ? "Stop-loss" : "Target";
-    const problem = checkLevelMove(level, price, priceOf(pane));
+    const current = chartLevels[pane].find((l) => l.tradeId === level.tradeId && l.field === level.field)?.price ?? null;
+    const problem = checkLevelMove(level, price, priceOf(pane), current);
     if (problem) {
       setLevelNote({ text: problem, error: true });
       return false;
     }
     try {
-      await moveOpenLevel(level, price);
+      await moveOpenLevel(level, price, ws.panes[pane].interval);
     } catch (e) {
       setLevelNote({ text: e instanceof Error ? e.message : "Could not move it. Try again.", error: true });
       return false;
@@ -158,6 +187,12 @@ export function TradePage() {
   }
 
   // ---- account, budget, waiting orders ----
+  // What today looks like for the ticket's plan block (cooldown, trades so far, loss-limit room): the server's rules, the same ones the score uses.
+  const pretrade = useResource(
+    () => api<Pretrade>("execution", `/discipline/${ws.panes[active].segment}/today?symbol=${encodeURIComponent(ws.panes[active].symbol)}`),
+    [ws.panes[active].segment, ws.panes[active].symbol],
+    { pollMs: 30_000 },
+  );
   const accounts = useResource(getAccounts, []);
   const waiting = useResource(listWaitingOrders, [], { pollMs: 15_000 });
   const activeSpec = ws.panes[active];
@@ -178,15 +213,17 @@ export function TradePage() {
   // ---- the ticket belongs to the active chart ----
   const [ticket, setTicket] = useState<Ticket>(() => emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
   const [pickField, setPickField] = useState<PriceField | null>(null);
-  // The order form is hidden once something is already open on this instrument - the open
-  // position(s) are almost always what the person came to look at then, and a bare order form
-  // above them just pushes that down. "+ Place another order" reveals it again for pyramiding, and
-  // resets with everything else the moment the instrument changes.
-  const [showFormAnyway, setShowFormAnyway] = useState(false);
+  // The same chart click can instead set the stop or target of an OPEN trade (saved straight away, like
+  // dragging its line) - never both at once.
+  const [levelPick, setLevelPick] = useState<{ kind: "position" | "group"; tradeId: string; long: boolean; field: "stop" | "target" } | null>(null);
+  // The order form is hidden once something is already open on this instrument: the open position(s) are what the person came to
+  // look at, and a second order on top of one is how a plan turns into averaging in. To add, close it first or let its stop or target
+  // do it. (There used to be a "+ Place another order" link here; it is gone by decision.)
   useEffect(() => {
     setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
+    setSuggested({});
     setPickField(null);
-    setShowFormAnyway(false);
+    setLevelPick(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- defaultInstrument/defaultOptionStrategy
     // intentionally excluded: changing the preference mid-session (e.g. from another tab) should
     // not yank a ticket already in progress here; it takes effect on the next instrument change.
@@ -225,22 +262,48 @@ export function TradePage() {
   }, [analysis?.entry, analysis?.stop, analysis?.target, ticket.orderType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function onPick(price: number) {
+    if (levelPick) {
+      const level = levelPick;
+      setLevelPick(null);
+      void moveLevel(active, level, price);
+      return;
+    }
     if (!pickField) return;
     setTicket((t) => ({ ...t, [pickField]: String(price), ...(pickField === "entry" ? { orderType: "limit" as const } : {}) }));
     setPickField(null);
   }
 
-  // A plan line dragged on the chart (or added with "Add line") sets the ticket's price for that field.
+  // A plan line dragged on the chart (or suggested with "Suggest") sets the ticket's price for that field.
   function setLevel(field: PriceField, price: number) {
     setTicket((t) => ({ ...t, [field]: String(price), ...(field === "entry" ? { orderType: "limit" as const } : {}) }));
   }
+  // "Suggest" on an open trade: save a starting stop/target at the usual distance, then it is a line to drag.
+  function addOpenLevel(kind: "position" | "group", tradeId: string, long: boolean, field: "stop" | "target") {
+    const level = defaultLevel(field, long ? "BUY" : "SELL", activePrice, paneRefs[active].current?.typicalMove() ?? null, ctx?.minRR);
+    if (level != null) void moveLevel(active, { kind, tradeId, long, field }, level);
+  }
+  const openTradeHelp = (kind: "position" | "group", tradeId: string, long: boolean) => ({
+    pickingField: levelPick && levelPick.tradeId === tradeId ? levelPick.field : null,
+    onAddLine: (field: "stop" | "target") => addOpenLevel(kind, tradeId, long, field),
+    onPick: (field: "stop" | "target" | null) => {
+      setPickField(null);
+      setLevelPick(field ? { kind, tradeId, long, field } : null);
+    },
+  });
+  // One click fills the stop and target that are still empty from the chart's typical move and the person's minimum reward-to-risk.
+  // The price "Suggest" first put on each field, so the ticket can offer a way back to it after the person has dragged or typed over it.
+  const [suggested, setSuggested] = useState<Partial<Record<PriceField, number>>>({});
   function addLine(field: PriceField) {
-    const level = defaultLevel(field, ticket.action, activePrice);
-    if (level != null) setLevel(field, level);
+    const level = defaultLevel(field, ticket.action, activePrice, paneRefs[active].current?.typicalMove() ?? null, ctx?.minRR);
+    if (level != null) {
+      setSuggested((cur) => ({ ...cur, [field]: level }));
+      setLevel(field, level);
+    }
   }
 
   // ---- drawing tools act on the active chart ----
   const paneRefs = [useRef<ChartPaneHandle>(null), useRef<ChartPaneHandle>(null)];
+  const aiRefs = [useRef<AiReadHandle>(null), useRef<AiReadHandle>(null)];
   const [tool, setTool] = useState<DrawTool | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
@@ -273,18 +336,14 @@ export function TradePage() {
 
   // ---- linked crosshair and scrolling ----
   const [cursor, setCursor] = useState<{ from: 0 | 1; ts: number | null }>({ from: 0, ts: null });
+  // The time clicked on either chart, while two are linked: marked on both, and the other one pans to it.
+  const [picked, setPicked] = useState<{ ts: number; seq: number; from: 0 | 1 } | null>(null);
   const [range, setRange] = useState<{ from: 0 | 1; msg: RangeMsg } | null>(null);
 
   // ---- structure readout per chart ----
   const [reports, setReports] = useState<[StructureReport | null, StructureReport | null]>([null, null]);
   const tfLabel = (tf: string) => STRUCTURE_TIMEFRAMES.find((t) => t.value === tf)?.label ?? tf;
   const trendFor = (i: 0 | 1) => Object.fromEntries(Object.entries(reports[i]?.trendByTf ?? {}).map(([tf, t]) => [tfLabel(tf), t]));
-
-  // ---- confluence between the two charts ----
-  const peerIndex = (active === 0 ? 1 : 0) as 0 | 1;
-  const havePeer = twoUp && ws.panes[peerIndex].symbol !== activeSpec.symbol;
-  const peer = havePeer ? { symbol: ws.panes[peerIndex].symbol, direction: directionOf(datas[peerIndex].regime) } : null;
-  const agree = twoUp ? agreement({ symbol: ws.panes[0].symbol, regime: dataA.regime }, { symbol: ws.panes[1].symbol, regime: dataB.regime }) : null;
 
   // Which panel the aside shows when the auto-trader is visible at all - otherwise there is
   // nothing to switch between, the aside is just the ticket, same as before. Not persisted:
@@ -315,7 +374,30 @@ export function TradePage() {
   };
 
   const shown: (0 | 1)[] = twoUp ? [0, 1] : [0];
+  const gridRef = useRef<HTMLDivElement>(null);
+  const dragSplit = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const box = gridRef.current?.getBoundingClientRect();
+    if (!box) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const stacked = ws.layout === "stack";
+    const move = (ev: PointerEvent) => {
+      const r = stacked ? (ev.clientY - box.top) / box.height : (ev.clientX - box.left) / box.width;
+      setWs((cur) => setSplit(cur, r));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const linkCrosshair = twoUp && ws.links.crosshair;
+  useEffect(() => {
+    if (!twoUp) setMaximized(null);
+  }, [twoUp]);
+  useEffect(() => {
+    if (!twoUp || !linkCrosshair) setPicked(null);
+  }, [twoUp, linkCrosshair]);
   const linkScale = twoUp && ws.links.scale;
 
   return (
@@ -340,13 +422,13 @@ export function TradePage() {
 
         <div className="ws-tools">
           {wide && (
-            <div className="chips" role="group" aria-label="Layout">
-              {LAYOUTS.map((l) => (
-                <button key={l.id} aria-pressed={ws.layout === l.id} onClick={() => setWs((cur) => setLayout(cur, l.id))}>
-                  {l.label}
-                </button>
-              ))}
-            </div>
+            <LayoutMenu
+              layout={ws.layout}
+              onChange={(layout) => setWs((cur) => setLayout(cur, layout))}
+              twoUp={twoUp}
+              links={ws.links}
+              onLinks={(patch) => setWs((cur) => setLinks(cur, { ...cur.links, ...patch }))}
+            />
           )}
           {wide && (
             <CombosMenu
@@ -357,30 +439,34 @@ export function TradePage() {
               onSave={() => setCombos((cur) => addCombo(cur, ws.panes[0], ws.panes[1]))}
             />
           )}
-          <IndicatorMenu
-            selected={indicators}
-            onSelected={setIndicators}
-            params={indicatorParams}
-            onParams={setIndicatorParams}
-            hidden={tools.indicatorsHidden}
-            onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
-          />
-          <StructureMenu config={structure} onChange={setStructure} />
-          {twoUp && (
-            <LinksMenu
-              crosshair={ws.links.crosshair}
-              onCrosshair={(v) => setWs((cur) => setLinks(cur, { ...cur.links, crosshair: v }))}
-              scale={ws.links.scale}
-              onScale={(v) => setWs((cur) => setLinks(cur, { ...cur.links, scale: v }))}
-              interval={ws.links.interval}
-              onInterval={(v) => setWs((cur) => setLinks(cur, { ...cur.links, interval: v }))}
-            />
+          {!wide && (
+            <>
+              <IndicatorMenu
+                selected={indicators}
+                onSelected={setIndicators}
+                params={indicatorParams}
+                onParams={setIndicatorParams}
+                hidden={tools.indicatorsHidden}
+                onHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
+                structureOn={structureIsOn(structure)}
+                onStructureOn={setStructureOn}
+              />
+              {structureIsOn(structure) && <StructureMenu config={structure} onChange={setStructure} />}
+            </>
           )}
-          <LayersMenu
+          <ViewToggles
             tradesOn={tools.tradesOn}
             onTradesOn={(on) => setTools((t) => ({ ...t, tradesOn: on }))}
-            oiLevelsOn={tools.oiLevelsOn}
-            onOiLevelsOn={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
+            oi={
+              wide
+                ? undefined
+                : {
+                    stripOn: tools.oiStripOn,
+                    onStripOn: (on) => setTools((t) => ({ ...t, oiStripOn: on })),
+                    levelsOn: tools.oiLevelsOn,
+                    onLevelsOn: (on) => setTools((t) => ({ ...t, oiLevelsOn: on })),
+                  }
+            }
             priceShown={!tools.priceHidden}
             onPriceShown={(shown) => setTools((t) => ({ ...t, priceHidden: !shown }))}
             ticket={wide ? { open: ws.ticketOpen, onToggle: (open) => setWs((cur) => ({ ...cur, ticketOpen: open })) } : undefined}
@@ -392,14 +478,6 @@ export function TradePage() {
           )}
         </div>
       </div>
-
-      {twoUp && agree && (
-        <div className="ws-links" role="group" aria-label="Linked charts">
-          <span className={`pill confluence ${agree.verdict === "aligned-up" ? "up" : agree.verdict === "aligned-down" ? "dn" : agree.verdict === "mixed" ? "warn" : ""}`} data-testid="agreement">
-            {agree.text}
-          </span>
-        </div>
-      )}
 
       <div className="ws-body">
         {wide && (
@@ -413,10 +491,41 @@ export function TradePage() {
             onClear={() => paneRefs[active].current?.clearDrawings()}
             hasSelection={hasSelection}
             onDeleteSelected={() => paneRefs[active].current?.removeSelected()}
+            analysis={
+              <>
+              <AnalysisTools
+                selected={indicators}
+                onSelected={setIndicators}
+                params={indicatorParams}
+                onParams={setIndicatorParams}
+                indicatorsHidden={tools.indicatorsHidden}
+                onIndicatorsHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
+                structure={structure}
+                onStructure={setStructure}
+                structureOn={structureIsOn(structure)}
+                onStructureOn={setStructureOn}
+              />
+              <span className="tool-sep" role="separator" />
+              <OiTools
+                available={hasOiChain(activeSpec.symbol)}
+                stripOn={tools.oiStripOn}
+                onStrip={(on) => setTools((t) => ({ ...t, oiStripOn: on }))}
+                levelsOn={tools.oiLevelsOn}
+                onLevels={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
+                onAiRead={() => aiRefs[active].current?.activate()}
+              />
+              </>
+            }
           />
         )}
 
         <div className="ws-charts">
+          <StyleBar
+            selection={selection}
+            onStyle={(patch) => paneRefs[active].current?.setSelectedStyle(patch)}
+            onReset={() => paneRefs[active].current?.resetSelectedStyle()}
+            onDefault={(on) => paneRefs[active].current?.setSelectedStyleAsDefault(on)}
+          />
           <AlertBar selection={selection} armed={shown.reduce<number>((n, i) => n + armed[i], 0)} onSet={setAlert} />
           {levelNote && (
             <div className={`ws-flash ${levelNote.error ? "error" : ""}`} role={levelNote.error ? "alert" : "status"} data-testid="level-note">
@@ -434,14 +543,18 @@ export function TradePage() {
               </button>
             </div>
           )}
-          <div className={`ws-grid layout-${twoUp ? ws.layout : "single"}`}>
+          <div
+            ref={gridRef}
+            className={`ws-grid layout-${twoUp ? ws.layout : "single"} ${focus != null ? "focused" : ""}`}
+            style={twoUp && focus == null ? ({ "--split-a": `${ws.split}fr`, "--split-b": `${1 - ws.split}fr` } as CSSProperties) : undefined}
+          >
           {shown.map((i) => {
             const d = datas[i];
             const spec = ws.panes[i];
             return (
               <section
                 key={i}
-                className={`ws-pane ${twoUp && active === i ? "active" : ""}`}
+                className={`ws-pane ${twoUp && active === i ? "active" : ""} ${focus != null && focus !== i ? "ws-pane-hidden" : ""}`}
                 aria-label={`${spec.symbol} chart`}
                 onMouseDownCapture={() => twoUp && ws.active !== i && setWs((cur) => ({ ...cur, active: i }))}
               >
@@ -449,17 +562,32 @@ export function TradePage() {
                   index={i}
                   symbol={spec.symbol}
                   interval={spec.interval}
-                  onInterval={(iv) => setWs((cur) => setPaneInterval(cur, i, iv))}
+                  onInterval={(iv) => {
+                    setWs((cur) => setPaneInterval(cur, i, iv));
+                    setStructure((cur) => ({ ...cur, tfs: resetStructureForInterval(cur.tfs, iv) }));
+                  }}
                   price={priceOf(i)}
                   priceShown={!tools.priceHidden}
                   live={socket.connected}
                   regime={d.regime}
+                  contract={d.resolved?.trade_symbol ?? null}
+                  expiry={d.resolved?.expiry ?? null}
                   structureTrend={trendFor(i)}
                   active={active === i}
                   showActive={twoUp}
+                  maximized={focus === i}
+                  onToggleMaximize={twoUp ? () => setMaximized((m) => (m === i ? null : i)) : undefined}
                 />
                 {d.error && !d.exchange && <ErrorNotice error={d.error as never} onRetry={d.reloadResolve} />}
-                <OiStrip summary={oi[i].summary} sentiment={oi[i].sentiment} levels={oi[i].levels} onChartLevelsOn={tools.oiLevelsOn} />
+                <OiStrip
+                  summary={oi[i].summary}
+                  sentiment={oi[i].sentiment}
+                  levels={oi[i].levels}
+                  onChartLevelsOn={tools.oiLevelsOn}
+                  stripOn={tools.oiStripOn}
+                  aiTarget={hasOiChain(spec.symbol) && d.exchange && d.symbol ? { exchange: d.exchange, symbol: d.symbol } : null}
+                  aiRef={aiRefs[i]}
+                />
                 {d.exchange && d.symbol ? (
                   <Suspense fallback={<div className="chart-status">Loading chart…</div>}>
                     <ChartPane
@@ -479,7 +607,7 @@ export function TradePage() {
                       oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
                       drawingsHidden={tools.drawingsHidden}
-                      pickField={active === i ? pickField : null}
+                      pickField={active === i ? (levelPick?.field ?? pickField) : null}
                       onPick={onPick}
                       onPlanMove={setLevel}
                       onDrawingChange={(s) => {
@@ -493,6 +621,8 @@ export function TradePage() {
                       onStructure={(r) => setReports((cur) => (i === 0 ? [r, cur[1]] : [cur[0], r]))}
                       onCursor={linkCrosshair ? (ts) => setCursor({ from: i, ts }) : undefined}
                       peerCursor={linkCrosshair && cursor.from !== i ? cursor.ts : null}
+                      onTimeClick={twoUp && linkCrosshair ? (ts) => setPicked((p) => ({ ts, seq: (p?.seq ?? 0) + 1, from: i })) : undefined}
+                      panTo={twoUp && linkCrosshair && picked && picked.from !== i ? { ts: picked.ts, seq: picked.seq } : null}
                       onRange={linkScale ? (msg) => setRange({ from: i, msg }) : undefined}
                       peerRange={linkScale && range && range.from !== i ? range.msg : null}
                     />
@@ -503,7 +633,39 @@ export function TradePage() {
               </section>
             );
           })}
+          {twoUp && focus == null && (
+            <div
+              className="ws-splitter"
+              role="separator"
+              aria-label="Resize charts"
+              aria-orientation={ws.layout === "stack" ? "horizontal" : "vertical"}
+              aria-valuemin={20}
+              aria-valuemax={80}
+              aria-valuenow={Math.round(ws.split * 100)}
+              tabIndex={0}
+              title="Drag to resize the charts; double-click to even them out"
+              onPointerDown={dragSplit}
+              onDoubleClick={() => setWs((cur) => setSplit(cur, 0.5))}
+              onKeyDown={(e: ReactKeyboardEvent) => {
+                const back = ws.layout === "stack" ? "ArrowUp" : "ArrowLeft";
+                const fwd = ws.layout === "stack" ? "ArrowDown" : "ArrowRight";
+                if (e.key === back || e.key === fwd) {
+                  e.preventDefault();
+                  setWs((cur) => setSplit(cur, cur.split + (e.key === fwd ? 0.05 : -0.05)));
+                }
+              }}
+            />
+          )}
           </div>
+          <NotesPanel
+            key={`${ws.panes[active].segment}:${ws.panes[active].symbol}`}
+            segment={ws.panes[active].segment}
+            symbol={ws.panes[active].symbol}
+            interval={ws.panes[active].interval}
+            getContext={noteContextFor}
+            getChartImage={() => paneRefs[active].current?.snapshot() ?? { problem: datas[active].error ? `the chart did not load (${datas[active].error!.message})` : "the chart is not on screen yet" }}
+            aiRead={aiReadFor(active)}
+          />
           {structure.tfs.length > 0 && structure.setups && (reports[active]?.setups.length ?? 0) > 0 && (
             <div className="ws-setups" data-testid="setups">
               {reports[active]!.setups.map((s) => (
@@ -556,7 +718,7 @@ export function TradePage() {
                 </p>
               </div>
             )}
-            {ctx && !live && (!hasOpenForInstrument || showFormAnyway) && (
+            {ctx && !live && !hasOpenForInstrument && (
               <TradeTicket
                 ticket={ticket}
                 onChange={setTicket}
@@ -568,39 +730,49 @@ export function TradePage() {
                 }}
                 regime={activeData.regime}
                 budget={account?.max_daily_loss != null && today.data ? { limit: account.max_daily_loss, lostToday: Math.max(0, -today.data.realized) } : null}
-                peer={peer}
                 pickField={pickField}
-                onPickField={setPickField}
+                onPickField={(f) => {
+                  setLevelPick(null);
+                  setPickField(f);
+                }}
                 onAddLine={addLine}
+                today={pretrade.data ?? null}
+                waitingHere={
+                  mine.length > 0
+                    ? {
+                        text: mine.length === 1 ? `a waiting ${mine[0].action} order at ${formatPrice(mine[0].trigger_price)}` : `${mine.length} waiting orders`,
+                        cancel: () => void Promise.all(mine.map((w) => cancelWaitingOrder(w.id).catch(() => undefined))).finally(() => waiting.reload()),
+                      }
+                    : null
+                }
+                suggested={suggested}
                 onPlaced={() => {
                   waiting.reload();
                   today.reload();
                   tradeRows.reload();
+                  pretrade.reload();
                   // The chart's "plan" lines (entry/stop/target) are drawn straight from this
                   // draft - left alone, they kept showing the just-placed order's prices
                   // indefinitely (nothing else ever cleared them; the ticket itself only resets
                   // on a symbol/segment change, not on a successful placement).
                   setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
+                  setSuggested({});
                   setPickField(null);
                 }}
               />
             )}
             {hasOpenForInstrument && (
               <>
-                <div className="row">
-                  <h2 className="section-title">Open positions</h2>
-                  {ctx && !live && !showFormAnyway && (
-                    <button className="link-btn" onClick={() => setShowFormAnyway(true)}>
-                      + Place another order
-                    </button>
-                  )}
-                </div>
+                <h2 className="section-title" style={{ marginBottom: 2 }}>Open positions</h2>
+                <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }} data-testid="no-second-order">
+                  To add to it, close it first or let its stop or target do it.
+                </p>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
-                    <PositionCard key={p.id} kind="position" item={p} compact onChanged={tradeRows.reload} />
+                    <PositionCard key={p.id} kind="position" item={p} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} />
                   ))}
                   {activeTrades.groups.map((g) => (
-                    <PositionCard key={g.id} kind="group" item={g} compact onChanged={tradeRows.reload} />
+                    <PositionCard key={g.id} kind="group" item={g} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} />
                   ))}
                 </div>
               </>

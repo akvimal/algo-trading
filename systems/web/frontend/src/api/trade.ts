@@ -1,5 +1,5 @@
 import { api } from "./http";
-import type { Candle, Ltp, MarketRegime, OiSummary, OptionChain, OptionGroup, OptionLegPreview, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
+import type { AiRead, Candle, Ltp, MarketRegime, OiSummary, OptionChain, OptionGroup, OptionLegPreview, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 import type { OpenLevel } from "../chart/trades";
 
@@ -26,6 +26,10 @@ export function getCandles(exchange: string, symbol: string, interval: string, d
 }
 
 export const getLtp = (exchange: string, symbol: string) => api<Ltp>("marketData", `/quotes/ltp?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}`);
+
+/** The model read can take several seconds, so it is only ever fetched on a click, never polled. */
+export const getAiRead = (exchange: string, symbol: string, expiry?: string) =>
+  api<AiRead>("marketData", `/ai-read?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=5min${expiry ? `&expiry=${encodeURIComponent(expiry)}` : ""}`);
 
 export const getRegime = (exchange: string, symbol: string, interval: string) =>
   api<MarketRegime>("marketData", `/regime?exchange=${exchange}&symbol=${encodeURIComponent(symbol)}&interval=${interval}`);
@@ -107,15 +111,32 @@ export const getOptionLegPreview = (exchange: string, symbol: string, action: "B
  * sentiment_history is keyed by the underlying). */
 export const getSentimentHistory = (symbol: string) => api<SentimentHistoryDay>("marketData", `/options/sentiment-history?symbol=${encodeURIComponent(symbol)}`);
 
+const ATR_INTERVALS = new Set(["1min", "3min", "5min", "15min", "25min", "30min", "60min"]);
+
 /** Moves the stop or target of an open trade to a new price. A position's target has its own route; an
  * option group's stop and target are levels of the underlying. */
-export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number): Promise<void> {
+export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number, interval?: string): Promise<void> {
+  // The chart interval the person trades on, so the server can judge a tight trail against that interval's ATR.
+  const atr = interval && ATR_INTERVALS.has(interval) ? { atr_interval: interval } : {};
   const base = level.kind === "position" ? `/positions/${level.tradeId}` : `/option-groups/${level.tradeId}`;
   const [path, body] =
     level.kind === "position"
-      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price }] : [`${base}/target`, { target_price: price }]
-      : level.field === "stop" ? [`${base}/spot-stop-loss`, { spot_stop_loss_price: price }] : [`${base}/spot-target`, { spot_target_price: price }];
+      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price, ...atr }] : [`${base}/target`, { target_price: price }]
+      : level.field === "stop" ? [`${base}/spot-stop-loss`, { spot_stop_loss_price: price, ...atr }] : [`${base}/spot-target`, { spot_target_price: price }];
   await api("execution", path, { method: "PUT", json: body });
+}
+
+/** Switches the one-tap auto-trail of an open trade on or off: the stop stays put until the trade is one initial risk in profit,
+ * then moves to breakeven and trails by an ATR multiple. `interval` is the chart interval the person trades on. */
+export async function setAutoTrail(kind: "position" | "group", tradeId: string, enabled: boolean, interval?: string): Promise<void> {
+  const base = kind === "position" ? `/positions/${tradeId}` : `/option-groups/${tradeId}`;
+  await api("execution", `${base}/auto-trail`, { method: "PUT", json: { enabled, ...(interval && ATR_INTERVALS.has(interval) ? { interval } : {}) } });
+}
+
+/** Saves how the person felt about a closed trade (or clears it with null). Part of the same tags route as the setup tag. */
+export async function setFeeling(kind: "position" | "group", tradeId: string, feeling: string | null): Promise<void> {
+  const base = kind === "position" ? `/positions/${tradeId}` : `/option-groups/${tradeId}`;
+  await api("execution", `${base}/tags`, { method: "PUT", json: { emotion_tag: feeling ?? "" } });
 }
 
 export const listWaitingOrders = () => api<PendingOrder[]>("execution", "/pending-orders?status=pending");

@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { ChartStructure } from "../api/types";
 import { fractionalIndexToTs, floorBarIndex, pointTimestamp, toChartPoint, tsToFractionalIndex } from "./anchor";
 import {
-  DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure,
-  loadTools, lookbackRange, parseParamList, pricePrecision, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toKLine,
+  DEFAULT_INDICATORS, EMPTY_STRUCTURE, INTERVALS, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, loadIndicatorParams, loadIndicators, loadStructure,
+  loadTools, lookbackRange, parseParamList, pricePrecision, resetStructureForInterval, saveDrawingDefault, saveDrawings, saveIndicatorParams, saveIndicators, saveStructure, saveTools, toggleStructureOn, toKLine,
 } from "./config";
 import { rollLiveBar, type Bar } from "./liveBar";
 import { liveSetups, structureOverlays } from "./structure";
 
-describe("anchor: drawings stay put when the candle size changes", () => {
+describe("anchor: drawings stay put when the interval changes", () => {
   // Market hours only: a gap from 15:15 to 09:15 next day, not evenly spaced.
   const t = [1000, 2000, 3000, 10_000, 11_000];
 
@@ -123,18 +123,103 @@ describe("saved chart settings", () => {
     expect(loadStructure().tfs).toEqual(["15min"]);
   });
 
-  it("tool settings default off", () => {
-    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false, priceHidden: false });
-    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, priceHidden: true });
-    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, priceHidden: true });
+  describe("resetStructureForInterval", () => {
+    it("drops timeframes finer than the new interval and keeps coarser ones", () => {
+      expect(resetStructureForInterval(["5min", "15min", "60min"], "15min")).toEqual(["15min", "60min"]);
+    });
+
+    it("adds the new size itself if it's a valid structure timeframe and not already selected", () => {
+      expect(resetStructureForInterval(["60min", "daily"], "15min")).toEqual(["15min", "60min", "daily"]);
+    });
+
+    it("does not duplicate the new size if it's already selected", () => {
+      expect(resetStructureForInterval(["15min", "60min"], "15min")).toEqual(["15min", "60min"]);
+    });
+
+    it("drops every old selection once the new size is coarser than all of them, but still adds the new size itself", () => {
+      expect(resetStructureForInterval(["1min", "5min"], "60min")).toEqual(["60min"]);
+    });
+
+    it("weekly has no structure-timeframe entry, so nothing is added for it - and daily (finer than a week) is dropped like anything else finer than the new size", () => {
+      expect(resetStructureForInterval(["15min", "60min", "daily"], "weekly")).toEqual([]);
+    });
+
+    it("is a no-op while the structure layer is off - never turns it on by itself", () => {
+      expect(resetStructureForInterval([], "60min")).toEqual([]);
+    });
   });
 
-  it("drawings are kept per instrument, shared by every candle size", () => {
+  describe("toggleStructureOn", () => {
+    it("off clears every ticked timeframe, regardless of what was selected", () => {
+      expect(toggleStructureOn(false, "15min")).toEqual([]);
+      expect(toggleStructureOn(false, "60min")).toEqual([]);
+    });
+
+    it("on seeds a single fresh timeframe - the active chart's own interval", () => {
+      expect(toggleStructureOn(true, "60min")).toEqual(["60min"]);
+    });
+
+    it("on falls back to the coarsest structure timeframe (daily) for an interval with no structure-timeframe equivalent (weekly)", () => {
+      expect(toggleStructureOn(true, "weekly")).toEqual(["daily"]);
+    });
+  });
+
+  it("tool settings default off - except the trades and the OI strip, which start on", () => {
+    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false, oiStripOn: true, priceHidden: false });
+    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
+    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
+  });
+
+  it("an older saved settings record, from before the OI strip had a switch, keeps the strip on", () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ magnet: true, tradesOn: true, oiLevelsOn: false }));
+    expect(loadTools().oiStripOn).toBe(true);
+  });
+
+  it("drawings are kept per instrument, shared by every interval", () => {
     saveDrawings("NSE", "NIFTY", [{ name: "segment", points: [{ timestamp: 1, value: 2 }] }]);
     expect(loadDrawings("NSE", "NIFTY")).toHaveLength(1);
     expect(loadDrawings("NSE", "BANKNIFTY")).toEqual([]);
     localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([{ nope: true }]));
     expect(loadDrawings("NSE", "NIFTY")).toEqual([]); // malformed is ignored, not crashed on
+  });
+
+  it("keeps a saved look with its drawing, cleaned: unknown or out-of-range values are dropped", () => {
+    localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([
+      { name: "segment", points: [{ timestamp: 1, value: 10 }], style: { color: "#E8586A", width: 3, dash: "dashed", evil: "x" } },
+      { name: "segment", points: [{ timestamp: 2, value: 11 }], style: { color: "url(x)", width: 12 } },
+    ]));
+    const loaded = loadDrawings("NSE", "NIFTY");
+    expect(loaded[0].style).toEqual({ color: "#e8586a", width: 3, dash: "dashed" });
+    expect(loaded[1]).toEqual({ name: "segment", points: [{ timestamp: 2, value: 11 }] });
+  });
+
+  it("remembers a default look per kind of drawing, and forgets it again", () => {
+    expect(loadDrawingDefaults()).toEqual({});
+    saveDrawingDefault("segment", { color: "#ffc83d", width: 2 });
+    saveDrawingDefault("rect", { fill: 0.3 });
+    expect(loadDrawingDefaults()).toEqual({ segment: { color: "#ffc83d", width: 2 }, rect: { fill: 0.3 } });
+    saveDrawingDefault("segment", undefined);
+    expect(loadDrawingDefaults()).toEqual({ rect: { fill: 0.3 } });
+  });
+
+  it("ignores a damaged defaults record", () => {
+    localStorage.setItem("web.chart.drawingDefaults", JSON.stringify({ segment: { color: "bad" }, rect: { fill: 0.5 }, junk: 5 }));
+    expect(loadDrawingDefaults()).toEqual({ rect: { fill: 0.5 } });
+    localStorage.setItem("web.chart.drawingDefaults", "[1,2]");
+    expect(loadDrawingDefaults()).toEqual({});
+  });
+
+  it("keeps the words of a text drawing, cut to the length a label can hold, and drops a text with no words", () => {
+    localStorage.setItem("web.chart.drawings:NSE:NIFTY", JSON.stringify([
+      { name: "textNote", points: [{ timestamp: 1, value: 10 }], text: "x".repeat(300) },
+      { name: "textNote", points: [{ timestamp: 2, value: 11 }], text: "   " },
+      { name: "textNote", points: [{ timestamp: 3, value: 12 }] },
+      { name: "segment", points: [{ timestamp: 4, value: 13 }], text: "not a text drawing" },
+    ]));
+    const loaded = loadDrawings("NSE", "NIFTY");
+    expect(loaded).toHaveLength(2);
+    expect(loaded[0].text).toHaveLength(120);
+    expect(loaded[1]).toEqual({ name: "segment", points: [{ timestamp: 4, value: 13 }] }); // words belong only to a text drawing
   });
 
   it("does not throw when storage is blocked", () => {
@@ -150,7 +235,7 @@ describe("saved chart settings", () => {
   });
 });
 
-describe("candle sizes and precision", () => {
+describe("intervals and precision", () => {
   it("knows each size, and falls back to 15 minutes for an unknown one", () => {
     expect(INTERVALS.map((i) => i.label)).toEqual(["1m", "3m", "5m", "15m", "30m", "1h", "1d", "1w"]);
     expect(intervalDef("60min").label).toBe("1h");
@@ -290,5 +375,19 @@ describe("open trade levels", () => {
     const pos = (over: object) => ({ id: "p", symbol: "NIFTY-Sep2026-FUT", action: "BUY", quantity: 65, status: "OPEN", option_group_id: null, stop_loss_price: 100, target_price: null, ...over }) as never;
     const levels = openLevels("NIFTY", [pos({}), pos({ id: "closed", status: "CLOSED" }), pos({ id: "leg", option_group_id: "g" }), pos({ id: "other", symbol: "BANKNIFTY-Sep2026-FUT" })], []);
     expect(levels.map((l) => [l.key, l.price, l.draggable])).toEqual([["position:p:stop", 100, true]]);
+  });
+});
+
+describe("a live stop only moves toward price", () => {
+  it("refuses a long's stop moved down and a short's moved up, and allows the other way", () => {
+    expect(checkLevelMove({ field: "stop", long: true }, 985, 1000, 990)).toMatch(/only move toward price/);
+    expect(checkLevelMove({ field: "stop", long: true }, 995, 1000, 990)).toBeNull();
+    expect(checkLevelMove({ field: "stop", long: false }, 1015, 1000, 1010)).toMatch(/only move toward price/);
+    expect(checkLevelMove({ field: "stop", long: false }, 1005, 1000, 1010)).toBeNull();
+  });
+
+  it("does not apply to a target, or to a stop that is not set yet", () => {
+    expect(checkLevelMove({ field: "target", long: true }, 1100, 1000, 1030)).toBeNull();
+    expect(checkLevelMove({ field: "stop", long: true }, 980, 1000, null)).toBeNull();
   });
 });

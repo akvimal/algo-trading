@@ -1,9 +1,11 @@
 import type { Candle } from "../api/types";
 
-// Everything about the chart that is plain data: which candle sizes exist, which indicators can be
+// Everything about the chart that is plain data: which intervals exist, which indicators can be
 // added, what the person has switched on. Kept apart from the chart component so it can be tested
 // without a canvas. Settings live in localStorage under one prefix: they are per-browser
 // conveniences, and every read and write is guarded because storage can be blocked.
+
+import { sanitizeStyle, type DrawingStyle } from "./drawingStyle";
 
 const PREFIX = "web.chart.";
 
@@ -28,7 +30,7 @@ function write(key: string, value: unknown): void {
 
 export type IntervalDef = { label: string; value: string; minutes: number; lookbackDays: number; source?: string };
 
-/** Candle sizes, in the vocabulary market-data speaks. `lookbackDays` keeps the first download to a
+/** Intervals, in the vocabulary market-data speaks. `lookbackDays` keeps the first download to a
  * few hundred bars whatever the size. Daily and weekly come from a different provider (Yahoo, NSE
  * only), so they work even when a Dhan token has lapsed; every intraday size needs Dhan. */
 export const INTERVALS: IntervalDef[] = [
@@ -41,6 +43,50 @@ export const INTERVALS: IntervalDef[] = [
   { label: "1d", value: "daily", minutes: 1440, lookbackDays: 365, source: "yahoo" },
   { label: "1w", value: "weekly", minutes: 10080, lookbackDays: 1095, source: "yahoo" },
 ];
+
+/** The intervals shown as quick buttons on a chart until the person picks their own favourites (the star
+ * menu next to them lists every size). */
+export const DEFAULT_FAVORITE_INTERVALS = ["1min", "3min", "5min", "15min", "60min"];
+
+const INTERVAL_VALUES = new Set(INTERVALS.map((i) => i.value));
+const FAVORITES_KEY = "favoriteIntervals";
+export const FAVORITE_INTERVALS_CHANGED_EVENT = "web:chart:favorite-intervals-changed";
+
+/** The favourite intervals, finest first. Anything unknown is dropped, and an empty or unreadable
+ * saved list falls back to the defaults - there is always at least one quick button. */
+export function parseFavoriteIntervals(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string" && INTERVAL_VALUES.has(v)) : [];
+  if (list.length === 0) return DEFAULT_FAVORITE_INTERVALS;
+  return INTERVALS.filter((i) => list.includes(i.value)).map((i) => i.value);
+}
+
+/** The saved favourites as stored text (or null), so a component can subscribe to it as a plain value. */
+export function favoriteIntervalsRaw(): string | null {
+  try {
+    return localStorage.getItem(PREFIX + FAVORITES_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function favoriteIntervals(): string[] {
+  const raw = favoriteIntervalsRaw();
+  try {
+    return parseFavoriteIntervals(raw == null ? null : JSON.parse(raw));
+  } catch {
+    return DEFAULT_FAVORITE_INTERVALS;
+  }
+}
+
+/** Star or un-star one size, for every chart at once. The last favourite cannot be removed. */
+export function toggleFavoriteInterval(value: string): void {
+  if (!INTERVAL_VALUES.has(value)) return;
+  const current = favoriteIntervals();
+  const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+  if (next.length === 0) return;
+  write(FAVORITES_KEY, parseFavoriteIntervals(next));
+  window.dispatchEvent(new Event(FAVORITE_INTERVALS_CHANGED_EVENT));
+}
 
 export const DEFAULT_INTERVAL = "15min";
 export const intervalDef = (value: string): IntervalDef => INTERVALS.find((i) => i.value === value) ?? INTERVALS.find((i) => i.value === DEFAULT_INTERVAL)!;
@@ -99,7 +145,7 @@ export function effectiveParams(name: string, overrides: Record<string, number[]
   return INDICATOR_BY_NAME.get(name)?.params;
 }
 
-/** Detection timeframes for the structure layer, chosen independently of the candle size on screen.
+/** Detection timeframes for the structure layer, chosen independently of the interval on screen.
  * Each has its own, wider look-back so a coarse timeframe has enough bars to find structure. */
 export const STRUCTURE_TIMEFRAMES: { label: string; value: string; lookbackDays: number; source?: string }[] = [
   { label: "1m", value: "1min", lookbackDays: 4 },
@@ -138,12 +184,46 @@ export const saveStructure = (s: StructureConfig) => write("structure", s);
 
 export const structureIsOn = (s: StructureConfig) => s.tfs.length > 0;
 
-export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean; priceHidden: boolean };
+const structureMinutesOf = (v: string): number => INTERVALS.find((i) => i.value === v)?.minutes ?? 0;
+
+/** After the chart's own interval changes, the structure layer's selected detection timeframes
+ * reset to match: anything finer than the new size is dropped (a 1-minute structure read makes
+ * little sense once the chart itself is on 1-hour candles), anything coarser stays (still a
+ * meaningful "zoom out" read), and the new size itself joins the selection if it's a valid
+ * structure timeframe. STRUCTURE_TIMEFRAMES has no "weekly" entry (order-block detection doesn't
+ * go that coarse), so switching to weekly candles adds nothing - and drops every other selected
+ * timeframe too, daily included, since daily is itself finer than a week. A no-op while the layer
+ * is off (tfs empty): this never turns it on by itself, since it is opt-in by design (see
+ * loadStructure's own comment). */
+export function resetStructureForInterval(tfs: string[], newInterval: string): string[] {
+  if (tfs.length === 0) return tfs;
+  const newMinutes = structureMinutesOf(newInterval);
+  const kept = tfs.filter((tf) => structureMinutesOf(tf) >= newMinutes);
+  if (STRUCTURE_TF_VALUES.has(newInterval) && !kept.includes(newInterval)) {
+    return [...kept, newInterval].sort((a, b) => structureMinutesOf(a) - structureMinutesOf(b));
+  }
+  return kept;
+}
+
+/** The Indicators menu's own quick "Structure" switch, alongside "Hide all indicators" - since
+ * ticking/unticking every "Detect on" timeframe by hand is the only way there was to turn the
+ * whole layer off before this existed. Off clears every ticked timeframe (which is also what hides
+ * the Structure dropdown itself - see structureIsOn); on seeds a single fresh one - the active
+ * chart's own interval, or the coarsest structure timeframe available if that size has none
+ * (weekly candles, same gap resetStructureForInterval's own comment notes). Never restores
+ * whatever mix was ticked before switching off - a clean slate is the whole point of a quick
+ * toggle, not resurrecting an accumulated list. */
+export function toggleStructureOn(on: boolean, activeInterval: string): string[] {
+  if (!on) return [];
+  return STRUCTURE_TF_VALUES.has(activeInterval) ? [activeInterval] : [STRUCTURE_TIMEFRAMES[STRUCTURE_TIMEFRAMES.length - 1].value];
+}
+
+export type ToolSettings = { magnet: boolean; drawingsHidden: boolean; indicatorsHidden: boolean; tradesOn: boolean; oiLevelsOn: boolean; /** The OI strip under each chart's header. */ oiStripOn: boolean; priceHidden: boolean };
 export const loadTools = (): ToolSettings => {
   const raw = read<Record<string, unknown>>("tools", {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));
   return {
     magnet: raw.magnet === true, drawingsHidden: raw.drawingsHidden === true, indicatorsHidden: raw.indicatorsHidden === true,
-    tradesOn: raw.tradesOn !== false, oiLevelsOn: raw.oiLevelsOn === true, priceHidden: raw.priceHidden === true,
+    tradesOn: raw.tradesOn !== false, oiLevelsOn: raw.oiLevelsOn === true, oiStripOn: raw.oiStripOn !== false, priceHidden: raw.priceHidden === true,
   };
 };
 export const saveTools = (t: ToolSettings) => write("tools", t);
@@ -163,26 +243,81 @@ export function pricePrecision(p: number): number {
 
 export const ymd = (d: Date): string => d.toISOString().slice(0, 10);
 
-/** The date range to download for a candle size, ending today. */
+/** The date range to download for an interval, ending today. */
 export function lookbackRange(days: number, now: Date = new Date()): { from: string; to: string } {
   return { from: ymd(new Date(now.getTime() - days * 86_400_000)), to: ymd(now) };
 }
 
-/** Drawings are anchored in price and time, so they belong to the instrument, not the candle size:
+/** Drawings are anchored in price and time, so they belong to the instrument, not the interval:
  * one saved set per (exchange, symbol), shared by every interval. */
 export const drawingsKey = (exchange: string, symbol: string) => `drawings:${exchange}:${symbol}`;
 
 export type StoredPoint = { timestamp?: number; value?: number };
 /** A drawing as saved. `alert`, when set, means the page tells the person when the price crosses it. */
-export type StoredDrawing = { name: string; points: StoredPoint[]; color?: string; alert?: { trigger: "cross" | "close" } };
+export type StoredDrawing = {
+  name: string;
+  points: StoredPoint[];
+  color?: string;
+  alert?: { trigger: "cross" | "close" };
+  /** The words of a text drawing. */
+  text?: string;
+  /** How it looks, when the person changed that. */
+  style?: DrawingStyle;
+};
+
+/** The longest text a text drawing can hold: it is a label on a chart, not a note (those have their own panel). */
+export const TEXT_DRAWING_MAX = 120;
 
 const isDrawings = (v: unknown): v is StoredDrawing[] =>
   Array.isArray(v) && v.every((d) => d && typeof d.name === "string" && Array.isArray(d.points));
 
 /** What was saved, made safe: an alert setting that is not a known trigger is dropped. */
 export const loadDrawings = (exchange: string, symbol: string): StoredDrawing[] =>
-  read(drawingsKey(exchange, symbol), [], isDrawings).map((d) => {
-    const { alert, ...rest } = d;
-    return alert && (alert.trigger === "cross" || alert.trigger === "close") ? { ...rest, alert: { trigger: alert.trigger } } : rest;
-  });
-export const saveDrawings = (exchange: string, symbol: string, d: StoredDrawing[]) => write(drawingsKey(exchange, symbol), d);
+  read(drawingsKey(exchange, symbol), [], isDrawings)
+    // A text drawing with no words has nothing to show (and nothing to grab): drop it rather than draw an empty label.
+    .filter((d) => d.name !== "textNote" || (typeof d.text === "string" && d.text.trim() !== ""))
+    .map((d) => {
+      const { alert, text, style, ...rest } = d;
+      const withText = typeof text === "string" && d.name === "textNote" ? { ...rest, text: text.slice(0, TEXT_DRAWING_MAX) } : rest;
+      const cleanStyle = sanitizeStyle(style);
+      const clean = cleanStyle ? { ...withText, style: cleanStyle } : withText;
+      return alert && (alert.trigger === "cross" || alert.trigger === "close") ? { ...clean, alert: { trigger: alert.trigger } } : clean;
+    });
+
+// The look the person made the default for each kind of drawing (by tool name): a new drawing of that kind starts with it.
+const DEFAULTS_KEY = "drawingDefaults";
+export function loadDrawingDefaults(): Record<string, DrawingStyle> {
+  const raw = read<Record<string, unknown>>(DEFAULTS_KEY, {}, (v): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v));
+  const out: Record<string, DrawingStyle> = {};
+  for (const [name, style] of Object.entries(raw)) {
+    const clean = sanitizeStyle(style);
+    if (clean) out[name] = clean;
+  }
+  return out;
+}
+/** Make `style` the default look for new drawings of `name`; `undefined` clears it. */
+export function saveDrawingDefault(name: string, style: DrawingStyle | undefined): void {
+  const all = loadDrawingDefaults();
+  if (style && sanitizeStyle(style)) all[name] = style;
+  else delete all[name];
+  write(DEFAULTS_KEY, all);
+}
+
+// Saving is the only signal a SIBLING ChartPane showing the same instrument (a two-chart layout,
+// same symbol at two different intervals) has that it needs to re-read and redraw - drawings
+// are keyed only by (exchange, symbol), deliberately shared across every interval (see
+// drawingsKey's own comment), but writing to localStorage from one pane does not by itself notify
+// another still-mounted pane reading the same key in the same document: the browser's own
+// `storage` event only fires in OTHER tabs/windows, never the one that made the write. `origin`
+// (each ChartPane's own instance id) lets a pane recognise and skip its OWN write - reacting to it
+// too would wipe and rebuild its own overlays on every draw/move/delete, losing whatever was
+// selected for no reason, not just resync a peer.
+export const DRAWINGS_CHANGED_EVENT = "web:chart:drawings-changed";
+export type DrawingsChangedDetail = { exchange: string; symbol: string; origin: string };
+
+export function saveDrawings(exchange: string, symbol: string, d: StoredDrawing[], origin = ""): void {
+  write(drawingsKey(exchange, symbol), d);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent<DrawingsChangedDetail>(DRAWINGS_CHANGED_EVENT, { detail: { exchange, symbol, origin } }));
+  }
+}

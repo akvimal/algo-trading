@@ -687,7 +687,9 @@ def test_evaluate_option_group_exits_trails_future_supertrend_stop():
         _accounts(), get_candle_history=lambda *a: _ST_FUTURE_CANDLES,
     )
 
+    events = result.pop("trail_events")  # logged by check_option_group_exits, as a position_events row
     assert result == {"closed_stop_loss": 0, "closed_target": 0, "trailed": 1, "checked": 1}
+    assert [(e["old_price"], e["new_price"], e["price_at_event"]) for e in events] == [(events[0]["old_price"], pytest.approx(67.0), 69.0)]
     assert group.spot_stop_loss_price == pytest.approx(67.0)
     assert group.status == "OPEN"
 

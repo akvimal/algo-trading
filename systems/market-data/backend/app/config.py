@@ -154,6 +154,9 @@ class Settings(BaseSettings):
     # failing the whole tab (see that module's _analyze_via_ai).
     openrouter_api_key: str = ""
     openrouter_model: str = "google/gemini-2.5-flash-lite"
+    # Model for the on-demand OI-strip AI read (GET /ai-read), separate from the
+    # news digest's cheap one since it only runs when the user clicks.
+    openrouter_read_model: str = "openai/gpt-6-luna-pro"
 
     # Live LTP push layer (2026-09-16, Phase 1 of the SaaS scaling work -
     # see docs/architecture.md) - the shared quote cache + pub/sub channel

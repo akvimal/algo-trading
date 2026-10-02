@@ -241,7 +241,7 @@ describe("OI buildup", () => {
       expect(reliance.queryByTestId("chart-pane")).not.toBeInTheDocument();
     });
 
-    it("switches candle size without leaving the card", async () => {
+    it("switches interval without leaving the card", async () => {
       const user = userEvent.setup();
       renderAt("/scan");
       const list = await screen.findByTestId("oi-list");

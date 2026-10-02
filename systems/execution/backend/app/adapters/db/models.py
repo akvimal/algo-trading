@@ -8,7 +8,7 @@ import uuid
 
 from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import declarative_base, deferred
 
 from app.config import settings
 
@@ -271,6 +271,10 @@ class OptionPositionGroup(Base):
     # The two legs' own strike difference, frozen at open - NULL for a naked (single-leg) group.
     # See infra/postgres/init/02-execution.sql's own comment on this column.
     strike_width = Column(Numeric)
+    # Discipline v2: what the system's own sizing would have bought at open (NULL = not worked out). See migration 034.
+    system_quantity = Column(Numeric)
+    # Discipline v2: how the person felt after a loss or an early exit (calm/fearful/greedy/fomo). See migration 035.
+    emotion_tag = Column(Text)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
     sl_scope = Column(Text, nullable=False, default="combined")
@@ -383,6 +387,10 @@ class Position(Base):
     live_trading_user_id = Column(UUID(as_uuid=True), nullable=True)
     stop_loss_price = Column(Numeric)  # current (may trail) - null if the strategy set no stop-loss method
     initial_stop_loss_price = Column(Numeric)  # audit trail - the stop as computed at open, never changes
+    # Discipline v2: what the system's risk sizing would have bought at open, same unit as quantity (NULL = not worked out).
+    system_quantity = Column(Numeric)
+    # Discipline v2: how the person felt after a loss or an early exit (calm/fearful/greedy/fomo). See migration 035.
+    emotion_tag = Column(Text)
     target_price = Column(Numeric)
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
     # Copied from the Strategy at open time - the exit-monitor job's
@@ -551,6 +559,29 @@ class PendingOrder(Base):
     last_checked_at = Column(TIMESTAMP(timezone=True))
     position_id = Column(UUID(as_uuid=True))
     option_group_id = Column(UUID(as_uuid=True))
+    # May this order open a second position on an instrument already held? Default no: see migrations/030.
+    allow_stacking = Column(Boolean, nullable=False, default=False)
+
+
+class StudyNote(Base):
+    """One note from the thoughts-and-plans panel under a chart - see infra/postgres/migrations/031-study-notes.sql
+    and app/domain/study_notes.py. `snapshot_png` is deferred so listing notes never pulls the images."""
+
+    __tablename__ = "study_notes"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    segment = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    interval = Column(Text)
+    text = Column(Text, nullable=False)
+    tag = Column(Text)
+    context = Column(JSONB(none_as_null=True))
+    position_id = Column(UUID(as_uuid=True))
+    option_group_id = Column(UUID(as_uuid=True))
+    snapshot_png = deferred(Column(LargeBinary))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
 class OptionGroupPnlSnapshot(Base):
@@ -603,3 +634,28 @@ class BrokerOrder(Base):
     failure_reason = Column(Text, nullable=True)
     requested_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class PositionEvent(Base):
+    """One attempt to move a stop-loss or target on an open position or option group - accepted or refused. See
+    infra/postgres/migrations/032-position-events.sql and app/domain/stop_rules.py."""
+
+    __tablename__ = "position_events"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True))
+    position_id = Column(UUID(as_uuid=True))
+    option_group_id = Column(UUID(as_uuid=True))
+    field = Column(Text, nullable=False)
+    move = Column(Text, nullable=False)
+    old_price = Column(Numeric)
+    new_price = Column(Numeric)
+    source = Column(Text, nullable=False)
+    accepted = Column(Boolean, nullable=False, default=True)
+    refused_reason = Column(Text)
+    price_at_event = Column(Numeric)
+    atr = Column(Numeric)
+    atr_interval = Column(Text)
+    tight_trail = Column(Boolean)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

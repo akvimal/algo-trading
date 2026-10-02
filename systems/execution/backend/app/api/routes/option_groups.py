@@ -22,7 +22,9 @@ from app.adapters.quotes.client import (
     resolve_underlying,
 )
 from app.auth import User, get_current_user, require_admin
+from app.domain import stop_rules
 from app.domain.models import (
+    AutoTrailUpdate,
     CombinedStopLossUpdate,
     CombinedTargetUpdate,
     ManualOptionPositionCreate,
@@ -40,6 +42,7 @@ from app.domain.option_position_manager import (
     compute_group_unrealized_pnl,
     legs_by_group,
     open_manual_option_group,
+    set_group_auto_trail,
     preview_option_legs,
     square_off_all_open_option_groups,
     square_off_due_option_groups,
@@ -150,6 +153,7 @@ def _group_to_out(
         # Structured trade journal (PUT /option-groups/{id}/tags).
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
+        "emotion_tag": row.emotion_tag,
         # Immutable entry snapshot + auto-trade flag - see positions.py's
         # _position_to_out.
         "entry_setup_tag": row.entry_setup_tag,
@@ -448,7 +452,10 @@ def edit_group_stop_loss(
     if row.sl_scope != "combined":
         raise HTTPException(status_code=409, detail="only sl_scope='combined' groups support editing SL here")
 
-    row = update_group_stop_loss(db, owner_id, parsed_id, payload.stop_loss_price)
+    try:
+        row = update_group_stop_loss(db, owner_id, parsed_id, payload.stop_loss_price)
+    except stop_rules.StopWidenRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
@@ -499,7 +506,43 @@ def edit_group_spot_stop_loss(
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
 
-    row = update_group_spot_stop_loss(db, owner_id, parsed_id, payload.spot_stop_loss_price)
+    atr_interval = payload.atr_interval or stop_rules.DEFAULT_ATR_INTERVAL
+    context = stop_rules.fetch_context(
+        functools.partial(get_ltp_batch, token=user.token),
+        functools.partial(get_candle_history, token=user.token),
+        row.stop_loss_future_exchange or row.exchange,
+        row.stop_loss_future_symbol or row.underlying_symbol,
+        atr_interval,
+    )
+    try:
+        row = update_group_spot_stop_loss(db, owner_id, parsed_id, payload.spot_stop_loss_price, context=context, atr_interval=atr_interval)
+    except stop_rules.StopWidenRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    legs = legs_by_group(db, [row]).get(row.id, {})
+    return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
+
+
+@router.put("/option-groups/{group_id}/auto-trail")
+def edit_group_auto_trail(
+    group_id: str, payload: AutoTrailUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """The one-tap auto-trail on an option group's spot stop - see set_group_auto_trail. 404 if missing or owned by another
+    user, 409 if not OPEN, 422 if it cannot start (no spot stop yet, another trailing method, or no entry price recorded)."""
+    try:
+        parsed_id = uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="option group not found")
+
+    row = db.get(db_models.OptionPositionGroup, parsed_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="option group not found")
+    owner_id = _authorized_owner_id(row.user_id, user)
+    if row.status != "OPEN":
+        raise HTTPException(status_code=409, detail=f"option group is {row.status}, not OPEN")
+
+    row, reject_reason = set_group_auto_trail(db, owner_id, parsed_id, payload.enabled, payload.interval, payload.multiple)
+    if reject_reason is not None:
+        raise HTTPException(status_code=422, detail=reject_reason)
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])
 
@@ -579,6 +622,8 @@ def edit_group_tags(
         set_setup_tag="setup_tag" in sent,
         confidence=payload.confidence,
         set_confidence="confidence" in sent,
+        emotion_tag=payload.emotion_tag,
+        set_emotion_tag="emotion_tag" in sent,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="option group not found")

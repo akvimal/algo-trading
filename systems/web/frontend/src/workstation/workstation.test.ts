@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { MarketRegime } from "../api/types";
-import { agreement, directionOf } from "./confluence";
+import { directionOf } from "./direction";
 import { applyCombo, isActiveCombo, type Combo } from "./combos";
 import {
   DEFAULT_STATE, loadWorkstation, paneCount, saveWorkstation, setInterval as setIv, setLayout, setLinks, setSymbol, withUrlSymbol,
 } from "./state";
 
-const NIFTY_BANKNIFTY: Combo = { id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: { symbol: "NIFTY", segment: "NSE" }, b: { symbol: "BANKNIFTY", segment: "NSE" } };
+const NIFTY_BANKNIFTY: Combo = { id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: { symbol: "NIFTY", segment: "NSE", interval: "15min" }, b: { symbol: "BANKNIFTY", segment: "NSE", interval: "15min" } };
 const applyPair = (s: Parameters<typeof applyCombo>[0]) => applyCombo(s, NIFTY_BANKNIFTY);
 const isPair = (s: Parameters<typeof isActiveCombo>[0]) => isActiveCombo(s, NIFTY_BANKNIFTY);
 
@@ -25,30 +25,9 @@ describe("directionOf", () => {
   });
 });
 
-describe("agreement", () => {
-  const a = (r: MarketRegime | null) => ({ symbol: "NIFTY", regime: r });
-  const b = (r: MarketRegime | null) => ({ symbol: "BANKNIFTY", regime: r });
-
-  it("aligned when both point the same way", () => {
-    expect(agreement(a(regime("trending_up")), b(regime("ranging", "up"))).verdict).toBe("aligned-up");
-    expect(agreement(a(regime("trending_down")), b(regime("trending_down"))).verdict).toBe("aligned-down");
-    expect(agreement(a(regime("trending_up")), b(regime("trending_up"))).text).toMatch(/both moving up/);
-  });
-  it("mixed when they disagree, including one going nowhere", () => {
-    expect(agreement(a(regime("trending_up")), b(regime("trending_down"))).verdict).toBe("mixed");
-    const one = agreement(a(regime("trending_up")), b(regime("ranging")));
-    expect(one.verdict).toBe("mixed");
-    expect(one.text).toMatch(/NIFTY is up, BANKNIFTY is sideways/);
-  });
-  it("unclear while either has not loaded, or both go nowhere", () => {
-    expect(agreement(a(null), b(regime("trending_up"))).verdict).toBe("unclear");
-    expect(agreement(a(regime("ranging")), b(regime("ranging"))).verdict).toBe("unclear");
-  });
-});
-
 describe("workstation state", () => {
-  it("starts as one chart on Nifty, ticket open, everything linked", () => {
-    expect(DEFAULT_STATE).toMatchObject({ layout: "single", active: 0, ticketOpen: true, links: { crosshair: true, scale: true, interval: true } });
+  it("starts as one chart on Nifty, ticket open, crosshair and interval linked but not scrolling/zoom", () => {
+    expect(DEFAULT_STATE).toMatchObject({ layout: "single", active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } });
     expect(paneCount(DEFAULT_STATE)).toBe(1);
   });
 
@@ -76,17 +55,17 @@ describe("workstation state", () => {
     expect(withUrlSymbol(saved, null, null)).toBe(saved);
   });
 
-  it("the pair puts the two indices side by side at the first chart's candle size", () => {
+  it("the pair puts the two indices side by side at the combo's own saved interval, not whatever the workstation was already showing", () => {
     const start = setIv(DEFAULT_STATE, 0, "5min");
     const s = applyPair(start);
     expect(s.layout).toBe("side");
-    expect(s.panes.map((p) => `${p.symbol}@${p.interval}`)).toEqual(["NIFTY@5min", "BANKNIFTY@5min"]);
+    expect(s.panes.map((p) => `${p.symbol}@${p.interval}`)).toEqual(["NIFTY@15min", "BANKNIFTY@15min"]); // the combo's own 15min, not the pre-existing 5min
     expect(isPair(s)).toBe(true);
     expect(isPair(DEFAULT_STATE)).toBe(false);
     expect(applyPair(setLayout(s, "stack")).layout).toBe("stack"); // an existing two-chart layout is kept
   });
 
-  it("changing one chart's candle size moves the other only while linked", () => {
+  it("changing one chart's interval moves the other only while linked", () => {
     const s = applyPair(DEFAULT_STATE);
     expect(setIv(s, 1, "60min").panes.map((p) => p.interval)).toEqual(["60min", "60min"]);
     const free = setLinks(s, { ...s.links, interval: false });

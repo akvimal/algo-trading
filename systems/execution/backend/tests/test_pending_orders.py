@@ -613,3 +613,92 @@ def test_the_scheduler_registers_the_job_and_zero_disables_it(monkeypatch):
     monkeypatch.setattr(scheduler.settings, "pending_order_poll_seconds", 0)
     scheduler.start_scheduler()
     assert "pending-orders" not in added
+
+
+# --- stacking: a waiting order must not quietly open a second position --------------------------------------------------------------
+
+
+def test_a_fired_order_is_skipped_when_the_person_already_holds_that_instrument():
+    db = FakeDb()
+    row = armed(db, {("NSE", "NIFTY"): 105.0})
+    counts, deps = run(db, {("NSE", "NIFTY"): 99.5}, holds_open=lambda db_, uid, seg, sym: "1 open NIFTY position")
+    assert counts["skipped"] == 1 and counts["triggered"] == 0
+    assert row.status == "cancelled" and "already hold 1 open NIFTY position" in row.status_reason
+    assert deps.log.futures == [] and deps.log.options == []  # nothing was placed
+
+
+def test_allow_stacking_lets_it_add_to_an_open_position_on_purpose():
+    db = FakeDb()
+    row = armed(db, {("NSE", "NIFTY"): 105.0}, allow_stacking=True)
+    assert row.allow_stacking is True
+    counts, deps = run(db, {("NSE", "NIFTY"): 99.5}, holds_open=lambda *a: "1 open NIFTY position")
+    assert counts["triggered"] == 1 and row.status == "triggered" and len(deps.log.futures) == 1
+
+
+def test_it_fires_normally_when_nothing_is_open_and_the_default_is_not_to_stack():
+    db = FakeDb()
+    row = armed(db, {("NSE", "NIFTY"): 105.0})
+    assert row.allow_stacking is False
+    counts, _ = run(db, {("NSE", "NIFTY"): 99.5}, holds_open=lambda *a: None)
+    assert counts["triggered"] == 1 and row.status == "triggered"
+
+
+def test_the_holding_is_looked_up_for_the_orders_own_owner_segment_and_symbol():
+    db = FakeDb()
+    armed(db, {("NSE", "NIFTY"): 105.0}, symbol="nifty")
+    seen = []
+    run(db, {("NSE", "NIFTY"): 99.5}, holds_open=lambda db_, uid, seg, sym: seen.append((uid, seg, sym)))
+    assert seen == [(ALICE, "NSE", "NIFTY")]
+
+
+def test_the_check_only_runs_once_the_price_is_actually_hit():
+    db = FakeDb()
+    armed(db, {("NSE", "NIFTY"): 105.0})
+    seen = []
+    run(db, {("NSE", "NIFTY"): 104.0}, holds_open=lambda *a: seen.append(a))
+    assert seen == []
+
+
+def test_a_skip_that_loses_the_race_to_a_cancel_changes_nothing_more():
+    db = FakeDb()
+    row = armed(db, {("NSE", "NIFTY"): 105.0})
+
+    def cancel_then_report(db_, uid, seg, sym):
+        row.status, row.status_reason = "cancelled", "cancelled by you"
+        return "1 open NIFTY position"
+
+    counts, _ = run(db, {("NSE", "NIFTY"): 99.5}, holds_open=cancel_then_report)
+    assert row.status_reason == "cancelled by you" and counts["skipped"] == 0
+
+
+class _HoldingsQuery:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def filter(self, *_):
+        return self  # the SQL filters are the database's job (checked live); this covers the Python-side matching
+
+    def all(self):
+        return list(self.rows)
+
+
+class _HoldingsDb:
+    def __init__(self, positions, groups):
+        self.by_model = {db_models.Position: positions, db_models.OptionPositionGroup: groups}
+
+    def query(self, model):
+        return _HoldingsQuery(self.by_model[model])
+
+
+def _pos(symbol):
+    return SimpleNamespace(symbol=symbol)
+
+
+def test_holds_open_position_counts_contracts_of_the_underlying_and_option_groups_but_not_lookalikes():
+    db = _HoldingsDb([_pos("NIFTY-Oct2026-FUT"), _pos("nifty"), _pos("BANKNIFTY-Oct2026-FUT"), _pos("NIFTYIT")], [SimpleNamespace()])
+    assert po.holds_open_position(db, ALICE, "NSE", "nifty") == "3 open NIFTY positions"
+
+
+def test_holds_open_position_is_none_when_nothing_matches_and_singular_for_one():
+    assert po.holds_open_position(_HoldingsDb([_pos("BANKNIFTY-Oct2026-FUT")], []), ALICE, "NSE", "NIFTY") is None
+    assert po.holds_open_position(_HoldingsDb([], [SimpleNamespace()]), ALICE, "NSE", "NIFTY") == "1 open NIFTY position"

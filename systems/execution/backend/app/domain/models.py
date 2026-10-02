@@ -274,6 +274,9 @@ class PendingOrderCreate(BaseModel):
     entry_interval: Optional[str] = Field(default=None, max_length=8)
     # Minutes until it expires unrecognised; None = the server default (24h). Capped by config.
     expires_in_minutes: Optional[int] = Field(default=None, ge=1)
+    # False (default): if a position or option group on this instrument is open when the price is hit, the
+    # order is cancelled with a reason instead of stacking a second trade. True: add to it deliberately.
+    allow_stacking: bool = False
 
 
 class PendingOrderOut(BaseModel):
@@ -302,6 +305,46 @@ class PendingOrderOut(BaseModel):
     last_checked_at: Optional[datetime] = None
     position_id: Optional[str] = None
     option_group_id: Optional[str] = None
+    allow_stacking: bool = False
+
+
+class StudyNoteCreate(BaseModel):
+    """POST /study-notes - one note from the thoughts-and-plans panel. `context` is the market as the person saw
+    it (price, regime, structure, OI, the AI read's bias...), free-form but size-capped; `snapshot_png_base64` is an
+    optional chart image (a data URL or bare base64)."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str = Field(min_length=1, max_length=64)
+    interval: Optional[str] = Field(default=None, max_length=8)
+    text: str = Field(min_length=1, max_length=4000)
+    tag: Optional[Literal["plan", "observation", "mistake", "review"]] = None
+    context: Optional[dict] = None
+    position_id: Optional[str] = Field(default=None, max_length=36)
+    option_group_id: Optional[str] = Field(default=None, max_length=36)
+    snapshot_png_base64: Optional[str] = None
+
+
+class StudyNoteOut(BaseModel):
+    id: str
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str
+    interval: Optional[str] = None
+    text: str
+    tag: Optional[Literal["plan", "observation", "mistake", "review"]] = None
+    context: Optional[dict] = None
+    position_id: Optional[str] = None
+    option_group_id: Optional[str] = None
+    has_snapshot: bool = False
+    created_at: Optional[datetime] = None
+
+
+class StudyNoteInstrumentOut(BaseModel):
+    """One instrument the person has written notes on, for the notes history page's instrument list."""
+
+    segment: Literal["NSE", "MCX", "CRYPTO"]
+    symbol: str
+    count: int
+    last_at: Optional[datetime] = None
 
 
 class RequirementOut(BaseModel):
@@ -894,6 +937,9 @@ class StopLossUpdate(BaseModel):
     stop_loss_indicator_type: Optional[str] = None
     stop_loss_indicator_params: Optional[dict] = None
     trailing_stop_enabled: bool = False
+    # The chart interval the person is trading on - the ATR a "tight trail" is judged against is taken at this interval.
+    # Optional: without it the judgement uses 15min.
+    atr_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
 
     @model_validator(mode="after")
     def _check_stop_loss_config(self) -> "StopLossUpdate":
@@ -968,6 +1014,17 @@ class SpotStopLossUpdate(BaseModel):
     flat-price-only scope StopLossUpdate has for options."""
 
     spot_stop_loss_price: float = Field(gt=0)
+    atr_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
+
+
+class AutoTrailUpdate(BaseModel):
+    """PUT /positions/{id}/auto-trail and PUT /option-groups/{id}/auto-trail - the one-tap auto-trail (discipline v2): once
+    price is one initial risk in profit the stop moves to breakeven, then trails `multiple` x ATR behind price, at the chart
+    `interval` the person trades on. `enabled=false` switches it off and leaves a plain stop at its current price."""
+
+    enabled: bool = True
+    interval: Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"] = "15min"
+    multiple: float = Field(default=1.5, ge=0.5, le=5)
 
 
 class SpotTargetUpdate(BaseModel):
@@ -1023,6 +1080,8 @@ class TradeTagsUpdate(BaseModel):
 
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
+    # Discipline v2: how the person felt after a loss or an early exit. "" clears it.
+    emotion_tag: Optional[Literal["calm", "fearful", "greedy", "fomo", ""]] = None
 
 
 class AdminResetAllConfirm(BaseModel):
@@ -1039,3 +1098,100 @@ class AdminResetAllConfirm(BaseModel):
         if self.confirm != "RESET":
             raise ValueError("confirm must be exactly 'RESET'")
         return self
+
+
+class DisciplineCheckOut(BaseModel):
+    key: str
+    category: str
+    emotion: str
+    score: float  # 0-1
+    mistake: Optional[str] = None
+
+
+class WhatIfOut(BaseModel):
+    """After an early exit: how much further price went in the trade's favour that day."""
+
+    extra_r: float
+    target_reached: Optional[bool] = None
+
+
+class DisciplineTradeOut(BaseModel):
+    id: str
+    kind: str  # position | group
+    symbol: str
+    action: str
+    exit_time: datetime
+    exit_reason: Optional[str] = None
+    exit_kind: Optional[str] = None  # target, clean_stop, rule_trail, tight_trail, early_exit, ...
+    planned_rr: Optional[float] = None
+    exit_r: Optional[float] = None
+    score: Optional[int] = None
+    pnl: Optional[float] = None
+    mistakes: list[str] = []
+    flags: list[str] = []
+    checks: list[DisciplineCheckOut] = []
+    what_if: Optional[WhatIfOut] = None
+    emotion_tag: Optional[str] = None
+    needs_emotion: bool = False
+
+
+class DisciplineCoachingOut(BaseModel):
+    mistake: Optional[str] = None
+    emotion: Optional[str] = None
+    count: int = 0
+    line: str
+
+
+class CredentialOut(BaseModel):
+    """One micro-credential: a habit rewarded over a run of trades, with Bronze/Silver/Gold levels. Motivation only - it is not
+    connected to the live-trading gate."""
+
+    key: str
+    label: str
+    blurb: str
+    unit: str
+    count: int
+    level: Optional[str] = None
+    next_level: Optional[str] = None
+    next_at: Optional[int] = None
+    best_count: int = 0
+    best_level: Optional[str] = None
+    lapsed: bool = False
+    available: bool = True
+    detail: Optional[str] = None
+
+
+class DisciplineV2Out(BaseModel):
+    """Discipline v2: a behaviour score over the last 20 closed manual trades, split into greed, fear and patience. `score` is
+    None below 5 trades. Never a function of profit."""
+
+    segment: str
+    scope: str
+    score: Optional[int] = None
+    trade_count: int
+    emotions: dict[str, Optional[int]]
+    categories: dict[str, Optional[int]]
+    mistakes: dict[str, int]
+    week_mistakes: dict[str, int]
+    target_and_stop_moved: int = 0
+    emotion_counts: dict[str, int] = {}
+    needs_emotion: int = 0
+    coaching: Optional[DisciplineCoachingOut] = None
+    credentials: list[CredentialOut] = []
+    trades: list[DisciplineTradeOut]
+
+
+class PretradeOut(BaseModel):
+    """GET /discipline/{segment}/today - what the order ticket needs to know before an order is placed, by the same rules the
+    discipline score uses. Nothing here blocks an order."""
+
+    segment: str
+    symbol: str
+    cooldown_minutes_left: int
+    cooldown_minutes: int
+    trades_today: int
+    trade_cap: int
+    loss_limit: Optional[float] = None
+    lost_today: float
+    loss_room: Optional[float] = None
+    off_window: bool

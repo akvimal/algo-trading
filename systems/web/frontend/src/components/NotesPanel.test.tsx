@@ -58,7 +58,8 @@ describe("NotesPanel", () => {
     expect(screen.queryByLabelText("Note")).not.toBeInTheDocument();
     await openIt(user);
     expect(listNotes).toHaveBeenCalledWith({ segment: "NSE", symbol: "NIFTY", limit: 3 });
-    expect(await screen.findByText(/No notes on NIFTY yet/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Note")).toBeInTheDocument());
+    expect(screen.queryByText(/No notes on NIFTY yet/)).not.toBeInTheDocument(); // an empty thread says nothing
   });
 
   it("shows the thread under day headings with each note's tag and the market when it was written", async () => {
@@ -70,7 +71,7 @@ describe("NotesPanel", () => {
     expect(row.getByText("Waiting for a retest")).toBeInTheDocument();
     expect(row.getByText("plan")).toBeInTheDocument();
     expect(row.getByText("Ranging · ADX 14")).toBeInTheDocument();
-    expect(screen.getByText("Today")).toBeInTheDocument();
+    expect(screen.queryByText("Today")).not.toBeInTheDocument(); // today needs no heading
   });
 
   it("saves a note with its tag and the market as it is now, then clears the box and reloads the thread", async () => {
@@ -110,7 +111,7 @@ describe("NotesPanel", () => {
     await openIt(user);
     await user.type(screen.getByLabelText("Note"), "Retest then short");
     await user.click(screen.getByRole("button", { name: "plan" }));
-    await user.click(screen.getByLabelText(/Attach a snapshot/));
+    await user.click(screen.getByLabelText(/Attach snapshot/));
     await user.click(screen.getByRole("button", { name: "Save note" }));
     await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1));
     expect(composeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ chart: "data:image/png;base64,CHART", note: "Retest then short", tag: "plan", aiLine: "Sell rallies.", title: "NIFTY · 5m" }));
@@ -122,7 +123,7 @@ describe("NotesPanel", () => {
     panel({ getChartImage: () => ({ problem: "the chart is still loading its candles" }) });
     await openIt(user);
     await user.type(screen.getByLabelText("Note"), "thought");
-    await user.click(screen.getByLabelText(/Attach a snapshot/));
+    await user.click(screen.getByLabelText(/Attach snapshot/));
     await user.click(screen.getByRole("button", { name: "Save note" }));
     await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1));
     expect(addNote.mock.calls[0][0]).not.toHaveProperty("snapshot_png_base64");
@@ -248,15 +249,44 @@ describe("NotesPanel", () => {
     panel({ symbol: "GOLDM", segment: "MCX" });
     await openIt(user);
     const link = await screen.findByTestId("notes-history-link");
-    expect(link).toHaveTextContent("All notes on GOLDM");
+    expect(link).toHaveAttribute("aria-label", "All notes on GOLDM"); // an icon in the header, named for screen readers
     expect(link).toHaveAttribute("href", "/more/notes?segment=MCX&symbol=GOLDM");
   });
 
-  it("shows only the latest few under the chart and says so when there may be more", async () => {
+  it("shows only the latest few under the chart, and the icon says so when there may be more", async () => {
     listNotes.mockResolvedValue([note({ id: "a", text: "one" }), note({ id: "b", text: "two" }), note({ id: "c", text: "three" })]);
     const user = userEvent.setup();
     panel();
     await openIt(user);
-    expect(await screen.findByText("Showing the latest 3.")).toBeInTheDocument();
+    await screen.findByText("three");
+    expect(screen.getByTestId("notes-history-link")).toHaveAttribute("title", expect.stringContaining("the latest 3 are shown here"));
+  });
+
+  it("the history link is in the header even while the panel is shut", () => {
+    panel();
+    expect(screen.getByTestId("notes-history-link")).toBeInTheDocument();
+  });
+
+  it("limits a note to 500 characters and counts them", async () => {
+    const user = userEvent.setup();
+    panel();
+    await openIt(user);
+    const box = screen.getByLabelText("Note") as HTMLTextAreaElement;
+    expect(box.maxLength).toBe(500);
+    expect(screen.getByTestId("notes-count")).toHaveTextContent("0/500");
+    await user.type(box, "hello");
+    expect(screen.getByTestId("notes-count")).toHaveTextContent("5/500");
+  });
+
+  it("shows older days under a heading, but not today", async () => {
+    const old = new Date();
+    old.setDate(old.getDate() - 3);
+    listNotes.mockResolvedValue([note({ id: "a", text: "recent" }), note({ id: "b", text: "older", created_at: old.toISOString() })]);
+    const user = userEvent.setup();
+    panel();
+    await openIt(user);
+    await screen.findByText("older");
+    expect(screen.queryByText("Today")).not.toBeInTheDocument();
+    expect(screen.getByText(old.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }))).toBeInTheDocument();
   });
 });

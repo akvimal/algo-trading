@@ -55,3 +55,31 @@ export const CrosshairIcon = () => (
     <path d="M12 2v5M12 17v5M2 12h5M17 12h5" />
   </svg>
 );
+
+/** Small icons for the notes panel: the whole history, a picture of the chart, copy, download. */
+export const ListIcon = () => (
+  <svg {...small}>
+    <path d="M8 6h13M8 12h13M8 18h13" />
+    <circle cx="3.5" cy="6" r="1" />
+    <circle cx="3.5" cy="12" r="1" />
+    <circle cx="3.5" cy="18" r="1" />
+  </svg>
+);
+export const ImageIcon = () => (
+  <svg {...small}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <circle cx="9" cy="10" r="1.6" />
+    <path d="M21 16l-5-5-8 8" />
+  </svg>
+);
+export const CopyIcon = () => (
+  <svg {...small}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V6a2 2 0 0 1 2-2h8" />
+  </svg>
+);
+export const DownloadIcon = () => (
+  <svg {...small}>
+    <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
+  </svg>
+);

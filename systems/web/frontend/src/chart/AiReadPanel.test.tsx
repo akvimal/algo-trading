@@ -10,7 +10,7 @@ const getAiRead = vi.fn();
 vi.mock("../api/trade", () => ({ getAiRead: (...a: unknown[]) => getAiRead(...a) }));
 
 const READ: AiRead = {
-  underlying: "NIFTY", expiry: "2026-10-06", model: "openai/gpt-6-luna-pro", generated_at: "2026-10-01T10:00:00+05:30",
+  underlying: "NIFTY", expiry: "2026-10-06", model: "openai/gpt-6-luna-pro", generated_at: new Date(Date.now() - 60 * 60_000).toISOString(), // an hour ago: always inside the 24-hour age limit
   bias: "bearish", confidence: 72, one_liner: "Sell rallies.", reasoning: ["ADX 33 downtrend"], support: [22553.26], resistance: [22595.2],
   risks: ["Breadth unknown"], wait_for: "5m close below 22508", data_gaps: ["futures OI/volume", "market breadth"],
 };

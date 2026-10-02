@@ -222,3 +222,21 @@ CREATE TABLE IF NOT EXISTS market_data.custom_screens (
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_custom_screens_user ON market_data.custom_screens (user_id, created_at DESC);
+
+-- A log of every background-job run (the nightly snapshots, instrument sync, token renewal, sentiment recorder): one
+-- row per run, opened as 'running' with a moving done/total and closed with how it ended. See migration 036 and
+-- app/domain/job_tracker.py.
+CREATE TABLE IF NOT EXISTS market_data.job_runs (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id       TEXT NOT NULL,
+    label        TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'partial', 'failed', 'skipped', 'interrupted')),
+    started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at  TIMESTAMPTZ,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    total        INTEGER,
+    done         INTEGER NOT NULL DEFAULT 0,
+    tally        JSONB,
+    message      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_job_runs_job_started ON market_data.job_runs (job_id, started_at DESC);

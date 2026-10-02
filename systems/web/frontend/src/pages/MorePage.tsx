@@ -168,6 +168,19 @@ export function MorePage() {
           <span aria-hidden="true">›</span>
         </Link>
       </div>
+      {session?.isAdmin && (
+        <div className="card">
+          <Link to="/more/jobs" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+            <span>
+              <strong>Background jobs</strong>
+              <span className="dim" style={{ display: "block", fontSize: 13 }}>
+                The nightly snapshots and other scheduled jobs: running now, last run, next run
+              </span>
+            </span>
+            <span aria-hidden="true">›</span>
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

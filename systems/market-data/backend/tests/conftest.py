@@ -1,5 +1,6 @@
 import pytest
 
+from app.domain import job_tracker
 from app.providers import calendar, dhan, news
 
 
@@ -49,3 +50,12 @@ def _reset_dhan_throttle_state():
     dhan._last_option_chain_call_at.clear()
     dhan._last_order_call_at.clear()
     dhan._last_any_call_at.clear()
+
+@pytest.fixture(autouse=True)
+def _job_tracker_in_memory():
+    """The tracked jobs record their runs; in tests that goes to memory, never a database (and the store is
+    reset so one test's runs cannot show up in the next)."""
+    store = job_tracker.MemoryStore()
+    job_tracker.configure(store)
+    yield store
+    job_tracker.configure(None)

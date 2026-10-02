@@ -480,3 +480,32 @@ export type Pretrade = {
   loss_room: number | null;
   off_window: boolean;
 };
+
+/** A background job's run log (market-data's GET /jobs, admin only). */
+export type JobStatus = "running" | "succeeded" | "partial" | "failed" | "skipped" | "interrupted";
+export type JobRun = {
+  id: string;
+  status: JobStatus;
+  started_at: string;
+  finished_at: string | null;
+  /** For a run still going, how long it has been going when the answer was made. */
+  duration_seconds: number | null;
+  total: number | null;
+  done: number;
+  tally: Record<string, number>;
+  message: string | null;
+};
+export type Job = {
+  job_id: string;
+  label: string;
+  what: string;
+  schedule: string;
+  next_run_at: string | null;
+  running: JobRun | null;
+  /** The latest run that has ended, however it ended. */
+  last_run: JobRun | null;
+  last_success: JobRun | null;
+  /** Newest first, including one still running. */
+  recent: JobRun[];
+};
+export type Jobs = { jobs: Job[] };

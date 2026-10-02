@@ -41,9 +41,42 @@ export const REGIME_LABEL: Record<Regime, string> = {
 
 export const PROXIMITY_LABEL: Record<Proximity, string> = { near_52w_high: "Near 52-week high", near_52w_low: "Near 52-week low" };
 
-export type OiSort = "call_oi" | "put_oi" | "pcr" | "price" | "symbol";
-export type OiFilters = { call: Buildup | "all"; put: Buildup | "all"; search: string; sort: OiSort };
-export const OI_DEFAULTS: OiFilters = { call: "all", put: "all", search: "", sort: "call_oi" };
+export type OiSort = "call_oi" | "put_oi" | "pcr" | "price" | "strength" | "symbol";
+/** A one-tap reading of a big, two-sided shift in the option chain. */
+export type OiSignal = "all" | "strong_bull" | "strong_bear";
+export type OiFilters = { call: Buildup | "all"; put: Buildup | "all"; signal: OiSignal; minShift: number; search: string; sort: OiSort };
+/** minShift: how much (in %) the call AND the put open interest must each have grown for a shift to count as a major one. */
+export const DEFAULT_MIN_SHIFT = 10;
+export const OI_DEFAULTS: OiFilters = { call: "all", put: "all", signal: "all", minShift: DEFAULT_MIN_SHIFT, search: "", sort: "call_oi" };
+
+export const OI_SIGNAL_LABEL: Record<Exclude<OiSignal, "all">, string> = { strong_bull: "Strong bullish", strong_bear: "Strong bearish" };
+// NOTE on the labels these read. The buildup labels here compare each side's open interest with the UNDERLYING's price move
+// (market-data's oi_buildup.py: one price change for both sides), not with the option's own premium. So the textbook bullish pair
+// "call long buildup + put short buildup" (call buyers arriving while put writers arrive) can never appear on these labels: it would
+// need the price to be up for the call side and down for the put side. In these labels the same situation is price up with
+// call OI up and put OI up, i.e. "Long buildup" on BOTH sides; its bearish mirror (call writers and put buyers arriving, price
+// falling) is "Short buildup" on both.
+export const OI_SIGNAL_HELP: Record<Exclude<OiSignal, "all">, string> = {
+  strong_bull: "Price up while both call and put open interest grew a lot: new call buyers and new put writers arriving together (long buildup on both sides).",
+  strong_bear: "Price down while both call and put open interest grew a lot: new call writers and new put buyers arriving together (short buildup on both sides).",
+};
+
+/** Whether a stock shows a major two-sided shift: price up with a long buildup on BOTH sides is bullish, price down with a short
+ * buildup on both sides is bearish (see the note above on why it is read this way), AND open interest grew by at least `minShift` percent
+ * on BOTH sides. A reading with no OI change figure never qualifies. It describes what the option chain did today; it is not a prediction. */
+export function oiSignal(row: Pick<OiRow, "call_buildup" | "put_buildup" | "call_oi_change_pct" | "put_oi_change_pct">, minShift: number): Exclude<OiSignal, "all"> | null {
+  const call = row.call_oi_change_pct;
+  const put = row.put_oi_change_pct;
+  if (call == null || put == null || Number.isNaN(call) || Number.isNaN(put)) return null;
+  if (call < minShift || put < minShift) return null;
+  if (row.call_buildup === "long_buildup" && row.put_buildup === "long_buildup") return "strong_bull";
+  if (row.call_buildup === "short_buildup" && row.put_buildup === "short_buildup") return "strong_bear";
+  return null;
+}
+
+/** How big a shift is: the call and put OI changes together. Null when either is missing. */
+export const oiStrength = (row: Pick<OiRow, "call_oi_change_pct" | "put_oi_change_pct">): number | null =>
+  row.call_oi_change_pct == null || row.put_oi_change_pct == null ? null : row.call_oi_change_pct + row.put_oi_change_pct;
 
 const num = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? null : v);
 
@@ -62,12 +95,19 @@ function byNumberDesc<T>(get: (r: T) => number | null | undefined) {
 const matches = (symbol: string, search: string) => !search.trim() || symbol.toUpperCase().includes(search.trim().toUpperCase());
 
 export function filterOi(rows: OiRow[], f: OiFilters): OiRow[] {
-  const out = rows.filter((r) => matches(r.symbol, f.search) && (f.call === "all" || r.call_buildup === f.call) && (f.put === "all" || r.put_buildup === f.put));
+  const out = rows.filter(
+    (r) =>
+      matches(r.symbol, f.search) &&
+      (f.call === "all" || r.call_buildup === f.call) &&
+      (f.put === "all" || r.put_buildup === f.put) &&
+      (f.signal === "all" || oiSignal(r, f.minShift) === f.signal),
+  );
   const sorters: Record<OiSort, (a: OiRow, b: OiRow) => number> = {
     call_oi: byNumberDesc((r) => r.call_oi_change_pct),
     put_oi: byNumberDesc((r) => r.put_oi_change_pct),
     pcr: byNumberDesc((r) => r.pcr),
     price: byNumberDesc((r) => r.price_change_pct),
+    strength: byNumberDesc(oiStrength),
     symbol: (a, b) => a.symbol.localeCompare(b.symbol),
   };
   return [...out].sort((a, b) => sorters[f.sort](a, b) || a.symbol.localeCompare(b.symbol));

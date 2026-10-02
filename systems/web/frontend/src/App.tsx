@@ -3,6 +3,7 @@ import { useAuth } from "./auth/AuthContext";
 import { ProfileProvider, useProfile } from "./auth/ProfileContext";
 import { Skeleton } from "./components/bits";
 import { AppShell } from "./layout/AppShell";
+import { JobsPage } from "./pages/JobsPage";
 import { MorePage } from "./pages/MorePage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { ScanPage } from "./pages/ScanPage";
@@ -23,6 +24,12 @@ function RequireAuth() {
       <OnboardingGate />
     </ProfileProvider>
   );
+}
+
+/** The platform operator's screens: anyone else is sent back to More rather than shown a page whose data the server refuses them anyway. */
+function RequireAdmin({ children }: { children: JSX.Element }) {
+  const { session } = useAuth();
+  return session?.isAdmin ? children : <Navigate to="/more" replace />;
 }
 
 /** A person who has not been through first-run setup is taken there, and once they have been it is
@@ -60,6 +67,7 @@ export function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="notes" element={<NotesPage />} />
             <Route path="strategies" element={<StrategiesPage />} />
+            <Route path="jobs" element={<RequireAdmin><JobsPage /></RequireAdmin>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

@@ -169,6 +169,19 @@ export function MorePage() {
           <span aria-hidden="true">›</span>
         </Link>
       </div>
+      {session?.isAdmin && (
+        <div className="card">
+          <Link to="/more/jobs" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+            <span>
+              <strong>Background jobs</strong>
+              <span className="dim" style={{ display: "block", fontSize: 13 }}>
+                The nightly snapshots and other scheduled jobs: running now, last run, next run
+              </span>
+            </span>
+            <span aria-hidden="true">›</span>
+          </Link>
+        </div>
+      )}
       <div className="card">
         <p style={{ marginTop: 0 }}>Alerts and the rest are still in the classic app while this one is built out.</p>
         <a className="btn" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }} href={CLASSIC_APP_URL}>

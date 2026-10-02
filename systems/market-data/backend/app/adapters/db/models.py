@@ -216,3 +216,24 @@ class NewsHistory(Base):
     bias_reason = Column(Text, nullable=False)
     digest = Column(Text, nullable=False)
     articles = Column(JSONB, nullable=False)
+
+
+class JobRun(Base):
+    """One run of a background job (the nightly snapshots, instrument sync, token renewal, sentiment recorder): opened as
+    'running' with a moving done/total, closed with how it ended. Written by app/domain/job_tracker.py's DbStore with plain
+    SQL; this mirror is for the read side (GET /jobs). See migration 036 and infra/postgres/init/05-market-data.sql."""
+
+    __tablename__ = "job_runs"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(Text, nullable=False)
+    label = Column(Text, nullable=False)
+    status = Column(Text, nullable=False)
+    started_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    finished_at = Column(TIMESTAMP(timezone=True))
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    total = Column(Integer)
+    done = Column(Integer, nullable=False, default=0)
+    tally = Column(JSONB)
+    message = Column(Text)

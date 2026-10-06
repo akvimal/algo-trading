@@ -67,6 +67,20 @@ class PriceAlert(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_triggered_at = Column(TIMESTAMP(timezone=True))
     trigger_count = Column(Integer, nullable=False, default=0)
+    # Consecutive failed attempts to deliver a crossing, and why the last one failed. See app/domain/price_alerts.py.
+    delivery_failures = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text)
+
+
+class AlertChannel(Base):
+    """A user's own Telegram chat id for their price alerts (the bot is the platform's). See migration 042."""
+
+    __tablename__ = "alert_channels"
+    __table_args__ = {"schema": SCHEMA}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
+    telegram_chat_id = Column(Text, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
 
 
 class OiEodSnapshot(Base):

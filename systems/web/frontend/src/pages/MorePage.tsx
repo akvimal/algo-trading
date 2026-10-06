@@ -148,6 +148,17 @@ export function MorePage() {
         </Link>
       </div>
       <div className="card">
+        <Link to="/more/alerts" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+          <span>
+            <strong>Price alerts</strong>
+            <span className="dim" style={{ display: "block", fontSize: 13 }}>
+              A Telegram message when a price crosses your level, even with the app closed
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      </div>
+      <div className="card">
         <Link to="/more/notes" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
           <span>
             <strong>Notes</strong>

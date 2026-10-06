@@ -723,6 +723,9 @@ class PriceAlertOut(BaseModel):
     created_at: datetime
     last_triggered_at: Optional[datetime] = None
     trigger_count: int
+    # Crossings that could not be delivered (no chat set, Telegram down...), and why. A one-shot alert stays armed while this is > 0.
+    delivery_failures: int = 0
+    last_error: Optional[str] = None
 
 
 class CustomScreenCreate(BaseModel):

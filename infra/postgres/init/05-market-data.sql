@@ -66,7 +66,9 @@ CREATE TABLE IF NOT EXISTS market_data.price_alerts (
     last_side         TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_triggered_at TIMESTAMPTZ,
-    trigger_count     INTEGER NOT NULL DEFAULT 0
+    trigger_count     INTEGER NOT NULL DEFAULT 0,
+    delivery_failures INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_price_alerts_active
@@ -297,3 +299,11 @@ CREATE TABLE IF NOT EXISTS market_data.news_article_scores (
     PRIMARY KEY (underlying, url)
 );
 CREATE INDEX IF NOT EXISTS idx_news_article_scores_scored_at ON market_data.news_article_scores (scored_at);
+
+-- Each user's own Telegram chat for their price alerts. See migration 042 and app/domain/price_alerts.py.
+CREATE TABLE IF NOT EXISTS market_data.alert_channels (
+    user_id           UUID PRIMARY KEY,
+    telegram_chat_id  TEXT NOT NULL CHECK (telegram_chat_id ~ '^-?[0-9]{3,20}$'),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+

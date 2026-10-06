@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OiSummary } from "../api/types";
-import { compactIndian, computeOiLevels, hasOiChain, oiCount, oiLevelLines } from "./oiLevels";
+import { compactIndian, computeOiLevels, closestOiLevels, hasOiChain, oiCount, oiLevelLines } from "./oiLevels";
 
 const leg = (oi: number, change15: number | null = null) => ({ oi, oi_change_5m: null, oi_change_15m: change15, volume: 0 });
 
@@ -83,5 +83,19 @@ describe("formatting and which instruments have a chain", () => {
   it("knows the instruments with an option chain, whatever the case", () => {
     for (const s of ["NIFTY", "banknifty", " GOLDM ", "CRUDEOILM", "BTCUSD", "ETHUSD"]) expect(hasOiChain(s)).toBe(true);
     for (const s of ["RELIANCE", "SENSEX", ""]) expect(hasOiChain(s)).toBe(false);
+  });
+});
+
+describe("closestOiLevels", () => {
+  const L = (kind: "resistance" | "support", price: number, rank: 1 | 2 = 1, forming = false) => ({ kind, rank, forming, price, label: `${kind}${price}` });
+  const levels = [L("resistance", 24500), L("resistance", 24800, 2), L("support", 24300), L("support", 24000, 2), L("resistance", 24450, 1, true)];
+  it("keeps the nearest wall on each side of the price and ignores forming ones", () => {
+    expect(closestOiLevels(levels, 24400).map((l) => l.price)).toEqual([24500, 24300]);
+  });
+  it("falls back to the nearest of a side when price is past all its walls", () => {
+    expect(closestOiLevels(levels, 25000).map((l) => l.price)).toEqual([24800, 24300]);
+  });
+  it("takes the biggest wall (rank 1) of each side without a price", () => {
+    expect(closestOiLevels(levels, null).map((l) => l.price)).toEqual([24500, 24300]);
   });
 });

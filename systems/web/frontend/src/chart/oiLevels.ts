@@ -83,3 +83,23 @@ export function oiLevelLines(oi: OiSummary): OiLevelLine[] {
     return { kind: l.kind, rank: l.rank, forming: l.forming, price: l.strike, label };
   });
 }
+
+/** Only the walls nearest the price: the closest resistance at or above it and the closest support at or below it, from the standing
+ * (not forming) levels. A side with nothing beyond the price falls back to its nearest level of that kind, so there is still a line to
+ * look at. Without a price, the biggest wall (rank 1) on each side. */
+export function closestOiLevels(levels: OiLevelLine[], price: number | null): OiLevelLine[] {
+  const out: OiLevelLine[] = [];
+  for (const kind of ["resistance", "support"] as const) {
+    const side = levels.filter((l) => l.kind === kind && !l.forming);
+    if (side.length === 0) continue;
+    if (price == null) {
+      out.push([...side].sort((a, b) => a.rank - b.rank)[0]);
+      continue;
+    }
+    const beyond = side.filter((l) => (kind === "resistance" ? l.price >= price : l.price <= price));
+    const pool = beyond.length ? beyond : side;
+    const nearest = [...pool].sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0];
+    out.push(nearest);
+  }
+  return out;
+}

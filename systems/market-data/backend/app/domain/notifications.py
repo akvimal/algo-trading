@@ -300,9 +300,11 @@ def token_message(expires_at: datetime, now: datetime, tz) -> Optional[tuple[str
     return None
 
 
-def job_failed_message(label: str, message: Optional[str], started_at: datetime, tz, count: int = 1) -> str:
-    """One message for a job that failed, however many times it did that day: the latest run's time and reason, and how many failed."""
+def job_failed_message(label: str, message: Optional[str], started_at: datetime, tz, count: int = 1, today: Optional[date] = None) -> str:
+    """One message for a job that failed, however many times it did that day: the latest run's time and reason, and how many failed.
+    A failure from an earlier day says which day ("on 5 Oct"), never "today"."""
     local = started_at.astimezone(tz)
     reason = (message or "no reason recorded").strip()[:240]
-    times = f"failed {count} times today, latest at" if count > 1 else "failed at"
+    when = "today" if today is None or local.date() == today else f"on {local.day} {local.strftime('%b')}"
+    times = f"failed {count} times {when}, latest at" if count > 1 else (f"failed {when} at" if when != "today" else "failed at")
     return f"🔴 Background job {times} {local.strftime('%H:%M')} IST: {label}\n{reason}"

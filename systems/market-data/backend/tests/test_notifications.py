@@ -204,6 +204,14 @@ def test_a_job_that_failed_several_times_says_so_in_one_message():
     assert text.startswith("🔴 Background job failed 5 times today, latest at 12:01 IST: Dhan token renewal")
 
 
+def test_a_failure_from_an_earlier_day_says_which_day_not_today():
+    earlier = datetime(2026, 10, 5, 8, 40, tzinfo=timezone.utc)  # 14:10 IST on the 5th
+    today = date(2026, 10, 6)
+    assert n.job_failed_message("Dhan token renewal", "401", earlier, IST, 1, today).startswith("🔴 Background job failed on 5 Oct at 14:10 IST: Dhan token renewal")
+    assert n.job_failed_message("Dhan token renewal", "401", earlier, IST, 4, today).startswith("🔴 Background job failed 4 times on 5 Oct, latest at 14:10 IST")
+    assert "today" in n.job_failed_message("J", "x", datetime(2026, 10, 6, 5, 0, tzinfo=timezone.utc), IST, 3, today)
+
+
 class JobsDB:
     def __init__(self, runs):
         self.runs = runs
@@ -226,6 +234,11 @@ class JobsDB:
 
 def run_of(job_id, label, minutes_ago, message="boom"):
     return SimpleNamespace(id=uuid4(), job_id=job_id, label=label, message=message, started_at=NOW - timedelta(minutes=minutes_ago))
+
+
+@pytest.fixture(autouse=True)
+def _nothing_has_recovered_by_default(monkeypatch):
+    monkeypatch.setattr(jobs, "_latest_success_by_job", lambda db, job_ids: {})
 
 
 def test_ops_messages_combine_the_token_and_each_failed_job_with_a_key_that_does_not_repeat_within_a_day():
@@ -474,3 +487,35 @@ def test_the_delivery_status_is_sent_retrying_or_gave_up():
     assert route._status(row(ME, "a", sent=NOW)) == "sent"
     assert route._status(row(ME, "b", attempts=2)) == "retrying"
     assert route._status(row(ME, "c", attempts=n.MAX_ATTEMPTS)) == "gave_up"
+
+
+# ---- a failure that has since recovered is history, not a problem ---------------------------------------------------------------
+
+
+def test_a_job_that_failed_and_then_ran_fine_is_no_longer_reported(monkeypatch):
+    runs = [run_of("dhan-token-renew", "Dhan token renewal", m) for m in (20, 40, 90)]
+    monkeypatch.setattr(jobs, "_latest_success_by_job", lambda db, ids: {"dhan-token-renew": NOW - timedelta(minutes=5)})  # a good run AFTER the newest failure
+    assert jobs.ops_messages(JobsDB(runs), NOW, None) == []
+
+
+def test_a_job_whose_good_run_came_before_the_failure_is_still_reported(monkeypatch):
+    runs = [run_of("dhan-token-renew", "Dhan token renewal", 10)]
+    monkeypatch.setattr(jobs, "_latest_success_by_job", lambda db, ids: {"dhan-token-renew": NOW - timedelta(hours=3)})
+    assert len(jobs.ops_messages(JobsDB(runs), NOW, None)) == 1
+
+
+def test_recovery_is_per_job_so_one_healthy_job_does_not_hide_another_that_is_still_failing(monkeypatch):
+    runs = [run_of("a-job", "A", 10), run_of("b-job", "B", 20)]
+    monkeypatch.setattr(jobs, "_latest_success_by_job", lambda db, ids: {"a-job": NOW - timedelta(minutes=1)})
+    assert [k for k, _ in jobs.ops_messages(JobsDB(runs), NOW, None)] == ["job-failed:b-job:2026-10-06"]
+
+
+def test_the_operator_status_says_all_clear_only_when_nothing_is_failing(monkeypatch):
+    monkeypatch.setattr(jobs, "_token_expiry", lambda: NOW + timedelta(hours=20))
+    clear = jobs.ops_status_text(JobsDB([]), NOW)
+    assert clear.startswith("✅ Operator check: the Dhan token is fine (valid until ") and clear.endswith("no background job is currently failing.")
+    runs = [run_of("dhan-token-renew", "Dhan token renewal", 10)]
+    assert "Background job failed" in jobs.ops_status_text(JobsDB(runs), NOW)
+    monkeypatch.setattr(jobs, "_latest_success_by_job", lambda db, ids: {"dhan-token-renew": NOW})
+    assert jobs.ops_status_text(JobsDB(runs), NOW).startswith("✅")
+

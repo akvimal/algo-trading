@@ -82,8 +82,19 @@ def send_oi_digest() -> n.Tally:
 # ---- operator alerts ------------------------------------------------------------------------------------------------------------
 
 
+def _latest_success_by_job(db: Session, job_ids: list[str]) -> dict[str, datetime]:
+    """When each job last ran to a good end (succeeded, or partly done), so a failure it has since recovered from is not reported."""
+    if not job_ids:
+        return {}
+    latest: dict[str, datetime] = {}
+    for r in db.query(JobRun).filter(JobRun.job_id.in_(job_ids), JobRun.status.in_(("succeeded", "partial"))).order_by(JobRun.started_at.desc()).all():
+        latest.setdefault(r.job_id, r.started_at)
+    return latest
+
+
 def ops_messages(db: Session, now: datetime, token_expires_at: Optional[datetime]) -> list[tuple[str, str]]:
-    """(dedupe key, text) for each current operator problem: the Dhan token and any job that failed recently."""
+    """(dedupe key, text) for each CURRENT operator problem: the Dhan token, and any job that failed recently and has not run to a good
+    end since (a job that failed and then recovered is history, not a problem to raise or to list as one)."""
     out: list[tuple[str, str]] = []
     if token_expires_at is not None:
         t = n.token_message(token_expires_at, now, _tz())
@@ -101,14 +112,17 @@ def ops_messages(db: Session, now: datetime, token_expires_at: Optional[datetime
     groups: dict[tuple[str, date], list[JobRun]] = {}
     for r in runs:
         groups.setdefault((r.job_id, r.started_at.astimezone(_tz()).date()), []).append(r)
-    for (job_id, day), group in list(groups.items())[:JOB_FAILURES_PER_PASS]:
+    recovered = _latest_success_by_job(db, sorted({job_id for job_id, _ in groups}))
+    today = now.astimezone(_tz()).date()
+    still_failing = [(k, g) for k, g in groups.items() if not (k[0] in recovered and recovered[k[0]] > g[0].started_at)]
+    for (job_id, day), group in still_failing[:JOB_FAILURES_PER_PASS]:
         latest = group[0]
-        out.append((f"job-failed:{job_id}:{day.isoformat()}", n.job_failed_message(latest.label, latest.message, latest.started_at, _tz(), len(group))))
+        out.append((f"job-failed:{job_id}:{day.isoformat()}", n.job_failed_message(latest.label, latest.message, latest.started_at, _tz(), len(group), today)))
     return out
 
 
 def ops_status_text(db: Session, now: datetime) -> str:
-    """A one-off status line for "send me the latest now": the token's state and the failed jobs of the last day, good or bad."""
+    """A one-off status line for "send me the latest now": the token's state and any job that is still failing, good or bad."""
     try:
         expiry = _token_expiry()
     except Exception:
@@ -117,7 +131,7 @@ def ops_status_text(db: Session, now: datetime) -> str:
     if problems:
         return "Operator check:\n" + "\n".join(problems)
     until = f" (valid until {expiry.astimezone(_tz()).strftime('%d %b %H:%M')} IST)" if expiry else ""
-    return f"✅ Operator check: the Dhan token is fine{until} and no background job failed in the last 24 hours."
+    return f"✅ Operator check: the Dhan token is fine{until} and no background job is currently failing."
 
 
 def _token_expiry() -> Optional[datetime]:

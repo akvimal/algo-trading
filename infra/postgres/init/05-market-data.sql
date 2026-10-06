@@ -240,3 +240,17 @@ CREATE TABLE IF NOT EXISTS market_data.job_runs (
     message      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_job_runs_job_started ON market_data.job_runs (job_id, started_at DESC);
+
+-- The morning pre-market bias report, one row per IST day. See migration 037 and app/domain/premarket_report.py.
+CREATE TABLE IF NOT EXISTS market_data.premarket_reports (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    day          DATE NOT NULL UNIQUE,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    bias         TEXT NOT NULL CHECK (bias IN ('bullish', 'bearish', 'neutral')),
+    agree        BOOLEAN,
+    model        TEXT,
+    ai_error     TEXT,
+    inputs       JSONB NOT NULL,
+    rules        JSONB NOT NULL,
+    ai           JSONB
+);

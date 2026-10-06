@@ -39,3 +39,4 @@
 034-system-quantity.sql|execution.positions|system_quantity
 035-emotion-tag.sql|execution.positions|emotion_tag
 036-job-runs.sql|market_data.job_runs|
+037-premarket-reports.sql|market_data.premarket_reports|

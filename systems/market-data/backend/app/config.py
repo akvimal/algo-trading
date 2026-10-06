@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # sentiment_history above: this scans EVERY NSE F&O stock (~150-200,
     # vs. sentiment_history's fixed 6), so it deliberately runs once, not
     # continuously.
+    # Morning pre-market bias report (app/scheduler.py's _record_premarket_report) - before the 09:00 pre-open,
+    # after the US close is final and GIFT Nifty is trading.
+    premarket_report_hour: int = 8
+    premarket_report_minute: int = 45
     oi_eod_snapshot_hour: int = 15
     oi_eod_snapshot_minute: int = 40
     # EOD equity screener (momentum/trend + 52-week proximity, see

@@ -917,3 +917,55 @@ class JobOut(BaseModel):
 
 class JobsOut(BaseModel):
     jobs: list[JobOut]
+
+
+class PremarketInputOut(BaseModel):
+    key: str
+    label: str
+    group: str
+    ok: bool
+    value: Optional[float] = None
+    change: Optional[float] = None  # % for prices, basis points for the yields (see `unit`)
+    unit: Literal["pct", "bp"] = "pct"
+    source: str = ""
+    error: Optional[str] = None
+
+
+class PremarketFactorOut(BaseModel):
+    key: str
+    label: str
+    move: Optional[float] = None
+    score: Optional[float] = None
+    weight: float
+
+
+class PremarketRulesOut(BaseModel):
+    score: float
+    bias: Literal["bullish", "bearish", "neutral"]
+    coverage: float
+    gift_gap_pct: Optional[float] = None
+    factors: list[PremarketFactorOut]
+
+
+class PremarketAiOut(BaseModel):
+    bias: Literal["bullish", "bearish", "neutral"]
+    confidence: int
+    one_liner: str
+    reasons: list[str]
+    risks: list[str]
+    watch: str
+
+
+class PremarketReportOut(BaseModel):
+    """GET /premarket - the day's overnight inputs, the rule-based score, and the model's own call on them. `bias` is
+    the model's when it ran, else the rules'; `agree` says whether the two match (None when the model did not run)."""
+
+    day: date
+    generated_at: datetime
+    bias: Literal["bullish", "bearish", "neutral"]
+    agree: Optional[bool] = None
+    model: Optional[str] = None
+    ai_error: Optional[str] = None
+    inputs: list[PremarketInputOut]
+    rules: PremarketRulesOut
+    ai: Optional[PremarketAiOut] = None

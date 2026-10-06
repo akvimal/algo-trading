@@ -237,3 +237,23 @@ class JobRun(Base):
     done = Column(Integer, nullable=False, default=0)
     tally = Column(JSONB)
     message = Column(Text)
+
+
+class PremarketReport(Base):
+    """The morning pre-market bias report, one row per IST day (a refresh replaces that day's row). `inputs` are the
+    fetched overnight figures, `rules` the deterministic score, `ai` the model's own call (NULL when it did not run -
+    see `ai_error`). See app/domain/premarket_report.py, migration 037 and infra/postgres/init/05-market-data.sql."""
+
+    __tablename__ = "premarket_reports"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    day = Column(Date, nullable=False, unique=True)
+    generated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    bias = Column(Text, nullable=False)
+    agree = Column(Boolean)
+    model = Column(Text)
+    ai_error = Column(Text)
+    inputs = Column(JSONB, nullable=False)
+    rules = Column(JSONB, nullable=False)
+    ai = Column(JSONB)

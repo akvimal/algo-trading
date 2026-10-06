@@ -17,6 +17,7 @@ from app.api.routes import (
     oi_buildup,
     options,
     order_blocks,
+    premarket,
     price_alerts,
     quotes,
     quotes_ws,
@@ -57,6 +58,7 @@ app.include_router(custom_screens.router)
 app.include_router(news.router)
 app.include_router(ai_read.router)
 app.include_router(calendar.router)
+app.include_router(premarket.router)
 
 
 @app.on_event("startup")

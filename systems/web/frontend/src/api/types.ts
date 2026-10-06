@@ -114,6 +114,39 @@ export type MarketSentiment = {
   exchanges: Record<string, { direction: string; strength: string; score: number | null; underlyings: SentimentUnderlying[] }>;
 };
 
+export type Bias = "bullish" | "bearish" | "neutral";
+
+export type PremarketInput = {
+  key: string;
+  label: string;
+  group: "us" | "commodity" | "currency" | "yield" | "adr" | "india";
+  ok: boolean;
+  value: number | null;
+  /** Percent for prices; basis points when `unit` is "bp" (the two bond yields). */
+  change: number | null;
+  unit: "pct" | "bp";
+  source: string;
+  error: string | null;
+};
+
+export type PremarketReport = {
+  day: string;
+  generated_at: string;
+  bias: Bias;
+  agree: boolean | null;
+  model: string | null;
+  ai_error: string | null;
+  inputs: PremarketInput[];
+  rules: {
+    score: number;
+    bias: Bias;
+    coverage: number;
+    gift_gap_pct: number | null;
+    factors: { key: string; label: string; move: number | null; score: number | null; weight: number }[];
+  };
+  ai: { bias: Bias; confidence: number; one_liner: string; reasons: string[]; risks: string[]; watch: string } | null;
+};
+
 export type Segment = "NSE" | "MCX" | "CRYPTO";
 
 export type EquityPoint = { snapshot_date: string; balance: number; unrealized_pnl: number; equity: number; is_reset_point: boolean };

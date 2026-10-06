@@ -438,6 +438,30 @@ def _record_equity_screener_snapshot() -> None:
     _log_eod_summary("equity screener snapshot", len(symbols), tally)
 
 
+@tracked("premarket-report-record", "Pre-market bias report")
+def _record_premarket_report() -> None:
+    """Builds today's pre-market bias report (app/domain/premarket_report.py) on the platform OpenRouter key and stores it.
+    Weekdays only (a cron day_of_week), so no weekend row; a market holiday still produces one, which is harmless. A run
+    where nothing could be fetched is recorded as failed rather than storing an empty report."""
+    from app.domain.premarket_report import build_report, save_report, today_ist
+
+    run = job_tracker.current()
+    report = build_report(settings.openrouter_api_key or None)
+    ok = sum(1 for i in report["inputs"] if i["ok"])
+    run.set_total(len(report["inputs"]))
+    run.tick(ok, {"ok": ok, "failed": len(report["inputs"]) - ok})
+    if ok == 0:
+        run.fail("no pre-market inputs could be fetched")
+        return
+    db = SessionLocal()
+    try:
+        save_report(db, today_ist(), report)
+    finally:
+        db.close()
+    if report["ai_error"]:
+        run.note(report["ai_error"])
+
+
 def _check_price_alerts() -> None:
     """Evaluate every active market_data.price_alerts row against a fresh
     LTP and push the ones that just crossed to Telegram - see
@@ -461,6 +485,7 @@ def job_catalog() -> list[dict]:
     jobs = [
         ("oi-eod-snapshot-record", "OI buildup snapshot", f"Weekdays {s.oi_eod_snapshot_hour:02d}:{s.oi_eod_snapshot_minute:02d}", "Stores each F&O stock's total call and put open interest for the day, which the OI buildup scan and its history read."),
         ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches a year of daily bars for every NSE stock and stores the screener row, which the Screener and custom scans read."),
+        ("premarket-report-record", "Pre-market bias report", f"Weekdays {s.premarket_report_hour:02d}:{s.premarket_report_minute:02d}", "Reads the overnight US close, crude, USDINR, yields, ADRs and GIFT Nifty and works out the day's likely market bias."),
         ("instrument-sync-daily", "Instrument master sync", f"Daily {s.instrument_sync_hour:02d}:{s.instrument_sync_minute:02d}, and at start-up", "Refreshes the broker's list of tradeable instruments and the NSE index memberships."),
         ("sentiment-history-record", "Sentiment recorder", f"Every {s.sentiment_history_interval_minutes} minutes while a market is open", "Records the option-chain sentiment badge for the main indices."),
     ]
@@ -519,6 +544,14 @@ def start_scheduler() -> None:
         _record_equity_screener_snapshot,
         CronTrigger(hour=settings.equity_screener_snapshot_hour, minute=settings.equity_screener_snapshot_minute),
         id="equity-screener-snapshot-record",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _record_premarket_report,
+        # timezone= is required: a CronTrigger passed in ready-made ignores the scheduler's own, so without it this
+        # would fire at 08:45 in the container's UTC (14:15 IST) - see docs/architecture.md "Background-job run log".
+        CronTrigger(day_of_week="mon-fri", hour=settings.premarket_report_hour, minute=settings.premarket_report_minute, timezone=settings.timezone),
+        id="premarket-report-record",
         replace_existing=True,
     )
     _scheduler.add_job(

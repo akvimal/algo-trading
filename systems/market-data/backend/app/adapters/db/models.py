@@ -10,7 +10,7 @@ this system, otherwise in-memory-cache-only by design, now has one.
 
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Column, Date, Float, Integer, Numeric, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, Column, Date, Float, Integer, Numeric, SmallInteger, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -331,4 +331,33 @@ class NewsArticleScore(Base):
     relevance_score = Column(Integer)
     why = Column(Text)
     scored_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+
+
+class IdeasDestination(Base):
+    """The one chat/channel ideas are posted to (a one-row table: id is always 1). See migration 043 and app/domain/ideas.py."""
+
+    __tablename__ = "ideas_destination"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(SmallInteger, primary_key=True, default=1)
+    telegram_chat_id = Column(Text, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    updated_by = Column(UUID(as_uuid=True))
+
+
+class PublishedIdea(Base):
+    """A note that was published as an idea: which Telegram messages, where, exactly what was sent, and when it went out / was
+    taken down. See migration 043 and app/domain/ideas.py."""
+
+    __tablename__ = "published_ideas"
+    __table_args__ = {"schema": SCHEMA}
+
+    note_id = Column(UUID(as_uuid=True), primary_key=True)
+    published_by = Column(UUID(as_uuid=True), nullable=False)
+    chat_id = Column(Text, nullable=False)
+    message_ids = Column(JSONB, nullable=False)
+    text = Column(Text, nullable=False)
+    has_image = Column(Boolean, nullable=False, default=False)
+    published_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    unpublished_at = Column(TIMESTAMP(timezone=True))
 

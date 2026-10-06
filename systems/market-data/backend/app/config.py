@@ -148,6 +148,13 @@ class Settings(BaseSettings):
     # nothing is sent (app/domain/notify.py logs a warning once).
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # A SEPARATE bot for publishing notes as ideas to a channel/group (app/domain/ideas.py), so followers of ideas never share a bot
+    # with anyone's private alerts. The destination chat is set in the app, not here. The disclaimer appended to every idea defaults
+    # to a general "not advice" notice; override it with IDEAS_DISCLAIMER (have counsel review it before the audience widens) and
+    # add a registration line (e.g. a SEBI registration number) with IDEAS_REGISTRATION_LINE.
+    telegram_ideas_bot_token: str = ""
+    ideas_disclaimer: str = ""
+    ideas_registration_line: str = ""
     # How often the scheduler polls the LTP for every active alert.
     price_alert_check_interval_seconds: int = 60
 

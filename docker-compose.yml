@@ -200,6 +200,9 @@ services:
       # still evaluate/persist, nothing gets pushed (see app/domain/notify.py).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_IDEAS_BOT_TOKEN: ${TELEGRAM_IDEAS_BOT_TOKEN:-}
+      IDEAS_DISCLAIMER: ${IDEAS_DISCLAIMER:-}
+      IDEAS_REGISTRATION_LINE: ${IDEAS_REGISTRATION_LINE:-}
       # OpenRouter (Live Chart's News tab AI digest, see app/providers/news.py -
       # raw headlines come from free RSS feeds, no key needed there) - see app/config.py.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}

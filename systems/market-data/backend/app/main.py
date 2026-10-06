@@ -12,6 +12,7 @@ from app.api.routes import (
     dhan,
     equity_screener,
     health,
+    ideas,
     instruments,
     jobs,
     news,
@@ -49,6 +50,7 @@ app.include_router(candles.router)
 app.include_router(order_blocks.router)
 app.include_router(regime.router)
 app.include_router(price_alerts.router)
+app.include_router(ideas.router)
 app.include_router(dhan.router)
 app.include_router(delta.router)
 app.include_router(options.router)

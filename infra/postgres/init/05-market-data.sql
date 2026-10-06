@@ -307,3 +307,21 @@ CREATE TABLE IF NOT EXISTS market_data.alert_channels (
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Ideas published from notes to a Telegram channel (operator only). See migration 043 and app/domain/ideas.py.
+CREATE TABLE IF NOT EXISTS market_data.ideas_destination (
+    id                SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    telegram_chat_id  TEXT NOT NULL,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by        UUID
+);
+
+CREATE TABLE IF NOT EXISTS market_data.published_ideas (
+    note_id         UUID PRIMARY KEY,
+    published_by    UUID NOT NULL,
+    chat_id         TEXT NOT NULL,
+    message_ids     JSONB NOT NULL,
+    text            TEXT NOT NULL,
+    has_image       BOOLEAN NOT NULL DEFAULT false,
+    published_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    unpublished_at  TIMESTAMPTZ
+);

@@ -45,3 +45,4 @@
 040-rbi-summaries.sql|market_data.rbi_summaries|
 041-dedupe-processing.sql|market_data.news_article_scores|
 042-alert-delivery.sql|market_data.alert_channels|
+043-ideas.sql|market_data.published_ideas|

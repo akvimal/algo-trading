@@ -68,6 +68,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+/** Whether the signed-in person is an admin. False when nobody is signed in or there is no provider, so a screen that shows
+ * operator-only controls fails closed. (The server checks again on every call; this only decides what is shown.) */
+export function useIsAdmin(): boolean {
+  return Boolean(useContext(AuthContext)?.session?.isAdmin);
+}
+
 export function useAuth(): AuthValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");

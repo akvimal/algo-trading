@@ -40,6 +40,8 @@ export type NewNote = {
   context: NoteContext;
   /** A PNG data URL of the chart with the note on it, when the person asked for one to be kept. */
   snapshot_png_base64?: string;
+  /** The same chart with only a header (no note text, no AI line): the picture a published idea uses. */
+  clean_png_base64?: string;
 };
 
 export const addNote = (note: NewNote) => api<StudyNote>("execution", "/study-notes", { method: "POST", json: note });

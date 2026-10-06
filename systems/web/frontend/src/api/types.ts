@@ -41,6 +41,8 @@ export type Position = {
   live_price?: number | null;
   unrealized_pnl?: number | null;
   status: "OPEN" | "CLOSED" | "REJECTED" | string;
+  /** True only if the entry cleared through a real broker order; otherwise it was a paper trade. */
+  is_live_broker_order?: boolean;
   stop_loss_price: number | null;
   target_price: number | null;
   option_group_id: string | null;
@@ -496,6 +498,8 @@ export type StudyNote = {
   position_id: string | null;
   option_group_id: string | null;
   has_snapshot: boolean;
+  /** A chart-and-header-only picture was kept too (notes saved before it existed have only the composed one). */
+  has_clean_snapshot?: boolean;
   created_at: string | null;
 };
 

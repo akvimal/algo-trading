@@ -57,8 +57,13 @@ def get_note_instruments(user: User = Depends(get_current_user), db: Session = D
 
 
 @router.get("/study-notes/{note_id}/snapshot")
-def note_snapshot(note_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    data = get_snapshot(db, user.id, _note_id(note_id))
+def note_snapshot(
+    note_id: str,
+    variant: str = Query(default="full", pattern="^(full|clean)$", description="full = the composed picture; clean = the chart with only a header"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    data = get_snapshot(db, user.id, _note_id(note_id), clean=(variant == "clean"))
     if data is None:
         raise HTTPException(status_code=404, detail="no snapshot for this note")
     return Response(content=data, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})

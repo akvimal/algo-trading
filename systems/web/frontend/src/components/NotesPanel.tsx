@@ -55,23 +55,27 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
   // Why the last attempt to take a picture failed, so the message says what to do rather than "not ready".
   const lastProblem = useRef("the chart is not ready");
 
-  async function snapshot(): Promise<string | null> {
+  /** The picture kept with the note (chart, header, the words, the tag, the AI line) and a second, clean one (chart and header only) that a
+   * published idea uses instead, because the first is flattened and its words and AI line cannot be taken off afterwards. */
+  async function snapshot(withClean = true): Promise<{ full: string; clean: string | null } | null> {
     const image = getChartImage();
     if ("problem" in image) {
       lastProblem.current = image.problem;
       return null;
     }
     const ctx = getContext();
-    const composed = await composeSnapshot({
+    const header = {
       chart: image.url,
       title: `${symbol} · ${interval.replace("min", "m")}`,
       subtitle: `${new Date().toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}${ctx.price != null ? ` · ${formatPrice(ctx.price)}` : ""}`,
-      note: draft,
-      tag,
-      aiLine: aiRead?.one_liner ?? null,
-    });
-    if (!composed) lastProblem.current = "this browser could not build the picture";
-    return composed;
+    };
+    const full = await composeSnapshot({ ...header, note: draft, tag, aiLine: aiRead?.one_liner ?? null });
+    if (!full) {
+      lastProblem.current = "this browser could not build the picture";
+      return null;
+    }
+    const clean = withClean ? await composeSnapshot({ ...header, note: "", tag: null, aiLine: null }) : null;
+    return { full, clean };
   }
 
   async function send() {
@@ -80,12 +84,15 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
     setBusy(true);
     setStatus(null);
     try {
-      let png: string | null = null;
+      let png: { full: string; clean: string | null } | null = null;
       if (attach) {
         png = await snapshot();
         if (!png) setStatus({ text: `The note was saved without a snapshot: ${lastProblem.current}.`, error: true });
       }
-      await addNote({ segment, symbol, interval, text, tag, context: getContext(), ...(png ? { snapshot_png_base64: png } : {}) });
+      await addNote({
+        segment, symbol, interval, text, tag, context: getContext(),
+        ...(png ? { snapshot_png_base64: png.full, ...(png.clean ? { clean_png_base64: png.clean } : {}) } : {}),
+      });
       setDraft("");
       setTag(null);
       notes.reload();
@@ -98,7 +105,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
 
   async function saveFile(action: "download" | "copy") {
     setStatus(null);
-    const png = await snapshot();
+    const png = (await snapshot(false))?.full ?? null; // a file for the person to keep or paste needs only the composed picture
     if (!png) {
       setStatus({ text: `No snapshot taken: ${lastProblem.current}.`, error: true });
       return;

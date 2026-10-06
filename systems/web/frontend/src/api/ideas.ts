@@ -6,6 +6,22 @@ import { ApiError, api } from "./http";
 
 export type IdeasConfig = { bot_configured: boolean; destination_set: boolean; destination_hint: string | null; disclaimer: string };
 
+/** The only things sent about a closed trade. There is no field for quantity, lots, rupee P&L or charges, and the server refuses any. */
+export type TradeRequest = {
+  kind: "position" | "group";
+  label: string;
+  side: "BUY" | "SELL";
+  /** A real broker order; false is a paper trade. */
+  live: boolean;
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  exit: number | null;
+  exit_reason: string | null;
+  /** An option spread's result as a percentage of the premium paid. */
+  result_pct: number | null;
+};
+
 export type IdeaRequest = {
   note_id: string;
   segment: string;
@@ -16,6 +32,7 @@ export type IdeaRequest = {
   context: Record<string, unknown> | null;
   include_context: boolean;
   snapshot_png_base64?: string;
+  trade?: TradeRequest;
 };
 
 export type IdeaPreview = { text: string; messages: number; has_image: boolean; destination_hint: string | null };
@@ -40,12 +57,13 @@ export const listPublished = (noteIds: string[]) => (noteIds.length ? api<Publis
 /** A real post to the destination, to check the bot can post there. */
 export const sendTestIdea = () => api<{ sent: boolean }>("marketData", "/ideas/test", { method: "POST" });
 
-/** A note's chart snapshot as a base64 data URL, ready to send with the idea. The route needs the login token. */
-export async function snapshotDataUrl(noteId: string): Promise<string> {
+/** A note's chart snapshot as a base64 data URL, ready to send with the idea. `variant` "clean" is the chart with only a header;
+ * "full" is the composed picture saved with the note. The route needs the login token. */
+export async function snapshotDataUrl(noteId: string, variant: "full" | "clean" = "full"): Promise<string> {
   const token = getToken();
   let response: Response;
   try {
-    response = await fetch(`${SERVICE_URLS.execution}/study-notes/${noteId}/snapshot`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    response = await fetch(`${SERVICE_URLS.execution}/study-notes/${noteId}/snapshot?variant=${variant}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   } catch {
     throw new ApiError(0, "Could not reach the server. Check your connection and try again.", "network");
   }

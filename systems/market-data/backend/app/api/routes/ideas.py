@@ -8,7 +8,7 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.adapters.db.models import IdeasDestination, PublishedIdea
@@ -26,6 +26,24 @@ def _fail(e: ideas.IdeaError) -> HTTPException:
     return HTTPException(status_code=e.status, detail=e.detail)
 
 
+class TradeIn(BaseModel):
+    """A closed trade to show with the idea. Only these fields exist and anything else is refused (extra="forbid"): a client that
+    sends a quantity, lots, a rupee P&L or charges gets a 422 rather than having them quietly dropped or, worse, published."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    kind: Literal["position", "group"]
+    label: str = Field(min_length=1, max_length=80)
+    side: Literal["BUY", "SELL"]
+    live: bool
+    entry: Optional[float] = Field(default=None, gt=0, lt=1e9)
+    stop: Optional[float] = Field(default=None, gt=0, lt=1e9)
+    target: Optional[float] = Field(default=None, gt=0, lt=1e9)
+    exit: Optional[float] = Field(default=None, gt=0, lt=1e9)
+    exit_reason: Optional[str] = Field(default=None, max_length=30)
+    result_pct: Optional[float] = Field(default=None, ge=-100, le=100000)
+
+
 class IdeaIn(BaseModel):
     note_id: UUID
     segment: Literal["NSE", "MCX", "CRYPTO"]
@@ -36,6 +54,7 @@ class IdeaIn(BaseModel):
     context: Optional[dict] = None
     include_context: bool = True
     snapshot_png_base64: Optional[str] = None
+    trade: Optional[TradeIn] = None
 
 
 class DestinationIn(BaseModel):
@@ -77,6 +96,7 @@ def _idea(payload: IdeaIn) -> ideas.Idea:
     return ideas.Idea(
         note_id=payload.note_id, segment=payload.segment, symbol=payload.symbol.strip().upper(), interval=payload.interval,
         tag=payload.tag, text=payload.text, context=payload.context, include_context=payload.include_context, image=image,
+        trade=ideas.Trade(**payload.trade.model_dump()) if payload.trade else None,
     )
 
 

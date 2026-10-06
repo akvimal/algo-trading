@@ -10,6 +10,10 @@ Who and what, by design:
     before the audience widens - it does not assert any registration status.
   * The context line is built from an allow-list of the note's market context (price, regime, trend, PCR). The position held
     (`holding`) and the AI read are NEVER published, whatever the client sends.
+  * A CLOSED trade can be attached (never an open one: entry, stop and target for a trade still running read as a live call). Only
+    its side, instrument, entry / stop / target, exit and result are shown, and the result is in R (price move over the risk taken)
+    or, for an option spread, a percentage of the premium paid (after charges, as the app records it; a position's is before): never a
+    quantity, a lot count, a rupee amount, the charges themselves or any balance. Every trade is labelled paper or live, because a paper result presented unlabelled would mislead anyone following it.
   * Each note is published once; it can be unpublished (the message is deleted) and then published again.
 """
 
@@ -52,6 +56,23 @@ class IdeaError(Exception):
 
 
 @dataclass
+class Trade:
+    """The only things published about a trade. There is deliberately no field for quantity, lots, capital, rupee P&L or charges, so
+    none of them can reach a post. `kind` "group" is an option spread, whose entry/stop/target are levels on the UNDERLYING."""
+
+    kind: str  # "position" | "group"
+    label: str
+    side: str  # "BUY" | "SELL"
+    live: bool
+    entry: Optional[float]
+    stop: Optional[float]
+    target: Optional[float]
+    exit: Optional[float] = None  # a position's exit price
+    exit_reason: Optional[str] = None
+    result_pct: Optional[float] = None  # a spread's result as a percentage of the premium paid
+
+
+@dataclass
 class Idea:
     note_id: UUID
     segment: str
@@ -62,6 +83,7 @@ class Idea:
     context: Optional[dict]
     include_context: bool
     image: Optional[bytes]
+    trade: Optional[Trade] = None
 
 
 def disclaimer() -> str:
@@ -98,6 +120,81 @@ def context_line(ctx: Optional[dict]) -> str:
     return " · ".join(parts)
 
 
+_EXIT_WORDS = {
+    "target": "hit the target", "target_hit": "hit the target", "stop_loss": "stopped out", "stop_loss_hit": "stopped out", "stop": "stopped out",
+    "trailing_stop": "stopped out on the trail", "square_off": "squared off at the end of the day", "counter_signal": "closed on a counter signal",
+    "manual": "closed by hand", "indicator_exit": "closed on its exit rule", "exit_condition": "closed on its exit rule",
+}
+
+
+def _price(v: float) -> str:
+    return f"{v:,.2f}"
+
+
+def _signed(v: float, decimals: int, suffix: str) -> str:
+    if round(v, decimals) == 0:
+        return f"{0:.{decimals}f}{suffix}"
+    return f"{'+' if v > 0 else '−'}{abs(v):.{decimals}f}{suffix}"
+
+
+def trade_result(t: Trade) -> Optional[str]:
+    """How the trade ended, quantity-free. A position: in R (the move over the risk taken) when it had a stop, otherwise as a percentage
+    move. A spread: a percentage of the premium paid. Before charges."""
+    if t.kind == "group":
+        return f"{_signed(t.result_pct, 0, '%')} of the premium paid" if t.result_pct is not None else None
+    if t.entry is None or t.exit is None:
+        return None
+    sign = 1 if t.side == "BUY" else -1
+    move = (t.exit - t.entry) * sign
+    if t.stop is not None and t.stop != t.entry:
+        return _signed(move / abs(t.entry - t.stop), 1, "R")
+    return _signed(move / t.entry * 100, 1, "%")
+
+
+def planned_risk_reward(t: Trade) -> Optional[float]:
+    if None in (t.entry, t.stop, t.target) or t.stop == t.entry:
+        return None
+    return abs(t.target - t.entry) / abs(t.entry - t.stop)
+
+
+def trade_block(t: Trade) -> str:
+    """One line about an attached closed trade: what it was, the levels, how it ended, and whether it was paper or live."""
+    under = "Underlying " if t.kind == "group" else ""
+    parts = [f"{t.side} {t.label}"]
+    if t.entry is not None:
+        parts.append(f"{under}entry {_price(t.entry)}")
+    if t.stop is not None:
+        parts.append(f"{under}stop {_price(t.stop)}")
+    if t.target is not None:
+        parts.append(f"{under}target {_price(t.target)}")
+    rr = planned_risk_reward(t)
+    if rr is not None:
+        parts.append(f"R:R {rr:.1f}")
+    if t.kind == "position" and t.exit is not None:
+        reason = _EXIT_WORDS.get((t.exit_reason or "").lower())
+        parts.append(f"exit {_price(t.exit)}" + (f" ({reason})" if reason else ""))
+    elif t.kind == "group":
+        reason = _EXIT_WORDS.get((t.exit_reason or "").lower())
+        if reason:
+            parts.append(f"closed: {reason}")
+    result = trade_result(t)
+    if result:
+        # A position's result comes from its prices, so it is before charges; a spread's comes from its stored P&L, which the app
+        # records after charges and slippage. Each says which it is.
+        parts.append(f"{result} ({'after' if t.kind == 'group' else 'before'} charges)")
+    return f"{'Live' if t.live else 'Paper'} trade: " + " · ".join(parts)
+
+
+def check_trade(t: Trade) -> None:
+    """Only a CLOSED trade can be attached. The request carries no 'open' state, so a trade is closed only if it says how it ended."""
+    if t.kind == "position" and (t.exit is None or t.entry is None):
+        raise IdeaError(422, "Only a closed trade can be attached: this one has no exit price.")
+    if t.kind == "group" and t.result_pct is None:
+        raise IdeaError(422, "Only a closed trade can be attached: this one has no result.")
+    if t.kind not in ("position", "group") or t.side not in ("BUY", "SELL"):
+        raise IdeaError(422, "That trade could not be read.")
+
+
 def _interval_word(interval: Optional[str]) -> str:
     return interval.replace("min", "m") if interval else ""
 
@@ -109,6 +206,8 @@ def header(idea: Idea) -> str:
 def build_text(idea: Idea) -> str:
     """The whole post as text: header, the note, the market line (if asked for) and the disclaimer."""
     blocks = [header(idea), idea.text.strip()]
+    if idea.trade is not None:
+        blocks.append(trade_block(idea.trade))
     if idea.include_context:
         line = context_line(idea.context)
         if line:
@@ -156,6 +255,8 @@ def decode_image(data: Optional[str]) -> Optional[bytes]:
 def check_publishable(idea: Idea) -> None:
     if idea.tag not in PUBLISHABLE_TAGS:
         raise IdeaError(422, f"Only {' and '.join(PUBLISHABLE_TAGS)} notes can be published; '{idea.tag}' notes stay private.")
+    if idea.trade is not None:
+        check_trade(idea.trade)
     text = idea.text.strip()
     if not text:
         raise IdeaError(422, "The note is empty.")

@@ -17,12 +17,25 @@ const note = (over: Partial<StudyNote> = {}): StudyNote => ({
 });
 const published = (over: Partial<PublishedIdea> = {}): PublishedIdea => ({ note_id: "n1", published: true, published_at: "2026-10-06T05:40:00Z", unpublished_at: null, destination_hint: "…7890", has_image: false, ...over });
 
+const pos = (over: object = {}) => ({
+  id: "p1", symbol: "NIFTY", exchange: "NSE", segment: "NSE", action: "BUY", instrument_type: "future", quantity: 75, entry_price: 23140.5, entry_time: "2026-10-05T04:00:00Z",
+  exit_price: 23235, exit_time: "2026-10-05T09:30:00Z", pnl: 7087.5, status: "CLOSED", stop_loss_price: 23090, target_price: 23240, option_group_id: null,
+  exit_reason: "target", is_live_broker_order: false, trailing_stop_enabled: false, stop_loss_method: null, ...over,
+});
+const grp = (over: object = {}) => ({
+  id: "g1", underlying_symbol: "NIFTY", strategy_type: "bull_call_spread", action: "BUY", quantity: 75, net_debit: 100, status: "CLOSED", pnl: 4650, entry_time: "2026-10-04T04:00:00Z",
+  exit_time: "2026-10-04T09:00:00Z", segment: "NSE", entry_spot_price: 23100, spot_stop_loss_price: 22950, spot_target_price: 23350, exit_reason: "target", ...over,
+});
+let positions: object[];
+let groups: object[];
 let calls: { url: string; method: string; body: any }[];
 let destination: string | null;
 let failNext: { status: number; detail: string; path: string } | null;
 
 beforeEach(() => {
   calls = [];
+  positions = [pos()];
+  groups = [grp()];
   destination = "…7890";
   failNext = null;
   vi.stubGlobal(
@@ -36,7 +49,9 @@ beforeEach(() => {
         failNext = null;
         return json({ detail: f.detail }, f.status);
       }
-      if (url.includes("/study-notes/") && url.endsWith("/snapshot")) return new Response(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), { status: 200 });
+      if (url.includes("/positions")) return json(positions);
+      if (url.includes("/option-groups")) return json(groups);
+      if (url.includes("/study-notes/") && url.includes("/snapshot")) return new Response(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }), { status: 200 });
       if (url.endsWith("/ideas/preview")) {
         const text = `💡 ${body.symbol} · 15m · ${body.tag}\n\n${body.text}${body.include_context ? "\n\nPrice 23,140.50" : ""}\n\n${DISCLAIMER}`;
         return json({ text, messages: body.snapshot_png_base64 ? 1 : 1, has_image: Boolean(body.snapshot_png_base64), destination_hint: destination });
@@ -109,7 +124,7 @@ describe("PublishIdea", () => {
     const panel = await screen.findByTestId("idea-preview");
     const box = within(panel).getByLabelText(/Include the chart image/);
     expect(box).not.toBeChecked();
-    expect(within(panel).getByText(/can show lines you drew, including your own trades/)).toBeInTheDocument();
+    expect(within(panel).getByText(/also shows your note text and any AI read line, as well as lines you drew/)).toBeInTheDocument();
     await within(panel).findByText(/Watching 23,100/);
     expect(calls.some((c) => c.url.includes("/snapshot"))).toBe(false);
     await userEvent.click(box);
@@ -176,4 +191,113 @@ describe("PublishIdea", () => {
     setup(note(), published({ published: false, unpublished_at: "2026-10-06T06:00:00Z" }));
     expect(screen.getByRole("button", { name: "Publish idea" })).toBeInTheDocument();
   });
+
+  it("uses the clean chart-only picture when the note has one, and says what it still shows", async () => {
+    setup(note({ has_snapshot: true, has_clean_snapshot: true }));
+    await userEvent.click(screen.getByRole("button", { name: "Publish idea" }));
+    const panel = await screen.findByTestId("idea-preview");
+    expect(within(panel).getByText(/The chart with a header only/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/AI read line/)).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByLabelText(/Include the chart image/));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/snapshot?variant=clean"))).toBe(true));
+    expect(calls.some((c) => c.url.includes("/snapshot?variant=full"))).toBe(false);
+  });
+
+  it("falls back to the composed picture for an older note, and asks for that variant", async () => {
+    setup(note({ has_snapshot: true, has_clean_snapshot: false }));
+    await userEvent.click(screen.getByRole("button", { name: "Publish idea" }));
+    const panel = await screen.findByTestId("idea-preview");
+    await userEvent.click(within(panel).getByLabelText(/Include the chart image/));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/snapshot?variant=full"))).toBe(true));
+  });
+
+  describe("attaching a closed trade", () => {
+    const open = async () => {
+      await userEvent.click(screen.getByRole("button", { name: "Publish idea" }));
+      return screen.findByTestId("idea-preview");
+    };
+
+    it("lists only the closed trades on this instrument, with no amounts, and attaches none by default", async () => {
+      positions = [pos(), pos({ id: "open", status: "OPEN", exit_price: null, exit_time: null }), pos({ id: "other", symbol: "BANKNIFTY" }), pos({ id: "beesx", symbol: "NIFTYBEES" }), pos({ id: "leg", option_group_id: "g1" })];
+      groups = [grp(), grp({ id: "credit", net_debit: -20 }), grp({ id: "open-g", status: "OPEN" })];
+      setup();
+      const panel = await open();
+      const picker = await within(panel).findByLabelText("Attach a closed trade");
+      const options = within(picker).getAllByRole("option").map((o) => o.textContent);
+      expect(options).toEqual(["No trade", expect.stringMatching(/^BUY NIFTY · closed 5 Oct · hit target · paper$/), expect.stringMatching(/^BUY NIFTY bull call spread · closed 4 Oct · hit target · paper$/)]);
+      expect(options.join(" ")).not.toMatch(/₹|\b4650\b|\b7087|\b75\b/); // nothing about size or money in the list
+      await within(panel).findByText(/Watching 23,100/);
+      expect(last(calls.filter((c) => c.url.endsWith("/ideas/preview"))).body).not.toHaveProperty("trade");
+    });
+
+    it("sends the levels and how it ended for a position, and nothing about its size or its rupee result", async () => {
+      setup();
+      const panel = await open();
+      await userEvent.selectOptions(await within(panel).findByLabelText("Attach a closed trade"), "p1");
+      await waitFor(() => expect(last(calls.filter((c) => c.url.endsWith("/ideas/preview"))).body.trade).toBeDefined());
+      const trade = last(calls.filter((c) => c.url.endsWith("/ideas/preview"))).body.trade;
+      expect(trade).toEqual({ kind: "position", label: "NIFTY", side: "BUY", live: false, entry: 23140.5, stop: 23090, target: 23240, exit: 23235, exit_reason: "target", result_pct: null });
+      const wire = JSON.stringify(trade);
+      for (const private_ of ["quantity", "75", "pnl", "7087", "charges"]) expect(wire).not.toContain(private_);
+      await userEvent.click(within(panel).getByRole("button", { name: "Publish now" }));
+      await waitFor(() => expect(writes("/ideas/publish")[0].body.trade).toEqual(trade));
+    });
+
+    it("sends an option spread's result as a share of the premium, not as money, and labels a live one live", async () => {
+      positions = [pos({ id: "leg1", option_group_id: "g1", is_live_broker_order: true })];
+      setup();
+      const panel = await open();
+      await userEvent.selectOptions(await within(panel).findByLabelText("Attach a closed trade"), "g1");
+      await waitFor(() => expect(last(calls.filter((c) => c.url.endsWith("/ideas/preview"))).body.trade?.kind).toBe("group"));
+      const trade = last(calls.filter((c) => c.url.endsWith("/ideas/preview"))).body.trade;
+      expect(trade).toMatchObject({ kind: "group", label: "NIFTY bull call spread", live: true, entry: 23100, stop: 22950, target: 23350, exit: null });
+      expect(trade.result_pct).toBeCloseTo(62, 5); // 4650 / (100 x 75), computed here so neither number is sent
+      expect(JSON.stringify(trade)).not.toContain("4650");
+    });
+
+    it("leaves out a stop that was trailed, so the result is not measured against a moved stop", async () => {
+      positions = [pos({ trailing_stop_enabled: true, stop_loss_price: 23200 })];
+      setup();
+      const panel = await open();
+      await userEvent.selectOptions(await within(panel).findByLabelText("Attach a closed trade"), "p1");
+      await waitFor(() => expect(last(calls.filter((c) => c.url.endsWith("/ideas/preview"))).body.trade).toBeDefined());
+      expect(last(calls.filter((c) => c.url.endsWith("/ideas/preview"))).body.trade.stop).toBeNull();
+    });
+
+    it("says so when there is nothing to attach, and still lets the idea go out", async () => {
+      positions = [];
+      groups = [];
+      setup();
+      const panel = await open();
+      expect(await within(panel).findByText("No closed trades on NIFTY to attach.")).toBeInTheDocument();
+      await within(panel).findByText(/Watching 23,100/);
+      expect(within(panel).getByRole("button", { name: "Publish now" })).toBeEnabled();
+    });
+
+    it("says so when the trades could not be loaded, and still lets the idea go out without one", async () => {
+      failNext = { status: 500, path: "/positions", detail: "boom" };
+      setup();
+      const panel = await open();
+      expect(await within(panel).findByText("Could not load your trades, so none can be attached right now.")).toBeInTheDocument();
+      await within(panel).findByText(/Watching 23,100/);
+      expect(within(panel).getByRole("button", { name: "Publish now" })).toBeEnabled();
+    });
+
+    it("explains what is and is not shown", async () => {
+      setup();
+      const panel = await open();
+      expect(await within(panel).findByText(/Closed trades only\..*paper or live\. It never shows quantity, lots, rupee amounts, charges or your balance/)).toBeInTheDocument();
+    });
+
+    it("shows the server's refusal if it will not take the trade", async () => {
+      setup();
+      const panel = await open();
+      await userEvent.selectOptions(await within(panel).findByLabelText("Attach a closed trade"), "p1");
+      await within(panel).findByText(/Watching 23,100/);
+      failNext = { status: 422, path: "/ideas/publish", detail: "Only a closed trade can be attached: this one has no exit price." };
+      await userEvent.click(within(panel).getByRole("button", { name: "Publish now" }));
+      expect(await within(panel).findByRole("alert")).toHaveTextContent("Only a closed trade can be attached");
+    });
+  });
 });
+

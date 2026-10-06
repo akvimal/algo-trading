@@ -116,6 +116,10 @@ describe("NotesPanel", () => {
     await waitFor(() => expect(addNote).toHaveBeenCalledTimes(1));
     expect(composeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ chart: "data:image/png;base64,CHART", note: "Retest then short", tag: "plan", aiLine: "Sell rallies.", title: "NIFTY · 5m" }));
     expect(addNote.mock.calls[0][0].snapshot_png_base64).toBe("data:image/png;base64,COMPOSED");
+    // a second, clean picture (the chart and header only: no words, no tag, no AI line) is kept for publishing
+    expect(composeSnapshot).toHaveBeenCalledTimes(2);
+    expect(composeSnapshot.mock.calls[1][0]).toEqual(expect.objectContaining({ chart: "data:image/png;base64,CHART", title: "NIFTY · 5m", note: "", tag: null, aiLine: null }));
+    expect(addNote.mock.calls[0][0].clean_png_base64).toBe("data:image/png;base64,COMPOSED");
   });
 
   it("still saves the words when the chart is not ready for a snapshot, and says so", async () => {

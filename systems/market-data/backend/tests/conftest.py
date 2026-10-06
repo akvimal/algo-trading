@@ -1,3 +1,11 @@
+import os
+
+# These tests must never touch a real database. The default DATABASE_URL points at the dev Postgres that is published on this machine
+# (localhost:5433), and a test that runs a job which opens its own session would write to it: on 2026-10-06 a scheduler test, whose job
+# now sends a notification when it finishes, queued a real Telegram message in the dev database. Point every test at an address that
+# refuses connections, BEFORE the app (and its settings) are imported, so any accidental database use fails loudly instead.
+os.environ["DATABASE_URL"] = "postgresql+psycopg://nobody:nothing@127.0.0.1:1/never_a_real_database"
+
 import pytest
 
 from app.domain import job_tracker
@@ -13,6 +21,19 @@ def _no_model_settings_db(monkeypatch):
     ai_models.invalidate()
     yield
     ai_models.invalidate()
+
+
+@pytest.fixture(autouse=True)
+def _no_notifications_sent(monkeypatch):
+    """The jobs call app/domain/notification_jobs when they finish (the OI digest, the pre-market push, the operator check). Nothing a
+    test does may send a message or queue one: tests that exercise the notification code replace these with their own."""
+    from app.domain import notification_jobs, notifications
+
+    monkeypatch.setattr(notification_jobs, "send_oi_digest", lambda: notifications.Tally())
+    monkeypatch.setattr(notification_jobs, "send_premarket", lambda report, day=None: notifications.Tally())
+    monkeypatch.setattr(notification_jobs, "check_ops", lambda: notifications.Tally())
+    monkeypatch.setattr(notification_jobs, "retry_failed", lambda: notifications.Tally())
+    monkeypatch.setattr(notifications, "send_telegram", lambda text, chat=None: pytest.fail("a test tried to send a real Telegram message"))
 
 
 @pytest.fixture(autouse=True)

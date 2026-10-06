@@ -67,9 +67,13 @@ def latest_oi_rows(db: Session) -> tuple[list[dict], Optional[date]]:
     ], latest
 
 
-def oi_digest_to_subscribers(db: Session) -> n.Tally:
+def oi_digest_to_subscribers(db: Session, today: Optional[date] = None) -> n.Tally:
+    """Only a scan for TODAY is announced. The "latest snapshot" can be days old (a scan that wrote nothing new leaves yesterday's or last
+    week's rows as the latest), and telling someone last week's OI buildup as if it were the day's news is worse than saying nothing."""
     rows, snapshot_date = latest_oi_rows(db)
-    if snapshot_date is None:
+    if snapshot_date is None or snapshot_date != (today or datetime.now(_tz()).date()):
+        if snapshot_date is not None:
+            logger.info("notifications: the latest OI snapshot is %s, not today - no digest sent", snapshot_date)
         return n.Tally()
     return n.broadcast(db, "oi_buildup", f"oi:{snapshot_date.isoformat()}", lambda params: n.oi_digest_message(rows, snapshot_date, params.get("top_n", 10)))
 

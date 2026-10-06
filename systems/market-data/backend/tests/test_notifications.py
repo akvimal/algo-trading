@@ -519,3 +519,58 @@ def test_the_operator_status_says_all_clear_only_when_nothing_is_failing(monkeyp
     monkeypatch.setattr(jobs, "_latest_success_by_job", lambda db, ids: {"dhan-token-renew": NOW})
     assert jobs.ops_status_text(JobsDB(runs), NOW).startswith("✅")
 
+
+# ---- tests can never reach a real database or send a real message ---------------------------------------------------------------
+
+
+def test_the_test_run_is_pointed_at_a_database_that_refuses_connections():
+    assert "never_a_real_database" in settings.database_url and "5433" not in settings.database_url
+
+
+def test_a_test_that_reaches_for_the_database_fails_instead_of_touching_dev():
+    from sqlalchemy import text
+
+    from app.adapters.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        with pytest.raises(Exception):
+            db.execute(text("select 1"))
+    finally:
+        db.close()
+
+
+def test_nothing_in_a_test_can_send_a_telegram_message(monkeypatch):
+    with pytest.raises(pytest.fail.Exception):
+        n.send_telegram("hello", "111")
+
+
+def test_a_scan_that_finishes_triggers_the_digest_without_sending_anything_in_tests(monkeypatch):
+    called = []
+    monkeypatch.setattr(jobs, "send_oi_digest", lambda: (called.append(1), n.Tally())[1])
+    assert jobs.send_oi_digest().sent == 0 and called == [1]  # the stub in conftest is replaceable, and the default sends nothing
+
+
+# ---- only today's OI scan is announced ----------------------------------------------------------------------------------------------
+
+
+def test_a_digest_is_not_sent_for_an_old_snapshot(monkeypatch):
+    sent = []
+    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 20, 20)], date(2026, 10, 1)))
+    monkeypatch.setattr(n, "broadcast", lambda *a, **k: sent.append(a) or n.Tally(sent=1))
+    assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 0 and sent == []
+
+
+def test_a_digest_is_sent_for_todays_snapshot_once_with_a_per_day_key(monkeypatch):
+    calls = []
+    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 20, 20)], date(2026, 10, 6)))
+    monkeypatch.setattr(n, "broadcast", lambda db, category, key, build, now=None: (calls.append((category, key, build({"top_n": 5}))), n.Tally(sent=1))[1])
+    assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 1
+    category, key, text = calls[0]
+    assert (category, key) == ("oi_buildup", "oi:2026-10-06") and text.startswith("📊 Strong OI buildup · 6 Oct close")
+
+
+def test_no_snapshot_at_all_sends_nothing(monkeypatch):
+    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([], None))
+    assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 0
+

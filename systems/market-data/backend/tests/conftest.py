@@ -1,7 +1,7 @@
 import pytest
 
 from app.domain import job_tracker
-from app.domain import ai_models
+from app.domain import ai_models, news_scores
 from app.providers import calendar, dhan, news
 
 
@@ -13,6 +13,15 @@ def _no_model_settings_db(monkeypatch):
     ai_models.invalidate()
     yield
     ai_models.invalidate()
+
+
+@pytest.fixture(autouse=True)
+def _no_news_scores_db(monkeypatch):
+    """app/domain/news_scores.py reads/writes market_data.news_article_scores; by default nothing has been judged yet, which is
+    the original send-everything behaviour the older news tests describe. test_news_dedupe.py supplies its own store."""
+    monkeypatch.setattr(news_scores, "load", lambda underlying, urls: {})
+    monkeypatch.setattr(news_scores, "save", lambda underlying, judged: None)
+    monkeypatch.setattr(news_scores, "latest_digest", lambda underlying: None)
 
 
 @pytest.fixture(autouse=True)

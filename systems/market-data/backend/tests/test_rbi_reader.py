@@ -25,17 +25,24 @@ class _Resp:
 
 
 class _Db:
-    """Just enough of a Session for attach_summaries: get / add / commit / rollback / close."""
+    """Just enough of a Session for attach_summaries: get / add / delete / commit / rollback / close, for both tables."""
 
-    def __init__(self, rows=None):
-        self.rows, self.added, self.commits, self.rollbacks, self.closed = dict(rows or {}), [], 0, 0, False
+    def __init__(self, rows=None, attempts=None):
+        self.rows, self.attempts = dict(rows or {}), dict(attempts or {})
+        self.added, self.commits, self.rollbacks, self.closed = [], 0, 0, False
 
-    def get(self, _model, key):
-        return self.rows.get(key)
+    def get(self, model, key):
+        return (self.attempts if model is rbi_reader.RbiReadAttempt else self.rows).get(key)
 
     def add(self, row):
         self.added.append(row)
-        self.rows[row.url] = row
+        if isinstance(row, rbi_reader.RbiReadAttempt):
+            self.attempts[row.url] = row
+        else:
+            self.rows[row.url] = row
+
+    def delete(self, row):
+        self.attempts.pop(row.url, None)
 
     def commit(self):
         self.commits += 1
@@ -58,6 +65,8 @@ GOOD = {"summary": "Governor says banks are well capitalised.", "stance": "not a
 def db(monkeypatch):
     d = _Db()
     monkeypatch.setattr(rbi_reader, "SessionLocal", lambda: d)
+    # The same-text lookup is a query on text_hash; the fake answers it from the summaries it holds.
+    monkeypatch.setattr(rbi_reader, "_same_text", lambda session, h: next((r for r in session.rows.values() if getattr(r, "text_hash", None) == h), None))
     return d
 
 
@@ -162,7 +171,8 @@ def test_a_page_that_cannot_be_read_or_a_model_failure_leaves_the_item_without_a
     monkeypatch.setattr(rbi_reader, "summarise", boom)
     items = rbi_reader.attach_summaries([_item(5), _item(4)], "key")
     assert "summary" not in items[0] and "summary" not in items[1]
-    assert db.rollbacks == 1 and db.closed  # the failed model call rolled back; the session is always closed
+    assert db.closed  # the session is always closed
+    assert db.attempts["http://rbi/5"].attempts == 1 and db.attempts["http://rbi/4"].attempts == 1  # both failures are recorded
 
 
 def test_an_item_without_a_url_is_skipped(monkeypatch, db):
@@ -244,4 +254,95 @@ def test_a_stored_summary_is_capped_even_when_the_model_ignores_the_limit(monkey
     s = rbi_reader.attach_summaries([_item(3)], "key")[0]["summary"]
     assert len(s["text"]) <= rbi_reader.SUMMARY_MAX_CHARS and "**" not in s["text"]
     assert len(s["rates"]) <= rbi_reader.RATES_MAX_CHARS
+
+
+# --- each item is processed once: same text, backoff, giving up ---------------------------------------------------------------
+
+
+def _stored(url, text_hash=None):
+    return type("Row", (), {"url": url, "summary": "Stored.", "stance": "neutral", "rates": None, "model": "m", "text_hash": text_hash})()
+
+
+def _attempt(url, attempts, hours_ago):
+    from datetime import datetime, timedelta, timezone
+
+    return rbi_reader.RbiReadAttempt(url=url, attempts=attempts, last_attempt_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago), last_error="x")
+
+
+def test_the_same_text_under_a_new_url_reuses_the_summary_with_no_model_call(monkeypatch, db):
+    text = "Date : Oct 03, 2026 The Governor said banks are strong. " * 20
+    db.rows["http://rbi/old"] = _stored("http://rbi/old", rbi_reader.text_hash(text))
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: text)
+    monkeypatch.setattr(rbi_reader, "summarise", lambda *a: pytest.fail("the text was already summarised under another url"))
+    item = rbi_reader.attach_summaries([_item(3)], "key")[0]
+    assert item["summary"]["text"] == "Stored." and item["summary"]["stance"] == "neutral"
+    assert db.rows["http://rbi/3"].text_hash == rbi_reader.text_hash(text)  # remembered under the new url too, so it is not re-checked
+
+
+def test_text_hash_ignores_case_spacing_and_the_date_header():
+    a = rbi_reader.text_hash("Date : Oct 03, 2026  Thank you.\n\n  Banks   are strong.")
+    b = rbi_reader.text_hash("thank you. banks are strong.")
+    assert a == b
+    assert rbi_reader.text_hash("A different speech.") != a
+
+
+def test_a_failed_item_is_recorded_and_the_report_still_goes_on(monkeypatch, db):
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: None)
+    items = rbi_reader.attach_summaries([_item(3)], "key")
+    assert "summary" not in items[0]
+    assert db.attempts["http://rbi/3"].attempts == 1 and "could not be read" in db.attempts["http://rbi/3"].last_error
+
+
+def test_a_model_failure_is_recorded_too(monkeypatch, db):
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: "t " * 300)
+
+    def boom(*a):
+        raise RuntimeError("OpenRouter returned 402")
+
+    monkeypatch.setattr(rbi_reader, "summarise", boom)
+    rbi_reader.attach_summaries([_item(3)], "key")
+    assert db.attempts["http://rbi/3"].attempts == 1 and "402" in db.attempts["http://rbi/3"].last_error
+
+
+def test_a_recently_failed_item_waits_before_it_is_tried_again(monkeypatch, db):
+    db.attempts["http://rbi/3"] = _attempt("http://rbi/3", attempts=1, hours_ago=2)
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: pytest.fail("still backing off"))
+    assert "summary" not in rbi_reader.attach_summaries([_item(3)], "key")[0]
+
+
+def test_a_failed_item_is_retried_once_the_wait_has_passed_and_the_count_grows(monkeypatch, db):
+    db.attempts["http://rbi/3"] = _attempt("http://rbi/3", attempts=1, hours_ago=20)  # 1st failure waits 12h: due
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: None)
+    rbi_reader.attach_summaries([_item(3)], "key")
+    assert db.attempts["http://rbi/3"].attempts == 2
+
+
+def test_the_wait_grows_with_each_failure():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    due = lambda attempts, hours: rbi_reader._may_try(rbi_reader.RbiReadAttempt(url="u", attempts=attempts, last_attempt_at=now - timedelta(hours=hours)), now)  # noqa: E731
+    assert due(1, 13) and not due(1, 11)
+    assert due(2, 37) and not due(2, 24)  # the second failure waits more than a day, so one daily run is skipped
+    assert due(3, 85) and not due(3, 60)
+
+
+def test_an_item_that_keeps_failing_is_given_up_on(monkeypatch, db):
+    db.attempts["http://rbi/3"] = _attempt("http://rbi/3", attempts=rbi_reader.MAX_ATTEMPTS, hours_ago=10_000)
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: pytest.fail("given up on this item"))
+    assert "summary" not in rbi_reader.attach_summaries([_item(3)], "key")[0]
+
+
+def test_a_success_clears_an_earlier_failure_record(monkeypatch, db):
+    db.attempts["http://rbi/3"] = _attempt("http://rbi/3", attempts=2, hours_ago=100)
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: "t " * 300)
+    monkeypatch.setattr(rbi_reader, "summarise", lambda *a: GOOD)
+    assert "summary" in rbi_reader.attach_summaries([_item(3)], "key")[0]
+    assert "http://rbi/3" not in db.attempts
+
+
+def test_a_manual_refresh_without_a_key_does_not_count_as_a_failed_attempt(monkeypatch, db):
+    monkeypatch.setattr(rbi_reader, "fetch_text", lambda url: pytest.fail("no key, no fetch"))
+    rbi_reader.attach_summaries([_item(3)], None)
+    assert db.attempts == {}
 

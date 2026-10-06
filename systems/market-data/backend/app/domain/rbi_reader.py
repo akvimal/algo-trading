@@ -11,15 +11,16 @@ read, a model that fails or no key all just leave an item without a summary - th
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
 
-from app.adapters.db.models import RbiSummary
+from app.adapters.db.models import RbiReadAttempt, RbiSummary
 from app.adapters.db.session import SessionLocal
 from app.domain import ai_models
 from app.domain.ai_retry import post_json
@@ -33,6 +34,12 @@ READ_NEWEST = 3
 MAX_TEXT_CHARS = 30_000
 _MIN_TEXT_CHARS = 400  # shorter than this is not a speech or a statement, but an operations notice or an error page
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+# An item that cannot be read (page down or unreadable, model failing) is not retried every morning forever: after a failure it
+# waits, and after MAX_ATTEMPTS failures it is left alone. The waits are a little short of whole days so the daily 08:45 job
+# is not skipped by a few seconds of drift: 1st failure -> next day, 2nd -> two days, 3rd -> four days, 4th -> given up.
+MAX_ATTEMPTS = 4
+_RETRY_AFTER_HOURS = {1: 12, 2: 36, 3: 84}
 
 STANCES = ["hawkish", "dovish", "neutral", "not about policy"]
 
@@ -129,6 +136,34 @@ def _tidy(s: str, limit: int) -> str:
     return cut[: cut.rfind(" ")].rstrip(" ,;:-") + "\u2026"
 
 
+def text_hash(text: str) -> str:
+    """Identifies an item's TEXT, whatever url it was published under (RBI can put the same address on a speech page and a press
+    release): lower-cased, whitespace-collapsed, with the page's "Date : Oct 03, 2026" header dropped."""
+    body = re.sub(r"^\s*date\s*:\s*[a-z]{3,9}\s+\d{1,2},\s*\d{4}\s*", "", text.lower())
+    return hashlib.sha256(re.sub(r"\s+", " ", body).strip().encode("utf-8")).hexdigest()
+
+
+def _may_try(attempt: Optional[RbiReadAttempt], now: datetime) -> bool:
+    """Whether a previously failed item is due another go."""
+    if attempt is None:
+        return True
+    if attempt.attempts >= MAX_ATTEMPTS:
+        return False
+    wait = timedelta(hours=_RETRY_AFTER_HOURS.get(attempt.attempts, _RETRY_AFTER_HOURS[3]))
+    return now - attempt.last_attempt_at >= wait
+
+
+def _record_failure(db, url: str, error: str) -> None:
+    row = db.get(RbiReadAttempt, url)
+    if row is None:
+        row = RbiReadAttempt(url=url, attempts=0)
+        db.add(row)
+    row.attempts = (row.attempts or 0) + 1
+    row.last_attempt_at = datetime.now(timezone.utc)
+    row.last_error = error[:300]
+    db.commit()
+
+
 def _clean(s: str) -> str:
     """The text (and the model's quotes of it) carry narrow no-break spaces and other odd spacing; show plain spaces."""
     return re.sub(r"\s+", " ", re.sub(r"[\u202f\u00a0\u2009]", " ", s)).strip()
@@ -138,9 +173,19 @@ def _as_dict(row: RbiSummary) -> dict:
     return {"text": row.summary, "stance": row.stance, "rates": row.rates or None, "model": row.model}
 
 
+def _same_text(db, h: str) -> Optional[RbiSummary]:
+    return db.query(RbiSummary).filter(RbiSummary.text_hash == h).first()
+
+
 def attach_summaries(items: list[dict], api_key: Optional[str]) -> list[dict]:
     """Adds `summary` to the newest READ_NEWEST items: the stored one when this item was read before, else a fresh read
-    (needs `api_key`). Returns the same list; an item that could not be summarised simply has no `summary` key."""
+    (needs `api_key`). Returns the same list; an item that could not be summarised simply has no `summary` key.
+
+    Each item is processed once:
+      * a stored summary for the url is reused (no fetch, no model call);
+      * a new url whose TEXT matches an item already summarised (the same address under another url) copies that summary
+        (a fetch, but no model call);
+      * an item that failed recently waits before it is tried again, and is dropped after MAX_ATTEMPTS failures."""
     db = SessionLocal()
     try:
         for item in items[:READ_NEWEST]:
@@ -150,17 +195,7 @@ def attach_summaries(items: list[dict], api_key: Optional[str]) -> list[dict]:
             try:
                 row = db.get(RbiSummary, url)
                 if row is None and api_key:
-                    text = fetch_text(url)
-                    if text:
-                        model = ai_models.model_for("rbi_summary")
-                        got = summarise(item["title"], text, api_key, model)
-                        row = RbiSummary(
-                            url=url, kind=item["kind"], title=item["title"], published=_parse_dt(item.get("published")),
-                            stance=got["stance"], summary=_tidy(got["summary"], SUMMARY_MAX_CHARS), rates=_tidy(got.get("rates") or "", RATES_MAX_CHARS) or None,
-                            model=model, read_at=datetime.now(timezone.utc),
-                        )
-                        db.add(row)
-                        db.commit()
+                    row = _read_new(db, item, api_key)
                 if row is not None:
                     item["summary"] = _as_dict(row)
             except Exception as exc:
@@ -169,6 +204,37 @@ def attach_summaries(items: list[dict], api_key: Optional[str]) -> list[dict]:
     finally:
         db.close()
     return items
+
+
+def _read_new(db, item: dict, api_key: str) -> Optional[RbiSummary]:
+    """Fetch, (reuse or) summarise and store one unseen item. Returns its row, or None after recording why it could not be read."""
+    url = item["url"]
+    if not _may_try(db.get(RbiReadAttempt, url), datetime.now(timezone.utc)):
+        return None
+    text = fetch_text(url)
+    if not text:
+        _record_failure(db, url, "page could not be read or was too short")
+        return None
+    h = text_hash(text)
+    twin = _same_text(db, h)
+    try:
+        if twin is not None:
+            fields = dict(stance=twin.stance, summary=twin.summary, rates=twin.rates, model=twin.model)
+        else:
+            model = ai_models.model_for("rbi_summary")
+            got = summarise(item["title"], text, api_key, model)
+            fields = dict(stance=got["stance"], summary=_tidy(got["summary"], SUMMARY_MAX_CHARS), rates=_tidy(got.get("rates") or "", RATES_MAX_CHARS) or None, model=model)
+    except Exception as exc:
+        db.rollback()
+        _record_failure(db, url, f"{type(exc).__name__}: {exc}")
+        raise
+    row = RbiSummary(url=url, kind=item["kind"], title=item["title"], published=_parse_dt(item.get("published")), text_hash=h, read_at=datetime.now(timezone.utc), **fields)
+    db.add(row)
+    stale = db.get(RbiReadAttempt, url)
+    if stale is not None:
+        db.delete(stale)  # it worked after all
+    db.commit()
+    return row
 
 
 def _parse_dt(iso: Optional[str]) -> Optional[datetime]:

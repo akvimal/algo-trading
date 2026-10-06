@@ -289,3 +289,32 @@ class RbiSummary(Base):
     rates = Column(Text)
     model = Column(Text)
     read_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    text_hash = Column(Text, index=True)  # same text under another url reuses the summary
+
+
+class RbiReadAttempt(Base):
+    """A failed attempt to read an RBI item, so it backs off and eventually stops being retried. See app/domain/rbi_reader.py."""
+
+    __tablename__ = "rbi_read_attempts"
+    __table_args__ = {"schema": SCHEMA}
+
+    url = Column(Text, primary_key=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_attempt_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    last_error = Column(Text)
+
+
+class NewsArticleScore(Base):
+    """What the model made of one news article for one instrument, so it is judged once. `relevant` False = the model dropped it
+    as irrelevant (remembered so it is not re-sent). See app/domain/news_scores.py."""
+
+    __tablename__ = "news_article_scores"
+    __table_args__ = {"schema": SCHEMA}
+
+    underlying = Column(Text, primary_key=True)
+    url = Column(Text, primary_key=True)
+    relevant = Column(Boolean, nullable=False)
+    relevance_score = Column(Integer)
+    why = Column(Text)
+    scored_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+

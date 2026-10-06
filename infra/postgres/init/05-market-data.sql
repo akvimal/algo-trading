@@ -274,5 +274,26 @@ CREATE TABLE IF NOT EXISTS market_data.rbi_summaries (
     summary     TEXT NOT NULL,
     rates       TEXT,
     model       TEXT,
-    read_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    read_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    text_hash   TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_rbi_summaries_text_hash ON market_data.rbi_summaries (text_hash);
+
+-- Process each piece of news once. See migration 041, app/domain/rbi_reader.py and app/domain/news_scores.py.
+CREATE TABLE IF NOT EXISTS market_data.rbi_read_attempts (
+    url              TEXT PRIMARY KEY,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS market_data.news_article_scores (
+    underlying       TEXT NOT NULL,
+    url              TEXT NOT NULL,
+    relevant         BOOLEAN NOT NULL,
+    relevance_score  INTEGER,
+    why              TEXT,
+    scored_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (underlying, url)
+);
+CREATE INDEX IF NOT EXISTS idx_news_article_scores_scored_at ON market_data.news_article_scores (scored_at);

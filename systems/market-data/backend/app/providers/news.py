@@ -12,7 +12,7 @@ import requests
 from app.adapters.db.models import NewsHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
-from app.domain import ai_models
+from app.domain import ai_models, news_scores
 from app.domain.ai_retry import post_json
 from app.domain.models import NewsArticle, NewsDigest
 
@@ -299,7 +299,19 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
 
     candidates = rows[:_MAX_ARTICLES_FOR_AI]
     by_url = {row.get("url"): row for row in candidates if row.get("url")}
-    articles_payload = [
+
+    # Judge each article once: what the model already made of an article (relevant or dropped) is remembered per
+    # instrument (app/domain/news_scores.py), so only articles it has not seen are sent for scoring.
+    known = news_scores.load(underlying, list(by_url))
+    new_rows = [row for row in candidates if row.get("url") and row["url"] not in known]
+    if not new_rows and known:
+        reused = _reuse_last_digest(underlying, candidates, known)
+        if reused is not None:
+            return reused
+        new_rows = [row for row in candidates if row.get("url")]  # nothing to reuse (first run, or the log is unreadable)
+        known = {}
+
+    new_payload = [
         {
             "url": row.get("url"),
             "title": row.get("title"),
@@ -307,7 +319,12 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
             "source": row.get("source"),
             "published_at": row.get("published_at"),
         }
-        for row in candidates
+        for row in new_rows
+    ]
+    already_scored = [
+        {"title": by_url[url].get("title"), "relevance_score": k["score"], "why": k["why"]}
+        for url, k in known.items()
+        if k["relevant"] and url in by_url
     ]
     instrument_label = _INSTRUMENT_LABELS.get(underlying, underlying)
 
@@ -328,12 +345,17 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
                             "signal), score what's left 0-100 by likely trend impact, and give an overall "
                             "bullish/bearish/neutral bias with a one-line reason and a short digest. Base this "
                             "only on the headlines/summaries given - never invent facts, prices, or events not "
-                            "present in them."
+                            "present in them. Score ONLY the articles under new_articles (return only those in "
+                            "'articles'). already_scored_relevant lists articles you judged earlier, with their "
+                            "scores: do not return or re-score them, but let them inform the overall bias and digest."
                         ),
                     },
                     {
                         "role": "user",
-                        "content": f"Instrument: {instrument_label}\n\nHeadlines (JSON):\n{json.dumps(articles_payload)}",
+                        "content": (
+                            f"Instrument: {instrument_label}\n\nnew_articles (JSON):\n{json.dumps(new_payload)}"
+                            + (f"\n\nalready_scored_relevant (JSON):\n{json.dumps(already_scored)}" if already_scored else "")
+                        ),
                     },
                 ],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "news_digest", "strict": True, "schema": _DIGEST_SCHEMA}},
@@ -349,29 +371,61 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
             _parse_ai_json,
         )
 
+        new_by_url = {row["url"]: row for row in new_rows}
+        verdicts: dict[str, Optional[dict]] = {url: None for url in new_by_url}  # not returned = judged irrelevant
         scored_articles = []
         for entry in parsed.get("articles") or []:
-            row = by_url.get(entry.get("url"))
+            row = new_by_url.get(entry.get("url"))
             if row is None:
-                continue  # AI referenced a url we didn't give it - skip rather than fabricate a row
+                continue  # AI referenced a url we didn't give it (or one it had already scored) - skip rather than fabricate
             article = _to_article(row)
             article.relevance_score = entry.get("relevance_score")
             article.why = entry.get("why")
             scored_articles.append(article)
-        # The AI picks which articles matter but its own list order isn't
-        # meaningful (confirmed live - not chronological); newest-first is
-        # what the tab should actually show.
-        scored_articles.sort(key=lambda a: a.published_at, reverse=True)
+            verdicts[row["url"]] = {"score": article.relevance_score, "why": article.why}
+        scored_articles += _articles_from_known(candidates, known)
+        news_scores.save(underlying, verdicts)  # only after a successful call, so a failure is retried next time
 
         return NewsDigest(
             bias=parsed["bias"],
             bias_reason=parsed["bias_reason"],
             digest=parsed["digest"],
-            articles=scored_articles,
+            articles=_top_newest_first(scored_articles),
         )
     except Exception as exc:
         logger.warning("OpenRouter news analysis failed for %s: %s", underlying, exc)
         return _fallback_digest(rows, "AI analysis temporarily unavailable - showing raw headlines.")
+
+
+def _articles_from_known(candidates: list[dict], known: dict[str, dict]) -> list[NewsArticle]:
+    """The articles judged relevant on an earlier run that are still in the feed, with their remembered score and reason."""
+    out = []
+    for row in candidates:
+        k = known.get(row.get("url"))
+        if k and k["relevant"]:
+            article = _to_article(row)
+            article.relevance_score, article.why = k["score"], k["why"]
+            out.append(article)
+    return out
+
+
+def _top_newest_first(articles: list[NewsArticle]) -> list[NewsArticle]:
+    """The most relevant few, shown newest first. The AI picks which articles matter but its own list order isn't meaningful
+    (confirmed live - not chronological); newest-first is what the tab should actually show."""
+    top = sorted(articles, key=lambda a: a.relevance_score or 0, reverse=True)[:_MAX_ARTICLES_IN_DIGEST]
+    return sorted(top, key=lambda a: a.published_at, reverse=True)
+
+
+def _reuse_last_digest(underlying: str, candidates: list[dict], known: dict[str, dict]) -> Optional[NewsDigest]:
+    """Every matched article was judged on an earlier run, so there is nothing new to ask the model: reuse the last digest (from
+    the in-memory cache, else the persisted log, which survives a restart) with the still-current articles' remembered scores."""
+    cached = _cache_stale(underlying)
+    prior = {"bias": cached.bias, "bias_reason": cached.bias_reason, "digest": cached.digest} if cached else news_scores.latest_digest(underlying)
+    # A placeholder ("AI analysis temporarily unavailable...") is logged and cached like a real digest and has digest == bias_reason;
+    # it is not something to serve again for articles that were judged fine.
+    if prior is None or prior["digest"] == prior["bias_reason"]:
+        return None
+    return NewsDigest(**prior, articles=_top_newest_first(_articles_from_known(candidates, known)))
 
 
 def _persist_digest(underlying: str, digest: NewsDigest) -> None:

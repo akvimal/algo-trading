@@ -12,6 +12,7 @@ import requests
 from app.adapters.db.models import NewsHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
+from app.domain import ai_models
 from app.domain.models import NewsArticle, NewsDigest
 
 logger = logging.getLogger(__name__)
@@ -314,7 +315,7 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
-                "model": settings.openrouter_model,
+                "model": ai_models.model_for("news"),
                 "messages": [
                     {
                         "role": "system",

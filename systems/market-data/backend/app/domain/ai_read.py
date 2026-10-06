@@ -15,6 +15,7 @@ from typing import Optional
 import requests
 
 from app.config import settings
+from app.domain import ai_models
 from app.domain.models import Candle, ChartStructure, EconomicEvent, MarketRegime, NewsDigest, OptionOiSummary
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
 
@@ -302,15 +303,17 @@ def build_context(
     return context
 
 
-def run_ai_read(context: dict, api_key: str) -> dict:
+def run_ai_read(context: dict, api_key: str, model: Optional[str] = None) -> dict:
     """One OpenRouter call. Raises RuntimeError with a user-presentable message
-    on any failure - unlike the news digest there is no raw fallback to show."""
+    on any failure - unlike the news digest there is no raw fallback to show. `model` is the one the caller resolved (so
+    what it reports back is what actually ran); by default it is resolved here."""
+    model = model or ai_models.model_for("ai_read")
     try:
         resp = requests.post(
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={
-                "model": settings.openrouter_read_model,
+                "model": model,
                 "messages": [
                     {"role": "system", "content": system_prompt(context.get("segment", ""))},
                     {"role": "user", "content": json.dumps(context)},
@@ -329,9 +332,9 @@ def run_ai_read(context: dict, api_key: str) -> dict:
         return parsed
     except requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "?"
-        logger.warning("OpenRouter AI read failed (%s) for model %s: %s", status, settings.openrouter_read_model, exc)
-        hint = {401: "key rejected", 402: "insufficient OpenRouter credit", 404: "model not found - check OPENROUTER_READ_MODEL"}.get(status, "")
+        logger.warning("OpenRouter AI read failed (%s) for model %s: %s", status, model, exc)
+        hint = {401: "key rejected", 402: "insufficient OpenRouter credit", 404: "model not found - pick another under More -> AI models"}.get(status, "")
         raise RuntimeError(f"AI read failed: OpenRouter returned {status}" + (f" ({hint})" if hint else "")) from exc
     except Exception as exc:  # network, timeout, malformed JSON
-        logger.warning("OpenRouter AI read failed for model %s: %s", settings.openrouter_read_model, exc)
+        logger.warning("OpenRouter AI read failed for model %s: %s", model, exc)
         raise RuntimeError("AI read temporarily unavailable") from exc

@@ -171,6 +171,19 @@ export function MorePage() {
       </div>
       {session?.isAdmin && (
         <div className="card">
+          <Link to="/more/ai-models" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+            <span>
+              <strong>AI models</strong>
+              <span className="dim" style={{ display: "block", fontSize: 13 }}>
+                Which model runs the news digest, the pre-market bias and the OI read: the same for all, or one each
+              </span>
+            </span>
+            <span aria-hidden="true">›</span>
+          </Link>
+        </div>
+      )}
+      {session?.isAdmin && (
+        <div className="card">
           <Link to="/more/jobs" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
             <span>
               <strong>Background jobs</strong>

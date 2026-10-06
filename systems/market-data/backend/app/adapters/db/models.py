@@ -257,3 +257,17 @@ class PremarketReport(Base):
     inputs = Column(JSONB, nullable=False)
     rules = Column(JSONB, nullable=False)
     ai = Column(JSONB)
+
+
+class AiModelSetting(Base):
+    """The OpenRouter model chosen for one AI task, or for every task without its own ('default'). See
+    app/domain/ai_models.py, migration 038 and infra/postgres/init/05-market-data.sql."""
+
+    __tablename__ = "ai_model_settings"
+    __table_args__ = {"schema": SCHEMA}
+
+    task = Column(Text, primary_key=True)
+    model = Column(Text, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    updated_by = Column(UUID(as_uuid=True))
+

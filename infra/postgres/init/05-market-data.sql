@@ -254,3 +254,11 @@ CREATE TABLE IF NOT EXISTS market_data.premarket_reports (
     rules        JSONB NOT NULL,
     ai           JSONB
 );
+
+-- Which OpenRouter model each AI task uses. See migration 038 and app/domain/ai_models.py.
+CREATE TABLE IF NOT EXISTS market_data.ai_model_settings (
+    task        TEXT PRIMARY KEY,
+    model       TEXT NOT NULL CHECK (btrim(model) <> ''),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by  UUID
+);

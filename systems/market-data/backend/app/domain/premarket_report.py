@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db.models import PremarketReport
 from app.config import settings
+from app.domain import ai_models
 from app.domain.premarket_bias import score_inputs
 from app.providers import premarket as provider
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
@@ -72,12 +73,13 @@ def _context(inputs: list[dict], rules: dict) -> dict:
 
 def run_ai(inputs: list[dict], rules: dict, api_key: str) -> dict:
     """One OpenRouter call. Raises RuntimeError with a short, presentable message on any failure."""
+    model = ai_models.model_for("premarket")
     try:
         resp = requests.post(
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={
-                "model": settings.openrouter_model,
+                "model": model,
                 "messages": [
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": json.dumps(_context(inputs, rules))},
@@ -93,6 +95,7 @@ def run_ai(inputs: list[dict], rules: dict, api_key: str) -> dict:
         parsed = _parse_ai_json(resp.json()["choices"][0]["message"]["content"])
         if parsed.get("bias") not in ("bullish", "bearish", "neutral"):
             raise ValueError("model reply had no valid bias")
+        parsed["model"] = model  # which model produced THIS read, now that it can change between runs
         return parsed
     except requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "?"
@@ -126,7 +129,7 @@ def build_report(api_key: Optional[str]) -> dict:
         "rules": rules,
         "ai": ai,
         "ai_error": ai_error,
-        "model": settings.openrouter_model if ai else None,
+        "model": ai.get("model") if ai else None,
         "bias": ai["bias"] if ai else rules["bias"],
         "agree": (ai["bias"] == rules["bias"]) if ai else None,
     }

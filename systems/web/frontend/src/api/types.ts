@@ -114,6 +114,28 @@ export type MarketSentiment = {
   exchanges: Record<string, { direction: string; strength: string; score: number | null; underlyings: SentimentUnderlying[] }>;
 };
 
+export type CatalogModel = {
+  id: string;
+  name: string;
+  context_length: number | null;
+  /** USD per million tokens. */
+  prompt_per_m: number | null;
+  completion_per_m: number | null;
+};
+
+export type AiModelTask = {
+  task: string;
+  label: string;
+  description: string;
+  /** This task's own choice, or null when it follows the shared default / server setting. */
+  override: string | null;
+  /** What the task actually uses right now. */
+  model: string;
+  source: "task" | "default" | "env";
+};
+
+export type AiModels = { default: string | null; tasks: AiModelTask[] };
+
 export type Bias = "bullish" | "bearish" | "neutral";
 
 export type PremarketInput = {

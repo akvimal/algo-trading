@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.secure_config import cors_origins, enforce_secure_config
 from app.api.routes import (
+    ai_models,
     ai_read,
     calendar,
     candles,
@@ -57,6 +58,7 @@ app.include_router(equity_screener.router)
 app.include_router(custom_screens.router)
 app.include_router(news.router)
 app.include_router(ai_read.router)
+app.include_router(ai_models.router)
 app.include_router(calendar.router)
 app.include_router(premarket.router)
 

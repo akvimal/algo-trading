@@ -1,7 +1,18 @@
 import pytest
 
 from app.domain import job_tracker
+from app.domain import ai_models
 from app.providers import calendar, dhan, news
+
+
+@pytest.fixture(autouse=True)
+def _no_model_settings_db(monkeypatch):
+    """app/domain/ai_models.py reads market_data.ai_model_settings; without this every test that reaches an AI call
+    site would open a real database session. Tests that want overrides patch ai_models._load_overrides."""
+    monkeypatch.setattr(ai_models, "_load_overrides", lambda: {})
+    ai_models.invalidate()
+    yield
+    ai_models.invalidate()
 
 
 @pytest.fixture(autouse=True)

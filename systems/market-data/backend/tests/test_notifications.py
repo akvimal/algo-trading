@@ -42,8 +42,16 @@ class FakeDB:
 
 class Telegram:
     def __init__(self, monkeypatch, fail=None):
-        self.sent, self.fail = [], fail  # fail: a reason string, or a callable(chat) -> reason|None
+        self.sent, self.photos, self.fail = [], [], fail  # fail: a reason string, or a callable(chat) -> reason|None
         monkeypatch.setattr(n, "send_telegram", self.send)
+        monkeypatch.setattr(n, "send_telegram_photo", self.send_photo)
+
+    def send_photo(self, png, caption, chat):
+        reason = self.fail(chat) if callable(self.fail) else self.fail
+        if reason:
+            return reason
+        self.photos.append((chat, caption))
+        return None
 
     def send(self, text, chat):
         reason = self.fail(chat) if callable(self.fail) else self.fail

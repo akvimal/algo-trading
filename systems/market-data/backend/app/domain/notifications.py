@@ -148,7 +148,7 @@ def deliver(db: Session, user_id: UUID, chat_id: str, category: str, key: str, t
     return "sent" if ok else "failed"
 
 
-def broadcast(db: Session, category: str, key: str, build: Callable[[dict], Optional[str]], now: Optional[datetime] = None) -> Tally:
+def broadcast(db: Session, category: str, key: str, build: Callable[[dict], Optional[str]], now: Optional[datetime] = None, image: Optional[bytes] = None, caption: Optional[str] = None) -> Tally:
     """Send a category's message to every subscriber, once each. `build(params)` returns the text for that person's settings, or None
     when there is nothing worth sending them."""
     tally = Tally()
@@ -157,7 +157,7 @@ def broadcast(db: Session, category: str, key: str, build: Callable[[dict], Opti
         if not text:
             tally.skipped += 1
             continue
-        outcome = deliver(db, sub.user_id, sub.chat_id, category, key, text, now)
+        outcome = deliver(db, sub.user_id, sub.chat_id, category, key, text, now, image=image, caption=caption)
         setattr(tally, outcome, getattr(tally, outcome) + 1)
     return tally
 
@@ -220,6 +220,36 @@ def _move(inputs: list[dict], key: str, label: str) -> Optional[str]:
     return f"{label} {_signed(i['change'], 1, ' bp')}" if i.get("unit") == "bp" else f"{label} {_signed(i['change'])}"
 
 
+def _drivers_lines(rules: dict) -> list[str]:
+    """What is lifting the market and what is weighing on it, from the fixed rules' own factors, strongest first: the quickest way to read
+    WHY the bias is what it is."""
+    factors = [f for f in rules.get("factors", []) if f.get("score") is not None and f.get("move") is not None]
+
+    def show(f):
+        unit = " bp" if f["key"] in ("us10y", "in10y") else "%"
+        return f"{f['label']} {'+' if f['move'] > 0 else MINUS if f['move'] < 0 else ''}{abs(f['move']):.2f}{unit}"
+
+    up = sorted((f for f in factors if f["score"] >= 0.1), key=lambda f: -f["score"] * f["weight"])[:3]
+    down = sorted((f for f in factors if f["score"] <= -0.1), key=lambda f: f["score"] * f["weight"])[:3]
+    out = []
+    if up:
+        out.append("🟢 Lifting: " + " · ".join(show(f) for f in up))
+    if down:
+        out.append("🔴 Weighing: " + " · ".join(show(f) for f in down))
+    return out
+
+
+def premarket_caption(report: dict, day: date) -> str:
+    """The short line that goes with the pre-market picture."""
+    rules, ai = report["rules"], report.get("ai")
+    bias = (ai["bias"] if ai else rules["bias"]).capitalize()
+    gift = _input(report["inputs"], "gift_nifty")
+    gap = f" · GIFT Nifty {_signed(gift['change'])}" if gift is not None and gift.get("change") is not None else ""
+    conf = f" ({ai['confidence']}% sure)" if ai and ai.get("confidence") else ""
+    dot = {"Bullish": "🟢", "Bearish": "🔴"}.get(bias, "🟡")
+    return f"☀️ Pre-market · {day.strftime('%a')} {day.day} {day.strftime('%b')}\n{dot} {bias}{conf}{gap}"
+
+
 def premarket_message(report: dict, day: date) -> str:
     """The morning read as one compact message. `report` is the stored report's inputs / rules / ai (as built by premarket_report)."""
     inputs, rules, ai = report["inputs"], report["rules"], report.get("ai")
@@ -233,6 +263,9 @@ def premarket_message(report: dict, day: date) -> str:
     lines = [f"☀️ Pre-market · {day.strftime('%a')} {day.day} {day.strftime('%b')}", head]
     if ai and ai.get("one_liner"):
         lines += ["", shorten(ai["one_liner"], ONE_LINER_MAX)]
+    drivers = _drivers_lines(rules)
+    if drivers:
+        lines += [""] + drivers
     gift = _input(inputs, "gift_nifty")
     block = []
     if gift is not None and gift.get("change") is not None:
@@ -317,47 +350,120 @@ def bias_check(bias: Optional[str], nifty_change_pct: Optional[float]) -> Option
     return f"Morning bias was {bias.capitalize()}: {'it held' if held else 'it did not hold'} (NIFTY {_signed(c)})."
 
 
-def _mode_lines(name: str, d: dict, segment: str) -> list[str]:
-    won = f"{d['wins']} won" + (f", {d['losses']} lost" if d["losses"] else "")
-    lines = [f"{name}: {d['trades']} closed · {won} · net {_money(d['net_pnl'], segment)} after charges"]
+VERDICT_LABEL = {
+    "good_win": "Good trade · followed the plan",
+    "good_loss": "Good loss · stayed within the plan",
+    "lucky_win": "Won, but off the plan (luck)",
+    "avoidable_loss": "Avoidable loss · off the plan",
+    "flat": "Flat",
+}
+VERDICT_MARK = {"good_win": "✅", "good_loss": "✅", "lucky_win": "⚠️", "avoidable_loss": "❌", "flat": "➖"}
 
-    def leg(word: str, t: dict) -> str:
-        r = f" ({t['r']:+.1f}R)".replace("-", MINUS) if t.get("r") is not None else ""
-        return f"{word} {t['symbol']} {_money(t['pnl'], segment)}{r}"
 
-    if d["trades"] > 1 and d.get("best") and d.get("worst"):
-        lines.append(f"{leg('Best', d['best'])} · {leg('Worst', d['worst'])}")
-    elif d.get("best"):
-        lines.append(leg("Trade", d["best"]))
-    lines.append(f"With a limit entry and a stop: {d['with_plan']} of {d['trades']}")
-    return lines
+def trade_note(item: dict) -> str:
+    """Why a trade was judged as it was: the verdict, and what was missing (no stop, market entry, closed by hand)."""
+    label = VERDICT_LABEL.get(item.get("verdict", ""), "")
+    issues = ", ".join(item.get("issues") or [])
+    return f"{label}" + (f" · {issues}" if issues and item.get("verdict") not in ("good_win", "good_loss") else "")
+
+
+def plan_insight(mode: dict, segment: str) -> Optional[str]:
+    """One sentence on what following (or not following) the plan was worth today."""
+    f_n, f_p, b_n, b_p = mode["followed_count"], mode["followed_pnl"], mode["broke_count"], mode["broke_pnl"]
+    if mode["trades"] == 0:
+        return None
+    if b_n == 0:
+        return "Every trade followed the plan."
+    if f_n == 0:
+        return "No trade followed the plan today."
+    tail = f" Breaking the plan cost {_money(abs(b_p), segment).lstrip('+')}." if b_p < 0 else " Off-plan gains are luck."
+    return f"On-plan {_money(f_p, segment)} · off-plan {_money(b_p, segment)}.{tail}"
+
+
+def _price(v: Optional[float]) -> str:
+    return "-" if v is None else (f"{v:,.2f}" if abs(v) < 1000 else f"{v:,.0f}")
+
+
+def _held(minutes: Optional[int]) -> str:
+    if minutes is None:
+        return ""
+    return f"{minutes}m" if minutes < 60 else f"{minutes // 60}h{minutes % 60:02d}m"
+
+
+def _trade_line(item: dict, segment: str) -> list[str]:
+    side = {"long": "long", "short": "short"}.get(item.get("side") or "", "")
+    r = f" ({item['r']:+.1f}R)".replace("-", MINUS) if item.get("r") is not None else ""
+    name = item.get("label") or ""
+    head = f"{VERDICT_MARK.get(item['verdict'], '')} {item['symbol']}{(' ' + name) if name else ''} {side}".rstrip()
+    move = f"{_price(item.get('entry'))} → {_price(item.get('exit'))}" if item.get("entry") and item.get("exit") else ""
+    held = f" · {_held(item.get('held_minutes'))}" if item.get("held_minutes") is not None else ""
+    return [f"{head}  {_money(item['pnl'], segment)}{r}", f"   {trade_note(item)}" + (f" · {move}{held}" if move else "")]
+
+
+def _stats_line(st: Optional[dict], segment: str) -> Optional[str]:
+    if not st:
+        return None
+    parts = [f"win rate {st['win_rate_pct']:.0f}%"]
+    if st.get("profit_factor") is not None:
+        parts.append(f"profit factor {st['profit_factor']:.1f}")
+    if st.get("avg_win") is not None and st.get("avg_loss") is not None:
+        parts.append(f"avg win {_money(st['avg_win'], segment).lstrip('+')} / avg loss {_money(abs(st['avg_loss']), segment).lstrip('+')}")
+    if st.get("expectancy") is not None:
+        parts.append(f"expectancy {_money(st['expectancy'], segment)} a trade")
+    return f"Last {st['days']} days ({st['trades']} trades): " + " · ".join(parts)
+
+
+def _account_line(acct: Optional[dict], segment: str) -> Optional[str]:
+    if not acct:
+        return None
+    day = f"{_money(acct['day_change'], segment)}" + (f" ({_signed(acct['day_change_pct'])})" if acct.get("day_change_pct") is not None else "")
+    parts = [f"{day} today", f"balance {_money(acct['balance'], segment).lstrip('+')}"]
+    if acct.get("since_start_pct") is not None:
+        parts.append(f"{_signed(acct['since_start_pct'])} since the start")
+    parts.append(f"{_money(acct['month_pnl'], segment)} this month")
+    return "Paper account: " + " · ".join(parts)
+
+
+def _market_strip(market: dict, bias: Optional[str], segment: str) -> str:
+    bits = []
+    for r in market["rows"]:
+        bits.append(f"{r['label']} {_signed(r['change_pct'])}")
+    nifty = next((r for r in market["rows"] if r["label"] == "NIFTY"), None)
+    check = bias_check(bias, nifty["change_pct"] if nifty else None) if segment == "NSE" else None
+    if check:
+        bits.append("bias held" if "it held" in check else "bias did not hold")
+    return "Market: " + " · ".join(bits)
 
 
 def session_message(segment: str, day: date, market: dict, trader: Optional[dict], bias: Optional[str] = None, trader_known: bool = True) -> str:
-    """The post-session summary: how the market did, then the person's own day. `trader` is execution's answer for that day (None with
-    `trader_known=False` when execution could not be reached, which the message says rather than claiming no trades)."""
+    """The post-session summary, your own trading first: the account, each trade judged by the plan, the last 30 days, then a line on the
+    market. `trader` is execution's answer for that day (None with `trader_known=False` when execution could not be reached, which the
+    message says rather than claiming no trades)."""
     icon, title = SESSION_TITLES[segment]
-    lines = [f"{icon} {title} · {day.strftime('%a')} {day.day} {day.strftime('%b')}"]
-    rows = market["rows"]
-    for r in rows:
-        if r["label"] == "India VIX":
-            lines.append(f"India VIX {r['close']:.2f} ({_signed(r['change_pct'])})")
-            continue
-        near = "near the high" if r["position"] >= 0.8 else "near the low" if r["position"] <= 0.2 else "mid-range"
-        lines.append(f"{r['label']} {_level(r['label'], r['close'])} ({_signed(r['change_pct'])}) · range {_level(r['label'], r['low'])}–{_level(r['label'], r['high'])}, closed {near}")
-    nifty = next((r for r in rows if r["label"] == "NIFTY"), None)
-    check = bias_check(bias, nifty["change_pct"] if nifty else None) if segment == "NSE" else None
-    if check:
-        lines += ["", check]
-    lines.append("")
+    lines = [f"{icon} Your trading day · {title.split('· ')[-1]} · {day.strftime('%a')} {day.day} {day.strftime('%b')}"]
     if not trader_known:
-        lines.append("Your trades: could not be loaded just now. See them in the app.")
+        lines += ["", "Your trades could not be loaded just now. See them in the app."]
     else:
         modes = [(n_, trader[k]) for n_, k in (("Paper", "paper"), ("Live", "live")) if trader and trader.get(k)]
+        acct = _account_line(trader.get("account") if trader else None, segment)
+        if acct:
+            lines += ["", acct]
         if not modes:
-            lines.append("You had no closed trades today.")
-        for i, (name, d) in enumerate(modes):
-            lines += ([""] if i else []) + _mode_lines(name, d, segment)
+            lines += ["", "You had no closed trades today."]
+        for name, d in modes:
+            won = f"{d['wins']} won" + (f", {d['losses']} lost" if d["losses"] else "")
+            lines += ["", f"{name}: {d['trades']} closed · {won} · net {_money(d['net_pnl'], segment)} after charges"]
+            insight = plan_insight(d, segment)
+            if insight:
+                lines.append(insight)
+            for item in d.get("items", []):
+                lines += _trade_line(item, segment)
+            if d.get("more"):
+                lines.append(f"…and {d['more']} more in the app")
+        stats = (trader.get("stats") or {}) if trader else {}
+        stat = _stats_line(stats.get("paper") or stats.get("live"), segment)
+        if stat:
+            lines += ["", stat]
         extras = []
         if trader and trader.get("open_now"):
             extras.append(f"Still open: {trader['open_now']}")
@@ -365,24 +471,28 @@ def session_message(segment: str, day: date, market: dict, trader: Optional[dict
             extras.append(f"Discipline (30 days): {trader['discipline_score']}/100")
         if extras:
             lines.append(" · ".join(extras))
-    lines += ["", "Market data and your own record, not a recommendation. Details in the app."]
+    lines += ["", _market_strip(market, bias, segment), "", "Your own record and public market data, not a recommendation. Details in the app."]
     return "\n".join(lines)
 
 
 def session_caption(segment: str, day: date, market: dict, trader: Optional[dict], bias: Optional[str] = None) -> str:
-    """The short line that goes with the picture (and shows in a notification): the day, the lead index and the person's net result."""
+    """The short line that goes with the picture (and shows in a notification): your result first, then the lead index."""
     icon, title = SESSION_TITLES[segment]
+    parts = []
+    for name, key in (("Paper", "paper"), ("Live", "live")):
+        m = trader.get(key) if trader else None
+        if m:
+            parts.append(f"{name} {_money(m['net_pnl'], segment)} · {m['trades']} trades · plan followed {m['followed_count']}/{m['trades']}")
+    if not parts:
+        parts.append("no closed trades" if trader else "trades unavailable")
     lead = market["rows"][0]
-    parts = [f"{lead['label']} {_level(lead['label'], lead['close'])} ({_signed(lead['change_pct'])})"]
+    parts.append(f"{lead['label']} {_signed(lead['change_pct'])}")
     if segment == "NSE":
         nifty = next((r for r in market["rows"] if r["label"] == "NIFTY"), None)
         check = bias_check(bias, nifty["change_pct"] if nifty else None)
         if check:
             parts.append("bias held" if "it held" in check else "bias did not hold")
-    for name, key in (("Paper", "paper"), ("Live", "live")):
-        if trader and trader.get(key):
-            parts.append(f"{name} {_money(trader[key]['net_pnl'], segment)}")
-    return f"{icon} {title} · {day.strftime('%a')} {day.day} {day.strftime('%b')}\n" + " · ".join(parts)
+    return f"{icon} Your trading day · {title.split('· ')[-1]} · {day.strftime('%a')} {day.day} {day.strftime('%b')}\n" + " · ".join(parts)
 
 
 def session_bias_held(segment: str, market: dict, bias: Optional[str]) -> Optional[tuple[str, bool]]:

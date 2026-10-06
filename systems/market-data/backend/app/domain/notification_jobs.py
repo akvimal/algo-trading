@@ -42,9 +42,21 @@ def _safely(name: str, fn, *args) -> n.Tally:
 # ---- pre-market -----------------------------------------------------------------------------------------------------------------
 
 
+def premarket_card_for(report: dict, day: date) -> tuple[Optional[bytes], Optional[str]]:
+    """The morning picture and its short caption, or (None, None) when it cannot be drawn (the text goes out instead)."""
+    try:
+        from app.domain.premarket_card import render_premarket_card
+
+        return render_premarket_card(report, day), n.premarket_caption(report, day)
+    except Exception:
+        logger.exception("pre-market: the card could not be drawn; sending the text")
+        return None, None
+
+
 def premarket_to_subscribers(db: Session, report: dict, day: date) -> n.Tally:
     text = n.premarket_message(report, day)
-    return n.broadcast(db, "premarket", f"premarket:{day.isoformat()}", lambda params: text)
+    image, caption = premarket_card_for(report, day)  # one picture for everyone: the report is the same for all
+    return n.broadcast(db, "premarket", f"premarket:{day.isoformat()}", lambda params: text, image=image, caption=caption)
 
 
 def send_premarket(report: dict, day: Optional[date] = None) -> n.Tally:

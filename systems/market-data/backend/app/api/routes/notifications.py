@@ -151,6 +151,11 @@ def _latest_message(db: Session, user: User, cat: n.Category):
     """(text, picture, caption) for a category's latest message; only the session summaries have a picture."""
     if cat.key in ("session_nse", "session_mcx", "session_crypto"):
         return _session_parts(db, user, {"session_nse": "NSE", "session_mcx": "MCX"}.get(cat.key, "CRYPTO"))
+    if cat.key == "premarket":
+        row = get_report(db)
+        text = _latest_text(db, user, cat)
+        image, caption = notification_jobs.premarket_card_for({"inputs": row.inputs, "rules": row.rules, "ai": row.ai}, row.day)
+        return text, image, caption
     return _latest_text(db, user, cat), None, None
 
 

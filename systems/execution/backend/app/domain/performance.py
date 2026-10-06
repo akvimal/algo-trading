@@ -62,6 +62,11 @@ class TradeRecord:
     costs_applied: bool = False
     # True for a trade placed through the live broker; a paper trade is False. Reported separately, never mixed.
     live: bool = False
+    # For the post-session summary: which way, where it ended, when it opened, and a short name ("naked call").
+    side: Optional[str] = None
+    exit_price: Optional[float] = None
+    entry_time: Optional[datetime] = None
+    label: Optional[str] = None
 
 
 def day_key(moment: datetime) -> date:
@@ -233,6 +238,11 @@ def compute_performance(trades: list[TradeRecord]) -> Optional[PerformanceStats]
 # --- loading -----------------------------------------------------------------------------------------------------
 
 
+def _side(action) -> Optional[str]:
+    a = (action or "").strip().upper()
+    return "long" if a == "BUY" else "short" if a == "SELL" else None
+
+
 def _reviewed(reviewed_at, notes) -> bool:
     return reviewed_at is not None or (notes is not None and notes.strip() != "")
 
@@ -271,6 +281,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             confidence=p.confidence, reviewed=_reviewed(p.reviewed_at, p.notes), auto_traded=bool(p.auto_traded),
             charges=_f(p.charges) or 0.0, slippage_cost=_f(p.slippage_cost) or 0.0, costs_applied=p.charges is not None,
             live=bool(p.is_live_broker_order),
+            side=_side(getattr(p, "action", None)), exit_price=_f(getattr(p, "exit_price", None)), entry_time=getattr(p, "entry_time", None),
         )
         for p in positions
     ] + [
@@ -281,6 +292,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             confidence=g.confidence, reviewed=_reviewed(g.reviewed_at, g.notes), auto_traded=bool(g.auto_traded),
             charges=_f(g.charges) or 0.0, slippage_cost=_f(g.slippage_cost) or 0.0, costs_applied=g.charges is not None,
             live=g.id in live_groups,
+            side=_side(getattr(g, "action", None)), entry_time=getattr(g, "created_at", None), label=getattr(g, "strategy_type", None),
         )
         for g in groups
     ]

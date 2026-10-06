@@ -21,40 +21,64 @@ MARKET = {
         {"label": "India VIX", "close": 13.2, "change_pct": -3.1, "high": 13.9, "low": 13.1, "position": 0.1},
     ],
 }
-MODE = {"trades": 3, "wins": 2, "losses": 1, "net_pnl": 1240.0, "charges": 30.0, "with_plan": 2,
-        "best": {"symbol": "NIFTY", "pnl": 900.0, "r": 2.1, "exit_reason": "target"}, "worst": {"symbol": "TCS", "pnl": -300.0, "r": -1.0, "exit_reason": "stop"}}
+def item(symbol, pnl, verdict, issues=(), r=None, side="long", entry=100.0, exit=105.0, held=45, label=None):
+    return {"symbol": symbol, "label": label, "side": side, "pnl": pnl, "r": r, "entry": entry, "exit": exit, "held_minutes": held, "exit_reason": "target",
+            "followed": verdict in ("good_win", "good_loss"), "verdict": verdict, "issues": list(issues)}
 
 
-def trader(paper=MODE, live=None, open_now=1, score=72):
-    return {"segment": "NSE", "day": DAY.isoformat(), "paper": paper, "live": live, "open_now": open_now, "discipline_score": score}
+ITEMS = [item("NIFTY", 900.0, "good_win", r=2.1, held=95), item("TCS", -300.0, "good_loss", r=-1.0, side="short"), item("INFY", 640.0, "lucky_win", ["no stop", "market entry"])]
+MODE = {"trades": 3, "wins": 2, "losses": 1, "net_pnl": 1240.0, "charges": 30.0, "with_plan": 2, "best": ITEMS[0], "worst": ITEMS[1],
+        "followed_count": 2, "followed_pnl": 600.0, "broke_count": 1, "broke_pnl": 640.0, "items": ITEMS, "more": 0}
+STATS = {"days": 30, "trades": 34, "win_rate_pct": 58.8, "profit_factor": 1.7, "avg_win": 910.0, "avg_loss": -520.0, "expectancy": 181.0, "avg_r": 0.4, "net_pnl": 6150.0, "max_consecutive_losses": 3}
+ACCOUNT = {"balance": 104350.0, "starting_balance": 100000.0, "day_change": 1240.0, "day_change_pct": 1.2, "since_start_pct": 4.35, "month_pnl": 3100.0, "curve": [100000, 101110, 104350], "max_drawdown_pct": 1.8}
 
 
-def test_the_nse_message_has_the_market_the_bias_check_and_the_persons_trades():
+def trader(paper=MODE, live=None, open_now=1, score=72, account=ACCOUNT, stats=STATS):
+    return {"segment": "NSE", "day": DAY.isoformat(), "paper": paper, "live": live, "account": account, "stats": {"paper": stats, "live": None}, "open_now": open_now, "discipline_score": score}
+
+
+def test_the_message_leads_with_your_account_and_trades_then_the_market():
     text = n.session_message("NSE", DAY, MARKET, trader(), bias="bullish")
-    assert text.startswith("📈 Post-session · NSE · Tue 6 Oct")
-    assert "NIFTY 24,580 (+0.42%) · range 24,420–24,610, closed near the high" in text
-    assert "BANKNIFTY 52,310 (−0.15%)" in text and "mid-range" in text
-    assert "India VIX 13.20 (−3.10%)" in text
-    assert "Morning bias was Bullish: it held (NIFTY +0.42%)." in text
+    assert text.startswith("📈 Your trading day · NSE · Tue 6 Oct")
+    assert text.index("Paper account:") < text.index("Paper: 3 closed") < text.index("Last 30 days") < text.index("Market:")
+    assert "Paper account: +₹1,240 (+1.20%) today · balance ₹104,350 · +4.35% since the start · +₹3,100 this month" in text
     assert "Paper: 3 closed · 2 won, 1 lost · net +₹1,240 after charges" in text
-    assert "Best NIFTY +₹900 (+2.1R) · Worst TCS −₹300 (−1.0R)" in text
-    assert "With a limit entry and a stop: 2 of 3" in text
     assert "Still open: 1 · Discipline (30 days): 72/100" in text
     assert text.rstrip().endswith("not a recommendation. Details in the app.")
 
 
-def test_a_bias_that_did_not_hold_says_so_and_a_neutral_one_holds_in_a_band():
-    assert "did not hold" in n.bias_check("bearish", 0.5)
-    assert "it held" in n.bias_check("neutral", 0.2)
-    assert "did not hold" in n.bias_check("neutral", -0.6)
+def test_each_trade_is_judged_by_the_plan_with_its_levels_and_why():
+    text = n.session_message("NSE", DAY, MARKET, trader())
+    assert "✅ NIFTY long  +₹900 (+2.1R)" in text and "Good trade · followed the plan · 100.00 → 105.00 · 1h35m" in text
+    assert "✅ TCS short  −₹300 (−1.0R)" in text and "Good loss · stayed within the plan" in text
+    assert "⚠️ INFY long  +₹640" in text and "Won, but off the plan (luck) · no stop, market entry" in text
+
+
+def test_the_plan_insight_says_what_following_or_breaking_it_was_worth():
+    assert n.plan_insight(MODE, "NSE") == "On-plan +₹600 · off-plan +₹640. Off-plan gains are luck."
+    costly = {**MODE, "broke_count": 1, "broke_pnl": -260.0}
+    assert "Breaking the plan cost ₹260" in n.plan_insight(costly, "NSE")
+    assert n.plan_insight({**MODE, "broke_count": 0, "broke_pnl": 0.0}, "NSE") == "Every trade followed the plan."
+    assert n.plan_insight({**MODE, "followed_count": 0, "followed_pnl": 0.0, "broke_count": 3}, "NSE") == "No trade followed the plan today."
+    assert n.plan_insight({**MODE, "trades": 0}, "NSE") is None
+
+
+def test_the_thirty_day_line_has_win_rate_profit_factor_averages_and_expectancy():
+    text = n.session_message("NSE", DAY, MARKET, trader())
+    assert "Last 30 days (34 trades): win rate 59% · profit factor 1.7 · avg win ₹910 / avg loss ₹520 · expectancy +₹181 a trade" in text
+
+
+def test_the_market_is_one_line_at_the_end_with_the_bias_check():
+    text = n.session_message("NSE", DAY, MARKET, trader(), bias="bullish")
+    assert "Market: NIFTY +0.42% · BANKNIFTY −0.15% · India VIX −3.10% · bias held" in text
+    assert "did not hold" in n.bias_check("bearish", 0.5) and "it held" in n.bias_check("neutral", 0.2)
     assert n.bias_check(None, 0.5) is None and n.bias_check("bullish", None) is None
 
 
 def test_paper_and_live_are_reported_apart_and_never_summed():
-    live = {**MODE, "trades": 1, "wins": 1, "losses": 0, "net_pnl": 500.0, "best": MODE["best"], "worst": MODE["best"]}
+    live = {**MODE, "trades": 1, "wins": 1, "losses": 0, "net_pnl": 500.0, "items": [ITEMS[0]], "followed_count": 1, "followed_pnl": 900.0, "broke_count": 0, "broke_pnl": 0.0}
     text = n.session_message("NSE", DAY, MARKET, trader(live=live))
-    assert "Paper: 3 closed" in text and "Live: 1 closed · 1 won · net +₹500" in text
-    assert "net +₹1,740" not in text
+    assert "Paper: 3 closed" in text and "Live: 1 closed · 1 won · net +₹500" in text and "net +₹1,740" not in text
 
 
 def test_no_trades_and_unreachable_execution_are_said_differently():
@@ -63,41 +87,14 @@ def test_no_trades_and_unreachable_execution_are_said_differently():
     assert "could not be loaded just now" in unreachable and "no closed trades" not in unreachable
 
 
+def test_a_long_day_says_how_many_trades_were_left_off():
+    assert "…and 4 more in the app" in n.session_message("NSE", DAY, MARKET, trader(paper={**MODE, "more": 4}))
+
+
 def test_the_crypto_message_uses_dollars_and_has_no_bias_line():
     crypto = {"day": DAY, "rows": [{"label": "BTC", "close": 85981.5, "change_pct": 1.2, "high": 86400.0, "low": 85100.0, "position": 0.7}]}
     text = n.session_message("CRYPTO", DAY, crypto, {**trader(), "segment": "CRYPTO"}, bias="bullish")
-    assert text.startswith("🪙 Daily summary · crypto") and "net +$1,240" in text and "Morning bias" not in text
-
-
-def test_the_mcx_message_is_in_rupees_with_no_bias_line():
-    mcx = {"day": DAY, "rows": [{"label": "GOLDM", "close": 148680.0, "change_pct": 0.35, "high": 149000.0, "low": 147900.0, "position": 0.7}]}
-    text = n.session_message("MCX", DAY, mcx, {**trader(), "segment": "MCX"}, bias="bullish")
-    assert text.startswith("🛢️ Post-session · MCX") and "GOLDM 148,680 (+0.35%)" in text and "net +₹1,240" in text and "Morning bias" not in text
-
-
-def test_the_mcx_summary_is_its_own_category_sent_once_and_skipped_on_a_holiday(monkeypatch):
-    mcx = {"day": DAY, "rows": [{"label": "GOLDM", "close": 148680.0, "change_pct": 0.35, "high": 149000.0, "low": 147900.0, "position": 0.7}]}
-    monkeypatch.setattr(session_market, "fetch_mcx", lambda day=None: mcx)
-    monkeypatch.setattr(execution_client, "trader_day", lambda user, seg, day: {**trader(), "segment": seg})
-    subs(monkeypatch, (ME, "111"), category="session_mcx")
-    monkeypatch.setattr(jobs, "session_card_for", lambda *a, **k: (None, None))
-    tg = Telegram(monkeypatch)
-    db = FakeDB()
-    assert jobs.session_to_subscribers(db, "MCX", DAY).sent == 1 and jobs.session_to_subscribers(db, "MCX", DAY).sent == 0
-    assert "Post-session · MCX" in tg.sent[0][1]
-    monkeypatch.setattr(session_market, "fetch_mcx", lambda day=None: None)
-    assert jobs.session_to_subscribers(FakeDB(), "MCX", DAY).sent == 0
-
-
-def test_the_mcx_schedule_is_11_58_pm_on_weekdays_in_ist():
-    import inspect
-    import re
-
-    from app.config import settings
-
-    assert (settings.session_summary_mcx_hour, settings.session_summary_mcx_minute) == (23, 58)
-    trig = re.search(r"_send_session_summary_mcx,\s*CronTrigger\((.*?)\),\s*id=", inspect.getsource(scheduler.start_scheduler), re.S).group(1)
-    assert 'day_of_week="mon-fri"' in trig and "timezone=settings.timezone" in trig
+    assert text.startswith("🪙 Your trading day · crypto") and "net +$1,240" in text and "bias held" not in text
 
 
 def _wire(monkeypatch, *, market=MARKET, people=((ME, "111"),), trader_result=None):
@@ -115,7 +112,7 @@ def test_it_is_sent_once_to_each_subscribers_own_chat_with_their_own_trades(monk
     first = jobs.session_to_subscribers(db, "NSE", DAY)
     again = jobs.session_to_subscribers(db, "NSE", DAY)
     assert (first.sent, again.sent, again.skipped) == (1, 0, 1)
-    assert [c for c, _ in tg.sent] == ["111"] and "Morning bias was Bullish" in tg.sent[0][1]
+    assert [c for c, _ in tg.sent] == ["111"] and "bias held" in tg.sent[0][1]
 
 
 def test_a_holiday_sends_nothing(monkeypatch):
@@ -128,7 +125,7 @@ def test_execution_being_down_still_sends_the_market_and_says_the_trades_are_mis
     tg = _wire(monkeypatch)
     monkeypatch.setattr(execution_client, "trader_day", lambda user, seg, day: None)
     jobs.session_to_subscribers(FakeDB(), "NSE", DAY)
-    assert "NIFTY 24,580" in tg.sent[0][1] and "could not be loaded just now" in tg.sent[0][1]
+    assert "NIFTY +0.42%" in tg.sent[0][1] and "could not be loaded just now" in tg.sent[0][1]
 
 
 def test_the_two_summaries_are_separate_categories_and_start_off():
@@ -189,7 +186,7 @@ def test_the_card_renders_a_real_png_for_every_shape_of_day():
 
     for tr, known in ((trader(), True), (trader(paper=None, open_now=0, score=None), True), (None, False)):
         fmt, (w, h) = _png_size(render_session_card("NSE", DAY, MARKET, tr, ("bullish", True), trader_known=known))
-        assert fmt == "PNG" and w == 1080 and h > 600
+        assert fmt == "PNG" and w == 1080 and h > 400
     crypto = {"day": DAY, "rows": [{"label": "BTC", "close": 85981.5, "change_pct": -1.2, "high": 86400.0, "low": 85100.0, "position": 0.2}]}
     assert _png_size(render_session_card("CRYPTO", DAY, crypto, trader()))[0] == "PNG"
 
@@ -211,8 +208,9 @@ def test_a_card_with_more_trades_is_taller_and_still_draws_without_the_dejavu_fo
 
 def test_the_caption_is_short_and_carries_the_headline():
     cap = n.session_caption("NSE", DAY, MARKET, trader(live={**MODE, "net_pnl": -450.0}), bias="bullish")
-    assert cap.startswith("📈 Post-session · NSE · Tue 6 Oct\n") and "NIFTY 24,580 (+0.42%)" in cap
-    assert "bias held" in cap and "Paper +₹1,240" in cap and "Live −₹450" in cap and len(cap) < 300
+    assert cap.startswith("📈 Your trading day · NSE · Tue 6 Oct\n")
+    assert "Paper +₹1,240 · 3 trades · plan followed 2/3" in cap and "Live −₹450" in cap and "NIFTY +0.42%" in cap and "bias held" in cap and len(cap) < 400
+    assert cap.index("Paper") < cap.index("NIFTY")  # your result comes before the index
 
 
 def test_a_summary_goes_as_a_photo_with_its_caption_and_the_text_is_the_fallback(monkeypatch):
@@ -248,4 +246,61 @@ def test_the_job_sends_the_card_and_still_sends_text_if_it_cannot_be_drawn(monke
     assert len(photos) == 1 and texts == []
     monkeypatch.setattr("app.domain.session_card.render_session_card", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no pillow")))
     jobs.session_to_subscribers(FakeDB(), "NSE", DAY)
-    assert len(photos) == 1 and len(texts) == 1 and "Post-session · NSE" in texts[0][1]
+    assert len(photos) == 1 and len(texts) == 1 and "Your trading day · NSE" in texts[0][1]
+
+
+# ---- the pre-market card and its clearer text ----------------------------------------------------------------------------------
+
+
+PM_REPORT = {
+    "inputs": [
+        {"key": "gift_nifty", "label": "GIFT Nifty vs last close", "group": "india", "value": 22713.5, "change": 0.699, "unit": "pct", "ok": True},
+        {"key": "nifty_close", "label": "Nifty last close", "group": "india", "value": 22555.75, "change": None, "unit": "pct", "ok": True},
+        {"key": "sp500", "label": "S&P 500", "group": "us", "value": 7773.9, "change": 0.663, "unit": "pct", "ok": True},
+        {"key": "us10y", "label": "US 10Y yield", "group": "yield", "value": 5.311, "change": 3.4, "unit": "bp", "ok": True},
+    ],
+    "rules": {"bias": "bullish", "score": 0.29, "factors": [
+        {"key": "gift_gap", "move": 0.699, "label": "GIFT Nifty gap", "score": 1.0, "weight": 3.0},
+        {"key": "us_close", "move": 0.631, "label": "US close", "score": 0.631, "weight": 2.0},
+        {"key": "adr", "move": -0.722, "label": "Indian ADRs", "score": -0.481, "weight": 1.5},
+        {"key": "us10y", "move": 3.4, "label": "US 10Y yield", "score": -0.425, "weight": 0.5},
+        {"key": "in10y", "move": None, "label": "India 10Y yield", "score": None, "weight": 0.5}]},
+    "ai": {"bias": "bullish", "confidence": 72, "one_liner": "A positive open is likely.", "watch": "Watch 22555-22713.", "risks": ["A reversal in risk appetite."], "model": "m"},
+}
+
+
+def test_the_premarket_text_says_what_is_lifting_and_what_is_weighing_on_the_market():
+    text = n.premarket_message(PM_REPORT, DAY)
+    assert "🟢 Lifting: GIFT Nifty gap +0.70% · US close +0.63%" in text
+    assert "🔴 Weighing: Indian ADRs −0.72% · US 10Y yield +3.40 bp" in text
+    assert text.index("Lifting") < text.index("GIFT Nifty +0.70% vs last close")  # the why comes before the raw numbers
+
+
+def test_the_premarket_caption_has_the_call_and_the_gap():
+    cap = n.premarket_caption(PM_REPORT, DAY)
+    assert cap == "☀️ Pre-market · Tue 6 Oct\n🟢 Bullish (72% sure) · GIFT Nifty +0.70%"
+    assert n.premarket_caption({**PM_REPORT, "ai": None, "rules": {**PM_REPORT["rules"], "bias": "neutral"}}, DAY).splitlines()[1].startswith("🟡 Neutral")
+
+
+def test_the_premarket_card_renders_with_and_without_the_ai_and_with_missing_inputs():
+    from app.domain.premarket_card import render_premarket_card
+
+    assert _png_size(render_premarket_card(PM_REPORT, DAY))[0] == "PNG"
+    no_ai = {**PM_REPORT, "ai": None}
+    fmt, (w, h) = _png_size(render_premarket_card(no_ai, DAY))
+    assert fmt == "PNG" and w == 1080
+    bare = {"inputs": [], "rules": {"bias": "neutral", "score": 0.0, "factors": []}, "ai": None}
+    assert _png_size(render_premarket_card(bare, DAY))[0] == "PNG"  # nothing could be fetched: still a card, never an error
+
+
+def test_the_premarket_push_is_one_picture_for_everyone_and_falls_back_to_text(monkeypatch):
+    photos, texts = [], []
+    monkeypatch.setattr(n, "send_telegram_photo", lambda png, cap, chat: photos.append((chat, cap)))
+    monkeypatch.setattr(n, "send_telegram", lambda text, chat: texts.append((chat, text)))
+    other = uuid4()
+    subs(monkeypatch, (ME, "111"), (other, "222"), category="premarket")
+    jobs.premarket_to_subscribers(FakeDB(), PM_REPORT, DAY)
+    assert [c for c, _ in photos] == ["111", "222"] and texts == []
+    monkeypatch.setattr("app.domain.premarket_card.render_premarket_card", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no pillow")))
+    jobs.premarket_to_subscribers(FakeDB(), PM_REPORT, DAY)
+    assert len(photos) == 2 and [c for c, _ in texts] == ["111", "222"]

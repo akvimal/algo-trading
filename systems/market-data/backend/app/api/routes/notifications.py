@@ -156,7 +156,14 @@ def _latest_message(db: Session, user: User, cat: n.Category):
         text = _latest_text(db, user, cat)
         image, caption = notification_jobs.premarket_card_for({"inputs": row.inputs, "rules": row.rules, "ai": row.ai}, row.day)
         return text, image, caption
-    return _latest_text(db, user, cat), None, None
+    text = _latest_text(db, user, cat)
+    if cat.key == "oi_buildup":
+        rows, snapshot_date = notification_jobs.latest_oi_rows(db)
+        sub = db.get(NotificationSubscription, (user.user_id, cat.key))
+        top_n = {**cat.defaults, **((sub.params if sub else None) or {})}["top_n"]
+        image, caption = notification_jobs.oi_card_for(rows, snapshot_date, top_n)
+        return text, image, caption
+    return text, None, None
 
 
 def _session_text(db: Session, user: User, segment: str) -> str:

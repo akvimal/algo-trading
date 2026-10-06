@@ -132,6 +132,17 @@ def latest_oi_rows(db: Session) -> tuple[list[dict], Optional[date]]:
     ], latest
 
 
+def oi_card_for(rows: list[dict], snapshot_date: date, top_n: int) -> tuple[Optional[bytes], Optional[str]]:
+    """The digest's picture and short caption, or (None, None) when it cannot be drawn (the text goes out instead)."""
+    try:
+        from app.domain.oi_card import render_oi_card
+
+        return render_oi_card(rows, snapshot_date, top_n), n.oi_caption(rows, snapshot_date, top_n)
+    except Exception:
+        logger.exception("OI digest: the card could not be drawn; sending the text")
+        return None, None
+
+
 def oi_digest_to_subscribers(db: Session, today: Optional[date] = None) -> n.Tally:
     """Only a scan for TODAY is announced. The "latest snapshot" can be days old (a scan that wrote nothing new leaves yesterday's or last
     week's rows as the latest), and telling someone last week's OI buildup as if it were the day's news is worse than saying nothing."""
@@ -140,7 +151,15 @@ def oi_digest_to_subscribers(db: Session, today: Optional[date] = None) -> n.Tal
         if snapshot_date is not None:
             logger.info("notifications: the latest OI snapshot is %s, not today - no digest sent", snapshot_date)
         return n.Tally()
-    return n.broadcast(db, "oi_buildup", f"oi:{snapshot_date.isoformat()}", lambda params: n.oi_digest_message(rows, snapshot_date, params.get("top_n", 10)))
+    cards: dict[int, tuple[Optional[bytes], Optional[str]]] = {}  # one picture per distinct top-N, not one per person
+
+    def card(params: dict):
+        top_n = params.get("top_n", 10)
+        if top_n not in cards:
+            cards[top_n] = oi_card_for(rows, snapshot_date, top_n)
+        return cards[top_n]
+
+    return n.broadcast(db, "oi_buildup", f"oi:{snapshot_date.isoformat()}", lambda params: n.oi_digest_message(rows, snapshot_date, params.get("top_n", 10)), card=card)
 
 
 def send_oi_digest() -> n.Tally:

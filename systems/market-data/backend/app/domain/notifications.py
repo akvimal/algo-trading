@@ -148,7 +148,10 @@ def deliver(db: Session, user_id: UUID, chat_id: str, category: str, key: str, t
     return "sent" if ok else "failed"
 
 
-def broadcast(db: Session, category: str, key: str, build: Callable[[dict], Optional[str]], now: Optional[datetime] = None, image: Optional[bytes] = None, caption: Optional[str] = None) -> Tally:
+def broadcast(
+    db: Session, category: str, key: str, build: Callable[[dict], Optional[str]], now: Optional[datetime] = None, image: Optional[bytes] = None, caption: Optional[str] = None,
+    card: Optional[Callable[[dict], tuple[Optional[bytes], Optional[str]]]] = None,
+) -> Tally:
     """Send a category's message to every subscriber, once each. `build(params)` returns the text for that person's settings, or None
     when there is nothing worth sending them."""
     tally = Tally()
@@ -157,7 +160,8 @@ def broadcast(db: Session, category: str, key: str, build: Callable[[dict], Opti
         if not text:
             tally.skipped += 1
             continue
-        outcome = deliver(db, sub.user_id, sub.chat_id, category, key, text, now, image=image, caption=caption)
+        pic, cap = card(sub.params) if card is not None else (image, caption)  # `card` for a message whose picture depends on the person's settings
+        outcome = deliver(db, sub.user_id, sub.chat_id, category, key, text, now, image=pic, caption=cap)
         setattr(tally, outcome, getattr(tally, outcome) + 1)
     return tally
 
@@ -502,6 +506,14 @@ def session_bias_held(segment: str, market: dict, bias: Optional[str]) -> Option
     nifty = next((r for r in market["rows"] if r["label"] == "NIFTY"), None)
     check = bias_check(bias, nifty["change_pct"] if nifty else None)
     return (bias, "it held" in check) if check else None
+
+
+def oi_caption(rows: list[dict], snapshot_date: date, top_n: int) -> str:
+    """The short line that goes with the OI picture: how many on each side and the leading names."""
+    bull, bear, n_bull, n_bear = strong_oi(rows, top_n)
+    top = lambda items: ", ".join(r["symbol"] for r in items[:3])  # noqa: E731
+    parts = [f"🟢 {n_bull} bullish" + (f" ({top(bull)})" if bull else ""), f"🔴 {n_bear} bearish" + (f" ({top(bear)})" if bear else "")]
+    return f"📊 Strong OI buildup · {snapshot_date.day} {snapshot_date.strftime('%b')} close\n" + " · ".join(parts)
 
 
 def token_message(expires_at: datetime, now: datetime, tz) -> Optional[tuple[str, str]]:

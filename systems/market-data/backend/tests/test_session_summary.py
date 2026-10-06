@@ -304,3 +304,72 @@ def test_the_premarket_push_is_one_picture_for_everyone_and_falls_back_to_text(m
     monkeypatch.setattr("app.domain.premarket_card.render_premarket_card", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no pillow")))
     jobs.premarket_to_subscribers(FakeDB(), PM_REPORT, DAY)
     assert len(photos) == 2 and [c for c, _ in texts] == ["111", "222"]
+
+
+# ---- the strong OI buildup card ------------------------------------------------------------------------------------------------
+
+
+def oi_row(symbol, call, put, price=1.0, buildup=("long_buildup", "long_buildup")):
+    return {"symbol": symbol, "call_oi_change_pct": call, "put_oi_change_pct": put, "price_change_pct": price, "call_buildup": buildup[0], "put_buildup": buildup[1]}
+
+
+OI_ROWS = [oi_row("RELIANCE", 42, 35, 1.8), oi_row("TCS", 25, 31, 0.6), oi_row("INFY", 18, 22, -0.4, ("short_buildup", "short_buildup")),
+           oi_row("SBIN", 12, 14, -1.1, ("short_buildup", "short_buildup")), oi_row("ITC", 3, 4, 0.2)]
+
+
+def test_the_oi_card_renders_for_a_busy_day_a_one_sided_day_and_a_day_with_nothing():
+    from app.domain.oi_card import render_oi_card
+
+    fmt, (w, h) = _png_size(render_oi_card(OI_ROWS, DAY, 10))
+    assert fmt == "PNG" and w == 1080 and h > 900
+    one_sided = [r for r in OI_ROWS if r["call_buildup"] == "long_buildup"]
+    assert _png_size(render_oi_card(one_sided, DAY, 10))[0] == "PNG"
+    assert _png_size(render_oi_card([oi_row("ITC", 3, 4)], DAY, 10))[0] == "PNG"  # nothing qualified: still a card, never an error
+
+
+def test_the_oi_card_is_taller_with_a_longer_list_and_respects_the_top_n():
+    from app.domain.oi_card import render_oi_card
+
+    many = [oi_row(f"S{i}", 20 + i, 25 + i) for i in range(12)]
+    assert _png_size(render_oi_card(many, DAY, 3))[1][1] < _png_size(render_oi_card(many, DAY, 10))[1][1]
+
+
+def test_the_oi_caption_names_the_leaders_on_each_side():
+    cap = n.oi_caption(OI_ROWS, DAY, 10)
+    assert cap == "📊 Strong OI buildup · 6 Oct close\n🟢 2 bullish (RELIANCE, TCS) · 🔴 2 bearish (INFY, SBIN)"
+    assert "0 bullish · 🔴 0 bearish" in n.oi_caption([oi_row("ITC", 3, 4)], DAY, 10)
+
+
+def test_the_digest_goes_as_a_picture_sized_to_each_persons_top_n_and_falls_back_to_text(monkeypatch):
+    photos, texts, drawn = [], [], []
+    monkeypatch.setattr(n, "send_telegram_photo", lambda png, cap, chat: photos.append((chat, cap)))
+    monkeypatch.setattr(n, "send_telegram", lambda text, chat: texts.append((chat, text)))
+    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: (OI_ROWS, DAY))
+    real = jobs.oi_card_for
+    monkeypatch.setattr(jobs, "oi_card_for", lambda rows, day, top_n: (drawn.append(top_n), real(rows, day, top_n))[1])
+    other = uuid4()
+    rows = [SimpleNamespace(user_id=ME, params={"top_n": 5}), SimpleNamespace(user_id=other, params={"top_n": 5})]
+    monkeypatch.setattr(n, "_enabled_subscriptions", lambda db, c: rows if c == "oi_buildup" else [])
+    monkeypatch.setattr(n, "_chats_for", lambda db, ids: {ME: "111", other: "222"})
+    jobs.oi_digest_to_subscribers(FakeDB(), today=DAY)
+    assert [c for c, _ in photos] == ["111", "222"] and texts == [] and drawn == [5]  # drawn once for two people with the same setting
+    monkeypatch.setattr("app.domain.oi_card.render_oi_card", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no pillow")))
+    monkeypatch.setattr(jobs, "oi_card_for", real)
+    jobs.oi_digest_to_subscribers(FakeDB(), today=DAY)
+    assert len(photos) == 2 and [c for c, _ in texts] == ["111", "222"] and "Strong OI buildup" in texts[0][1]
+
+
+def test_both_tally_tiles_are_drawn_and_an_outlier_does_not_squash_the_other_bars():
+    """The bullish tile used to be painted over by the bearish one's panel; and one stock whose OI tripled shrank every other bar to a sliver."""
+    import io
+
+    from PIL import Image
+
+    from app.domain.oi_card import BAR_CAP, render_oi_card
+
+    outlier = [oi_row("ENRIN", 349, 296, 4.1), oi_row("TCS", 40, 35, 0.6)]
+    img = Image.open(io.BytesIO(render_oi_card(outlier, DAY, 10))).convert("RGB")
+    # The bullish count is drawn in bright green in the left tile (x 40-530, y 200-270); the bug painted that tile over, leaving none.
+    green = sum(1 for x in range(60, 300) for y in range(200, 270) if img.getpixel((x, y)) == (61, 220, 151))
+    assert green > 100, "the bullish tile looks empty"
+    assert BAR_CAP < 349

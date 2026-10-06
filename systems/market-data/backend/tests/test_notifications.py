@@ -572,7 +572,7 @@ def test_a_digest_is_not_sent_for_an_old_snapshot(monkeypatch):
 def test_a_digest_is_sent_for_todays_snapshot_once_with_a_per_day_key(monkeypatch):
     calls = []
     monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 20, 20)], date(2026, 10, 6)))
-    monkeypatch.setattr(n, "broadcast", lambda db, category, key, build, now=None: (calls.append((category, key, build({"top_n": 5}))), n.Tally(sent=1))[1])
+    monkeypatch.setattr(n, "broadcast", lambda db, category, key, build, now=None, **kw: (calls.append((category, key, build({"top_n": 5}))), n.Tally(sent=1))[1])
     assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 1
     category, key, text = calls[0]
     assert (category, key) == ("oi_buildup", "oi:2026-10-06") and text.startswith("📊 Strong OI buildup · 6 Oct close")

@@ -140,7 +140,7 @@ def _latest_text(db: Session, user: User, cat: n.Category) -> str:
         sub = db.get(NotificationSubscription, (user.user_id, cat.key))
         text = n.oi_digest_message(rows, snapshot_date, {**cat.defaults, **((sub.params if sub else None) or {})}["top_n"]) if snapshot_date else None
         if not text:
-            raise HTTPException(status_code=404, detail="No stock showed a strong two-sided shift in the latest scan." if snapshot_date else "There is no OI scan yet.")
+            raise HTTPException(status_code=404, detail="No stock moved enough in price and open interest in the latest scan." if snapshot_date else "There is no OI scan yet.")
         return text
     if cat.key in ("session_nse", "session_mcx", "session_crypto"):
         return _session_text(db, user, {"session_nse": "NSE", "session_mcx": "MCX"}.get(cat.key, "CRYPTO"))

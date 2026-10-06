@@ -12,7 +12,7 @@ import { useResource } from "../hooks/useResource";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { ScanTradePanel } from "./ScanTradePanel";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, oiDays, oiSignal, oiWindowChange, tradeLink, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, tradeLink, visible,
   type OiFilters, type OiSignal, type OiSort, type ScreenerFilters, type ScreenerSort,
 } from "./scanModel";
 import {
@@ -99,19 +99,25 @@ function OiScan() {
     <div className="stack">
       <div className="oi-signal">
         <div className="chips" role="group" aria-label="Signal">
-          {(["all", "strong_bull", "strong_bear"] as OiSignal[]).map((s) => (
+          {(["all", ...QUADRANT_SIGNALS, "strong_bull", "strong_bear"] as OiSignal[]).map((s) => (
             <button
               key={s}
               aria-pressed={f.signal === s}
-              title={s === "all" ? "Every stock, whatever it shows" : OI_SIGNAL_HELP[s]}
-              // a major-shift list is read biggest first
-              onClick={() => setF({ ...f, signal: s, sort: s === "all" ? (f.sort === "strength" ? "call_oi" : f.sort) : "strength" })}
+              title={s === "all" ? "Every stock, whatever it shows" : isQuadrantSignal(s) ? `${BUILDUP_LABEL[s]}: ${BUILDUP_HELP[s]}` : OI_SIGNAL_HELP[s]}
+              // a list of shifts is read biggest first
+              onClick={() =>
+                setF({
+                  ...f,
+                  signal: s,
+                  sort: s === "all" ? (f.sort === "strength" || f.sort === "oi_total" ? "call_oi" : f.sort) : isQuadrantSignal(s) ? "oi_total" : "strength",
+                })
+              }
             >
-              {s === "all" ? "All stocks" : OI_SIGNAL_LABEL[s]}
+              {s === "all" ? "All stocks" : isQuadrantSignal(s) ? BUILDUP_LABEL[s] : `★ ${OI_SIGNAL_LABEL[s]}`}
             </button>
           ))}
         </div>
-        {f.signal !== "all" && (
+        {(f.signal === "strong_bull" || f.signal === "strong_bear") && (
           <label className="select-field oi-shift">
             <span className="dim">Both sides up at least (%)</span>
             <input
@@ -126,7 +132,13 @@ function OiScan() {
           </label>
         )}
       </div>
-      {f.signal !== "all" && (
+      {isQuadrantSignal(f.signal) && (
+        <p className="faint" style={{ margin: 0, fontSize: 12 }} data-testid="oi-signal-help">
+          {BUILDUP_LABEL[f.signal]}: {BUILDUP_HELP[f.signal]}. Counts when the price moved at least {MIN_PRICE_MOVE_PCT}% and total open interest (calls plus puts) changed at least {MIN_OI_CHANGE_PCT}%, the
+          biggest OI change first. It describes today's option chain; it is not a prediction.
+        </p>
+      )}
+      {(f.signal === "strong_bull" || f.signal === "strong_bear") && (
         <p className="faint" style={{ margin: 0, fontSize: 12 }} data-testid="oi-signal-help">
           {OI_SIGNAL_HELP[f.signal]} Both call and put open interest grew by at least {f.minShift}%. It describes today's option chain; it is not a prediction.
         </p>
@@ -145,6 +157,7 @@ function OiScan() {
             { value: "pcr", label: "Put/call ratio" },
             { value: "price", label: "Price change" },
             { value: "strength", label: "Size of the shift" },
+            { value: "oi_total", label: "Total OI change" },
             { value: "symbol", label: "Symbol A to Z" },
           ]}
         />
@@ -165,6 +178,10 @@ function OiScan() {
             ))}
             <div>
               <strong>Put/call ratio</strong>: put open interest divided by call open interest. Above 1 means more puts are open than calls.
+            </div>
+            <div>
+              <strong>The four boxes</strong> compare the price move with the change in total open interest (calls plus puts): long buildup and short covering are the bullish pair, short
+              buildup and long unwinding the bearish pair. A stock counts when the price moved at least {MIN_PRICE_MOVE_PCT}% and total OI changed at least {MIN_OI_CHANGE_PCT}%.
             </div>
             <div>
               <strong>Strong bullish</strong>: {OI_SIGNAL_HELP.strong_bull} <strong>Strong bearish</strong>: {OI_SIGNAL_HELP.strong_bear} A shift counts only when open interest
@@ -290,7 +307,16 @@ function OiCard({
             const signal = oiSignal(r, minShift);
             return signal ? (
               <span className={`pill pill-small ${signal === "strong_bull" ? "up" : "dn"}`} title={OI_SIGNAL_HELP[signal]} data-testid="oi-signal-badge" style={{ marginLeft: 8 }}>
-                {OI_SIGNAL_LABEL[signal]}
+                ★ {OI_SIGNAL_LABEL[signal]}
+              </span>
+            ) : null;
+          })()}
+          {(() => {
+            const q = oiQuadrant(r);
+            const total = totalOiChangePct(r);
+            return q ? (
+              <span className={`pill pill-small ${q === "long_buildup" || q === "short_covering" ? "up" : "dn"}`} title={`${BUILDUP_HELP[q]}. Total OI ${formatPct(total, 1, true)}.`} data-testid="oi-quadrant-badge" style={{ marginLeft: 8 }}>
+                {BUILDUP_LABEL[q]} · OI {formatPct(total, 1, true)}
               </span>
             ) : null;
           })()}

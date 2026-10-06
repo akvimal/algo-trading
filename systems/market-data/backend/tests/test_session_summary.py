@@ -306,38 +306,39 @@ def test_the_premarket_push_is_one_picture_for_everyone_and_falls_back_to_text(m
     assert len(photos) == 2 and [c for c, _ in texts] == ["111", "222"]
 
 
-# ---- the strong OI buildup card ------------------------------------------------------------------------------------------------
+# ---- the OI buildup card (four boxes: price against open interest) ---------------------------------------------------------------
 
 
-def oi_row(symbol, call, put, price=1.0, buildup=("long_buildup", "long_buildup")):
-    return {"symbol": symbol, "call_oi_change_pct": call, "put_oi_change_pct": put, "price_change_pct": price, "call_buildup": buildup[0], "put_buildup": buildup[1]}
+def oi_row(symbol, price, oi_pct, call=None, put=None):
+    """A stock whose total OI moved by `oi_pct` percent (each side by it unless set)."""
+    side = "long_buildup" if price > 0 else "short_buildup"
+    return {"symbol": symbol, "total_call_oi": 1000, "total_put_oi": 1000, "price_change_pct": price,
+            "call_oi_change_pct": oi_pct if call is None else call, "put_oi_change_pct": oi_pct if put is None else put, "call_buildup": side, "put_buildup": side}
 
 
-OI_ROWS = [oi_row("RELIANCE", 42, 35, 1.8), oi_row("TCS", 25, 31, 0.6), oi_row("INFY", 18, 22, -0.4, ("short_buildup", "short_buildup")),
-           oi_row("SBIN", 12, 14, -1.1, ("short_buildup", "short_buildup")), oi_row("ITC", 3, 4, 0.2)]
+OI_ROWS = [oi_row("RELIANCE", 1.8, 42), oi_row("TCS", 0.6, 25), oi_row("SAIL", 1.1, -14), oi_row("INFY", -0.9, 22), oi_row("SBIN", -1.4, 12), oi_row("ITC", -0.8, -9), oi_row("NOISE", 0.1, 30)]
 
 
 def test_the_oi_card_renders_for_a_busy_day_a_one_sided_day_and_a_day_with_nothing():
     from app.domain.oi_card import render_oi_card
 
-    fmt, (w, h) = _png_size(render_oi_card(OI_ROWS, DAY, 10))
-    assert fmt == "PNG" and w == 1080 and h > 900
-    one_sided = [r for r in OI_ROWS if r["call_buildup"] == "long_buildup"]
-    assert _png_size(render_oi_card(one_sided, DAY, 10))[0] == "PNG"
-    assert _png_size(render_oi_card([oi_row("ITC", 3, 4)], DAY, 10))[0] == "PNG"  # nothing qualified: still a card, never an error
+    fmt, (w, h) = _png_size(render_oi_card(OI_ROWS, DAY, 5))
+    assert fmt == "PNG" and w == 1080 and h > 700
+    assert _png_size(render_oi_card([r for r in OI_ROWS if r["price_change_pct"] > 0.5], DAY, 5))[0] == "PNG"
+    assert _png_size(render_oi_card([oi_row("NOISE", 0.1, 30)], DAY, 5))[0] == "PNG"  # nothing cleared the floors: still a card, never an error
 
 
 def test_the_oi_card_is_taller_with_a_longer_list_and_respects_the_top_n():
     from app.domain.oi_card import render_oi_card
 
-    many = [oi_row(f"S{i}", 20 + i, 25 + i) for i in range(12)]
-    assert _png_size(render_oi_card(many, DAY, 3))[1][1] < _png_size(render_oi_card(many, DAY, 10))[1][1]
+    many = [oi_row(f"S{i}", 1.0 + i / 10, 20 + i) for i in range(12)] + [oi_row(f"D{i}", -1.0 - i / 10, 20 + i) for i in range(12)]
+    assert _png_size(render_oi_card(many, DAY, 3))[1][1] < _png_size(render_oi_card(many, DAY, 5))[1][1] < _png_size(render_oi_card(many, DAY, 10))[1][1]
 
 
-def test_the_oi_caption_names_the_leaders_on_each_side():
-    cap = n.oi_caption(OI_ROWS, DAY, 10)
-    assert cap == "📊 Strong OI buildup · 6 Oct close\n🟢 2 bullish (RELIANCE, TCS) · 🔴 2 bearish (INFY, SBIN)"
-    assert "0 bullish · 🔴 0 bearish" in n.oi_caption([oi_row("ITC", 3, 4)], DAY, 10)
+def test_the_oi_caption_names_the_count_and_leader_of_each_box():
+    cap = n.oi_caption(OI_ROWS, DAY, 5)
+    assert cap == "📊 OI buildup · 6 Oct close\n🟢 Long buildup 2 (RELIANCE) · 🟢 Short covering 1 (SAIL) · 🔴 Short buildup 2 (INFY) · 🔴 Long unwinding 1 (ITC)"
+    assert "Long buildup 0 · " in n.oi_caption([oi_row("NOISE", 0.1, 30)], DAY, 5)
 
 
 def test_the_digest_goes_as_a_picture_sized_to_each_persons_top_n_and_falls_back_to_text(monkeypatch):
@@ -356,20 +357,21 @@ def test_the_digest_goes_as_a_picture_sized_to_each_persons_top_n_and_falls_back
     monkeypatch.setattr("app.domain.oi_card.render_oi_card", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no pillow")))
     monkeypatch.setattr(jobs, "oi_card_for", real)
     jobs.oi_digest_to_subscribers(FakeDB(), today=DAY)
-    assert len(photos) == 2 and [c for c, _ in texts] == ["111", "222"] and "Strong OI buildup" in texts[0][1]
+    assert len(photos) == 2 and [c for c, _ in texts] == ["111", "222"] and "OI buildup" in texts[0][1]
 
 
-def test_both_tally_tiles_are_drawn_and_an_outlier_does_not_squash_the_other_bars():
-    """The bullish tile used to be painted over by the bearish one's panel; and one stock whose OI tripled shrank every other bar to a sliver."""
+def test_each_box_is_drawn_in_its_own_colour_and_empty_boxes_are_outlined_dim():
+    """The top-left box (long buildup) holds a stock, so its outline is green; the bottom-right (long unwinding) is empty, so it is not red."""
     import io
 
     from PIL import Image
 
-    from app.domain.oi_card import BAR_CAP, render_oi_card
+    from app.domain.oi_card import render_oi_card
 
-    outlier = [oi_row("ENRIN", 349, 296, 4.1), oi_row("TCS", 40, 35, 0.6)]
-    img = Image.open(io.BytesIO(render_oi_card(outlier, DAY, 10))).convert("RGB")
-    # The bullish count is drawn in bright green in the left tile (x 40-530, y 200-270); the bug painted that tile over, leaving none.
-    green = sum(1 for x in range(60, 300) for y in range(200, 270) if img.getpixel((x, y)) == (61, 220, 151))
-    assert green > 100, "the bullish tile looks empty"
-    assert BAR_CAP < 349
+    img = Image.open(io.BytesIO(render_oi_card([oi_row("RELIANCE", 1.8, 42), oi_row("INFY", -0.9, 22)], DAY, 5))).convert("RGB")
+    green, red = (61, 220, 151), (255, 107, 107)
+    count = lambda colour, box: sum(1 for x in range(*box[0]) for y in range(*box[1]) if img.getpixel((x, y)) == colour)  # noqa: E731
+    top_left = ((40, 540), (190, 360))
+    bottom_right = ((560, 1040), (560, img.height - 100))
+    assert count(green, top_left) > 200
+    assert count(red, bottom_right) == 0

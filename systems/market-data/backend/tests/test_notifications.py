@@ -73,13 +73,13 @@ def subs(monkeypatch, *people, category="premarket", params=None):
 
 def test_every_category_starts_with_sane_defaults_and_only_ops_is_admin_only():
     assert {k: c.admin_only for k, c in n.CATEGORIES.items()} == {"premarket": False, "oi_buildup": False, "session_nse": False, "session_mcx": False, "session_crypto": False, "ops": True}
-    assert n.clean_params("oi_buildup", None) == {"top_n": 10}
+    assert n.clean_params("oi_buildup", None) == {"top_n": 5}
     assert n.clean_params("premarket", {"top_n": 99}) == {}  # settings a category does not have are dropped
 
 
 def test_the_oi_digest_size_is_a_whole_number_in_range():
     assert n.clean_params("oi_buildup", {"top_n": 5}) == {"top_n": 5}
-    assert n.clean_params("oi_buildup", {"top_n": 20}) == {"top_n": 20}
+    assert n.clean_params("oi_buildup", {"top_n": 10}) == {"top_n": 10}
     for bad in (2, 21, 0, -1, "10", 7.5, True, None):
         with pytest.raises(n.NotificationError):
             n.clean_params("oi_buildup", {"top_n": bad})
@@ -146,45 +146,39 @@ def test_missing_inputs_are_left_out_rather_than_shown_as_blanks():
 # ---- strong OI buildup --------------------------------------------------------------------------------------------------------------
 
 
-def oi(symbol, call, put, cb="long_buildup", pb="long_buildup", price=1.0):
-    return {"symbol": symbol, "call_oi_change_pct": call, "put_oi_change_pct": put, "call_buildup": cb, "put_buildup": pb, "price_change_pct": price}
+def oi(symbol, price, oi_pct, call=None, put=None):
+    """A stock whose total OI moved by `oi_pct` percent (each side by it unless set); a long buildup when price is up, else short."""
+    side = "long_buildup" if price > 0 else "short_buildup"
+    return {"symbol": symbol, "total_call_oi": 1000, "total_put_oi": 1000, "price_change_pct": price,
+            "call_oi_change_pct": oi_pct if call is None else call, "put_oi_change_pct": oi_pct if put is None else put, "call_buildup": side, "put_buildup": side}
 
 
-def test_strong_means_both_sides_grew_at_least_ten_percent_with_the_same_buildup():
-    assert n.oi_signal(oi("A", 10, 10)) == "bull"
-    assert n.oi_signal(oi("A", 30, 12, "short_buildup", "short_buildup", -1)) == "bear"
-    assert n.oi_signal(oi("A", 9.9, 40)) is None  # one side below the threshold
-    assert n.oi_signal(oi("A", 40, 40, "long_buildup", "short_buildup")) is None  # the two sides disagree
-    assert n.oi_signal(oi("A", None, 40)) is None and n.oi_signal(oi("A", 40, None)) is None
-    assert n.oi_signal(oi("A", 40, 40, "short_covering", "short_covering")) is None
-
-
-def test_the_top_few_are_ranked_by_the_combined_shift_with_ties_by_symbol():
-    rows = [oi("SMALL", 10, 10), oi("BIG", 50, 60), oi("MID", 20, 30), oi("TIEB", 15, 15), oi("TIEA", 15, 15), oi("BEAR", 25, 25, "short_buildup", "short_buildup", -2), oi("NONE", 5, 5)]
-    bull, bear, n_bull, n_bear = n.strong_oi(rows, 3)
-    assert [r["symbol"] for r in bull] == ["BIG", "MID", "TIEA"] and (n_bull, n_bear) == (5, 1)
-    assert [r["symbol"] for r in bear] == ["BEAR"]
-
-
-def test_the_digest_is_one_message_with_both_lists_the_counts_and_no_advice():
-    rows = [oi("RELIANCE", 24.4, 31.2, price=1.24), oi("INFY", 12, 15, "short_buildup", "short_buildup", -0.8)]
-    text = n.oi_digest_message(rows, date(2026, 10, 6), 10)
-    assert text.startswith("📊 Strong OI buildup · 6 Oct close")
-    assert "🟢 Strong bullish (top 1 of 1)\n1. RELIANCE  call +24% · put +31% · price +1.24%" in text
-    assert "🔴 Strong bearish (top 1 of 1)\n1. INFY  call +12% · put +15% · price −0.80%" in text
+def test_the_digest_has_the_four_boxes_bullish_pair_first_then_bearish():
+    rows = [oi("RELIANCE", 1.24, 31.2), oi("COVER", 1.1, -12), oi("INFY", -0.8, 15), oi("UNWIND", -1.3, -9)]
+    text = n.oi_digest_message(rows, date(2026, 10, 6), 5)
+    assert text.startswith("📊 OI buildup · 6 Oct close")
+    assert text.index("🟢 Bullish") < text.index("Long buildup") < text.index("Short covering") < text.index("🔴 Bearish") < text.index("Short buildup") < text.index("Long unwinding")
+    assert "1. RELIANCE ★  OI +31.2% · price +1.24%" in text and "1. COVER  OI −12.0% · price +1.10%" in text
+    assert "1. INFY ★  OI +15.0% · price −0.80%" in text and "1. UNWIND  OI −9.0% · price −1.30%" in text
     assert text.endswith("Option-chain activity for the day, not a prediction or a recommendation.")
 
 
-def test_with_one_side_empty_it_says_none_and_with_neither_there_is_no_message():
-    only_bull = n.oi_digest_message([oi("A", 20, 20)], date(2026, 10, 6), 10)
-    assert "🔴 Strong bearish: none" in only_bull
-    assert n.oi_digest_message([oi("A", 5, 5), oi("B", 20, 20, "long_buildup", "short_buildup")], date(2026, 10, 6), 10) is None
-    assert n.oi_digest_message([], date(2026, 10, 6), 10) is None
+def test_each_box_lists_the_biggest_oi_changes_first_up_to_top_n_and_counts_them_all():
+    rows = [oi(f"S{i}", 1.0, 10 + i) for i in range(8)]
+    text = n.oi_digest_message(rows, date(2026, 10, 6), 3)
+    assert "Long buildup · price up, OI up · fresh buyers · 8 stocks" in text
+    assert [f"{i}. S{8 - i}" for i in (1, 2, 3)] and "1. S7 ★" in text and "3. S5 ★" in text and "4. S4" not in text
+
+
+def test_an_empty_box_says_none_and_with_nothing_clearing_the_floors_there_is_no_message():
+    assert "none today" in n.oi_digest_message([oi("A", 1.0, 20)], date(2026, 10, 6), 5)
+    assert n.oi_digest_message([oi("A", 0.2, 20), oi("B", 2.0, 1.0)], date(2026, 10, 6), 5) is None  # price or OI below the floor: noise
+    assert n.oi_digest_message([], date(2026, 10, 6), 5) is None
 
 
 def test_a_full_digest_stays_well_inside_telegrams_message_limit():
-    rows = [oi(f"SYMBOL{i:02d}", 10 + i, 10 + i) for i in range(30)] + [oi(f"BEARISH{i:02d}", 10 + i, 10 + i, "short_buildup", "short_buildup", -3) for i in range(30)]
-    assert len(n.oi_digest_message(rows, date(2026, 10, 6), n.TOP_N_MAX)) < 3000
+    rows = [oi(f"UP{i:02d}", 1.0, 10 + i) for i in range(30)] + [oi(f"DN{i:02d}", -2.0, 10 + i) for i in range(30)] + [oi(f"CV{i:02d}", 1.0, -10 - i) for i in range(30)] + [oi(f"UW{i:02d}", -2.0, -10 - i) for i in range(30)]
+    assert len(n.oi_digest_message(rows, date(2026, 10, 6), n.TOP_N_MAX)) < 4096
 
 
 # ---- operator alerts --------------------------------------------------------------------------------------------------------------
@@ -428,7 +422,7 @@ class RouteDB:
 def test_a_person_sees_the_categories_they_may_use_all_off_and_whether_they_have_a_chat():
     out = route._state(RouteDB(chat=False), User(ME, False))
     assert out.chat_ready is False and [c.key for c in out.categories] == ["premarket", "oi_buildup", "session_nse", "session_mcx", "session_crypto"]
-    assert not any(c.enabled for c in out.categories) and next(c for c in out.categories if c.key == "oi_buildup").params == {"top_n": 10}
+    assert not any(c.enabled for c in out.categories) and next(c for c in out.categories if c.key == "oi_buildup").params == {"top_n": 5}
     assert [c.key for c in route._state(RouteDB(), User(ME, True)).categories] == ["premarket", "oi_buildup", "session_nse", "session_mcx", "session_crypto", "ops"]
 
 
@@ -473,10 +467,10 @@ def test_send_now_with_nothing_to_send_says_so_instead_of_sending_an_empty_messa
         route.send_now("premarket", User(ME, False), RouteDB())
     assert e.value.status_code == 404 and tg.sent == []
     route._last_send.clear()
-    monkeypatch.setattr(route.notification_jobs, "latest_oi_rows", lambda db: ([oi("A", 5, 5)], date(2026, 10, 6)))
+    monkeypatch.setattr(route.notification_jobs, "latest_oi_rows", lambda db: ([oi("A", 0.2, 5)], date(2026, 10, 6)))
     with pytest.raises(HTTPException) as e:
         route.send_now("oi_buildup", User(ME, False), RouteDB())
-    assert e.value.status_code == 404 and "strong two-sided shift" in e.value.detail and tg.sent == []
+    assert e.value.status_code == 404 and "moved enough in price and open interest" in e.value.detail and tg.sent == []
 
 
 def test_a_failed_manual_send_says_why_and_is_not_left_to_retry_in_the_background(monkeypatch):
@@ -564,18 +558,18 @@ def test_a_scan_that_finishes_triggers_the_digest_without_sending_anything_in_te
 
 def test_a_digest_is_not_sent_for_an_old_snapshot(monkeypatch):
     sent = []
-    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 20, 20)], date(2026, 10, 1)))
+    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 1.0, 20)], date(2026, 10, 1)))
     monkeypatch.setattr(n, "broadcast", lambda *a, **k: sent.append(a) or n.Tally(sent=1))
     assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 0 and sent == []
 
 
 def test_a_digest_is_sent_for_todays_snapshot_once_with_a_per_day_key(monkeypatch):
     calls = []
-    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 20, 20)], date(2026, 10, 6)))
+    monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 1.0, 20)], date(2026, 10, 6)))
     monkeypatch.setattr(n, "broadcast", lambda db, category, key, build, now=None, **kw: (calls.append((category, key, build({"top_n": 5}))), n.Tally(sent=1))[1])
     assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 1
     category, key, text = calls[0]
-    assert (category, key) == ("oi_buildup", "oi:2026-10-06") and text.startswith("📊 Strong OI buildup · 6 Oct close")
+    assert (category, key) == ("oi_buildup", "oi:2026-10-06") and text.startswith("📊 OI buildup · 6 Oct close")
 
 
 def test_no_snapshot_at_all_sends_nothing(monkeypatch):

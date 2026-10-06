@@ -23,6 +23,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.adapters.db.models import AlertChannel, NotificationLog, NotificationSubscription
+from app.domain import oi_quadrants as oiq
 from app.domain.notify import send_telegram, send_telegram_photo
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ CATEGORIES: dict[str, Category] = {
     c.key: c
     for c in (
         Category("premarket", "Pre-market bias", "The morning read on the overnight US close, crude, USD/INR, yields, ADRs and the GIFT Nifty gap, with the AI's call.", "Weekdays at 8:45 AM IST, 30 minutes before NSE opens"),
-        Category("oi_buildup", "Strong OI buildup", "The F&O stocks whose call and put open interest both grew a lot in the same direction that day: the top few bullish and bearish, in one message.", "Weekdays after the end-of-day OI scan finishes (about 4:05 PM IST)", defaults={"top_n": 10}),
+        Category("oi_buildup", "OI buildup", "How F&O stocks moved against their open interest that day, in four boxes: long buildup and short covering (bullish), short buildup and long unwinding (bearish), the biggest OI change first.", "Weekdays after the end-of-day OI scan finishes (about 4:05 PM IST)", defaults={"top_n": 5}),
         Category("session_nse", "Post-session summary: NSE", "How the NSE session went (NIFTY, BANKNIFTY, VIX, and whether the morning bias held) and your own closed trades that day, paper and live apart.", "Weekdays at 3:50 PM IST, after the 3:30 PM close; skipped on a market holiday"),
         Category("session_mcx", "Post-session summary: MCX", "How gold, crude, silver and natural gas (the mini contracts) did in the MCX session, and your own closed MCX trades that day, paper and live apart.", "Weekdays at 11:58 PM IST, after the late-evening close; skipped on an MCX holiday"),
         Category("session_crypto", "Post-session summary: crypto", "The last 24 hours in BTC and ETH and your own crypto trades that day, paper and live apart. Crypto never closes, so this goes out at a fixed time.", "Every day at 11:30 PM IST"),
@@ -54,8 +55,7 @@ CATEGORIES: dict[str, Category] = {
     )
 }
 
-TOP_N_MIN, TOP_N_MAX = 3, 20
-STRONG_MIN_SHIFT = 10.0  # percent: how much BOTH call and put OI must have grown, the same default the Scan screen uses
+TOP_N_MIN, TOP_N_MAX = 3, 10  # per box: four boxes of ten would be a very long message
 
 
 class NotificationError(Exception):
@@ -291,43 +291,30 @@ def premarket_message(report: dict, day: date) -> str:
     return "\n".join(lines)
 
 
-def oi_signal(row: dict, min_shift: float = STRONG_MIN_SHIFT) -> Optional[str]:
-    """"bull" / "bear" when BOTH call and put open interest grew at least `min_shift` percent in the same direction of buildup (price up
-    with long buildup on both sides, or price down with short buildup on both); else None. The same rule as the Scan screen's strong
-    bullish / strong bearish. A row missing a change figure never qualifies."""
-    call, put = row.get("call_oi_change_pct"), row.get("put_oi_change_pct")
-    if call is None or put is None or call < min_shift or put < min_shift:
-        return None
-    if row.get("call_buildup") == "long_buildup" and row.get("put_buildup") == "long_buildup":
-        return "bull"
-    if row.get("call_buildup") == "short_buildup" and row.get("put_buildup") == "short_buildup":
-        return "bear"
-    return None
-
-
-def strong_oi(rows: list[dict], top_n: int) -> tuple[list[dict], list[dict], int, int]:
-    """(top bullish, top bearish, total bullish, total bearish), each list ranked by the combined call+put shift, biggest first."""
-    bull = sorted((r for r in rows if oi_signal(r) == "bull"), key=lambda r: (-(r["call_oi_change_pct"] + r["put_oi_change_pct"]), r["symbol"]))
-    bear = sorted((r for r in rows if oi_signal(r) == "bear"), key=lambda r: (-(r["call_oi_change_pct"] + r["put_oi_change_pct"]), r["symbol"]))
-    return bull[:top_n], bear[:top_n], len(bull), len(bear)
-
-
 def _oi_line(i: int, r: dict) -> str:
-    price = f" · price {_signed(r.get('price_change_pct'))}" if r.get("price_change_pct") is not None else ""
-    return f"{i}. {r['symbol']}  call {_signed(r['call_oi_change_pct'], 0)} · put {_signed(r['put_oi_change_pct'], 0)}{price}"
+    star = " ★" if r.get("strong") else ""
+    return f"{i}. {r['symbol']}{star}  OI {_signed(r['oi_change_pct'], 1)} · price {_signed(r['price_change_pct'])}"
 
 
 def oi_digest_message(rows: list[dict], snapshot_date: date, top_n: int) -> Optional[str]:
-    """The strong OI buildup digest, or None when no stock qualified (no message rather than an empty one)."""
-    bull, bear, n_bull, n_bear = strong_oi(rows, top_n)
-    if not bull and not bear:
+    """The end-of-day OI digest: how price moved against open interest, in four boxes (long buildup and short covering are the bullish
+    pair, short buildup and long unwinding the bearish pair), the biggest OI changes first. None when no stock cleared the noise floors
+    (no message rather than an empty one)."""
+    groups = oiq.by_quadrant(rows, top_n)
+    if not any(g["total"] for g in groups.values()):
         return None
-    lines = [f"📊 Strong OI buildup · {snapshot_date.day} {snapshot_date.strftime('%b')} close", f"Stocks whose call AND put open interest both grew at least {STRONG_MIN_SHIFT:.0f}% the same way. Ranked by the size of the shift.", ""]
-    for title, items, total in (("🟢 Strong bullish", bull, n_bull), ("🔴 Strong bearish", bear, n_bear)):
-        lines.append(f"{title} (top {len(items)} of {total})" if items else f"{title}: none")
-        lines += [_oi_line(i, r) for i, r in enumerate(items, 1)]
-        lines.append("")
-    lines.append("Option-chain activity for the day, not a prediction or a recommendation.")
+    lines = [
+        f"📊 OI buildup · {snapshot_date.day} {snapshot_date.strftime('%b')} close",
+        f"Price against open interest, the biggest OI change first (top {top_n} of each). Only moves of {oiq.MIN_PRICE_MOVE_PCT:g}% or more in price and "
+        f"{oiq.MIN_OI_CHANGE_PCT:g}% or more in total OI count.",
+    ]
+    for heading, keys in (("🟢 Bullish", oiq.BULLISH), ("🔴 Bearish", oiq.BEARISH)):
+        lines += ["", heading]
+        for key in keys:
+            g = groups[key]
+            lines.append(f"{oiq.LABEL[key]} · {oiq.MEANING[key]} · {g['total']} stock{'s' if g['total'] != 1 else ''}")
+            lines += [_oi_line(i, r) for i, r in enumerate(g["items"], 1)] or ["   none today"]
+    lines += ["", f"★ call and put OI both grew {oiq.STRONG_MIN_SHIFT:.0f}% or more the same way (a strong two-sided build).", "Option-chain activity for the day, not a prediction or a recommendation."]
     return "\n".join(lines)
 
 
@@ -509,11 +496,13 @@ def session_bias_held(segment: str, market: dict, bias: Optional[str]) -> Option
 
 
 def oi_caption(rows: list[dict], snapshot_date: date, top_n: int) -> str:
-    """The short line that goes with the OI picture: how many on each side and the leading names."""
-    bull, bear, n_bull, n_bear = strong_oi(rows, top_n)
-    top = lambda items: ", ".join(r["symbol"] for r in items[:3])  # noqa: E731
-    parts = [f"🟢 {n_bull} bullish" + (f" ({top(bull)})" if bull else ""), f"🔴 {n_bear} bearish" + (f" ({top(bear)})" if bear else "")]
-    return f"📊 Strong OI buildup · {snapshot_date.day} {snapshot_date.strftime('%b')} close\n" + " · ".join(parts)
+    """The short line that goes with the OI picture: how many stocks are in each of the four boxes and the leader of each."""
+    groups = oiq.by_quadrant(rows, 1)
+    parts = []
+    for key, icon in (("long_buildup", "🟢"), ("short_covering", "🟢"), ("short_buildup", "🔴"), ("long_unwinding", "🔴")):
+        g = groups[key]
+        parts.append(f"{icon} {oiq.LABEL[key]} {g['total']}" + (f" ({g['items'][0]['symbol']})" if g["items"] else ""))
+    return f"📊 OI buildup · {snapshot_date.day} {snapshot_date.strftime('%b')} close\n" + " · ".join(parts)
 
 
 def token_message(expires_at: datetime, now: datetime, tz) -> Optional[tuple[str, str]]:

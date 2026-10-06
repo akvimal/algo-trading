@@ -80,8 +80,8 @@ describe("DailyMessages", () => {
     const oi = await screen.findByTestId("daily-oi_buildup");
     await userEvent.click(within(oi).getByLabelText("Off"));
     await waitFor(() => expect(writes("PUT")[0].body).toEqual({ enabled: true, params: { top_n: 10 } }));
-    await userEvent.selectOptions(await within(screen.getByTestId("daily-oi_buildup")).findByLabelText("How many per side"), "5");
-    await waitFor(() => expect(writes("PUT")[1].body).toEqual({ enabled: true, params: { top_n: 5 } }));
+    await userEvent.selectOptions(await within(screen.getByTestId("daily-oi_buildup")).findByLabelText("How many per box"), "3");
+    await waitFor(() => expect(writes("PUT")[1].body).toEqual({ enabled: true, params: { top_n: 3 } }));
   });
 
   it("will not let anything be switched on until Telegram is connected, and says so", async () => {
@@ -138,10 +138,10 @@ describe("DailyMessages", () => {
 
 describe("notificationsModel", () => {
   it("offers the usual digest sizes, plus the current one if it is something else", () => {
-    expect(topNOptions(10)).toEqual([5, 10, 15, 20]);
-    expect(topNOptions(7)).toEqual([5, 7, 10, 15, 20]);
-    expect(topNOptions(undefined)).toEqual([5, 10, 15, 20]);
-    expect(DEFAULT_TOP_N).toBe(10);
+    expect(topNOptions(5)).toEqual([3, 5, 7, 10]);
+    expect(topNOptions(8)).toEqual([3, 5, 7, 8, 10]);
+    expect(topNOptions(undefined)).toEqual([3, 5, 7, 10]);
+    expect(DEFAULT_TOP_N).toBe(5);
   });
   it("colours a delivery by how it went, and says what went wrong", () => {
     expect([statusTone("sent"), statusTone("retrying"), statusTone("gave_up")]).toEqual(["up", "warn", "dn"]);

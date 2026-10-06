@@ -127,7 +127,10 @@ def latest_oi_rows(db: Session) -> tuple[list[dict], Optional[date]]:
         return [], None
     rows = db.query(OiEodSnapshot).filter(OiEodSnapshot.snapshot_date == latest).all()
     return [
-        {"symbol": r.symbol, "call_oi_change_pct": r.call_oi_change_pct, "put_oi_change_pct": r.put_oi_change_pct, "price_change_pct": r.price_change_pct, "call_buildup": r.call_buildup, "put_buildup": r.put_buildup}
+        {
+            "symbol": r.symbol, "total_call_oi": r.total_call_oi, "total_put_oi": r.total_put_oi, "call_oi_change_pct": r.call_oi_change_pct,
+            "put_oi_change_pct": r.put_oi_change_pct, "price_change_pct": r.price_change_pct, "call_buildup": r.call_buildup, "put_buildup": r.put_buildup,
+        }
         for r in rows
     ], latest
 
@@ -154,12 +157,12 @@ def oi_digest_to_subscribers(db: Session, today: Optional[date] = None) -> n.Tal
     cards: dict[int, tuple[Optional[bytes], Optional[str]]] = {}  # one picture per distinct top-N, not one per person
 
     def card(params: dict):
-        top_n = params.get("top_n", 10)
+        top_n = params.get("top_n", 5)
         if top_n not in cards:
             cards[top_n] = oi_card_for(rows, snapshot_date, top_n)
         return cards[top_n]
 
-    return n.broadcast(db, "oi_buildup", f"oi:{snapshot_date.isoformat()}", lambda params: n.oi_digest_message(rows, snapshot_date, params.get("top_n", 10)), card=card)
+    return n.broadcast(db, "oi_buildup", f"oi:{snapshot_date.isoformat()}", lambda params: n.oi_digest_message(rows, snapshot_date, params.get("top_n", 5)), card=card)
 
 
 def send_oi_digest() -> n.Tally:

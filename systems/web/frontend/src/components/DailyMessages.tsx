@@ -106,12 +106,12 @@ function CategoryCard({ category: c, chatReady, onChanged }: { category: Notific
       {topN != null && (
         <div className="row" style={{ justifyContent: "flex-start" }}>
           <label htmlFor={`daily-${c.key}-n`} className="dim" style={{ fontSize: 13 }}>List the top</label>
-          <select id={`daily-${c.key}-n`} value={topN} disabled={busy} onChange={(e) => void save(c.enabled, { top_n: Number(e.target.value) })} aria-label="How many per side">
+          <select id={`daily-${c.key}-n`} value={topN} disabled={busy} onChange={(e) => void save(c.enabled, { top_n: Number(e.target.value) })} aria-label="How many per box">
             {topNOptions(topN).map((n) => (
               <option key={n} value={n}>{n}{n === DEFAULT_TOP_N ? " (default)" : ""}</option>
             ))}
           </select>
-          <span className="dim" style={{ fontSize: 13 }}>on each side</span>
+          <span className="dim" style={{ fontSize: 13 }}>in each of the four boxes</span>
         </div>
       )}
       <div className="row" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>

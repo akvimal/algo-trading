@@ -239,6 +239,52 @@ describe("OI buildup", () => {
     });
   });
 
+  describe("the four price-against-OI boxes", () => {
+    const quadrants = () => {
+      const base = { total_call_oi: 1000, total_put_oi: 1000 };
+      oi = {
+        snapshot_date: "2026-09-25",
+        rows: [
+          oiRow("BIGLONG", { ...base, price_change_pct: 2, call_oi_change_pct: 40, put_oi_change_pct: 40 }),
+          oiRow("SMALLLONG", { ...base, price_change_pct: 1, call_oi_change_pct: 8, put_oi_change_pct: 8 }),
+          oiRow("COVERING", { ...base, price_change_pct: 1.5, call_oi_change_pct: -20, put_oi_change_pct: -20 }),
+          oiRow("SHORTING", { ...base, price_change_pct: -2, call_oi_change_pct: 15, put_oi_change_pct: 15 }),
+          oiRow("UNWINDING", { ...base, price_change_pct: -1, call_oi_change_pct: -10, put_oi_change_pct: -10 }),
+          oiRow("NOISE", { ...base, price_change_pct: 0.1, call_oi_change_pct: 50, put_oi_change_pct: 50 }),
+        ],
+      };
+    };
+    const chip = (name: string) => within(screen.getByRole("group", { name: "Signal" })).getByRole("button", { name });
+
+    it("has a chip per box that filters to it, biggest total OI change first, with the rule spelled out", async () => {
+      quadrants();
+      const user = userEvent.setup();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      await user.click(chip("Long buildup"));
+      const cards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+      expect(cards.map((c) => c.textContent?.match(/BIGLONG|SMALLLONG/)?.[0])).toEqual(["BIGLONG", "SMALLLONG"]);
+      expect(screen.getByLabelText("Sort by")).toHaveValue("oi_total");
+      expect(screen.getByTestId("oi-signal-help")).toHaveTextContent(/at least 0\.5% and total open interest .* at least 5%/);
+      await user.click(chip("Short covering"));
+      expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(1);
+      await user.click(chip("Short buildup"));
+      expect(within(screen.getByTestId("oi-list")).getByTestId("oi-card")).toHaveTextContent("SHORTING");
+      await user.click(chip("Long unwinding"));
+      expect(within(screen.getByTestId("oi-list")).getByTestId("oi-card")).toHaveTextContent("UNWINDING");
+    });
+
+    it("badges a stock with its box and total OI change, and leaves a noisy day unbadged", async () => {
+      quadrants();
+      renderAt("/scan");
+      const list = await screen.findByTestId("oi-list");
+      const badges = within(list).getAllByTestId("oi-quadrant-badge").map((b) => b.textContent);
+      expect(badges).toContain("Long buildup · OI +40.0%");
+      expect(badges).toContain("Short covering · OI −20.0%");
+      expect(badges).toHaveLength(5); // NOISE (price moved 0.1%) has none
+    });
+  });
+
   describe("major two-sided shifts", () => {
     const shifted = () => {
       oi = {
@@ -252,14 +298,14 @@ describe("OI buildup", () => {
         ],
       };
     };
-    const signal = (name: string) => within(screen.getByRole("group", { name: "Signal" })).getByRole("button", { name });
+    const signal = (name: string) => within(screen.getByRole("group", { name: "Signal" })).getByRole("button", { name: new RegExp(`^(★ )?${name}$`) });
 
     it("badges a stock with a major shift in the all-stocks list, using the 10% default", async () => {
       shifted();
       renderAt("/scan");
       const list = await screen.findByTestId("oi-list");
       const badges = within(list).getAllByTestId("oi-signal-badge").map((b) => b.textContent);
-      expect(badges.sort()).toEqual(["Strong bearish", "Strong bullish", "Strong bullish"]); // TINY (under 10%) has none
+      expect(badges.sort()).toEqual(["★ Strong bearish", "★ Strong bullish", "★ Strong bullish"]); // TINY (under 10%) has none
     });
 
     it("has a preset for each direction, sorting the biggest shift first, and the size box appears with it at 10", async () => {

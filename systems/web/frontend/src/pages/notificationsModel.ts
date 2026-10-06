@@ -1,9 +1,9 @@
 import type { Delivery } from "../api/notifications";
 import { formatDay, formatTime } from "../format";
 
-/** How many strong OI buildups per side the digest lists. The server accepts 3 to 20; these are the offered steps. */
-export const TOP_N_OPTIONS = [5, 10, 15, 20] as const;
-export const DEFAULT_TOP_N = 10;
+/** How many stocks the OI digest lists in EACH of its four boxes. The server accepts 3 to 10; these are the offered steps. */
+export const TOP_N_OPTIONS = [3, 5, 7, 10] as const;
+export const DEFAULT_TOP_N = 5;
 
 /** The options to show for the digest size, always including the current value (it may have been set to something else). */
 export function topNOptions(current: number | undefined): number[] {

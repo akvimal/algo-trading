@@ -1,8 +1,15 @@
-import { Suspense, lazy, useRef, useState } from "react";
+import { Suspense, lazy, useMemo, useRef, useState } from "react";
 import type { ChartPaneHandle, DrawTool } from "../chart/ChartPane";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { EMPTY_STRUCTURE, INTERVALS, loadTools, saveTools } from "../chart/config";
 import { PaneHeader } from "../workstation/PaneHeader";
+import { NotesPanel } from "../components/NotesPanel";
+import { buildNoteContext } from "../components/notesModel";
+import { closestOiLevels } from "../chart/oiLevels";
+import { oiStripItems } from "../chart/oiStripModel";
+import { formatPrice } from "../format";
+import type { Segment } from "../api/types";
+import { useOiData } from "../workstation/useOiData";
 import { useScanLivePrice } from "./useScanLivePrice";
 
 // The chart library is large and only a card that is actually expanded needs it.
@@ -32,6 +39,12 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
   const paneRef = useRef<ChartPaneHandle>(null);
 
   const { price, connected } = useScanLivePrice(exchange, symbol);
+
+  // The nearest option-chain walls, for an instrument that has an option chain (the index options, gold/crude mini, BTC/ETH): the closest
+  // resistance above the price and the closest support below it. Nothing is requested for any other symbol.
+  const oi = useOiData({ exchange, symbol } as never, symbol, true);
+  const oiLines = useMemo(() => closestOiLevels(oi.levels, price), [oi.levels, price]);
+  const segment: Segment = exchange === "MCX" ? "MCX" : exchange === "CRYPTO" ? "CRYPTO" : "NSE";
 
   const chooseTool = (t: DrawTool | null) => {
     setTool(t);
@@ -76,6 +89,7 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
             drawingsHidden={tools.drawingsHidden}
             pickField={null}
             onPick={() => {}}
+            oiLevels={oiLines}
             onDrawingChange={(s) => {
               if (!s.drawing) setTool(null);
               setHasSelection(s.selected);
@@ -83,6 +97,17 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
           />
         </Suspense>
       </div>
+      {/* Notes on this chart, with the option to publish one as an idea to Telegram (admin only), and a picture of the chart with its OI. */}
+      <NotesPanel
+        key={`${segment}:${symbol}`}
+        segment={segment}
+        symbol={symbol}
+        interval={interval}
+        getContext={() => buildNoteContext({ price, interval, regime: null, structure: {}, oi: oi.summary, aiRead: null, holding: null })}
+        getChartImage={(opts) => paneRef.current?.snapshot(opts) ?? { problem: "the chart is not on screen yet" }}
+        getOiItems={() => oiStripItems(oi.summary, oi.sentiment, oi.levels, true, formatPrice)}
+        aiRead={null}
+      />
     </div>
   );
 }

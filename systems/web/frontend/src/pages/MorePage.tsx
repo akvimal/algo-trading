@@ -147,6 +147,17 @@ export function MorePage() {
         </Link>
       </div>
       <div className="card">
+        <Link to="/more/alerts" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+          <span>
+            <strong>Price alerts</strong>
+            <span className="dim" style={{ display: "block", fontSize: 13 }}>
+              Price alerts and daily Telegram messages: the pre-market bias and strong OI buildups, even with the app closed
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      </div>
+      <div className="card">
         <Link to="/more/notes" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
           <span>
             <strong>Notes</strong>
@@ -168,6 +179,19 @@ export function MorePage() {
           <span aria-hidden="true">›</span>
         </Link>
       </div>
+      {session?.isAdmin && (
+        <div className="card">
+          <Link to="/more/ai-models" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+            <span>
+              <strong>AI models</strong>
+              <span className="dim" style={{ display: "block", fontSize: 13 }}>
+                Which model runs the news digest, the pre-market bias and the OI read: the same for all, or one each
+              </span>
+            </span>
+            <span aria-hidden="true">›</span>
+          </Link>
+        </div>
+      )}
       {session?.isAdmin && (
         <div className="card">
           <Link to="/more/jobs" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>

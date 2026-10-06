@@ -3,7 +3,11 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { listNoteInstruments, listNotes } from "../api/notes";
 import type { NoteTag, Segment, StudyNote } from "../api/types";
+import { listPublished, type PublishedIdea } from "../api/ideas";
+import { useIsAdmin } from "../auth/AuthContext";
 import { ChartIcon } from "../chart/icons";
+import { IdeasChannelCard } from "../components/IdeasChannelCard";
+import { PublishIdea } from "../components/PublishIdea";
 import { NoteRow } from "../components/NoteRow";
 import { NOTE_TAGS, groupByDay } from "../components/notesModel";
 import { useResource } from "../hooks/useResource";
@@ -28,6 +32,17 @@ export function NotesPage() {
   const [error, setError] = useState<string | null>(null);
   const request = useRef(0);
   const instruments = useResource(listNoteInstruments, []);
+  const isAdmin = useIsAdmin();
+  // Which of the notes on screen have been published as ideas (operator only).
+  const [published, setPublished] = useState<Record<string, PublishedIdea>>({});
+  useEffect(() => {
+    if (!isAdmin || items.length === 0) return;
+    let live = true;
+    listPublished(items.map((n) => n.id)).then((rows) => live && setPublished((cur) => ({ ...cur, ...Object.fromEntries(rows.map((r) => [r.note_id, r])) }))).catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [isAdmin, items]);
 
   // Words are searched a moment after the person stops typing, not on every key.
   useEffect(() => {
@@ -74,6 +89,8 @@ export function NotesPage() {
     <div className="stack notes-page" data-testid="notes-page">
       <h1>Notes</h1>
       <p className="faint notes-intro">Your thoughts and plans by instrument, with the market as it was when you wrote them. Write new ones from the Notes bar under a Trade chart.</p>
+
+      {isAdmin && <IdeasChannelCard />}
 
       <div className="notes-instruments chips" role="group" aria-label="Instrument">
         <button aria-pressed={!symbol} onClick={() => pick(null)}>
@@ -124,7 +141,13 @@ export function NotesPage() {
           <div key={g.label}>
             {g.label !== "Today" && <div className="notes-day">{g.label}</div>}
             {g.notes.map((n) => (
-              <NoteRow key={n.id} note={n} showInstrument={!symbol} onDeleted={refresh} />
+              <NoteRow
+                key={n.id}
+                note={n}
+                showInstrument={!symbol}
+                onDeleted={refresh}
+                extra={isAdmin ? <PublishIdea note={n} state={published[n.id]} onChanged={(p) => setPublished((cur) => ({ ...cur, [p.note_id]: p }))} /> : undefined}
+              />
             ))}
           </div>
         ))}

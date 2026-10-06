@@ -2215,3 +2215,30 @@ table.t th {
   padding: 6px 0;
   border-top: 1px solid var(--border);
 }
+
+/* Pre-market card (components/PremarketCard.tsx). The headline must not carry an inline margin: it would override the
+   .stack gap and sit flush under the badge row. */
+.premarket-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.premarket-bias {
+  padding: 4px 14px;
+  font-size: 14px;
+  border-width: 1.5px;
+}
+.premarket-headline {
+  margin-bottom: 0;
+  line-height: 1.45;
+}
+.premarket-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}

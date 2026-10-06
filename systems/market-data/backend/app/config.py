@@ -26,8 +26,21 @@ class Settings(BaseSettings):
     # sentiment_history above: this scans EVERY NSE F&O stock (~150-200,
     # vs. sentiment_history's fixed 6), so it deliberately runs once, not
     # continuously.
-    oi_eod_snapshot_hour: int = 15
-    oi_eod_snapshot_minute: int = 40
+    # Morning pre-market bias report (app/scheduler.py's _record_premarket_report) - before the 09:00 pre-open,
+    # after the US close is final and GIFT Nifty is trading.
+    premarket_report_hour: int = 8
+    premarket_report_minute: int = 45
+    # 16:05 IST (moved from 15:40 on 2026-10-06): the strong-OI-buildup digest goes out when this scan finishes, and the scan runs
+    # in IST now (the CronTriggers below carry timezone=; before that they fired on the container's UTC clock, 5h30m late).
+    # The post-session Telegram summaries (app/domain/notification_jobs.py): NSE just after the 15:30 close, crypto late evening.
+    session_summary_nse_hour: int = 15
+    session_summary_nse_minute: int = 50
+    session_summary_mcx_hour: int = 23  # MCX closes at 23:30, or 23:55 while the US is on summer time
+    session_summary_mcx_minute: int = 58
+    session_summary_crypto_hour: int = 23
+    session_summary_crypto_minute: int = 30
+    oi_eod_snapshot_hour: int = 16
+    oi_eod_snapshot_minute: int = 5
     # EOD equity screener (momentum/trend + 52-week proximity, see
     # app/scheduler.py's _record_equity_screener_snapshot) - sequenced
     # AFTER the OI snapshot job above (15:40) rather than at the same
@@ -36,8 +49,9 @@ class Settings(BaseSettings):
     # F&O-only stocks) - a full sweep takes ~65-70 minutes at Dhan's 2s/
     # call candle throttle, comfortably finishing well before the next
     # trading day.
+    # 16:30 IST, after the OI scan above (16:05, a ~10-15 minute run) so the two do not compete for Dhan's shared rate limit.
     equity_screener_snapshot_hour: int = 16
-    equity_screener_snapshot_minute: int = 0
+    equity_screener_snapshot_minute: int = 30
 
     dhan_client_id: str = ""
     dhan_access_token: str = ""
@@ -144,8 +158,20 @@ class Settings(BaseSettings):
     # nothing is sent (app/domain/notify.py logs a warning once).
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # A SEPARATE bot for publishing notes as ideas to a channel/group (app/domain/ideas.py), so followers of ideas never share a bot
+    # with anyone's private alerts. The destination chat is set in the app, not here. The disclaimer appended to every idea defaults
+    # to a general "not advice" notice; override it with IDEAS_DISCLAIMER (have counsel review it before the audience widens) and
+    # add a registration line (e.g. a SEBI registration number) with IDEAS_REGISTRATION_LINE.
+    telegram_ideas_bot_token: str = ""
+    ideas_disclaimer: str = ""
+    ideas_registration_line: str = ""
     # How often the scheduler polls the LTP for every active alert.
     price_alert_check_interval_seconds: int = 60
+    # Zones armed on a chart (app/domain/zone_watch.py): the price against each zone this often, the closed candles every minute, and the list of
+    # a person's zones goes out each morning.
+    zone_watch_check_interval_seconds: int = 20
+    zone_morning_hour: int = 8
+    zone_morning_minute: int = 50
 
     # OpenRouter (openrouter.ai) - turns the raw RSS headlines (see
     # app/providers/news.py) into an AI trend-relevance digest (bias +

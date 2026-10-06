@@ -14,8 +14,8 @@ const CHOICES: { trigger: Trigger; label: string }[] = [
 ];
 
 /** Alerts on drawings. With a line or zone selected it offers to arm one and says how; otherwise it only
- * reminds the person that some are armed. It always says the honest limit: these are watched by this
- * page, so they fire only while it is open. */
+ * reminds the person that some are armed. It always says the honest limit: a zone or horizontal level is
+ * also watched by the server (Telegram, page closed), a sloped line only by this page. */
 export function AlertBar({ selection, armed, onSet }: Props) {
   const offering = selection?.alertable === true;
   if (!offering && armed === 0) return null;
@@ -45,7 +45,9 @@ export function AlertBar({ selection, armed, onSet }: Props) {
           {armed} {armed === 1 ? "alert" : "alerts"} armed
         </span>
       )}
-      <span className="faint">Alerts fire only while this page is open.</span>
+      <span className="faint" data-testid="alert-limits">
+        Zones and horizontal levels are also watched by the server and sent to your Telegram, with this page closed. A sloped line fires only while this page is open.
+      </span>
     </div>
   );
 }

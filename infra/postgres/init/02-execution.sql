@@ -1097,6 +1097,8 @@ CREATE TABLE IF NOT EXISTS execution.study_notes (
     -- A PNG of the chart (composed in the browser). bytea in its own column, like trade_images, and never
     -- selected by the list query.
     snapshot_png     BYTEA,
+    -- The same chart with only a header (no note text, no AI line): what a published idea uses. See migration 045.
+    snapshot_clean_png BYTEA,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_study_notes_user_symbol ON execution.study_notes (user_id, segment, symbol, created_at DESC);

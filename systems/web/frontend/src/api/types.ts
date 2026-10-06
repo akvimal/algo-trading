@@ -41,6 +41,8 @@ export type Position = {
   live_price?: number | null;
   unrealized_pnl?: number | null;
   status: "OPEN" | "CLOSED" | "REJECTED" | string;
+  /** True only if the entry cleared through a real broker order; otherwise it was a paper trade. */
+  is_live_broker_order?: boolean;
   stop_loss_price: number | null;
   target_price: number | null;
   option_group_id: string | null;
@@ -112,6 +114,97 @@ export type SentimentUnderlying = {
 
 export type MarketSentiment = {
   exchanges: Record<string, { direction: string; strength: string; score: number | null; underlyings: SentimentUnderlying[] }>;
+};
+
+export type CatalogModel = {
+  id: string;
+  name: string;
+  context_length: number | null;
+  /** USD per million tokens. */
+  prompt_per_m: number | null;
+  completion_per_m: number | null;
+  /** Can think before answering. */
+  reasoning: boolean;
+  image_input: boolean;
+  free: boolean;
+};
+
+export type AiModelTask = {
+  task: string;
+  label: string;
+  description: string;
+  /** This task's own choice, or null when it follows the shared default / server setting. */
+  override: string | null;
+  /** What the task actually uses right now. */
+  model: string;
+  source: "task" | "default" | "env";
+};
+
+export type AiModels = { default: string | null; tasks: AiModelTask[] };
+
+export type Bias = "bullish" | "bearish" | "neutral";
+
+export type PremarketInput = {
+  key: string;
+  label: string;
+  group: "us" | "commodity" | "currency" | "yield" | "adr" | "india";
+  ok: boolean;
+  value: number | null;
+  /** Percent for prices; basis points when `unit` is "bp" (the two bond yields). */
+  change: number | null;
+  unit: "pct" | "bp";
+  source: string;
+  error: string | null;
+};
+
+export type PremarketIndicator = {
+  key: string;
+  label: string;
+  unit: "pct" | "usd_bn";
+  ok: boolean;
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  /** The last day of the period the print covers. */
+  period: string | null;
+  error: string | null;
+};
+
+export type PremarketMacro = {
+  indicators: PremarketIndicator[];
+  derived: { real_rate: number | null; spread_10y_repo: number | null; india_10y: number | null };
+  rbi: PremarketRbiItem[];
+};
+
+export type RbiStance = "hawkish" | "dovish" | "neutral" | "not about policy";
+
+export type PremarketRbiItem = {
+  title: string;
+  url: string | null;
+  published: string | null;
+  kind: "press release" | "speech";
+  /** An AI summary of the item's full text, when it has been read. */
+  summary?: { text: string; stance: RbiStance; rates: string | null; model: string | null } | null;
+};
+
+export type PremarketReport = {
+  day: string;
+  generated_at: string;
+  bias: Bias;
+  agree: boolean | null;
+  model: string | null;
+  ai_error: string | null;
+  inputs: PremarketInput[];
+  rules: {
+    score: number;
+    bias: Bias;
+    coverage: number;
+    gift_gap_pct: number | null;
+    factors: { key: string; label: string; move: number | null; score: number | null; weight: number }[];
+  };
+  ai: { bias: Bias; confidence: number; one_liner: string; reasons: string[]; risks: string[]; watch: string; macro_context?: string | null } | null;
+  /** India's domestic macro backdrop. Absent on reports written before it existed. */
+  macro?: PremarketMacro | null;
 };
 
 export type Segment = "NSE" | "MCX" | "CRYPTO";
@@ -405,6 +498,8 @@ export type StudyNote = {
   position_id: string | null;
   option_group_id: string | null;
   has_snapshot: boolean;
+  /** A chart-and-header-only picture was kept too (notes saved before it existed have only the composed one). */
+  has_clean_snapshot?: boolean;
   created_at: string | null;
 };
 

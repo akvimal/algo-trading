@@ -310,6 +310,18 @@ def _record_oi_eod_snapshot() -> None:
         db.close()
     run.tick(len(symbols), tally)
     _log_eod_summary("OI EOD snapshot", len(symbols), tally)
+    # The scan is complete, so the day's strong-buildup digest can go out. Only when most of the universe was read: after a
+    # run that mostly failed (Dhan down) the list would be missing most stocks and misleading. Never fails the job.
+    if tally["written"] >= max(1, len(symbols) // 2):
+        try:
+            from app.domain.notification_jobs import send_oi_digest
+
+            sent = send_oi_digest()
+            logger.info("scheduled OI EOD snapshot: digest sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+        except Exception:
+            logger.exception("scheduled OI EOD snapshot: the digest could not be sent")
+    else:
+        logger.warning("scheduled OI EOD snapshot: only %d of %d stocks written - the digest was not sent", tally["written"], len(symbols))
 
 
 @tracked("equity-screener-snapshot-record", "Equity screener snapshot")
@@ -438,6 +450,83 @@ def _record_equity_screener_snapshot() -> None:
     _log_eod_summary("equity screener snapshot", len(symbols), tally)
 
 
+@tracked("premarket-report-record", "Pre-market bias report")
+def _record_premarket_report() -> None:
+    """Builds today's pre-market bias report (app/domain/premarket_report.py) on the platform OpenRouter key and stores it.
+    Weekdays only (a cron day_of_week), so no weekend row; a market holiday still produces one, which is harmless. A run
+    where nothing could be fetched is recorded as failed rather than storing an empty report."""
+    from app.domain.premarket_report import build_report, save_report, today_ist
+
+    run = job_tracker.current()
+    report = build_report(settings.openrouter_api_key or None, read_new_rbi=True)
+    ok = sum(1 for i in report["inputs"] if i["ok"])
+    run.set_total(len(report["inputs"]))
+    run.tick(ok, {"ok": ok, "failed": len(report["inputs"]) - ok})
+    if ok == 0:
+        run.fail("no pre-market inputs could be fetched")
+        return
+    db = SessionLocal()
+    try:
+        save_report(db, today_ist(), report)
+    finally:
+        db.close()
+    if report["ai_error"]:
+        run.note(report["ai_error"])
+    # Push it to everyone subscribed (each with their own chat, once a day). Never fails the job.
+    try:
+        from app.domain.notification_jobs import send_premarket
+
+        sent = send_premarket(report)
+        logger.info("pre-market report: push sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+    except Exception:
+        logger.exception("pre-market report: the push could not be sent")
+
+
+@tracked("session-summary-nse", "Post-session summary: NSE")
+def _send_session_summary_nse() -> None:
+    from app.domain.notification_jobs import send_session_summary
+
+    run = job_tracker.current()
+    sent = send_session_summary("NSE", datetime.now(ZoneInfo(settings.timezone)).date())
+    run.tick(1, {"sent": sent.sent, "failed": sent.failed, "already_sent": sent.skipped})
+    logger.info("NSE session summary: sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+
+
+@tracked("session-summary-mcx", "Post-session summary: MCX")
+def _send_session_summary_mcx() -> None:
+    from app.domain.notification_jobs import send_session_summary
+
+    run = job_tracker.current()
+    sent = send_session_summary("MCX", datetime.now(ZoneInfo(settings.timezone)).date())
+    run.tick(1, {"sent": sent.sent, "failed": sent.failed, "already_sent": sent.skipped})
+    logger.info("MCX session summary: sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+
+
+@tracked("session-summary-crypto", "Post-session summary: crypto")
+def _send_session_summary_crypto() -> None:
+    from app.domain.notification_jobs import send_session_summary
+
+    run = job_tracker.current()
+    sent = send_session_summary("CRYPTO")
+    run.tick(1, {"sent": sent.sent, "failed": sent.failed, "already_sent": sent.skipped})
+    logger.info("crypto summary: sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+
+
+def _notification_retry() -> None:
+    """Re-send notifications whose first attempt failed (see app/domain/notifications.py). Not tracked in the job log: it runs every
+    few minutes and almost always has nothing to do."""
+    from app.domain.notification_jobs import retry_failed
+
+    retry_failed()
+
+
+def _notification_ops_check() -> None:
+    """Tell the operator about an expired / expiring Dhan token or a failed background job, once each."""
+    from app.domain.notification_jobs import check_ops
+
+    check_ops()
+
+
 def _check_price_alerts() -> None:
     """Evaluate every active market_data.price_alerts row against a fresh
     LTP and push the ones that just crossed to Telegram - see
@@ -454,6 +543,48 @@ def _check_price_alerts() -> None:
         db.close()
 
 
+def _check_zone_live() -> None:
+    """The price against every zone armed on a chart (app/domain/zone_watch.py): announce a touch at once."""
+    from app.domain.zone_watch import check_live
+
+    db = SessionLocal()
+    try:
+        check_live(db)
+    except Exception:
+        logger.exception("scheduled zone check failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _check_zone_bars() -> None:
+    """The candles that closed since each zone was armed: a touch the live check missed (a wick) and how each touching candle closed."""
+    from app.domain.zone_watch import check_bars
+
+    db = SessionLocal()
+    try:
+        check_bars(db)
+    except Exception:
+        logger.exception("scheduled zone candle check failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
+@tracked("zones-morning", "Your zones today")
+def _send_zones_morning() -> None:
+    from app.domain.zone_watch import send_morning
+
+    run = job_tracker.current()
+    db = SessionLocal()
+    try:
+        sent = send_morning(db, datetime.now(ZoneInfo(settings.timezone)).date())
+    finally:
+        db.close()
+    run.tick(1, {"sent": sent.sent, "failed": sent.failed, "skipped": sent.skipped})
+    logger.info("zones morning list: sent=%d failed=%d skipped=%d", sent.sent, sent.failed, sent.skipped)
+
+
 def job_catalog() -> list[dict]:
     """The jobs worth tracking, in the order they are shown: what each is, when it is due, and what is next. The price-alert
     check (every few seconds) is deliberately absent: a run row per poll would bury the rest."""
@@ -461,6 +592,11 @@ def job_catalog() -> list[dict]:
     jobs = [
         ("oi-eod-snapshot-record", "OI buildup snapshot", f"Weekdays {s.oi_eod_snapshot_hour:02d}:{s.oi_eod_snapshot_minute:02d}", "Stores each F&O stock's total call and put open interest for the day, which the OI buildup scan and its history read."),
         ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches a year of daily bars for every NSE stock and stores the screener row, which the Screener and custom scans read."),
+        ("session-summary-nse", "Post-session summary: NSE", f"Weekdays {s.session_summary_nse_hour:02d}:{s.session_summary_nse_minute:02d}", "Sends each subscriber how the NSE session went and their own closed trades that day."),
+        ("session-summary-mcx", "Post-session summary: MCX", f"Weekdays {s.session_summary_mcx_hour:02d}:{s.session_summary_mcx_minute:02d}", "Sends each subscriber how gold, crude, silver and natural gas did and their own closed MCX trades that day."),
+        ("session-summary-crypto", "Post-session summary: crypto", f"Daily {s.session_summary_crypto_hour:02d}:{s.session_summary_crypto_minute:02d}", "Sends each subscriber the last 24 hours in BTC and ETH and their own crypto trades that day."),
+        ("zones-morning", "Your zones today", f"Daily {s.zone_morning_hour:02d}:{s.zone_morning_minute:02d}", "Sends each person the zones and levels they have armed, with how far the price is from each."),
+        ("premarket-report-record", "Pre-market bias report", f"Weekdays {s.premarket_report_hour:02d}:{s.premarket_report_minute:02d}", "Reads the overnight US close, crude, USDINR, yields, ADRs and GIFT Nifty and works out the day's likely market bias."),
         ("instrument-sync-daily", "Instrument master sync", f"Daily {s.instrument_sync_hour:02d}:{s.instrument_sync_minute:02d}, and at start-up", "Refreshes the broker's list of tradeable instruments and the NSE index memberships."),
         ("sentiment-history-record", "Sentiment recorder", f"Every {s.sentiment_history_interval_minutes} minutes while a market is open", "Records the option-chain sentiment badge for the main indices."),
     ]
@@ -479,7 +615,7 @@ def start_scheduler() -> None:
     job_tracker.mark_interrupted_on_start()
     _scheduler.add_job(
         _sync_all,
-        CronTrigger(hour=settings.instrument_sync_hour, minute=settings.instrument_sync_minute),
+        CronTrigger(hour=settings.instrument_sync_hour, minute=settings.instrument_sync_minute, timezone=settings.timezone),
         id="instrument-sync-daily",
         replace_existing=True,
     )
@@ -505,21 +641,53 @@ def start_scheduler() -> None:
         # sparklines (LiveChartPanel.tsx's sentimentSteps) then have to
         # round down to display cleanly. Recording ON that boundary instead
         # means every row already falls on one, no rounding needed downstream.
-        CronTrigger(minute=f"*/{settings.sentiment_history_interval_minutes}"),
+        CronTrigger(minute=f"*/{settings.sentiment_history_interval_minutes}", timezone=settings.timezone),
         id="sentiment-history-record",
         replace_existing=True,
     )
     _scheduler.add_job(
         _record_oi_eod_snapshot,
-        CronTrigger(hour=settings.oi_eod_snapshot_hour, minute=settings.oi_eod_snapshot_minute),
+        CronTrigger(day_of_week="mon-fri", hour=settings.oi_eod_snapshot_hour, minute=settings.oi_eod_snapshot_minute, timezone=settings.timezone),
         id="oi-eod-snapshot-record",
         replace_existing=True,
     )
     _scheduler.add_job(
         _record_equity_screener_snapshot,
-        CronTrigger(hour=settings.equity_screener_snapshot_hour, minute=settings.equity_screener_snapshot_minute),
+        CronTrigger(day_of_week="mon-fri", hour=settings.equity_screener_snapshot_hour, minute=settings.equity_screener_snapshot_minute, timezone=settings.timezone),
         id="equity-screener-snapshot-record",
         replace_existing=True,
+    )
+    _scheduler.add_job(
+        _record_premarket_report,
+        # timezone= is required: a CronTrigger passed in ready-made ignores the scheduler's own, so without it this
+        # would fire at 08:45 in the container's UTC (14:15 IST) - see docs/architecture.md "Background-job run log".
+        CronTrigger(day_of_week="mon-fri", hour=settings.premarket_report_hour, minute=settings.premarket_report_minute, timezone=settings.timezone),
+        id="premarket-report-record",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _send_session_summary_nse,
+        CronTrigger(day_of_week="mon-fri", hour=settings.session_summary_nse_hour, minute=settings.session_summary_nse_minute, timezone=settings.timezone),
+        id="session-summary-nse", replace_existing=True, max_instances=1, coalesce=True,
+    )
+    _scheduler.add_job(
+        _send_session_summary_mcx,
+        CronTrigger(day_of_week="mon-fri", hour=settings.session_summary_mcx_hour, minute=settings.session_summary_mcx_minute, timezone=settings.timezone),
+        id="session-summary-mcx", replace_existing=True, max_instances=1, coalesce=True,
+    )
+    _scheduler.add_job(
+        _send_session_summary_crypto,
+        CronTrigger(hour=settings.session_summary_crypto_hour, minute=settings.session_summary_crypto_minute, timezone=settings.timezone),
+        id="session-summary-crypto", replace_existing=True, max_instances=1, coalesce=True,
+    )
+    _scheduler.add_job(_notification_retry, IntervalTrigger(minutes=5), id="notification-retry", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(_notification_ops_check, IntervalTrigger(minutes=10), id="notification-ops-check", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(_check_zone_live, IntervalTrigger(seconds=settings.zone_watch_check_interval_seconds), id="zone-watch-live", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(_check_zone_bars, IntervalTrigger(seconds=60), id="zone-watch-bars", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(
+        _send_zones_morning,
+        CronTrigger(hour=settings.zone_morning_hour, minute=settings.zone_morning_minute, timezone=settings.timezone),
+        id="zones-morning", replace_existing=True, max_instances=1, coalesce=True,
     )
     _scheduler.add_job(
         _check_price_alerts,

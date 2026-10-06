@@ -6,6 +6,7 @@ import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
 import { PerformanceSnapshot } from "../components/PerformanceSnapshot";
+import { PremarketCard } from "../components/PremarketCard";
 import { PositionCard } from "../components/PositionCard";
 import { formatInr, formatPnl } from "../format";
 import { useLivePositions } from "../hooks/useLivePositions";
@@ -93,6 +94,8 @@ export function TodayPage() {
       </div>
 
       {today.error && <ErrorNotice error={today.error} onRetry={today.reload} />}
+
+      {markets.includes("NSE") && <PremarketCard />}
 
       {guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
 

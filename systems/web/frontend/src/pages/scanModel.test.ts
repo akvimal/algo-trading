@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, classifyBuildup, oiDays, oiSignal, oiStrength, oiWindowChange, tradeLink, visible } from "./scanModel";
+import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, totalOiChangePct, tradeLink, visible } from "./scanModel";
+import QUADRANT_CASES from "./fixtures/oi_quadrant_cases.json";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
   symbol, exchange: "NSE", snapshot_date: "2026-09-25", spot_price: 100, total_call_oi: 1000, total_put_oi: 1000, pcr: 1,
@@ -238,5 +239,39 @@ describe("per-stock OI history", () => {
     expect(w.putPct).toBeCloseTo(8.9, 5);
     expect(oiWindowChange([hist[0]], 5)).toEqual({ callPct: null, putPct: null, from: null });
     expect(oiWindowChange(hist, 2).from).toBe("2026-09-25"); // two days of change start from the point before them
+  });
+});
+
+
+// The same cases market-data's tests run against its Python version (tests/fixtures/oi_quadrant_cases.json): if the two ever disagree one of them fails.
+describe("the four quadrants (price against total OI), shared cases with the Telegram digest", () => {
+  for (const c of QUADRANT_CASES as { name: string; row: never; oi_change_pct: number | null; quadrant: string | null; strong: boolean }[]) {
+    it(c.name, () => {
+      const total = totalOiChangePct(c.row);
+      if (c.oi_change_pct === null) expect(total).toBeNull();
+      else expect(total).toBeCloseTo(c.oi_change_pct, 1);
+      expect(oiQuadrant(c.row)).toBe(c.quadrant);
+      expect(oiSignal(c.row, 10) !== null).toBe(c.strong);
+    });
+  }
+
+  const row = (symbol: string, price: number, oiPct: number) => oi(symbol, { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: oiPct, put_oi_change_pct: oiPct, price_change_pct: price });
+
+  it("filters to one quadrant and reads the biggest total OI change first, whichever way the OI moved", () => {
+    const rows = [row("SMALL", 1, 8), row("BIG", 2, 40), row("MID", 1.5, 20), row("DOWN", 1, -25), row("NOISE", 0.1, 50)];
+    const lb = filterOi(rows, { ...OI_DEFAULTS, signal: "long_buildup", sort: "oi_total" });
+    expect(lb.map((r) => r.symbol)).toEqual(["BIG", "MID", "SMALL"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, signal: "short_covering", sort: "oi_total" }).map((r) => r.symbol)).toEqual(["DOWN"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, signal: "short_buildup" })).toEqual([]);
+  });
+
+  it("sorts every stock by the size of its total OI change, up or down, with an unknown one last", () => {
+    const rows = [row("UP", 1, 10), row("DOWN", 1, -30), oi("NOPE", { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: null, put_oi_change_pct: null })];
+    expect(filterOi(rows, { ...OI_DEFAULTS, sort: "oi_total" }).map((r) => r.symbol)).toEqual(["DOWN", "UP", "NOPE"]);
+  });
+
+  it("keeps the older strong two-sided filters working beside the quadrants", () => {
+    const rows = [oi("BULL", { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: 30, put_oi_change_pct: 30, price_change_pct: 1, call_buildup: "long_buildup", put_buildup: "long_buildup" }), oi("LONELY", { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: 60, put_oi_change_pct: 0, price_change_pct: 1, call_buildup: "long_buildup", put_buildup: "long_buildup" })];
+    expect(filterOi(rows, { ...OI_DEFAULTS, signal: "strong_bull" }).map((r) => r.symbol)).toEqual(["BULL"]);
   });
 });

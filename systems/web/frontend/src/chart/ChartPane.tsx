@@ -3,7 +3,7 @@ import { ActionType, OverlayMode, dispose, init, type Chart, type Crosshair, typ
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
-import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
+import { ALERTABLE, SERVER_WATCHED, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
   DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
@@ -14,6 +14,7 @@ import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./s
 import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
 import { mergeStyle, sanitizeStyle, toOverlayStyles, type DrawingStyle } from "./drawingStyle";
 import { withDevicePixelRatio } from "./snapshot";
+import { scheduleZoneSync } from "./zoneSync";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
@@ -41,11 +42,52 @@ export type ChartPaneHandle = {
   /** Make the selected drawing's look the default for new drawings of its kind (true), or clear that default (false). */
   setSelectedStyleAsDefault: (on: boolean) => void;
   /** The chart as it is on screen (candles, indicators, drawings, structure, trade markers) as a PNG data URL, or
-   * the reason there is no picture to take (still loading, failed to load, the browser could not draw it). */
-  snapshot: () => ChartImage;
+   * the reason there is no picture to take (still loading, failed to load, the browser could not draw it).
+   * `withoutTrades` takes the picture with the person's own trading hidden (the trade plan's entry/stop/target, their open trades'
+   * levels with their profit label, and the entry/exit markers), then shows it again: the picture a published idea needs. */
+  snapshot: (opts?: { withoutTrades?: boolean }) => ChartImage;
 };
 
-export type ChartImage = { url: string } | { problem: string };
+export type ChartImage = { url: string; scale?: number } | { problem: string };
+
+/** The least height, in layout pixels, a chart is exported at: a short pane is made this tall for the capture. */
+const SNAPSHOT_MIN_HEIGHT = 560;
+
+/** The overlay groups that show the person's own trading. */
+export const TRADE_GROUPS = [PLAN_GROUP, LEVELS_GROUP, TRADES_GROUP];
+
+/** Draw the chart to a PNG with the library's own export (the chart's DOM canvases cannot be read back instead: it paints them off-screen,
+ * so they come out blank). Everything on it first; then without overlays in case one of them cannot be drawn; then both again at a pixel
+ * ratio of 1, for a chart too large (or a screen too dense) for the browser to allocate the full-size canvas, which makes it return an
+ * empty "data:,". */
+function exportChart(chart: Chart): ChartImage {
+  const background = getComputedStyle(document.body).backgroundColor || "#0f1216";
+  const tried: string[] = [];
+  // Sharpest first: at least twice the screen's pixel ratio (a picture shared elsewhere is looked at bigger than the chart is on screen),
+  // then the screen's own, then ratio 1 for a chart too large to allocate the bigger canvas.
+  const dpr = window.devicePixelRatio || 1;
+  const sharp = Math.max(2, dpr);
+  const attempts: { overlays: boolean; ratio: number | null }[] = [
+    { overlays: true, ratio: sharp },
+    { overlays: true, ratio: null },
+    { overlays: false, ratio: null },
+    { overlays: true, ratio: 1 },
+    { overlays: false, ratio: 1 },
+  ];
+  for (const a of attempts) {
+    const label = `${a.overlays ? "with" : "without"} overlays${a.ratio != null ? ` at ratio ${a.ratio}` : ""}`;
+    try {
+      const run = () => chart.getConvertPictureUrl(a.overlays, "png", background);
+      const url = a.ratio != null ? withDevicePixelRatio(a.ratio, run) : run();
+      if (url && url.startsWith("data:image")) return { url, scale: a.ratio ?? dpr };
+      tried.push(`export ${label} gave no image`);
+    } catch (e) {
+      console.warn(`chart snapshot ${label} failed`, e);
+      tried.push(`export ${label}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return { problem: `the browser could not draw the chart as an image (${tried.join("; ")})` };
+}
 
 /** The visible window of a chart, in terms another chart can follow: the size of a bar and the time at the
  * right-hand edge. `seq` makes each message distinct. */
@@ -593,7 +635,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [oiLevels, status, epoch]);
 
   // ---- drawings: saved per instrument, restored after every load ----
-  const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()], instanceIdRef.current);
+  const persist = () => {
+    const all = [...drawnRef.current.values()];
+    saveDrawings(propsRef.current.exchange, propsRef.current.symbol, all, instanceIdRef.current);
+    // the armed zones and levels are also watched by the server, so a touch reaches Telegram with every tab closed
+    scheduleZoneSync(propsRef.current.exchange, propsRef.current.symbol, propsRef.current.interval, all);
+  };
 
   // A drawing being dragged. The library only reports the end of a drag when the mouse is released over the chart's own plot area: let
   // go over the price axis, between two panes or outside the window and that report never comes, so the change was neither saved nor
@@ -634,7 +681,16 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         emitDrawing();
         return false;
       }
-      drawnRef.current.set(e.overlay.id, serialize(e.overlay));
+      const drawn = serialize(e.overlay);
+      // A zone is drawn to be watched: it is armed straight away (the person can switch it off), and starts from where the price is now.
+      const arm = e.overlay.name === "rect" && !drawn.alert;
+      drawnRef.current.set(e.overlay.id, arm ? { ...drawn, alert: { trigger: "cross" } } : drawn);
+      if (arm) {
+        const z = alertZone(drawn);
+        const price = propsRef.current.price;
+        if (price != null && z) sidesRef.current.set(e.overlay.id, sideOf(price, z));
+        emitArmed();
+      }
       persist();
       emitDrawing();
       return false;
@@ -747,6 +803,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const selection: SelectionInfo | null = d
       ? {
           alertable: ALERTABLE.has(d.name),
+          server: SERVER_WATCHED.has(d.name),
           trigger: d.alert?.trigger ?? null,
           level: levelText(d),
           look: { name: d.name, style: d.style ?? {}, hasDefault: loadDrawingDefaults()[d.name] !== undefined },
@@ -805,6 +862,11 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     // A restored alert starts from where the price is now, not from whichever tick happens to come next.
     if (propsRef.current.price != null) seedAlerts(propsRef.current.price);
     emitArmed();
+    // Zones armed before the server watched them (or on this browser's last visit) are sent now. Only when there are some: an empty set is sent
+    // when the person deletes a zone, never on load, because a browser with no drawings (another device, cleared storage) must not wipe the
+    // zones the server already watches for them.
+    const all = [...drawnRef.current.values()];
+    if (all.some((d) => d.alert && SERVER_WATCHED.has(d.name))) scheduleZoneSync(propsRef.current.exchange, propsRef.current.symbol, propsRef.current.interval, all);
   }
 
   useEffect(() => {
@@ -908,36 +970,32 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     typicalMove() {
       return averageTrueRange(barsRef.current);
     },
-    snapshot(): ChartImage {
+    snapshot(opts?: { withoutTrades?: boolean }): ChartImage {
       const chart = chartRef.current;
       if (!chart) return { problem: "the chart is not on screen" };
       if (statusRef.current === "loading") return { problem: "the chart is still loading its candles" };
       if (statusRef.current === "error") return { problem: "the chart has not loaded - fix the message shown on it first (for example a Dhan token problem)" };
-      const background = getComputedStyle(document.body).backgroundColor || "#0f1216";
-      const tried: string[] = [];
-      // The library's own export (the chart's DOM canvases cannot be read back instead: it paints them off-screen, so they
-      // come out blank). Everything on it first; then without overlays in case one of them cannot be drawn; then both again
-      // at a pixel ratio of 1, for a chart too large (or a screen too dense) for the browser to allocate the full-size
-      // canvas, which makes it return an empty "data:,".
-      const attempts: { overlays: boolean; ratio1: boolean }[] = [
-        { overlays: true, ratio1: false },
-        { overlays: false, ratio1: false },
-        { overlays: true, ratio1: true },
-        { overlays: false, ratio1: true },
-      ];
-      for (const a of attempts) {
-        const label = `${a.overlays ? "with" : "without"} overlays${a.ratio1 ? " at ratio 1" : ""}`;
-        try {
-          const run = () => chart.getConvertPictureUrl(a.overlays, "png", background);
-          const url = a.ratio1 ? withDevicePixelRatio(1, run) : run();
-          if (url && url.startsWith("data:image")) return { url };
-          tried.push(`export ${label} gave no image`);
-        } catch (e) {
-          console.warn(`chart snapshot ${label} failed`, e);
-          tried.push(`export ${label}: ${e instanceof Error ? e.message : String(e)}`);
-        }
+      const hidden = opts?.withoutTrades ? TRADE_GROUPS : [];
+      for (const groupId of hidden) chart.overrideOverlay({ groupId, visible: false });
+      // A short chart pane makes a squashed picture (the order blocks and OI levels run into each other): for the capture the chart is
+      // made reasonably tall, then put back at once, in the same step, so nothing is painted at the other size.
+      const box = containerRef.current;
+      const extra = box ? Math.max(0, SNAPSHOT_MIN_HEIGHT - box.clientHeight) : 0;
+      const prevBottom = box?.style.bottom ?? "";
+      if (box && extra > 0) {
+        box.style.bottom = `${-extra}px`;
+        chart.resize();
       }
-      return { problem: `the browser could not draw the chart as an image (${tried.join("; ")})` };
+      try {
+        return exportChart(chart);
+      } finally {
+        if (box && extra > 0) {
+          box.style.bottom = prevBottom;
+          chart.resize();
+        }
+        // Shown again whatever happened, so a failed export never leaves the person's own trade lines missing from their chart.
+        for (const groupId of hidden) chart.overrideOverlay({ groupId, visible: true });
+      }
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);

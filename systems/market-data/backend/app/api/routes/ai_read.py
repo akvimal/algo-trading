@@ -14,6 +14,7 @@ from app.api.routes.options import get_expiries, get_oi_summary
 from app.auth import Caller, get_caller
 from app.config import settings
 from app.data_access import data_credentials
+from app.domain import ai_models
 from app.domain.ai_read import build_context, events_context, news_context, run_ai_read, vix_context
 from app.domain.models import ChartStructure
 from app.domain.order_blocks import detect_order_blocks, structure_state
@@ -91,7 +92,8 @@ def get_ai_read(
         raise HTTPException(status_code=400, detail="No OpenRouter key - add yours in Settings to use the AI read.")
 
     expiry = expiry or _nearest_expiry(exchange, symbol, caller)
-    cache_key = (user_id, exchange, symbol, interval, expiry, settings.openrouter_read_model)
+    model = ai_models.model_for("ai_read")
+    cache_key = (user_id, exchange, symbol, interval, expiry, model)
     with _cache_lock:
         hit = _cache.get(cache_key)
     if hit and time.monotonic() - hit[0] < _CACHE_TTL_SECONDS:
@@ -133,14 +135,14 @@ def get_ai_read(
     )
 
     try:
-        parsed = run_ai_read(context, key)
+        parsed = run_ai_read(context, key, model)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     result = AiRead(
         underlying=symbol,
         expiry=expiry,
-        model=settings.openrouter_read_model,
+        model=model,
         generated_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         bias=parsed["bias"],
         confidence=max(0, min(100, int(parsed.get("confidence") or 0))),

@@ -581,6 +581,8 @@ class StudyNote(Base):
     position_id = Column(UUID(as_uuid=True))
     option_group_id = Column(UUID(as_uuid=True))
     snapshot_png = deferred(Column(LargeBinary))
+    # The chart with only a header: what a published idea uses (migration 045).
+    snapshot_clean_png = deferred(Column(LargeBinary))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

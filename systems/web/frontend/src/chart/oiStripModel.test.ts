@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SentimentHistoryPoint } from "../api/types";
 import {
-  buildupTone, classifyPcr, deltaPct, flowSkew, hasSentimentTrend, isStaleAt, pcrDiverges, sentimentSteps, volumePcr,
+  buildupTone, classifyPcr, deltaPct, flowSkew, hasSentimentTrend, isStaleAt, pcrDiverges, sentimentSteps, volumePcr, oiStripItems, type OiItem,
 } from "./oiStripModel";
 
 const leg = (over: Partial<{ oi: number; volume: number }> = {}) => ({ oi: 0, oi_change_5m: null, oi_change_15m: null, volume: 0, ...over });
@@ -148,5 +148,22 @@ describe("skewView", () => {
     const { skewView } = await import("./oiStripModel");
     expect(skewView({ pct: 2.5, leader: "PE" }).fill).toBe(0.5);
     expect(skewView({ pct: 12, leader: "CE" }).fill).toBe(1);
+  });
+});
+
+describe("oiStripItems", () => {
+  const base = { pcr: 0.98, underlying_exchange: "NSE", strikes: [{ call: { volume: 100 }, put: { volume: 108 } }], total_call_oi: 1000, total_put_oi: 1000, total_call_oi_change_15m: null, total_call_oi_change_5m: 10, total_put_oi_change_15m: null, total_put_oi_change_5m: -20, total_call_buildup: "short_buildup", total_put_buildup: null } as never;
+  const texts = (items: OiItem[] | null) => (items ?? []).filter((i) => i.t === "text").map((i) => (i as { text: string }).text);
+  it("is null without a reading", () => expect(oiStripItems(null, [], [], false, String)).toBeNull());
+  it("reads the strip in its own order, with dashes for a missing change", () => {
+    const items = oiStripItems(base, [], [], false, String)!;
+    expect(texts(items)).toEqual(expect.arrayContaining(["PCR", "0.98", "Vol PCR", "1.08", "▲1.0%", "–"]));
+    expect(items.find((i) => i.t === "pill")).toMatchObject({ text: "▼ CE SB" });
+    expect(items.find((i) => i.t === "skew")).toMatchObject({ leader: "CE" });
+  });
+  it("shows resistance and support unless the chart already draws them", () => {
+    const lv = [{ kind: "resistance" as const, rank: 1, forming: false, price: 24500 }, { kind: "support" as const, rank: 1, forming: false, price: 24300 }];
+    expect(texts(oiStripItems(base, [], lv, false, String))).toEqual(expect.arrayContaining(["R", "24500", "S", "24300"]));
+    expect(texts(oiStripItems(base, [], lv, true, String))).not.toContain("24500");
   });
 });

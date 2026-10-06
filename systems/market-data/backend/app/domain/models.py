@@ -723,6 +723,11 @@ class PriceAlertOut(BaseModel):
     created_at: datetime
     last_triggered_at: Optional[datetime] = None
     trigger_count: int
+    # Crossings that could not be delivered (no chat set, Telegram down...), and why. A one-shot alert stays armed while this is > 0.
+    delivery_failures: int = 0
+    last_error: Optional[str] = None
+    # The price when the alert was created, so the page can say how far away the level is. Only set on the create response.
+    current_price: Optional[float] = None
 
 
 class CustomScreenCreate(BaseModel):
@@ -917,3 +922,99 @@ class JobOut(BaseModel):
 
 class JobsOut(BaseModel):
     jobs: list[JobOut]
+
+
+class PremarketInputOut(BaseModel):
+    key: str
+    label: str
+    group: str
+    ok: bool
+    value: Optional[float] = None
+    change: Optional[float] = None  # % for prices, basis points for the yields (see `unit`)
+    unit: Literal["pct", "bp"] = "pct"
+    source: str = ""
+    error: Optional[str] = None
+
+
+class PremarketFactorOut(BaseModel):
+    key: str
+    label: str
+    move: Optional[float] = None
+    score: Optional[float] = None
+    weight: float
+
+
+class PremarketRulesOut(BaseModel):
+    score: float
+    bias: Literal["bullish", "bearish", "neutral"]
+    coverage: float
+    gift_gap_pct: Optional[float] = None
+    factors: list[PremarketFactorOut]
+
+
+class PremarketAiOut(BaseModel):
+    bias: Literal["bullish", "bearish", "neutral"]
+    confidence: int
+    one_liner: str
+    reasons: list[str]
+    risks: list[str]
+    watch: str
+    macro_context: Optional[str] = None  # how the domestic backdrop frames bond yields and sentiment (absent on older reports)
+
+
+class PremarketIndicatorOut(BaseModel):
+    key: str
+    label: str
+    unit: Literal["pct", "usd_bn"]
+    ok: bool
+    value: Optional[float] = None
+    previous: Optional[float] = None
+    change: Optional[float] = None
+    period: Optional[date] = None  # the last day of the period the print covers
+    error: Optional[str] = None
+
+
+class PremarketRbiSummaryOut(BaseModel):
+    """An AI summary of the item's FULL text (read once). `stance` is hawkish/dovish/neutral only when the text itself signals
+    a policy direction, else "not about policy"."""
+
+    text: str
+    stance: Literal["hawkish", "dovish", "neutral", "not about policy"]
+    rates: Optional[str] = None  # what the text explicitly says about rates, inflation or liquidity
+    model: Optional[str] = None
+
+
+class PremarketRbiItemOut(BaseModel):
+    title: str
+    url: Optional[str] = None
+    published: Optional[datetime] = None
+    kind: Literal["press release", "speech"]
+    summary: Optional[PremarketRbiSummaryOut] = None
+
+
+class PremarketMacroDerivedOut(BaseModel):
+    real_rate: Optional[float] = None  # repo rate minus CPI inflation, in percentage points
+    spread_10y_repo: Optional[float] = None  # India 10Y yield minus the repo rate, in percentage points
+    india_10y: Optional[float] = None
+
+
+class PremarketMacroOut(BaseModel):
+    indicators: list[PremarketIndicatorOut]
+    derived: PremarketMacroDerivedOut
+    rbi: list[PremarketRbiItemOut]
+
+
+class PremarketReportOut(BaseModel):
+    """GET /premarket - the day's overnight inputs, the rule-based score, and the model's own call on them. `bias` is
+    the model's when it ran, else the rules'; `agree` says whether the two match (None when the model did not run)."""
+
+    day: date
+    generated_at: datetime
+    bias: Literal["bullish", "bearish", "neutral"]
+    agree: Optional[bool] = None
+    model: Optional[str] = None
+    ai_error: Optional[str] = None
+    inputs: list[PremarketInputOut]
+    rules: PremarketRulesOut
+    ai: Optional[PremarketAiOut] = None
+    macro: Optional[PremarketMacroOut] = None

@@ -41,22 +41,25 @@ export const REGIME_LABEL: Record<Regime, string> = {
 
 export const PROXIMITY_LABEL: Record<Proximity, string> = { near_52w_high: "Near 52-week high", near_52w_low: "Near 52-week low" };
 
-export type OiSort = "call_oi" | "put_oi" | "pcr" | "price" | "strength" | "symbol";
-/** A one-tap reading of a big, two-sided shift in the option chain. */
-export type OiSignal = "all" | "strong_bull" | "strong_bear";
+export type OiSort = "call_oi" | "put_oi" | "pcr" | "price" | "strength" | "oi_total" | "symbol";
+/** A one-tap reading of the option chain: one of the four price-against-OI quadrants, or a big two-sided shift. */
+export type OiSignal = "all" | "strong_bull" | "strong_bear" | Buildup;
+/** The signals that are a quadrant, in the order the chips show them: bullish pair first, then the bearish pair. */
+export const QUADRANT_SIGNALS: Buildup[] = ["long_buildup", "short_covering", "short_buildup", "long_unwinding"];
+export const isQuadrantSignal = (s: OiSignal): s is Buildup => (QUADRANT_SIGNALS as string[]).includes(s);
 export type OiFilters = { call: Buildup | "all"; put: Buildup | "all"; signal: OiSignal; minShift: number; search: string; sort: OiSort };
 /** minShift: how much (in %) the call AND the put open interest must each have grown for a shift to count as a major one. */
 export const DEFAULT_MIN_SHIFT = 10;
 export const OI_DEFAULTS: OiFilters = { call: "all", put: "all", signal: "all", minShift: DEFAULT_MIN_SHIFT, search: "", sort: "call_oi" };
 
-export const OI_SIGNAL_LABEL: Record<Exclude<OiSignal, "all">, string> = { strong_bull: "Strong bullish", strong_bear: "Strong bearish" };
+export const OI_SIGNAL_LABEL: Record<"strong_bull" | "strong_bear", string> = { strong_bull: "Strong bullish", strong_bear: "Strong bearish" };
 // NOTE on the labels these read. The buildup labels here compare each side's open interest with the UNDERLYING's price move
 // (market-data's oi_buildup.py: one price change for both sides), not with the option's own premium. So the textbook bullish pair
 // "call long buildup + put short buildup" (call buyers arriving while put writers arrive) can never appear on these labels: it would
 // need the price to be up for the call side and down for the put side. In these labels the same situation is price up with
 // call OI up and put OI up, i.e. "Long buildup" on BOTH sides; its bearish mirror (call writers and put buyers arriving, price
 // falling) is "Short buildup" on both.
-export const OI_SIGNAL_HELP: Record<Exclude<OiSignal, "all">, string> = {
+export const OI_SIGNAL_HELP: Record<"strong_bull" | "strong_bear", string> = {
   strong_bull: "Price up while both call and put open interest grew a lot: new call buyers and new put writers arriving together (long buildup on both sides).",
   strong_bear: "Price down while both call and put open interest grew a lot: new call writers and new put buyers arriving together (short buildup on both sides).",
 };
@@ -64,7 +67,7 @@ export const OI_SIGNAL_HELP: Record<Exclude<OiSignal, "all">, string> = {
 /** Whether a stock shows a major two-sided shift: price up with a long buildup on BOTH sides is bullish, price down with a short
  * buildup on both sides is bearish (see the note above on why it is read this way), AND open interest grew by at least `minShift` percent
  * on BOTH sides. A reading with no OI change figure never qualifies. It describes what the option chain did today; it is not a prediction. */
-export function oiSignal(row: Pick<OiRow, "call_buildup" | "put_buildup" | "call_oi_change_pct" | "put_oi_change_pct">, minShift: number): Exclude<OiSignal, "all"> | null {
+export function oiSignal(row: Pick<OiRow, "call_buildup" | "put_buildup" | "call_oi_change_pct" | "put_oi_change_pct">, minShift: number): "strong_bull" | "strong_bear" | null {
   const call = row.call_oi_change_pct;
   const put = row.put_oi_change_pct;
   if (call == null || put == null || Number.isNaN(call) || Number.isNaN(put)) return null;
@@ -72,6 +75,35 @@ export function oiSignal(row: Pick<OiRow, "call_buildup" | "put_buildup" | "call
   if (row.call_buildup === "long_buildup" && row.put_buildup === "long_buildup") return "strong_bull";
   if (row.call_buildup === "short_buildup" && row.put_buildup === "short_buildup") return "strong_bear";
   return null;
+}
+
+// ---- the four quadrants: price against TOTAL open interest (calls and puts together) --------------------------------------------------------
+//
+//                  OI rising                 OI falling
+//   price up       Long buildup (bullish)    Short covering (bullish)
+//   price down     Short buildup (bearish)   Long unwinding (bearish)
+//
+// The same reading the end-of-day Telegram digest uses (market-data's app/domain/oi_quadrants.py); both are tested against the same cases file
+// (fixtures/oi_quadrant_cases.json) so they cannot drift. A stock only counts when the day was not noise.
+export const MIN_PRICE_MOVE_PCT = 0.5;
+export const MIN_OI_CHANGE_PCT = 5;
+
+/** How much call plus put open interest changed in total, as a percent of yesterday's total: rebuilt from today's totals and each side's change
+ * (yesterday = today / (1 + change)), so a big side counts for more than a small one. Null when a figure is missing. */
+export function totalOiChangePct(row: Pick<OiRow, "total_call_oi" | "total_put_oi" | "call_oi_change_pct" | "put_oi_change_pct">): number | null {
+  const { total_call_oi: tc, total_put_oi: tp, call_oi_change_pct: cp, put_oi_change_pct: pp } = row;
+  if (tc == null || tp == null || cp == null || pp == null || Number.isNaN(cp) || Number.isNaN(pp) || cp <= -100 || pp <= -100) return null;
+  const previous = tc / (1 + cp / 100) + tp / (1 + pp / 100);
+  return previous > 0 ? ((tc + tp - previous) / previous) * 100 : null;
+}
+
+/** Which quadrant a stock is in, or null when the price moved under the floor, total OI changed under the floor, or a figure is missing. */
+export function oiQuadrant(row: Pick<OiRow, "total_call_oi" | "total_put_oi" | "call_oi_change_pct" | "put_oi_change_pct" | "price_change_pct">): Buildup | null {
+  const price = row.price_change_pct;
+  const oi = totalOiChangePct(row);
+  if (price == null || oi == null || Math.abs(price) < MIN_PRICE_MOVE_PCT || Math.abs(oi) < MIN_OI_CHANGE_PCT) return null;
+  if (price > 0) return oi > 0 ? "long_buildup" : "short_covering";
+  return oi > 0 ? "short_buildup" : "long_unwinding";
 }
 
 /** How big a shift is: the call and put OI changes together. Null when either is missing. */
@@ -100,7 +132,7 @@ export function filterOi(rows: OiRow[], f: OiFilters): OiRow[] {
       matches(r.symbol, f.search) &&
       (f.call === "all" || r.call_buildup === f.call) &&
       (f.put === "all" || r.put_buildup === f.put) &&
-      (f.signal === "all" || oiSignal(r, f.minShift) === f.signal),
+      (f.signal === "all" || (isQuadrantSignal(f.signal) ? oiQuadrant(r) === f.signal : oiSignal(r, f.minShift) === f.signal)),
   );
   const sorters: Record<OiSort, (a: OiRow, b: OiRow) => number> = {
     call_oi: byNumberDesc((r) => r.call_oi_change_pct),
@@ -108,6 +140,10 @@ export function filterOi(rows: OiRow[], f: OiFilters): OiRow[] {
     pcr: byNumberDesc((r) => r.pcr),
     price: byNumberDesc((r) => r.price_change_pct),
     strength: byNumberDesc(oiStrength),
+    oi_total: byNumberDesc((r) => {
+      const t = totalOiChangePct(r);
+      return t == null ? null : Math.abs(t);
+    }),
     symbol: (a, b) => a.symbol.localeCompare(b.symbol),
   };
   return [...out].sort((a, b) => sorters[f.sort](a, b) || a.symbol.localeCompare(b.symbol));

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { deleteNote, fetchSnapshotUrl } from "../api/notes";
 import { ApiError } from "../api/http";
 import type { StudyNote } from "../api/types";
@@ -11,7 +11,7 @@ const hhmm = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString(und
 /** One note: when, its tag and interval, the words, the market as it was when written, and (on request) the chart
  * snapshot kept with it. Deleting takes a second click. Used under the chart and on the notes history page, where
  * `showInstrument` names which instrument the note is about. */
-export function NoteRow({ note, onDeleted, showInstrument = false }: { note: StudyNote; onDeleted: () => void; showInstrument?: boolean }) {
+export function NoteRow({ note, onDeleted, showInstrument = false, extra }: { note: StudyNote; onDeleted: () => void; showInstrument?: boolean; extra?: ReactNode }) {
   const [image, setImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
@@ -76,6 +76,7 @@ export function NoteRow({ note, onDeleted, showInstrument = false }: { note: Stu
         </div>
       )}
       {error && <p className="error-text">{error}</p>}
+      {extra}
       {image && (
         <button className="note-image-button" onClick={() => setLarge(true)} aria-label="View the snapshot larger" title="Click to view larger">
           <img className="note-image" src={image} alt={`Chart snapshot with the note from ${hhmm(note.created_at)}`} />

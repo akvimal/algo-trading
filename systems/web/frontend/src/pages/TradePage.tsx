@@ -42,6 +42,7 @@ import {
   withUrlSymbol, type WorkstationState,
 } from "../workstation/state";
 import { OiStrip } from "../chart/OiStrip";
+import { oiStripItems } from "../chart/oiStripModel";
 import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
@@ -662,7 +663,8 @@ export function TradePage() {
             symbol={ws.panes[active].symbol}
             interval={ws.panes[active].interval}
             getContext={noteContextFor}
-            getChartImage={() => paneRefs[active].current?.snapshot() ?? { problem: datas[active].error ? `the chart did not load (${datas[active].error!.message})` : "the chart is not on screen yet" }}
+            getChartImage={(opts) => paneRefs[active].current?.snapshot(opts) ?? { problem: datas[active].error ? `the chart did not load (${datas[active].error!.message})` : "the chart is not on screen yet" }}
+            getOiItems={() => (tools.oiStripOn ? oiStripItems(oi[active].summary, oi[active].sentiment, oi[active].levels, tools.oiLevelsOn, formatPrice) : null)}
             aiRead={aiReadFor(active)}
           />
           {structure.tfs.length > 0 && structure.setups && (reports[active]?.setups.length ?? 0) > 0 && (

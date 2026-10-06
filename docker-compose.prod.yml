@@ -37,7 +37,7 @@
 # credentials become undecryptable).
 x-secure-backend-env: &secure-backend-env
   REQUIRE_SECURE_CONFIG: "true"
-  CORS_ALLOW_ORIGINS: "https://${VPS_DOMAIN}:${SHELL_PORT},https://${VPS_DOMAIN}:${SIGNAL_ENGINE_FRONTEND_PORT},https://${VPS_DOMAIN}:${MARKET_DATA_FRONTEND_PORT},https://${VPS_DOMAIN}:${EXECUTION_FRONTEND_PORT},https://${VPS_DOMAIN}:${MANUAL_TRADING_FRONTEND_PORT}"
+  CORS_ALLOW_ORIGINS: "https://${VPS_DOMAIN}:${SHELL_PORT},https://${VPS_DOMAIN}:${SIGNAL_ENGINE_FRONTEND_PORT},https://${VPS_DOMAIN}:${MARKET_DATA_FRONTEND_PORT},https://${VPS_DOMAIN}:${EXECUTION_FRONTEND_PORT},https://${VPS_DOMAIN}:${MANUAL_TRADING_FRONTEND_PORT},https://${VPS_DOMAIN}:${WEB_FRONTEND_PORT}"
 
 services:
   # Host-port publish removed - Caddy is the only thing that should own
@@ -70,6 +70,8 @@ services:
       TRUST_FORWARDED_FOR: "true"
   manual-trading-frontend:
     ports: !reset []
+  web-frontend:
+    ports: !reset []
 
   caddy:
     image: caddy:2-alpine
@@ -101,6 +103,7 @@ services:
       - "${EXECUTION_BACKEND_PORT}:${EXECUTION_BACKEND_PORT}"
       - "${ACCOUNTS_BACKEND_PORT}:${ACCOUNTS_BACKEND_PORT}"
       - "${MANUAL_TRADING_FRONTEND_PORT}:${MANUAL_TRADING_FRONTEND_PORT}"
+      - "${WEB_FRONTEND_PORT}:${WEB_FRONTEND_PORT}"
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       # Cert storage - MUST persist across restarts. Let's Encrypt rate-

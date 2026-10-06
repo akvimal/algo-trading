@@ -53,3 +53,7 @@
 {$VPS_DOMAIN}:8084 {
 	reverse_proxy manual-trading-frontend:80
 }
+
+{$VPS_DOMAIN}:8095 {
+	reverse_proxy web-frontend:80
+}

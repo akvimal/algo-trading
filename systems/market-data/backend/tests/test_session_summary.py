@@ -80,6 +80,7 @@ def test_the_mcx_summary_is_its_own_category_sent_once_and_skipped_on_a_holiday(
     monkeypatch.setattr(session_market, "fetch_mcx", lambda day=None: mcx)
     monkeypatch.setattr(execution_client, "trader_day", lambda user, seg, day: {**trader(), "segment": seg})
     subs(monkeypatch, (ME, "111"), category="session_mcx")
+    monkeypatch.setattr(jobs, "session_card_for", lambda *a, **k: (None, None))
     tg = Telegram(monkeypatch)
     db = FakeDB()
     assert jobs.session_to_subscribers(db, "MCX", DAY).sent == 1 and jobs.session_to_subscribers(db, "MCX", DAY).sent == 0
@@ -104,6 +105,7 @@ def _wire(monkeypatch, *, market=MARKET, people=((ME, "111"),), trader_result=No
     monkeypatch.setattr(execution_client, "trader_day", lambda user, seg, day: trader_result if trader_result is not None else trader())
     monkeypatch.setattr("app.domain.premarket_report.get_report", lambda db, day=None: SimpleNamespace(ai={"bias": "bullish"}, rules={"bias": "neutral"}))
     subs(monkeypatch, *people, category="session_nse")
+    monkeypatch.setattr(jobs, "session_card_for", lambda *a, **k: (None, None))  # these tests are about the text message; the card has its own tests
     return Telegram(monkeypatch)
 
 
@@ -167,3 +169,83 @@ def test_the_mcx_session_is_built_from_hourly_bars_with_text_timestamps(monkeypa
     assert day == DAY and row["close"] == 105 and row["high"] == 106 and row["low"] == 101
     assert row["change_pct"] == round((105 / 102 - 1) * 100, 2)
     assert session_market._mcx_session("GOLDM", date(2026, 10, 7))[0] is None  # no bar that day: a holiday
+
+
+# ---- the picture card ----------------------------------------------------------------------------------------------------------
+
+
+def _png_size(data: bytes):
+    import io
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(data))
+    img.load()
+    return img.format, img.size
+
+
+def test_the_card_renders_a_real_png_for_every_shape_of_day():
+    from app.domain.session_card import render_session_card
+
+    for tr, known in ((trader(), True), (trader(paper=None, open_now=0, score=None), True), (None, False)):
+        fmt, (w, h) = _png_size(render_session_card("NSE", DAY, MARKET, tr, ("bullish", True), trader_known=known))
+        assert fmt == "PNG" and w == 1080 and h > 600
+    crypto = {"day": DAY, "rows": [{"label": "BTC", "close": 85981.5, "change_pct": -1.2, "high": 86400.0, "low": 85100.0, "position": 0.2}]}
+    assert _png_size(render_session_card("CRYPTO", DAY, crypto, trader()))[0] == "PNG"
+
+
+def test_a_card_with_more_trades_is_taller_and_still_draws_without_the_dejavu_font(monkeypatch):
+    from app.domain import session_card as sc
+
+    both = _png_size(sc.render_session_card("NSE", DAY, MARKET, trader(live={**MODE, "trades": 1}))) [1][1]
+    one = _png_size(sc.render_session_card("NSE", DAY, MARKET, trader()))[1][1]
+    assert both > one
+    monkeypatch.setattr(sc, "_font_path", lambda bold: None)
+    sc._cache.clear()
+    try:
+        assert _png_size(sc.render_session_card("NSE", DAY, MARKET, trader()))[0] == "PNG"
+        assert sc.rupee() == "Rs " and sc.minus() == "-"
+    finally:
+        sc._cache.clear()
+
+
+def test_the_caption_is_short_and_carries_the_headline():
+    cap = n.session_caption("NSE", DAY, MARKET, trader(live={**MODE, "net_pnl": -450.0}), bias="bullish")
+    assert cap.startswith("📈 Post-session · NSE · Tue 6 Oct\n") and "NIFTY 24,580 (+0.42%)" in cap
+    assert "bias held" in cap and "Paper +₹1,240" in cap and "Live −₹450" in cap and len(cap) < 300
+
+
+def test_a_summary_goes_as_a_photo_with_its_caption_and_the_text_is_the_fallback(monkeypatch):
+    sent = {"photo": [], "text": []}
+    fail_photo = {"on": False}
+
+    def photo(png, caption, chat):
+        if fail_photo["on"]:
+            return "Telegram rejected the picture"
+        sent["photo"].append((chat, caption, png[:4]))
+        return None
+
+    monkeypatch.setattr(n, "send_telegram_photo", photo)
+    monkeypatch.setattr(n, "send_telegram", lambda text, chat: sent["text"].append((chat, text)))
+    db = FakeDB()
+    assert n.deliver(db, ME, "111", "session_nse", "k1", "FULL TEXT", image=b"\x89PNG-bytes", caption="short caption") == "sent"
+    assert sent["photo"] == [("111", "short caption", b"\x89PNG")] and sent["text"] == []
+    fail_photo["on"] = True
+    assert n.deliver(db, ME, "111", "session_nse", "k2", "FULL TEXT", image=b"\x89PNG-bytes", caption="short caption") == "sent"
+    assert sent["text"] == [("111", "FULL TEXT")]  # the picture failed, so the person still got the message
+    assert n.deliver(db, ME, "111", "session_nse", "k3", "PLAIN") == "sent" and sent["text"][-1] == ("111", "PLAIN")
+
+
+def test_the_job_sends_the_card_and_still_sends_text_if_it_cannot_be_drawn(monkeypatch):
+    photos, texts = [], []
+    monkeypatch.setattr(n, "send_telegram_photo", lambda png, cap, chat: photos.append((chat, cap)))
+    monkeypatch.setattr(n, "send_telegram", lambda text, chat: texts.append((chat, text)))
+    monkeypatch.setattr(session_market, "fetch_nse", lambda day=None: MARKET)
+    monkeypatch.setattr(execution_client, "trader_day", lambda user, seg, day: trader())
+    monkeypatch.setattr("app.domain.premarket_report.get_report", lambda db, day=None: None)
+    subs(monkeypatch, (ME, "111"), category="session_nse")
+    jobs.session_to_subscribers(FakeDB(), "NSE", DAY)
+    assert len(photos) == 1 and texts == []
+    monkeypatch.setattr("app.domain.session_card.render_session_card", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no pillow")))
+    jobs.session_to_subscribers(FakeDB(), "NSE", DAY)
+    assert len(photos) == 1 and len(texts) == 1 and "Post-session · NSE" in texts[0][1]

@@ -53,6 +53,29 @@ def send_telegram(text: str, chat_id: Optional[str] = None) -> Optional[str]:
         return "could not reach Telegram"
 
 
+def send_telegram_photo(png: bytes, caption: str, chat_id: Optional[str] = None) -> Optional[str]:
+    """Send a picture (PNG bytes) with a caption of at most 1024 characters. Returns None when delivered, else a short reason."""
+    chat = chat_id or settings.telegram_chat_id
+    if not settings.telegram_bot_token:
+        return "Telegram is not set up on this server"
+    if not chat:
+        return "no Telegram chat to send to"
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto",
+            data={"chat_id": chat, "caption": caption[:1024]},
+            files={"photo": ("summary.png", png, "image/png")},
+            timeout=30,
+        )
+        if resp.status_code // 100 == 2:
+            return None
+        logger.warning("Telegram sendPhoto failed: %s %s", resp.status_code, resp.text[:200])
+        return {400: "Telegram rejected the picture", 403: "the bot cannot message this chat (start the bot first)"}.get(resp.status_code, f"Telegram returned {resp.status_code}")
+    except requests.exceptions.RequestException as exc:
+        logger.warning("Telegram sendPhoto errored: %s", exc)
+        return "could not reach Telegram"
+
+
 def notify_telegram(text: str) -> bool:
     """Send to the platform chat. True on delivery, False on any failure or if unconfigured."""
     return send_telegram(text) is None

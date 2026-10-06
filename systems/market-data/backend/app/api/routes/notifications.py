@@ -147,7 +147,18 @@ def _latest_text(db: Session, user: User, cat: n.Category) -> str:
     return notification_jobs.ops_status_text(db, datetime.now(timezone.utc))
 
 
+def _latest_message(db: Session, user: User, cat: n.Category):
+    """(text, picture, caption) for a category's latest message; only the session summaries have a picture."""
+    if cat.key in ("session_nse", "session_mcx", "session_crypto"):
+        return _session_parts(db, user, {"session_nse": "NSE", "session_mcx": "MCX"}.get(cat.key, "CRYPTO"))
+    return _latest_text(db, user, cat), None, None
+
+
 def _session_text(db: Session, user: User, segment: str) -> str:
+    return _session_parts(db, user, segment)[0]
+
+
+def _session_parts(db: Session, user: User, segment: str):
     """The latest post-session summary for this person (the latest NSE session, or the last 24 hours of crypto), for a manual send."""
     from app.adapters import execution_client
     from app.providers import session_market
@@ -159,7 +170,9 @@ def _session_text(db: Session, user: User, segment: str) -> str:
     trader = execution_client.trader_day(user.user_id, segment, market["day"])
     report = get_report(db, market["day"]) if segment == "NSE" else None
     bias = (((report.ai or {}).get("bias")) or (report.rules or {}).get("bias")) if report is not None else None
-    return n.session_message(segment, market["day"], market, trader, bias, trader_known=trader is not None)
+    text = n.session_message(segment, market["day"], market, trader, bias, trader_known=trader is not None)
+    image, caption = notification_jobs.session_card_for(segment, market["day"], market, trader, bias)
+    return text, image, caption
 
 
 @router.post("/notifications/{category}/send-now")
@@ -175,10 +188,10 @@ def send_now(category: str, user: User = Depends(require_user), db: Session = De
         if wait > 0:
             raise HTTPException(status_code=429, detail=f"Just sent one - try again in {int(wait) + 1}s.")
         _last_send[(user.user_id, cat.key)] = time.monotonic()
-    text = _latest_text(db, user, cat)
+    text, image, caption = _latest_message(db, user, cat)
     now = datetime.now(timezone.utc)
     key = f"manual:{now.isoformat()}"
-    outcome = n.deliver(db, user.user_id, chat.telegram_chat_id, cat.key, key, text, now)
+    outcome = n.deliver(db, user.user_id, chat.telegram_chat_id, cat.key, key, text, now, image=image, caption=caption)
     if outcome != "sent":
         row = db.get(NotificationLog, (user.user_id, cat.key, key))
         reason = row.last_error if row else "unknown"

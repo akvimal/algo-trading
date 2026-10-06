@@ -55,6 +55,18 @@ def send_premarket(report: dict, day: Optional[date] = None) -> n.Tally:
 # ---- post-session summaries -----------------------------------------------------------------------------------------------------
 
 
+def session_card_for(segment: str, day: date, market: dict, trader: Optional[dict], bias: Optional[str]) -> tuple[Optional[bytes], Optional[str]]:
+    """The summary's picture and its short caption, or (None, None) when the picture cannot be drawn (the text message goes out instead)."""
+    try:
+        from app.domain.session_card import render_session_card
+
+        png = render_session_card(segment, day, market, trader, n.session_bias_held(segment, market, bias), trader_known=trader is not None)
+        return png, n.session_caption(segment, day, market, trader, bias)
+    except Exception:
+        logger.exception("session summary: the card could not be drawn; sending the text")
+        return None, None
+
+
 def session_to_subscribers(db: Session, segment: str, day: Optional[date] = None) -> n.Tally:
     """The market half is read once; each subscriber then gets it with their own trades for that day (asked of execution one person at a
     time). Skipped quietly when the market has no session for `day` (a holiday)."""
@@ -78,13 +90,12 @@ def session_to_subscribers(db: Session, segment: str, day: Optional[date] = None
         if report is not None:
             bias = ((report.ai or {}).get("bias")) or (report.rules or {}).get("bias")
 
-    def build_for(sub_id):
-        trader = execution_client.trader_day(sub_id, segment, session_day)
-        return n.session_message(segment, session_day, market, trader, bias, trader_known=trader is not None)
-
     tally = n.Tally()
     for sub in n.subscribers(db, category):
-        outcome = n.deliver(db, sub.user_id, sub.chat_id, category, f"session:{segment}:{session_day.isoformat()}", build_for(sub.user_id))
+        trader = execution_client.trader_day(sub.user_id, segment, session_day)
+        text = n.session_message(segment, session_day, market, trader, bias, trader_known=trader is not None)
+        image, caption = session_card_for(segment, session_day, market, trader, bias)
+        outcome = n.deliver(db, sub.user_id, sub.chat_id, category, f"session:{segment}:{session_day.isoformat()}", text, image=image, caption=caption)
         setattr(tally, outcome, getattr(tally, outcome) + 1)
     return tally
 

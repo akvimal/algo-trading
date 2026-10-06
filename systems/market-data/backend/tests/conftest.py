@@ -34,6 +34,7 @@ def _no_notifications_sent(monkeypatch):
     monkeypatch.setattr(notification_jobs, "check_ops", lambda: notifications.Tally())
     monkeypatch.setattr(notification_jobs, "retry_failed", lambda: notifications.Tally())
     monkeypatch.setattr(notifications, "send_telegram", lambda text, chat=None: pytest.fail("a test tried to send a real Telegram message"))
+    monkeypatch.setattr(notifications, "send_telegram_photo", lambda png, caption, chat=None: pytest.fail("a test tried to send a real Telegram picture"))
 
 
 @pytest.fixture(autouse=True)

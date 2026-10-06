@@ -9,6 +9,8 @@ requests==2.32.3
 tzdata==2024.1
 websocket-client==1.8.0
 PyJWT==2.8.0
+# The post-session summary card (app/domain/session_card.py): a picture drawn on the server.
+Pillow==11.0.0
 # Shared quote cache + pub/sub fan-out for the live LTP push layer
 # (app/providers/dhan_feed.py's _publish_tick, app/api/routes/quotes_ws.py)
 # - this service's first-ever Redis dependency, otherwise in-memory-cache-

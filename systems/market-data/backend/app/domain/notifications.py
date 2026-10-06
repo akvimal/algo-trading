@@ -23,7 +23,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.adapters.db.models import AlertChannel, NotificationLog, NotificationSubscription
-from app.domain.notify import send_telegram
+from app.domain.notify import send_telegram, send_telegram_photo
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +119,12 @@ class Tally:
     skipped: int = 0  # already sent, or given up on
 
 
-def _attempt(db: Session, row: NotificationLog, chat_id: str, now: datetime) -> bool:
-    error = send_telegram(row.text, chat_id)
+def _attempt(db: Session, row: NotificationLog, chat_id: str, now: datetime, image: Optional[bytes] = None, caption: Optional[str] = None) -> bool:
+    """One send. With a picture it goes as a photo with its short caption; if that fails the full text is sent instead, so the person still
+    gets the message. A retry later has no picture (it is not stored) and sends the text."""
+    error = send_telegram_photo(image, caption or row.text, chat_id) if image else "no picture"
+    if error:
+        error = send_telegram(row.text, chat_id)
     row.attempts = (row.attempts or 0) + 1
     row.last_attempt_at = now
     if error:
@@ -130,8 +134,8 @@ def _attempt(db: Session, row: NotificationLog, chat_id: str, now: datetime) -> 
     return True
 
 
-def deliver(db: Session, user_id: UUID, chat_id: str, category: str, key: str, text: str, now: Optional[datetime] = None) -> str:
-    """Send one message once. Returns "sent", "failed" (kept for a retry) or "skipped" (already sent, or given up on)."""
+def deliver(db: Session, user_id: UUID, chat_id: str, category: str, key: str, text: str, now: Optional[datetime] = None, image: Optional[bytes] = None, caption: Optional[str] = None) -> str:
+    """Send one message once (as a picture with a caption when `image` is given, with the full text as the fallback). Returns "sent", "failed" (kept for a retry) or "skipped" (already sent, or given up on)."""
     now = now or datetime.now(timezone.utc)
     row = db.get(NotificationLog, (user_id, category, key))
     if row is None:
@@ -139,7 +143,7 @@ def deliver(db: Session, user_id: UUID, chat_id: str, category: str, key: str, t
         db.add(row)
     elif row.sent_at is not None or (row.attempts or 0) >= MAX_ATTEMPTS:
         return "skipped"
-    ok = _attempt(db, row, chat_id, now)
+    ok = _attempt(db, row, chat_id, now, image, caption)
     db.commit()
     return "sent" if ok else "failed"
 
@@ -363,6 +367,31 @@ def session_message(segment: str, day: date, market: dict, trader: Optional[dict
             lines.append(" · ".join(extras))
     lines += ["", "Market data and your own record, not a recommendation. Details in the app."]
     return "\n".join(lines)
+
+
+def session_caption(segment: str, day: date, market: dict, trader: Optional[dict], bias: Optional[str] = None) -> str:
+    """The short line that goes with the picture (and shows in a notification): the day, the lead index and the person's net result."""
+    icon, title = SESSION_TITLES[segment]
+    lead = market["rows"][0]
+    parts = [f"{lead['label']} {_level(lead['label'], lead['close'])} ({_signed(lead['change_pct'])})"]
+    if segment == "NSE":
+        nifty = next((r for r in market["rows"] if r["label"] == "NIFTY"), None)
+        check = bias_check(bias, nifty["change_pct"] if nifty else None)
+        if check:
+            parts.append("bias held" if "it held" in check else "bias did not hold")
+    for name, key in (("Paper", "paper"), ("Live", "live")):
+        if trader and trader.get(key):
+            parts.append(f"{name} {_money(trader[key]['net_pnl'], segment)}")
+    return f"{icon} {title} · {day.strftime('%a')} {day.day} {day.strftime('%b')}\n" + " · ".join(parts)
+
+
+def session_bias_held(segment: str, market: dict, bias: Optional[str]) -> Optional[tuple[str, bool]]:
+    """(the morning's bias, whether it held) for the card, or None when there is no call to check."""
+    if segment != "NSE" or bias is None:
+        return None
+    nifty = next((r for r in market["rows"] if r["label"] == "NIFTY"), None)
+    check = bias_check(bias, nifty["change_pct"] if nifty else None)
+    return (bias, "it held" in check) if check else None
 
 
 def token_message(expires_at: datetime, now: datetime, tz) -> Optional[tuple[str, str]]:

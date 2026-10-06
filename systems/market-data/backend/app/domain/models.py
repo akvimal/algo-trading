@@ -726,6 +726,8 @@ class PriceAlertOut(BaseModel):
     # Crossings that could not be delivered (no chat set, Telegram down...), and why. A one-shot alert stays armed while this is > 0.
     delivery_failures: int = 0
     last_error: Optional[str] = None
+    # The price when the alert was created, so the page can say how far away the level is. Only set on the create response.
+    current_price: Optional[float] = None
 
 
 class CustomScreenCreate(BaseModel):

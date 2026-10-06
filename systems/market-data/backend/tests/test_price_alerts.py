@@ -224,6 +224,7 @@ def create(monkeypatch, *, chat="111", count=0, ltp=95.0, payload=None):
 
 def test_create_normalises_the_symbol_owns_the_alert_and_seeds_its_side(monkeypatch):
     out, db = create(monkeypatch, ltp=95.0)
+    assert out.current_price == 95.0  # the response says where the price is, so the page can say how far the level is
     row = db.added[0]
     assert (row.exchange, row.symbol, row.user_id) == ("NSE", "NIFTY", OWNER)
     assert row.last_side == "below"  # evaluated from the first minute, not left unseeded

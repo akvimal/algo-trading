@@ -32,6 +32,32 @@ export function alertStatus(a: PriceAlert): AlertStatus {
   return { label: a.repeat ? "Watching, repeats" : "Watching", tone: "", detail: times };
 }
 
+/** The distance from the price to the level: "7 away (0.01%)", or "right at it" when they are the same. */
+function distanceText(price: number, level: number): string {
+  const gap = Math.abs(price - level);
+  if (gap === 0) return "right at it";
+  const pct = (gap / level) * 100;
+  return `${formatPrice(gap)} away (${pct < 0.01 ? "<0.01" : pct.toFixed(2)}%)`;
+}
+
+/** What the person should expect right after adding an alert, given where the price is now. It fires on a crossing, so an alert whose
+ * level the price is already past says that it waits for the price to go back and cross again, which is what people trip over. */
+export function placementMessage(a: Pick<PriceAlert, "symbol" | "direction" | "target_price">, price: number | null | undefined): string {
+  if (price == null || !Number.isFinite(price)) return "It will fire when the price crosses that level.";
+  const level = formatPrice(a.target_price);
+  const now = `${a.symbol} is ${formatPrice(price)} now.`;
+  const onAbove = price >= a.target_price;
+  if (a.direction === "cross") return `${now} It fires when the price crosses ${level} either way, ${distanceText(price, a.target_price)}.`;
+  if (a.direction === "above") {
+    return onAbove
+      ? `${now} It is already above ${level}, so this fires only after the price drops below it and then rises back through.`
+      : `${now} It fires when the price rises to ${level}, ${distanceText(price, a.target_price)}.`;
+  }
+  return onAbove
+    ? `${now} It fires when the price falls to ${level}, ${distanceText(price, a.target_price)}.`
+    : `${now} It is already below ${level}, so this fires only after the price rises above it and then falls back through.`;
+}
+
 export type FormErrors = { symbol?: string; price?: string };
 
 /** The number typed in a price box, with commas and spaces tolerated. NaN when it is not a positive number. */

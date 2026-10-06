@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PriceAlert } from "../api/priceAlerts";
-import { alertStatus, describeAlert, looksLikeChatId, parsePrice, sortAlerts, toNewAlert, validateForm } from "./alertsModel";
+import { alertStatus, describeAlert, looksLikeChatId, parsePrice, placementMessage, sortAlerts, toNewAlert, validateForm } from "./alertsModel";
 
 const alert = (over: Partial<PriceAlert> = {}): PriceAlert => ({
   id: "a1", exchange: "NSE", symbol: "NIFTY", target_price: 23100, direction: "above", note: null, repeat: false, active: true, last_side: "below",
@@ -74,3 +74,28 @@ describe("sortAlerts", () => {
     expect(sorted.map((a) => a.id)).toEqual(["new-live", "old-live", "new-done", "old-done"]);
   });
 });
+
+describe("placementMessage", () => {
+  const a = (direction: PriceAlert["direction"], level = 85471) => ({ symbol: "BTCUSD", direction, target_price: level });
+
+  it("says where the price is and how far the level is, for a crossing either way", () => {
+    expect(placementMessage(a("cross"), 85478)).toBe("BTCUSD is 85,478 now. It fires when the price crosses 85,471 either way, 7 away (<0.01%).");
+  });
+  it("says when it will fire for a level the price has not reached yet", () => {
+    expect(placementMessage(a("above"), 85400)).toBe("BTCUSD is 85,400 now. It fires when the price rises to 85,471, 71 away (0.08%).");
+    expect(placementMessage(a("below"), 85500)).toBe("BTCUSD is 85,500 now. It fires when the price falls to 85,471, 29 away (0.03%).");
+  });
+  it("explains that a level the price is already past waits for it to cross back, which is what trips people up", () => {
+    expect(placementMessage(a("above"), 85500)).toBe("BTCUSD is 85,500 now. It is already above 85,471, so this fires only after the price drops below it and then rises back through.");
+    expect(placementMessage(a("below"), 85400)).toBe("BTCUSD is 85,400 now. It is already below 85,471, so this fires only after the price rises above it and then falls back through.");
+  });
+  it("shows a tiny distance as under 0.01% rather than 0.00%, and says so when the price is exactly on the level", () => {
+    expect(placementMessage(a("cross", 1_000_000), 1_000_050)).toContain("50 away (<0.01%)");
+    expect(placementMessage(a("cross"), 85471)).toContain("right at it");
+  });
+  it("still says something useful when the server gave no price", () => {
+    expect(placementMessage(a("above"), null)).toBe("It will fire when the price crosses that level.");
+    expect(placementMessage(a("above"), undefined)).toBe("It will fire when the price crosses that level.");
+  });
+});
+

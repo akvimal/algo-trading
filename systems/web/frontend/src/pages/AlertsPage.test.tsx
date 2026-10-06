@@ -18,12 +18,14 @@ let channel: AlertChannel;
 let alerts: PriceAlert[];
 let calls: { url: string; method: string; body: any }[];
 let failNext: { status: number; detail: string } | null;
+let currentPrice: number | null;
 
 beforeEach(() => {
   channel = { bot_configured: true, chat_set: true, chat_id_hint: "…6789" };
   alerts = [];
   calls = [];
   failNext = null;
+  currentPrice = 71_240;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -45,7 +47,7 @@ beforeEach(() => {
       if (url.endsWith("/price-alerts") && method === "POST") {
         const made = alert({ id: `n${alerts.length}`, symbol: body.symbol, direction: body.direction, target_price: body.target_price, exchange: body.exchange, repeat: body.repeat, note: body.note ?? null });
         alerts = [...alerts, made];
-        return json(made, 201);
+        return json({ ...made, current_price: currentPrice }, 201); // the list never carries it
       }
       const del = url.match(/\/price-alerts\/([\w-]+)$/);
       if (del && method === "DELETE") {
@@ -110,7 +112,9 @@ describe("AlertsPage", () => {
     await userEvent.click(within(form).getByLabelText("Keep watching after it fires"));
     await userEvent.click(within(form).getByRole("button", { name: "Add alert" }));
     await waitFor(() => expect(writes("POST")[0].body).toEqual({ exchange: "MCX", symbol: "GOLDM", target_price: 71250, direction: "cross", repeat: true, note: "range top" }));
-    expect(await within(form).findByText("Added: GOLDM crosses 71,250 either way")).toBeInTheDocument();
+    const added = await screen.findByTestId("added-alert");
+    expect(within(added).getByText("Added: GOLDM crosses 71,250 either way")).toBeInTheDocument();
+    expect(within(added).getByText("GOLDM is 71,240 now. It fires when the price crosses 71,250 either way, 10 away (0.01%).")).toBeInTheDocument();
     expect(within(form).getByLabelText("Symbol")).toHaveValue("");
     expect(await screen.findAllByTestId("alert-row")).toHaveLength(1);
   });
@@ -175,4 +179,33 @@ describe("AlertsPage", () => {
     await waitFor(() => expect(writes("PUT")[0].body).toEqual({ telegram_chat_id: "" }));
     expect(await within(card).findByText("Not set up")).toBeInTheDocument();
   });
+
+  it("warns right after adding when the price is already past the level, since it then waits for a cross back", async () => {
+    currentPrice = 23_200;
+    renderPage();
+    const form = await screen.findByTestId("new-alert");
+    await userEvent.type(within(form).getByLabelText("Symbol"), "nifty");
+    await userEvent.type(within(form).getByLabelText("Price"), "23100");
+    await userEvent.click(within(form).getByRole("button", { name: "Add alert" })); // "Goes above" is the default
+    const added = await screen.findByTestId("added-alert");
+    expect(within(added).getByText(/NIFTY is 23,200 now\. It is already above 23,100, so this fires only after the price drops below it/)).toBeInTheDocument();
+  });
+
+  it("still confirms the alert when the server returns no price", async () => {
+    currentPrice = null;
+    renderPage();
+    const form = await screen.findByTestId("new-alert");
+    await userEvent.type(within(form).getByLabelText("Symbol"), "nifty");
+    await userEvent.type(within(form).getByLabelText("Price"), "23100");
+    await userEvent.click(within(form).getByRole("button", { name: "Add alert" }));
+    expect(await screen.findByText("It will fire when the price crosses that level.")).toBeInTheDocument();
+  });
+
+  it("does not show the created-alert message on the alerts that are listed", async () => {
+    alerts = [alert()];
+    renderPage();
+    await screen.findAllByTestId("alert-row");
+    expect(screen.queryByTestId("added-alert")).not.toBeInTheDocument();
+  });
 });
+

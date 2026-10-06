@@ -6,7 +6,7 @@ import { ErrorNotice, Skeleton } from "../components/bits";
 import { TextField } from "../components/Field";
 import { SEGMENTS } from "../config";
 import { useResource } from "../hooks/useResource";
-import { DIRECTION_LABEL, alertStatus, describeAlert, looksLikeChatId, sortAlerts, toNewAlert, validateForm, type FormErrors } from "./alertsModel";
+import { DIRECTION_LABEL, alertStatus, describeAlert, looksLikeChatId, placementMessage, sortAlerts, toNewAlert, validateForm, type FormErrors } from "./alertsModel";
 
 const MARKET_LABEL = { NSE: "Stocks & F&O", MCX: "Commodities", CRYPTO: "Crypto" } as const;
 const POLL_MS = 30_000;
@@ -147,7 +147,7 @@ function NewAlertCard({ ready, onCreated }: { ready: boolean; onCreated: () => v
   const [errors, setErrors] = useState<FormErrors>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [added, setAdded] = useState<string | null>(null);
+  const [added, setAdded] = useState<{ title: string; where: string } | null>(null);
 
   async function add() {
     const found = validateForm(symbol, price);
@@ -158,7 +158,7 @@ function NewAlertCard({ ready, onCreated }: { ready: boolean; onCreated: () => v
     setBusy(true);
     try {
       const made = await createPriceAlert(toNewAlert({ exchange, symbol, price, direction, note, repeat }));
-      setAdded(describeAlert(made));
+      setAdded({ title: describeAlert(made), where: placementMessage(made, made.current_price) });
       setSymbol("");
       setPrice("");
       setNote("");
@@ -202,8 +202,13 @@ function NewAlertCard({ ready, onCreated }: { ready: boolean; onCreated: () => v
         <button className="btn btn-primary" onClick={() => void add()} disabled={busy || !ready}>
           {busy ? "Adding…" : "Add alert"}
         </button>
-        {added && !serverError && <span className="up" role="status">Added: {added}</span>}
       </div>
+      {added && !serverError && (
+        <div className="stack" role="status" data-testid="added-alert">
+          <div className="up">Added: {added.title}</div>
+          <div className="dim" style={{ fontSize: 13 }}>{added.where}</div>
+        </div>
+      )}
       {serverError && <div className="notice error" role="alert">{serverError}</div>}
     </div>
   );

@@ -18,6 +18,8 @@ export type PriceAlert = {
   /** Crossings that could not be sent (no chat, Telegram down...); a one-shot alert stays armed while this is above 0. */
   delivery_failures: number;
   last_error: string | null;
+  /** The price when the alert was created. Only on the create response; null in the list. */
+  current_price?: number | null;
 };
 
 export type AlertChannel = { bot_configured: boolean; chat_set: boolean; chat_id_hint: string | null };

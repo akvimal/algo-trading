@@ -135,6 +135,7 @@ def create_price_alert(payload: PriceAlertCreate, user: User = Depends(require_u
     db.add(row)
     db.commit()
     db.refresh(row)
+    row.current_price = ltp  # not a column: carried on the object so the response can say where the price is right now
     return row
 
 

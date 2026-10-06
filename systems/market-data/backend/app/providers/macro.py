@@ -13,6 +13,7 @@ report) intact.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import datetime, timezone
@@ -96,7 +97,8 @@ def _text(el: Optional[ElementTree.Element]) -> str:
 def parse_rbi_feed(xml: bytes, kind: str, policy_only: bool) -> list[dict]:
     items = []
     for item in ElementTree.fromstring(xml).iter("item"):
-        title = re.sub(r"\s+", " ", _text(item.find("title"))).strip()
+        # RBI titles carry inline markup (e.g. "13<sup>th</sup> SBI Banking...") and entities; show plain text.
+        title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", _text(item.find("title"))))).strip()
         if not title or (policy_only and not _POLICY_RE.search(title)):
             continue
         try:

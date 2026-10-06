@@ -184,3 +184,12 @@ def test_the_model_gets_the_macro_and_its_macro_context_comes_back(monkeypatch):
     out = premarket_report.run_ai([], rules, "key", MACRO)
     assert "domestic_macro" in sent["messages"][1]["content"] and "macro_context" in sent["response_format"]["json_schema"]["schema"]["required"]
     assert out["macro_context"] == "Real rate is positive."
+
+
+def test_rbi_titles_are_plain_text_without_inline_markup_or_entities():
+    xml = b"""<?xml version="1.0"?><rss><channel>
+<item><title><![CDATA[Address at the 13<sup>th</sup> SBI Banking &amp; Economics Conclave on September 23, 2026]]></title><link>http://x/1</link><pubDate>Wed, 23 Sep 2026 11:00:00 +0530</pubDate></item>
+</channel></rss>"""
+    (item,) = macro.parse_rbi_feed(xml, "speech", policy_only=False)
+    assert item["title"] == "Address at the 13th SBI Banking & Economics Conclave on September 23, 2026"
+

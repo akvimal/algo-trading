@@ -47,6 +47,8 @@ CATEGORIES: dict[str, Category] = {
     for c in (
         Category("premarket", "Pre-market bias", "The morning read on the overnight US close, crude, USD/INR, yields, ADRs and the GIFT Nifty gap, with the AI's call.", "Weekdays at 8:45 AM IST, 30 minutes before NSE opens"),
         Category("oi_buildup", "Strong OI buildup", "The F&O stocks whose call and put open interest both grew a lot in the same direction that day: the top few bullish and bearish, in one message.", "Weekdays after the end-of-day OI scan finishes (about 4:05 PM IST)", defaults={"top_n": 10}),
+        Category("session_nse", "Post-session summary: NSE", "How the NSE session went (NIFTY, BANKNIFTY, VIX, and whether the morning bias held) and your own closed trades that day, paper and live apart.", "Weekdays at 3:50 PM IST, after the 3:30 PM close; skipped on a market holiday"),
+        Category("session_crypto", "Post-session summary: crypto", "The last 24 hours in BTC and ETH and your own crypto trades that day, paper and live apart. Crypto never closes, so this goes out at a fixed time.", "Every day at 11:30 PM IST"),
         Category("ops", "Operator alerts", "The Dhan token expiring or expired, and background jobs that failed.", "Checked every 10 minutes", admin_only=True),
     )
 }
@@ -284,6 +286,81 @@ def oi_digest_message(rows: list[dict], snapshot_date: date, top_n: int) -> Opti
         lines += [_oi_line(i, r) for i, r in enumerate(items, 1)]
         lines.append("")
     lines.append("Option-chain activity for the day, not a prediction or a recommendation.")
+    return "\n".join(lines)
+
+
+SESSION_TITLES = {"NSE": ("📈", "Post-session · NSE"), "CRYPTO": ("🪙", "Daily summary · crypto")}
+BIAS_HELD_BAND = 0.10  # percent: a bullish or bearish call needs the index to have moved at least this much its way to count as held
+NEUTRAL_BAND = 0.30  # percent: a neutral call holds while the index stays inside this
+
+
+def _money(v: float, segment: str) -> str:
+    sign = "+" if v > 0 else MINUS if v < 0 else ""
+    return f"{sign}{'$' if segment == 'CRYPTO' else '₹'}{abs(v):,.0f}"
+
+
+def _level(label: str, v: float) -> str:
+    return f"{v:,.0f}" if v >= 1000 else f"{v:,.2f}"
+
+
+def bias_check(bias: Optional[str], nifty_change_pct: Optional[float]) -> Optional[str]:
+    """Did the morning's call hold? None when there was no call or no index move to judge it by."""
+    if bias is None or nifty_change_pct is None:
+        return None
+    c = nifty_change_pct
+    held = c >= BIAS_HELD_BAND if bias == "bullish" else c <= -BIAS_HELD_BAND if bias == "bearish" else abs(c) <= NEUTRAL_BAND
+    return f"Morning bias was {bias.capitalize()}: {'it held' if held else 'it did not hold'} (NIFTY {_signed(c)})."
+
+
+def _mode_lines(name: str, d: dict, segment: str) -> list[str]:
+    won = f"{d['wins']} won" + (f", {d['losses']} lost" if d["losses"] else "")
+    lines = [f"{name}: {d['trades']} closed · {won} · net {_money(d['net_pnl'], segment)} after charges"]
+
+    def leg(word: str, t: dict) -> str:
+        r = f" ({t['r']:+.1f}R)".replace("-", MINUS) if t.get("r") is not None else ""
+        return f"{word} {t['symbol']} {_money(t['pnl'], segment)}{r}"
+
+    if d["trades"] > 1 and d.get("best") and d.get("worst"):
+        lines.append(f"{leg('Best', d['best'])} · {leg('Worst', d['worst'])}")
+    elif d.get("best"):
+        lines.append(leg("Trade", d["best"]))
+    lines.append(f"With a limit entry and a stop: {d['with_plan']} of {d['trades']}")
+    return lines
+
+
+def session_message(segment: str, day: date, market: dict, trader: Optional[dict], bias: Optional[str] = None, trader_known: bool = True) -> str:
+    """The post-session summary: how the market did, then the person's own day. `trader` is execution's answer for that day (None with
+    `trader_known=False` when execution could not be reached, which the message says rather than claiming no trades)."""
+    icon, title = SESSION_TITLES[segment]
+    lines = [f"{icon} {title} · {day.strftime('%a')} {day.day} {day.strftime('%b')}"]
+    rows = market["rows"]
+    for r in rows:
+        if r["label"] == "India VIX":
+            lines.append(f"India VIX {r['close']:.2f} ({_signed(r['change_pct'])})")
+            continue
+        near = "near the high" if r["position"] >= 0.8 else "near the low" if r["position"] <= 0.2 else "mid-range"
+        lines.append(f"{r['label']} {_level(r['label'], r['close'])} ({_signed(r['change_pct'])}) · range {_level(r['label'], r['low'])}–{_level(r['label'], r['high'])}, closed {near}")
+    nifty = next((r for r in rows if r["label"] == "NIFTY"), None)
+    check = bias_check(bias, nifty["change_pct"] if nifty else None) if segment == "NSE" else None
+    if check:
+        lines += ["", check]
+    lines.append("")
+    if not trader_known:
+        lines.append("Your trades: could not be loaded just now. See them in the app.")
+    else:
+        modes = [(n_, trader[k]) for n_, k in (("Paper", "paper"), ("Live", "live")) if trader and trader.get(k)]
+        if not modes:
+            lines.append("You had no closed trades today.")
+        for i, (name, d) in enumerate(modes):
+            lines += ([""] if i else []) + _mode_lines(name, d, segment)
+        extras = []
+        if trader and trader.get("open_now"):
+            extras.append(f"Still open: {trader['open_now']}")
+        if trader and trader.get("discipline_score") is not None:
+            extras.append(f"Discipline (30 days): {trader['discipline_score']}/100")
+        if extras:
+            lines.append(" · ".join(extras))
+    lines += ["", "Market data and your own record, not a recommendation. Details in the app."]
     return "\n".join(lines)
 
 

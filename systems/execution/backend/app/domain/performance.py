@@ -60,6 +60,8 @@ class TradeRecord:
     # True when Indian charges were recorded for this trade (charges is not NULL), i.e. its P&L is
     # net of costs. A gross trade cannot count toward the paper track record (app/domain/track_record.py).
     costs_applied: bool = False
+    # True for a trade placed through the live broker; a paper trade is False. Reported separately, never mixed.
+    live: bool = False
 
 
 def day_key(moment: datetime) -> date:
@@ -255,6 +257,12 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
         .filter(G.user_id == user_id, G.strategy_id.is_(None), G.status == "CLOSED", G.segment == segment, G.exit_time.isnot(None))
         .all()
     )
+    # A spread is live when any of its legs went to the broker.
+    live_groups = (
+        {leg.option_group_id for leg in db.query(P).filter(P.user_id == user_id, P.option_group_id.isnot(None), P.is_live_broker_order.is_(True)).all()}
+        if groups
+        else set()
+    )
     records = [
         TradeRecord(
             segment=p.segment, symbol=p.symbol, pnl=_f(p.pnl), entry_price=_f(p.entry_price), stop_loss_price=_f(p.stop_loss_price),
@@ -262,6 +270,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             order_type=p.order_type, entry_setup_tag=p.entry_setup_tag, entry_confidence=p.entry_confidence, setup_tag=p.setup_tag,
             confidence=p.confidence, reviewed=_reviewed(p.reviewed_at, p.notes), auto_traded=bool(p.auto_traded),
             charges=_f(p.charges) or 0.0, slippage_cost=_f(p.slippage_cost) or 0.0, costs_applied=p.charges is not None,
+            live=bool(p.is_live_broker_order),
         )
         for p in positions
     ] + [
@@ -271,6 +280,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             order_type=g.order_type, entry_setup_tag=g.entry_setup_tag, entry_confidence=g.entry_confidence, setup_tag=g.setup_tag,
             confidence=g.confidence, reviewed=_reviewed(g.reviewed_at, g.notes), auto_traded=bool(g.auto_traded),
             charges=_f(g.charges) or 0.0, slippage_cost=_f(g.slippage_cost) or 0.0, costs_applied=g.charges is not None,
+            live=g.id in live_groups,
         )
         for g in groups
     ]

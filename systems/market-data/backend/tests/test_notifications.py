@@ -64,7 +64,7 @@ def subs(monkeypatch, *people, category="premarket", params=None):
 
 
 def test_every_category_starts_with_sane_defaults_and_only_ops_is_admin_only():
-    assert {k: c.admin_only for k, c in n.CATEGORIES.items()} == {"premarket": False, "oi_buildup": False, "ops": True}
+    assert {k: c.admin_only for k, c in n.CATEGORIES.items()} == {"premarket": False, "oi_buildup": False, "session_nse": False, "session_crypto": False, "ops": True}
     assert n.clean_params("oi_buildup", None) == {"top_n": 10}
     assert n.clean_params("premarket", {"top_n": 99}) == {}  # settings a category does not have are dropped
 
@@ -419,9 +419,9 @@ class RouteDB:
 
 def test_a_person_sees_the_categories_they_may_use_all_off_and_whether_they_have_a_chat():
     out = route._state(RouteDB(chat=False), User(ME, False))
-    assert out.chat_ready is False and [c.key for c in out.categories] == ["premarket", "oi_buildup"]
+    assert out.chat_ready is False and [c.key for c in out.categories] == ["premarket", "oi_buildup", "session_nse", "session_crypto"]
     assert not any(c.enabled for c in out.categories) and next(c for c in out.categories if c.key == "oi_buildup").params == {"top_n": 10}
-    assert [c.key for c in route._state(RouteDB(), User(ME, True)).categories] == ["premarket", "oi_buildup", "ops"]
+    assert [c.key for c in route._state(RouteDB(), User(ME, True)).categories] == ["premarket", "oi_buildup", "session_nse", "session_crypto", "ops"]
 
 
 def test_switching_a_category_on_saves_it_and_a_bad_setting_is_refused():

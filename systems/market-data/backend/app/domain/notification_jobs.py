@@ -52,6 +52,48 @@ def send_premarket(report: dict, day: Optional[date] = None) -> n.Tally:
     return _safely("pre-market push", premarket_to_subscribers, report, day or datetime.now(_tz()).date())
 
 
+# ---- post-session summaries -----------------------------------------------------------------------------------------------------
+
+
+def session_to_subscribers(db: Session, segment: str, day: Optional[date] = None) -> n.Tally:
+    """The market half is read once; each subscriber then gets it with their own trades for that day (asked of execution one person at a
+    time). Skipped quietly when the market has no session for `day` (a holiday)."""
+    from app.adapters import execution_client
+    from app.domain.premarket_report import get_report
+    from app.providers import session_market
+
+    category = "session_nse" if segment == "NSE" else "session_crypto"
+    if segment == "NSE":
+        market = session_market.fetch_nse(day)
+        if market is None:
+            logger.info("session summary: no NSE session on %s (a holiday): nothing sent", day)
+            return n.Tally()
+        session_day = market["day"]
+    else:
+        market = session_market.fetch_crypto(day)
+        session_day = market["day"]
+    bias = None
+    if segment == "NSE":
+        report = get_report(db, session_day)
+        if report is not None:
+            bias = ((report.ai or {}).get("bias")) or (report.rules or {}).get("bias")
+
+    def build_for(sub_id):
+        trader = execution_client.trader_day(sub_id, segment, session_day)
+        return n.session_message(segment, session_day, market, trader, bias, trader_known=trader is not None)
+
+    tally = n.Tally()
+    for sub in n.subscribers(db, category):
+        outcome = n.deliver(db, sub.user_id, sub.chat_id, category, f"session:{segment}:{session_day.isoformat()}", build_for(sub.user_id))
+        setattr(tally, outcome, getattr(tally, outcome) + 1)
+    return tally
+
+
+def send_session_summary(segment: str, day: Optional[date] = None) -> n.Tally:
+    """Called by the schedule after the NSE close and late in the evening for crypto. Once per person per day."""
+    return _safely(f"{segment} post-session summary", session_to_subscribers, segment, day)
+
+
 # ---- strong OI buildup ----------------------------------------------------------------------------------------------------------
 
 

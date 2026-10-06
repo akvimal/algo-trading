@@ -205,7 +205,7 @@ def pos(**over):
         user_id=ALICE, strategy_id=None, status="CLOSED", segment="NSE", option_group_id=None, symbol="TCS", pnl=100, entry_price=100,
         stop_loss_price=90, target_price=130, quantity=10, exit_time=datetime(2026, 9, 10, 6, 0, tzinfo=timezone.utc), exit_reason="target",
         order_type="limit", entry_setup_tag="a", entry_confidence=3, setup_tag="a", confidence=3, reviewed_at=None, notes=None,
-        auto_traded=False, charges=None, slippage_cost=None,
+        auto_traded=False, charges=None, slippage_cost=None, is_live_broker_order=False,
     )
     row.update(over)
     return SimpleNamespace(**row)
@@ -216,7 +216,7 @@ def grp(**over):
         user_id=ALICE, strategy_id=None, status="CLOSED", segment="NSE", underlying_symbol="NIFTY", pnl=250, spot_stop_loss_price=22000,
         spot_target_price=23000, quantity=75, exit_time=datetime(2026, 9, 11, 6, 0, tzinfo=timezone.utc), exit_reason="spot_target",
         order_type="market", entry_setup_tag=None, entry_confidence=None, setup_tag=None, confidence=None, reviewed_at=None, notes=None,
-        auto_traded=False, charges=12.5, slippage_cost=3.0,
+        auto_traded=False, charges=12.5, slippage_cost=3.0, id=uuid.uuid4(),
     )
     row.update(over)
     return SimpleNamespace(**row)

@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     premarket_report_minute: int = 45
     # 16:05 IST (moved from 15:40 on 2026-10-06): the strong-OI-buildup digest goes out when this scan finishes, and the scan runs
     # in IST now (the CronTriggers below carry timezone=; before that they fired on the container's UTC clock, 5h30m late).
+    # The post-session Telegram summaries (app/domain/notification_jobs.py): NSE just after the 15:30 close, crypto late evening.
+    session_summary_nse_hour: int = 15
+    session_summary_nse_minute: int = 50
+    session_summary_crypto_hour: int = 23
+    session_summary_crypto_minute: int = 30
     oi_eod_snapshot_hour: int = 16
     oi_eod_snapshot_minute: int = 5
     # EOD equity screener (momentum/trend + 52-week proximity, see

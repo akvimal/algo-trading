@@ -482,6 +482,26 @@ def _record_premarket_report() -> None:
         logger.exception("pre-market report: the push could not be sent")
 
 
+@tracked("session-summary-nse", "Post-session summary: NSE")
+def _send_session_summary_nse() -> None:
+    from app.domain.notification_jobs import send_session_summary
+
+    run = job_tracker.current()
+    sent = send_session_summary("NSE", datetime.now(ZoneInfo(settings.timezone)).date())
+    run.tick(1, {"sent": sent.sent, "failed": sent.failed, "already_sent": sent.skipped})
+    logger.info("NSE session summary: sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+
+
+@tracked("session-summary-crypto", "Post-session summary: crypto")
+def _send_session_summary_crypto() -> None:
+    from app.domain.notification_jobs import send_session_summary
+
+    run = job_tracker.current()
+    sent = send_session_summary("CRYPTO")
+    run.tick(1, {"sent": sent.sent, "failed": sent.failed, "already_sent": sent.skipped})
+    logger.info("crypto summary: sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+
+
 def _notification_retry() -> None:
     """Re-send notifications whose first attempt failed (see app/domain/notifications.py). Not tracked in the job log: it runs every
     few minutes and almost always has nothing to do."""
@@ -520,6 +540,8 @@ def job_catalog() -> list[dict]:
     jobs = [
         ("oi-eod-snapshot-record", "OI buildup snapshot", f"Weekdays {s.oi_eod_snapshot_hour:02d}:{s.oi_eod_snapshot_minute:02d}", "Stores each F&O stock's total call and put open interest for the day, which the OI buildup scan and its history read."),
         ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches a year of daily bars for every NSE stock and stores the screener row, which the Screener and custom scans read."),
+        ("session-summary-nse", "Post-session summary: NSE", f"Weekdays {s.session_summary_nse_hour:02d}:{s.session_summary_nse_minute:02d}", "Sends each subscriber how the NSE session went and their own closed trades that day."),
+        ("session-summary-crypto", "Post-session summary: crypto", f"Daily {s.session_summary_crypto_hour:02d}:{s.session_summary_crypto_minute:02d}", "Sends each subscriber the last 24 hours in BTC and ETH and their own crypto trades that day."),
         ("premarket-report-record", "Pre-market bias report", f"Weekdays {s.premarket_report_hour:02d}:{s.premarket_report_minute:02d}", "Reads the overnight US close, crude, USDINR, yields, ADRs and GIFT Nifty and works out the day's likely market bias."),
         ("instrument-sync-daily", "Instrument master sync", f"Daily {s.instrument_sync_hour:02d}:{s.instrument_sync_minute:02d}, and at start-up", "Refreshes the broker's list of tradeable instruments and the NSE index memberships."),
         ("sentiment-history-record", "Sentiment recorder", f"Every {s.sentiment_history_interval_minutes} minutes while a market is open", "Records the option-chain sentiment badge for the main indices."),
@@ -588,6 +610,16 @@ def start_scheduler() -> None:
         CronTrigger(day_of_week="mon-fri", hour=settings.premarket_report_hour, minute=settings.premarket_report_minute, timezone=settings.timezone),
         id="premarket-report-record",
         replace_existing=True,
+    )
+    _scheduler.add_job(
+        _send_session_summary_nse,
+        CronTrigger(day_of_week="mon-fri", hour=settings.session_summary_nse_hour, minute=settings.session_summary_nse_minute, timezone=settings.timezone),
+        id="session-summary-nse", replace_existing=True, max_instances=1, coalesce=True,
+    )
+    _scheduler.add_job(
+        _send_session_summary_crypto,
+        CronTrigger(hour=settings.session_summary_crypto_hour, minute=settings.session_summary_crypto_minute, timezone=settings.timezone),
+        id="session-summary-crypto", replace_existing=True, max_instances=1, coalesce=True,
     )
     _scheduler.add_job(_notification_retry, IntervalTrigger(minutes=5), id="notification-retry", replace_existing=True, max_instances=1, coalesce=True)
     _scheduler.add_job(_notification_ops_check, IntervalTrigger(minutes=10), id="notification-ops-check", replace_existing=True, max_instances=1, coalesce=True)

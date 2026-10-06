@@ -171,7 +171,18 @@ export type PremarketIndicator = {
 export type PremarketMacro = {
   indicators: PremarketIndicator[];
   derived: { real_rate: number | null; spread_10y_repo: number | null; india_10y: number | null };
-  rbi: { title: string; url: string | null; published: string | null; kind: "press release" | "speech" }[];
+  rbi: PremarketRbiItem[];
+};
+
+export type RbiStance = "hawkish" | "dovish" | "neutral" | "not about policy";
+
+export type PremarketRbiItem = {
+  title: string;
+  url: string | null;
+  published: string | null;
+  kind: "press release" | "speech";
+  /** An AI summary of the item's full text, when it has been read. */
+  summary?: { text: string; stance: RbiStance; rates: string | null; model: string | null } | null;
 };
 
 export type PremarketReport = {

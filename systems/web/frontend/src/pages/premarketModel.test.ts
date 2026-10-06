@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PremarketIndicator, PremarketInput, PremarketMacro, PremarketReport } from "../api/types";
-import { derivedRows, formatIndicator, formatMove, formatPoints, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate } from "./premarketModel";
+import { derivedRows, formatIndicator, formatMove, formatPoints, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "./premarketModel";
 
 const inp = (over: Partial<PremarketInput>): PremarketInput => ({
   key: "sp500", label: "S&P 500", group: "us", ok: true, value: 1, change: 0.66, unit: "pct", source: "yahoo", error: null, ...over,
@@ -92,6 +92,13 @@ describe("domestic backdrop", () => {
     expect(shortDate("2026-10-03T05:30:00Z")).toBe("3 Oct");
     expect(shortDate("2026-09-30T20:00:00Z")).toBe("1 Oct"); // already October in India
     expect(shortDate(null)).toBe("");
+  });
+  it("only highlights a stance when the text itself gave a policy direction", () => {
+    expect(stanceTone("hawkish")).toBe("warn");
+    expect(stanceTone("dovish")).toBe("warn");
+    expect(stanceTone("neutral")).toBe("");
+    expect(stanceTone("not about policy")).toBe("");
+    expect(STANCE_LABEL["not about policy"]).toBe("Not about rates policy");
   });
   it("signs percentage points", () => {
     expect(formatPoints(0.43)).toBe("+0.43 pts");

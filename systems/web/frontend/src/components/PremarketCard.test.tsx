@@ -130,6 +130,30 @@ describe("PremarketCard", () => {
       expect(within(box).queryByText(/Industrial production/)).not.toBeInTheDocument();
     });
 
+    it("shows an RBI item's AI summary, stance and what it says about rates, labelled as AI, only for items that were read", async () => {
+      const withSummary: NonNullable<PremarketReport["macro"]> = {
+        ...macro,
+        rbi: [
+          { title: "Governor address", url: "https://rbi.example/a", published: "2026-10-03T05:30:00Z", kind: "speech", summary: { text: "Banks are well capitalised.", stance: "not about policy", rates: null, model: "m" } },
+          { title: "Policy statement", url: "https://rbi.example/b", published: "2026-10-02T05:30:00Z", kind: "press release", summary: { text: "Policy rate kept; stance withdrawal of accommodation.", stance: "hawkish", rates: "Repo held at 5.25%.", model: "m" } },
+          { title: "Unread item", url: "https://rbi.example/c", published: "2026-09-20T05:30:00Z", kind: "speech", summary: null },
+        ],
+      };
+      stub(() => json(report({ macro: withSummary })));
+      render(<PremarketCard />);
+      await userEvent.click(await screen.findByText("Reasoning and numbers"));
+      const summaries = screen.getAllByTestId("rbi-summary");
+      expect(summaries).toHaveLength(2);
+      expect(within(summaries[0]).getByText("Not about rates policy")).toBeInTheDocument();
+      expect(within(summaries[0]).getByText("Banks are well capitalised.")).toBeInTheDocument();
+      expect(within(summaries[0]).queryByText(/On rates and liquidity/)).not.toBeInTheDocument();
+      expect(within(summaries[0]).getByText("AI summary of the full text")).toBeInTheDocument();
+      expect(within(summaries[1]).getByText("Hawkish tone")).toHaveClass("warn");
+      expect(within(summaries[1]).getByText("On rates and liquidity: Repo held at 5.25%.")).toBeInTheDocument();
+      // The unread item still shows its link, with no summary block.
+      expect(screen.getByRole("link", { name: "Unread item" })).toBeInTheDocument();
+    });
+
     it("shows no backdrop section for an older report that has none", async () => {
       stub(() => json(report({ macro: null })));
       render(<PremarketCard />);

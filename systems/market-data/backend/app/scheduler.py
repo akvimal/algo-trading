@@ -446,7 +446,7 @@ def _record_premarket_report() -> None:
     from app.domain.premarket_report import build_report, save_report, today_ist
 
     run = job_tracker.current()
-    report = build_report(settings.openrouter_api_key or None)
+    report = build_report(settings.openrouter_api_key or None, read_new_rbi=True)
     ok = sum(1 for i in report["inputs"] if i["ok"])
     run.set_total(len(report["inputs"]))
     run.tick(ok, {"ok": ok, "failed": len(report["inputs"]) - ok})

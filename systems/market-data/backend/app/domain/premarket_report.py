@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db.models import PremarketReport
 from app.config import settings
-from app.domain import ai_models
+from app.domain import ai_models, rbi_reader
 from app.domain.ai_retry import post_json
 from app.domain.premarket_bias import score_inputs
 from app.providers import premarket as provider
@@ -62,7 +62,7 @@ _SYSTEM_PROMPT = (
     "The optional domestic_macro block is India's slow-moving backdrop (monthly prints with their previous values, the real "
     "policy rate = repo minus CPI, the 10Y yield's spread over the repo rate, and recent RBI releases). It is context for "
     "bond yields and sentiment, NOT a daily driver: do not let it override the overnight inputs or the GIFT Nifty gap, and "
-    "put what it means in macro_context rather than in the reasons unless it is genuinely decisive today. Quote its figures "
+    "put what it means in macro_context rather than in the reasons unless it is genuinely decisive today. Some RBI items carry an AI-written summary of their full text (ai_summary_of_full_text): you may use it, but its stance is that summary's reading, not an RBI decision. Quote its figures "
     "exactly; never infer a forecast, a release date, or what the RBI will or will not do. RBI items are headlines only: say what they are about, not what they signal about policy."
 )
 
@@ -82,8 +82,16 @@ def _macro_context_block(macro: Optional[dict]) -> Optional[dict]:
         ],
         "real_policy_rate_pp": macro["derived"]["real_rate"],
         "india_10y_minus_repo_pp": macro["derived"]["spread_10y_repo"],
-        "recent_rbi": [{"kind": r["kind"], "published": (r["published"] or "")[:10], "title": r["title"]} for r in macro["rbi"]],
+        "recent_rbi": [_rbi_for_model(r) for r in macro["rbi"]],
     }
+
+
+def _rbi_for_model(r: dict) -> dict:
+    out = {"kind": r["kind"], "published": (r["published"] or "")[:10], "title": r["title"]}
+    s = r.get("summary")
+    if s:
+        out["ai_summary_of_full_text"] = {"stance": s["stance"], "summary": s["text"], "says_about_rates": s.get("rates")}
+    return out
 
 
 def _context(inputs: list[dict], rules: dict, macro: Optional[dict] = None) -> dict:
@@ -154,11 +162,15 @@ def today_ist() -> date:
     return datetime.now(ZoneInfo(settings.timezone)).date()
 
 
-def build_report(api_key: Optional[str]) -> dict:
+def build_report(api_key: Optional[str], read_new_rbi: bool = False) -> dict:
     """Fetch + score + (optionally) ask the model. Pure of the database, so a manual run can be inspected before it is stored."""
     inputs = [i.to_dict() for i in provider.fetch_inputs()]
     rules = score_inputs(inputs)
     macro = fetch_macro(_india_10y(inputs))
+    if macro["rbi"]:
+        # Reading a new speech takes a model call per item (a minute or more in total on a thinking model), so only the
+        # scheduled job does it; a manual refresh reuses what has already been read and stays quick.
+        macro["rbi"] = rbi_reader.attach_summaries(macro["rbi"], api_key if read_new_rbi else None)
     ai, ai_error = None, None
     if not api_key:
         ai_error = "No OpenRouter key - showing the rule-based bias only."

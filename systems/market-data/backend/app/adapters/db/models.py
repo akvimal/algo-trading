@@ -272,3 +272,20 @@ class AiModelSetting(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     updated_by = Column(UUID(as_uuid=True))
 
+
+class RbiSummary(Base):
+    """The AI summary of one RBI speech / release, kept so each item is read once. See app/domain/rbi_reader.py,
+    migration 040 and infra/postgres/init/05-market-data.sql."""
+
+    __tablename__ = "rbi_summaries"
+    __table_args__ = {"schema": SCHEMA}
+
+    url = Column(Text, primary_key=True)
+    kind = Column(Text, nullable=False)
+    title = Column(Text, nullable=False)
+    published = Column(TIMESTAMP(timezone=True))
+    stance = Column(Text, nullable=False)
+    summary = Column(Text, nullable=False)
+    rates = Column(Text)
+    model = Column(Text)
+    read_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)

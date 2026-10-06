@@ -42,6 +42,7 @@ TASKS: dict[str, Task] = {
     for t in (
         Task("news", "News digest", "Scores and summarises headlines for a chart's News tab. Runs on a cache refresh, shared by everyone.", lambda: settings.openrouter_model),
         Task("premarket", "Pre-market bias", "The morning read on the overnight US close, crude, USD/INR, yields, ADRs and GIFT Nifty.", lambda: settings.openrouter_model),
+        Task("rbi_summary", "RBI speech summaries", "Reads the full text of the newest RBI speeches and policy releases once and summarises them for the pre-market report.", lambda: settings.openrouter_model),
         Task("ai_read", "OI AI read", "The on-demand read of a chart's open-interest strip, run when someone presses the button.", lambda: settings.openrouter_read_model),
     )
 }

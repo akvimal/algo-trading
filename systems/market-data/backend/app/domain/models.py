@@ -969,11 +969,22 @@ class PremarketIndicatorOut(BaseModel):
     error: Optional[str] = None
 
 
+class PremarketRbiSummaryOut(BaseModel):
+    """An AI summary of the item's FULL text (read once). `stance` is hawkish/dovish/neutral only when the text itself signals
+    a policy direction, else "not about policy"."""
+
+    text: str
+    stance: Literal["hawkish", "dovish", "neutral", "not about policy"]
+    rates: Optional[str] = None  # what the text explicitly says about rates, inflation or liquidity
+    model: Optional[str] = None
+
+
 class PremarketRbiItemOut(BaseModel):
     title: str
     url: Optional[str] = None
     published: Optional[datetime] = None
     kind: Literal["press release", "speech"]
+    summary: Optional[PremarketRbiSummaryOut] = None
 
 
 class PremarketMacroDerivedOut(BaseModel):

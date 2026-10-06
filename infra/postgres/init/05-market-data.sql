@@ -263,3 +263,16 @@ CREATE TABLE IF NOT EXISTS market_data.ai_model_settings (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_by  UUID
 );
+
+-- AI summaries of linked RBI speeches/releases, one per item. See migration 040 and app/domain/rbi_reader.py.
+CREATE TABLE IF NOT EXISTS market_data.rbi_summaries (
+    url         TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    published   TIMESTAMPTZ,
+    stance      TEXT NOT NULL CHECK (stance IN ('hawkish', 'dovish', 'neutral', 'not about policy')),
+    summary     TEXT NOT NULL,
+    rates       TEXT,
+    model       TEXT,
+    read_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);

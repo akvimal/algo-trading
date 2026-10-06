@@ -4,7 +4,7 @@ import { ApiError } from "../api/http";
 import type { PremarketReport } from "../api/types";
 import { formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
-import { BIAS_LABEL, derivedRows, formatIndicator, formatMove, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate } from "../pages/premarketModel";
+import { BIAS_LABEL, derivedRows, formatIndicator, formatMove, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "../pages/premarketModel";
 import { ErrorNotice, Skeleton } from "./bits";
 
 const BIAS_PILL = { bullish: "pill up", bearish: "pill dn", neutral: "pill" } as const;
@@ -193,6 +193,22 @@ function Backdrop({ report }: { report: PremarketReport }) {
                   {r.kind === "speech" ? "speech" : "release"}
                   {r.published ? ` · ${shortDate(r.published)}` : ""}
                 </span>
+                {r.summary && (
+                  <div className="stack" style={{ marginTop: 4 }} data-testid="rbi-summary">
+                    <div>
+                      <span className={`pill ${stanceTone(r.summary.stance)}`}>{STANCE_LABEL[r.summary.stance]}</span>{" "}
+                      <span className="faint" style={{ fontSize: 12 }}>
+                        AI summary of the full text
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 13 }}>{r.summary.text}</div>
+                    {r.summary.rates && (
+                      <div className="dim" style={{ fontSize: 13 }}>
+                        On rates and liquidity: {r.summary.rates}
+                      </div>
+                    )}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

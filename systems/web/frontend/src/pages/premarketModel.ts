@@ -1,4 +1,4 @@
-import type { Bias, PremarketIndicator, PremarketInput, PremarketMacro, PremarketReport } from "../api/types";
+import type { Bias, PremarketIndicator, PremarketInput, PremarketMacro, PremarketReport, RbiStance } from "../api/types";
 import { formatTime, istDayKey } from "../format";
 
 const MINUS = "−";
@@ -109,4 +109,17 @@ export function shortDate(iso: string | null): string {
   if (!iso) return "";
   const [, month, day] = istDayKey(iso).split("-");
   return `${Number(day)} ${MONTHS[Number(month) - 1]}`;
+}
+
+/** How an RBI item's summary labels its direction. A stance is only given when the text itself signals one. */
+export const STANCE_LABEL: Record<RbiStance, string> = {
+  hawkish: "Hawkish tone",
+  dovish: "Dovish tone",
+  neutral: "Neutral tone",
+  "not about policy": "Not about rates policy",
+};
+
+/** The pill class for a stance: a policy signal is highlighted, everything else stays plain. Colour never carries it alone. */
+export function stanceTone(s: RbiStance): "warn" | "" {
+  return s === "hawkish" || s === "dovish" ? "warn" : "";
 }

@@ -37,6 +37,9 @@ class CatalogModel(BaseModel):
     context_length: Optional[int] = None
     prompt_per_m: Optional[float] = None  # USD per million input tokens
     completion_per_m: Optional[float] = None  # USD per million output tokens
+    reasoning: bool = False  # can think before answering (supports OpenRouter's reasoning parameter)
+    image_input: bool = False  # accepts images as well as text
+    free: bool = False  # both prices are zero
 
 
 class AiModelTask(BaseModel):
@@ -59,9 +62,11 @@ class AiModelIn(BaseModel):
 
 def _per_million(price) -> Optional[float]:
     try:
-        return round(float(price) * 1_000_000, 4)
+        value = float(price) * 1_000_000
     except (TypeError, ValueError):
         return None
+    # OpenRouter's auto-router models report -1: the price depends on the model it picks per request.
+    return round(value, 4) if value >= 0 else None
 
 
 def fetch_catalog() -> list[dict]:
@@ -82,9 +87,13 @@ def fetch_catalog() -> list[dict]:
             if "text" not in ((m.get("architecture") or {}).get("output_modalities") or ["text"]):
                 continue
             pricing = m.get("pricing") or {}
+            prompt, completion = _per_million(pricing.get("prompt")), _per_million(pricing.get("completion"))
             rows.append({
                 "id": m["id"], "name": m.get("name") or m["id"], "context_length": m.get("context_length"),
-                "prompt_per_m": _per_million(pricing.get("prompt")), "completion_per_m": _per_million(pricing.get("completion")),
+                "prompt_per_m": prompt, "completion_per_m": completion,
+                "reasoning": "reasoning" in (m.get("supported_parameters") or []),
+                "image_input": "image" in ((m.get("architecture") or {}).get("input_modalities") or []),
+                "free": prompt == 0 and completion == 0,
             })
         rows.sort(key=lambda r: (r["prompt_per_m"] is None, r["prompt_per_m"] or 0, r["id"]))
     except Exception as exc:

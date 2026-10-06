@@ -10,8 +10,9 @@ function json(body: unknown, status = 200) {
 }
 
 const CATALOG: CatalogModel[] = [
-  { id: "google/cheap", name: "Cheap", context_length: 1000, prompt_per_m: 0.1, completion_per_m: 0.4 },
-  { id: "vendor/big", name: "Big", context_length: 1000, prompt_per_m: 3, completion_per_m: 15 },
+  { id: "google/cheap", name: "Cheap", context_length: 1000, prompt_per_m: 0.1, completion_per_m: 0.4, reasoning: false, image_input: false, free: false },
+  { id: "vendor/big", name: "Big", context_length: 1000, prompt_per_m: 3, completion_per_m: 15, reasoning: true, image_input: true, free: false },
+  { id: "vendor/gratis", name: "Gratis", context_length: 1000, prompt_per_m: 0, completion_per_m: 0, reasoning: true, image_input: false, free: true },
 ];
 
 let state: AiModels;
@@ -112,5 +113,40 @@ describe("AiModelsPage", () => {
     const news = await screen.findByTestId("ai-task-news");
     expect(within(news).getByRole("button", { name: "Save" })).toBeDisabled();
     expect(within(news).getByRole("button", { name: "Follow the default" })).toBeDisabled();
+  });
+
+  it("narrows the suggestions with the filters, which combine, and resets them", async () => {
+    renderPage();
+    const bar = await screen.findByTestId("ai-filters");
+    const options = () => [...document.querySelectorAll("#ai-model-options option")].map((o) => o.getAttribute("value"));
+    expect(options()).toEqual(["google/cheap", "vendor/big", "vendor/gratis"]);
+    expect(screen.getByTestId("ai-filter-count")).toHaveTextContent("3 of 3 models");
+
+    await userEvent.click(within(bar).getByRole("button", { name: "Reasoning" }));
+    expect(options()).toEqual(["vendor/big", "vendor/gratis"]);
+    await userEvent.click(within(bar).getByRole("button", { name: "Free" }));
+    expect(options()).toEqual(["vendor/gratis"]);
+    expect(screen.getByTestId("ai-filter-count")).toHaveTextContent("1 of 3 models");
+
+    await userEvent.click(within(bar).getByRole("button", { name: "Reset filters" }));
+    expect(options()).toHaveLength(3);
+    await userEvent.selectOptions(within(bar).getByLabelText("Provider"), "google");
+    expect(options()).toEqual(["google/cheap"]);
+  });
+
+  it("still accepts a model typed in by id even when a filter hides it from the suggestions", async () => {
+    renderPage();
+    const bar = await screen.findByTestId("ai-filters");
+    await userEvent.click(within(bar).getByRole("button", { name: "Free" }));
+    const news = screen.getByTestId("ai-task-news");
+    await userEvent.type(within(news).getByLabelText("News digest model"), "google/cheap");
+    await userEvent.click(within(news).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(puts).toEqual([{ task: "news", model: "google/cheap" }]));
+  });
+
+  it("shows what the current model can do next to its price", async () => {
+    renderPage();
+    const ai = await screen.findByTestId("ai-task-ai_read");
+    expect(within(ai).getByText("$3.00 in · $15.0 out per 1M tokens · Reasoning · Image input")).toBeInTheDocument();
   });
 });

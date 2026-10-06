@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db.models import PremarketReport
 from app.config import settings
 from app.domain import ai_models
+from app.domain.ai_retry import post_json
 from app.domain.premarket_bias import score_inputs
 from app.providers import premarket as provider
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
@@ -75,10 +76,11 @@ def run_ai(inputs: list[dict], rules: dict, api_key: str) -> dict:
     """One OpenRouter call. Raises RuntimeError with a short, presentable message on any failure."""
     model = ai_models.model_for("premarket")
     try:
-        resp = requests.post(
+        parsed = post_json(
+            requests.post,
             OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": _SYSTEM_PROMPT},
@@ -86,20 +88,20 @@ def run_ai(inputs: list[dict], rules: dict, api_key: str) -> dict:
                 ],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "premarket_bias", "strict": True, "schema": _AI_SCHEMA}},
                 # Without a cap OpenRouter reserves the model's full max output and 402s a small balance
-                # (see news.py's identical note).
+                # (see news.py's identical note); ai_retry.post_json asks again with more room if a reasoning
+                # model's thinking used the cap up.
                 "max_tokens": 1200,
             },
-            timeout=45,
+            90,  # room for a reasoning model's second, larger attempt
+            _parse_ai_json,
         )
-        resp.raise_for_status()
-        parsed = _parse_ai_json(resp.json()["choices"][0]["message"]["content"])
         if parsed.get("bias") not in ("bullish", "bearish", "neutral"):
             raise ValueError("model reply had no valid bias")
         parsed["model"] = model  # which model produced THIS read, now that it can change between runs
         return parsed
     except requests.exceptions.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "?"
-        hint = {401: "key rejected", 402: "insufficient OpenRouter credit", 404: "model not found - check OPENROUTER_MODEL"}.get(status, "")
+        hint = {401: "key rejected", 402: "insufficient OpenRouter credit", 404: "model not found - pick another under More -> AI models"}.get(status, "")
         raise RuntimeError(f"OpenRouter returned {status}" + (f" ({hint})" if hint else "")) from exc
     except Exception as exc:
         raise RuntimeError("AI read temporarily unavailable") from exc

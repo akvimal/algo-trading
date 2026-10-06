@@ -13,6 +13,7 @@ from app.adapters.db.models import NewsHistory
 from app.adapters.db.session import SessionLocal
 from app.config import settings
 from app.domain import ai_models
+from app.domain.ai_retry import post_json
 from app.domain.models import NewsArticle, NewsDigest
 
 logger = logging.getLogger(__name__)
@@ -311,10 +312,11 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
     instrument_label = _INSTRUMENT_LABELS.get(underlying, underlying)
 
     try:
-        resp = requests.post(
+        parsed = post_json(
+            requests.post,
             OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            {
                 "model": ai_models.model_for("news"),
                 "messages": [
                     {
@@ -343,11 +345,9 @@ def _analyze_via_ai(underlying: str, rows: list[dict], api_key: Optional[str] = 
                 # (confirmed live 2026-09-17).
                 "max_tokens": 2000,
             },
-            timeout=30,
+            60,  # a reasoning model that needs a second, larger attempt (ai_retry.post_json) takes longer
+            _parse_ai_json,
         )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        parsed = _parse_ai_json(content)
 
         scored_articles = []
         for entry in parsed.get("articles") or []:

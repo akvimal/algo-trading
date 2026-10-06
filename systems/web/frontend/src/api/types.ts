@@ -121,6 +121,10 @@ export type CatalogModel = {
   /** USD per million tokens. */
   prompt_per_m: number | null;
   completion_per_m: number | null;
+  /** Can think before answering. */
+  reasoning: boolean;
+  image_input: boolean;
+  free: boolean;
 };
 
 export type AiModelTask = {

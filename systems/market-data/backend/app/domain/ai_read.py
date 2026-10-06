@@ -16,6 +16,7 @@ import requests
 
 from app.config import settings
 from app.domain import ai_models
+from app.domain.ai_retry import post_json
 from app.domain.models import Candle, ChartStructure, EconomicEvent, MarketRegime, NewsDigest, OptionOiSummary
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
 
@@ -309,10 +310,11 @@ def run_ai_read(context: dict, api_key: str, model: Optional[str] = None) -> dic
     what it reports back is what actually ran); by default it is resolved here."""
     model = model or ai_models.model_for("ai_read")
     try:
-        resp = requests.post(
+        parsed = post_json(
+            requests.post,
             OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            {
                 "model": model,
                 "messages": [
                     {"role": "system", "content": system_prompt(context.get("segment", ""))},
@@ -323,10 +325,9 @@ def run_ai_read(context: dict, api_key: str, model: Optional[str] = None) -> dic
                 # model's full max output and 402s accounts with a small balance.
                 "max_tokens": 1500,
             },
-            timeout=60,
+            90,
+            _parse_ai_json,
         )
-        resp.raise_for_status()
-        parsed = _parse_ai_json(resp.json()["choices"][0]["message"]["content"])
         if parsed.get("bias") not in ("bullish", "bearish", "neutral"):
             raise ValueError("model reply had no valid bias")
         return parsed

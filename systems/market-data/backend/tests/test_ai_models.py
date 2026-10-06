@@ -126,7 +126,7 @@ def test_catalog_keeps_only_structured_output_text_models_cheapest_first(monkeyp
 
         def json(self):
             return {"data": [
-                {"id": "a/pricey", "name": "Pricey", "context_length": 1, "pricing": {"prompt": "0.000003", "completion": "0.000015"}, "supported_parameters": ["structured_outputs"], "architecture": {"output_modalities": ["text"]}},
+                {"id": "a/pricey", "name": "Pricey", "context_length": 1, "pricing": {"prompt": "0.000003", "completion": "0.000015"}, "supported_parameters": ["structured_outputs", "reasoning"], "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}},
                 {"id": "b/cheap", "name": "Cheap", "context_length": 1, "pricing": {"prompt": "0.0000001", "completion": "0.0000004"}, "supported_parameters": ["structured_outputs"], "architecture": {"output_modalities": ["text"]}},
                 {"id": "c/no-json", "name": "NoJson", "pricing": {"prompt": "0"}, "supported_parameters": ["tools"], "architecture": {"output_modalities": ["text"]}},
                 {"id": "d/image", "name": "Image", "pricing": {"prompt": "0"}, "supported_parameters": ["structured_outputs"], "architecture": {"output_modalities": ["image"]}},
@@ -137,6 +137,9 @@ def test_catalog_keeps_only_structured_output_text_models_cheapest_first(monkeyp
     rows = route.fetch_catalog()
     assert [r["id"] for r in rows] == ["b/cheap", "a/pricey"]
     assert rows[0]["prompt_per_m"] == 0.1 and rows[0]["completion_per_m"] == 0.4
+    cheap, pricey = rows
+    assert (cheap["reasoning"], cheap["image_input"], cheap["free"]) == (False, False, False)
+    assert (pricey["reasoning"], pricey["image_input"], pricey["free"]) == (True, True, False)
     route._catalog = None
 
 
@@ -192,3 +195,22 @@ def test_news_and_ai_read_calls_follow_the_shared_default(monkeypatch):
     assert sent == ["vendor/shared"]
     assert ai_models.model_for("news") == "vendor/shared"
     assert "ai_models.model_for(\"news\")" in open(news.__file__, encoding="utf-8").read()
+
+
+def test_variable_router_prices_are_unknown_not_negative_and_free_models_are_flagged(monkeypatch):
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [
+                {"id": "openrouter/auto", "name": "Auto", "pricing": {"prompt": "-1", "completion": "-1"}, "supported_parameters": ["structured_outputs"], "architecture": {"output_modalities": ["text"]}},
+                {"id": "x/free:free", "name": "Free", "pricing": {"prompt": "0", "completion": "0"}, "supported_parameters": ["structured_outputs"], "architecture": {"output_modalities": ["text"]}},
+            ]}
+
+    monkeypatch.setattr(route.requests, "get", lambda *a, **k: Resp())
+    route._catalog = None
+    by = {r["id"]: r for r in route.fetch_catalog()}
+    assert by["openrouter/auto"]["prompt_per_m"] is None and by["openrouter/auto"]["free"] is False
+    assert by["x/free:free"]["free"] is True
+    route._catalog = None

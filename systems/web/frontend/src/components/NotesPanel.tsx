@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { addNote, listNotes } from "../api/notes";
+import { previewIdea, publishIdea, type IdeaPreview } from "../api/ideas";
+import { useIsAdmin } from "../auth/AuthContext";
+import { canPublish, publishableContext } from "../pages/ideasModel";
 import { ApiError } from "../api/http";
 import type { AiRead, NoteContext, NoteTag, Segment } from "../api/types";
 import type { ChartImage } from "../chart/ChartPane";
+import type { OiItem } from "../chart/oiStripModel";
 import { composeSnapshot, copyDataUrl, downloadDataUrl, snapshotFileName } from "../chart/snapshot";
 import { CopyIcon, DownloadIcon, ListIcon } from "../chart/icons";
 import { formatPrice } from "../format";
@@ -22,7 +26,10 @@ type Props = {
   /** The market as it is on screen right now. A function, so it is read at the moment a note is sent. */
   getContext: () => NoteContext;
   /** The chart as a PNG data URL, or the reason there is none to take. */
-  getChartImage: () => ChartImage;
+  /** The chart as a picture; with `withoutTrades` it has the person's own trade lines and markers hidden (for a picture that may be published). */
+  getChartImage: (opts?: { withoutTrades?: boolean }) => ChartImage;
+  /** The OI strip as it reads on screen (drawable items), when the chart has one; it is drawn on the snapshot. */
+  getOiItems?: () => OiItem[] | null;
   /** The latest AI read for this instrument, if one has been run - its one-liner goes on the snapshot. */
   aiRead: AiRead | null;
 };
@@ -30,12 +37,40 @@ type Props = {
 /** The thoughts-and-plans panel under the chart: write what you are seeing and what you plan to do, tagged, with the
  * market's state stored beside it, and optionally a picture of the chart with the note on it. Private to the
  * person; a record for studying their own process, and for handing to an AI later. Not sent anywhere. */
-export function NotesPanel({ segment, symbol, interval, getContext, getChartImage, aiRead }: Props) {
+export function NotesPanel({ segment, symbol, interval, getContext, getChartImage, getOiItems, aiRead }: Props) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [tag, setTag] = useState<NoteTag | null>(null);
   const [attach, setAttach] = useState(false);
   const [busy, setBusy] = useState(false);
+  const isAdmin = useIsAdmin();
+  const [publish, setPublish] = useState(false);
+  const [preview, setPreview] = useState<IdeaPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const publishable = isAdmin && canPublish({ tag }) && draft.trim() !== "";
+  const ideaBody = (noteId: string, image?: string | null) => ({
+    note_id: noteId, segment, symbol, interval, tag: tag ?? "", text: draft.trim(), context: publishableContext(getContext()), include_context: true,
+    ...(image ? { snapshot_png_base64: image } : {}),
+  });
+  // What would be posted, shown while the person writes (text only: the picture is taken when they save).
+  useEffect(() => {
+    if (!publish || !publishable) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
+    }
+    let live = true;
+    const t = window.setTimeout(() => {
+      previewIdea(ideaBody("00000000-0000-4000-8000-000000000000"))
+        .then((p) => live && (setPreview(p), setPreviewError(null)))
+        .catch((e) => live && (setPreview(null), setPreviewError(e instanceof ApiError ? e.message : "Could not build the preview.")));
+    }, 400);
+    return () => {
+      live = false;
+      window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publish, publishable, draft, tag]);
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
   // Only the latest few sit under the chart; the whole history, by instrument, is on its own page.
   const notes = useResource(() => listNotes({ segment, symbol, limit: RECENT }), [segment, symbol], { enabled: open });
@@ -66,7 +101,9 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
     const ctx = getContext();
     const header = {
       chart: image.url,
+      scale: image.scale,
       title: `${symbol} · ${interval.replace("min", "m")}`,
+      oiItems: getOiItems?.() ?? null,
       subtitle: `${new Date().toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}${ctx.price != null ? ` · ${formatPrice(ctx.price)}` : ""}`,
     };
     const full = await composeSnapshot({ ...header, note: draft, tag, aiLine: aiRead?.one_liner ?? null });
@@ -74,7 +111,13 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
       lastProblem.current = "this browser could not build the picture";
       return null;
     }
-    const clean = withClean ? await composeSnapshot({ ...header, note: "", tag: null, aiLine: null }) : null;
+    // The clean picture is the one that can be published, so it is taken with the person's own trade lines hidden: their open trades'
+    // levels carry the entry and a profit figure in rupees, which a post must never show. It is a second capture of the same chart.
+    let clean: string | null = null;
+    if (withClean) {
+      const bare = getChartImage({ withoutTrades: true });
+      if (!("problem" in bare)) clean = await composeSnapshot({ ...header, chart: bare.url, scale: bare.scale, note: "", tag: null, aiLine: null });
+    }
     return { full, clean };
   }
 
@@ -89,10 +132,19 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
         png = await snapshot();
         if (!png) setStatus({ text: `The note was saved without a snapshot: ${lastProblem.current}.`, error: true });
       }
-      await addNote({
+      const saved = await addNote({
         segment, symbol, interval, text, tag, context: getContext(),
         ...(png ? { snapshot_png_base64: png.full, ...(png.clean ? { clean_png_base64: png.clean } : {}) } : {}),
       });
+      if (publish && publishable) {
+        try {
+          await publishIdea(ideaBody(saved.id, attach ? png?.clean : null));
+          setStatus({ text: "Saved and published.", error: false });
+        } catch (e) {
+          setStatus({ text: `The note was saved, but publishing failed: ${e instanceof ApiError ? e.message : "try again from the Notes page"}.`, error: true });
+        }
+      }
+      setPublish(false);
       setDraft("");
       setTag(null);
       notes.reload();
@@ -185,6 +237,24 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
                 }
               }}
             />
+            {publishable && (
+              <div className="stack" data-testid="notes-publish">
+                <label className="check">
+                  <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} /> Publish as an idea when saving
+                </label>
+                {publish && previewError && <span className="error-text" role="alert">{previewError}</span>}
+                {publish && preview && (
+                  <>
+                    <span className="dim" style={{ fontSize: 12 }}>
+                      This is what will be posted{preview.destination_hint ? ` to ${preview.destination_hint}` : ""}
+                      {attach ? ", with the chart-only picture (the OI line included, never your trade lines)" : ""}.
+                    </span>
+                    <pre className="idea-text" style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit", fontSize: 13 }}>{preview.text}</pre>
+                    {!preview.destination_hint && <span className="error-text">No ideas channel is set, so this cannot be published yet.</span>}
+                  </>
+                )}
+              </div>
+            )}
             <div className="notes-footer">
               <span className={`faint notes-count ${draft.length >= NOTE_MAX ? "at-limit" : ""}`} data-testid="notes-count" aria-live="off">
                 {draft.length}/{NOTE_MAX}

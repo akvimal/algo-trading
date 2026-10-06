@@ -118,3 +118,84 @@ export const hasSentimentTrend = (points: SentimentHistoryPoint[]) => sentimentS
 
 /** More than 2 recording cycles (5-minute) behind: the reading is stale. */
 export const isStaleAt = (recordedAt: string, now: number = Date.now()) => now - Date.parse(recordedAt) > 12 * 60_000;
+
+/** Indices report OI in crores; a crypto perpetual's open interest is a plain contract count. */
+export const fmtOi = (n: number, crypto: boolean) => (crypto ? Math.round(n).toLocaleString("en-US") : compactIndian(n));
+function compactIndian(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1_00_00_000) return `${(n / 1_00_00_000).toFixed(2)}Cr`;
+  if (abs >= 1_00_000) return `${(n / 1_00_000).toFixed(2)}L`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
+
+// ---- the strip as items a picture can draw (the picture has no page to copy, so it draws the same reading itself) ----
+
+export type OiTone = "up" | "dn" | "warn" | "dim";
+export type OiItem =
+  | { t: "text"; text: string; tone?: OiTone; bold?: boolean; attach?: boolean }
+  | { t: "pill"; text: string; tone: OiTone }
+  | { t: "spark"; window: "5m" | "15m"; bars: { h: number; tone: "up" | "dn" | "flat"; major: boolean }[]; value: string; tone: OiTone; flag: string | null }
+  | { t: "skew"; fill: number; leader: "CE" | "PE"; tone: "up" | "dn"; label: string };
+
+/** The OI strip as drawable items, in the strip's own order and with its own wording: PCR and volume PCR, CE/PE OI with their 15m/5m change,
+ * resistance and support (unless the chart already draws them), buildup pills, the flow-skew bar and the OI-trend sparklines. Null when
+ * there is no option-chain reading. `levels` are the strip's support/resistance lines (price and kind, with the shown ones already solid). */
+export function oiStripItems(
+  s: OiSummary | null,
+  sentiment: SentimentHistoryPoint[],
+  levels: { kind: "resistance" | "support"; rank: number; forming: boolean; price: number }[],
+  onChartLevelsOn: boolean,
+  fmtPrice: (n: number) => string,
+): OiItem[] | null {
+  if (!s) return null;
+  const crypto = s.underlying_exchange === "CRYPTO";
+  const items: OiItem[] = [];
+  const kv = (label: string, value: string, tone?: OiTone) => {
+    items.push({ t: "text", text: label, tone: "dim" });
+    items.push({ t: "text", text: value, bold: true, tone, attach: true });
+  };
+  const vp = volumePcr(s.strikes);
+  kv("PCR", s.pcr != null ? s.pcr.toFixed(2) : "–");
+  kv(pcrDiverges(s.pcr, vp) ? "Vol PCR ⇄" : "Vol PCR", vp != null ? vp.toFixed(2) : "–", pcrDiverges(s.pcr, vp) ? "warn" : undefined);
+  const chg = (c: number | null, t: number): OiItem => {
+    const d = deltaPct(c, t);
+    return d ? { t: "text", text: `${d.up ? "▲" : "▼"}${d.pct.toFixed(1)}%`, tone: d.up ? "up" : "dn", attach: true } : { t: "text", text: "–", tone: "dim", attach: true };
+  };
+  const side = (name: string, total: number, c15: number | null, c5: number | null) => {
+    items.push({ t: "text", text: `${name} OI ${fmtOi(total, crypto)}` });
+    items.push(chg(c15, total), { t: "text", text: "/15m", tone: "dim", attach: true }, chg(c5, total), { t: "text", text: "/5m", tone: "dim", attach: true });
+  };
+  side("CE", s.total_call_oi, s.total_call_oi_change_15m, s.total_call_oi_change_5m);
+  side("PE", s.total_put_oi, s.total_put_oi_change_15m, s.total_put_oi_change_5m);
+  const solid = onChartLevelsOn ? [] : levels.filter((l) => !l.forming);
+  for (const [tag, kind] of [["R", "resistance"], ["S", "support"]] as const) {
+    const ls = solid.filter((l) => l.kind === kind).sort((a, b) => a.rank - b.rank);
+    if (ls.length) kv(tag, ls.map((l) => fmtPrice(l.price)).join(" · "));
+  }
+  if (s.total_call_buildup) items.push({ t: "pill", text: `${BUILDUP_ICON[s.total_call_buildup]} CE ${BUILDUP_ABBR[s.total_call_buildup]}`, tone: buildupTone(s.total_call_buildup, "CE") });
+  if (s.total_put_buildup) items.push({ t: "pill", text: `${BUILDUP_ICON[s.total_put_buildup]} PE ${BUILDUP_ABBR[s.total_put_buildup]}`, tone: buildupTone(s.total_put_buildup, "PE") });
+  const k = flowSkew(s.total_call_oi_change_5m, s.total_call_oi, s.total_put_oi_change_5m, s.total_put_oi);
+  if (k) {
+    const v = skewView(k);
+    items.push({ t: "skew", fill: v.fill, leader: v.leader, tone: v.tone, label: `${v.leader} +${k.pct.toFixed(1)}%` });
+  }
+  if (hasSentimentTrend(sentiment)) items.push({ t: "text", text: "OI trend", tone: "dim" });
+  for (const window of ["15m", "5m"] as const) {
+    const steps = sentimentSteps(sentiment, window);
+    if (steps.length < 2) continue;
+    const maxAbs = Math.max(0.2, ...steps.map((x) => Math.abs(x.score)));
+    const last = steps[steps.length - 1];
+    const prev = steps[steps.length - 2];
+    const tone = (x: number) => (x > 0.02 ? "up" : x < -0.02 ? "dn" : "flat");
+    items.push({
+      t: "spark",
+      window,
+      bars: steps.map((x) => ({ h: Math.max(0.08, Math.abs(x.score) / maxAbs), tone: tone(x.score), major: x.major })),
+      value: `${last.score >= 0 ? "+" : ""}${last.score.toFixed(2)}%`,
+      tone: tone(last.score) === "flat" ? "dim" : (tone(last.score) as "up" | "dn"),
+      flag: last.major ? `⚡ ${last.score - prev.score >= 0 ? "+" : ""}${(last.score - prev.score).toFixed(2)}` : null,
+    });
+  }
+  return items;
+}

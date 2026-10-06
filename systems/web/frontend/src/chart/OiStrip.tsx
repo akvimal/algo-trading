@@ -5,20 +5,10 @@ import { formatPrice } from "../format";
 import type { OiLevelLine } from "./oiLevels";
 import {
   BUILDUP_ABBR, BUILDUP_ICON, BUILDUP_LABEL, buildupTone, classifyPcr, deltaPct, flowSkew, hasSentimentTrend, skewView, isStaleAt, pcrDiverges, sentimentSteps, volumePcr,
-  type SentStep,
+  fmtOi, type SentStep,
 } from "./oiStripModel";
 
 const hhmm = (t: string | number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-/** Indices report OI in crores; a crypto perpetual's open interest is a plain contract count. */
-const fmtOi = (n: number, crypto: boolean) => (crypto ? Math.round(n).toLocaleString("en-US") : compactIndian(n));
-function compactIndian(n: number): string {
-  const abs = Math.abs(n);
-  if (abs >= 1_00_00_000) return `${(n / 1_00_00_000).toFixed(2)}Cr`;
-  if (abs >= 1_00_000) return `${(n / 1_00_000).toFixed(2)}L`;
-  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(Math.round(n));
-}
-
 function OiChangeBadge({ change, total }: { change: number | null; total: number }) {
   const d = deltaPct(change, total);
   if (!d) return <span className="faint">–</span>;

@@ -62,7 +62,7 @@ describe("PremarketCard", () => {
   it("colours crude's rise as bad news and prints yields in basis points", async () => {
     stub(() => json(report({ inputs: [input("brent", "Brent crude", 1.2, { group: "commodity" }), input("us10y", "US 10Y yield", 3.4, { unit: "bp", group: "yield" })] })));
     render(<PremarketCard />);
-    await userEvent.click(await screen.findByText("Why, and the numbers"));
+    await userEvent.click(await screen.findByText("Reasoning and numbers"));
     expect(screen.getByText("+1.20%")).toHaveClass("dn");
     expect(screen.getByText("+3.4 bp")).toHaveClass("dn");
   });

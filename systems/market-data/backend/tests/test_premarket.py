@@ -204,3 +204,10 @@ def test_gift_row_keeps_the_feeds_change_when_niftys_close_is_missing():
     ref = premarket.RawInput(key="nifty_close", label="Nifty last close", group="india", ok=False)
     premarket._gift_as_gap([gift, ref])
     assert gift.change == 0.30 and gift.label == "GIFT Nifty"
+
+
+def test_bias_agrees_with_the_rounded_score_that_is_shown():
+    # Only the GIFT gap moves; 0.1198% / 0.6% = 0.1997, which displays as 0.20 and so must read bullish, not neutral.
+    r = score_inputs(_all(gift=22500.0 * (1 + 0.1198 / 100 * 1.0)))
+    assert r["score"] == round(r["score"], 2)
+    assert (r["bias"] == "bullish") == (r["score"] >= 0.2)

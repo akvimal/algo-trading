@@ -85,10 +85,12 @@ def score_inputs(inputs: list[dict]) -> dict:
         weighted += weight * s
         used += weight
         rows.append({"key": key, "label": FACTOR_LABELS[key], "move": round(move, 3), "score": round(s, 3), "weight": weight})
-    score = weighted / used if used else 0.0
+    # Rounded BEFORE the thresholds are applied, so the bias always agrees with the score that is shown: a raw 0.1996
+    # displayed as "0.20" next to "neutral" (cutoff 0.20) read as a bug.
+    score = round(weighted / used, 2) if used else 0.0
     gap = factor_moves["gift_gap"]
     return {
-        "score": round(score, 3),
+        "score": score,
         "bias": "bullish" if score >= BULLISH_AT else "bearish" if score <= BEARISH_AT else "neutral",
         "coverage": round(used / total, 2),
         "gift_gap_pct": round(gap, 3) if gap is not None else None,

@@ -64,8 +64,8 @@ function Report({ report }: { report: PremarketReport }) {
   const ai = report.ai;
   return (
     <div className="card stack">
-      <div className="row" style={{ alignItems: "center" }}>
-        <span className={BIAS_PILL[report.bias]} style={{ fontSize: 14 }} data-testid="premarket-bias">
+      <div className="premarket-head">
+        <span className={`${BIAS_PILL[report.bias]} premarket-bias`} data-testid="premarket-bias">
           {BIAS_LABEL[report.bias]}
         </span>
         {ai && <span className="dim">{ai.confidence}% confident</span>}
@@ -74,7 +74,7 @@ function Report({ report }: { report: PremarketReport }) {
         </span>
       </div>
 
-      <p style={{ margin: 0 }}>{headline(report)}</p>
+      <p className="premarket-headline">{headline(report)}</p>
 
       {report.agree === false && (
         <div className="notice" data-testid="premarket-disagree">
@@ -90,7 +90,7 @@ function Report({ report }: { report: PremarketReport }) {
       )}
 
       <details>
-        <summary>Why, and the numbers</summary>
+        <summary className="premarket-toggle">Reasoning and numbers</summary>
         <div className="stack" style={{ marginTop: 12 }}>
           {ai && (
             <>

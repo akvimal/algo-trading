@@ -155,6 +155,25 @@ export type PremarketInput = {
   error: string | null;
 };
 
+export type PremarketIndicator = {
+  key: string;
+  label: string;
+  unit: "pct" | "usd_bn";
+  ok: boolean;
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  /** The last day of the period the print covers. */
+  period: string | null;
+  error: string | null;
+};
+
+export type PremarketMacro = {
+  indicators: PremarketIndicator[];
+  derived: { real_rate: number | null; spread_10y_repo: number | null; india_10y: number | null };
+  rbi: { title: string; url: string | null; published: string | null; kind: "press release" | "speech" }[];
+};
+
 export type PremarketReport = {
   day: string;
   generated_at: string;
@@ -170,7 +189,9 @@ export type PremarketReport = {
     gift_gap_pct: number | null;
     factors: { key: string; label: string; move: number | null; score: number | null; weight: number }[];
   };
-  ai: { bias: Bias; confidence: number; one_liner: string; reasons: string[]; risks: string[]; watch: string } | null;
+  ai: { bias: Bias; confidence: number; one_liner: string; reasons: string[]; risks: string[]; watch: string; macro_context?: string | null } | null;
+  /** India's domestic macro backdrop. Absent on reports written before it existed. */
+  macro?: PremarketMacro | null;
 };
 
 export type Segment = "NSE" | "MCX" | "CRYPTO";

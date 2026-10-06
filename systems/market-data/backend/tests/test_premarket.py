@@ -5,6 +5,12 @@ from app.domain.premarket_bias import score_inputs
 from app.providers import premarket
 
 
+@pytest.fixture(autouse=True)
+def _no_macro_network(monkeypatch):
+    """build_report also fetches the macro backdrop; these tests are about the overnight inputs."""
+    monkeypatch.setattr(premarket_report, "fetch_macro", lambda india_10y=None: {"indicators": [], "derived": {"real_rate": None, "spread_10y_repo": None, "india_10y": india_10y}, "rbi": []})
+
+
 def _inp(key, change=None, value=None, ok=True, unit="pct", group="us"):
     return {"key": key, "label": key, "group": group, "ok": ok, "value": value, "change": change, "unit": unit, "source": "t", "error": None}
 
@@ -91,7 +97,7 @@ def test_report_without_key_uses_rules_bias_and_says_why(monkeypatch):
 def test_report_uses_ai_bias_and_flags_disagreement(monkeypatch):
     _fake_inputs(monkeypatch, _all(gift=22650.0, sp500=1.0, dow=1.0, nasdaq=1.0))
     ai = {"bias": "neutral", "confidence": 55, "one_liner": "x", "reasons": ["r"], "risks": [], "watch": "w"}
-    monkeypatch.setattr(premarket_report, "run_ai", lambda inputs, rules, key: ai)
+    monkeypatch.setattr(premarket_report, "run_ai", lambda inputs, rules, key, macro=None: ai)
     rep = premarket_report.build_report("k")
     assert rep["bias"] == "neutral"
     assert rep["agree"] is False

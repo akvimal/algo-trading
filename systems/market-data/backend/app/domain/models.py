@@ -954,6 +954,38 @@ class PremarketAiOut(BaseModel):
     reasons: list[str]
     risks: list[str]
     watch: str
+    macro_context: Optional[str] = None  # how the domestic backdrop frames bond yields and sentiment (absent on older reports)
+
+
+class PremarketIndicatorOut(BaseModel):
+    key: str
+    label: str
+    unit: Literal["pct", "usd_bn"]
+    ok: bool
+    value: Optional[float] = None
+    previous: Optional[float] = None
+    change: Optional[float] = None
+    period: Optional[date] = None  # the last day of the period the print covers
+    error: Optional[str] = None
+
+
+class PremarketRbiItemOut(BaseModel):
+    title: str
+    url: Optional[str] = None
+    published: Optional[datetime] = None
+    kind: Literal["press release", "speech"]
+
+
+class PremarketMacroDerivedOut(BaseModel):
+    real_rate: Optional[float] = None  # repo rate minus CPI inflation, in percentage points
+    spread_10y_repo: Optional[float] = None  # India 10Y yield minus the repo rate, in percentage points
+    india_10y: Optional[float] = None
+
+
+class PremarketMacroOut(BaseModel):
+    indicators: list[PremarketIndicatorOut]
+    derived: PremarketMacroDerivedOut
+    rbi: list[PremarketRbiItemOut]
 
 
 class PremarketReportOut(BaseModel):
@@ -969,3 +1001,4 @@ class PremarketReportOut(BaseModel):
     inputs: list[PremarketInputOut]
     rules: PremarketRulesOut
     ai: Optional[PremarketAiOut] = None
+    macro: Optional[PremarketMacroOut] = None

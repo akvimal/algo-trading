@@ -32,7 +32,7 @@ _last_refresh = 0.0
 def report_out(row: PremarketReport) -> PremarketReportOut:
     return PremarketReportOut(
         day=row.day, generated_at=row.generated_at, bias=row.bias, agree=row.agree, model=row.model,
-        ai_error=row.ai_error, inputs=row.inputs, rules=row.rules, ai=row.ai,
+        ai_error=row.ai_error, inputs=row.inputs, rules=row.rules, ai=row.ai, macro=row.macro,
     )
 
 

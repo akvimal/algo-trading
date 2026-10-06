@@ -25,6 +25,7 @@ from app.domain import ai_models
 from app.domain.ai_retry import post_json
 from app.domain.premarket_bias import score_inputs
 from app.providers import premarket as provider
+from app.providers.macro import fetch_macro
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,12 @@ _AI_SCHEMA = {
         "reasons": {"type": "array", "items": {"type": "string"}, "description": "2-5 short reasons, strongest first, each citing a figure from the input."},
         "risks": {"type": "array", "items": {"type": "string"}, "description": "0-3 things that could make the call wrong."},
         "watch": {"type": "string", "description": "One thing to watch at the open to confirm or reject the call."},
+        "macro_context": {
+            "type": "string",
+            "description": "1-2 sentences on how India's domestic macro backdrop (inflation, policy rate, real rate, the 10Y yield against the repo rate, recent RBI communication) frames bond yields and sentiment. Empty string if no macro data was given.",
+        },
     },
-    "required": ["bias", "confidence", "one_liner", "reasons", "risks", "watch"],
+    "required": ["bias", "confidence", "one_liner", "reasons", "risks", "watch", "macro_context"],
     "additionalProperties": False,
 }
 
@@ -53,11 +58,43 @@ _SYSTEM_PROMPT = (
     "Units: a field named change_pct is a percent move; change_bp is a move in basis points (100bp = 1 percentage "
     "point), so a US 10Y change_bp of 3.4 is a small 3.4bp move. Judge size sensibly: index moves under ~0.3%, crude "
     "under ~1%, USD/INR under ~0.15%, yields under ~5bp and single ADRs under ~1% are noise, not a trend - do not "
-    "call them spikes or crashes. Quote figures exactly as given."
+    "call them spikes or crashes. Quote figures exactly as given. "
+    "The optional domestic_macro block is India's slow-moving backdrop (monthly prints with their previous values, the real "
+    "policy rate = repo minus CPI, the 10Y yield's spread over the repo rate, and recent RBI releases). It is context for "
+    "bond yields and sentiment, NOT a daily driver: do not let it override the overnight inputs or the GIFT Nifty gap, and "
+    "put what it means in macro_context rather than in the reasons unless it is genuinely decisive today. Quote its figures "
+    "exactly; never infer a forecast, a release date, or what the RBI will or will not do. RBI items are headlines only: say what they are about, not what they signal about policy."
 )
 
 
-def _context(inputs: list[dict], rules: dict) -> dict:
+def _macro_context_block(macro: Optional[dict]) -> Optional[dict]:
+    """The macro backdrop trimmed to what the model needs: ok indicators with their previous prints, the derived figures and
+    the RBI headlines (no urls)."""
+    if not macro:
+        return None
+    ok = [i for i in macro["indicators"] if i["ok"]]
+    if not ok and not macro["rbi"]:
+        return None
+    return {
+        "indicators": [
+            {"label": i["label"], "latest": i["value"], "previous": i["previous"], "period_end": i["period"], "unit": "US$ billion" if i["unit"] == "usd_bn" else "percent"}
+            for i in ok
+        ],
+        "real_policy_rate_pp": macro["derived"]["real_rate"],
+        "india_10y_minus_repo_pp": macro["derived"]["spread_10y_repo"],
+        "recent_rbi": [{"kind": r["kind"], "published": (r["published"] or "")[:10], "title": r["title"]} for r in macro["rbi"]],
+    }
+
+
+def _context(inputs: list[dict], rules: dict, macro: Optional[dict] = None) -> dict:
+    ctx = _context_overnight(inputs, rules)
+    block = _macro_context_block(macro)
+    if block:
+        ctx["domestic_macro"] = block
+    return ctx
+
+
+def _context_overnight(inputs: list[dict], rules: dict) -> dict:
     return {
         "inputs": [
             {"label": i["label"], "value": i["value"], "change_bp" if i["unit"] == "bp" else "change_pct": i["change"]}
@@ -72,7 +109,7 @@ def _context(inputs: list[dict], rules: dict) -> dict:
     }
 
 
-def run_ai(inputs: list[dict], rules: dict, api_key: str) -> dict:
+def run_ai(inputs: list[dict], rules: dict, api_key: str, macro: Optional[dict] = None) -> dict:
     """One OpenRouter call. Raises RuntimeError with a short, presentable message on any failure."""
     model = ai_models.model_for("premarket")
     try:
@@ -84,7 +121,7 @@ def run_ai(inputs: list[dict], rules: dict, api_key: str) -> dict:
                 "model": model,
                 "messages": [
                     {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": json.dumps(_context(inputs, rules))},
+                    {"role": "user", "content": json.dumps(_context(inputs, rules, macro))},
                 ],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "premarket_bias", "strict": True, "schema": _AI_SCHEMA}},
                 # Without a cap OpenRouter reserves the model's full max output and 402s a small balance
@@ -107,6 +144,12 @@ def run_ai(inputs: list[dict], rules: dict, api_key: str) -> dict:
         raise RuntimeError("AI read temporarily unavailable") from exc
 
 
+def _india_10y(inputs: list[dict]) -> Optional[float]:
+    """The India 10Y yield from the overnight inputs, for the spread over the repo rate."""
+    i = next((x for x in inputs if x["key"] == "in10y" and x["ok"]), None)
+    return i["value"] if i else None
+
+
 def today_ist() -> date:
     return datetime.now(ZoneInfo(settings.timezone)).date()
 
@@ -115,6 +158,7 @@ def build_report(api_key: Optional[str]) -> dict:
     """Fetch + score + (optionally) ask the model. Pure of the database, so a manual run can be inspected before it is stored."""
     inputs = [i.to_dict() for i in provider.fetch_inputs()]
     rules = score_inputs(inputs)
+    macro = fetch_macro(_india_10y(inputs))
     ai, ai_error = None, None
     if not api_key:
         ai_error = "No OpenRouter key - showing the rule-based bias only."
@@ -122,7 +166,7 @@ def build_report(api_key: Optional[str]) -> dict:
         ai_error = "No inputs could be fetched."
     else:
         try:
-            ai = run_ai(inputs, rules, api_key)
+            ai = run_ai(inputs, rules, api_key, macro)
         except RuntimeError as exc:
             ai_error = str(exc)
             logger.warning("premarket: AI step failed: %s", exc)
@@ -130,6 +174,7 @@ def build_report(api_key: Optional[str]) -> dict:
         "inputs": inputs,
         "rules": rules,
         "ai": ai,
+        "macro": macro,
         "ai_error": ai_error,
         "model": ai.get("model") if ai else None,
         "bias": ai["bias"] if ai else rules["bias"],
@@ -151,6 +196,7 @@ def save_report(db: Session, day: date, report: dict) -> PremarketReport:
     row.inputs = report["inputs"]
     row.rules = report["rules"]
     row.ai = report["ai"]
+    row.macro = report.get("macro")
     db.commit()
     db.refresh(row)
     return row

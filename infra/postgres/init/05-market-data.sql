@@ -252,7 +252,8 @@ CREATE TABLE IF NOT EXISTS market_data.premarket_reports (
     ai_error     TEXT,
     inputs       JSONB NOT NULL,
     rules        JSONB NOT NULL,
-    ai           JSONB
+    ai           JSONB,
+    macro        JSONB
 );
 
 -- Which OpenRouter model each AI task uses. See migration 038 and app/domain/ai_models.py.

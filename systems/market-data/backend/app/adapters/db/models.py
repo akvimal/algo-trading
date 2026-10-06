@@ -257,6 +257,7 @@ class PremarketReport(Base):
     inputs = Column(JSONB, nullable=False)
     rules = Column(JSONB, nullable=False)
     ai = Column(JSONB)
+    macro = Column(JSONB)  # India's domestic macro backdrop, see app/providers/macro.py
 
 
 class AiModelSetting(Base):

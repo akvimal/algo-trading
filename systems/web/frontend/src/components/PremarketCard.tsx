@@ -4,7 +4,7 @@ import { ApiError } from "../api/http";
 import type { PremarketReport } from "../api/types";
 import { formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
-import { BIAS_LABEL, formatMove, headline, moveTone, reportAge, sections } from "../pages/premarketModel";
+import { BIAS_LABEL, derivedRows, formatIndicator, formatMove, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate } from "../pages/premarketModel";
 import { ErrorNotice, Skeleton } from "./bits";
 
 const BIAS_PILL = { bullish: "pill up", bearish: "pill dn", neutral: "pill" } as const;
@@ -68,7 +68,8 @@ function Report({ report }: { report: PremarketReport }) {
         <span className={`${BIAS_PILL[report.bias]} premarket-bias`} data-testid="premarket-bias">
           {BIAS_LABEL[report.bias]}
         </span>
-        {ai && <span className="dim">{ai.confidence}% confident</span>}
+        {/* 0 is a model that did not calibrate (some cheap ones always answer 0), not a real "no confidence" - hide it rather than contradict the call. */}
+        {ai && ai.confidence > 0 && <span className="dim">{ai.confidence}% confident</span>}
         <span className={age.stale ? "pill warn" : "faint"} style={{ marginLeft: "auto", fontSize: 12 }}>
           {age.stale ? `Older report · ${age.text}` : age.text}
         </span>
@@ -131,12 +132,77 @@ function Report({ report }: { report: PremarketReport }) {
               ))}
             </div>
           ))}
+          {hasMacro(report.macro, ai) && <Backdrop report={report} />}
           <span className="faint" style={{ fontSize: 12 }}>
             Overnight context from public market data{report.model ? `, read by ${report.model}` : ""}. It is not a recommendation.
             Colours show whether a move helps or hurts Indian equities, so a rise in crude or yields is red.
           </span>
         </div>
       </details>
+    </div>
+  );
+}
+
+/** India's slow-moving macro backdrop: the AI's reading of it, the latest prints against the ones before, what they imply
+ * for bonds (real rate, 10Y over repo) and the RBI's recent policy-related items. Monthly data, so it frames the day
+ * rather than driving it, and it is not part of the bullish/bearish score. */
+function Backdrop({ report }: { report: PremarketReport }) {
+  const macro = report.macro;
+  const derived = macro ? derivedRows(macro) : [];
+  return (
+    <div className="stack" data-testid="premarket-backdrop">
+      <div className="dim" style={{ fontSize: 12 }}>
+        Domestic backdrop
+      </div>
+      {report.ai?.macro_context && <p style={{ margin: 0 }}>{report.ai.macro_context}</p>}
+      {macro?.indicators
+        .filter((i) => i.ok)
+        .map((i) => (
+          <div className="row" key={i.key} style={{ alignItems: "flex-start" }}>
+            <span>
+              {i.label}
+              <span className="faint" style={{ display: "block", fontSize: 12 }}>
+                {[periodLabel(i.period), indicatorMove(i)].filter(Boolean).join(" · ")}
+              </span>
+            </span>
+            <span className="num">{formatIndicator(i)}</span>
+          </div>
+        ))}
+      {derived.map((d) => (
+        <div className="row" key={d.label} title={d.hint}>
+          <span>{d.label}</span>
+          <span className="num">{d.value}</span>
+        </div>
+      ))}
+      {macro && macro.rbi.length > 0 && (
+        <div>
+          <div className="dim" style={{ fontSize: 12, marginBottom: 4 }}>
+            Recent from the RBI
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {macro.rbi.map((r) => (
+              <li key={`${r.url ?? r.title}`}>
+                {r.url ? (
+                  <a href={r.url} target="_blank" rel="noreferrer">
+                    {r.title}
+                  </a>
+                ) : (
+                  r.title
+                )}{" "}
+                <span className="faint">
+                  {r.kind === "speech" ? "speech" : "release"}
+                  {r.published ? ` · ${shortDate(r.published)}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {macro && !macro.indicators.some((i) => i.ok) && (
+        <span className="faint" style={{ fontSize: 12 }}>
+          The macro figures could not be loaded for this report.
+        </span>
+      )}
     </div>
   );
 }

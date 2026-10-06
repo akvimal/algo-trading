@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { PremarketInput, PremarketReport } from "../api/types";
-import { formatMove, headline, moveTone, reportAge, sections } from "./premarketModel";
+import type { PremarketIndicator, PremarketInput, PremarketMacro, PremarketReport } from "../api/types";
+import { derivedRows, formatIndicator, formatMove, formatPoints, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate } from "./premarketModel";
 
 const inp = (over: Partial<PremarketInput>): PremarketInput => ({
   key: "sp500", label: "S&P 500", group: "us", ok: true, value: 1, change: 0.66, unit: "pct", source: "yahoo", error: null, ...over,
@@ -61,5 +61,57 @@ describe("headline", () => {
   });
   it("falls back to a plain rule-based statement", () => {
     expect(headline(report({}))).toBe("Rule-based read: bullish. GIFT Nifty is up 0.33% on Nifty's last close.");
+  });
+});
+
+const ind = (over: Partial<PremarketIndicator>): PremarketIndicator => ({
+  key: "cpi", label: "Inflation (CPI, YoY)", unit: "pct", ok: true, value: 4.82, previous: 4.44, change: 0.38, period: "2026-08-31", error: null, ...over,
+});
+
+describe("domestic backdrop", () => {
+  it("formats percent prints and reserves in billions", () => {
+    expect(formatIndicator(ind({}))).toBe("4.82%");
+    expect(formatIndicator(ind({ unit: "usd_bn", value: 747.56 }))).toBe("$747.6bn");
+    expect(formatIndicator(ind({ ok: false, value: null }))).toBe("–");
+  });
+  it("names the month a print covers", () => {
+    expect(periodLabel("2026-08-31")).toBe("Aug 2026");
+    expect(periodLabel(null)).toBe("");
+    expect(periodLabel("2026-09-30")).toBe("Sep 2026");
+  });
+  it("says how a print moved from the one before it", () => {
+    expect(indicatorMove(ind({}))).toBe("up 0.38 from 4.44%");
+    expect(indicatorMove(ind({ change: -0.5, previous: 5.32 }))).toBe("down 0.50 from 5.32%");
+    expect(indicatorMove(ind({ key: "repo", change: 0, previous: 5.25, value: 5.25 }))).toBe("unchanged at 5.25%");
+    expect(indicatorMove(ind({ unit: "usd_bn", value: 747.56, previous: 765.9, change: -18.34 }))).toBe("down $18.34bn from $765.9bn");
+  });
+  it("says nothing about movement when the feed gave no previous value", () => {
+    expect(indicatorMove(ind({ change: null, previous: null }))).toBe("");
+  });
+  it("dates an RBI item on the IST calendar", () => {
+    expect(shortDate("2026-10-03T05:30:00Z")).toBe("3 Oct");
+    expect(shortDate("2026-09-30T20:00:00Z")).toBe("1 Oct"); // already October in India
+    expect(shortDate(null)).toBe("");
+  });
+  it("signs percentage points", () => {
+    expect(formatPoints(0.43)).toBe("+0.43 pts");
+    expect(formatPoints(-0.12)).toBe("−0.12 pts");
+    expect(formatPoints(null)).toBe("–");
+  });
+  it("shows the real rate and the 10Y spread only when they could be worked out", () => {
+    expect(derivedRows({ derived: { real_rate: 0.43, spread_10y_repo: 1.97, india_10y: 7.2 } }).map((r) => [r.label, r.value])).toEqual([
+      ["Real policy rate", "+0.43 pts"],
+      ["10Y yield over repo", "+1.97 pts"],
+    ]);
+    expect(derivedRows({ derived: { real_rate: null, spread_10y_repo: 1.97, india_10y: 7.2 } })).toHaveLength(1);
+    expect(derivedRows({ derived: { real_rate: null, spread_10y_repo: null, india_10y: null } })).toEqual([]);
+  });
+  it("has nothing to show when every feed was down and the model said nothing", () => {
+    const empty: PremarketMacro = { indicators: [ind({ ok: false, value: null })], derived: { real_rate: null, spread_10y_repo: null, india_10y: null }, rbi: [] };
+    expect(hasMacro(empty, null)).toBe(false);
+    expect(hasMacro(null, null)).toBe(false);
+    expect(hasMacro(undefined, null)).toBe(false);
+    expect(hasMacro({ ...empty, indicators: [ind({})] }, null)).toBe(true);
+    expect(hasMacro(null, { bias: "neutral", confidence: 1, one_liner: "", reasons: [], risks: [], watch: "", macro_context: "Real rate is positive." })).toBe(true);
   });
 });

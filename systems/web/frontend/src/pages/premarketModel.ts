@@ -1,4 +1,4 @@
-import type { Bias, PremarketInput, PremarketReport } from "../api/types";
+import type { Bias, PremarketIndicator, PremarketInput, PremarketMacro, PremarketReport } from "../api/types";
 import { formatTime, istDayKey } from "../format";
 
 const MINUS = "−";
@@ -50,4 +50,63 @@ export function headline(report: PremarketReport): string {
   const gap = report.rules.gift_gap_pct;
   const gapText = gap == null ? "" : ` GIFT Nifty is ${gap >= 0 ? "up" : "down"} ${Math.abs(gap).toFixed(2)}% on Nifty's last close.`;
   return `Rule-based read: ${BIAS_LABEL[report.rules.bias].toLowerCase()}.${gapText}`;
+}
+
+// ---- Domestic backdrop ------------------------------------------------------------------------------------------
+
+const money = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(2));
+
+/** "4.82%" or "$747.6bn". */
+export function formatIndicator(i: Pick<PremarketIndicator, "value" | "unit" | "ok">): string {
+  if (!i.ok || i.value == null) return "–";
+  return i.unit === "usd_bn" ? `$${money(i.value)}bn` : `${i.value.toFixed(2)}%`;
+}
+
+// Not Intl: en-IN spells September "Sept" in some runtimes and "Sep" in others, so the label would depend on the browser.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Aug 2026": the month a print covers (the feed dates a period by its last day). */
+export function periodLabel(iso: string | null): string {
+  const m = iso?.match(/^(\d{4})-(\d{2})-\d{2}/);
+  return m ? `${MONTHS[Number(m[2]) - 1]} ${m[1]}` : "";
+}
+
+/** How a print moved from the one before it, in words: "up 0.38 from 4.44%", "unchanged at 5.25%". */
+export function indicatorMove(i: PremarketIndicator): string {
+  if (!i.ok || i.change == null || i.previous == null) return "";
+  const prev = formatIndicator({ value: i.previous, unit: i.unit, ok: true });
+  if (i.change === 0) return `unchanged at ${prev}`;
+  const size = i.unit === "usd_bn" ? `$${money(Math.abs(i.change))}bn` : Math.abs(i.change).toFixed(2);
+  return `${i.change > 0 ? "up" : "down"} ${size} from ${prev}`;
+}
+
+/** Percentage points, signed: "+0.43 pts" / "−0.12 pts". */
+export function formatPoints(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return "–";
+  return `${v > 0 ? "+" : v < 0 ? MINUS : ""}${Math.abs(v).toFixed(2)} pts`;
+}
+
+export type DerivedRow = { label: string; value: string; hint: string };
+
+/** The two figures that tie the prints to the bond market. A row is dropped when its inputs were missing. */
+export function derivedRows(macro: Pick<PremarketMacro, "derived">): DerivedRow[] {
+  const rows: DerivedRow[] = [];
+  if (macro.derived.real_rate != null)
+    rows.push({ label: "Real policy rate", value: formatPoints(macro.derived.real_rate), hint: "Repo rate minus CPI inflation. Positive means policy is tighter than inflation." });
+  if (macro.derived.spread_10y_repo != null)
+    rows.push({ label: "10Y yield over repo", value: formatPoints(macro.derived.spread_10y_repo), hint: "How far the 10-year yield sits above the policy rate." });
+  return rows;
+}
+
+/** Whether there is anything to show for the backdrop at all (every feed can be down). */
+export function hasMacro(macro: PremarketMacro | null | undefined, ai: PremarketReport["ai"]): boolean {
+  if (!macro) return !!ai?.macro_context;
+  return macro.indicators.some((i) => i.ok) || macro.rbi.length > 0 || !!ai?.macro_context;
+}
+
+/** "3 Oct" for an RBI item's date, on the IST calendar. */
+export function shortDate(iso: string | null): string {
+  if (!iso) return "";
+  const [, month, day] = istDayKey(iso).split("-");
+  return `${Number(day)} ${MONTHS[Number(month) - 1]}`;
 }

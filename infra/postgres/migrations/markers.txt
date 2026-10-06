@@ -41,3 +41,4 @@
 036-job-runs.sql|market_data.job_runs|
 037-premarket-reports.sql|market_data.premarket_reports|
 038-ai-model-settings.sql|market_data.ai_model_settings|
+039-premarket-macro.sql|market_data.premarket_reports|macro

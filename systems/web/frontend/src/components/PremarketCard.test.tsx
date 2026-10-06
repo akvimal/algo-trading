@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PremarketInput, PremarketReport } from "../api/types";
@@ -39,6 +39,13 @@ describe("PremarketCard", () => {
     expect(screen.getByText("72% confident")).toBeInTheDocument();
     expect(screen.getByText("Gap up on a firm US close.")).toBeInTheDocument();
     expect(screen.queryByTestId("premarket-disagree")).not.toBeInTheDocument();
+  });
+
+  it("does not print 0% confident for a model that did not give a confidence", async () => {
+    stub(() => json(report({ ai: { bias: "bullish", confidence: 0, one_liner: "Gap up.", reasons: [], risks: [], watch: "" } })));
+    render(<PremarketCard />);
+    expect(await screen.findByTestId("premarket-bias")).toHaveTextContent("Bullish");
+    expect(screen.queryByText(/% confident/)).not.toBeInTheDocument();
   });
 
   it("says so when the AI and the fixed rules disagree", async () => {
@@ -91,5 +98,52 @@ describe("PremarketCard", () => {
     await userEvent.click(screen.getByRole("button", { name: /refresh the pre-market report/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent("try again in 20s");
     expect(screen.getByTestId("premarket-bias")).toHaveTextContent("Bullish");
+  });
+
+  describe("domestic backdrop", () => {
+    const macro: NonNullable<PremarketReport["macro"]> = {
+      indicators: [
+        { key: "cpi", label: "Inflation (CPI, YoY)", unit: "pct", ok: true, value: 4.82, previous: 4.44, change: 0.38, period: "2026-08-31", error: null },
+        { key: "repo", label: "RBI repo rate", unit: "pct", ok: true, value: 5.25, previous: 5.25, change: 0, period: "2026-09-30", error: null },
+        { key: "fx_reserves", label: "FX reserves", unit: "usd_bn", ok: true, value: 747.56, previous: 765.9, change: -18.34, period: "2026-09-25", error: null },
+        { key: "iip", label: "Industrial production (IIP, YoY)", unit: "pct", ok: false, value: null, previous: null, change: null, period: null, error: "x" },
+      ],
+      derived: { real_rate: 0.43, spread_10y_repo: 1.97, india_10y: 7.2 },
+      rbi: [{ title: "Preserving Financial Stability - Address by the Governor", url: "https://rbi.example/s1", published: "2026-10-03T05:30:00Z", kind: "speech" }],
+    };
+
+    it("shows the prints against the ones before, the real rate, and linked RBI items, and the model's reading of them", async () => {
+      const ai = { bias: "bullish" as const, confidence: 70, one_liner: "x", reasons: [], risks: [], watch: "", macro_context: "Inflation is edging up but the real rate stays positive." };
+      stub(() => json(report({ ai, macro })));
+      render(<PremarketCard />);
+      await userEvent.click(await screen.findByText("Reasoning and numbers"));
+      const box = screen.getByTestId("premarket-backdrop");
+      expect(within(box).getByText("Inflation is edging up but the real rate stays positive.")).toBeInTheDocument();
+      expect(within(box).getByText("4.82%")).toBeInTheDocument();
+      expect(within(box).getByText("Aug 2026 · up 0.38 from 4.44%")).toBeInTheDocument();
+      expect(within(box).getByText("Sep 2026 · unchanged at 5.25%")).toBeInTheDocument();
+      expect(within(box).getByText("$747.6bn")).toBeInTheDocument();
+      expect(within(box).getByText("+0.43 pts")).toBeInTheDocument();
+      expect(within(box).getByText("+1.97 pts")).toBeInTheDocument();
+      expect(within(box).getByRole("link", { name: /Preserving Financial Stability/ })).toHaveAttribute("href", "https://rbi.example/s1");
+      // A print the feed could not give is left out rather than shown as a dash row.
+      expect(within(box).queryByText(/Industrial production/)).not.toBeInTheDocument();
+    });
+
+    it("shows no backdrop section for an older report that has none", async () => {
+      stub(() => json(report({ macro: null })));
+      render(<PremarketCard />);
+      await userEvent.click(await screen.findByText("Reasoning and numbers"));
+      expect(screen.queryByTestId("premarket-backdrop")).not.toBeInTheDocument();
+    });
+
+    it("says so when the macro figures could not be loaded but the RBI items could", async () => {
+      const down = { ...macro, indicators: macro.indicators.map((i) => ({ ...i, ok: false })), derived: { real_rate: null, spread_10y_repo: null, india_10y: null } };
+      stub(() => json(report({ macro: down })));
+      render(<PremarketCard />);
+      await userEvent.click(await screen.findByText("Reasoning and numbers"));
+      expect(screen.getByText("The macro figures could not be loaded for this report.")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Preserving Financial Stability/ })).toBeInTheDocument();
+    });
   });
 });

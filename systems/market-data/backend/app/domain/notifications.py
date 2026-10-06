@@ -48,6 +48,7 @@ CATEGORIES: dict[str, Category] = {
         Category("premarket", "Pre-market bias", "The morning read on the overnight US close, crude, USD/INR, yields, ADRs and the GIFT Nifty gap, with the AI's call.", "Weekdays at 8:45 AM IST, 30 minutes before NSE opens"),
         Category("oi_buildup", "Strong OI buildup", "The F&O stocks whose call and put open interest both grew a lot in the same direction that day: the top few bullish and bearish, in one message.", "Weekdays after the end-of-day OI scan finishes (about 4:05 PM IST)", defaults={"top_n": 10}),
         Category("session_nse", "Post-session summary: NSE", "How the NSE session went (NIFTY, BANKNIFTY, VIX, and whether the morning bias held) and your own closed trades that day, paper and live apart.", "Weekdays at 3:50 PM IST, after the 3:30 PM close; skipped on a market holiday"),
+        Category("session_mcx", "Post-session summary: MCX", "How gold, crude, silver and natural gas (the mini contracts) did in the MCX session, and your own closed MCX trades that day, paper and live apart.", "Weekdays at 11:58 PM IST, after the late-evening close; skipped on an MCX holiday"),
         Category("session_crypto", "Post-session summary: crypto", "The last 24 hours in BTC and ETH and your own crypto trades that day, paper and live apart. Crypto never closes, so this goes out at a fixed time.", "Every day at 11:30 PM IST"),
         Category("ops", "Operator alerts", "The Dhan token expiring or expired, and background jobs that failed.", "Checked every 10 minutes", admin_only=True),
     )
@@ -289,7 +290,7 @@ def oi_digest_message(rows: list[dict], snapshot_date: date, top_n: int) -> Opti
     return "\n".join(lines)
 
 
-SESSION_TITLES = {"NSE": ("📈", "Post-session · NSE"), "CRYPTO": ("🪙", "Daily summary · crypto")}
+SESSION_TITLES = {"NSE": ("📈", "Post-session · NSE"), "MCX": ("🛢️", "Post-session · MCX"), "CRYPTO": ("🪙", "Daily summary · crypto")}
 BIAS_HELD_BAND = 0.10  # percent: a bullish or bearish call needs the index to have moved at least this much its way to count as held
 NEUTRAL_BAND = 0.30  # percent: a neutral call holds while the index stays inside this
 

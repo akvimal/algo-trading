@@ -69,6 +69,36 @@ def test_the_crypto_message_uses_dollars_and_has_no_bias_line():
     assert text.startswith("🪙 Daily summary · crypto") and "net +$1,240" in text and "Morning bias" not in text
 
 
+def test_the_mcx_message_is_in_rupees_with_no_bias_line():
+    mcx = {"day": DAY, "rows": [{"label": "GOLDM", "close": 148680.0, "change_pct": 0.35, "high": 149000.0, "low": 147900.0, "position": 0.7}]}
+    text = n.session_message("MCX", DAY, mcx, {**trader(), "segment": "MCX"}, bias="bullish")
+    assert text.startswith("🛢️ Post-session · MCX") and "GOLDM 148,680 (+0.35%)" in text and "net +₹1,240" in text and "Morning bias" not in text
+
+
+def test_the_mcx_summary_is_its_own_category_sent_once_and_skipped_on_a_holiday(monkeypatch):
+    mcx = {"day": DAY, "rows": [{"label": "GOLDM", "close": 148680.0, "change_pct": 0.35, "high": 149000.0, "low": 147900.0, "position": 0.7}]}
+    monkeypatch.setattr(session_market, "fetch_mcx", lambda day=None: mcx)
+    monkeypatch.setattr(execution_client, "trader_day", lambda user, seg, day: {**trader(), "segment": seg})
+    subs(monkeypatch, (ME, "111"), category="session_mcx")
+    tg = Telegram(monkeypatch)
+    db = FakeDB()
+    assert jobs.session_to_subscribers(db, "MCX", DAY).sent == 1 and jobs.session_to_subscribers(db, "MCX", DAY).sent == 0
+    assert "Post-session · MCX" in tg.sent[0][1]
+    monkeypatch.setattr(session_market, "fetch_mcx", lambda day=None: None)
+    assert jobs.session_to_subscribers(FakeDB(), "MCX", DAY).sent == 0
+
+
+def test_the_mcx_schedule_is_11_58_pm_on_weekdays_in_ist():
+    import inspect
+    import re
+
+    from app.config import settings
+
+    assert (settings.session_summary_mcx_hour, settings.session_summary_mcx_minute) == (23, 58)
+    trig = re.search(r"_send_session_summary_mcx,\s*CronTrigger\((.*?)\),\s*id=", inspect.getsource(scheduler.start_scheduler), re.S).group(1)
+    assert 'day_of_week="mon-fri"' in trig and "timezone=settings.timezone" in trig
+
+
 def _wire(monkeypatch, *, market=MARKET, people=((ME, "111"),), trader_result=None):
     monkeypatch.setattr(session_market, "fetch_nse", lambda day=None: market)
     monkeypatch.setattr(execution_client, "trader_day", lambda user, seg, day: trader_result if trader_result is not None else trader())
@@ -120,3 +150,20 @@ def test_the_schedules_are_3_50_pm_on_weekdays_and_11_30_pm_daily_in_ist():
     nse, crypto = trigger("_send_session_summary_nse"), trigger("_send_session_summary_crypto")
     assert 'day_of_week="mon-fri"' in nse and "timezone=settings.timezone" in nse
     assert "day_of_week" not in crypto and "timezone=settings.timezone" in crypto  # crypto trades every day
+
+
+def test_the_mcx_session_is_built_from_hourly_bars_with_text_timestamps(monkeypatch):
+    """The provider returns timestamps as ISO text; the day's change is against the previous session's last close."""
+    def bar(ts, o, h, l, c):
+        return SimpleNamespace(timestamp=ts, open=o, high=h, low=l, close=c)
+
+    bars = [
+        bar("2026-10-05T10:00:00+05:30", 100, 101, 99, 100), bar("2026-10-05T23:00:00+05:30", 100, 103, 100, 102),
+        bar("2026-10-06T09:00:00+05:30", 102, 104, 101, 103), bar("2026-10-06T23:00:00+05:30", 103, 106, 102, 105),
+    ]
+    provider = SimpleNamespace(resolve_underlying=lambda name: SimpleNamespace(chart_symbol=name + "-FUT"), get_candle_history=lambda *a, **k: bars)
+    monkeypatch.setattr("app.providers.router.get_provider", lambda ex: provider)
+    row, day = session_market._mcx_session("GOLDM", DAY)
+    assert day == DAY and row["close"] == 105 and row["high"] == 106 and row["low"] == 101
+    assert row["change_pct"] == round((105 / 102 - 1) * 100, 2)
+    assert session_market._mcx_session("GOLDM", date(2026, 10, 7))[0] is None  # no bar that day: a holiday

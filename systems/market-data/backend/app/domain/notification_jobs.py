@@ -62,11 +62,11 @@ def session_to_subscribers(db: Session, segment: str, day: Optional[date] = None
     from app.domain.premarket_report import get_report
     from app.providers import session_market
 
-    category = "session_nse" if segment == "NSE" else "session_crypto"
-    if segment == "NSE":
-        market = session_market.fetch_nse(day)
+    category = {"NSE": "session_nse", "MCX": "session_mcx"}.get(segment, "session_crypto")
+    if segment in ("NSE", "MCX"):
+        market = session_market.fetch_nse(day) if segment == "NSE" else session_market.fetch_mcx(day)
         if market is None:
-            logger.info("session summary: no NSE session on %s (a holiday): nothing sent", day)
+            logger.info("session summary: no %s session on %s (a holiday): nothing sent", segment, day)
             return n.Tally()
         session_day = market["day"]
     else:

@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 NSE_SYMBOLS = [("NIFTY", "^NSEI"), ("BANKNIFTY", "^NSEBANK"), ("India VIX", "^INDIAVIX")]
 CRYPTO_SYMBOLS = [("BTC", "BTC-USD"), ("ETH", "ETH-USD")]
+# MCX: the mini contracts this platform trades, read as their front-month future from Dhan (Yahoo has no MCX prices, only global futures)
+MCX_UNDERLYINGS = ["GOLDM", "CRUDEOILM", "SILVERM", "NATGASMINI"]
 
 
 def _chart(symbol: str, range_: str, interval: str) -> tuple[list[datetime], dict]:
@@ -85,6 +87,53 @@ def _last_24h(label: str, symbol: str) -> dict:
         raise ValueError("fewer than 25 hourly bars")
     window = bars[-24:]
     return _row(label, window[-1][2], bars[-25][2], max(b[0] for b in window), min(b[1] for b in window))
+
+
+def _mcx_session(label: str, day: Optional[date]) -> tuple[Optional[dict], Optional[date]]:
+    from datetime import timedelta
+
+    from app.providers.router import get_provider
+
+    provider = get_provider("MCX")
+    resolved = provider.resolve_underlying(label)
+    if resolved is None:
+        raise ValueError("not resolved")
+    end = day or datetime.now(ZoneInfo(settings.timezone)).date()
+    candles = provider.get_candle_history(resolved.chart_symbol, "60min", end - timedelta(days=7), end)
+    by_day: dict[date, list] = {}
+    for c in candles:
+        ts = c.timestamp if isinstance(c.timestamp, datetime) else datetime.fromisoformat(str(c.timestamp))
+        by_day.setdefault(ts.astimezone(ZoneInfo(settings.timezone)).date(), []).append((ts, c))
+    days = sorted(by_day)
+    target = day if day is not None else (days[-1] if days else None)
+    if target is None or target not in by_day:
+        return None, days[-1] if days else None
+    earlier = [d for d in days if d < target]
+    if not earlier:
+        raise ValueError("no earlier session to compare with")
+    bars = [c for _, c in sorted(by_day[target], key=lambda t: t[0])]
+    prev_close = sorted(by_day[earlier[-1]], key=lambda t: t[0])[-1][1].close
+    return _row(label, bars[-1].close, prev_close, max(c.high for c in bars), min(c.low for c in bars)), target
+
+
+def fetch_mcx(day: Optional[date] = None) -> Optional[dict]:
+    """{day, rows} for the MCX session, or None when it did not trade on `day` (a holiday). Without `day` it is the latest session."""
+    rows, session = [], None
+    for label in MCX_UNDERLYINGS:
+        try:
+            row, d = _mcx_session(label, day)
+        except Exception as exc:
+            logger.warning("session summary: %s failed: %s", label, exc)
+            continue
+        if row is None:
+            if label == MCX_UNDERLYINGS[0]:
+                return None
+            continue
+        session = session or d
+        rows.append(row)
+    if not rows:
+        raise RuntimeError("no MCX prices could be read")
+    return {"day": session, "rows": rows}
 
 
 def fetch_crypto(day: Optional[date] = None) -> dict:

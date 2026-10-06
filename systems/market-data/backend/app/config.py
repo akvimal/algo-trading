@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     # The post-session Telegram summaries (app/domain/notification_jobs.py): NSE just after the 15:30 close, crypto late evening.
     session_summary_nse_hour: int = 15
     session_summary_nse_minute: int = 50
+    session_summary_mcx_hour: int = 23  # MCX closes at 23:30, or 23:55 while the US is on summer time
+    session_summary_mcx_minute: int = 58
     session_summary_crypto_hour: int = 23
     session_summary_crypto_minute: int = 30
     oi_eod_snapshot_hour: int = 16

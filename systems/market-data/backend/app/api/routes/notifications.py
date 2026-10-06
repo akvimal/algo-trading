@@ -142,8 +142,8 @@ def _latest_text(db: Session, user: User, cat: n.Category) -> str:
         if not text:
             raise HTTPException(status_code=404, detail="No stock showed a strong two-sided shift in the latest scan." if snapshot_date else "There is no OI scan yet.")
         return text
-    if cat.key in ("session_nse", "session_crypto"):
-        return _session_text(db, user, "NSE" if cat.key == "session_nse" else "CRYPTO")
+    if cat.key in ("session_nse", "session_mcx", "session_crypto"):
+        return _session_text(db, user, {"session_nse": "NSE", "session_mcx": "MCX"}.get(cat.key, "CRYPTO"))
     return notification_jobs.ops_status_text(db, datetime.now(timezone.utc))
 
 
@@ -153,7 +153,7 @@ def _session_text(db: Session, user: User, segment: str) -> str:
     from app.providers import session_market
 
     try:
-        market = session_market.fetch_nse() if segment == "NSE" else session_market.fetch_crypto()
+        market = {"NSE": session_market.fetch_nse, "MCX": session_market.fetch_mcx}.get(segment, session_market.fetch_crypto)()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"The market data could not be read: {exc}")
     trader = execution_client.trader_day(user.user_id, segment, market["day"])

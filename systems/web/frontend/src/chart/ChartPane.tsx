@@ -3,7 +3,7 @@ import { ActionType, OverlayMode, dispose, init, type Chart, type Crosshair, typ
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
-import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
+import { ALERTABLE, SERVER_WATCHED, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
   DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
@@ -14,6 +14,7 @@ import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./s
 import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
 import { mergeStyle, sanitizeStyle, toOverlayStyles, type DrawingStyle } from "./drawingStyle";
 import { withDevicePixelRatio } from "./snapshot";
+import { scheduleZoneSync } from "./zoneSync";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
@@ -634,7 +635,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [oiLevels, status, epoch]);
 
   // ---- drawings: saved per instrument, restored after every load ----
-  const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()], instanceIdRef.current);
+  const persist = () => {
+    const all = [...drawnRef.current.values()];
+    saveDrawings(propsRef.current.exchange, propsRef.current.symbol, all, instanceIdRef.current);
+    // the armed zones and levels are also watched by the server, so a touch reaches Telegram with every tab closed
+    scheduleZoneSync(propsRef.current.exchange, propsRef.current.symbol, propsRef.current.interval, all);
+  };
 
   // A drawing being dragged. The library only reports the end of a drag when the mouse is released over the chart's own plot area: let
   // go over the price axis, between two panes or outside the window and that report never comes, so the change was neither saved nor
@@ -675,7 +681,16 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         emitDrawing();
         return false;
       }
-      drawnRef.current.set(e.overlay.id, serialize(e.overlay));
+      const drawn = serialize(e.overlay);
+      // A zone is drawn to be watched: it is armed straight away (the person can switch it off), and starts from where the price is now.
+      const arm = e.overlay.name === "rect" && !drawn.alert;
+      drawnRef.current.set(e.overlay.id, arm ? { ...drawn, alert: { trigger: "cross" } } : drawn);
+      if (arm) {
+        const z = alertZone(drawn);
+        const price = propsRef.current.price;
+        if (price != null && z) sidesRef.current.set(e.overlay.id, sideOf(price, z));
+        emitArmed();
+      }
       persist();
       emitDrawing();
       return false;
@@ -788,6 +803,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const selection: SelectionInfo | null = d
       ? {
           alertable: ALERTABLE.has(d.name),
+          server: SERVER_WATCHED.has(d.name),
           trigger: d.alert?.trigger ?? null,
           level: levelText(d),
           look: { name: d.name, style: d.style ?? {}, hasDefault: loadDrawingDefaults()[d.name] !== undefined },
@@ -846,6 +862,11 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     // A restored alert starts from where the price is now, not from whichever tick happens to come next.
     if (propsRef.current.price != null) seedAlerts(propsRef.current.price);
     emitArmed();
+    // Zones armed before the server watched them (or on this browser's last visit) are sent now. Only when there are some: an empty set is sent
+    // when the person deletes a zone, never on load, because a browser with no drawings (another device, cleared storage) must not wipe the
+    // zones the server already watches for them.
+    const all = [...drawnRef.current.values()];
+    if (all.some((d) => d.alert && SERVER_WATCHED.has(d.name))) scheduleZoneSync(propsRef.current.exchange, propsRef.current.symbol, propsRef.current.interval, all);
   }
 
   useEffect(() => {

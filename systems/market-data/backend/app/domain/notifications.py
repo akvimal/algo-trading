@@ -415,6 +415,31 @@ def _account_line(acct: Optional[dict], segment: str) -> Optional[str]:
     return "Paper account: " + " · ".join(parts)
 
 
+ZONE_STATUS = {
+    "untouched": "not reached today",
+    "tested": "reached",
+    "held": "tested and held ✅",
+    "broke": "tested and broke ⚠️",
+    "closed_inside": "closed inside it",
+}
+
+
+def _zone_band(lo: float, hi: float) -> str:
+    f = lambda v: f"{v:,.0f}" if abs(v) >= 1000 else f"{v:,.2f}"  # noqa: E731
+    return f(lo) if lo == hi else f"{f(lo)}–{f(hi)}"
+
+
+def zone_line(z: dict) -> str:
+    """One line on what became of a zone or level the person armed: 'GOLDM support 147,116–147,673: tested and held ✅ (low 147,629 at 16:00)'."""
+    role = "level" if z.get("kind") == "line" else (z.get("role") or "zone")
+    mark = {"support": "🟢", "resistance": "🔴"}.get(z.get("role") or "", "🟡")
+    detail = ""
+    if z["status"] != "untouched" and z.get("at"):
+        extreme = f"{'low' if z.get('role') == 'support' else 'high'} {z['extreme']:,.0f} at " if z.get("extreme") is not None and z.get("role") in ("support", "resistance") else "at "
+        detail = f" ({extreme}{z['at']})"
+    return f"{mark} {z['symbol']} {role} {_zone_band(z['lo'], z['hi'])}: {ZONE_STATUS[z['status']]}{detail}"
+
+
 def _market_strip(market: dict, bias: Optional[str], segment: str) -> str:
     bits = []
     for r in market["rows"]:
@@ -426,7 +451,7 @@ def _market_strip(market: dict, bias: Optional[str], segment: str) -> str:
     return "Market: " + " · ".join(bits)
 
 
-def session_message(segment: str, day: date, market: dict, trader: Optional[dict], bias: Optional[str] = None, trader_known: bool = True) -> str:
+def session_message(segment: str, day: date, market: dict, trader: Optional[dict], bias: Optional[str] = None, trader_known: bool = True, zones: Optional[list] = None) -> str:
     """The post-session summary, your own trading first: the account, each trade judged by the plan, the last 30 days, then a line on the
     market. `trader` is execution's answer for that day (None with `trader_known=False` when execution could not be reached, which the
     message says rather than claiming no trades)."""
@@ -462,6 +487,8 @@ def session_message(segment: str, day: date, market: dict, trader: Optional[dict
             extras.append(f"Discipline (30 days): {trader['discipline_score']}/100")
         if extras:
             lines.append(" · ".join(extras))
+    if zones:
+        lines += ["", "Your zones today"] + [zone_line(z) for z in zones]
     lines += ["", _market_strip(market, bias, segment), "", "Your own record and public market data, not a recommendation. Details in the app."]
     return "\n".join(lines)
 

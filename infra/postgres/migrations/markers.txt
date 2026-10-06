@@ -48,3 +48,4 @@
 043-ideas.sql|market_data.published_ideas|
 044-notifications.sql|market_data.notification_log|
 045-study-note-clean-snapshot.sql|execution.study_notes|snapshot_clean_png
+046-zone-watches.sql|market_data.zone_watches|

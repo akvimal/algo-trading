@@ -182,8 +182,9 @@ def _session_parts(db: Session, user: User, segment: str):
     trader = execution_client.trader_day(user.user_id, segment, market["day"])
     report = get_report(db, market["day"]) if segment == "NSE" else None
     bias = (((report.ai or {}).get("bias")) or (report.rules or {}).get("bias")) if report is not None else None
-    text = n.session_message(segment, market["day"], market, trader, bias, trader_known=trader is not None)
-    image, caption = notification_jobs.session_card_for(segment, market["day"], market, trader, bias)
+    zones = notification_jobs.zone_recap_for(db, user.user_id, segment, market["day"])
+    text = n.session_message(segment, market["day"], market, trader, bias, trader_known=trader is not None, zones=zones)
+    image, caption = notification_jobs.session_card_for(segment, market["day"], market, trader, bias, zones)
     return text, image, caption
 
 

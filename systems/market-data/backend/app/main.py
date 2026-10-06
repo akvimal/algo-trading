@@ -22,6 +22,7 @@ from app.api.routes import (
     order_blocks,
     premarket,
     price_alerts,
+    zone_watches,
     quotes,
     quotes_ws,
     regime,
@@ -51,6 +52,7 @@ app.include_router(candles.router)
 app.include_router(order_blocks.router)
 app.include_router(regime.router)
 app.include_router(price_alerts.router)
+app.include_router(zone_watches.router)
 app.include_router(ideas.router)
 app.include_router(notifications.router)
 app.include_router(dhan.router)

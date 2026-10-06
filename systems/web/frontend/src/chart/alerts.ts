@@ -5,12 +5,29 @@ import type { DrawingStyle } from "./drawingStyle";
 // Alerts on drawings: the person marks a line or a zone on the chart, arms it, and is told when the
 // price crosses it. Plain logic and no chart library, so it can be tested without a screen.
 //
-// These alerts are watched by the open page, not by a server: they only fire while this page is open
-// and the price is arriving. That is said wherever the person arms one.
+// An alert on a line or zone is watched by the open page: it fires while this page is open and the price is arriving. A ZONE or a HORIZONTAL
+// LEVEL is also sent to the server (see SERVER_WATCHED and serverWatches below), which watches it with every tab closed and messages the
+// person's own Telegram. A sloped line is page-only (its price changes with time). That is said wherever the person arms one.
 
 /** The drawings an alert can watch: a level (a horizontal line or a price level), a diagonal line or
  * ray (its price now is a straight-line projection of its two anchors), or a zone (a price band). */
 export const ALERTABLE = new Set(["horizontalStraightLine", "priceLine", "segment", "rayLine", "rect"]);
+
+/** The drawings the server can watch: a zone (a rectangle) and a horizontal level. A sloped line moves with time, so only the open page follows it. */
+export const SERVER_WATCHED = new Set(["rect", "horizontalStraightLine", "priceLine"]);
+
+export type ServerWatch = { kind: "zone" | "line"; lo: number; hi: number };
+
+/** What the server should watch for these drawings: every ARMED zone or level, as a band (a level has lo = hi). */
+export function serverWatches(drawings: Pick<StoredDrawing, "name" | "points" | "alert">[]): ServerWatch[] {
+  const out: ServerWatch[] = [];
+  for (const d of drawings) {
+    if (!d.alert || !SERVER_WATCHED.has(d.name)) continue;
+    const z = alertZone(d);
+    if (z) out.push({ kind: d.name === "rect" ? "zone" : "line", lo: z.lo, hi: z.hi });
+  }
+  return out;
+}
 
 export type Trigger = "cross" | "close";
 export type Side = "above" | "inside" | "below";
@@ -82,6 +99,8 @@ export function levelText(d: Pick<StoredDrawing, "name" | "points">, now: number
 /** What the page needs to know about the selected drawing to offer an alert on it. */
 export type SelectionInfo = {
   alertable: boolean;
+  /** True when the server also watches this drawing (a zone or a horizontal level), so a Telegram message comes with every tab closed. */
+  server?: boolean;
   trigger: Trigger | null;
   level: string | null;
   /** The selected drawing's look, for the style bar: which tool made it, what has been changed, and whether that tool has a default. */

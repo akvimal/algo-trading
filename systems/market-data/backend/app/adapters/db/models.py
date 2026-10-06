@@ -392,3 +392,48 @@ class NotificationLog(Base):
     last_attempt_at = Column(TIMESTAMP(timezone=True))
     last_error = Column(Text)
 
+
+
+class ZoneWatch(Base):
+    """A zone (price band) or level a person armed on a chart, watched by the server. See migration 046 and app/domain/zone_watch.py."""
+
+    __tablename__ = "zone_watches"
+    __table_args__ = (UniqueConstraint("user_id", "exchange", "symbol", "kind", "lo", "hi"), {"schema": SCHEMA})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    kind = Column(Text, nullable=False)
+    lo = Column(Numeric, nullable=False)
+    hi = Column(Numeric, nullable=False)
+    interval = Column(Text, nullable=False, default="15min")
+    role = Column(Text)
+    last_state = Column(Text)
+    last_checked_at = Column(TIMESTAMP(timezone=True))
+    last_bar_checked = Column(TIMESTAMP(timezone=True))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class ZoneEvent(Base):
+    """What happened to a zone: a touch, and how the candle that touched it closed. Kept after the zone is removed. See migration 046."""
+
+    __tablename__ = "zone_events"
+    __table_args__ = (UniqueConstraint("user_id", "dedupe_key"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    watch_id = Column(UUID(as_uuid=True))
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    kind = Column(Text, nullable=False)
+    lo = Column(Numeric, nullable=False)
+    hi = Column(Numeric, nullable=False)
+    role = Column(Text)
+    event = Column(Text, nullable=False)
+    at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    bar_time = Column(TIMESTAMP(timezone=True))
+    approach = Column(Text)
+    extreme = Column(Numeric)
+    close = Column(Numeric)
+    dedupe_key = Column(Text, nullable=False)

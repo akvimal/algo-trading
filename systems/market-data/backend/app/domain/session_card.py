@@ -293,6 +293,31 @@ def _unknown() -> Block:
     return 100, draw
 
 
+def _zones_block(zones: list[dict]) -> Block:
+    """What became of each zone or level the person armed: a dot for its role, the band, and a chip for how the day treated it."""
+    chip = {"untouched": ("not reached", DIM), "tested": ("reached", WARN), "held": ("tested · held", UP), "broke": ("tested · broke", DN), "closed_inside": ("closed inside", WARN)}
+
+    def draw(d, y):
+        _text(d, (PAD + 4, y), "YOUR ZONES", 20, DIM, True)
+        yy = y + 34
+        for z in zones:
+            _panel(d, yy, 72)
+            col = UP if z.get("role") == "support" else DN if z.get("role") == "resistance" else WARN
+            d.ellipse([PAD + 22, yy + 26, PAD + 42, yy + 46], fill=col)
+            role = "level" if z.get("kind") == "line" else (z.get("role") or "zone")
+            _text(d, (PAD + 62, yy + 10), _fit(d, f"{z['symbol']}  {role}", 24, 420, True), 24, TEXT, True)
+            band = f"{z['lo']:,.0f}" if z["lo"] == z["hi"] else f"{z['lo']:,.0f}–{z['hi']:,.0f}"
+            _text(d, (PAD + 62, yy + 42), band, 19, DIM)
+            word, wcol = chip[z["status"]]
+            _text(d, (W - PAD - 24, yy + 10), word, 24, wcol, True, anchor="ra")
+            if z["status"] != "untouched" and z.get("at"):
+                ex = f"{'low' if z.get('role') == 'support' else 'high'} {z['extreme']:,.0f} · " if z.get("extreme") is not None and z.get("role") in ("support", "resistance") else ""
+                _text(d, (W - PAD - 24, yy + 42), f"{ex}{z['at']}", 19, DIM, anchor="ra")
+            yy += 80
+
+    return 34 + 80 * len(zones), draw
+
+
 def _market_strip(market: dict, bias_held: Optional[tuple[str, bool]]) -> Block:
     def draw(d, y):
         _text(d, (PAD + 4, y), "THE MARKET", 20, DIM, True)
@@ -334,7 +359,7 @@ def _footer(trader: Optional[dict]) -> Block:
     return 104, draw
 
 
-def render_session_card(segment: str, day: date, market: dict, trader: Optional[dict], bias_held: Optional[tuple[str, bool]] = None, trader_known: bool = True) -> bytes:
+def render_session_card(segment: str, day: date, market: dict, trader: Optional[dict], bias_held: Optional[tuple[str, bool]] = None, trader_known: bool = True, zones: Optional[list] = None) -> bytes:
     """The card as PNG bytes. `bias_held` is (the morning's bias, whether it held) for NSE, else None."""
     blocks: list[Block] = [_header(segment, day)]
     if not trader_known or trader is None:
@@ -354,6 +379,8 @@ def render_session_card(segment: str, day: date, market: dict, trader: Optional[
             if m:
                 blocks.append(_plan_block(segment, m))
                 blocks.append(_trade_rows(segment, m, name))
+    if zones:
+        blocks.append(_zones_block(zones))
     blocks.append(_market_strip(market, bias_held))
     blocks.append(_footer(trader if trader_known else None))
     gap = 18

@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
+import { listZoneWatches, removeZoneWatch, type ZoneEvent, type ZoneWatch } from "../api/zoneWatches";
 import { createPriceAlert, deletePriceAlert, getAlertChannel, listPriceAlerts, sendTestAlert, setAlertChannel, type AlertChannel, type AlertDirection, type PriceAlert } from "../api/priceAlerts";
 import { ErrorNotice, Skeleton } from "../components/bits";
+import { formatPrice } from "../format";
 import { DailyMessages } from "../components/DailyMessages";
 import { TextField } from "../components/Field";
 import { SEGMENTS } from "../config";
@@ -29,7 +31,7 @@ export function AlertsPage() {
       <h1>Price alerts</h1>
       <p className="dim" style={{ margin: 0 }}>
         Get a Telegram message when a price crosses a level, even with the app closed. The server checks every minute, so a very brief spike can be
-        missed. Lines you draw on a chart alert only while that chart is open.
+        missed. Lines you draw on a chart alert only while that chart is open; zones and horizontal levels are watched by the server too (below).
       </p>
 
       {channel.loading && <Skeleton lines={3} />}
@@ -37,6 +39,7 @@ export function AlertsPage() {
       {channel.data && <TelegramCard channel={channel.data} onChanged={channel.reload} />}
       {channel.data && <NewAlertCard ready={channel.data.chat_set} onCreated={alerts.reload} />}
       {channel.data && <DailyMessages />}
+      {channel.data && <ZonesCard />}
 
       <h2 className="section-title">Your alerts</h2>
       {alerts.loading && <Skeleton lines={3} />}
@@ -50,6 +53,69 @@ export function AlertsPage() {
       )}
       {alerts.data && sortAlerts(alerts.data).map((a) => <AlertRow key={a.id} alert={a} onDeleted={alerts.reload} />)}
     </div>
+  );
+}
+
+const num = (v: number) => formatPrice(v);
+const band = (lo: number, hi: number) => (lo === hi ? num(lo) : `${num(lo)}–${num(hi)}`);
+const ROLE_WORD: Record<string, string> = { support: "support", resistance: "resistance", zone: "zone" };
+const EVENT_WORD: Record<ZoneEvent["event"], string> = { touch: "reached it", held: "tested and held", broke: "closed through it", inside: "closed inside it" };
+
+/** The zones and levels drawn on a chart and armed, as the server holds them: each is watched all day, with every tab closed, and a touch (and then
+ * how the candle closed: held or broke) comes to Telegram. Drawing a zone arms it; this list is where to check the server really has it. */
+function ZonesCard() {
+  const zones = useResource(listZoneWatches, [], { pollMs: POLL_MS });
+  const [error, setError] = useState<string | null>(null);
+  async function remove(w: ZoneWatch) {
+    setError(null);
+    try {
+      await removeZoneWatch(w.id);
+      zones.reload();
+    } catch (e) {
+      setError(message(e, "Could not remove it. Try again."));
+    }
+  }
+  return (
+    <>
+      <h2 className="section-title">Zones the server is watching</h2>
+      <p className="dim" style={{ margin: 0 }} data-testid="zones-help">
+        Zones you draw on a chart are armed and watched here with every tab closed. You get a Telegram message when price reaches one, and another when the candle closes to say
+        whether it held or broke. It also catches a wick that touched between two checks. A zone follows the browser you drew it in; delete or move it on the chart and it changes here.
+      </p>
+      {zones.loading && <Skeleton lines={2} />}
+      {zones.error && <ErrorNotice error={zones.error} onRetry={zones.reload} />}
+      {error && <div className="notice error" role="alert">{error}</div>}
+      {zones.data && zones.data.watches.length === 0 && (
+        <div className="card">
+          <p className="dim" style={{ margin: 0 }}>
+            None armed yet. Draw a zone on a chart (the rectangle tool) and it is armed straight away.
+          </p>
+        </div>
+      )}
+      {zones.data?.watches.map((w) => (
+        <div className="card row" key={w.id} data-testid="zone-watch">
+          <span>
+            <strong>{w.symbol}</strong> <span className="pill pill-small">{w.exchange}</span>{" "}
+            <span className={`pill pill-small ${w.role === "support" ? "up" : w.role === "resistance" ? "dn" : ""}`}>{w.kind === "line" ? "level" : ROLE_WORD[w.role ?? "zone"]}</span>{" "}
+            <span className="num">{band(w.lo, w.hi)}</span>
+          </span>
+          <button className="btn btn-small" onClick={() => void remove(w)} aria-label={`Stop watching ${w.symbol} ${band(w.lo, w.hi)}`}>
+            Stop watching
+          </button>
+        </div>
+      ))}
+      {zones.data && zones.data.events.length > 0 && (
+        <div className="card" data-testid="zone-events">
+          <strong>Latest</strong>
+          {zones.data.events.slice(0, 8).map((e, i) => (
+            <div key={i} className="dim" style={{ fontSize: 13 }}>
+              {new Date(e.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · {e.symbol} {band(e.lo, e.hi)} {EVENT_WORD[e.event]}
+              {e.event !== "touch" && e.close != null ? ` at ${num(e.close)}` : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 

@@ -350,3 +350,43 @@ CREATE TABLE IF NOT EXISTS market_data.notification_log (
 );
 CREATE INDEX IF NOT EXISTS idx_notification_log_pending ON market_data.notification_log (created_at) WHERE sent_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_log_user ON market_data.notification_log (user_id, created_at DESC);
+
+-- Zones and levels armed on a chart, watched by the server. See migration 046 and app/domain/zone_watch.py.
+CREATE TABLE IF NOT EXISTS market_data.zone_watches (
+    id               UUID PRIMARY KEY,
+    user_id          UUID NOT NULL,
+    exchange         TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('zone', 'line')),
+    lo               NUMERIC NOT NULL,
+    hi               NUMERIC NOT NULL,
+    interval         TEXT NOT NULL DEFAULT '15min',
+    role             TEXT,
+    last_state       TEXT,
+    last_checked_at  TIMESTAMPTZ,
+    last_bar_checked TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, exchange, symbol, kind, lo, hi)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_watches_symbol ON market_data.zone_watches (exchange, symbol);
+
+CREATE TABLE IF NOT EXISTS market_data.zone_events (
+    id           BIGSERIAL PRIMARY KEY,
+    watch_id     UUID,
+    user_id      UUID NOT NULL,
+    exchange     TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    lo           NUMERIC NOT NULL,
+    hi           NUMERIC NOT NULL,
+    role         TEXT,
+    event        TEXT NOT NULL CHECK (event IN ('touch', 'held', 'broke', 'inside')),
+    at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    bar_time     TIMESTAMPTZ,
+    approach     TEXT,
+    extreme      NUMERIC,
+    close        NUMERIC,
+    dedupe_key   TEXT NOT NULL,
+    UNIQUE (user_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_events_user_day ON market_data.zone_events (user_id, at DESC);

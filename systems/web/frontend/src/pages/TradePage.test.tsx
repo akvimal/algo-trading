@@ -2890,13 +2890,13 @@ describe("alerts on drawings", () => {
   const bar = () => screen.getByRole("group", { name: "Alerts on drawings" });
   const flash = () => screen.queryByTestId("alert-flash");
 
-  it("offers an alert on a selected line, reading out its level, and says it works only while the page is open", async () => {
+  it("offers an alert on a selected line, reading out its level, and says what only works while the page is open", async () => {
     const { select } = await open([level(1015)]);
     expect(screen.queryByRole("group", { name: "Alerts on drawings" })).not.toBeInTheDocument(); // nothing selected, nothing armed
     select("horizontalStraightLine");
     expect(within(bar()).getByText("1,015")).toBeInTheDocument();
     expect(within(bar()).getByRole("button", { name: "Alert me" })).toHaveAttribute("aria-pressed", "false");
-    expect(within(bar()).getByText(/only while this page is open/)).toBeInTheDocument();
+    expect(within(bar()).getByTestId("alert-limits")).toHaveTextContent(/Zones and horizontal levels are also watched by the server and sent to your Telegram, with this page closed\. A sloped line fires only while this page is open/);
   });
 
   it("arms it, keeps it with the drawing, and counts it", async () => {

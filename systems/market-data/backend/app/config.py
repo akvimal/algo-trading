@@ -167,6 +167,11 @@ class Settings(BaseSettings):
     ideas_registration_line: str = ""
     # How often the scheduler polls the LTP for every active alert.
     price_alert_check_interval_seconds: int = 60
+    # Zones armed on a chart (app/domain/zone_watch.py): the price against each zone this often, the closed candles every minute, and the list of
+    # a person's zones goes out each morning.
+    zone_watch_check_interval_seconds: int = 20
+    zone_morning_hour: int = 8
+    zone_morning_minute: int = 50
 
     # OpenRouter (openrouter.ai) - turns the raw RSS headlines (see
     # app/providers/news.py) into an AI trend-relevance digest (bias +

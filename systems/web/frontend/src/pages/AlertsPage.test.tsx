@@ -19,6 +19,8 @@ let alerts: PriceAlert[];
 let calls: { url: string; method: string; body: any }[];
 let failNext: { status: number; detail: string } | null;
 let currentPrice: number | null;
+let zoneWatches: any[];
+let zoneEvents: any[];
 
 beforeEach(() => {
   channel = { bot_configured: true, chat_set: true, chat_id_hint: "…6789" };
@@ -26,6 +28,8 @@ beforeEach(() => {
   calls = [];
   failNext = null;
   currentPrice = 71_240;
+  zoneWatches = [];
+  zoneEvents = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -36,6 +40,12 @@ beforeEach(() => {
         const f = failNext;
         failNext = null;
         return json({ detail: f.detail }, f.status);
+      }
+      if (url.endsWith("/zone-watches") && method === "GET") return json({ watches: zoneWatches, events: zoneEvents });
+      const zdel = url.match(/\/zone-watches\/([\w-]+)$/);
+      if (zdel && method === "DELETE") {
+        zoneWatches = zoneWatches.filter((w) => w.id !== zdel[1]);
+        return json(null, 204);
       }
       if (url.includes("/notifications/history")) return json([]);
       if (url.endsWith("/notifications")) return json({ chat_ready: true, categories: [] });
@@ -211,3 +221,33 @@ describe("AlertsPage", () => {
   });
 });
 
+describe("the zones the server is watching", () => {
+  const goldm = { id: "z1", exchange: "MCX", symbol: "GOLDM-05Nov2026-FUT", kind: "zone", lo: 147116, hi: 147673, role: "support", interval: "15min", last_state: "above" };
+
+  it("says what it does, and that none are armed yet when the person has drawn none", async () => {
+    renderPage();
+    expect(await screen.findByText(/None armed yet/)).toBeInTheDocument();
+    expect(screen.getByTestId("zones-help")).toHaveTextContent(/watched here with every tab closed.*whether it held or broke.*wick/);
+  });
+
+  it("lists each armed zone with its role and band, and the latest things that happened to them", async () => {
+    zoneWatches = [goldm, { ...goldm, id: "z2", kind: "line", lo: 149000, hi: 149000, role: "resistance" }];
+    zoneEvents = [{ symbol: "GOLDM-05Nov2026-FUT", exchange: "MCX", kind: "zone", lo: 147116, hi: 147673, role: "support", event: "held", at: "2026-10-06T10:30:00Z", extreme: 147629, close: 148000 }];
+    renderPage();
+    const rows = await screen.findAllByTestId("zone-watch");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("GOLDM-05Nov2026-FUT");
+    expect(rows[0]).toHaveTextContent("support");
+    expect(rows[0]).toHaveTextContent("1,47,116–1,47,673");
+    expect(rows[1]).toHaveTextContent("level");
+    expect(screen.getByTestId("zone-events")).toHaveTextContent(/GOLDM-05Nov2026-FUT 1,47,116–1,47,673 tested and held at 1,48,000/);
+  });
+
+  it("stops watching a zone when asked, and the list reflects it", async () => {
+    zoneWatches = [goldm];
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /Stop watching GOLDM-05Nov2026-FUT/ }));
+    await waitFor(() => expect(screen.queryByTestId("zone-watch")).not.toBeInTheDocument());
+    expect(writes("DELETE").some((c) => c.url.endsWith("/zone-watches/z1"))).toBe(true);
+  });
+});

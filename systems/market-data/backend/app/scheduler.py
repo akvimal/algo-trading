@@ -543,6 +543,48 @@ def _check_price_alerts() -> None:
         db.close()
 
 
+def _check_zone_live() -> None:
+    """The price against every zone armed on a chart (app/domain/zone_watch.py): announce a touch at once."""
+    from app.domain.zone_watch import check_live
+
+    db = SessionLocal()
+    try:
+        check_live(db)
+    except Exception:
+        logger.exception("scheduled zone check failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _check_zone_bars() -> None:
+    """The candles that closed since each zone was armed: a touch the live check missed (a wick) and how each touching candle closed."""
+    from app.domain.zone_watch import check_bars
+
+    db = SessionLocal()
+    try:
+        check_bars(db)
+    except Exception:
+        logger.exception("scheduled zone candle check failed")
+        db.rollback()
+    finally:
+        db.close()
+
+
+@tracked("zones-morning", "Your zones today")
+def _send_zones_morning() -> None:
+    from app.domain.zone_watch import send_morning
+
+    run = job_tracker.current()
+    db = SessionLocal()
+    try:
+        sent = send_morning(db, datetime.now(ZoneInfo(settings.timezone)).date())
+    finally:
+        db.close()
+    run.tick(1, {"sent": sent.sent, "failed": sent.failed, "skipped": sent.skipped})
+    logger.info("zones morning list: sent=%d failed=%d skipped=%d", sent.sent, sent.failed, sent.skipped)
+
+
 def job_catalog() -> list[dict]:
     """The jobs worth tracking, in the order they are shown: what each is, when it is due, and what is next. The price-alert
     check (every few seconds) is deliberately absent: a run row per poll would bury the rest."""
@@ -553,6 +595,7 @@ def job_catalog() -> list[dict]:
         ("session-summary-nse", "Post-session summary: NSE", f"Weekdays {s.session_summary_nse_hour:02d}:{s.session_summary_nse_minute:02d}", "Sends each subscriber how the NSE session went and their own closed trades that day."),
         ("session-summary-mcx", "Post-session summary: MCX", f"Weekdays {s.session_summary_mcx_hour:02d}:{s.session_summary_mcx_minute:02d}", "Sends each subscriber how gold, crude, silver and natural gas did and their own closed MCX trades that day."),
         ("session-summary-crypto", "Post-session summary: crypto", f"Daily {s.session_summary_crypto_hour:02d}:{s.session_summary_crypto_minute:02d}", "Sends each subscriber the last 24 hours in BTC and ETH and their own crypto trades that day."),
+        ("zones-morning", "Your zones today", f"Daily {s.zone_morning_hour:02d}:{s.zone_morning_minute:02d}", "Sends each person the zones and levels they have armed, with how far the price is from each."),
         ("premarket-report-record", "Pre-market bias report", f"Weekdays {s.premarket_report_hour:02d}:{s.premarket_report_minute:02d}", "Reads the overnight US close, crude, USDINR, yields, ADRs and GIFT Nifty and works out the day's likely market bias."),
         ("instrument-sync-daily", "Instrument master sync", f"Daily {s.instrument_sync_hour:02d}:{s.instrument_sync_minute:02d}, and at start-up", "Refreshes the broker's list of tradeable instruments and the NSE index memberships."),
         ("sentiment-history-record", "Sentiment recorder", f"Every {s.sentiment_history_interval_minutes} minutes while a market is open", "Records the option-chain sentiment badge for the main indices."),
@@ -639,6 +682,13 @@ def start_scheduler() -> None:
     )
     _scheduler.add_job(_notification_retry, IntervalTrigger(minutes=5), id="notification-retry", replace_existing=True, max_instances=1, coalesce=True)
     _scheduler.add_job(_notification_ops_check, IntervalTrigger(minutes=10), id="notification-ops-check", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(_check_zone_live, IntervalTrigger(seconds=settings.zone_watch_check_interval_seconds), id="zone-watch-live", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(_check_zone_bars, IntervalTrigger(seconds=60), id="zone-watch-bars", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(
+        _send_zones_morning,
+        CronTrigger(hour=settings.zone_morning_hour, minute=settings.zone_morning_minute, timezone=settings.timezone),
+        id="zones-morning", replace_existing=True, max_instances=1, coalesce=True,
+    )
     _scheduler.add_job(
         _check_price_alerts,
         IntervalTrigger(seconds=settings.price_alert_check_interval_seconds),

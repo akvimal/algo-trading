@@ -152,7 +152,7 @@ export function MorePage() {
           <span>
             <strong>Price alerts</strong>
             <span className="dim" style={{ display: "block", fontSize: 13 }}>
-              A Telegram message when a price crosses your level, even with the app closed
+              Price alerts and daily Telegram messages: the pre-market bias and strong OI buildups, even with the app closed
             </span>
           </span>
           <span aria-hidden="true">›</span>

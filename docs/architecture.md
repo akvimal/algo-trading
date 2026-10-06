@@ -2263,3 +2263,23 @@ An operator-only way to share a note with an audience through a **separate bot**
 
 **Found while testing:** a snapshot read from the server came back labelled `data:text/plain` in the test environment, which the server would have rejected as unreadable; snapshots are always PNG, so the page now sets the label itself rather than trusting a response header.
 
+### Telegram notifications you subscribe to (2026-10-06)
+
+A small subscription system (`app/domain/notifications.py`, `notification_jobs.py`, routes in `app/api/routes/notifications.py`, UI in More -> Price alerts -> Daily messages) for messages that are not price alerts. Three categories, **every one off until the person turns it on**, each sent to the person's **own** Telegram chat (the one their price alerts use, so they must have connected it): trade event alerts were considered and deliberately left out.
+
+| Category | When | Who |
+|---|---|---|
+| **Pre-market bias** | Weekdays 08:45 IST, right after the report is saved (30 minutes before NSE opens) | anyone |
+| **Strong OI buildup** | Weekdays once the end-of-day OI scan **finishes** (about 16:05-16:20 IST), one message with the top N (default 10, 3-20) bullish and bearish | anyone |
+| **Operator alerts** | Checked every 10 minutes: the Dhan token expired or within 6 hours of expiring, and failed background jobs | admins only |
+
+**Sent once, never lost, never forever.** `notification_log` is keyed `(user, category, dedupe key)`: the pre-market message per day, the OI digest per trading day, a token problem per token expiry, a failed job per job per IST day. A repeat call (a re-run, a manual refresh, a restart) finds the row and sends nothing. A failed send stays in the log with its reason and is retried every 5 minutes, up to 5 attempts and only within 18 hours, then shown as "Not delivered"; a person who removed their chat is skipped without it counting against the message. Delivery history (including each failure's reason) is on the page. "Send me the latest now" sends a category's latest message to the caller's own chat for checking (20 s apart, logged as a manual send, never retried in the background).
+
+**The OI rule** is the Scan screen's: both call and put OI up at least 10% with a long buildup on both sides (bullish) or a short buildup on both (bearish), ranked by the combined shift. It describes the option chain that day and says it is not a prediction. The digest is only sent when most of the stocks were actually written (at least half), so a scan that mostly failed does not send a misleading short list.
+
+**A schedule fix came with it, and it changes when jobs run.** Every `CronTrigger` in the scheduler now carries `timezone=settings.timezone`. Before, only the pre-market job did, so the end-of-day OI scan, the equity screener and the instrument sync fired on the container's **UTC** clock, 5 h 30 m late: the "15:40" OI scan ran at about 21:10 IST. New times (IST, weekdays): instrument sync 08:00, pre-market report 08:45, **OI scan 16:05** (was 15:40), equity screener **16:30** (was 16:00, after the OI scan so the two do not compete for Dhan's shared rate limit). A test fails if any cron lacks a timezone.
+
+**Operator alert noise control.** A job that fails every few minutes (the Dhan token renewal does once the token has expired: five runs in a day on dev) is one problem: failed runs are grouped by job and IST day and sent once, with the count and the latest reason.
+
+Not built: trade event alerts (stop-loss / target / square-off), a holiday calendar (the pre-market message also goes out on a market holiday), and per-user send times.
+

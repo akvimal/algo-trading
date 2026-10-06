@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { createPriceAlert, deletePriceAlert, getAlertChannel, listPriceAlerts, sendTestAlert, setAlertChannel, type AlertChannel, type AlertDirection, type PriceAlert } from "../api/priceAlerts";
 import { ErrorNotice, Skeleton } from "../components/bits";
+import { DailyMessages } from "../components/DailyMessages";
 import { TextField } from "../components/Field";
 import { SEGMENTS } from "../config";
 import { useResource } from "../hooks/useResource";
@@ -35,6 +36,7 @@ export function AlertsPage() {
       {channel.error && <ErrorNotice error={channel.error} onRetry={channel.reload} />}
       {channel.data && <TelegramCard channel={channel.data} onChanged={channel.reload} />}
       {channel.data && <NewAlertCard ready={channel.data.chat_set} onCreated={alerts.reload} />}
+      {channel.data && <DailyMessages />}
 
       <h2 className="section-title">Your alerts</h2>
       {alerts.loading && <Skeleton lines={3} />}

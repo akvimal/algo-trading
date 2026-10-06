@@ -30,8 +30,10 @@ class Settings(BaseSettings):
     # after the US close is final and GIFT Nifty is trading.
     premarket_report_hour: int = 8
     premarket_report_minute: int = 45
-    oi_eod_snapshot_hour: int = 15
-    oi_eod_snapshot_minute: int = 40
+    # 16:05 IST (moved from 15:40 on 2026-10-06): the strong-OI-buildup digest goes out when this scan finishes, and the scan runs
+    # in IST now (the CronTriggers below carry timezone=; before that they fired on the container's UTC clock, 5h30m late).
+    oi_eod_snapshot_hour: int = 16
+    oi_eod_snapshot_minute: int = 5
     # EOD equity screener (momentum/trend + 52-week proximity, see
     # app/scheduler.py's _record_equity_screener_snapshot) - sequenced
     # AFTER the OI snapshot job above (15:40) rather than at the same
@@ -40,8 +42,9 @@ class Settings(BaseSettings):
     # F&O-only stocks) - a full sweep takes ~65-70 minutes at Dhan's 2s/
     # call candle throttle, comfortably finishing well before the next
     # trading day.
+    # 16:30 IST, after the OI scan above (16:05, a ~10-15 minute run) so the two do not compete for Dhan's shared rate limit.
     equity_screener_snapshot_hour: int = 16
-    equity_screener_snapshot_minute: int = 0
+    equity_screener_snapshot_minute: int = 30
 
     dhan_client_id: str = ""
     dhan_access_token: str = ""

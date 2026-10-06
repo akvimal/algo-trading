@@ -37,6 +37,8 @@ beforeEach(() => {
         failNext = null;
         return json({ detail: f.detail }, f.status);
       }
+      if (url.includes("/notifications/history")) return json([]);
+      if (url.endsWith("/notifications")) return json({ chat_ready: true, categories: [] });
       if (url.endsWith("/price-alerts/channel") && method === "GET") return json(channel);
       if (url.endsWith("/price-alerts/channel") && method === "PUT") {
         channel = body.telegram_chat_id ? { ...channel, chat_set: true, chat_id_hint: `…${body.telegram_chat_id.slice(-4)}` } : { ...channel, chat_set: false, chat_id_hint: null };

@@ -310,6 +310,18 @@ def _record_oi_eod_snapshot() -> None:
         db.close()
     run.tick(len(symbols), tally)
     _log_eod_summary("OI EOD snapshot", len(symbols), tally)
+    # The scan is complete, so the day's strong-buildup digest can go out. Only when most of the universe was read: after a
+    # run that mostly failed (Dhan down) the list would be missing most stocks and misleading. Never fails the job.
+    if tally["written"] >= max(1, len(symbols) // 2):
+        try:
+            from app.domain.notification_jobs import send_oi_digest
+
+            sent = send_oi_digest()
+            logger.info("scheduled OI EOD snapshot: digest sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+        except Exception:
+            logger.exception("scheduled OI EOD snapshot: the digest could not be sent")
+    else:
+        logger.warning("scheduled OI EOD snapshot: only %d of %d stocks written - the digest was not sent", tally["written"], len(symbols))
 
 
 @tracked("equity-screener-snapshot-record", "Equity screener snapshot")
@@ -460,6 +472,29 @@ def _record_premarket_report() -> None:
         db.close()
     if report["ai_error"]:
         run.note(report["ai_error"])
+    # Push it to everyone subscribed (each with their own chat, once a day). Never fails the job.
+    try:
+        from app.domain.notification_jobs import send_premarket
+
+        sent = send_premarket(report)
+        logger.info("pre-market report: push sent=%d failed=%d already_sent=%d", sent.sent, sent.failed, sent.skipped)
+    except Exception:
+        logger.exception("pre-market report: the push could not be sent")
+
+
+def _notification_retry() -> None:
+    """Re-send notifications whose first attempt failed (see app/domain/notifications.py). Not tracked in the job log: it runs every
+    few minutes and almost always has nothing to do."""
+    from app.domain.notification_jobs import retry_failed
+
+    retry_failed()
+
+
+def _notification_ops_check() -> None:
+    """Tell the operator about an expired / expiring Dhan token or a failed background job, once each."""
+    from app.domain.notification_jobs import check_ops
+
+    check_ops()
 
 
 def _check_price_alerts() -> None:
@@ -504,7 +539,7 @@ def start_scheduler() -> None:
     job_tracker.mark_interrupted_on_start()
     _scheduler.add_job(
         _sync_all,
-        CronTrigger(hour=settings.instrument_sync_hour, minute=settings.instrument_sync_minute),
+        CronTrigger(hour=settings.instrument_sync_hour, minute=settings.instrument_sync_minute, timezone=settings.timezone),
         id="instrument-sync-daily",
         replace_existing=True,
     )
@@ -530,19 +565,19 @@ def start_scheduler() -> None:
         # sparklines (LiveChartPanel.tsx's sentimentSteps) then have to
         # round down to display cleanly. Recording ON that boundary instead
         # means every row already falls on one, no rounding needed downstream.
-        CronTrigger(minute=f"*/{settings.sentiment_history_interval_minutes}"),
+        CronTrigger(minute=f"*/{settings.sentiment_history_interval_minutes}", timezone=settings.timezone),
         id="sentiment-history-record",
         replace_existing=True,
     )
     _scheduler.add_job(
         _record_oi_eod_snapshot,
-        CronTrigger(hour=settings.oi_eod_snapshot_hour, minute=settings.oi_eod_snapshot_minute),
+        CronTrigger(day_of_week="mon-fri", hour=settings.oi_eod_snapshot_hour, minute=settings.oi_eod_snapshot_minute, timezone=settings.timezone),
         id="oi-eod-snapshot-record",
         replace_existing=True,
     )
     _scheduler.add_job(
         _record_equity_screener_snapshot,
-        CronTrigger(hour=settings.equity_screener_snapshot_hour, minute=settings.equity_screener_snapshot_minute),
+        CronTrigger(day_of_week="mon-fri", hour=settings.equity_screener_snapshot_hour, minute=settings.equity_screener_snapshot_minute, timezone=settings.timezone),
         id="equity-screener-snapshot-record",
         replace_existing=True,
     )
@@ -554,6 +589,8 @@ def start_scheduler() -> None:
         id="premarket-report-record",
         replace_existing=True,
     )
+    _scheduler.add_job(_notification_retry, IntervalTrigger(minutes=5), id="notification-retry", replace_existing=True, max_instances=1, coalesce=True)
+    _scheduler.add_job(_notification_ops_check, IntervalTrigger(minutes=10), id="notification-ops-check", replace_existing=True, max_instances=1, coalesce=True)
     _scheduler.add_job(
         _check_price_alerts,
         IntervalTrigger(seconds=settings.price_alert_check_interval_seconds),

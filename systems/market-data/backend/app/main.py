@@ -16,6 +16,7 @@ from app.api.routes import (
     instruments,
     jobs,
     news,
+    notifications,
     oi_buildup,
     options,
     order_blocks,
@@ -51,6 +52,7 @@ app.include_router(order_blocks.router)
 app.include_router(regime.router)
 app.include_router(price_alerts.router)
 app.include_router(ideas.router)
+app.include_router(notifications.router)
 app.include_router(dhan.router)
 app.include_router(delta.router)
 app.include_router(options.router)

@@ -46,3 +46,4 @@
 041-dedupe-processing.sql|market_data.news_article_scores|
 042-alert-delivery.sql|market_data.alert_channels|
 043-ideas.sql|market_data.published_ideas|
+044-notifications.sql|market_data.notification_log|

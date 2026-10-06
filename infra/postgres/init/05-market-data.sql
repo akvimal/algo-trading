@@ -325,3 +325,28 @@ CREATE TABLE IF NOT EXISTS market_data.published_ideas (
     published_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     unpublished_at  TIMESTAMPTZ
 );
+
+-- Telegram notifications a person subscribes to, and the log that sends each item once. See migration 044 and app/domain/notifications.py.
+CREATE TABLE IF NOT EXISTS market_data.notification_subscriptions (
+    user_id     UUID NOT NULL,
+    category    TEXT NOT NULL,
+    enabled     BOOLEAN NOT NULL DEFAULT false,
+    params      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, category)
+);
+
+CREATE TABLE IF NOT EXISTS market_data.notification_log (
+    user_id          UUID NOT NULL,
+    category         TEXT NOT NULL,
+    dedupe_key       TEXT NOT NULL,
+    text             TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sent_at          TIMESTAMPTZ,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at  TIMESTAMPTZ,
+    last_error       TEXT,
+    PRIMARY KEY (user_id, category, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_log_pending ON market_data.notification_log (created_at) WHERE sent_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_log_user ON market_data.notification_log (user_id, created_at DESC);

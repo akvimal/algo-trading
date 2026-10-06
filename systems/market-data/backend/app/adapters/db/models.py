@@ -361,3 +361,34 @@ class PublishedIdea(Base):
     published_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
     unpublished_at = Column(TIMESTAMP(timezone=True))
 
+
+class NotificationSubscription(Base):
+    """A category of Telegram notification a user has switched on, with their settings. See migration 044 and app/domain/notifications.py."""
+
+    __tablename__ = "notification_subscriptions"
+    __table_args__ = {"schema": SCHEMA}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
+    category = Column(Text, primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    params = Column(JSONB, nullable=False, default=dict)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+
+
+class NotificationLog(Base):
+    """One notification to one person, identified by (user, category, dedupe key) so it is sent once; `sent_at` stays NULL while it is
+    still being retried. See migration 044 and app/domain/notifications.py."""
+
+    __tablename__ = "notification_log"
+    __table_args__ = {"schema": SCHEMA}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
+    category = Column(Text, primary_key=True)
+    dedupe_key = Column(Text, primary_key=True)
+    text = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    sent_at = Column(TIMESTAMP(timezone=True))
+    attempts = Column(Integer, nullable=False, default=0)
+    last_attempt_at = Column(TIMESTAMP(timezone=True))
+    last_error = Column(Text)
+

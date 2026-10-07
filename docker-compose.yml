@@ -102,6 +102,8 @@ services:
       # so accounts_client.py degrades to the platform OPENROUTER_API_KEY
       # above whenever it's not running rather than failing requests.
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      # Whose saved Dhan keys the platform uses (empty: the first admin).
+      PLATFORM_DHAN_OWNER_EMAIL: ${PLATFORM_DHAN_OWNER_EMAIL:-}
       ACCOUNTS_BASE_URL: http://accounts-backend:8000
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${SIGNAL_ENGINE_BACKEND_PORT}:8000"
@@ -161,6 +163,8 @@ services:
       # dev/test each use their own separate token instead, so both stay
       # at the default. See app/config.py/app/scheduler.py.
       DHAN_TOKEN_RENEW_INTERVAL_HOURS: ${DHAN_TOKEN_RENEW_INTERVAL_HOURS:-20}
+      # The platform's Dhan token comes from the operator's saved Settings keys (see docs/architecture.md, "One source for the platform's Dhan token").
+      PLATFORM_DHAN_FROM_ACCOUNTS: ${PLATFORM_DHAN_FROM_ACCOUNTS:-true}
       # Manual override for Dhan's own SEM_LOT_UNITS, confirmed wrong for
       # MCX commodities (every FUTCOM row reports 1 regardless of real
       # contract size). Each commodity's real trading-unit/quotation-unit

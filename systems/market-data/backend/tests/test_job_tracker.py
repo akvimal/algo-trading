@@ -251,10 +251,34 @@ def test_a_failed_token_renewal_is_a_failed_run(store, monkeypatch):
     def boom():
         raise RuntimeError("TOTP rejected")
 
-    monkeypatch.setattr(scheduler, "renew_access_token", boom)
+    from app.providers import platform_dhan
+
+    monkeypatch.setattr(platform_dhan, "renew_platform_token", boom)
     scheduler._renew_dhan_token()
     (run,) = store.of("dhan-token-renew")
     assert run["status"] == "failed" and "TOTP rejected" in run["message"]
+
+
+def test_a_renewal_that_could_not_be_saved_back_to_settings_is_flagged_on_the_run(store, monkeypatch):
+    from app.config import settings
+    from app.providers import platform_dhan
+
+    monkeypatch.setattr(settings, "platform_dhan_from_accounts", True)
+    monkeypatch.setattr(platform_dhan, "renew_platform_token", lambda: {"renewed": True, "saved_back_to_settings": False})
+    scheduler._renew_dhan_token()
+    (run,) = store.of("dhan-token-renew")
+    assert run["status"] != "failed" and "Settings copy is stale" in run["message"]
+
+
+def test_a_clean_renewal_leaves_no_warning(store, monkeypatch):
+    from app.config import settings
+    from app.providers import platform_dhan
+
+    monkeypatch.setattr(settings, "platform_dhan_from_accounts", True)
+    monkeypatch.setattr(platform_dhan, "renew_platform_token", lambda: {"renewed": True, "saved_back_to_settings": True})
+    scheduler._renew_dhan_token()
+    (run,) = store.of("dhan-token-renew")
+    assert run["status"] == "succeeded" and not run.get("message")
 
 
 def test_the_instrument_sync_counts_each_provider(store, monkeypatch):

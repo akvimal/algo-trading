@@ -128,3 +128,16 @@ def require_admin(credentials: Optional[HTTPAuthorizationCredentials] = Depends(
     if payload.get("is_admin") is not True:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin access required")
     return user_id
+
+
+def require_operator(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    x_internal_secret: Optional[str] = Header(default=None),
+) -> Optional[UUID]:
+    """For the platform's Dhan token routes: a signed-in admin, OR a caller holding the internal service secret (the ops script inside the
+    container, which has no browser login). Anyone else is refused. These routes can replace the platform's data credentials, so they must never
+    be open to the internet."""
+    secret = settings.internal_service_secret
+    if secret and x_internal_secret and hmac.compare_digest(x_internal_secret.encode(), secret.encode()):
+        return None
+    return require_admin(credentials)

@@ -18,7 +18,6 @@ from app.domain.oi_buildup import PreviousSnapshot, compute_eod_buildup
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
 from app.providers import nse_indices
-from app.providers.dhan import renew_access_token
 from app.providers.router import all_providers, get_provider
 
 logger = logging.getLogger(__name__)
@@ -118,11 +117,28 @@ def _sync_all() -> None:
 
 @tracked("dhan-token-renew", "Dhan token renewal")
 def _renew_dhan_token() -> None:
+    from app.providers import platform_dhan
+
+    run = job_tracker.current()
     try:
-        renew_access_token()
+        out = platform_dhan.renew_platform_token()
     except Exception as exc:
         logger.exception("scheduled Dhan token renewal failed")
-        job_tracker.current().fail(f"{type(exc).__name__}: {exc}"[:300])
+        run.fail(f"{type(exc).__name__}: {exc}"[:300])
+        return
+    if settings.platform_dhan_from_accounts and not out["saved_back_to_settings"]:
+        run.note("renewed, but the new token could not be saved to the account, so the Settings copy is stale")
+
+
+def _sync_platform_dhan() -> None:
+    """Use the Dhan token saved on the Settings page when it outlives the one in use (app/providers/platform_dhan.py). Quiet: it runs every few
+    minutes, so it is not in the job log; an adoption is logged."""
+    from app.providers import platform_dhan
+
+    try:
+        platform_dhan.refresh_from_accounts()
+    except Exception:
+        logger.exception("could not check the Dhan token saved in Settings")
 
 
 # keep a day of the five-minute recorder's runs, and drop the ones it skips: it skips every night and weekend, which is noise
@@ -632,6 +648,15 @@ def start_scheduler() -> None:
             id="dhan-token-renew",
             replace_existing=True,
         )
+    # Always on (even with renewal off): adopt a token saved on the Settings page within minutes of it being saved.
+    _scheduler.add_job(
+        _sync_platform_dhan,
+        IntervalTrigger(minutes=settings.platform_dhan_sync_minutes),
+        id="dhan-token-sync",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     _scheduler.add_job(
         _record_sentiment_history,
         # CronTrigger, not IntervalTrigger - an interval trigger's phase is
@@ -700,6 +725,7 @@ def start_scheduler() -> None:
     _scheduler.start()
     # Run once immediately in the background so quotes work without
     # waiting for the next scheduled run (e.g. right after a restart).
+    _scheduler.add_job(_sync_platform_dhan, id="dhan-token-sync-initial", replace_existing=True)
     _scheduler.add_job(_sync_all, id="instrument-sync-initial", replace_existing=True)
     _scheduler.add_job(_record_sentiment_history, id="sentiment-history-record-initial", replace_existing=True)
     if settings.dhan_token_renew_interval_hours > 0:

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # any frontend.
     internal_service_secret: str = "change-me-in-production"
 
+    # Whose saved Dhan credentials the PLATFORM uses (market-data's background jobs, shared feed and option-chain reads). Empty: the first admin
+    # ever created. See app/api/routes/internal.py's platform_owner.
+    platform_dhan_owner_email: str = ""
+
     # Browser origins allowed by CORS, comma-separated. "*" (the default) is
     # for local dev only; docker-compose.prod.yml sets the real origins. See
     # app/secure_config.py.

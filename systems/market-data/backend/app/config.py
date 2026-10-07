@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # tokens per account), so both stay at the default here - see
     # docs/architecture.md.
     dhan_token_renew_interval_hours: int = 20
+    # The platform's Dhan token comes from the operator's saved Settings keys in accounts (app/providers/platform_dhan.py): adopted when it
+    # outlives the one in use, and a renewed token is written back there. False keeps the old, separate platform token.
+    platform_dhan_from_accounts: bool = True
+    platform_dhan_sync_minutes: int = 5
 
     # Own-keys data model (docs/redesign-rollout-plan.md, decision 1): when true, live
     # Dhan-backed market data (quotes, candles, option chains, order blocks, the

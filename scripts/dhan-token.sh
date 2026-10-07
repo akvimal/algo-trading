@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sets, renews or checks the PLATFORM Dhan access token that market-data uses for its background jobs
-# (the end-of-day OI and screener scans), the shared price feed and the option-chain reads. This is NOT
-# the per-person key on the Settings page: that one only serves that person's own requests.
+# The PLATFORM Dhan token (what market-data's background jobs, shared price feed and option-chain reads use).
 #
-# Usage:   scripts/dhan-token.sh [set|from-settings|renew|status]        (default: set)
-#   from-settings [email]
-#           copies the Dhan token you saved on the web app's Settings page (the first admin's, or the account with that
-#           email) to the platform, entirely on the server: nothing to copy or paste. Add --check to look without changing.
-#           Does NOT renew afterwards: Dhan's renewal replaces the token, which would break the Settings copy.
-#   set     asks for the access token (typing is hidden), saves it to the server's persistent volume, then renews it
-#           straight away so it gets a fresh 24 hours. Needs the token to still be valid when you run it.
-#   renew   extends the token the server already holds (only works while that token is still valid)
-#   status  shows when the token expires and whether a live quote works. Changes nothing.
+# It has ONE source: the Dhan token the operator saved on the web app's Settings page (the first admin's, or PLATFORM_DHAN_OWNER_EMAIL's).
+# The server adopts a fresher saved token within a few minutes by itself, renews it before it expires, and saves the renewed token back to
+# Settings, so there is nothing to copy between the two. This script is for checking it, and for nudging it when you cannot wait.
 #
-# The token is read with a hidden prompt, handed to the container by NAME (never in a command line), and never
-# printed. Run it from anywhere inside the repo, on the machine that runs the stack (the VPS, or your PC).
+# Usage:   scripts/dhan-token.sh [status|refresh|renew|set]        (default: status)
+#   status   when the token expires, and whether a live quote works. Changes nothing.
+#   refresh  use the token saved on the Settings page right now instead of waiting a few minutes (only if it outlives the one in use).
+#   renew    adopt a fresher saved token if there is one, then renew with Dhan for a fresh 24 hours (only works while the token is still
+#            valid), and save the renewed token back to Settings.
+#   set      asks for an access token (typing is hidden) and sets it as the platform token AND the saved Settings token. Use it only when
+#            you cannot use the Settings page. Needs the token to still be valid to renew afterwards.
+#
+# The calls run inside the market-data container with its internal secret; a token is read with a hidden prompt, handed to the container by NAME
+# (never in a command line), and never printed. Run it on the machine that runs the stack (the VPS, or your PC).
 
 cd "$(dirname "$0")/.."
-ACTION="${1:-set}"
-case "$ACTION" in set | from-settings | renew | status) ;; *) echo "Usage: $0 [set|from-settings|renew|status]" >&2; exit 1 ;; esac
+ACTION="${1:-status}"
+case "$ACTION" in from-settings) ACTION=refresh ;; esac   # the old name
+case "$ACTION" in status | refresh | renew | set) ;; *) echo "Usage: $0 [status|refresh|renew|set]" >&2; exit 1 ;; esac
 
 # On the VPS (VPS_DOMAIN is set in .env) use the production overlay and the execution profile; elsewhere the plain file.
 if [ -f .env ] && grep -qE '^VPS_DOMAIN=.+' .env && [ -f docker-compose.prod.yml ]; then
@@ -46,129 +47,65 @@ except Exception as e:
 PY
 }
 
-do_renew() {
-  run_py <<'PY'
+# POST/PUT to an operator route as the container's own internal secret, printing everything except any token field.
+call() {  # call METHOD PATH [-e T]   (the token for set comes from the env var T)
+  local method="$1" path="$2"; shift 2
+  export METHOD="$method" URLPATH="$path"
+  run_py -e METHOD -e URLPATH "$@" <<'PY'
+import os
+
 import requests
 
-r = requests.post("http://localhost:8000/dhan/renew-token", timeout=40)
+from app.config import settings
+
+method, path = os.environ["METHOD"], os.environ["URLPATH"]
+kwargs = {}
+if "T" in os.environ:
+    token = os.environ["T"].strip()
+    if token.count(".") != 2:
+        print("  that does not look like a Dhan access token (it should have three parts separated by dots). Nothing was changed.")
+        raise SystemExit(3)
+    kwargs["json"] = {"client_id": settings.dhan_client_id, "access_token": token}
+r = requests.request(method, f"http://localhost:8000{path}", headers={"X-Internal-Secret": settings.internal_service_secret}, timeout=60, **kwargs)
 body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-safe = {k: v for k, v in body.items() if "token" not in k.lower()} if r.ok else body.get("detail", r.text[:200])
-print("  renew:", r.status_code, safe)
+if r.ok:
+    keep = ("has_access_token", "saved_back_to_settings", "saved_to_settings", "adopted_saved_token", "token_expires_at")
+    print(f"  {method} {path}: {r.status_code}", {k: v for k, v in body.items() if "token" not in k.lower() or k in keep})
+else:
+    print(f"  {method} {path}: {r.status_code}", body.get("detail", r.text[:200]))
 raise SystemExit(0 if r.ok else 2)
 PY
 }
 
 echo "Dhan platform token: $ACTION"
 
-if [ "$ACTION" = "status" ]; then
-  show_status
-  exit 0
-fi
+rc=0
+case "$ACTION" in
+  status)
+    show_status
+    exit 0
+    ;;
+  refresh)
+    set +e; call POST /dhan/refresh; rc=$?; set -e
+    ;;
+  renew)
+    set +e; call POST /dhan/renew-token; rc=$?; set -e
+    ;;
+  set)
+    read -r -s -p "Paste the Dhan access token (typing is hidden), then press Enter: " T
+    echo
+    if [ -z "$T" ]; then echo "Nothing entered, so nothing was changed." >&2; exit 1; fi
+    export T
+    set +e; call PUT /dhan/credentials -e T; rc=$?; set -e
+    unset T
+    if [ "$rc" -eq 0 ]; then set +e; call POST /dhan/renew-token; rc=$?; set -e; fi
+    ;;
+esac
 
-if [ "$ACTION" = "from-settings" ]; then
-  EMAIL=""
-  CHECK=0
-  for a in "${@:2}"; do
-    if [ "$a" = "--check" ]; then CHECK=1; else EMAIL="$a"; fi
-  done
-  # Find the account: the one with this email, else the first admin (the operator).
-  if [ -n "$EMAIL" ]; then
-    # the query goes in on stdin: psql does not substitute variables (the email) inside a -c string
-    UID_=$("${DC[@]}" exec -T postgres psql -U algotrading -d algotrading -v e="$EMAIL" -tA <<< "SELECT id FROM accounts.users WHERE lower(email) = lower(:'e') LIMIT 1" | tr -d '[:space:]')
-  else
-    UID_=$("${DC[@]}" exec -T postgres psql -U algotrading -d algotrading -tAc "SELECT id FROM accounts.users WHERE is_admin ORDER BY created_at LIMIT 1" </dev/null | tr -d '[:space:]')
-  fi
-  if [ -z "$UID_" ]; then echo "  no such account${EMAIL:+ ($EMAIL)}. Nothing was changed." >&2; exit 1; fi
-  export UID_ CHECK
-  set +e
-  run_py -e UID_ -e CHECK <<'PY'
-import base64
-import json
-import os
-from datetime import datetime, timezone
-
-import requests
-
-from app.config import settings
-
-uid = os.environ["UID_"]
-r = requests.get(f"{settings.accounts_base_url}/internal/credentials/{uid}/dhan", headers={"X-Internal-Secret": settings.internal_service_secret}, timeout=20)
-if not r.ok:
-    print("  could not read that account's saved keys:", r.status_code)
-    raise SystemExit(2)
-c = r.json()
-if not c.get("has_dhan"):
-    print("  that account has no Dhan token saved on the Settings page yet. Save it there first, then run this again. Nothing was changed.")
-    raise SystemExit(3)
-token = c["dhan_access_token"]
-try:
-    exp = datetime.fromtimestamp(json.loads(base64.urlsafe_b64decode(token.split(".")[1] + "=="))["exp"], tz=timezone.utc)
-except Exception:
-    exp = None
-now = datetime.now(timezone.utc)
-print("  saved token expires at (UTC):", exp.isoformat() if exp else "unknown", "| still valid:", bool(exp and exp > now))
-if exp and exp <= now:
-    print("  that saved token has already expired. Save a fresh one on the Settings page, then run this again. Nothing was changed.")
-    raise SystemExit(4)
-if os.environ.get("CHECK") == "1":
-    print("  --check: nothing was changed.")
-    raise SystemExit(0)
-p = requests.put("http://localhost:8000/dhan/credentials", json={"client_id": c["dhan_client_id"], "access_token": token}, timeout=40)
-body = p.json() if p.headers.get("content-type", "").startswith("application/json") else {}
-print("  set platform token:", p.status_code, {k: v for k, v in body.items() if "token" not in k.lower()} if p.ok else body.get("detail", p.text[:200]))
-raise SystemExit(0 if p.ok else 2)
-PY
-  rc=$?
-  set -e
-  unset UID_ CHECK
-  if [ "$rc" -ne 0 ]; then echo "Not changed (exit $rc). See the line above." >&2; exit "$rc"; fi
-  echo "Now:"
-  show_status
-  echo
-  echo "Done. The platform now uses the token from your Settings page. Renewal is left off on purpose here: set DHAN_TOKEN_RENEW_INTERVAL_HOURS=0 in .env"
-  echo "(then 'up -d market-data-backend') so the scheduled renewal does not replace it and break the Settings copy. Refresh the token on Settings each day, then run this again."
-  exit 0
-fi
-
-if [ "$ACTION" = "set" ]; then
-  read -r -s -p "Paste the Dhan access token (typing is hidden), then press Enter: " T
-  echo
-  if [ -z "$T" ]; then echo "Nothing entered, so nothing was changed." >&2; exit 1; fi
-  export T
-  set +e
-  run_py -e T <<'PY'
-import os
-
-import requests
-
-from app.config import settings
-
-token = os.environ["T"].strip()
-if token.count(".") != 2:
-    print("  that does not look like a Dhan access token (it should have three parts separated by dots). Nothing was changed.")
-    raise SystemExit(3)
-r = requests.put("http://localhost:8000/dhan/credentials", json={"client_id": settings.dhan_client_id, "access_token": token}, timeout=40)
-body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-print("  set:", r.status_code, {k: v for k, v in body.items() if "token" not in k.lower()} if r.ok else body.get("detail", r.text[:200]))
-raise SystemExit(0 if r.ok else 2)
-PY
-  rc=$?
-  set -e
-  unset T
-  if [ "$rc" -ne 0 ]; then echo "Not saved (exit $rc). See the line above." >&2; exit "$rc"; fi
-fi
-
-# set and renew both finish by renewing, so the token gets a fresh 24 hours while it is still valid
-set +e
-do_renew
-rc=$?
-set -e
 echo "Now:"
 show_status
 if [ "$rc" -ne 0 ]; then
-  echo
-  echo "The renewal did not go through. If the token you pasted had already expired, generate a new one on Dhan and run:  scripts/dhan-token.sh set" >&2
+  echo >&2
+  echo "That did not go through (exit $rc). If the token has already expired, generate a new one on Dhan, save it on the Settings page, then run:  scripts/dhan-token.sh refresh" >&2
   exit "$rc"
 fi
-echo
-echo "Done. Tip: set DHAN_TOKEN_RENEW_INTERVAL_HOURS=12 in .env (then 'up -d market-data-backend') so a missed renewal cannot strand the token."

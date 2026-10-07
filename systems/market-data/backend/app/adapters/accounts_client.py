@@ -147,3 +147,30 @@ def get_user_openrouter_key(user_id: UUID) -> Optional[str]:
     with _openrouter_cache_lock:
         _openrouter_cache[user_id] = (result, time.monotonic())
     return result
+
+
+def fetch_platform_dhan() -> Optional[dict]:
+    """The platform owner's saved Dhan credentials ({has_dhan, owner_user_id, dhan_client_id, dhan_access_token}), or None when accounts cannot be
+    reached. Not cached: the caller polls every few minutes and a stale answer would defeat the point."""
+    try:
+        resp = requests.get(f"{settings.accounts_base_url}/internal/platform/dhan", headers={"X-Internal-Secret": settings.internal_service_secret}, timeout=8)
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        logger.warning("could not read the platform Dhan credentials from accounts: %s", type(exc).__name__)
+        return None
+
+
+def push_platform_dhan(access_token: str, client_id: Optional[str] = None) -> bool:
+    """Save a (renewed) Dhan token as the platform owner's, so there is only one copy. True when accounts stored it."""
+    try:
+        resp = requests.put(
+            f"{settings.accounts_base_url}/internal/platform/dhan",
+            json={"dhan_access_token": access_token, **({"dhan_client_id": client_id} if client_id else {})},
+            headers={"X-Internal-Secret": settings.internal_service_secret},
+            timeout=8,
+        )
+        return resp.ok
+    except requests.exceptions.RequestException as exc:
+        logger.warning("could not save the platform Dhan token to accounts: %s", type(exc).__name__)
+        return False

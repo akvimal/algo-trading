@@ -19,7 +19,7 @@ from uuid import UUID
 import requests
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from app.adapters.accounts_client import get_user_dhan_credentials_strict
+from app.adapters.accounts_client import forget_user_credentials, get_user_dhan_credentials_strict
 from app.auth import require_operator, require_user_id
 from app.config import settings
 from app.domain.models import (
@@ -71,6 +71,15 @@ def renew_token():
         return platform_dhan.renew_platform_token()
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/dhan/forget-my-credentials")
+def forget_my_credentials(user_id: UUID = Depends(require_user_id)):
+    """Called by the web app right after a person saves new Dhan keys on Settings: market-data keeps each person's saved keys for 5 minutes, so
+    without this their old (possibly expired) token kept being sent and the first live-data check after saving failed with a 401. Only drops the
+    caller's own cached entry; nothing else is touched."""
+    forget_user_credentials(user_id)
+    return {"forgotten": True}
 
 
 @router.post("/dhan/refresh", dependencies=[Depends(require_operator)])

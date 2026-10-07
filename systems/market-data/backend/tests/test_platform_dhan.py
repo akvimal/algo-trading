@@ -449,3 +449,28 @@ def test_the_renewal_is_checked_every_ten_minutes_and_the_defaults_are_a_six_hou
     f = Settings.model_fields
     assert f["dhan_token_renew_interval_hours"].default == 6
     assert (f["dhan_renew_window_start"].default, f["dhan_renew_window_end"].default) == ("00:00", "08:30")
+
+
+def test_forgetting_my_credentials_drops_only_the_callers_cached_keys():
+    from uuid import uuid4
+
+    me, other = uuid4(), uuid4()
+    accounts_client._cache[me] = ("old", 1.0)
+    accounts_client._cache[other] = ("theirs", 1.0)
+    try:
+        assert dhan_routes.forget_my_credentials(user_id=me) == {"forgotten": True}
+        assert me not in accounts_client._cache and other in accounts_client._cache
+    finally:
+        accounts_client._cache.pop(other, None)
+
+
+def test_the_forget_route_needs_a_signed_in_user():
+    route = next(r for r in dhan_routes.router.routes if r.path == "/dhan/forget-my-credentials")
+    assert "POST" in route.methods
+    assert any(d.call is require_user_id_dep() for d in route.dependant.dependencies)
+
+
+def require_user_id_dep():
+    from app.auth import require_user_id
+
+    return require_user_id

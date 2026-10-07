@@ -14,7 +14,16 @@ export const resetAccount = (segment: Segment) => api<Account>("execution", `/ac
 export const getCredentials = () => api<Credentials>("accounts", "/credentials");
 
 /** The secrets are write-only: the server never sends them back, only whether they are set. */
-export const saveCredentials = (patch: Partial<Record<KeyField, string>>) => api<Credentials>("accounts", "/credentials", { method: "PUT", json: patch });
+export const saveCredentials = async (patch: Partial<Record<KeyField, string>>) => {
+  const saved = await api<Credentials>("accounts", "/credentials", { method: "PUT", json: patch });
+  // market-data keeps each person's keys for 5 minutes: tell it to drop them, or the next live-data check still sends the old token. Best effort.
+  try {
+    await api("marketData", "/dhan/forget-my-credentials", { method: "POST" });
+  } catch {
+    /* the keys are saved either way; the old copy just expires on its own */
+  }
+  return saved;
+};
 
 /** "Do live prices work for me?": one real quote, on whichever keys the platform uses for this
  * person. It proves the connection end to end without placing anything. */

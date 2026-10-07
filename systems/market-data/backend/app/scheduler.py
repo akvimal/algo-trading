@@ -624,7 +624,7 @@ def job_catalog() -> list[dict]:
         ("sentiment-history-record", "Sentiment recorder", f"Every {s.sentiment_history_interval_minutes} minutes while a market is open", "Records the option-chain sentiment badge for the main indices."),
     ]
     if s.dhan_token_renew_interval_hours > 0:
-        jobs.append(("dhan-token-renew", "Dhan token renewal", f"Checked every 10 minutes: renews once the token is {s.dhan_token_renew_interval_hours} hours old", "Extends the platform Dhan access token for another 24 hours. Waits for a running scan unless the token has under 3 hours left."))
+        jobs.append(("dhan-token-renew", "Dhan token renewal", f"Checked every 10 minutes: renews in the quiet window {s.dhan_renew_window_start}-{s.dhan_renew_window_end} IST (after MCX closes), once the token is {s.dhan_token_renew_interval_hours} hours old", "Extends the platform Dhan access token for another 24 hours, outside market hours, and not during a running scan unless the token has under 3 hours left."))
     out = []
     for job_id, label, schedule, what in jobs:
         scheduled = _scheduler.get_job(job_id)

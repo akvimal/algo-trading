@@ -160,7 +160,7 @@ services:
       # shares its DHAN_ACCESS_TOKEN with another auto-renewing stack -
       # dev/test each use their own separate token instead, so both stay
       # at the default. See app/config.py/app/scheduler.py.
-      DHAN_TOKEN_RENEW_INTERVAL_HOURS: ${DHAN_TOKEN_RENEW_INTERVAL_HOURS:-12}
+      DHAN_TOKEN_RENEW_INTERVAL_HOURS: ${DHAN_TOKEN_RENEW_INTERVAL_HOURS:-6}
       # The platform's Dhan token comes from the operator's saved Settings keys (see docs/architecture.md, "One source for the platform's Dhan token").
       PLATFORM_DHAN_FROM_ACCOUNTS: ${PLATFORM_DHAN_FROM_ACCOUNTS:-true}
       # Manual override for Dhan's own SEM_LOT_UNITS, confirmed wrong for

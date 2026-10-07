@@ -75,7 +75,13 @@ class Settings(BaseSettings):
     # separate token instead (Dhan allows multiple concurrent active
     # tokens per account), so both stay at the default here - see
     # docs/architecture.md.
-    dhan_token_renew_interval_hours: int = 12
+    # The platform Dhan token is renewed in a QUIET WINDOW, after MCX has closed (23:30, or 23:55 in US summer time) and before NSE/MCX open (09:00),
+    # because Dhan's renewal replaces the token and both markets use it. dhan_token_renew_interval_hours is the youngest the token may be to be
+    # renewed inside the window: with a 24 hour life, 6 gives two renewals a night and never more than ~18 hours of age (one a night would leave no margin:
+    # each token would expire the moment the next window opens). Outside the window it is renewed only when it would run out before the next window.
+    dhan_token_renew_interval_hours: int = 6
+    dhan_renew_window_start: str = "00:00"  # IST, HH:MM
+    dhan_renew_window_end: str = "08:30"  # IST, HH:MM
     # The platform's Dhan token comes from the operator's saved Settings keys in accounts (app/providers/platform_dhan.py): adopted when it
     # outlives the one in use, and a renewed token is written back there. False keeps the old, separate platform token.
     platform_dhan_from_accounts: bool = True

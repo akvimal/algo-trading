@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from app.adapters import accounts_client
 from app.domain import job_tracker
@@ -31,10 +32,11 @@ _lock = threading.Lock()
 
 TOKEN_LIFETIME_HOURS = 24.0  # a Dhan access token lives 24 hours (its own `exp` claim says exactly when)
 URGENT_HOURS = 3.0  # with less than this left a renewal goes ahead even while a scan runs: a dead token cannot be renewed at all
+SAFETY_HOURS = 2.0  # outside the quiet window, renew when the token would have less than this left at the moment the window opens
 RETRY_AFTER_FAILURE_MINUTES = 30
 # Jobs that call Dhan thousands of times over many minutes. Dhan's renewal REPLACES the token, so a renewal in the middle of one of these
 # can fail the calls that were in flight; they are given the room to finish.
-HEAVY_JOBS = ["oi-eod-snapshot-record", "equity-screener-snapshot-record"]
+HEAVY_JOBS = ["oi-eod-snapshot-record", "equity-screener-snapshot-record", "session-summary-mcx"]
 
 _last_failure: Optional[datetime] = None
 
@@ -92,11 +94,38 @@ def set_platform_credentials(client_id: str, access_token: str) -> dict:
     return {"saved_to_settings": _write_back(access_token)}
 
 
+def _hhmm(text: str) -> time:
+    h, m = text.split(":")
+    return time(int(h), int(m))
+
+
+def quiet_window(now: datetime) -> tuple[bool, float]:
+    """(inside the quiet window now?, hours until it next opens: 0 when inside). The window is in IST, between MCX's close and the morning open;
+    it may not wrap past midnight in the config, but a window that starts at 00:00 is the usual case."""
+    tz = ZoneInfo(settings.timezone)
+    local = now.astimezone(tz)
+    start, end = _hhmm(settings.dhan_renew_window_start), _hhmm(settings.dhan_renew_window_end)
+    t = local.timetz().replace(tzinfo=None)
+    inside = (start <= t < end) if start < end else (t >= start or t < end)
+    if inside:
+        return True, 0.0
+    opens = local.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+    if opens <= local:
+        opens += timedelta(days=1)
+    return False, (opens - local).total_seconds() / 3600
+
+
 def renewal_state(now: Optional[datetime] = None, busy=None) -> dict:
-    """Should the token be renewed now? Decided from the token's own age (24 hours minus what it has left), not from a timer that restarts
-    with the service: due once it is `DHAN_TOKEN_RENEW_INTERVAL_HOURS` old; put off while a scan runs unless under URGENT_HOURS remain; and
-    after a failure left alone for RETRY_AFTER_FAILURE_MINUTES. A token that has already expired cannot be renewed (Dhan refuses), so it is
-    reported, not attempted."""
+    """Should the token be renewed now? Dhan's renewal REPLACES the token and both NSE and MCX use it, so it is done in a quiet window (after MCX
+    closes, before the morning open), not on a timer that lands anywhere:
+
+      * inside the window: when the token is at least DHAN_TOKEN_RENEW_INTERVAL_HOURS old (read from the token's own expiry; it lives 24 hours);
+      * outside it: only when the token would have under SAFETY_HOURS left by the time the window opens (after downtime, say), since waiting would
+        let it expire;
+      * never in the middle of an OI or screener scan unless under URGENT_HOURS remain (a dead token cannot be renewed at all);
+      * after a failure, not again for RETRY_AFTER_FAILURE_MINUTES unless under an hour is left.
+
+    A token that has already expired cannot be renewed (Dhan refuses), so it is reported, not attempted."""
     now = now or _now()
     token = current_access_token()
     exp = _decode_jwt_exp(token) if token else None
@@ -106,15 +135,23 @@ def renewal_state(now: Optional[datetime] = None, busy=None) -> dict:
     if remaining <= 0:
         return {"due": False, "reason": "the token has already expired and cannot be renewed: save a fresh one on the Settings page", "remaining_hours": round(remaining, 2)}
     age = TOKEN_LIFETIME_HOURS - remaining
-    interval = max(1.0, float(settings.dhan_token_renew_interval_hours))
-    if age < interval:
-        return {"due": False, "reason": f"the token is {age:.1f} hours old; it is renewed at {interval:g}", "remaining_hours": round(remaining, 2)}
+    min_age = max(1.0, float(settings.dhan_token_renew_interval_hours))
+    inside, until_open = quiet_window(now)
+    base = {"remaining_hours": round(remaining, 2), "in_quiet_window": inside}
+    if inside:
+        if age < min_age:
+            return {"due": False, "reason": f"the token is {age:.1f} hours old; inside the quiet window it is renewed at {min_age:g}", **base}
+        why = f"the token is {age:.1f} hours old and it is the quiet window"
+    else:
+        if remaining >= until_open + SAFETY_HOURS:
+            return {"due": False, "reason": f"waiting for the quiet window, which opens in {until_open:.1f} hours (the token has {remaining:.1f} left)", **base}
+        why = f"the token would have under {SAFETY_HOURS:g} hours left when the quiet window opens in {until_open:.1f} hours"
     if _last_failure is not None and (now - _last_failure).total_seconds() < RETRY_AFTER_FAILURE_MINUTES * 60 and remaining > 1.0:
-        return {"due": False, "reason": f"the last renewal failed; trying again {RETRY_AFTER_FAILURE_MINUTES} minutes after it", "remaining_hours": round(remaining, 2)}
+        return {"due": False, "reason": f"the last renewal failed; trying again {RETRY_AFTER_FAILURE_MINUTES} minutes after it", **base}
     is_busy = busy if busy is not None else job_tracker.any_running
     if remaining > URGENT_HOURS and is_busy(HEAVY_JOBS):
-        return {"due": False, "deferred": True, "reason": f"a scan is running, so the renewal waits for it ({remaining:.1f} hours left)", "remaining_hours": round(remaining, 2)}
-    return {"due": True, "reason": f"the token is {age:.1f} hours old", "remaining_hours": round(remaining, 2)}
+        return {"due": False, "deferred": True, "reason": f"a scan is running, so the renewal waits for it ({remaining:.1f} hours left)", **base}
+    return {"due": True, "reason": why, **base}
 
 
 def renew_if_due(now: Optional[datetime] = None, busy=None) -> dict:

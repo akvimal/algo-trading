@@ -286,95 +286,132 @@ def test_a_failed_save_leaves_the_cache_alone(monkeypatch):
     assert accounts_client.push_platform_dhan("t.o.k") is False and owner in accounts_client._cache
 
 
-# ---- when the renewal happens: by the token's real age, never in the middle of a scan -----------------------------------------------------------
+# ---- when the renewal happens: in the quiet window after MCX closes, by the token's real age, never in the middle of a scan ----------------------
+
+NIGHT = datetime(2026, 10, 6, 20, 30, tzinfo=timezone.utc)  # 02:00 IST: inside the 00:00-08:30 quiet window
+DAY = datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc)  # 09:30 IST: markets about to be busy, window closed
+EVENING = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)  # 17:30 IST: window opens in 6.5 hours
 
 
 @pytest.fixture
 def renewal(monkeypatch):
-    monkeypatch.setattr(settings, "dhan_token_renew_interval_hours", 12)
+    monkeypatch.setattr(settings, "dhan_token_renew_interval_hours", 6)
+    monkeypatch.setattr(settings, "dhan_renew_window_start", "00:00")
+    monkeypatch.setattr(settings, "dhan_renew_window_end", "08:30")
     monkeypatch.setattr(platform_dhan, "_last_failure", None)
     monkeypatch.setattr(dhan, "_renewed_token", None)
     monkeypatch.setattr(settings, "dhan_access_token", "")
 
 
-def with_hours_left(hours):
-    dhan._renewed_token = tok(hours)
+def with_hours_left(hours, at=NIGHT):
+    dhan._renewed_token = tok(hours + (at - NOW).total_seconds() / 3600)
 
 
-def test_a_young_token_is_left_alone(state, renewal):
+def free(jobs):
+    return False
+
+
+def test_the_quiet_window_is_in_ist_and_reports_when_it_next_opens(renewal):
+    assert platform_dhan.quiet_window(NIGHT) == (True, 0.0)
+    assert platform_dhan.quiet_window(DAY)[0] is False
+    inside, until = platform_dhan.quiet_window(EVENING)
+    assert inside is False and until == pytest.approx(6.5)
+    assert platform_dhan.quiet_window(datetime(2026, 10, 6, 18, 30, tzinfo=timezone.utc))[0] is True  # 00:00 IST sharp
+
+
+def test_inside_the_window_a_young_token_is_left_alone(renewal):
     with_hours_left(20)  # 4 hours old
-    out = platform_dhan.renewal_state(NOW, busy=lambda jobs: False)
-    assert out["due"] is False and "4.0 hours old" in out["reason"] and "renewed at 12" in out["reason"]
+    out = platform_dhan.renewal_state(NIGHT, busy=free)
+    assert out["due"] is False and "4.0 hours old" in out["reason"] and "renewed at 6" in out["reason"]
 
 
-def test_the_age_comes_from_the_token_itself_not_from_when_the_service_started(state, renewal):
-    with_hours_left(13)  # 11 hours old
-    assert platform_dhan.renewal_state(NOW, busy=lambda j: False)["due"] is False
-    with_hours_left(12)  # exactly 12 hours old
-    assert platform_dhan.renewal_state(NOW, busy=lambda j: False)["due"] is True
-    with_hours_left(5)
-    assert platform_dhan.renewal_state(NOW, busy=lambda j: False)["due"] is True
+def test_inside_the_window_it_renews_at_the_configured_age_read_from_the_token(renewal):
+    with_hours_left(19)  # 5 hours old
+    assert platform_dhan.renewal_state(NIGHT, busy=free)["due"] is False
+    with_hours_left(18)  # exactly 6
+    assert platform_dhan.renewal_state(NIGHT, busy=free)["due"] is True
 
 
-def test_the_renewal_age_is_configurable_and_never_below_one_hour(state, renewal, monkeypatch):
-    monkeypatch.setattr(settings, "dhan_token_renew_interval_hours", 20)
-    with_hours_left(10)  # 14 hours old
-    assert platform_dhan.renewal_state(NOW, busy=lambda j: False)["due"] is False
-    monkeypatch.setattr(settings, "dhan_token_renew_interval_hours", 0)
-    with_hours_left(23.5)
-    assert platform_dhan.renewal_state(NOW, busy=lambda j: False)["due"] is False  # 0.5 hours old: the floor of one hour holds
+def test_two_renewals_fit_in_one_night_and_the_token_never_gets_old_enough_to_be_a_problem(renewal):
+    # renewed at 00:00 IST -> 24h left; at 06:00 IST it is 6h old -> renewed again; so the token handed to the 09:00 open is under 3 hours old
+    t = datetime(2026, 10, 6, 18, 30, tzinfo=timezone.utc)
+    with_hours_left(24, at=t)
+    assert platform_dhan.renewal_state(t + timedelta(hours=5.5), busy=free)["due"] is False  # 05:30 IST
+    dhan._renewed_token = tok(24 + ((t + timedelta(hours=0)) - NOW).total_seconds() / 3600)
+    assert platform_dhan.renewal_state(t + timedelta(hours=6), busy=free)["due"] is True  # 06:00 IST
 
 
-def test_a_scan_in_progress_puts_the_renewal_off_while_there_is_time(state, renewal):
-    with_hours_left(8)
+def test_outside_the_window_it_waits_for_it_while_there_is_plenty_of_time(renewal):
+    with_hours_left(10, at=EVENING)  # window opens in 6.5h; 10 left -> 3.5h margin
+    out = platform_dhan.renewal_state(EVENING, busy=free)
+    assert out["due"] is False and out["in_quiet_window"] is False and "waiting for the quiet window" in out["reason"]
+
+
+def test_outside_the_window_it_renews_only_if_waiting_would_leave_under_two_hours(renewal):
+    with_hours_left(8.4, at=EVENING)  # 6.5 + 2 = 8.5 needed
+    out = platform_dhan.renewal_state(EVENING, busy=free)
+    assert out["due"] is True and "under 2 hours" in out["reason"]
+    with_hours_left(8.6, at=EVENING)
+    assert platform_dhan.renewal_state(EVENING, busy=free)["due"] is False
+
+
+def test_a_scan_in_progress_puts_the_renewal_off_while_there_is_time(renewal):
+    with_hours_left(8)  # 16 hours old, in the window: due
     seen = []
-    out = platform_dhan.renewal_state(NOW, busy=lambda jobs: (seen.append(list(jobs)), True)[1])
+    out = platform_dhan.renewal_state(NIGHT, busy=lambda jobs: (seen.append(list(jobs)), True)[1])
     assert out["due"] is False and out["deferred"] is True and "a scan is running" in out["reason"]
-    assert seen == [["oi-eod-snapshot-record", "equity-screener-snapshot-record"]]  # the two long Dhan jobs
+    assert seen == [["oi-eod-snapshot-record", "equity-screener-snapshot-record", "session-summary-mcx"]]  # the long Dhan jobs
 
 
-def test_but_with_under_three_hours_left_it_goes_ahead_even_during_a_scan(state, renewal):
+def test_but_with_under_three_hours_left_it_goes_ahead_even_during_a_scan(renewal):
     with_hours_left(2.9)
-    assert platform_dhan.renewal_state(NOW, busy=lambda jobs: True)["due"] is True
+    assert platform_dhan.renewal_state(NIGHT, busy=lambda jobs: True)["due"] is True
     with_hours_left(3.1)
-    assert platform_dhan.renewal_state(NOW, busy=lambda jobs: True)["due"] is False
+    assert platform_dhan.renewal_state(NIGHT, busy=lambda jobs: True)["due"] is False
 
 
-def test_an_expired_or_unreadable_token_is_reported_not_attempted(state, renewal):
+def test_an_expired_or_unreadable_token_is_reported_not_attempted(renewal):
     with_hours_left(-1)
-    out = platform_dhan.renewal_state(NOW, busy=lambda j: False)
+    out = platform_dhan.renewal_state(NIGHT, busy=free)
     assert out["due"] is False and "already expired" in out["reason"] and "Settings page" in out["reason"]
     dhan._renewed_token = "not-a-jwt"
-    assert platform_dhan.renewal_state(NOW, busy=lambda j: False) == {"due": False, "reason": "there is no readable token to renew"}
+    assert platform_dhan.renewal_state(NIGHT, busy=free) == {"due": False, "reason": "there is no readable token to renew"}
 
 
-def test_a_failed_renewal_is_not_retried_every_ten_minutes_but_is_once_the_token_is_nearly_gone(state, renewal, monkeypatch):
+def test_the_age_floor_is_one_hour(renewal, monkeypatch):
+    monkeypatch.setattr(settings, "dhan_token_renew_interval_hours", 0)
+    with_hours_left(23.5)
+    assert platform_dhan.renewal_state(NIGHT, busy=free)["due"] is False
+    with_hours_left(22.9)
+    assert platform_dhan.renewal_state(NIGHT, busy=free)["due"] is True
+
+
+def test_a_failed_renewal_is_not_retried_every_ten_minutes_but_is_once_the_token_is_nearly_gone(renewal, state, monkeypatch):
     with_hours_left(8)
     fake_renewal(monkeypatch, None, fail="Dhan rejected the renewal request (401)")
     with pytest.raises(RuntimeError):
-        platform_dhan.renew_if_due(NOW, busy=lambda j: False)
-    later = NOW + timedelta(minutes=10)
-    out = platform_dhan.renewal_state(later, busy=lambda j: False)
+        platform_dhan.renew_if_due(NIGHT, busy=free)
+    out = platform_dhan.renewal_state(NIGHT + timedelta(minutes=10), busy=free)
     assert out["due"] is False and "last renewal failed" in out["reason"]
-    assert platform_dhan.renewal_state(NOW + timedelta(minutes=31), busy=lambda j: False)["due"] is True  # after the pause it tries again
+    assert platform_dhan.renewal_state(NIGHT + timedelta(minutes=31), busy=free)["due"] is True
     with_hours_left(0.9)
-    assert platform_dhan.renewal_state(later, busy=lambda j: False)["due"] is True  # nearly out of time: keep trying
+    assert platform_dhan.renewal_state(NIGHT + timedelta(minutes=10), busy=free)["due"] is True
 
 
-def test_a_successful_renewal_clears_the_failure_memory_and_reports_why_it_ran(state, renewal, monkeypatch):
+def test_a_successful_renewal_clears_the_failure_memory_and_reports_why_it_ran(renewal, state, monkeypatch):
     with_hours_left(8)
-    platform_dhan._last_failure = NOW - timedelta(minutes=45)
+    platform_dhan._last_failure = NIGHT - timedelta(minutes=45)
     fake_renewal(monkeypatch, tok(24, "renewed"))
-    out = platform_dhan.renew_if_due(NOW, busy=lambda j: False)
+    out = platform_dhan.renew_if_due(NIGHT, busy=free)
     assert out["renewed"] is True and out["saved_back_to_settings"] is True and "16.0 hours old" in out["reason"]
     assert platform_dhan._last_failure is None
 
 
-def test_a_check_that_is_not_due_renews_nothing(state, renewal, monkeypatch):
+def test_a_check_that_is_not_due_renews_nothing(renewal, state, monkeypatch):
     with_hours_left(22)
     called = []
     monkeypatch.setattr(platform_dhan, "renew_access_token", lambda: called.append(1))
-    out = platform_dhan.renew_if_due(NOW, busy=lambda j: False)
+    out = platform_dhan.renew_if_due(NIGHT, busy=free)
     assert out["renewed"] is False and called == [] and state.pushed == []
 
 
@@ -404,9 +441,11 @@ def test_if_the_job_log_cannot_be_read_the_renewal_is_not_held_up(monkeypatch):
     assert job_tracker.any_running(["oi-eod-snapshot-record"]) is False
 
 
-def test_the_renewal_is_checked_every_ten_minutes_and_the_default_age_is_twelve_hours():
+def test_the_renewal_is_checked_every_ten_minutes_and_the_defaults_are_a_six_hour_age_in_a_midnight_window():
     src = inspect.getsource(scheduler.start_scheduler)
     assert re.search(r"_renew_dhan_token,\s*IntervalTrigger\(minutes=10\)", src)
     from app.config import Settings
 
-    assert Settings.model_fields["dhan_token_renew_interval_hours"].default == 12
+    f = Settings.model_fields
+    assert f["dhan_token_renew_interval_hours"].default == 6
+    assert (f["dhan_renew_window_start"].default, f["dhan_renew_window_end"].default) == ("00:00", "08:30")

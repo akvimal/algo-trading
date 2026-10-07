@@ -170,7 +170,19 @@ def push_platform_dhan(access_token: str, client_id: Optional[str] = None) -> bo
             headers={"X-Internal-Secret": settings.internal_service_secret},
             timeout=8,
         )
+        if resp.ok:
+            # That person's credentials are cached for a few minutes (above): forget the old ones now, or they would keep sending the replaced token.
+            try:
+                forget_user_credentials(UUID(resp.json()["owner_user_id"]))
+            except (ValueError, KeyError, TypeError):
+                pass
         return resp.ok
     except requests.exceptions.RequestException as exc:
         logger.warning("could not save the platform Dhan token to accounts: %s", type(exc).__name__)
         return False
+
+
+def forget_user_credentials(user_id: UUID) -> None:
+    """Drop what is cached for this person so the next request reads their saved keys afresh (used after their token is replaced)."""
+    with _cache_lock:
+        _cache.pop(user_id, None)

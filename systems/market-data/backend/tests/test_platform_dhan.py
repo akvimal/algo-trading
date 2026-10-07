@@ -256,3 +256,31 @@ def test_the_saved_token_is_checked_every_few_minutes_and_once_at_start_even_whe
     sync = re.search(r"\n    _scheduler\.add_job\(\n        _sync_platform_dhan,\n        IntervalTrigger\(minutes=settings\.platform_dhan_sync_minutes\)", src)
     assert sync is not None and sync.start() > gate
     assert 'id="dhan-token-sync-initial"' in src
+
+
+# ---- a replaced token must not linger in the per-person credentials cache -------------------------------------------------------------------
+
+
+def test_saving_the_renewed_token_clears_that_persons_cached_credentials_so_the_old_token_stops_being_sent(monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    owner = uuid4()
+    other = uuid4()
+    stale = SimpleNamespace(access_token="old.tok.en")
+    monkeypatch.setitem(accounts_client._cache, owner, (stale, time.monotonic()))
+    monkeypatch.setitem(accounts_client._cache, other, (stale, time.monotonic()))
+    resp = SimpleNamespace(ok=True, json=lambda: {"ok": True, "owner_user_id": str(owner)})
+    monkeypatch.setattr(accounts_client.requests, "put", lambda *a, **k: resp)
+    assert accounts_client.push_platform_dhan("new.tok.en", "1101") is True
+    assert owner not in accounts_client._cache and other in accounts_client._cache  # only the owner's entry is dropped
+
+
+def test_a_failed_save_leaves_the_cache_alone(monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    owner = uuid4()
+    monkeypatch.setitem(accounts_client._cache, owner, (SimpleNamespace(), time.monotonic()))
+    monkeypatch.setattr(accounts_client.requests, "put", lambda *a, **k: SimpleNamespace(ok=False, json=lambda: {}))
+    assert accounts_client.push_platform_dhan("t.o.k") is False and owner in accounts_client._cache

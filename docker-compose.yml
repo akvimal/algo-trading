@@ -102,8 +102,6 @@ services:
       # so accounts_client.py degrades to the platform OPENROUTER_API_KEY
       # above whenever it's not running rather than failing requests.
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
-      # Whose saved Dhan keys the platform uses (empty: the first admin).
-      PLATFORM_DHAN_OWNER_EMAIL: ${PLATFORM_DHAN_OWNER_EMAIL:-}
       ACCOUNTS_BASE_URL: http://accounts-backend:8000
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${SIGNAL_ENGINE_BACKEND_PORT}:8000"
@@ -327,6 +325,8 @@ services:
       # service that returns a decrypted plaintext secret, since its
       # caller is a trusted service rather than a user with a JWT.
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      # Whose saved Dhan keys the platform uses (empty: the first admin).
+      PLATFORM_DHAN_OWNER_EMAIL: ${PLATFORM_DHAN_OWNER_EMAIL:-}
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${ACCOUNTS_BACKEND_PORT}:8000"
     depends_on:

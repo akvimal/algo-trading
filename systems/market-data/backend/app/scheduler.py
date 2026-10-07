@@ -115,16 +115,23 @@ def _sync_all() -> None:
     run.tick(len(providers) + 1, tally)
 
 
-@tracked("dhan-token-renew", "Dhan token renewal")
+@tracked("dhan-token-renew", "Dhan token renewal", keep_skips=False)
 def _renew_dhan_token() -> None:
+    """Runs every few minutes (and at start-up) and renews only when the token is due: see platform_dhan.renewal_state. Most runs find nothing
+    to do and leave no row in the job log."""
     from app.providers import platform_dhan
 
     run = job_tracker.current()
     try:
-        out = platform_dhan.renew_platform_token()
+        out = platform_dhan.renew_if_due()
     except Exception as exc:
         logger.exception("scheduled Dhan token renewal failed")
         run.fail(f"{type(exc).__name__}: {exc}"[:300])
+        return
+    if not out.get("renewed"):
+        if out.get("deferred"):
+            logger.info("Dhan token renewal put off: %s", out["reason"])
+        run.skip(out["reason"])
         return
     if settings.platform_dhan_from_accounts and not out["saved_back_to_settings"]:
         run.note("renewed, but the new token could not be saved to the account, so the Settings copy is stale")
@@ -617,7 +624,7 @@ def job_catalog() -> list[dict]:
         ("sentiment-history-record", "Sentiment recorder", f"Every {s.sentiment_history_interval_minutes} minutes while a market is open", "Records the option-chain sentiment badge for the main indices."),
     ]
     if s.dhan_token_renew_interval_hours > 0:
-        jobs.append(("dhan-token-renew", "Dhan token renewal", f"Every {s.dhan_token_renew_interval_hours} hours, and at start-up", "Extends the platform Dhan access token."))
+        jobs.append(("dhan-token-renew", "Dhan token renewal", f"Checked every 10 minutes: renews once the token is {s.dhan_token_renew_interval_hours} hours old", "Extends the platform Dhan access token for another 24 hours. Waits for a running scan unless the token has under 3 hours left."))
     out = []
     for job_id, label, schedule, what in jobs:
         scheduled = _scheduler.get_job(job_id)
@@ -644,7 +651,7 @@ def start_scheduler() -> None:
     if settings.dhan_token_renew_interval_hours > 0:
         _scheduler.add_job(
             _renew_dhan_token,
-            IntervalTrigger(hours=settings.dhan_token_renew_interval_hours),
+            IntervalTrigger(minutes=10),
             id="dhan-token-renew",
             replace_existing=True,
         )

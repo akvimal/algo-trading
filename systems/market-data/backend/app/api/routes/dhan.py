@@ -88,6 +88,8 @@ def token_status():
         **renew_token_status(),
         "dhan_client_id": settings.dhan_client_id,
         "has_access_token": bool(current_access_token()),
+        # Whether the scheduled renewal is due and, if not, why not (too young, or waiting for a scan): no secret in it.
+        "renewal": platform_dhan.renewal_state(),
     }
 
 

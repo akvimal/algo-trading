@@ -253,7 +253,7 @@ def test_a_failed_token_renewal_is_a_failed_run(store, monkeypatch):
 
     from app.providers import platform_dhan
 
-    monkeypatch.setattr(platform_dhan, "renew_platform_token", boom)
+    monkeypatch.setattr(platform_dhan, "renew_if_due", boom)
     scheduler._renew_dhan_token()
     (run,) = store.of("dhan-token-renew")
     assert run["status"] == "failed" and "TOTP rejected" in run["message"]
@@ -264,7 +264,7 @@ def test_a_renewal_that_could_not_be_saved_back_to_settings_is_flagged_on_the_ru
     from app.providers import platform_dhan
 
     monkeypatch.setattr(settings, "platform_dhan_from_accounts", True)
-    monkeypatch.setattr(platform_dhan, "renew_platform_token", lambda: {"renewed": True, "saved_back_to_settings": False})
+    monkeypatch.setattr(platform_dhan, "renew_if_due", lambda: {"renewed": True, "saved_back_to_settings": False})
     scheduler._renew_dhan_token()
     (run,) = store.of("dhan-token-renew")
     assert run["status"] != "failed" and "Settings copy is stale" in run["message"]
@@ -275,10 +275,24 @@ def test_a_clean_renewal_leaves_no_warning(store, monkeypatch):
     from app.providers import platform_dhan
 
     monkeypatch.setattr(settings, "platform_dhan_from_accounts", True)
-    monkeypatch.setattr(platform_dhan, "renew_platform_token", lambda: {"renewed": True, "saved_back_to_settings": True})
+    monkeypatch.setattr(platform_dhan, "renew_if_due", lambda: {"renewed": True, "saved_back_to_settings": True})
     scheduler._renew_dhan_token()
     (run,) = store.of("dhan-token-renew")
     assert run["status"] == "succeeded" and not run.get("message")
+
+
+def test_a_check_that_finds_nothing_due_leaves_no_row_in_the_job_log_but_a_deferral_is_logged(store, monkeypatch, caplog):
+    import logging
+
+    from app.providers import platform_dhan
+
+    monkeypatch.setattr(platform_dhan, "renew_if_due", lambda: {"renewed": False, "reason": "the token is 3.0 hours old; it is renewed at 12"})
+    scheduler._renew_dhan_token()
+    assert store.of("dhan-token-renew") == []  # it runs every ten minutes: skipped runs are not kept
+    monkeypatch.setattr(platform_dhan, "renew_if_due", lambda: {"renewed": False, "deferred": True, "reason": "a scan is running, so the renewal waits for it (9.0 hours left)"})
+    with caplog.at_level(logging.INFO, logger="app.scheduler"):
+        scheduler._renew_dhan_token()
+    assert store.of("dhan-token-renew") == [] and "put off" in caplog.text and "a scan is running" in caplog.text
 
 
 def test_the_instrument_sync_counts_each_provider(store, monkeypatch):

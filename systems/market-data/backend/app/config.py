@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     # separate token instead (Dhan allows multiple concurrent active
     # tokens per account), so both stay at the default here - see
     # docs/architecture.md.
-    dhan_token_renew_interval_hours: int = 20
+    dhan_token_renew_interval_hours: int = 12
     # The platform's Dhan token comes from the operator's saved Settings keys in accounts (app/providers/platform_dhan.py): adopted when it
     # outlives the one in use, and a renewed token is written back there. False keeps the old, separate platform token.
     platform_dhan_from_accounts: bool = True

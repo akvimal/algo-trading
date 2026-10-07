@@ -41,6 +41,7 @@ class JobStore(Protocol):
     def discard(self, run_id: str) -> None: ...
     def interrupt_running(self) -> int: ...
     def prune(self, job_id: str, keep: int) -> None: ...
+    def any_running(self, job_ids: list[str]) -> bool: ...
 
 
 def derive_status(tally: dict[str, int], forced: Optional[str]) -> str:
@@ -143,6 +144,18 @@ def configure(store: Optional[JobStore]) -> None:
     _store = store
 
 
+def any_running(job_ids: list[str]) -> bool:
+    """Is a run of any of these jobs in progress? False when nothing is recorded or it cannot be told (a caller that waits on this must never be
+    stuck waiting on a broken log)."""
+    if _store is None:
+        return False
+    try:
+        return _store.any_running(job_ids)
+    except Exception:
+        logger.warning("could not tell whether %s are running", job_ids, exc_info=True)
+        return False
+
+
 def current() -> NullRun:
     return _current.get() or _NULL
 
@@ -226,6 +239,9 @@ class MemoryStore:
         self.runs.pop(run_id, None)
         self.order.remove(run_id)
 
+    def any_running(self, job_ids: list[str]) -> bool:
+        return any(r["status"] == RUNNING and r["job_id"] in job_ids for r in self.runs.values())
+
     def interrupt_running(self) -> int:
         n = 0
         for r in self.runs.values():
@@ -288,6 +304,10 @@ class DbStore:
 
     def discard(self, run_id: str) -> None:
         self._run("DELETE FROM market_data.job_runs WHERE id = :id", {"id": run_id})
+
+    def any_running(self, job_ids: list[str]) -> bool:
+        rows = self._run("SELECT 1 FROM market_data.job_runs WHERE status = 'running' AND job_id = ANY(:ids) LIMIT 1", {"ids": list(job_ids)})
+        return bool(rows.fetchall()) if hasattr(rows, "fetchall") else False
 
     def interrupt_running(self) -> int:
         result = self._run(

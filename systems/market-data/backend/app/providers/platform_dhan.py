@@ -21,12 +21,22 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.adapters import accounts_client
+from app.domain import job_tracker
 from app.config import settings
 from app.providers.dhan import _decode_jwt_exp, current_access_token, renew_access_token, set_manual_credentials
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
+
+TOKEN_LIFETIME_HOURS = 24.0  # a Dhan access token lives 24 hours (its own `exp` claim says exactly when)
+URGENT_HOURS = 3.0  # with less than this left a renewal goes ahead even while a scan runs: a dead token cannot be renewed at all
+RETRY_AFTER_FAILURE_MINUTES = 30
+# Jobs that call Dhan thousands of times over many minutes. Dhan's renewal REPLACES the token, so a renewal in the middle of one of these
+# can fail the calls that were in flight; they are given the room to finish.
+HEAVY_JOBS = ["oi-eod-snapshot-record", "equity-screener-snapshot-record"]
+
+_last_failure: Optional[datetime] = None
 
 
 def _now() -> datetime:
@@ -80,3 +90,44 @@ def set_platform_credentials(client_id: str, access_token: str) -> dict:
     """The operator sets the token: it becomes the one in use (and is saved on the volume) and is stored as the owner's saved token."""
     set_manual_credentials(client_id, access_token)
     return {"saved_to_settings": _write_back(access_token)}
+
+
+def renewal_state(now: Optional[datetime] = None, busy=None) -> dict:
+    """Should the token be renewed now? Decided from the token's own age (24 hours minus what it has left), not from a timer that restarts
+    with the service: due once it is `DHAN_TOKEN_RENEW_INTERVAL_HOURS` old; put off while a scan runs unless under URGENT_HOURS remain; and
+    after a failure left alone for RETRY_AFTER_FAILURE_MINUTES. A token that has already expired cannot be renewed (Dhan refuses), so it is
+    reported, not attempted."""
+    now = now or _now()
+    token = current_access_token()
+    exp = _decode_jwt_exp(token) if token else None
+    if exp is None:
+        return {"due": False, "reason": "there is no readable token to renew"}
+    remaining = (exp - now).total_seconds() / 3600
+    if remaining <= 0:
+        return {"due": False, "reason": "the token has already expired and cannot be renewed: save a fresh one on the Settings page", "remaining_hours": round(remaining, 2)}
+    age = TOKEN_LIFETIME_HOURS - remaining
+    interval = max(1.0, float(settings.dhan_token_renew_interval_hours))
+    if age < interval:
+        return {"due": False, "reason": f"the token is {age:.1f} hours old; it is renewed at {interval:g}", "remaining_hours": round(remaining, 2)}
+    if _last_failure is not None and (now - _last_failure).total_seconds() < RETRY_AFTER_FAILURE_MINUTES * 60 and remaining > 1.0:
+        return {"due": False, "reason": f"the last renewal failed; trying again {RETRY_AFTER_FAILURE_MINUTES} minutes after it", "remaining_hours": round(remaining, 2)}
+    is_busy = busy if busy is not None else job_tracker.any_running
+    if remaining > URGENT_HOURS and is_busy(HEAVY_JOBS):
+        return {"due": False, "deferred": True, "reason": f"a scan is running, so the renewal waits for it ({remaining:.1f} hours left)", "remaining_hours": round(remaining, 2)}
+    return {"due": True, "reason": f"the token is {age:.1f} hours old", "remaining_hours": round(remaining, 2)}
+
+
+def renew_if_due(now: Optional[datetime] = None, busy=None) -> dict:
+    """The scheduled renewal: renew when `renewal_state` says so, remember a failure so it is not retried every few minutes, and otherwise
+    say why not. Raises RuntimeError when Dhan refuses (as `renew_platform_token` does)."""
+    global _last_failure
+    state = renewal_state(now, busy)
+    if not state["due"]:
+        return {"renewed": False, **state}
+    try:
+        out = renew_platform_token()
+    except RuntimeError:
+        _last_failure = now or _now()
+        raise
+    _last_failure = None
+    return {**out, **{k: v for k, v in state.items() if k != "due"}}

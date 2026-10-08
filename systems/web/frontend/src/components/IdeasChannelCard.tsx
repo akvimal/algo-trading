@@ -104,7 +104,7 @@ export function IdeasChannelCard() {
       )}
       <details>
         <summary className="premarket-toggle">The disclaimer on every post</summary>
-        <p className="dim" style={{ fontSize: 13, whiteSpace: "pre-wrap", marginBottom: 0 }} data-testid="ideas-disclaimer">{c.disclaimer}</p>
+        <p className="dim" style={{ fontSize: 11, whiteSpace: "pre-wrap", marginBottom: 0 }} data-testid="ideas-disclaimer">{c.disclaimer}</p>
       </details>
       {note && !error && <span className="up" role="status">{note}</span>}
       {error && <div className="notice error" role="alert">{error}</div>}

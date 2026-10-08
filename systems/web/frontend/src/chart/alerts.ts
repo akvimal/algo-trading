@@ -103,6 +103,8 @@ export type SelectionInfo = {
   server?: boolean;
   trigger: Trigger | null;
   level: string | null;
+  /** The selected drawing's label (a line, ray, level or zone; a text drawing has its words instead). */
+  label?: string;
   /** The selected drawing's look, for the style bar: which tool made it, what has been changed, and whether that tool has a default. */
   look?: { name: string; style: DrawingStyle; hasDefault: boolean };
 };

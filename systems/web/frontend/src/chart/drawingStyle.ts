@@ -12,6 +12,7 @@ export type DrawingStyle = {
   fill?: 0.15 | 0.3 | 0.5; // a zone's fill opacity
   textSize?: 11 | 13 | 16 | 20; // a text label
   bold?: boolean; // a text label
+  noMid?: boolean; // a zone: true hides its dashed midline (shown unless this is set)
 };
 
 /** Which controls make sense for a drawing: lines (and ray, channel, fib, price level), zones, or text. */
@@ -64,6 +65,7 @@ export function sanitizeStyle(raw: unknown): DrawingStyle | undefined {
   const size = oneOf(r.textSize, [11, 13, 16, 20] as const);
   if (size) out.textSize = size;
   if (typeof r.bold === "boolean") out.bold = r.bold;
+  if (r.noMid === true) out.noMid = true;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -92,6 +94,7 @@ const dashed = (d: DashStyle | undefined) => (d === "solid" ? { style: "solid", 
  * A text label is drawn by our own code (see textLook), so it needs no library styles. */
 export function toOverlayStyles(name: string, style: DrawingStyle | undefined): Record<string, unknown> | undefined {
   if (!style) return undefined;
+  if (Object.keys(style).every((k) => k === "noMid")) return undefined; // only the midline switch: the zone keeps the chart's own look
   const kind = styleKindOf(name);
   if (kind === "text") return undefined;
   if (kind === "zone") {

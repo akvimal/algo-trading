@@ -1,4 +1,5 @@
 import type { SelectionInfo } from "./alerts";
+import { TEXT_DRAWING_MAX } from "./config";
 import { DASHES, FILLS, SWATCHES, TEXT_SIZES, WIDTHS, styleKindOf, type DrawingStyle } from "./drawingStyle";
 
 type Props = {
@@ -7,6 +8,8 @@ type Props = {
   onStyle: (patch: DrawingStyle) => void;
   onReset: () => void;
   onDefault: (on: boolean) => void;
+  /** Set the selected line, ray, level or zone's label (empty removes it). */
+  onLabel: (text: string) => void;
 };
 
 /** What a new drawing of each kind is called in "Use for new ...". */
@@ -24,7 +27,7 @@ const PLURAL: Record<string, string> = {
 /** The look of the selected drawing: colour, thickness, solid/dashed/dotted, a zone's fill, a label's size and weight.
  * Each choice applies at once and is saved with the drawing; "Use for new ..." makes the look the starting point for the
  * next drawing of the same kind. Shown only while a drawing is selected. */
-export function StyleBar({ selection, onStyle, onReset, onDefault }: Props) {
+export function StyleBar({ selection, onStyle, onReset, onDefault, onLabel }: Props) {
   const look = selection?.look;
   if (!look) return null;
   const kind = styleKindOf(look.name);
@@ -61,6 +64,11 @@ export function StyleBar({ selection, onStyle, onReset, onDefault }: Props) {
         </div>
       )}
       {kind === "zone" && (
+        <button className="chip-btn" aria-pressed={s.noMid !== true} title="A dashed line at the zone's 50% level" onClick={() => onStyle({ noMid: s.noMid ? undefined : true })}>
+          Midline
+        </button>
+      )}
+      {kind === "zone" && (
         <div className="chips" role="group" aria-label="Fill">
           {FILLS.map((f) => (
             <button key={f.value} aria-pressed={s.fill === f.value} onClick={() => onStyle({ fill: f.value })}>
@@ -82,6 +90,24 @@ export function StyleBar({ selection, onStyle, onReset, onDefault }: Props) {
             Bold
           </button>
         </>
+      )}
+
+      {kind !== "text" && (
+        <input
+          key={`${look.name}:${selection.level ?? ""}:${selection.label ?? ""}`}
+          className="style-label"
+          aria-label="Label on the drawing"
+          placeholder="Label (Enter)"
+          maxLength={TEXT_DRAWING_MAX}
+          defaultValue={selection.label ?? ""}
+          onKeyDown={(e) => {
+            e.stopPropagation(); // typing must not trigger the chart's own keys (Delete removes a drawing)
+            if (e.key === "Enter") onLabel(e.currentTarget.value);
+          }}
+          onBlur={(e) => {
+            if (e.currentTarget.value.trim() !== (selection.label ?? "")) onLabel(e.currentTarget.value);
+          }}
+        />
       )}
 
       <button className="link-btn" disabled={!changed} onClick={onReset}>

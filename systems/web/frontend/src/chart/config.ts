@@ -261,6 +261,8 @@ export type StoredDrawing = {
   alert?: { trigger: "cross" | "close" };
   /** The words of a text drawing. */
   text?: string;
+  /** A short label shown on a line, ray, level or zone (not a text drawing: that one's words are `text`). */
+  label?: string;
   /** How it looks, when the person changed that. */
   style?: DrawingStyle;
 };
@@ -277,8 +279,10 @@ export const loadDrawings = (exchange: string, symbol: string): StoredDrawing[] 
     // A text drawing with no words has nothing to show (and nothing to grab): drop it rather than draw an empty label.
     .filter((d) => d.name !== "textNote" || (typeof d.text === "string" && d.text.trim() !== ""))
     .map((d) => {
-      const { alert, text, style, ...rest } = d;
-      const withText = typeof text === "string" && d.name === "textNote" ? { ...rest, text: text.slice(0, TEXT_DRAWING_MAX) } : rest;
+      const { alert, text, style, label, ...rest } = d;
+      const words = typeof text === "string" && d.name === "textNote" ? { ...rest, text: text.slice(0, TEXT_DRAWING_MAX) } : rest;
+      const tag = typeof label === "string" && d.name !== "textNote" ? label.trim().slice(0, TEXT_DRAWING_MAX) : "";
+      const withText = tag ? { ...words, label: tag } : words;
       const cleanStyle = sanitizeStyle(style);
       const clean = cleanStyle ? { ...withText, style: cleanStyle } : withText;
       return alert && (alert.trigger === "cross" || alert.trigger === "close") ? { ...clean, alert: { trigger: alert.trigger } } : clean;

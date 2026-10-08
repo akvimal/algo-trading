@@ -35,7 +35,7 @@ export type IdeaRequest = {
   trade?: TradeRequest;
 };
 
-export type IdeaPreview = { text: string; messages: number; has_image: boolean; destination_hint: string | null };
+export type IdeaPreview = { text: string; messages: number; has_image: boolean; destination_hint: string | null; disclaimer?: string };
 
 export type PublishedIdea = {
   note_id: string;

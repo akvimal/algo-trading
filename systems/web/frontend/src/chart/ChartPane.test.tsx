@@ -169,6 +169,40 @@ describe("armed zones are sent to the server", () => {
     expect(sent[0].body).toEqual({ interval: "15min", watches: [{ kind: "zone", lo: 990, hi: 1010 }] });
   });
 
+  it("marks an armed zone with a bell on the chart, and shows a typed label beside it", async () => {
+    const ref = withRef();
+    const { c, id } = await draw(ref, "rect", [{ value: 1010 }, { value: 990 }]);
+    expect(c.overlaysNamed("drawTag").map((o) => (o.extendData as { text: string }).text)).toEqual(["🔔"]);
+    act(() => c.select(id));
+    act(() => ref.current!.setSelectedLabel("  demand  "));
+    expect(c.overlaysNamed("drawTag").map((o) => (o.extendData as { text: string }).text)).toEqual(["🔔 demand"]);
+    expect(JSON.parse(localStorage.getItem(KEY)!)[0].label).toBe("demand");
+    act(() => ref.current!.setSelectedAlert(null)); // disarmed: the bell goes, the label stays
+    expect(c.overlaysNamed("drawTag").map((o) => (o.extendData as { text: string }).text)).toEqual(["demand"]);
+    act(() => ref.current!.setSelectedLabel(""));
+    expect(c.overlaysNamed("drawTag")).toEqual([]);
+  });
+
+  it("lets a zone's dashed midline be switched off, and keeps that with the drawing", async () => {
+    const ref = withRef();
+    const { c, id } = await draw(ref, "rect", [{ value: 1010 }, { value: 990 }]);
+    expect(c.overlays.get(id)!.extendData).toEqual({ noMid: false });
+    act(() => c.select(id));
+    act(() => ref.current!.setSelectedStyle({ noMid: true }));
+    expect(c.overlays.get(id)!.extendData).toEqual({ noMid: true });
+    expect(JSON.parse(localStorage.getItem(KEY)!)[0].style).toEqual({ noMid: true });
+  });
+
+  it("labels a level at the right edge, and drops the label with the drawing", async () => {
+    const ref = withRef();
+    const { c, id } = await draw(ref, "horizontalStraightLine", [{ value: 1015 }]);
+    act(() => c.select(id));
+    act(() => ref.current!.setSelectedLabel("PDH"));
+    expect(c.overlaysNamed("drawTag").map((o) => o.extendData)).toMatchObject([{ text: "PDH", edge: "right" }]);
+    act(() => ref.current!.removeSelected());
+    expect(c.overlaysNamed("drawTag")).toEqual([]);
+  });
+
   it("does not arm a level by itself, and sends it only once it is armed", async () => {
     const ref = withRef();
     const { c, id } = await draw(ref, "horizontalStraightLine", [{ value: 1015 }]);

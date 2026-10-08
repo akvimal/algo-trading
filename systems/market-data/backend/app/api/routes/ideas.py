@@ -73,6 +73,7 @@ class PreviewOut(BaseModel):
     messages: int  # how many Telegram messages it goes out as
     has_image: bool
     destination_hint: Optional[str] = None
+    disclaimer: str = ""  # the closing notice inside `text`, so a screen can show it in a smaller type
 
 
 class PublishedOut(BaseModel):
@@ -143,7 +144,7 @@ def preview(payload: IdeaIn, db: Session = Depends(get_db), _admin: UUID = Depen
         plan = ideas.plan_post(idea)
     except ideas.IdeaError as e:
         raise _fail(e)
-    return PreviewOut(text=plan.text, messages=len(plan.messages), has_image=idea.image is not None, destination_hint=_hint(ideas.destination(db)))
+    return PreviewOut(text=plan.text, messages=len(plan.messages), has_image=idea.image is not None, destination_hint=_hint(ideas.destination(db)), disclaimer=ideas.disclaimer())
 
 
 @router.post("/ideas/publish", response_model=PublishedOut)

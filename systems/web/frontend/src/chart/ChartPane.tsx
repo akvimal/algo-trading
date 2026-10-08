@@ -9,7 +9,8 @@ import {
   DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
   STRUCTURE_TIMEFRAMES, TEXT_DRAWING_MAX, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
 } from "./config";
-import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
+import { ACCENT } from "./colors";
+import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type DrawTagExtend, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
 import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
 import { mergeStyle, sanitizeStyle, toOverlayStyles, type DrawingStyle } from "./drawingStyle";
@@ -32,6 +33,8 @@ export type ChartPaneHandle = {
   removeSelected: () => void;
   /** Arm the selected drawing (or, with null, disarm it). Only lines and zones can be armed. */
   setSelectedAlert: (trigger: Trigger | null) => void;
+  /** Put a short label on the selected line, ray, level or zone (empty removes it). */
+  setSelectedLabel: (text: string) => void;
   /** How far the instrument typically moves in one bar of this chart (null until enough bars have loaded) -
    * what a starting stop or target line is measured in, so it lands inside the part of the chart on screen. */
   typicalMove: () => number | null;
@@ -146,6 +149,7 @@ const REFRESH_MS = 30_000;
 const STRUCTURE_REFRESH_MS = 2 * 60_000;
 const MAX_AUTO_RETRIES = 8;
 const USER_DRAWINGS = "user-drawings";
+const DRAW_TAGS = "draw-tags";
 
 const magnetMode = (on: boolean): OverlayMode => (on ? OverlayMode.WeakMagnet : OverlayMode.Normal);
 
@@ -657,6 +661,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         if (!overlay || !drawnRef.current.has(id)) return;
         drawnRef.current.set(id, serialize(overlay));
         sidesRef.current.delete(id);
+        syncTag(id);
         persist();
         emitDrawing();
       }, 0);
@@ -691,6 +696,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         if (price != null && z) sidesRef.current.set(e.overlay.id, sideOf(price, z));
         emitArmed();
       }
+      syncTag(e.overlay.id);
       persist();
       emitDrawing();
       return false;
@@ -707,6 +713,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       draggingRef.current = null;
       drawnRef.current.set(e.overlay.id, serialize(e.overlay));
       sidesRef.current.delete(e.overlay.id); // it moved: the next price only learns its side, it cannot cross
+      syncTag(e.overlay.id);
       persist();
       emitDrawing();
       return false;
@@ -715,6 +722,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (selectedRef.current === e.overlay.id) selectedRef.current = null;
       if (pendingRef.current === e.overlay.id) pendingRef.current = null;
       if (!restoringRef.current) {
+        removeTag(e.overlay.id);
         drawnRef.current.delete(e.overlay.id);
         sidesRef.current.delete(e.overlay.id);
         persist();
@@ -744,14 +752,47 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const alert = drawnRef.current.get(o.id)?.alert;
     const text = o.name === "textNote" ? ((o.extendData as { text?: string } | undefined)?.text ?? drawnRef.current.get(o.id)?.text) : undefined;
     const saved = drawnRef.current.get(o.id);
+    const label = saved?.label;
     const style = saved ? saved.style : pendingStyleRef.current; // a new drawing starts from the default look; a finished one keeps its own
     return {
       name: o.name,
       points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })),
       ...(alert ? { alert } : {}),
       ...(text ? { text } : {}),
+      ...(label ? { label } : {}),
       ...(style ? { style } : {}),
     };
+  }
+
+  // ---- the label / alert bell on a drawing: a companion pill, kept in step with its drawing ----
+  const tagsRef = useRef<Map<string, string>>(new Map());
+  function removeTag(id: string) {
+    const tag = tagsRef.current.get(id);
+    if (tag) chartRef.current?.removeOverlay(tag);
+    tagsRef.current.delete(id);
+  }
+  function syncTag(id: string) {
+    const chart = chartRef.current;
+    const d = drawnRef.current.get(id);
+    if (!chart) return;
+    const bell = d?.alert ? (d.alert.trigger === "close" ? "🔔 close" : "🔔") : "";
+    const text = [bell, d?.label].filter(Boolean).join(" ");
+    const p0 = d?.points[0];
+    if (!d || d.name === "textNote" || !text || !p0 || typeof p0.value !== "number") {
+      removeTag(id);
+      return;
+    }
+    // A zone's pill sits on its top edge; every other drawing's at its own first point.
+    const top = d.name === "rect" ? Math.max(...d.points.map((p) => p.value ?? -Infinity)) : p0.value;
+    const point = toChartPoint({ ...p0, value: Number.isFinite(top) ? top : p0.value }, anchorRef.current);
+    const extendData: DrawTagExtend = { text, color: d.style?.color ?? ACCENT, edge: d.name === "horizontalStraightLine" || d.name === "priceLine" ? "right" : "point" };
+    const existing = tagsRef.current.get(id);
+    if (existing) {
+      chart.overrideOverlay({ id: existing, points: [point], extendData, visible: !propsRef.current.drawingsHidden });
+      return;
+    }
+    const tag = chart.createOverlay({ name: "drawTag", groupId: DRAW_TAGS, lock: true, visible: !propsRef.current.drawingsHidden, points: [point], extendData });
+    if (typeof tag === "string") tagsRef.current.set(id, tag);
   }
 
   /** Put a drawing's look on the chart now. */
@@ -760,6 +801,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     if (!chart) return;
     if (name === "textNote") chart.overrideOverlay({ id, extendData: { text: text ?? "", style } });
     else {
+      if (name === "rect") chart.overrideOverlay({ id, extendData: { noMid: style?.noMid === true } });
       const styles = toOverlayStyles(name, style);
       if (styles) chart.overrideOverlay({ id, styles });
     }
@@ -806,6 +848,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
           server: SERVER_WATCHED.has(d.name),
           trigger: d.alert?.trigger ?? null,
           level: levelText(d),
+          ...(d.label ? { label: d.label } : {}),
           look: { name: d.name, style: d.style ?? {}, hasDefault: loadDrawingDefaults()[d.name] !== undefined },
         }
       : null;
@@ -843,6 +886,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     if (!chart) return;
     // Wipe only the drawings (by id): the plan and structure layers are theirs to manage.
     restoringRef.current = true;
+    for (const id of [...tagsRef.current.keys()]) removeTag(id);
     for (const id of drawnRef.current.keys()) chart.removeOverlay(id);
     drawnRef.current.clear();
     for (const d of loadDrawings(propsRef.current.exchange, propsRef.current.symbol)) {
@@ -852,10 +896,14 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         points: d.points.map((p) => toChartPoint(p, anchorRef.current)),
         mode: magnetMode(propsRef.current.magnet),
         ...(d.name === "textNote" ? { extendData: { text: d.text ?? "", style: d.style } } : {}),
+        ...(d.name === "rect" ? { extendData: { noMid: d.style?.noMid === true } } : {}),
         ...(toOverlayStyles(d.name, d.style) ? { styles: toOverlayStyles(d.name, d.style) } : {}),
         ...handlers(),
       });
-      if (typeof id === "string") drawnRef.current.set(id, d);
+      if (typeof id === "string") {
+        drawnRef.current.set(id, d);
+        syncTag(id);
+      }
     }
     restoringRef.current = false;
     sidesRef.current.clear();
@@ -893,6 +941,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const chart = chartRef.current;
     if (!chart) return;
     for (const id of drawnRef.current.keys()) chart.overrideOverlay({ id, visible: !drawingsHidden, mode: magnetMode(magnet) });
+    chart.overrideOverlay({ groupId: DRAW_TAGS, visible: !drawingsHidden });
   }, [drawingsHidden, magnet, epoch]);
 
   useImperativeHandle(ref, () => ({
@@ -908,6 +957,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         groupId: USER_DRAWINGS,
         mode: magnetMode(propsRef.current.magnet),
         ...(tool === "textNote" ? { extendData: { text: "", style: start } } : {}),
+        ...(tool === "rect" ? { extendData: { noMid: start?.noMid === true } } : {}),
         ...(toOverlayStyles(tool, start) ? { styles: toOverlayStyles(tool, start) } : {}),
         ...handlers(),
       });
@@ -922,6 +972,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     clearDrawings() {
       const chart = chartRef.current;
       if (!chart) return;
+      for (const id of [...tagsRef.current.keys()]) removeTag(id);
       for (const id of [...drawnRef.current.keys()]) chart.removeOverlay(id);
       drawnRef.current.clear();
       sidesRef.current.clear();
@@ -938,6 +989,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       void _old;
       drawnRef.current.set(id, style ? { ...rest, style } : rest);
       applyStyle(id, d.name, style, d.text);
+      syncTag(id);
       persist();
       emitDrawing();
     },
@@ -1012,9 +1064,22 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       const price = propsRef.current.price;
       const z = trigger ? alertZone(d) : null;
       if (price != null && z) sidesRef.current.set(id, sideOf(price, z));
+      syncTag(id);
       persist();
       emitDrawing();
       emitArmed();
+    },
+    setSelectedLabel(text) {
+      const id = selectedRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!id || !d || d.name === "textNote") return;
+      const { label: _old, ...rest } = d;
+      void _old;
+      const label = text.trim().slice(0, TEXT_DRAWING_MAX);
+      drawnRef.current.set(id, label ? { ...rest, label } : rest);
+      syncTag(id);
+      persist();
+      emitDrawing();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);

@@ -67,6 +67,7 @@ registerOverlay({
   createPointFigures: ({ coordinates, overlay }) => {
     if (coordinates.length < 2) return [];
     const [a, b] = coordinates;
+    const showMid = (overlay.extendData as { noMid?: boolean } | undefined)?.noMid !== true;
     return [
       {
         type: "polygon",
@@ -83,9 +84,26 @@ registerOverlay({
         // otherwise. style stays stroke_fill so the zone reads translucent.
         styles: { ...(overlay.styles?.polygon ?? {}), style: "stroke_fill" },
       },
+      // The zone's midpoint (50%): a thin dashed line, lighter than the border.
+      ...(showMid
+        ? [
+            {
+              type: "line",
+              attrs: { coordinates: [{ x: a.x, y: (a.y + b.y) / 2 }, { x: b.x, y: (a.y + b.y) / 2 }] },
+              styles: { style: "dashed", dashedValue: [4, 4], size: 1, color: midColor(overlay.styles?.polygon?.borderColor) },
+              ignoreEvent: true,
+            },
+          ]
+        : []),
     ];
   },
 });
+
+/** The zone's midline colour: its own border colour at half strength (a neutral grey when the border is not a plain hex). */
+function midColor(border: unknown): string {
+  const m = typeof border === "string" ? /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(border) : null;
+  return m ? `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, 0.5)` : "rgba(170, 180, 190, 0.5)";
+}
 
 // An optional user-typed label on a drawing (trend line/ray/h-line/zone/
 // fib) - a small pill anchored at the drawing's own first point, in its
@@ -1746,6 +1764,8 @@ type StoredOverlay = {
   style?: DrawStyle;
   alert?: DrawAlert;
   label?: string;
+  // A zone (rect): true hides its dashed 50% line (shown unless set).
+  noMid?: boolean;
   // market_data.price_alerts row ids created by "sync to Alerts page" -
   // present only while this drawing's level is also being watched
   // server-side (Telegram, works with the tab closed). A rect (zone)
@@ -1889,6 +1909,7 @@ function serializeOverlay(o: Overlay, prev: StoredOverlay | undefined, anchor: B
     style: prev?.style,
     alert: prev?.alert ? { ...prev.alert, lastSide: null } : undefined,
     label: prev?.label,
+    noMid: prev?.noMid,
   };
 }
 
@@ -2129,6 +2150,7 @@ export function LiveChartPanel({
   const [selStyle, setSelStyle] = useState<DrawStyle>(DEFAULT_DRAW_STYLE);
   const [selAlert, setSelAlert] = useState<DrawAlert | null>(null);
   const [selLabel, setSelLabel] = useState<string>("");
+  const [selNoMid, setSelNoMid] = useState(false);
   const [selServerAlertIds, setSelServerAlertIds] = useState<string[] | null>(null);
   const [syncingAlert, setSyncingAlert] = useState(false);
   // A transient "NIFTY ▲ crossed 23,900" banner when a line alert fires.
@@ -2525,6 +2547,7 @@ export function LiveChartPanel({
     setSelStyle(entry?.style ?? drawStyleRef.current);
     setSelAlert(entry?.alert ?? null);
     setSelLabel(entry?.label ?? "");
+    setSelNoMid(entry?.noMid === true);
     setSelServerAlertIds(entry?.serverAlertIds ?? null);
   }
 
@@ -2542,7 +2565,10 @@ export function LiveChartPanel({
   function syncLabelOverlay(parentId: string, entry: StoredOverlay) {
     const chart = chartRef.current;
     if (!chart) return;
-    if (!entry.label) {
+    // The pill carries the typed label and/or a bell when an alert is armed on the drawing.
+    const bell = entry.alert ? (entry.alert.trigger === "close" ? "🔔 close" : "🔔") : "";
+    const pillText = [bell, entry.label].filter(Boolean).join(" ");
+    if (!pillText) {
       removeLabelOverlay(parentId);
       return;
     }
@@ -2552,7 +2578,7 @@ export function LiveChartPanel({
     // toChartPoint above) - otherwise the label pill drifts independently
     // of the zone/line it's supposed to sit on when the interval changes.
     const anchorPoint = toChartPoint(pt, { timestamps: barTimestampsRef.current });
-    const extendData: DrawLabelExtendData = { text: entry.label, color: entry.style?.color ?? drawStyleRef.current.color };
+    const extendData: DrawLabelExtendData = { text: pillText, color: entry.style?.color ?? drawStyleRef.current.color };
     const existing = labelOverlaysRef.current.get(parentId);
     if (existing) {
       chart.overrideOverlay({ id: existing, points: [anchorPoint], extendData });
@@ -2788,22 +2814,37 @@ export function LiveChartPanel({
     }
   }
 
+  function toggleSelectedMid() {
+    const sel = selectedOverlayRef.current;
+    const entry = sel ? overlaysRef.current.get(sel) : undefined;
+    if (!sel || !entry || entry.name !== "rect") return;
+    const noMid = entry.noMid ? undefined : true;
+    overlaysRef.current.set(sel, { ...entry, noMid });
+    chartRef.current?.overrideOverlay({ id: sel, extendData: { noMid: noMid === true } });
+    setSelNoMid(noMid === true);
+    persistOverlays();
+  }
+
   function toggleSelectedAlert() {
     const sel = selectedOverlayRef.current;
     if (!sel) return;
     const entry = overlaysRef.current.get(sel);
     if (!entry) return;
     if (entry.alert) {
-      overlaysRef.current.set(sel, { ...entry, alert: undefined });
+      const next = { ...entry, alert: undefined };
+      overlaysRef.current.set(sel, next);
       setSelAlert(null);
+      syncLabelOverlay(sel, next);
     } else {
       ensureAlertChannel();
       const z = alertZone(entry);
       const lastSide: DrawAlert["lastSide"] =
         z && lastPriceRef.current != null ? alertSideOf(lastPriceRef.current, z) : null;
       const alert: DrawAlert = { trigger: "cross", lastSide };
-      overlaysRef.current.set(sel, { ...entry, alert });
+      const next = { ...entry, alert };
+      overlaysRef.current.set(sel, next);
       setSelAlert(alert);
+      syncLabelOverlay(sel, next);
     }
     persistOverlays();
   }
@@ -2814,8 +2855,10 @@ export function LiveChartPanel({
     const entry = overlaysRef.current.get(sel);
     if (!entry?.alert) return;
     const alert: DrawAlert = { trigger, lastSide: null }; // re-seed on next check
-    overlaysRef.current.set(sel, { ...entry, alert });
+    const next = { ...entry, alert };
+    overlaysRef.current.set(sel, next);
     setSelAlert(alert);
+    syncLabelOverlay(sel, next);
     persistOverlays();
   }
 
@@ -2977,6 +3020,7 @@ export function LiveChartPanel({
           points: s.points.map((p) => toChartPoint(p, anchor)),
           mode: magnetModeFor(magnetRef.current),
           styles: s.style ? styleToPatch(s.style) : undefined,
+          ...(s.name === "rect" ? { extendData: { noMid: s.noMid === true } } : {}),
           ...overlayHandlers(),
         });
         // A restored alert re-seeds its side on the next check. Stored
@@ -4194,6 +4238,18 @@ export function LiveChartPanel({
                   title="Name this drawing (shown as a small tag on the chart)"
                 />
               </div>
+              {selected.name === "rect" && (
+                <div className="lcsb-group">
+                  <button
+                    type="button"
+                    className={selNoMid ? "" : "active"}
+                    title={selNoMid ? "Show the dashed 50% line" : "Hide the dashed 50% line"}
+                    onClick={toggleSelectedMid}
+                  >
+                    50%
+                  </button>
+                </div>
+              )}
               {ALERTABLE_OVERLAYS.has(selected.name) && (
                 <div className="lcsb-group lcsb-alert">
                   <button

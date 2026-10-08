@@ -182,7 +182,10 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       {preview && (
         <>
           <div className="dim" style={{ fontSize: 12 }}>This is exactly what will be posted{preview.destination_hint ? ` to ${preview.destination_hint}` : ""}. {deliveryNote(preview.messages, preview.has_image)}</div>
-          <pre className="idea-text" style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit", fontSize: 13 }}>{preview.text}</pre>
+          <pre className="idea-text" style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "inherit", fontSize: 13 }}>
+            {preview.disclaimer && preview.text.endsWith(preview.disclaimer) ? preview.text.slice(0, -preview.disclaimer.length) : preview.text}
+            {preview.disclaimer && preview.text.endsWith(preview.disclaimer) && <small className="idea-disclaimer" style={{ fontSize: 10.5, opacity: 0.75 }}>{preview.disclaimer}</small>}
+          </pre>
           {!preview.destination_hint && <div className="notice" role="status">No ideas channel is set. Set it at the top of this page first.</div>}
         </>
       )}

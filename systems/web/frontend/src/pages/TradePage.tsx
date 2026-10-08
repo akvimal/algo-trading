@@ -36,6 +36,7 @@ import { useResource } from "../hooks/useResource";
 import { LayoutMenu } from "../workstation/LayoutMenu";
 import { PaneHeader } from "../workstation/PaneHeader";
 import { CombosMenu } from "../workstation/CombosMenu";
+import { MarketInfoMenu } from "../workstation/MarketInfoMenu";
 import { addCombo, applyCombo, loadCombos, removeCombo, saveCombos, type Combo } from "../workstation/combos";
 import {
   loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSplit, setSymbol,
@@ -421,6 +422,7 @@ export function TradePage() {
         </form>
 
         <div className="ws-tools">
+          <MarketInfoMenu segment={activeSpec.segment} symbol={activeSpec.symbol} markets={markets} />
           {wide && (
             <LayoutMenu
               layout={ws.layout}
@@ -525,6 +527,7 @@ export function TradePage() {
             onStyle={(patch) => paneRefs[active].current?.setSelectedStyle(patch)}
             onReset={() => paneRefs[active].current?.resetSelectedStyle()}
             onDefault={(on) => paneRefs[active].current?.setSelectedStyleAsDefault(on)}
+            onLabel={(text) => paneRefs[active].current?.setSelectedLabel(text)}
           />
           <AlertBar selection={selection} armed={shown.reduce<number>((n, i) => n + armed[i], 0)} onSet={setAlert} />
           {levelNote && (

@@ -1,10 +1,10 @@
-import { useState } from "react";
-import { getPremarket, refreshPremarket } from "../api/premarket";
+import { useEffect, useState } from "react";
+import { getMarketBrief, getPremarket, refreshPremarket } from "../api/premarket";
 import { ApiError } from "../api/http";
 import type { PremarketReport } from "../api/types";
-import { formatPrice } from "../format";
+import { formatPrice, formatTime } from "../format";
 import { useResource } from "../hooks/useResource";
-import { BIAS_LABEL, derivedRows, formatIndicator, formatMove, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "../pages/premarketModel";
+import { BIAS_LABEL, type BriefSegment, derivedRows, formatIndicator, formatMove, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "../pages/premarketModel";
 import { ErrorNotice, Skeleton } from "./bits";
 
 const BIAS_PILL = { bullish: "pill up", bearish: "pill dn", neutral: "pill" } as const;
@@ -12,8 +12,13 @@ const BIAS_PILL = { bullish: "pill up", bearish: "pill dn", neutral: "pill" } as
 /** The morning read for the Indian session: the overnight inputs (GIFT Nifty gap, US close, crude, USD/INR, yields,
  * ADRs), scored by fixed rules and read by an AI model. Both calls are shown, and the card says when they disagree,
  * because the rules are the checkable part. Context for the day, not a recommendation. */
-export function PremarketCard() {
-  const report = useResource(getPremarket, [], { pollMs: 5 * 60_000 });
+export function PremarketCard({ segment = "NSE" }: { segment?: BriefSegment }) {
+  // NSE has its own scheduled morning report; MCX and crypto get a brief built on demand (cached on the server for half an hour).
+  // While the model's read is still being prepared, check back every few seconds instead of every five minutes.
+  const [preparing, setPreparing] = useState(false);
+  const briefSegment = segment === "NSE_PULSE" ? "NSE" : segment; // the API path of the in-session pulse
+  const report = useResource(() => (segment === "NSE" ? getPremarket() : getMarketBrief(briefSegment as "NSE" | "MCX" | "CRYPTO")), [segment], { pollMs: preparing ? 6_000 : 5 * 60_000 });
+  useEffect(() => setPreparing(!!report.data?.ai_pending), [report.data]);
   const [fresh, setFresh] = useState<PremarketReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -22,7 +27,7 @@ export function PremarketCard() {
     setBusy(true);
     setRefreshError(null);
     try {
-      setFresh(await refreshPremarket());
+      setFresh(await (segment === "NSE" ? refreshPremarket() : getMarketBrief(briefSegment as "NSE" | "MCX" | "CRYPTO", true)));
     } catch (e) {
       setRefreshError(e instanceof ApiError ? e.message : "Could not refresh. Try again in a moment.");
     } finally {
@@ -37,9 +42,9 @@ export function PremarketCard() {
     <>
       <div className="row" style={{ alignItems: "baseline" }}>
         <h2 className="section-title" style={{ margin: 0 }}>
-          Pre-market
+          {TITLE[segment]}
         </h2>
-        <button className="btn btn-small" onClick={refresh} disabled={busy} aria-label="Refresh the pre-market report">
+        <button className="btn btn-small" onClick={refresh} disabled={busy} aria-label={`Refresh the ${segment === "NSE_PULSE" ? "market pulse" : segment === "CRYPTO" ? "market brief" : "pre-market report"}`}>
           {busy ? "Refreshing…" : "Refresh"}
         </button>
       </div>
@@ -47,19 +52,38 @@ export function PremarketCard() {
       {report.loading && <Skeleton lines={3} />}
       {report.error && !data && <ErrorNotice error={report.error} onRetry={report.reload} />}
       {refreshError && <div className="notice" role="alert">{refreshError}</div>}
+      {data?.ai_reused && (
+        <div className="notice" data-testid="ai-reused">
+          The numbers have not meaningfully changed{data.ai_read_at ? ` since the AI read at ${formatTime(data.ai_read_at)}` : " since the last AI read"}, so that read was kept (no new AI call).
+        </div>
+      )}
+      {data?.ai_pending && (
+        <div className="notice" data-testid="ai-pending">
+          Showing the rule-based read. The AI read is being prepared and will appear here in a moment.
+        </div>
+      )}
       {!report.loading && !report.error && !data && (
         <div className="card">
           <p className="dim" style={{ margin: 0 }}>
-            No pre-market report yet. It is built each weekday at 8:45 AM, or press Refresh to build one now.
+            {segment === "NSE" ? "No pre-market report yet. It is built each weekday at 8:45 AM, or press Refresh to build one now." : "Nothing yet. Press Refresh to build one."}
           </p>
         </div>
       )}
-      {data && <Report report={data} />}
+      {data && <Report report={data} segment={segment} />}
     </>
   );
 }
 
-function Report({ report }: { report: PremarketReport }) {
+const TITLE: Record<BriefSegment, string> = { NSE: "Pre-market", NSE_PULSE: "Market pulse", MCX: "Pre-market", CRYPTO: "Market brief" };
+
+const FOOTNOTE: Record<BriefSegment, string> = {
+  NSE_PULSE: "Colours show whether a move helps or hurts Indian equities, so a rising India VIX is red.",
+  NSE: "Colours show whether a move helps or hurts Indian equities, so a rise in crude or yields is red.",
+  MCX: "Colours show whether a move is likely to lift or weigh on MCX prices, so a firmer dollar or higher US yields is red.",
+  CRYPTO: "Colours show whether a move helps or hurts crypto, so a firmer dollar, higher yields or a rising VIX is red.",
+};
+
+function Report({ report, segment }: { report: PremarketReport; segment: BriefSegment }) {
   const age = reportAge(report);
   const ai = report.ai;
   return (
@@ -116,7 +140,7 @@ function Report({ report }: { report: PremarketReport }) {
               </div>
             </>
           )}
-          {sections(report.inputs).map((s) => (
+          {sections(report.inputs, segment).map((s) => (
             <div key={s.title}>
               <div className="dim" style={{ fontSize: 12, marginBottom: 4 }}>
                 {s.title}
@@ -126,7 +150,7 @@ function Report({ report }: { report: PremarketReport }) {
                   <span>{i.label}</span>
                   <span className="num">
                     {i.ok && i.value != null ? formatPrice(i.value) : "–"}{" "}
-                    <span className={moveTone(i)}>{formatMove(i)}</span>
+                    <span className={moveTone(i, segment)}>{formatMove(i)}</span>
                   </span>
                 </div>
               ))}
@@ -134,8 +158,8 @@ function Report({ report }: { report: PremarketReport }) {
           ))}
           {hasMacro(report.macro, ai) && <Backdrop report={report} />}
           <span className="faint" style={{ fontSize: 12 }}>
-            Overnight context from public market data{report.model ? `, read by ${report.model}` : ""}. It is not a recommendation.
-            Colours show whether a move helps or hurts Indian equities, so a rise in crude or yields is red.
+            {segment === "NSE" ? "Overnight context" : segment === "NSE_PULSE" ? "Live context" : "Context"} from public market data{report.model ? `, read by ${report.model}` : ""}. It is not a recommendation.{" "}
+            {FOOTNOTE[segment]}
           </span>
         </div>
       </details>

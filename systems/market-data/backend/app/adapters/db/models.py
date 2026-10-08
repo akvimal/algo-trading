@@ -159,6 +159,14 @@ class EquityScreenerSnapshot(Base):
     # this ORM otherwise has no other use for.
     is_fno = Column(Boolean, nullable=False, server_default="false")
     index_memberships = Column(Text)
+    # Descriptive fields for the Screener page's universe, liquidity and relative-strength filters (migration 048; app/domain/equity_screener.py's swing_fields).
+    avg_turnover_cr = Column(Float)
+    ret_3m_pct = Column(Float)
+    mom_12_1_pct = Column(Float)
+    rsi3 = Column(Float)
+    dist_ema20_pct = Column(Float)
+    atr_pct = Column(Float)
+    vol_ratio = Column(Float)
 
 
 class EquityDailyBar(Base):
@@ -437,3 +445,34 @@ class ZoneEvent(Base):
     extreme = Column(Numeric)
     close = Column(Numeric)
     dedupe_key = Column(Text, nullable=False)
+
+
+class ZoneScan(Base):
+    """One row per (symbol, snapshot_date) for every F&O stock with enough stored daily bars: the daily and weekly structure read, the nearest
+    untested trend-aligned daily zone at or approaching price, the open-interest labels it was set against and the resulting tier. See migration
+    047 and app/domain/zone_scan.py. Every day is kept so the tiers can be reviewed against what happened next."""
+
+    __tablename__ = "zone_scan"
+    __table_args__ = (UniqueConstraint("symbol", "snapshot_date"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    snapshot_date = Column(Date, nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    close = Column(Float, nullable=False)
+    daily_trend = Column(Text, nullable=False)
+    weekly_trend = Column(Text)
+    weekly_bars = Column(Integer, nullable=False, server_default="0")
+    zone_kind = Column(Text)
+    zone_proximal = Column(Float)
+    zone_distal = Column(Float)
+    zone_position = Column(Text)
+    zone_distance_pct = Column(Float)
+    zone_distance_atr = Column(Float)
+    weekly_zone = Column(Boolean, nullable=False, server_default="false")
+    weekly_agrees = Column(Boolean, nullable=False, server_default="false")
+    call_buildup = Column(Text)
+    put_buildup = Column(Text)
+    oi_agrees = Column(Boolean)
+    tier = Column(Text)

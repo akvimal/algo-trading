@@ -2096,6 +2096,7 @@ describe("saved combos", () => {
 
     await openCombos(user);
     await user.click(screen.getByRole("button", { name: "+ Save NIFTY + RELIANCE" }));
+    await openCombos(user); // saving closes the menu
     expect(await screen.findByRole("button", { name: "NIFTY + RELIANCE" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /\+ Save/ })).not.toBeInTheDocument(); // now saved: nothing more to offer
     expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toHaveLength(2);
@@ -2136,6 +2137,7 @@ describe("saved combos", () => {
 
     await openCombos(user);
     await user.click(screen.getByRole("button", { name: "+ Save NIFTY 15m + NIFTY 1h" }));
+    await openCombos(user); // saving closes the menu
     expect(await screen.findByRole("button", { name: "NIFTY 15m + NIFTY 1h" })).toBeInTheDocument();
     const saved = JSON.parse(localStorage.getItem("web.workstation.combos")!);
     expect(saved).toHaveLength(2);

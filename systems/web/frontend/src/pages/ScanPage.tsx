@@ -1,18 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/http";
 import { createCustomScreen, deleteCustomScreen, listCustomScreens, previewCustomScreen, runCustomScreen, updateCustomScreen } from "../api/customScreens";
-import type { Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
+import type { ZoneScan, ZoneScanRow, Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { TextField } from "../components/Field";
 import { Sparkline } from "../components/Sparkline";
 import { formatDay, formatPct, formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
+import { ChartIcon, HistoryIcon, TradeIcon } from "../chart/icons";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { ScanTradePanel } from "./ScanTradePanel";
 import {
   BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, tradeLink, visible,
-  type OiFilters, type OiSignal, type OiSort, type ScreenerFilters, type ScreenerSort,
+  UNIVERSES, UNIVERSE_LABEL, haveLiquidity, sizeLabel, universeCounts, ZONE_TIER_HELP, zonePlace, zoneTrends, type OiFilters, type OiSignal, type OiSort, type RsCut, type ScreenerFilters, type ScreenerSort, type ZoneFilter,
 } from "./scanModel";
 import {
   EMPTY_FORM, EXAMPLE_CONDITIONS, INDEX_OPTIONS, defToForm, filterSummary, formToDef, sortScreens, usesIntraday, validateForm, type CustomScreenForm,
@@ -83,7 +84,10 @@ const buildupOptions = [{ value: "all" as const, label: "All" }, ...(Object.keys
 function OiScan() {
   const data = useResource(() => api<OiBuildup>("marketData", "/oi-buildup?history_days=10"), []);
   const [f, setF] = useState<OiFilters>(OI_DEFAULTS);
-  const rows = data.data ? filterOi(data.data.rows, f) : [];
+  // The nightly zone scan is a separate read: if it is missing or fails the OI list works exactly as before, just without the zone filter's matches.
+  const zoneScan = useResource(() => api<ZoneScan>("marketData", "/zone-scan"), []);
+  const zones = useMemo(() => Object.fromEntries((zoneScan.data?.rows ?? []).map((z) => [z.symbol, z])) as Record<string, ZoneScanRow>, [zoneScan.data]);
+  const rows = data.data ? filterOi(data.data.rows, f, zones) : [];
   const [shown, more] = useShown(JSON.stringify(f));
   // Only one card's chart, and independently only one card's ticket, is ever open at a time - each
   // is its own live read (a quote socket for the chart, an account/regime read for the ticket), so
@@ -143,6 +147,16 @@ function OiScan() {
       )}
       <div className="filters">
         <SearchBox value={f.search} onChange={(search) => setF({ ...f, search })} />
+        <Select<ZoneFilter>
+          label="At a zone"
+          value={f.zone}
+          onChange={(zone) => setF({ ...f, zone, sort: zone === "all" ? (f.sort === "zone" ? "call_oi" : f.sort) : "zone" })}
+          options={[
+            { value: "all", label: "Any stock" },
+            { value: "shortlist", label: "Shortlist (tier A and B)" },
+            { value: "any", label: "Any zone (A, B and C)" },
+          ]}
+        />
         <Select label="Call side" value={f.call} onChange={(call) => setF({ ...f, call })} options={buildupOptions} />
         <Select label="Put side" value={f.put} onChange={(put) => setF({ ...f, put })} options={buildupOptions} />
         <Select<OiSort>
@@ -156,10 +170,20 @@ function OiScan() {
             { value: "price", label: "Price change" },
             { value: "strength", label: "Size of the shift" },
             { value: "oi_total", label: "Total OI change" },
+            { value: "zone", label: "Zone: best tier first" },
             { value: "symbol", label: "Symbol A to Z" },
           ]}
         />
       </div>
+      {f.zone !== "all" && (
+        <p className="faint" style={{ margin: 0, fontSize: 12 }} data-testid="zone-help">
+          {zoneScan.error
+            ? "The zone scan could not be loaded, so no stock matches."
+            : zoneScan.data?.snapshot_date
+              ? `Zones from the nightly scan of ${formatDay(zoneScan.data.snapshot_date)}: an untested demand or supply zone on the daily chart, with the weekly chart and open interest as support. It describes where price sits; it is not a prediction.${data.data && data.data.snapshot_date !== zoneScan.data.snapshot_date ? ` The open interest on the cards is from ${formatDay(data.data.snapshot_date)}, so a tier may not match it.` : ""}`
+              : "The nightly zone scan has not run yet."}
+        </p>
+      )}
       {data.loading && <Skeleton lines={6} />}
       {data.error && <ErrorNotice error={data.error} onRetry={data.reload} />}
       {data.data && (
@@ -182,6 +206,10 @@ function OiScan() {
               buildup and long unwinding the bearish pair. A stock counts when the price moved at least {MIN_PRICE_MOVE_PCT}% and total OI changed at least {MIN_OI_CHANGE_PCT}%.
             </div>
             <div>
+              <strong>At a zone</strong>: the nightly scan reads each F&O stock's daily and weekly chart for an untested demand or supply zone that price is inside or within one day's range of, and not against the
+              daily trend. {ZONE_TIER_HELP.A} {ZONE_TIER_HELP.B} {ZONE_TIER_HELP.C} Zones are a judgment drawn from price history, not a signal.
+            </div>
+            <div>
               <strong>Strong bullish</strong>: {OI_SIGNAL_HELP.strong_bull} <strong>Strong bearish</strong>: {OI_SIGNAL_HELP.strong_bear} A shift counts only when open interest
               grew by at least {DEFAULT_MIN_SHIFT}% (you can change it) on both sides.
             </div>
@@ -197,6 +225,7 @@ function OiScan() {
                   <OiCard
                     key={r.symbol}
                     row={r}
+                    zone={zones[r.symbol]}
                     minShift={f.minShift}
                     expanded={expanded === r.symbol}
                     onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))}
@@ -229,6 +258,19 @@ function BuildupPill({ b }: { b: Buildup | null }) {
 }
 
 /** The last five days of call and put OI change for one stock, newest first, each against the day before it. */
+const SCAN_ICONS = { history: HistoryIcon, chart: ChartIcon, trade: TradeIcon } as const;
+
+/** The History / Chart / Trade toggles on a result card: an icon, with the word kept as its accessible name and tooltip. */
+function ScanIconButton({ kind, open, onClick }: { kind: keyof typeof SCAN_ICONS; open: boolean; onClick: () => void }) {
+  const Icon = SCAN_ICONS[kind];
+  const label = open ? `Close ${kind}` : kind[0].toUpperCase() + kind.slice(1);
+  return (
+    <button className="link-btn icon-only" aria-expanded={open} aria-label={label} title={label} onClick={onClick}>
+      <Icon />
+    </button>
+  );
+}
+
 function OiHistory({ row }: { row: OiRow }) {
   const days = oiDays(row.history, 5);
   const window = oiWindowChange(row.history, 5);
@@ -280,8 +322,25 @@ function OiHistory({ row }: { row: OiRow }) {
   );
 }
 
+function ZoneLine({ z }: { z: ZoneScanRow }) {
+  return (
+    <div className="row" data-testid="zone-line">
+      <span>
+        <span className={`pill pill-small ${z.zone_kind === "demand" ? "up" : "dn"}`} title={ZONE_TIER_HELP[z.tier]} data-testid="zone-badge">
+          Tier {z.tier} · {z.zone_kind === "demand" ? "Demand" : "Supply"}
+        </span>{" "}
+        <span className="dim">{zonePlace(z)}</span>
+      </span>
+      <span className="faint num" style={{ fontSize: 12 }} title="The zone's edges, and the trend on each chart">
+        {formatPrice(Math.min(z.zone_proximal, z.zone_distal))} to {formatPrice(Math.max(z.zone_proximal, z.zone_distal))} · {zoneTrends(z)}
+      </span>
+    </div>
+  );
+}
+
 function OiCard({
   row: r,
+  zone,
   minShift,
   expanded,
   onToggle,
@@ -289,6 +348,7 @@ function OiCard({
   onToggleTrade,
 }: {
   row: OiRow;
+  zone?: ZoneScanRow;
   minShift: number;
   expanded: boolean;
   onToggle: () => void;
@@ -334,20 +394,15 @@ function OiCard({
           <Signed value={r.put_oi_change_pct} text={formatPct(r.put_oi_change_pct, 1, true)} /> <BuildupPill b={r.put_buildup} />
         </div>
       </div>
+      {zone && <ZoneLine z={zone} />}
       <div className="row">
         <span className="dim">
           Put/call ratio <span className="num">{r.pcr == null ? "–" : r.pcr.toFixed(2)}</span>
         </span>
         <span className="field-actions">
-          <button className="link-btn" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)}>
-            {historyOpen ? "Close history" : "History"}
-          </button>
-          <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
-            {expanded ? "Close chart" : "Chart"}
-          </button>
-          <button className="link-btn" aria-expanded={tradeOpen} onClick={onToggleTrade}>
-            {tradeOpen ? "Close trade" : "Trade"}
-          </button>
+          <ScanIconButton kind="history" open={historyOpen} onClick={() => setHistoryOpen((v) => !v)} />
+          <ScanIconButton kind="chart" open={expanded} onClick={onToggle} />
+          <ScanIconButton kind="trade" open={tradeOpen} onClick={onToggleTrade} />
         </span>
       </div>
       {historyOpen && <OiHistory row={r} />}
@@ -379,11 +434,44 @@ function ScreenerScan() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [tradeOpen, setTradeOpen] = useState<string | null>(null);
 
+  const counts = data.data ? universeCounts(data.data.rows, f.liquid) : null;
+  const liquidityKnown = data.data ? haveLiquidity(data.data.rows) : true;
+
   return (
     <div className="stack">
+      <div className="oi-signal">
+        <div className="chips" role="group" aria-label="Universe">
+          {UNIVERSES.map((u) => (
+            <button key={u} aria-pressed={f.universe === u} onClick={() => setF({ ...f, universe: u })} title={u === "other" ? "Stocks in none of the Nifty 500 index lists - mostly smaller and thinner" : undefined}>
+              {UNIVERSE_LABEL[u]}
+              {counts && ` (${counts[u]})`}
+            </button>
+          ))}
+        </div>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+          <input type="checkbox" checked={f.liquid} onChange={(e) => setF({ ...f, liquid: e.target.checked })} />
+          <span className="dim">Liquid only (₹5 Cr or more traded a day)</span>
+        </label>
+      </div>
+      {f.liquid && !liquidityKnown && data.data && (
+        <p className="faint" style={{ margin: 0, fontSize: 12 }} data-testid="liquidity-pending">
+          Traded value is filled in by tonight's end-of-day run, so this filter does nothing until then.
+        </p>
+      )}
       <div className="filters">
         <SearchBox value={f.search} onChange={(search) => setF({ ...f, search })} />
         <Select label="Trend" value={f.regime} onChange={(regime) => setF({ ...f, regime })} options={regimeOptions} />
+        <Select<RsCut>
+          label="Relative strength (12-1 month)"
+          value={f.rs}
+          onChange={(rs) => setF({ ...f, rs, sort: rs === "any" ? (f.sort === "rs" ? "d5" : f.sort) : "rs" })}
+          options={[
+            { value: "any", label: "Any" },
+            { value: "10", label: "Top 10%" },
+            { value: "20", label: "Top 20%" },
+            { value: "40", label: "Top 40%" },
+          ]}
+        />
         <Select label="52-week range" value={f.proximity} onChange={(proximity) => setF({ ...f, proximity })} options={proximityOptions} />
         <Select<ScreenerSort>
           label="Sort by"
@@ -393,6 +481,12 @@ function ScreenerScan() {
             { value: "d5", label: "5-day change" },
             { value: "d20", label: "20-day change" },
             { value: "adx", label: "Trend strength (ADX)" },
+            { value: "mom", label: "12-1 month return" },
+            { value: "ret3m", label: "3-month return" },
+            { value: "rs", label: "Relative strength rank" },
+            { value: "turnover", label: "Traded value" },
+            { value: "ema20", label: "Furthest below 20-day EMA" },
+            { value: "rsi3", label: "Lowest 3-day RSI" },
             { value: "symbol", label: "Symbol A to Z" },
           ]}
         />
@@ -404,6 +498,18 @@ function ScreenerScan() {
           <p className="dim" style={{ margin: 0 }}>
             End-of-day read for {formatDay(data.data.snapshot_date)}. {rows.length} of {data.data.rows.length} stocks. Trend comes from ADX and DMI, the 52-week range from daily bars.
           </p>
+          <details className="legend">
+            <summary>About these numbers</summary>
+            <div>
+              <strong>Universe and liquidity</strong>: the index lists are the exchange's own. Traded value is the 20-day average of price times volume; the cut-off keeps out stocks a trader could struggle to leave. Roughly half of all listed stocks fall under it.
+            </div>
+            <div>
+              <strong>Relative strength</strong>: where the 12-1 month return ranks among the liquid stocks (100 is the best). That score is the close a month ago against the close a year ago, so the latest month is left out on purpose.
+            </div>
+            <div>
+              <strong>Not a signal.</strong> These are filters for your own judgment. Back-tests in October 2026 of few-day setups built from these same fields (pullbacks, breakouts, squeezes, oversold bounces, demand zones) found no reliable edge after costs on liquid Nifty 500 stocks. Buying the strongest 12-1 month names for two to four weeks showed a small advantage over the whole group, but not a proven one.
+            </div>
+          </details>
           {data.data.rows.length === 0 ? (
             <Empty title="No snapshot yet">The end-of-day screener has not run yet. Check back after the market closes.</Empty>
           ) : rows.length === 0 ? (
@@ -431,6 +537,33 @@ function ScreenerScan() {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/** The descriptive extras on a Screener card, leaving out whatever the stock has too few bars for. */
+function SwingLine({ r }: { r: ScreenerRow }) {
+  const size = sizeLabel(r);
+  const bits: { key: string; text: string; title: string }[] = [];
+  if (r.avg_turnover_cr != null) bits.push({ key: "t", text: `₹${r.avg_turnover_cr >= 100 ? r.avg_turnover_cr.toFixed(0) : r.avg_turnover_cr.toFixed(1)} Cr/day`, title: "Average traded value over 20 days" });
+  if (r.rs_12m_pctile != null) bits.push({ key: "rs", text: `RS ${r.rs_12m_pctile.toFixed(0)}`, title: "Rank of the 12-1 month return among liquid stocks (100 is the best)" });
+  if (r.ret_3m_pct != null) bits.push({ key: "3m", text: `3m ${formatPct(r.ret_3m_pct, 0, true)}`, title: "Return over the last 63 trading days" });
+  if (r.mom_12_1_pct != null) bits.push({ key: "12", text: `12-1m ${formatPct(r.mom_12_1_pct, 0, true)}`, title: "The close a month ago against the close a year ago" });
+  if (r.dist_ema20_pct != null) bits.push({ key: "e", text: `${formatPct(r.dist_ema20_pct, 1, true)} vs 20-day EMA`, title: "How far the close is from its 20-day exponential average" });
+  if (r.rsi3 != null) bits.push({ key: "r", text: `RSI(3) ${r.rsi3.toFixed(0)}`, title: "A very short-term momentum read: low is oversold, high is overbought" });
+  if (r.atr_pct != null) bits.push({ key: "a", text: `moves ~${r.atr_pct.toFixed(1)}%/day`, title: "Average true range over 14 days, as a percentage of the close" });
+  if (!size && bits.length === 0) return null;
+  return (
+    <div className="row" data-testid="swing-line">
+      <span className="faint" style={{ fontSize: 12 }}>
+        {size && <span className="pill pill-small" data-testid="size-badge" style={{ marginRight: 6 }}>{size}</span>}
+        {bits.map((b, i) => (
+          <span key={b.key} title={b.title}>
+            {i > 0 && " · "}
+            {b.text}
+          </span>
+        ))}
+      </span>
     </div>
   );
 }
@@ -465,6 +598,7 @@ function ScreenerCard({
         </div>
         <Sparkline values={r.history.map((h) => h.close)} />
       </div>
+      <SwingLine r={r} />
       <div className="row">
         <span>
           {r.regime && <span className="pill">{REGIME_LABEL[r.regime]}</span>}
@@ -476,12 +610,8 @@ function ScreenerCard({
           )}
         </span>
         <span className="field-actions">
-          <button className="link-btn" aria-expanded={expanded} onClick={onToggle}>
-            {expanded ? "Close chart" : "Chart"}
-          </button>
-          <button className="link-btn" aria-expanded={tradeOpen} onClick={onToggleTrade}>
-            {tradeOpen ? "Close trade" : "Trade"}
-          </button>
+          <ScanIconButton kind="chart" open={expanded} onClick={onToggle} />
+          <ScanIconButton kind="trade" open={tradeOpen} onClick={onToggleTrade} />
         </span>
       </div>
       {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
@@ -692,12 +822,8 @@ function CustomScreenScan() {
                       <strong>{m.symbol}</strong>
                       <span className="num">{formatPrice(m.close)}</span>
                       <span className="field-actions">
-                        <button className="link-btn" aria-expanded={isExpanded} onClick={() => setExpanded((cur) => (cur === m.symbol ? null : m.symbol))}>
-                          {isExpanded ? "Close chart" : "Chart"}
-                        </button>
-                        <button className="link-btn" aria-expanded={isTradeOpen} onClick={() => setTradeOpen((cur) => (cur === m.symbol ? null : m.symbol))}>
-                          {isTradeOpen ? "Close trade" : "Trade"}
-                        </button>
+                        <ScanIconButton kind="chart" open={isExpanded} onClick={() => setExpanded((cur) => (cur === m.symbol ? null : m.symbol))} />
+                        <ScanIconButton kind="trade" open={isTradeOpen} onClick={() => setTradeOpen((cur) => (cur === m.symbol ? null : m.symbol))} />
                       </span>
                     </div>
                     {isExpanded && <ScanChartPanel exchange={m.exchange} symbol={m.symbol} />}

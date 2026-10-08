@@ -23,6 +23,8 @@ export function CombosMenu({ ws, combos, onApply, onRemove, onSave }: Props) {
   const buttonLabel = `Combos${active ? `: ${active.label}` : ""}${combos.length ? `, ${combos.length} saved` : ""}`;
   return (
     <Popover label="Combos" text={active?.label} buttonLabel={buttonLabel} badge={combos.length || undefined}>
+      {(close) => (
+        <>
       {combos.length === 0 && (
         <p className="faint" style={{ margin: "0 0 8px" }}>
           No saved combos yet.
@@ -30,7 +32,7 @@ export function CombosMenu({ ws, combos, onApply, onRemove, onSave }: Props) {
       )}
       {combos.map((c) => (
         <div className="menu-row" key={c.id}>
-          <button type="button" className="link-btn" aria-pressed={isActiveCombo(ws, c)} title={`Show ${c.label} together, linked`} onClick={() => onApply(c)}>
+          <button type="button" className="link-btn" aria-pressed={isActiveCombo(ws, c)} title={`Show ${c.label} together, linked`} onClick={() => { onApply(c); close(); }}>
             {c.label}
           </button>
           <button type="button" className="icon-btn" aria-label={`Remove ${c.label}`} onClick={() => onRemove(c.id)}>
@@ -39,9 +41,11 @@ export function CombosMenu({ ws, combos, onApply, onRemove, onSave }: Props) {
         </div>
       ))}
       {canSave && (
-        <button type="button" className="link-btn" style={{ marginTop: 8 }} onClick={onSave}>
+        <button type="button" className="link-btn" style={{ marginTop: 8 }} onClick={() => { onSave(); close(); }}>
           + Save {comboLabel(ws.panes[0], ws.panes[1])}
         </button>
+      )}
+        </>
       )}
     </Popover>
   );

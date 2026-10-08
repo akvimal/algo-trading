@@ -49,3 +49,5 @@
 044-notifications.sql|market_data.notification_log|
 045-study-note-clean-snapshot.sql|execution.study_notes|snapshot_clean_png
 046-zone-watches.sql|market_data.zone_watches|
+047-zone-scan.sql|market_data.zone_scan|
+048-screener-swing-fields.sql|market_data.equity_screener_snapshot|avg_turnover_cr

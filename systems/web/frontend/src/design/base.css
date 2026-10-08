@@ -2242,3 +2242,69 @@ table.t th {
   font-weight: 600;
   cursor: pointer;
 }
+
+/* the label typed for the selected line, level or zone */
+.ws-style .style-label {
+  width: 150px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #3a424d);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+/* Icon-only link buttons (scan result cards): a comfortable tap target around the icon. */
+.link-btn.icon-only {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+.link-btn.icon-only[aria-expanded="true"] {
+  background: var(--accent-soft, rgba(125, 125, 125, 0.18));
+  border-radius: 6px;
+}
+
+/* The market badge's panel (pre-market + news): wider than a normal menu so the report reads without sideways scrolling. */
+.popover-panel:has(.market-info) {
+  width: min(440px, 90vw);
+}
+.workstation:not(.wide) .popover-panel:has(.market-info) {
+  width: auto;
+}
+.market-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.market-info-news {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Calendar tab rows: time, what it is, and its impact. */
+.calendar-row {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.calendar-time {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.calendar-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

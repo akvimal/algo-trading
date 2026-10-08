@@ -24,7 +24,9 @@ below are exactly its own fields.
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+from app.domain.indicators import compute_ema
 from app.domain.models import Candle
+from app.domain.order_blocks import _atr
 from app.domain.regime import _MIN_BARS, assess_regime
 
 # How close (as a % of the 52-week extreme itself) counts as "near" - not
@@ -38,6 +40,11 @@ NEAR_52W_THRESHOLD_PCT = 3.0
 MIN_BARS_FOR_52W_PROXIMITY = 200
 
 Proximity = Literal["near_52w_high", "near_52w_low"]
+
+# Turnover is shown in Rs crore; the screener's "liquid" cut-off (a stock a swing trader can get out of) is Rs 5 Cr a day.
+CRORE = 1e7
+LIQUID_MIN_CR = 5.0
+TURNOVER_DAYS = 20
 
 
 @dataclass
@@ -59,6 +66,52 @@ class EquityScreenerCompute:
     # "mid-range") - not a third enum value, same "None means nothing to
     # flag" convention as oi_summary.py's own buildup classification.
     proximity: Optional[Proximity]
+    # Descriptive fields for filtering and sorting (added 2026-10-08). None when there are too few bars, so a young listing simply has no value.
+    avg_turnover_cr: Optional[float] = None  # 20-day average of close x volume, in Rs crore
+    ret_3m_pct: Optional[float] = None  # close against 63 bars earlier
+    mom_12_1_pct: Optional[float] = None  # the close a month ago against the close a year ago: the "12-1" momentum score (the latest month is skipped)
+    rsi3: Optional[float] = None  # 3-period RSI, a very short-term oversold/overbought read (0-100)
+    dist_ema20_pct: Optional[float] = None  # how far the close is above (+) or below (-) its 20-day EMA
+    atr_pct: Optional[float] = None  # 14-day average true range as a % of the close: how far it typically moves in a day
+    vol_ratio: Optional[float] = None  # today's volume against the average of the 20 days before
+
+
+def _rsi3(closes: list[float]) -> Optional[float]:
+    """Wilder-style 3-period RSI over the whole series (smoothing factor 1/3), None when flat or too short."""
+    if len(closes) < 5:
+        return None
+    up = down = None
+    for prev, cur in zip(closes, closes[1:]):
+        gain, loss = max(cur - prev, 0.0), max(prev - cur, 0.0)
+        up, down = (gain, loss) if up is None else (up * 2 / 3 + gain / 3, down * 2 / 3 + loss / 3)
+    if not down:
+        return 100.0 if up else None
+    return round(100 - 100 / (1 + up / down), 2)
+
+
+def swing_fields(candles: list[Candle]) -> dict:
+    """The descriptive filter/sort fields above, from the same trailing daily bars (oldest-first)."""
+    n = len(candles)
+    closes = [c.close for c in candles]
+    close = closes[-1]
+    out: dict = {}
+    if n >= TURNOVER_DAYS:
+        out["avg_turnover_cr"] = round(sum(c.close * c.volume for c in candles[-TURNOVER_DAYS:]) / TURNOVER_DAYS / CRORE, 3)
+    if n >= 64:
+        out["ret_3m_pct"] = (close / closes[-64] - 1) * 100
+    if n >= 253:
+        out["mom_12_1_pct"] = (closes[-22] / closes[-253] - 1) * 100
+    out["rsi3"] = _rsi3(closes)
+    ema20 = compute_ema(closes, 20)[-1]
+    if ema20:
+        out["dist_ema20_pct"] = (close / ema20 - 1) * 100
+    if n >= 15 and close:
+        out["atr_pct"] = _atr([c.high for c in candles], [c.low for c in candles], closes, 14) / close * 100
+    if n >= 21:
+        before = [c.volume for c in candles[-21:-1]]
+        if sum(before):
+            out["vol_ratio"] = candles[-1].volume / (sum(before) / len(before))
+    return out
 
 
 def compute_equity_screener_row(candles: list[Candle]) -> Optional[EquityScreenerCompute]:
@@ -106,4 +159,24 @@ def compute_equity_screener_row(candles: list[Candle]) -> Optional[EquityScreene
         pct_from_52w_high=pct_from_52w_high,
         pct_from_52w_low=pct_from_52w_low,
         proximity=proximity,
+        **swing_fields(candles),
     )
+
+
+def percentile_ranks(values: dict[str, Optional[float]]) -> dict[str, float]:
+    """0-100 rank for each symbol with a value (100 = the highest), ties sharing their average rank; symbols without one are left out."""
+    have = sorted((v, k) for k, v in values.items() if v is not None)
+    n = len(have)
+    if n == 0:
+        return {}
+    out: dict[str, float] = {}
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and have[j + 1][0] == have[i][0]:
+            j += 1
+        rank = 100.0 * ((i + j) / 2) / (n - 1) if n > 1 else 100.0
+        for k in range(i, j + 1):
+            out[have[k][1]] = round(rank, 1)
+        i = j + 1
+    return out

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db.models import PremarketReport
 from app.config import settings
 from app.domain import ai_models, rbi_reader
+from app.domain.ai_fingerprint import basis, same_basis
 from app.domain.ai_retry import post_json
 from app.domain.premarket_bias import score_inputs
 from app.providers import premarket as provider
@@ -162,8 +163,18 @@ def today_ist() -> date:
     return datetime.now(ZoneInfo(settings.timezone)).date()
 
 
-def build_report(api_key: Optional[str], read_new_rbi: bool = False) -> dict:
-    """Fetch + score + (optionally) ask the model. Pure of the database, so a manual run can be inspected before it is stored."""
+def _same_data(prior: Optional[dict], new_basis: dict) -> bool:
+    """Whether `prior`'s AI read still holds: made on numbers within tolerance of these, by the same model, on the same prompt."""
+    if not prior or not prior.get("ai") or not prior.get("model"):
+        return False
+    return same_basis(basis(prior["inputs"], prior["rules"], prior["model"], prior.get("macro")), new_basis)
+
+
+def build_report(api_key: Optional[str], read_new_rbi: bool = False, prior: Optional[dict] = None) -> dict:
+    """Fetch + score + (optionally) ask the model. Pure of the database, so a manual run can be inspected before it is stored.
+
+    `prior` is today's stored report (inputs, rules, macro, ai, model): when the numbers the model would read have not meaningfully
+    changed since it was made (app/domain/ai_fingerprint.py), its AI read is reused instead of paying for the same answer again."""
     inputs = [i.to_dict() for i in provider.fetch_inputs()]
     rules = score_inputs(inputs)
     macro = fetch_macro(_india_10y(inputs))
@@ -171,11 +182,13 @@ def build_report(api_key: Optional[str], read_new_rbi: bool = False) -> dict:
         # Reading a new speech takes a model call per item (a minute or more in total on a thinking model), so only the
         # scheduled job does it; a manual refresh reuses what has already been read and stays quick.
         macro["rbi"] = rbi_reader.attach_summaries(macro["rbi"], api_key if read_new_rbi else None)
-    ai, ai_error = None, None
+    ai, ai_error, ai_reused = None, None, False
     if not api_key:
         ai_error = "No OpenRouter key - showing the rule-based bias only."
     elif rules["coverage"] == 0:
         ai_error = "No inputs could be fetched."
+    elif _same_data(prior, basis(inputs, rules, ai_models.model_for("premarket"), macro)):
+        ai, ai_reused = prior["ai"], True
     else:
         try:
             ai = run_ai(inputs, rules, api_key, macro)
@@ -188,7 +201,8 @@ def build_report(api_key: Optional[str], read_new_rbi: bool = False) -> dict:
         "ai": ai,
         "macro": macro,
         "ai_error": ai_error,
-        "model": ai.get("model") if ai else None,
+        "ai_reused": ai_reused,
+        "model": (prior.get("model") if ai_reused else ai.get("model")) if ai else None,
         "bias": ai["bias"] if ai else rules["bias"],
         "agree": (ai["bias"] == rules["bias"]) if ai else None,
     }

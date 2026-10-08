@@ -6,17 +6,20 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy import func
 
-from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, SentimentHistory
+from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, SentimentHistory, ZoneScan
 from app.adapters.db.session import SessionLocal
 from app.config import settings
 from app.domain import job_tracker
 from app.domain.dhan_retry import dhan_retry_delay
 from app.domain.job_tracker import tracked
 from app.domain.equity_screener import compute_equity_screener_row
+from app.domain.models import Candle
 from app.domain.oi_buildup import PreviousSnapshot, compute_eod_buildup
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
+from app.domain.zone_scan import read_zones, tier_for
 from app.providers import nse_indices
 from app.providers.router import all_providers, get_provider
 
@@ -347,6 +350,34 @@ def _record_oi_eod_snapshot() -> None:
         logger.warning("scheduled OI EOD snapshot: only %d of %d stocks written - the digest was not sent", tally["written"], len(symbols))
 
 
+_INCREMENTAL_MIN_STORED_BARS = 200
+_INCREMENTAL_MAX_GAP_DAYS = 10
+_INCREMENTAL_OVERLAP_DAYS = 3
+# How much daily history is kept per stock: about a year for every NSE equity (the screener's 52-week read needs 252 bars), about three years for the
+# F&O stocks, so the zone scan's weekly structure has ~150 weekly bars to read instead of ~50 (app/domain/zone_scan.py). The longer window is only ~210
+# stocks; keeping it for all ~2,700 would roughly triple the table for nothing.
+_RETENTION_DAYS = 380
+_RETENTION_DAYS_FNO = 1100
+# An F&O stock whose stored bars do not reach back this close to its window start is fetched in full (a one-off backfill for the stocks that had only a
+# year stored before the window grew; a stock listed less than three years ago is simply fetched in full each day, which is a handful of stocks).
+_COVERS_WINDOW_SLACK_DAYS = 45
+
+
+def _plan_daily_fetch(stored_dates: list[date], today: date, window_start: date, is_fno: bool, full_refresh: bool) -> tuple[bool, date]:
+    """(incremental, fetch_from) for one stock in the screener job. Incremental - fetch only the days since the last stored bar, plus a few days'
+    overlap - when the stored bars are enough (200+), recent (within 10 days) and, for an F&O stock, reach back to the start of its longer window.
+    Anything else is a full fetch of the window: a new or thin symbol, a stale cache, an F&O stock still being backfilled to three years, and every
+    stock on the Monday refresh (which also picks up split and bonus adjustments to old bars). `stored_dates` is oldest-first."""
+    if (
+        not full_refresh
+        and len(stored_dates) >= _INCREMENTAL_MIN_STORED_BARS
+        and (today - stored_dates[-1]).days <= _INCREMENTAL_MAX_GAP_DAYS
+        and (not is_fno or stored_dates[0] <= window_start + timedelta(days=_COVERS_WINDOW_SLACK_DAYS))
+    ):
+        return True, stored_dates[-1] - timedelta(days=_INCREMENTAL_OVERLAP_DAYS)
+    return False, window_start
+
+
 @tracked("equity-screener-snapshot-record", "Equity screener snapshot")
 def _record_equity_screener_snapshot() -> None:
     """Writes one market_data.equity_screener_snapshot row per NSE equity
@@ -374,7 +405,7 @@ def _record_equity_screener_snapshot() -> None:
     not only more derived columns. Append-only per symbol (only bar_dates
     past whatever is already stored are inserted - a full day's ~2000
     symbols only ever add ~2000 new rows, not re-write the whole window),
-    then prunes anything older than `from_date` below."""
+    then prunes anything older than the symbol's own window below (about a year; about three for F&O stocks - see _RETENTION_DAYS_FNO)."""
     run = job_tracker.current()
     now = datetime.now(ZoneInfo(settings.timezone))
     if now.weekday() >= 5:
@@ -406,7 +437,9 @@ def _record_equity_screener_snapshot() -> None:
     # ~380 calendar days comfortably covers 252 TRADING days (the 52-week
     # window equity_screener.py needs) even across weekends/holidays - also
     # equity_daily_bar's own retention window, pruned to the same cutoff below.
-    from_date = today - timedelta(days=380)
+    from_date = today - timedelta(days=_RETENTION_DAYS)
+    from_date_fno = today - timedelta(days=_RETENTION_DAYS_FNO)
+    full_refresh = today.weekday() == 0
     tally = {"written": 0, "too_little_history": 0, "failed": 0}
     run.set_total(len(symbols))
     db = SessionLocal()
@@ -414,7 +447,29 @@ def _record_equity_screener_snapshot() -> None:
         for i, symbol in enumerate(symbols):
             run.tick(i, tally)
             try:
-                candles = _retry_when_throttled(provider.get_candle_history, symbol, "daily", from_date, today)
+                # Incremental: bars already in equity_daily_bar are not re-downloaded. Only the
+                # days since the last stored bar (plus a few days' overlap) are fetched, and the
+                # screener row is computed from stored + new bars. A symbol with no/short stored
+                # history, a stale cache, or the weekly Monday refresh (picks up split/bonus
+                # adjustments to old bars) does the full-window fetch instead.
+                sym_from = from_date_fno if symbol in fno_symbols else from_date
+                stored = (
+                    db.query(EquityDailyBar)
+                    .filter(EquityDailyBar.symbol == symbol, EquityDailyBar.bar_date >= sym_from)
+                    .order_by(EquityDailyBar.bar_date.asc())
+                    .all()
+                )
+                existing_max = stored[-1].bar_date if stored else None
+                incremental, fetch_from = _plan_daily_fetch([b.bar_date for b in stored], today, sym_from, symbol in fno_symbols, full_refresh)
+                fetched = _retry_when_throttled(provider.get_candle_history, symbol, "daily", fetch_from, today)
+                if incremental:
+                    stored_candles = [
+                        Candle(exchange=b.exchange, symbol=b.symbol, interval="daily", open=b.open, high=b.high, low=b.low, close=b.close, volume=b.volume, timestamp=f"{b.bar_date.isoformat()}T00:00:00", provider="cache")
+                        for b in stored
+                    ]
+                    candles = stored_candles + [c for c in fetched if date.fromisoformat(c.timestamp[:10]) > existing_max]
+                else:
+                    candles = fetched
 
                 # Cache the raw bars regardless of whether there's enough history for the
                 # regime/ADX read below - a symbol too young/thin for a real ADX read can
@@ -423,16 +478,17 @@ def _record_equity_screener_snapshot() -> None:
                 # correct, informative absence - not a reason to skip caching what DOES
                 # exist). Must run BEFORE the `result is None: continue` below, not after -
                 # a thin symbol would otherwise never get cached at all.
-                existing = (
-                    db.query(EquityDailyBar.bar_date).filter(EquityDailyBar.symbol == symbol).order_by(EquityDailyBar.bar_date.desc()).first()
-                )
-                existing_max = existing[0] if existing else None
-                for c in candles:
+                if not incremental and stored:
+                    # Replace, not append: a full fetch covers the whole window again, and adjusted history (a split, a bonus) differs from what
+                    # was stored; appending only bars newer than the stored maximum would also skip the older ones a backfill fetched.
+                    db.query(EquityDailyBar).filter(EquityDailyBar.symbol == symbol).delete()
+                    existing_max = None
+                for c in fetched:
                     bar_date = date.fromisoformat(c.timestamp[:10])
                     if existing_max is not None and bar_date <= existing_max:
                         continue
                     db.add(EquityDailyBar(symbol=symbol, exchange=c.exchange, bar_date=bar_date, open=c.open, high=c.high, low=c.low, close=c.close, volume=c.volume))
-                db.query(EquityDailyBar).filter(EquityDailyBar.symbol == symbol, EquityDailyBar.bar_date < from_date).delete()
+                db.query(EquityDailyBar).filter(EquityDailyBar.symbol == symbol, EquityDailyBar.bar_date < sym_from).delete()
 
                 result = compute_equity_screener_row(candles)
                 if result is None:
@@ -459,6 +515,8 @@ def _record_equity_screener_snapshot() -> None:
                 row.pct_from_52w_low = result.pct_from_52w_low
                 row.proximity = result.proximity
                 row.is_fno = symbol in fno_symbols
+                for field in ("avg_turnover_cr", "ret_3m_pct", "mom_12_1_pct", "rsi3", "dist_ema20_pct", "atr_pct", "vol_ratio"):
+                    setattr(row, field, getattr(result, field))
                 row.index_memberships = ",".join(sorted(symbol_indices.get(symbol, []))) or None
 
                 db.commit()
@@ -471,6 +529,74 @@ def _record_equity_screener_snapshot() -> None:
         db.close()
     run.tick(len(symbols), tally)
     _log_eod_summary("equity screener snapshot", len(symbols), tally)
+
+
+@tracked("zone-scan-record", "Zone scan")
+def _record_zone_scan() -> None:
+    """Writes one market_data.zone_scan row per NSE F&O stock for today: the daily and weekly market structure, whether price is at (or
+    approaching) an untested demand or supply zone, and the tier that gives it once the day's open-interest labels are laid against it - see
+    app/domain/zone_scan.py for what each means. It only READS what the other two end-of-day jobs have already stored (equity_daily_bar from the
+    screener, oi_eod_snapshot from the OI job), so it makes no provider calls and a whole run takes seconds. It therefore has to run after them
+    (settings.zone_scan_hour/minute), and skips rather than writing yesterday's bars under today's date when the screener has not got there.
+    Idempotent: a re-run replaces the day's rows."""
+    run = job_tracker.current()
+    now = datetime.now(ZoneInfo(settings.timezone))
+    if now.weekday() >= 5:
+        run.skip("weekend")
+        return
+    today = now.date()
+    tally = {"written": 0, "too_little_history": 0, "at_zone": 0, "failed": 0}
+    db = SessionLocal()
+    try:
+        latest = db.query(func.max(EquityScreenerSnapshot.snapshot_date)).filter(EquityScreenerSnapshot.is_fno.is_(True)).scalar()
+        if latest is None:
+            run.fail("no F&O stocks in the screener snapshot yet")
+            return
+        symbols = [r[0] for r in db.query(EquityScreenerSnapshot.symbol).filter(EquityScreenerSnapshot.is_fno.is_(True), EquityScreenerSnapshot.snapshot_date == latest)]
+        newest = db.query(func.max(EquityDailyBar.bar_date)).filter(EquityDailyBar.symbol.in_(symbols)).scalar()
+        if newest is None or newest < today:
+            run.skip(f"no daily bar for {today} yet (the screener has not stored it, or the market was shut); newest stored bar is {newest}")
+            return
+        bars: dict[str, list[Candle]] = {}
+        for b in db.query(EquityDailyBar).filter(EquityDailyBar.symbol.in_(symbols)).order_by(EquityDailyBar.symbol.asc(), EquityDailyBar.bar_date.asc()):
+            bars.setdefault(b.symbol, []).append(
+                Candle(exchange=b.exchange, symbol=b.symbol, interval="daily", open=b.open, high=b.high, low=b.low, close=b.close, volume=b.volume, timestamp=f"{b.bar_date.isoformat()}T00:00:00", provider="cache")
+            )
+        labels = {s: (c, p) for s, c, p in db.query(OiEodSnapshot.symbol, OiEodSnapshot.call_buildup, OiEodSnapshot.put_buildup).filter(OiEodSnapshot.snapshot_date == today)}
+        run.set_total(len(symbols))
+        for i, symbol in enumerate(symbols):
+            run.tick(i, tally)
+            try:
+                candles = bars.get(symbol, [])
+                if not candles or date.fromisoformat(candles[-1].timestamp[:10]) < today:
+                    continue  # no bar for today: a halted or newly suspended stock, left out rather than read off a stale series
+                read = read_zones(candles)
+                if read is None:
+                    tally["too_little_history"] += 1
+                    continue
+                call_label, put_label = labels.get(symbol, (None, None))
+                tier, agrees = tier_for(read, call_label, put_label)
+                row = db.query(ZoneScan).filter(ZoneScan.symbol == symbol, ZoneScan.snapshot_date == today).first()
+                if row is None:
+                    row = ZoneScan(symbol=symbol, exchange="NSE", snapshot_date=today)
+                    db.add(row)
+                row.close, row.daily_trend, row.weekly_trend, row.weekly_bars = read.close, read.daily_trend, read.weekly_trend, read.weekly_bars
+                row.zone_kind, row.zone_proximal, row.zone_distal, row.zone_position = read.zone_kind, read.zone_proximal, read.zone_distal, read.zone_position
+                row.zone_distance_pct, row.zone_distance_atr = read.zone_distance_pct, read.zone_distance_atr
+                row.weekly_zone, row.weekly_agrees = read.weekly_zone, read.weekly_agrees
+                row.call_buildup, row.put_buildup, row.oi_agrees, row.tier = call_label, put_label, agrees, tier
+                db.commit()
+                tally["written"] += 1
+                if tier:
+                    tally["at_zone"] += 1
+            except Exception:
+                tally["failed"] += 1
+                logger.exception("zone scan failed for %s", symbol)
+                db.rollback()
+    finally:
+        db.close()
+    run.tick(len(symbols), tally)
+    _log_eod_summary("zone scan", len(symbols), tally)
 
 
 @tracked("premarket-report-record", "Pre-market bias report")
@@ -614,7 +740,8 @@ def job_catalog() -> list[dict]:
     s = settings
     jobs = [
         ("oi-eod-snapshot-record", "OI buildup snapshot", f"Weekdays {s.oi_eod_snapshot_hour:02d}:{s.oi_eod_snapshot_minute:02d}", "Stores each F&O stock's total call and put open interest for the day, which the OI buildup scan and its history read."),
-        ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches a year of daily bars for every NSE stock and stores the screener row, which the Screener and custom scans read."),
+        ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches the new daily bars for every NSE stock (a full year only on Mondays or for a new stock) and stores the screener row, which the Screener and custom scans read."),
+        ("zone-scan-record", "Zone scan", f"Weekdays {s.zone_scan_hour:02d}:{s.zone_scan_minute:02d}", "Reads each F&O stock's stored daily and weekly bars for an untested demand or supply zone at price, sets it against the day's open-interest read, and stores the tier for the OI scan page's At a zone filter."),
         ("session-summary-nse", "Post-session summary: NSE", f"Weekdays {s.session_summary_nse_hour:02d}:{s.session_summary_nse_minute:02d}", "Sends each subscriber how the NSE session went and their own closed trades that day."),
         ("session-summary-mcx", "Post-session summary: MCX", f"Weekdays {s.session_summary_mcx_hour:02d}:{s.session_summary_mcx_minute:02d}", "Sends each subscriber how gold, crude, silver and natural gas did and their own closed MCX trades that day."),
         ("session-summary-crypto", "Post-session summary: crypto", f"Daily {s.session_summary_crypto_hour:02d}:{s.session_summary_crypto_minute:02d}", "Sends each subscriber the last 24 hours in BTC and ETH and their own crypto trades that day."),
@@ -687,6 +814,12 @@ def start_scheduler() -> None:
         _record_equity_screener_snapshot,
         CronTrigger(day_of_week="mon-fri", hour=settings.equity_screener_snapshot_hour, minute=settings.equity_screener_snapshot_minute, timezone=settings.timezone),
         id="equity-screener-snapshot-record",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _record_zone_scan,
+        CronTrigger(day_of_week="mon-fri", hour=settings.zone_scan_hour, minute=settings.zone_scan_minute, timezone=settings.timezone),
+        id="zone-scan-record",
         replace_existing=True,
     )
     _scheduler.add_job(

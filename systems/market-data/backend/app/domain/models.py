@@ -883,6 +883,19 @@ class EquityScreenerRowOut(BaseModel):
     pct_from_52w_high: Optional[float] = None
     pct_from_52w_low: Optional[float] = None
     proximity: Optional[Literal["near_52w_high", "near_52w_low"]] = None
+    is_fno: bool = False
+    # The index keys the stock belongs to (NIFTY500, NIFTYMIDCAP150, ...); empty for a stock in none of the synced indices (mostly illiquid micro-caps).
+    universes: list[str] = Field(default_factory=list)
+    avg_turnover_cr: Optional[float] = None
+    ret_3m_pct: Optional[float] = None
+    mom_12_1_pct: Optional[float] = None
+    rsi3: Optional[float] = None
+    dist_ema20_pct: Optional[float] = None
+    atr_pct: Optional[float] = None
+    vol_ratio: Optional[float] = None
+    # 0-100 rank (100 = strongest) of the 3-month return and of the 12-1 momentum score among the stocks trading at least Rs 5 Cr a day; None for the rest.
+    rs_3m_pctile: Optional[float] = None
+    rs_12m_pctile: Optional[float] = None
     history: list[EquityScreenerHistoryPoint] = Field(default_factory=list)
 
 
@@ -931,7 +944,7 @@ class PremarketInputOut(BaseModel):
     ok: bool
     value: Optional[float] = None
     change: Optional[float] = None  # % for prices, basis points for the yields (see `unit`)
-    unit: Literal["pct", "bp"] = "pct"
+    unit: Literal["pct", "bp", "pt"] = "pct"
     source: str = ""
     error: Optional[str] = None
 
@@ -1018,3 +1031,8 @@ class PremarketReportOut(BaseModel):
     rules: PremarketRulesOut
     ai: Optional[PremarketAiOut] = None
     macro: Optional[PremarketMacroOut] = None
+    # MCX/crypto briefs only: the rules-based read is shown at once and the model's read is still being prepared.
+    ai_pending: bool = False
+    # When the AI read was actually made, and whether this build reused it because the numbers had not meaningfully changed.
+    ai_read_at: Optional[datetime] = None
+    ai_reused: bool = False

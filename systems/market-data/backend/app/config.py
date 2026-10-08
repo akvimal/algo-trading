@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # 16:30 IST, after the OI scan above (16:05, a ~10-15 minute run) so the two do not compete for Dhan's shared rate limit.
     equity_screener_snapshot_hour: int = 16
     equity_screener_snapshot_minute: int = 30
+    # 17:30 IST: after the screener above has stored today's daily bars (a run of about half an hour from 16:30) - the zone scan only reads them.
+    zone_scan_hour: int = 17
+    zone_scan_minute: int = 30
 
     dhan_client_id: str = ""
     dhan_access_token: str = ""

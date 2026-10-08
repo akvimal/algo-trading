@@ -56,5 +56,9 @@ def refresh_premarket(db: Session = Depends(get_db), user_id: UUID = Depends(req
             raise HTTPException(status_code=429, detail=f"Just refreshed - try again in {int(wait) + 1}s.")
         _last_refresh = time.monotonic()
     key = accounts_client.get_user_openrouter_key(user_id) or settings.openrouter_api_key or None
-    row = save_report(db, today_ist(), build_report(key))
-    return report_out(row)
+    today = get_report(db, today_ist())
+    prior = {"inputs": today.inputs, "rules": today.rules, "macro": today.macro, "ai": today.ai, "model": today.model} if today else None
+    report = build_report(key, prior=prior)
+    out = report_out(save_report(db, today_ist(), report))
+    out.ai_reused = report["ai_reused"]  # not stored: it describes this refresh, not the day's report
+    return out

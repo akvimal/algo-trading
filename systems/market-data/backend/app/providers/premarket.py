@@ -40,7 +40,7 @@ class RawInput:
     value: Optional[float] = None
     # Percent change for prices; for the two yields the move in basis points instead (see `unit`).
     change: Optional[float] = None
-    unit: str = "pct"  # "pct" | "bp"
+    unit: str = "pct"  # "pct" | "bp" | "pt" (index points, the crypto Fear & Greed index)
     source: str = ""
     error: Optional[str] = None
 

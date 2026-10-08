@@ -45,6 +45,8 @@ const chainStrikes = [
 let oi: { snapshot_date: string; rows: object[] };
 let scr: { snapshot_date: string; rows: object[] };
 let oiStatus = 200;
+let zones: { snapshot_date: string | null; rows: object[] };
+let zonesStatus = 200;
 let customScreens: any[];
 let previewResult: any;
 let previewErrorDetail: string | null;
@@ -63,6 +65,8 @@ beforeEach(() => {
   oi = { snapshot_date: "2026-09-25", rows: [oiRow("RELIANCE"), oiRow("TCS", { call_oi_change_pct: 12, call_buildup: "short_buildup" })] };
   scr = { snapshot_date: "2026-09-25", rows: [scrRow("SBIN"), scrRow("ITC", { regime: "ranging", proximity: null, pct_change_5d: -2 })] };
   oiStatus = 200;
+  zones = { snapshot_date: null, rows: [] };
+  zonesStatus = 200;
   customScreens = [];
   previewResult = { snapshot_date: "2026-09-25", candidates: 2, matches: [{ symbol: "TCS", exchange: "NSE", close: 3500 }] };
   previewErrorDetail = null;
@@ -84,6 +88,7 @@ beforeEach(() => {
       const method = init?.method ?? "GET";
       calls.push({ url, method });
       if (url.includes("/oi-buildup")) return oiStatus === 200 ? json(oi) : json({ detail: "boom" }, oiStatus);
+      if (url.includes("/zone-scan")) return zonesStatus === 200 ? json(zones) : json({ detail: "boom" }, zonesStatus);
       if (url.includes("/candles/history")) {
         const interval = new URL(url).searchParams.get("interval") ?? "daily";
         return json(candlesFor(new URL(url).searchParams.get("symbol") ?? "", interval));
@@ -170,6 +175,81 @@ describe("OI buildup", () => {
     expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(1);
     await user.type(screen.getByLabelText("Search a symbol"), "zzz");
     expect(await screen.findByText("No stocks match")).toBeInTheDocument();
+  });
+
+  describe("At a zone (the nightly zone scan)", () => {
+    const zoneRow = (symbol: string, over: object = {}) => ({
+      symbol, exchange: "NSE", close: 2500, daily_trend: "down", weekly_trend: "down", tier: "A", zone_kind: "supply", zone_position: "approaching", zone_proximal: 2560, zone_distal: 2600,
+      zone_distance_pct: 2.4, zone_distance_atr: 0.8, weekly_zone: true, weekly_agrees: true, call_buildup: "short_buildup", put_buildup: "short_buildup", oi_agrees: true, ...over,
+    });
+    const withZones = () => {
+      oi = { snapshot_date: "2026-09-25", rows: ["AAA", "BBB", "CCC", "DDD"].map((s) => oiRow(s)) };
+      zones = {
+        snapshot_date: "2026-09-25",
+        rows: [zoneRow("BBB", { tier: "B", zone_distance_atr: 0.3 }), zoneRow("AAA"), zoneRow("CCC", { tier: "C", zone_kind: "demand", zone_position: "inside", zone_distance_pct: 0, zone_distance_atr: 0, weekly_trend: null })],
+      };
+    };
+
+    it("puts a badge on a stock at a zone, saying the tier, the side, how far away and the trend on each chart", async () => {
+      withZones();
+      renderAt("/scan");
+      const cards = await within(await screen.findByTestId("oi-list")).findAllByTestId("oi-card");
+      await waitFor(() => expect(screen.getAllByTestId("zone-badge")).toHaveLength(3));
+      const aaa = within(cards.find((c) => c.textContent?.includes("AAA"))!);
+      expect(aaa.getByTestId("zone-badge")).toHaveTextContent("Tier A · Supply");
+      expect(aaa.getByText("2.4% below a supply zone")).toBeInTheDocument();
+      expect(aaa.getByText(/Daily down, weekly down/)).toBeInTheDocument();
+      const ccc = within(cards.find((c) => c.textContent?.includes("CCC"))!);
+      expect(ccc.getByText("Inside a demand zone")).toBeInTheDocument();
+      expect(ccc.getByText(/Daily down(?!, weekly)/)).toBeInTheDocument(); // no weekly read: not shown as "range"
+      expect(within(cards.find((c) => c.textContent?.includes("DDD"))!).queryByTestId("zone-badge")).not.toBeInTheDocument();
+    });
+
+    it("the shortlist keeps tiers A and B, any zone adds C, and both read best tier first", async () => {
+      withZones();
+      const user = userEvent.setup();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      await waitFor(() => expect(screen.getAllByTestId("zone-badge")).toHaveLength(3));
+      await user.selectOptions(screen.getByLabelText("At a zone"), "shortlist");
+      let cards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+      expect(cards.map((c) => /AAA|BBB|CCC|DDD/.exec(c.textContent ?? "")![0])).toEqual(["AAA", "BBB"]); // A before B, though B is nearer
+      await user.selectOptions(screen.getByLabelText("At a zone"), "any");
+      cards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+      expect(cards.map((c) => /AAA|BBB|CCC|DDD/.exec(c.textContent ?? "")![0])).toEqual(["AAA", "BBB", "CCC"]);
+      expect(screen.getByTestId("zone-help")).toHaveTextContent(/nightly scan of 25 Sept/);
+      await user.selectOptions(screen.getByLabelText("At a zone"), "all");
+      expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(4);
+    });
+
+    it("warns when the zone scan and the OI snapshot are from different days, since the tier was set against the other day's OI", async () => {
+      withZones();
+      zones = { ...zones, snapshot_date: "2026-09-24" };
+      const user = userEvent.setup();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      await user.selectOptions(await screen.findByLabelText("At a zone"), "any");
+      expect(await screen.findByTestId("zone-help")).toHaveTextContent(/scan of 24 Sept.*open interest on the cards is from 25 Sept, so a tier may not match it/);
+    });
+
+    it("works as before without the zone scan, and says why the filter matches nothing when it could not load", async () => {
+      zonesStatus = 500;
+      const user = userEvent.setup();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      expect(screen.queryByTestId("zone-badge")).not.toBeInTheDocument();
+      expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(2);
+      await user.selectOptions(screen.getByLabelText("At a zone"), "any");
+      expect(await screen.findByText("No stocks match")).toBeInTheDocument();
+      expect(screen.getByTestId("zone-help")).toHaveTextContent(/zone scan could not be loaded/);
+    });
+
+    it("explains the tiers in the legend", async () => {
+      withZones();
+      renderAt("/scan");
+      await screen.findByTestId("oi-list");
+      expect(screen.getByText(/Tier A: a weekly zone of the same kind is also at price/)).toBeInTheDocument();
+    });
   });
 
   describe("the five-day history", () => {
@@ -697,6 +777,80 @@ describe("OI buildup", () => {
       expect(await tcs.findByText(/set to live trading/)).toBeInTheDocument();
       expect(tcs.queryByTestId("ticket")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("Screener universe, liquidity and relative strength", () => {
+  const swingRow = (symbol: string, over: object = {}) =>
+    scrRow(symbol, { universes: ["NIFTY500", "NIFTYMIDCAP150"], is_fno: false, avg_turnover_cr: 42.5, ret_3m_pct: 9.4, mom_12_1_pct: 31, rsi3: 18, dist_ema20_pct: -3.2, atr_pct: 2.4, vol_ratio: 1.2, rs_3m_pctile: 70, rs_12m_pctile: 88, ...over });
+  const cardNames = () => within(screen.getByTestId("screener-list")).getAllByTestId("screener-card").map((c) => /^[A-Z]+/.exec(c.textContent ?? "")![0]);
+
+  beforeEach(() => {
+    scr = {
+      snapshot_date: "2026-10-08",
+      rows: [
+        swingRow("MIDCO"),
+        swingRow("LARGECO", { universes: ["NIFTY500", "NIFTY100"], avg_turnover_cr: 900, rs_12m_pctile: 95 }),
+        swingRow("THINCO", { universes: ["NIFTY500", "NIFTYSMALLCAP250"], avg_turnover_cr: 1.2, rs_12m_pctile: null }),
+        swingRow("MICRO", { universes: [], avg_turnover_cr: 30, rs_12m_pctile: 60 }),
+      ],
+    };
+  });
+
+  it("opens on the Nifty 500, liquid only, with a count on each universe chip, and shows the extra line on a card", async () => {
+    renderAt("/scan?tab=screener");
+    await screen.findByTestId("screener-list");
+    expect(screen.getByRole("button", { name: /^Nifty 500 \(2\)$/, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Liquid only/ })).toBeChecked();
+    expect(cardNames().sort()).toEqual(["LARGECO", "MIDCO"]); // THINCO is under Rs 5 Cr a day, MICRO is outside the index
+    const card = within(screen.getAllByTestId("screener-card").find((c) => c.textContent?.includes("MIDCO"))!);
+    expect(card.getByTestId("size-badge")).toHaveTextContent("Mid");
+    const line = card.getByTestId("swing-line");
+    expect(line).toHaveTextContent("₹42.5 Cr/day");
+    expect(line).toHaveTextContent("RS 88");
+    expect(line).toHaveTextContent("12-1m +31%");
+    expect(line).toHaveTextContent("−3.2% vs 20-day EMA");
+    expect(line).toHaveTextContent("RSI(3) 18");
+  });
+
+  it("switching the universe or turning liquidity off changes the list, and the outside-Nifty-500 chip finds the rest", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=screener");
+    await screen.findByTestId("screener-list");
+    await user.click(screen.getByRole("button", { name: /^Large/ }));
+    expect(cardNames()).toEqual(["LARGECO"]);
+    await user.click(screen.getByRole("button", { name: /^Outside Nifty 500/ }));
+    expect(cardNames()).toEqual(["MICRO"]);
+    await user.click(screen.getByRole("button", { name: /^All stocks/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Liquid only/ }));
+    expect(cardNames()).toHaveLength(4);
+  });
+
+  it("the relative-strength cut keeps the strongest and sorts by that rank", async () => {
+    const user = userEvent.setup();
+    renderAt("/scan?tab=screener");
+    await screen.findByTestId("screener-list");
+    await user.selectOptions(screen.getByLabelText("Relative strength (12-1 month)"), "10");
+    expect(cardNames()).toEqual(["LARGECO"]);
+    await user.selectOptions(screen.getByLabelText("Relative strength (12-1 month)"), "40");
+    expect(cardNames()).toEqual(["LARGECO", "MIDCO"]); // best rank first
+    expect(screen.getByLabelText("Sort by")).toHaveValue("rs");
+  });
+
+  it("says plainly that none of it is a signal, and explains the numbers", async () => {
+    renderAt("/scan?tab=screener");
+    await screen.findByTestId("screener-list");
+    expect(screen.getByText("About these numbers")).toBeInTheDocument();
+    expect(screen.getByText(/found no reliable edge after costs/)).toBeInTheDocument();
+  });
+
+  it("before tonight's run has filled in traded value, the liquidity filter says so and hides nothing", async () => {
+    scr = { snapshot_date: "2026-10-08", rows: [scrRow("OLDA"), scrRow("OLDB")] };
+    renderAt("/scan?tab=screener");
+    await screen.findByTestId("screener-list");
+    expect(await screen.findByTestId("liquidity-pending")).toBeInTheDocument();
+    expect(cardNames()).toEqual(["OLDA", "OLDB"]);
+    expect(screen.queryByTestId("swing-line")).not.toBeInTheDocument();
   });
 });
 

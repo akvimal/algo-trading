@@ -176,6 +176,14 @@ CREATE TABLE IF NOT EXISTS market_data.equity_screener_snapshot (
     -- rather than an array column - see app/adapters/db/models.py.
     is_fno             BOOLEAN NOT NULL DEFAULT false,
     index_memberships  TEXT,
+    -- descriptive filter/sort fields (migration 048)
+    avg_turnover_cr    DOUBLE PRECISION,
+    ret_3m_pct         DOUBLE PRECISION,
+    mom_12_1_pct       DOUBLE PRECISION,
+    rsi3               DOUBLE PRECISION,
+    dist_ema20_pct     DOUBLE PRECISION,
+    atr_pct            DOUBLE PRECISION,
+    vol_ratio          DOUBLE PRECISION,
     UNIQUE (symbol, snapshot_date)
 );
 
@@ -390,3 +398,31 @@ CREATE TABLE IF NOT EXISTS market_data.zone_events (
     UNIQUE (user_id, dedupe_key)
 );
 CREATE INDEX IF NOT EXISTS idx_zone_events_user_day ON market_data.zone_events (user_id, at DESC);
+
+-- The nightly "F&O stocks at a demand or supply zone" shortlist. See migration 047 and app/domain/zone_scan.py.
+CREATE TABLE IF NOT EXISTS market_data.zone_scan (
+    id                 BIGSERIAL PRIMARY KEY,
+    snapshot_date      DATE NOT NULL,
+    exchange           TEXT NOT NULL,
+    symbol             TEXT NOT NULL,
+    recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    close              DOUBLE PRECISION NOT NULL,
+    daily_trend        TEXT NOT NULL,
+    weekly_trend       TEXT,
+    weekly_bars        INTEGER NOT NULL DEFAULT 0,
+    zone_kind          TEXT CHECK (zone_kind IN ('demand', 'supply')),
+    zone_proximal      DOUBLE PRECISION,
+    zone_distal        DOUBLE PRECISION,
+    zone_position      TEXT CHECK (zone_position IN ('inside', 'approaching')),
+    zone_distance_pct  DOUBLE PRECISION,
+    zone_distance_atr  DOUBLE PRECISION,
+    weekly_zone        BOOLEAN NOT NULL DEFAULT false,
+    weekly_agrees      BOOLEAN NOT NULL DEFAULT false,
+    call_buildup       TEXT,
+    put_buildup        TEXT,
+    oi_agrees          BOOLEAN,
+    tier               TEXT CHECK (tier IN ('A', 'B', 'C')),
+    UNIQUE (symbol, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_scan_date ON market_data.zone_scan (snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_zone_scan_date_tier ON market_data.zone_scan (snapshot_date, tier);

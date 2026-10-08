@@ -1,4 +1,4 @@
-import type { Buildup, OiHistoryPoint, OiRow, Proximity, Regime, ScreenerRow } from "../api/types";
+import type { Buildup, OiHistoryPoint, OiRow, Proximity, Regime, ScreenerRow, ZoneScanRow } from "../api/types";
 
 export const BUILDUP_LABEL: Record<Buildup, string> = {
   long_buildup: "Long buildup",
@@ -41,16 +41,18 @@ export const REGIME_LABEL: Record<Regime, string> = {
 
 export const PROXIMITY_LABEL: Record<Proximity, string> = { near_52w_high: "Near 52-week high", near_52w_low: "Near 52-week low" };
 
-export type OiSort = "call_oi" | "put_oi" | "pcr" | "price" | "strength" | "oi_total" | "symbol";
+export type OiSort = "call_oi" | "put_oi" | "pcr" | "price" | "strength" | "oi_total" | "symbol" | "zone";
 /** A one-tap reading of the option chain: one of the four price-against-OI quadrants, or a big two-sided shift. */
 export type OiSignal = "all" | "strong_bull" | "strong_bear" | Buildup;
 /** The signals that are a quadrant, in the order the chips show them: bullish pair first, then the bearish pair. */
 export const QUADRANT_SIGNALS: Buildup[] = ["long_buildup", "short_covering", "short_buildup", "long_unwinding"];
 export const isQuadrantSignal = (s: OiSignal): s is Buildup => (QUADRANT_SIGNALS as string[]).includes(s);
-export type OiFilters = { call: Buildup | "all"; put: Buildup | "all"; signal: OiSignal; minShift: number; search: string; sort: OiSort };
+/** The "At a zone" filter: every stock, only the stocks the nightly zone scan put in tier A or B, or any stock at a zone (tier C too). */
+export type ZoneFilter = "all" | "shortlist" | "any";
+export type OiFilters = { call: Buildup | "all"; put: Buildup | "all"; signal: OiSignal; minShift: number; search: string; sort: OiSort; zone: ZoneFilter };
 /** minShift: how much (in %) the call AND the put open interest must each have grown for a shift to count as a major one. */
 export const DEFAULT_MIN_SHIFT = 10;
-export const OI_DEFAULTS: OiFilters = { call: "all", put: "all", signal: "all", minShift: DEFAULT_MIN_SHIFT, search: "", sort: "call_oi" };
+export const OI_DEFAULTS: OiFilters = { call: "all", put: "all", signal: "all", minShift: DEFAULT_MIN_SHIFT, search: "", sort: "call_oi", zone: "all" };
 
 export const OI_SIGNAL_LABEL: Record<"strong_bull" | "strong_bear", string> = { strong_bull: "Strong bullish", strong_bear: "Strong bearish" };
 // NOTE on the labels these read. The buildup labels here compare each side's open interest with the UNDERLYING's price move
@@ -126,10 +128,11 @@ function byNumberDesc<T>(get: (r: T) => number | null | undefined) {
 
 const matches = (symbol: string, search: string) => !search.trim() || symbol.toUpperCase().includes(search.trim().toUpperCase());
 
-export function filterOi(rows: OiRow[], f: OiFilters): OiRow[] {
+export function filterOi(rows: OiRow[], f: OiFilters, zones: Record<string, ZoneScanRow> = {}): OiRow[] {
   const out = rows.filter(
     (r) =>
       matches(r.symbol, f.search) &&
+      zoneMatches(zones[r.symbol], f.zone) &&
       (f.call === "all" || r.call_buildup === f.call) &&
       (f.put === "all" || r.put_buildup === f.put) &&
       (f.signal === "all" || (isQuadrantSignal(f.signal) ? oiQuadrant(r) === f.signal : oiSignal(r, f.minShift) === f.signal)),
@@ -145,21 +148,94 @@ export function filterOi(rows: OiRow[], f: OiFilters): OiRow[] {
       return t == null ? null : Math.abs(t);
     }),
     symbol: (a, b) => a.symbol.localeCompare(b.symbol),
+    // best tier first, then the nearest zone; a stock without one goes last
+    zone: (a, b) => zoneRank(zones[a.symbol]) - zoneRank(zones[b.symbol]),
   };
   return [...out].sort((a, b) => sorters[f.sort](a, b) || a.symbol.localeCompare(b.symbol));
 }
 
-export type ScreenerSort = "d5" | "d20" | "adx" | "symbol";
-export type ScreenerFilters = { regime: Regime | "all"; proximity: Proximity | "all"; search: string; sort: ScreenerSort };
-export const SCREENER_DEFAULTS: ScreenerFilters = { regime: "all", proximity: "all", search: "", sort: "d5" };
+const TIER_ORDER = { A: 0, B: 1, C: 2 } as const;
+const zoneMatches = (z: ZoneScanRow | undefined, filter: ZoneFilter) => filter === "all" || (!!z && (filter === "any" || z.tier !== "C"));
+const zoneRank = (z: ZoneScanRow | undefined) => (z ? TIER_ORDER[z.tier] * 1000 + Math.min(z.zone_distance_atr, 99) : 1e6);
+
+export const ZONE_TIER_HELP: Record<ZoneScanRow["tier"], string> = {
+  A: "Tier A: a weekly zone of the same kind is also at price, and open interest points the same way.",
+  B: "Tier B: the weekly trend is on the zone's side, and open interest points the same way.",
+  C: "Tier C: an untested daily zone at price, without that weekly or open-interest support.",
+};
+
+/** "Inside a supply zone" or "1.8% below a supply zone" (price approaches supply from below, demand from above). */
+export function zonePlace(z: Pick<ZoneScanRow, "zone_kind" | "zone_position" | "zone_distance_pct">): string {
+  const kind = z.zone_kind === "demand" ? "demand" : "supply";
+  if (z.zone_position === "inside") return `Inside a ${kind} zone`;
+  return `${z.zone_distance_pct.toFixed(1)}% ${z.zone_kind === "demand" ? "above" : "below"} a ${kind} zone`;
+}
+
+/** "Daily down, weekly range", leaving out a weekly read the stock had too little history for. */
+export const zoneTrends = (z: Pick<ZoneScanRow, "daily_trend" | "weekly_trend">) => `Daily ${z.daily_trend}${z.weekly_trend ? `, weekly ${z.weekly_trend}` : ""}`;
+
+export type ScreenerSort = "d5" | "d20" | "adx" | "symbol" | "mom" | "ret3m" | "rs" | "turnover" | "ema20" | "rsi3";
+/** Which stocks the Screener lists: everything, an index, the F&O stocks, or the liquid stocks outside the Nifty 500. */
+export type Universe = "all" | "nifty500" | "large" | "mid" | "small" | "fno" | "other";
+/** "Top 10% / 20% / 40% by 12-1 month momentum" among the liquid stocks, or no cut. */
+export type RsCut = "any" | "10" | "20" | "40";
+export type ScreenerFilters = { regime: Regime | "all"; proximity: Proximity | "all"; search: string; sort: ScreenerSort; universe: Universe; liquid: boolean; rs: RsCut };
+export const LIQUID_MIN_CR = 5;
+export const SCREENER_DEFAULTS: ScreenerFilters = { regime: "all", proximity: "all", search: "", sort: "d5", universe: "nifty500", liquid: true, rs: "any" };
+
+export const UNIVERSE_LABEL: Record<Universe, string> = { all: "All stocks", nifty500: "Nifty 500", large: "Large (Nifty 100)", mid: "Midcap 150", small: "Smallcap 250", fno: "F&O stocks", other: "Outside Nifty 500" };
+export const UNIVERSES = Object.keys(UNIVERSE_LABEL) as Universe[];
+const UNIVERSE_TAG: Partial<Record<Universe, string>> = { nifty500: "NIFTY500", large: "NIFTY100", mid: "NIFTYMIDCAP150", small: "NIFTYSMALLCAP250" };
+
+export function inUniverse(r: ScreenerRow, u: Universe): boolean {
+  if (u === "all") return true;
+  if (u === "fno") return !!r.is_fno;
+  if (u === "other") return !(r.universes ?? []).includes("NIFTY500");
+  return (r.universes ?? []).includes(UNIVERSE_TAG[u]!);
+}
+
+/** Whether the data has what a filter needs: an older backend, or a night before the new columns were first filled, lacks it - then the filter is skipped, not allowed to hide everything. */
+const haveTags = (rows: ScreenerRow[]) => rows.some((r) => r.universes !== undefined);
+export const haveLiquidity = (rows: ScreenerRow[]) => rows.some((r) => r.avg_turnover_cr != null);
+
+/** How many stocks each universe has under the current liquidity setting, for the chips. */
+export function universeCounts(rows: ScreenerRow[], liquid: boolean): Record<Universe, number> {
+  const base = liquid && haveLiquidity(rows) ? rows.filter((r) => (r.avg_turnover_cr ?? 0) >= LIQUID_MIN_CR) : rows;
+  return Object.fromEntries(UNIVERSES.map((u) => [u, base.filter((r) => inUniverse(r, u)).length])) as Record<Universe, number>;
+}
+
+/** "Large", "Mid", "Small" for a stock in one of those indices (the biggest first), else "Outside Nifty 500". */
+export function sizeLabel(r: Pick<ScreenerRow, "universes">): string | null {
+  const u = r.universes;
+  if (u === undefined) return null;
+  return u.includes("NIFTY100") ? "Large" : u.includes("NIFTYMIDCAP150") ? "Mid" : u.includes("NIFTYSMALLCAP250") ? "Small" : u.includes("NIFTY500") ? "Nifty 500" : "Outside Nifty 500";
+}
 
 export function filterScreener(rows: ScreenerRow[], f: ScreenerFilters): ScreenerRow[] {
-  const out = rows.filter((r) => matches(r.symbol, f.search) && (f.regime === "all" || r.regime === f.regime) && (f.proximity === "all" || r.proximity === f.proximity));
+  const tags = haveTags(rows);
+  const liquidity = haveLiquidity(rows);
+  const rsMin = f.rs === "any" ? null : 100 - Number(f.rs);
+  const out = rows.filter(
+    (r) =>
+      matches(r.symbol, f.search) &&
+      (f.regime === "all" || r.regime === f.regime) &&
+      (f.proximity === "all" || r.proximity === f.proximity) &&
+      (!tags || inUniverse(r, f.universe)) &&
+      (!f.liquid || !liquidity || (r.avg_turnover_cr ?? 0) >= LIQUID_MIN_CR) &&
+      (rsMin === null || (r.rs_12m_pctile != null && r.rs_12m_pctile >= rsMin)),
+  );
   const sorters: Record<ScreenerSort, (a: ScreenerRow, b: ScreenerRow) => number> = {
     d5: byNumberDesc((r) => r.pct_change_5d),
     d20: byNumberDesc((r) => r.pct_change_20d),
     adx: byNumberDesc((r) => r.adx),
     symbol: (a, b) => a.symbol.localeCompare(b.symbol),
+    mom: byNumberDesc((r) => r.mom_12_1_pct ?? null),
+    ret3m: byNumberDesc((r) => r.ret_3m_pct ?? null),
+    rs: byNumberDesc((r) => r.rs_12m_pctile ?? null),
+    turnover: byNumberDesc((r) => r.avg_turnover_cr ?? null),
+    // the stocks furthest below their 20-day EMA first (a pullback list); one without a value goes last
+    ema20: byNumberDesc((r) => (r.dist_ema20_pct == null ? null : -r.dist_ema20_pct)),
+    rsi3: byNumberDesc((r) => (r.rsi3 == null ? null : -r.rsi3)),
   };
   return [...out].sort((a, b) => sorters[f.sort](a, b) || a.symbol.localeCompare(b.symbol));
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PremarketIndicator, PremarketInput, PremarketMacro, PremarketReport } from "../api/types";
-import { derivedRows, formatIndicator, formatMove, formatPoints, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "./premarketModel";
+import { nseSessionStarted, derivedRows, formatIndicator, formatMove, formatPoints, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "./premarketModel";
 
 const inp = (over: Partial<PremarketInput>): PremarketInput => ({
   key: "sp500", label: "S&P 500", group: "us", ok: true, value: 1, change: 0.66, unit: "pct", source: "yahoo", error: null, ...over,
@@ -120,5 +120,38 @@ describe("domestic backdrop", () => {
     expect(hasMacro(undefined, null)).toBe(false);
     expect(hasMacro({ ...empty, indicators: [ind({})] }, null)).toBe(true);
     expect(hasMacro(null, { bias: "neutral", confidence: 1, one_liner: "", reasons: [], risks: [], watch: "", macro_context: "Real rate is positive." })).toBe(true);
+  });
+});
+
+describe("MCX and crypto briefs", () => {
+  it("formats the Fear & Greed index move in points", () => {
+    expect(formatMove(inp({ key: "fear_greed", unit: "pt", change: 3 }))).toBe("+3.0 pts");
+    expect(formatMove(inp({ key: "fear_greed", unit: "pt", change: -2.5 }))).toBe("−2.5 pts");
+  });
+  it("colours by what helps each market: crude rising is good for MCX but bad for Indian equities, VIX rising is bad for crypto", () => {
+    expect(moveTone(inp({ key: "brent", change: 2 }))).toBe("dn");
+    expect(moveTone(inp({ key: "brent", change: 2 }), "MCX")).toBe("up");
+    expect(moveTone(inp({ key: "dxy", change: 0.4 }), "MCX")).toBe("dn");
+    expect(moveTone(inp({ key: "vix", change: 6 }), "CRYPTO")).toBe("dn");
+    expect(moveTone(inp({ key: "btc", change: 2 }), "CRYPTO")).toBe("up");
+  });
+  it("groups each segment's own inputs, dropping sections with nothing in them", () => {
+    const rows = [inp({ key: "gold" }), inp({ key: "brent" }), inp({ key: "dxy" })];
+    expect(sections(rows, "MCX").map((s) => s.title)).toEqual(["Metals", "Energy", "Dollar, rupee, yields"]);
+    expect(sections([inp({ key: "btc" })], "CRYPTO").map((s) => s.title)).toEqual(["Coins"]);
+  });
+});
+
+describe("NSE market pulse", () => {
+  it("knows when the NSE session has started: weekdays from 09:15 IST", () => {
+    expect(nseSessionStarted(new Date("2026-10-08T03:30:00Z"))).toBe(false); // Thu 09:00 IST
+    expect(nseSessionStarted(new Date("2026-10-08T03:45:00Z"))).toBe(true); // 09:15
+    expect(nseSessionStarted(new Date("2026-10-08T12:00:00Z"))).toBe(true); // after the close it still leads with the day's pulse
+    expect(nseSessionStarted(new Date("2026-10-10T05:00:00Z"))).toBe(false); // Saturday
+  });
+  it("groups the pulse's own inputs and treats a rising India VIX as bad news", () => {
+    expect(sections([inp({ key: "nifty" }), inp({ key: "indiavix" }), inp({ key: "sec_it" })], "NSE_PULSE").map((s) => s.title)).toEqual(["Indices", "Volatility", "Sectors"]);
+    expect(moveTone(inp({ key: "indiavix", change: 5 }), "NSE_PULSE")).toBe("dn");
+    expect(moveTone(inp({ key: "nifty", change: 0.5 }), "NSE_PULSE")).toBe("up");
   });
 });

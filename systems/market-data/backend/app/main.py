@@ -20,8 +20,10 @@ from app.api.routes import (
     oi_buildup,
     options,
     order_blocks,
+    market_brief,
     premarket,
     price_alerts,
+    zone_scan,
     zone_watches,
     quotes,
     quotes_ws,
@@ -66,6 +68,8 @@ app.include_router(news.router)
 app.include_router(ai_read.router)
 app.include_router(ai_models.router)
 app.include_router(calendar.router)
+app.include_router(zone_scan.router)
+app.include_router(market_brief.router)
 app.include_router(premarket.router)
 
 

@@ -7,15 +7,32 @@ const MINUS = "−";
 export function formatMove(input: Pick<PremarketInput, "change" | "unit" | "ok">): string {
   if (!input.ok || input.change == null) return "–";
   const sign = input.change > 0 ? "+" : input.change < 0 ? MINUS : "";
-  const body = Math.abs(input.change).toFixed(input.unit === "bp" ? 1 : 2);
-  return `${sign}${body}${input.unit === "bp" ? " bp" : "%"}`;
+  const body = Math.abs(input.change).toFixed(input.unit === "pct" ? 2 : 1);
+  return `${sign}${body}${input.unit === "bp" ? " bp" : input.unit === "pt" ? " pts" : "%"}`;
 }
 
-/** Crude, the rupee's fall and yields work against Indian equities, so a rise in them is bad news. */
-const INVERTED = new Set(["brent", "wti", "usdinr", "us10y", "in10y"]);
-export function moveTone(input: Pick<PremarketInput, "key" | "change" | "ok">): "up" | "dn" | "flat" {
+/** NSE_PULSE is the in-session read of NSE (indices, sectors, India VIX); NSE is the morning pre-market report. */
+export type BriefSegment = "NSE" | "NSE_PULSE" | "MCX" | "CRYPTO";
+
+/** From the cash open on a weekday (09:15 IST) the NSE tab leads with the live pulse; before it (and at weekends) with the morning report. */
+export function nseSessionStarted(now: Date = new Date()): boolean {
+  const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+  if (get("weekday") === "Sat" || get("weekday") === "Sun") return false;
+  return Number(get("hour")) * 60 + Number(get("minute")) >= 9 * 60 + 15;
+}
+
+/** What counts as bad news when it rises, per market: for Indian equities crude, the rupee's fall and yields; for MCX
+ * commodities a firmer dollar and yields; for crypto a firmer dollar, yields and a rising VIX. */
+const INVERTED: Record<BriefSegment, Set<string>> = {
+  NSE: new Set(["brent", "wti", "usdinr", "us10y", "in10y"]),
+  NSE_PULSE: new Set(["indiavix"]),
+  MCX: new Set(["dxy", "us10y"]),
+  CRYPTO: new Set(["vix", "dxy", "us10y"]),
+};
+export function moveTone(input: Pick<PremarketInput, "key" | "change" | "ok">, segment: BriefSegment = "NSE"): "up" | "dn" | "flat" {
   if (!input.ok || !input.change) return "flat";
-  const good = INVERTED.has(input.key) ? input.change < 0 : input.change > 0;
+  const good = INVERTED[segment].has(input.key) ? input.change < 0 : input.change > 0;
   return good ? "up" : "dn";
 }
 
@@ -24,14 +41,33 @@ export const BIAS_LABEL: Record<Bias, string> = { bullish: "Bullish", bearish: "
 export type Section = { title: string; inputs: PremarketInput[] };
 
 /** The inputs in the order a trader reads them: the gap first, then what drove it. */
-export function sections(inputs: PremarketInput[]): Section[] {
-  const by = (keys: string[]) => keys.map((k) => inputs.find((i) => i.key === k)).filter((i): i is PremarketInput => !!i);
-  const defs: [string, string[]][] = [
+const SECTION_DEFS: Record<BriefSegment, [string, string[]][]> = {
+  NSE: [
     ["GIFT Nifty", ["gift_nifty"]],
     ["US close", ["sp500", "dow", "nasdaq"]],
     ["Crude, rupee, yields", ["brent", "wti", "usdinr", "us10y", "in10y"]],
     ["Indian ADRs", ["adr_infy", "adr_hdb", "adr_wit", "adr_ibn", "adr_rdy"]],
-  ];
+  ],
+  NSE_PULSE: [
+    ["Indices", ["nifty", "banknifty"]],
+    ["Volatility", ["indiavix"]],
+    ["Sectors", ["sec_it", "sec_fin", "sec_auto", "sec_fmcg", "sec_metal", "sec_pharma", "sec_energy"]],
+  ],
+  MCX: [
+    ["Metals", ["gold", "silver", "copper"]],
+    ["Energy", ["brent", "wti", "natgas"]],
+    ["Dollar, rupee, yields", ["dxy", "usdinr", "us10y"]],
+  ],
+  CRYPTO: [
+    ["Coins", ["btc", "eth", "sol"]],
+    ["US risk", ["nasdaq_fut", "sp500", "vix"]],
+    ["Dollar, yields, sentiment", ["dxy", "us10y", "fear_greed"]],
+  ],
+};
+
+export function sections(inputs: PremarketInput[], segment: BriefSegment = "NSE"): Section[] {
+  const by = (keys: string[]) => keys.map((k) => inputs.find((i) => i.key === k)).filter((i): i is PremarketInput => !!i);
+  const defs = SECTION_DEFS[segment];
   return defs.map(([title, keys]) => ({ title, inputs: by(keys) })).filter((s) => s.inputs.length > 0);
 }
 

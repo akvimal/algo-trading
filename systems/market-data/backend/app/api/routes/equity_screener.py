@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db.models import EquityScreenerSnapshot
 from app.adapters.db.session import get_db
+from app.domain.equity_screener import LIQUID_MIN_CR, percentile_ranks
 from app.domain.models import EquityScreenerHistoryPoint, EquityScreenerOut, EquityScreenerRowOut
 
 router = APIRouter()
@@ -51,6 +52,11 @@ def get_equity_screener(history_days: int = Query(10, ge=1, le=60), db: Session 
         if len(bucket) < history_days:
             bucket.append(row)
 
+    # Ranks are among the stocks a swing trader could actually trade (at least Rs 5 Cr a day), so a thinly traded micro-cap's wild return never sets the scale.
+    liquid = [r for r in latest_rows if (r.avg_turnover_cr or 0) >= LIQUID_MIN_CR]
+    rs_3m = percentile_ranks({r.symbol: r.ret_3m_pct for r in liquid})
+    rs_12m = percentile_ranks({r.symbol: r.mom_12_1_pct for r in liquid})
+
     rows = [
         EquityScreenerRowOut(
             symbol=row.symbol,
@@ -66,6 +72,17 @@ def get_equity_screener(history_days: int = Query(10, ge=1, le=60), db: Session 
             pct_from_52w_high=row.pct_from_52w_high,
             pct_from_52w_low=row.pct_from_52w_low,
             proximity=row.proximity,
+            is_fno=bool(row.is_fno),
+            universes=[k for k in (row.index_memberships or "").split(",") if k],
+            avg_turnover_cr=row.avg_turnover_cr,
+            ret_3m_pct=row.ret_3m_pct,
+            mom_12_1_pct=row.mom_12_1_pct,
+            rsi3=row.rsi3,
+            dist_ema20_pct=row.dist_ema20_pct,
+            atr_pct=row.atr_pct,
+            vol_ratio=row.vol_ratio,
+            rs_3m_pctile=rs_3m.get(row.symbol),
+            rs_12m_pctile=rs_12m.get(row.symbol),
             history=[
                 EquityScreenerHistoryPoint.model_validate(h)
                 for h in reversed(history_by_symbol.get(row.symbol, []))

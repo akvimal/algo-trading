@@ -147,12 +147,12 @@ export type Bias = "bullish" | "bearish" | "neutral";
 export type PremarketInput = {
   key: string;
   label: string;
-  group: "us" | "commodity" | "currency" | "yield" | "adr" | "india";
+  group: "us" | "commodity" | "currency" | "yield" | "adr" | "india" | "index" | "sector" | "metals" | "energy" | "macro" | "crypto" | "risk";
   ok: boolean;
   value: number | null;
-  /** Percent for prices; basis points when `unit` is "bp" (the two bond yields). */
+  /** Percent for prices; basis points when `unit` is "bp" (bond yields); index points when "pt" (the crypto Fear & Greed index). */
   change: number | null;
-  unit: "pct" | "bp";
+  unit: "pct" | "bp" | "pt";
   source: string;
   error: string | null;
 };
@@ -205,6 +205,11 @@ export type PremarketReport = {
   ai: { bias: Bias; confidence: number; one_liner: string; reasons: string[]; risks: string[]; watch: string; macro_context?: string | null } | null;
   /** India's domestic macro backdrop. Absent on reports written before it existed. */
   macro?: PremarketMacro | null;
+  /** MCX and crypto briefs: the rules-based read is shown at once and the model's read is still being prepared. */
+  ai_pending?: boolean;
+  /** When the AI read was actually made, and whether this build reused it because the numbers had not meaningfully changed. */
+  ai_read_at?: string | null;
+  ai_reused?: boolean;
 };
 
 export type Segment = "NSE" | "MCX" | "CRYPTO";
@@ -314,6 +319,22 @@ export type ScreenerRow = {
   pct_from_52w_high: number | null;
   pct_from_52w_low: number | null;
   proximity: Proximity | null;
+  /** The fields below arrive with the screener's descriptive columns (2026-10-08); absent from an older backend and null for a stock with too few bars. */
+  is_fno?: boolean;
+  /** Index keys the stock belongs to (NIFTY500, NIFTYMIDCAP150, ...); empty for a stock in none of them. */
+  universes?: string[];
+  /** 20-day average of close x volume, in Rs crore. */
+  avg_turnover_cr?: number | null;
+  ret_3m_pct?: number | null;
+  /** The 12-1 month momentum score: the close a month ago against the close a year ago. */
+  mom_12_1_pct?: number | null;
+  rsi3?: number | null;
+  dist_ema20_pct?: number | null;
+  atr_pct?: number | null;
+  vol_ratio?: number | null;
+  /** 0-100 rank (100 = strongest) among stocks trading at least Rs 5 Cr a day; null for the rest. */
+  rs_3m_pctile?: number | null;
+  rs_12m_pctile?: number | null;
   history: { snapshot_date: string; close: number }[];
 };
 export type Screener = { snapshot_date: string; rows: ScreenerRow[] };
@@ -604,3 +625,56 @@ export type Job = {
   recent: JobRun[];
 };
 export type Jobs = { jobs: Job[] };
+
+/** GET /news — headlines for one symbol with an overall bullish/bearish/neutral read. relevance_score and why are null when the AI step did not run. */
+export type NewsArticle = {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  image_url: string | null;
+  relevance_score: number | null;
+  why: string | null;
+};
+export type NewsDigest = {
+  bias: "bullish" | "bearish" | "neutral";
+  bias_reason: string;
+  digest: string;
+  articles: NewsArticle[];
+};
+
+/** GET /calendar/upcoming — the Markets panel's Calendar tab. `time` is HH:MM IST, or null for an all-day or untimed item. */
+export type CalendarEvent = {
+  date: string;
+  time: string | null;
+  title: string;
+  kind: "global" | "rbi" | "data" | "holiday" | "expiry";
+  impact: "high" | "medium" | "low";
+  detail: string | null;
+  forecast: string | null;
+  previous: string | null;
+  actual: string | null;
+};
+export type UpcomingCalendar = { segment: string; start: string; end: string; events: CalendarEvent[]; notes: string[] };
+
+/** GET /zone-scan — the nightly shortlist of F&O stocks at an untested demand or supply zone. tier: A = a weekly zone of the same kind is also at price and open interest agrees; B = the weekly trend is on the zone's side and OI agrees; C = a daily zone only. */
+export type ZoneScanRow = {
+  symbol: string;
+  exchange: string;
+  close: number;
+  daily_trend: "up" | "down" | "range";
+  weekly_trend: "up" | "down" | "range" | null;
+  tier: "A" | "B" | "C";
+  zone_kind: "demand" | "supply";
+  zone_position: "inside" | "approaching";
+  zone_proximal: number;
+  zone_distal: number;
+  zone_distance_pct: number;
+  zone_distance_atr: number;
+  weekly_zone: boolean;
+  weekly_agrees: boolean;
+  call_buildup: string | null;
+  put_buildup: string | null;
+  oi_agrees: boolean | null;
+};
+export type ZoneScan = { snapshot_date: string | null; rows: ZoneScanRow[] };

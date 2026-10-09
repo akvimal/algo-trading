@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, emptyTicketFor, favorable, instrumentFor, isFresh, optionsAvailable, parseTradeParams, planRows, planStatus, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, effectiveTicket, emptyTicketFor, favorable, instrumentFor, isFresh, marketStateOf, optionsAvailable, parseTradeParams, planAvailable, planHint, planNudges, planRows, planSide, planStatus, planTag, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -416,5 +416,84 @@ describe("planRows", () => {
     expect(row(busy, "trades")).toMatchObject({ status: "warn", detail: "This would be trade 7, over your cap of 6." });
     expect(row(busy, "loss").status).toBe("warn"); // risking 1000 against 200 of room
     expect(row(rows({}, today({ loss_limit: 1000, lost_today: 1000, loss_room: 0 })), "loss").status).toBe("bad");
+  });
+});
+
+
+describe("the plan: market state x plan", () => {
+  const regime = (r: string) => ({ regime: r, trend: r === "trending_up" ? "up" : r === "trending_down" ? "down" : "range", adx: 25 }) as never;
+
+  it("reads the market state from the regime badge, and leaves it to the person while the market is changing or unknown", () => {
+    expect(marketStateOf(regime("trending_up"))).toBe("trending_up");
+    expect(marketStateOf(regime("trending_down"))).toBe("trending_down");
+    expect(marketStateOf(regime("ranging"))).toBe("ranging");
+    expect(marketStateOf(regime("transitional"))).toBeNull();
+    expect(marketStateOf(null)).toBeNull();
+  });
+
+  it("three plans give five labels: a pullback needs a trend, a breakout and a reversal exist in both", () => {
+    expect(planTag("trending_up", "pullback")).toBe("Trend pullback");
+    expect(planTag("trending_down", "pullback")).toBe("Trend pullback");
+    expect(planTag("ranging", "pullback")).toBeNull(); // no trend to pull back within
+    expect(planAvailable("ranging", "pullback")).toBe(false);
+    expect(planAvailable("ranging", "breakout")).toBe(true);
+    expect(planTag("trending_up", "breakout")).toBe("Trend breakout");
+    expect(planTag("ranging", "breakout")).toBe("Range break");
+    expect(planTag("trending_down", "reversal")).toBe("Trend reversal");
+    expect(planTag("ranging", "reversal")).toBe("Range fade");
+    expect(planTag(null, "breakout")).toBeNull(); // the market state is not known yet
+    expect(planTag("ranging", null)).toBeNull();
+  });
+
+  it("a trend implies the side (a reversal is the opposite), and a range leaves it to the person", () => {
+    expect(planSide("trending_up", "pullback")).toBe("BUY");
+    expect(planSide("trending_up", "breakout")).toBe("BUY");
+    expect(planSide("trending_up", "reversal")).toBe("SELL");
+    expect(planSide("trending_down", "pullback")).toBe("SELL");
+    expect(planSide("trending_down", "reversal")).toBe("BUY");
+    expect(planSide("ranging", "reversal")).toBeNull(); // which edge price is at decides it
+    expect(planSide(null, "breakout")).toBeNull();
+  });
+
+  it("says how to enter in words for the market the person is in", () => {
+    expect(planHint("trending_up", "breakout")).toBe("Enter as the previous high is taken.");
+    expect(planHint("trending_down", "breakout")).toBe("Enter as the previous low is taken.");
+    expect(planHint("ranging", "breakout")).toMatch(/tested twice or more/);
+    expect(planHint("ranging", "reversal")).toMatch(/Fade the edge.*rejection/);
+    expect(planHint("trending_up", "reversal")).toMatch(/Against the trend/);
+    expect(planHint("ranging", "pullback")).toMatch(/needs a trend/);
+    expect(planHint("ranging", null)).toBe("");
+  });
+
+  it("the label kept with the trade follows the regime read until the person pins a market state", () => {
+    const t = ticket({ planKind: "breakout" });
+    expect(effectiveTicket(t, regime("trending_up")).setupTag).toBe("Trend breakout");
+    expect(effectiveTicket(t, regime("ranging")).setupTag).toBe("Range break"); // the read changed: so did the label
+    expect(effectiveTicket({ ...t, planState: "trending_down" }, regime("ranging")).setupTag).toBe("Trend breakout"); // pinned
+    expect(effectiveTicket(t, null).setupTag).toBeNull(); // nothing to derive it from
+    expect(effectiveTicket(ticket({ setupTag: "News" }), regime("ranging")).setupTag).toBe("News"); // no plan chosen: whatever was there stays
+    expect(effectiveTicket(ticket({ planKind: "pullback", setupTag: "News" }), regime("ranging")).setupTag).toBe("News"); // an impossible pair derives nothing
+  });
+
+  it("nudges, never blocks: against the plan's side, counter-trend risk, a thin fade", () => {
+    const a = (t: Ticket) => analyzeTicket(t, ctx());
+    const sellInUp = ticket({ planKind: "pullback", action: "SELL" });
+    expect(planNudges(sellInUp, a(sellInUp), "trending_up")[0]).toMatch(/against the plan: a pullback in an uptrend is a Buy/);
+    const counter = ticket({ planKind: "reversal", action: "SELL" });
+    expect(planNudges(counter, a(counter), "trending_up")).toEqual([expect.stringMatching(/riskier plan.*half/)]);
+    const thin = ticket({ planKind: "reversal", entry: "1000", stop: "990", target: "1010", orderType: "limit" });
+    expect(planNudges(thin, a(thin), "ranging")[0]).toMatch(/1\.0 to 1 is thin/);
+    const fine = ticket({ planKind: "reversal", entry: "1000", stop: "990", target: "1030", orderType: "limit" });
+    expect(planNudges(fine, a(fine), "ranging")).toEqual([]);
+    expect(planNudges(ticket(), a(ticket()), "ranging")).toEqual([]); // no plan chosen
+    expect(planNudges(sellInUp, a(sellInUp), null)).toEqual([]); // market state unknown
+  });
+
+  it("what the person saw goes into the order's notes, before their own words, and the tag is the derived one", () => {
+    const t = effectiveTicket(ticket({ stop: "990", planKind: "reversal", planState: "ranging", trigger: "Order block", reason: "  Second test.  " }), null);
+    const o = buildOrder(t, analyzeTicket(t, ctx()), ctx(), { instrument: "spot", interval: "15min", trendFollowed: false });
+    expect(o.body).toMatchObject({ setup_tag: "Range fade", notes: "Saw: Order block. Second test." });
+    const noWords = effectiveTicket(ticket({ stop: "990", trigger: "News" }), null);
+    expect(buildOrder(noWords, analyzeTicket(noWords, ctx()), ctx(), { instrument: "spot", interval: "15min", trendFollowed: false }).body).toMatchObject({ notes: "Saw: News." });
   });
 });

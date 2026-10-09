@@ -52,6 +52,11 @@ export const INTERVALS = [
 ] as const;
 export type IntervalId = (typeof INTERVALS)[number]["id"];
 
+/** What the market is doing: the person's read, pre-filled from the regime badge. */
+export type MarketState = "trending_up" | "trending_down" | "ranging";
+/** The three plans: trade a pullback (with a trend), a breakout (a level taken) or a reversal / fade (a retest of the same level with a rejection). */
+export type PlanKind = "pullback" | "breakout" | "reversal";
+
 export type Ticket = {
   action: Action;
   strategy: Strategy;
@@ -91,6 +96,12 @@ export type Ticket = {
   target: string;
   lots: string; // "" = size it from my risk
   setupTag: string | null;
+  // The plan: what the market is doing (null = follow the regime read) and which plan the person is trading. setupTag is DERIVED from the two
+  // (effectiveTicket) so it follows the market state if that is still the regime read.
+  planState: MarketState | null;
+  planKind: PlanKind | null;
+  // What the person saw, optional, kept in the order's notes ("Saw: Order block.").
+  trigger: string | null;
   confidence: number | null;
   // Free-text reason captured alongside setupTag, at order time - "why THIS trade", not just which
   // category. Sent as the order's own `notes` (positions.notes/option_position_groups.notes),
@@ -101,7 +112,7 @@ export type Ticket = {
 export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
   combinedStopLossPrice: null, combinedTargetPrice: null,
-  orderType: "market", allowStacking: false, entry: "", stop: "", target: "", lots: "", setupTag: null, confidence: null, reason: "",
+  orderType: "market", allowStacking: false, entry: "", stop: "", target: "", lots: "", setupTag: null, planState: null, planKind: null, trigger: null, confidence: null, reason: "",
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -248,6 +259,78 @@ export type Check = { key: string; label: string; status: CheckStatus; detail: s
 export type RegimeRead = { regime: "trending_up" | "trending_down" | "ranging" | "transitional"; trend: "up" | "down" | "range"; adx: number };
 export type DayBudget = { limit: number; lostToday: number } | null;
 
+// ---- the plan: market state x plan ----
+//
+// Three plans cover it. A PULLBACK is a trend trade (price returns to a zone, you go with the trend), so it does not exist in a range. A
+// BREAKOUT is a level being taken: the previous high in a trend, an edge that has been tested twice or more in a range. A REVERSAL is a retest of the
+// same high or low with a rejection: counter-trend (higher risk) in a trend, and "fade the edge" in a range. The market state decides the risk and
+// the hints, not what the person has to pick: they tap a plan, and the label kept with the trade is one of five (PLAN_TAGS).
+
+export const MARKET_STATES: { value: MarketState; label: string }[] = [
+  { value: "trending_up", label: "Trending ↑" },
+  { value: "trending_down", label: "Trending ↓" },
+  { value: "ranging", label: "Ranging" },
+];
+export const PLAN_KINDS: { value: PlanKind; label: string }[] = [
+  { value: "pullback", label: "Pullback" },
+  { value: "breakout", label: "Breakout" },
+  { value: "reversal", label: "Reversal / fade" },
+];
+
+/** The regime read as a market state, or null while it is changing or unavailable (the person then chooses). */
+export function marketStateOf(regime: RegimeRead | null): MarketState | null {
+  return regime && (regime.regime === "trending_up" || regime.regime === "trending_down" || regime.regime === "ranging") ? regime.regime : null;
+}
+
+/** A pullback needs a trend to pull back within. */
+export const planAvailable = (state: MarketState | null, kind: PlanKind) => !(kind === "pullback" && state === "ranging");
+
+/** The label kept with the trade, or null until both are known (or the pair does not exist: a pullback in a range). */
+export function planTag(state: MarketState | null, kind: PlanKind | null): string | null {
+  if (!state || !kind || !planAvailable(state, kind)) return null;
+  const trend = state !== "ranging";
+  if (kind === "pullback") return "Trend pullback";
+  if (kind === "breakout") return trend ? "Trend breakout" : "Range break";
+  return trend ? "Trend reversal" : "Range fade";
+}
+
+/** The side a plan implies, or null where the plan itself does not say (in a range it depends on which edge price is at). */
+export function planSide(state: MarketState | null, kind: PlanKind): Action | null {
+  if (state !== "trending_up" && state !== "trending_down") return null;
+  const up = state === "trending_up";
+  return (kind === "reversal" ? !up : up) ? "BUY" : "SELL";
+}
+
+/** One line on how to enter, in the market state the person is in. */
+export function planHint(state: MarketState | null, kind: PlanKind | null): string {
+  if (!kind) return "";
+  const trend = state === "trending_up" || state === "trending_down";
+  const high = state === "trending_down" ? "low" : "high";
+  if (kind === "pullback") return trend ? "Wait for price to come back to a zone, then go with the trend." : "A pullback needs a trend: in a range, fade an edge or wait for a break.";
+  if (kind === "breakout") return trend ? `Enter as the previous ${high} is taken.` : "Enter as an edge that has been tested twice or more breaks.";
+  return trend ? "Against the trend: a retest of the same high or low with a rejection candle. Higher risk." : "Fade the edge: a retest of the same high or low with a rejection candle. Aim for the other side.";
+}
+
+/** Cautions that follow from the plan (never blocking): trading against it, or its usual weak spot. */
+export function planNudges(t: Ticket, a: Analysis, state: MarketState | null): string[] {
+  const kind = t.planKind;
+  if (!kind || !state) return [];
+  const out: string[] = [];
+  const side = planSide(state, kind);
+  if (side && side !== t.action) out.push(`Your side is against the plan: a ${kind === "reversal" ? "reversal" : kind} in ${state === "trending_up" ? "an uptrend" : "a downtrend"} is a ${ACTION_WORD(side)}.`);
+  if (kind === "reversal" && state !== "ranging") out.push("This goes against the trend: it is the riskier plan. Consider half your usual size.");
+  if (kind === "reversal" && state === "ranging" && a.rr != null && a.rr < 1.5) out.push(`A fade wants room to the other side: ${a.rr.toFixed(1)} to 1 is thin.`);
+  return out;
+}
+
+/** The ticket with the label derived from the plan: the market state is the person's pick, else the regime read, so the tag follows the read until
+ * they pin it. Everything that analyses or sends the ticket works from this, not from the stored one. */
+export function effectiveTicket(t: Ticket, regime: RegimeRead | null): Ticket {
+  const state = t.planState ?? marketStateOf(regime);
+  const tag = planTag(state, t.planKind);
+  return tag ? { ...t, setupTag: tag } : t;
+}
+
 /** The "before you place" list: each item is a fact about this trade, marked in favour of it,
  * against it, or not applicable. It informs the decision; it never blocks the order. */
 export function checkList(t: Ticket, a: Analysis, ctx: TicketContext, regime: RegimeRead | null, budget: DayBudget): Check[] {
@@ -318,7 +401,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
   const journal = {
     ...(t.setupTag ? { setup_tag: t.setupTag } : {}),
     ...(t.confidence != null ? { confidence: t.confidence } : {}),
-    ...(t.reason.trim() ? { notes: t.reason.trim() } : {}),
+    ...(t.reason.trim() || t.trigger ? { notes: [t.trigger ? `Saw: ${t.trigger}.` : "", t.reason.trim()].filter(Boolean).join(" ") } : {}),
   };
   const riskManaged = a.lotsAuto && a.stop !== null;
   const common = { segment: ctx.segment, symbol: ctx.symbol, action: t.action };
@@ -448,7 +531,7 @@ export function planRows(t: Ticket, a: Analysis, ctx: TicketContext, today: Pret
   else rows.push({ key: "reward", label: "Reward", status: "warn", detail: `${a.rr.toFixed(1)} to 1 is under your minimum of ${ctx.minRR}.` });
 
   // setup (the chips themselves are drawn by the ticket)
-  rows.push(t.setupTag ? { key: "setup", label: "Setup", status: "good", detail: `Tagged ${t.setupTag}.` } : { key: "setup", label: "Setup", status: "warn", detail: "Not tagged." });
+  rows.push(t.setupTag ? { key: "setup", label: "Setup", status: "good", detail: `Tagged ${t.setupTag}.` } : { key: "setup", label: "Setup", status: "warn", detail: "Not tagged: pick a plan above." });
 
   // entry
   rows.push(t.orderType === "limit" ? { key: "entry", label: "Entry", status: "good", detail: "Waiting for your price." } : { key: "entry", label: "Entry", status: "info", detail: "At the market." });

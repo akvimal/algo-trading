@@ -334,6 +334,134 @@ describe("the page", () => {
   });
 });
 
+describe("the plan picker: market state and plan", () => {
+  beforeEach(() => screenIs(true));
+  const down = { regime: "trending_down", adx: 31, atr_percentile: 40, trend: "down", advice: "x" };
+  const ranging = { regime: "ranging", adx: 14, atr_percentile: 40, trend: "range", advice: "x" };
+  const state = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Market state" })).getByRole("button", { name });
+  const plan = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name });
+
+  it("pre-selects what the market is doing from the regime read, and says where that came from", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "false");
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read (ADX 30). Tap another to change it.");
+    expect(t.queryByTestId("plan-hint")).not.toBeInTheDocument(); // nothing until a plan is chosen
+  });
+
+  it("a plan sets the side the market implies and says how to enter; a pullback or reversal waits for a price, a breakout can be taken at once", async () => {
+    regimes = { default: down };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Trending ↓")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Pullback")); // a downtrend: with it is a Sell, waiting for price to come back up to a zone
+    expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Wait for a price" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend pullback. Wait for price to come back to a zone, then go with the trend.");
+    await user.click(plan(t, "Reversal / fade")); // against a downtrend: a Buy
+    expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Buy" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Trend reversal\. Against the trend/);
+    expect(await t.findByTestId("plan-nudge")).toHaveTextContent(/riskier plan.*half your usual size/);
+    await user.click(plan(t, "Reversal / fade")); // tapping it again lets go of it
+    expect(t.queryByTestId("plan-hint")).not.toBeInTheDocument();
+  });
+
+  it("a breakout leaves a market order a market order", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Breakout"));
+    expect(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Market" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout. Enter as the previous high is taken.");
+  });
+
+  it("in a range a pullback is not offered, the label is Range fade or Range break, and the person picks the side", async () => {
+    regimes = { default: ranging };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "true"));
+    expect(plan(t, "Pullback")).toBeDisabled();
+    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));
+    await user.click(plan(t, "Reversal / fade"));
+    expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" })).toHaveAttribute("aria-pressed", "true"); // the plan does not say: it stays
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range fade\. Fade the edge/);
+    await user.click(plan(t, "Breakout"));
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range break\. Enter as an edge that has been tested twice or more breaks/);
+  });
+
+  it("the person can overrule the read, and the label follows; tapping the read again lets go of the override", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Breakout"));
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
+    await user.click(state(t, "Ranging"));
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("Your read.");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range break\./);
+    expect(within(t.getByTestId("plan-block")).getByText("Tagged Range break.")).toBeInTheDocument();
+    await user.click(state(t, "Trending ↑")); // back to what the read says
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
+  });
+
+  it("choosing Ranging while a pullback is picked drops the pullback, which does not exist there", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Pullback"));
+    expect(t.getByTestId("plan-hint")).toBeInTheDocument();
+    await user.click(state(t, "Ranging"));
+    expect(t.queryByTestId("plan-hint")).not.toBeInTheDocument();
+    expect(plan(t, "Pullback")).toBeDisabled();
+  });
+
+  it("warns, without blocking, when the side is against the plan", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Pullback")); // an uptrend: Buy
+    await user.click(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Market" })); // (a pullback starts as "wait for a price", which needs a price typed)
+    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));
+    expect(await t.findByTestId("plan-nudge")).toHaveTextContent(/against the plan: a pullback in an uptrend is a Buy/);
+    expect(t.getByRole("button", { name: /Sell RELIANCE/ })).toBeEnabled();
+  });
+
+  it("keeps what you saw, the reason and the confidence in one optional, closed section that says what is in it", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const notes = t.getByTestId("ticket-notes");
+    expect(notes).not.toHaveAttribute("open");
+    expect(within(notes).getByText("Notes (optional)")).toBeInTheDocument();
+    await user.selectOptions(t.getByLabelText("What did you see?"), "Fair value gap");
+    await user.click(t.getByRole("button", { name: "3" }));
+    expect(within(notes).getByText(/Notes \(optional\) · Fair value gap · confidence 3/)).toBeInTheDocument();
+  });
+
+  it("a waiting order carries the derived label too", async () => {
+    regimes = { default: ranging };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Reversal / fade")); // the first time: waits for a price
+    await user.type(t.getByLabelText("Enter when the price reaches"), "1010");
+    await user.type(t.getByLabelText("Stop-loss"), "1020");
+    await user.type(t.getByLabelText("Target"), "980");
+    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));
+    await user.click(t.getByRole("button", { name: /Sell RELIANCE, wait for price/ }));
+    await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
+    expect(posts("/pending-orders")[0].body).toMatchObject({ action: "SELL", trigger_price: 1010, setup_tag: "Range fade" });
+  });
+});
+
 describe("placing", () => {
   it("places a market order at the live price, sized by the server from the stop, and links to Portfolio", async () => {
     const user = userEvent.setup();
@@ -341,15 +469,16 @@ describe("placing", () => {
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    await user.click(within(t.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
+    await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" })); // the regime read is an uptrend: a trend breakout
+    await user.selectOptions(t.getByLabelText("What did you see?"), "Order block");
     await user.type(t.getByLabelText(/Reason/), "Retested the daily OB and held.");
     await user.click(t.getByRole("button", { name: "4" }));
     await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
     await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
     expect(posts("/positions/manual")[0].body).toMatchObject({
       segment: "NSE", symbol: "RELIANCE", action: "BUY", instrument_type: "spot", price: 1000, order_type: "market",
-      stop_loss_price: 990, target_price: 1030, setup_tag: "Breakout", confidence: 4, risk_managed: true, trend_followed: true, entry_interval: "15min",
-      notes: "Retested the daily OB and held.",
+      stop_loss_price: 990, target_price: 1030, setup_tag: "Trend breakout", confidence: 4, risk_managed: true, trend_followed: true, entry_interval: "15min",
+      notes: "Saw: Order block. Retested the daily OB and held.", // what was seen first, then their own words
     });
     expect("quantity" in posts("/positions/manual")[0].body).toBe(false);
     expect(await t.findByText("Paper order placed.")).toBeInTheDocument();
@@ -532,12 +661,15 @@ describe("the plan on the ticket", () => {
     expect(block.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
     expect(block.getByText("No stop: your risk is open-ended.")).toBeInTheDocument();
     expect(block.getByText("No target: the reward is unplanned.")).toBeInTheDocument();
-    expect(block.getByText("Not tagged.")).toBeInTheDocument();
-    expect(block.getByText("At the market.")).toBeInTheDocument();
+    expect(block.getByText("Not tagged: pick a plan above.")).toBeInTheDocument(); // needs attention: shown straight away
+    expect(block.getByTestId("plan-calm")).not.toHaveAttribute("open"); // the rows that are only for information are one closed line
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    await user.click(within(block.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
-    expect(await block.findByText("Tagged Breakout.")).toBeInTheDocument();
+    await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" }));
+    expect(await block.findByText("Tagged Trend breakout.")).toBeInTheDocument();
+    expect(block.queryByText("Not tagged: pick a plan above.")).not.toBeInTheDocument();
+    // everything is fine now, so there is nothing to read: the checks are one closed line, and the rows are still there when it is opened
+    expect(block.getByText(/All checks \(\d+\) are fine/)).toBeInTheDocument();
     expect(block.getByText(/At the system size/)).toBeInTheDocument();
     expect(block.getByText(/3\.0 to 1, your minimum is/)).toBeInTheDocument();
     expect(block.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R 3\.0/);

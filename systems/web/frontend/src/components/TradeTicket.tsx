@@ -14,7 +14,8 @@ import type { PriceField } from "../chart/ChartPane";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import type { Pretrade } from "../api/types";
 import { TextField } from "./Field";
-import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, TrendingIcon } from "./BadgeIcons";
+import { Popover } from "../chart/Popover";
+import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, FutureIcon, OptionIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, SpreadIcon, TrendingIcon } from "./BadgeIcons";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
   { value: "ITM2", label: "2 strikes in the money" },
@@ -155,6 +156,14 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const marketRead = checks.filter((c) => c.key === "regime" || c.key === "trend");
   const stock = meta.instrument === "spot";
   const options = optionsForced ?? optionsAvailable(ctx.symbol);
+  const instrumentChoices: { value: Ticket["strategy"]; label: string; icon: JSX.Element }[] = [
+    { value: "future", label: stock ? "Spot" : "Future", icon: <FutureIcon /> },
+    { value: "naked", label: "Option", icon: <OptionIcon /> },
+    { value: "spread", label: "Option spread", icon: <SpreadIcon /> },
+  ];
+  const current = instrumentChoices.find((c) => c.value === t.strategy);
+  const instrumentLabel = current?.label ?? "Credit spread";
+  const instrumentIcon = current?.icon ?? <SpreadIcon />;
   const isOption = t.strategy !== "future";
   const limit = t.orderType === "limit";
   const simplifiedOption = Boolean(hideOptionExtras) && isOption;
@@ -216,7 +225,32 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         <h2 className="section-title" style={{ margin: 0 }}>
           Paper order
         </h2>
-        <span className="pill">Paper</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {/* Future / Option / Option spread: the person's default (More > Experience) is what the ticket opens on, and this badge changes it for the
+              one trade. It is a menu in the header instead of a row of its own, and only where options exist. */}
+          {options && !hideStrategyChips && (
+            <Popover label="What to trade" text={instrumentLabel} icon={instrumentIcon} buttonLabel={`What to trade: ${instrumentLabel}`} align="right">
+              {(close) => (
+                <div className="chips" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                  {instrumentChoices.map((c) => (
+                    <button
+                      key={c.value}
+                      aria-pressed={t.strategy === c.value}
+                      onClick={() => {
+                        set("strategy", c.value);
+                        close();
+                      }}
+                    >
+                      {c.icon}
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Popover>
+          )}
+          <span className="pill">Paper</span>
+        </span>
       </div>
 
       {!simplifiedOption && (
@@ -275,19 +309,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         </div>
       )}
 
-      {options && !hideStrategyChips && (
-        <div className="chips" role="group" aria-label="What to trade" style={{ marginBottom: 12 }}>
-          <button aria-pressed={t.strategy === "future"} onClick={() => set("strategy", "future")}>
-            {stock ? "Spot" : "Future"}
-          </button>
-          <button aria-pressed={t.strategy === "naked"} onClick={() => set("strategy", "naked")}>
-            Option
-          </button>
-          <button aria-pressed={t.strategy === "spread"} onClick={() => set("strategy", "spread")}>
-            Option spread
-          </button>
-        </div>
-      )}
       {isOption && !hideMoneynessField && (
         <label className="select-field" style={{ marginBottom: 12 }}>
           <span className="dim">Strike</span>

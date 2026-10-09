@@ -260,21 +260,39 @@ describe("the page", () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
     expect(await t.findByLabelText("Number of lots")).toBeInTheDocument();
+    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ })); // the instrument is a badge in the header that opens a menu
     expect(t.getByRole("button", { name: "Option spread" })).toBeInTheDocument();
+    expect(t.getByRole("button", { name: "Option" })).toBeInTheDocument();
   });
 
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
+    expect(t.getByRole("button", { name: "What to trade: Future" })).toBeInTheDocument();
+    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ }));
     expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("changes the instrument for one trade from the header badge, and closes the menu once chosen", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const t = await ticket();
+    expect(t.queryByRole("group", { name: "What to trade" })).not.toBeInTheDocument(); // no row of its own, and the menu is shut
+    await user.click(t.getByRole("button", { name: "What to trade: Future" }));
+    await user.click(t.getByRole("button", { name: "Option" }));
+    expect(t.queryByRole("group", { name: "What to trade" })).not.toBeInTheDocument(); // closed
+    expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument();
+    expect(t.getByLabelText("Strike")).toBeInTheDocument(); // the option-only field follows
   });
 
   it("starts the ticket on the person's preferred option style, on a symbol that has options", async () => {
     profilePrefs = { default_instrument: "option", default_option_strategy: "spread" };
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
-    await waitFor(() => expect(t.getByRole("button", { name: "Option spread" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option spread" })).toBeInTheDocument());
+    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ }));
     expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "false");
+    expect(t.getByRole("button", { name: "Option spread" })).toHaveAttribute("aria-pressed", "true");
     expect(t.getByLabelText("Strike")).toBeInTheDocument(); // the option-only strike field follows
   });
 
@@ -290,12 +308,12 @@ describe("the page", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     let t = await ticket();
-    await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument());
     await user.type(t.getByLabelText("Stop-loss"), "900");
     await user.click(t.getByRole("button", { name: /Buy NIFTY, paper order/ }));
     await waitFor(() => expect(posts("/option-groups/manual")).toHaveLength(1));
     t = within(await screen.findByTestId("ticket"));
-    expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument();
   });
 
   it("marks the plan on the chart and shows the risk in rupees as you type", async () => {
@@ -767,7 +785,7 @@ describe("the plan on the ticket", () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
     await loaded();
-    await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument());
     expect(t.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
     await user.click(t.getByRole("button", { name: "Add stop line" }));
     await user.click(t.getByRole("button", { name: "Add target line" }));
@@ -965,6 +983,7 @@ describe("options", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
+    await user.click(await t.findByRole("button", { name: /^What to trade/ }));
     await user.click(await t.findByRole("button", { name: "Option spread" }));
     await user.selectOptions(t.getByLabelText("Strike"), "OTM1");
     await user.type(t.getByLabelText("Stop-loss"), "990");

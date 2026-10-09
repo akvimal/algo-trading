@@ -515,17 +515,70 @@ describe("the plan picker: market state and plan", () => {
     expect(within(notes).getByText(/Notes \(optional\) · Fair value gap · confidence 3/)).toBeInTheDocument();
   });
 
+  it("changing Buy to Sell (or back) clears the entry, stop and target, which belonged to the other side, and says what it cleared", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const side = (name: string) => within(t.getByRole("group", { name: "Side" })).getByRole("button", { name });
+    await user.click(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Wait for a price" }));
+    await user.type(t.getByLabelText("Enter when the price reaches"), "990");
+    await user.type(t.getByLabelText("Stop-loss"), "980");
+    await user.type(t.getByLabelText("Target"), "1020");
+    await user.click(side("Sell"));
+    expect(side("Sell")).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByLabelText("Enter when the price reaches")).toHaveValue("");
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("");
+    expect(t.getByLabelText("Target")).toHaveValue("");
+    expect(t.getByTestId("side-cleared")).toHaveTextContent("Cleared the entry price, the stop-loss and the target: they were set for a buy.");
+    await user.type(t.getByLabelText("Stop-loss"), "1010"); // the next edit: the note goes
+    expect(t.queryByTestId("side-cleared")).not.toBeInTheDocument();
+    await user.click(side("Buy")); // and back again clears what was typed for the sell
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("");
+    expect(t.getByTestId("side-cleared")).toHaveTextContent("Cleared the stop-loss: it was set for a sell.");
+  });
+
+  it("choosing the side already chosen leaves the levels alone, and changing it with nothing entered says nothing", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const side = (name: string) => within(t.getByRole("group", { name: "Side" })).getByRole("button", { name });
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.click(side("Buy")); // already Buy
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("990");
+    expect(t.queryByTestId("side-cleared")).not.toBeInTheDocument();
+    await user.clear(t.getByLabelText("Stop-loss"));
+    await user.click(side("Sell")); // nothing to clear
+    expect(side("Sell")).toHaveAttribute("aria-pressed", "true");
+    expect(t.queryByTestId("side-cleared")).not.toBeInTheDocument();
+  });
+
+  it("a plan that implies the other side clears the levels in the same way", async () => {
+    regimes = { default: down };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Down")).toHaveAttribute("aria-pressed", "true"));
+    await user.type(t.getByLabelText("Stop-loss"), "990");
+    await user.type(t.getByLabelText("Target"), "1030");
+    await user.click(plan(t, "Pullback")); // a downtrend: with it is a Sell, and the buy's stop and target do not belong to it
+    expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByLabelText("Stop-loss")).toHaveValue("");
+    expect(t.getByLabelText("Target")).toHaveValue("");
+    expect(t.getByTestId("side-cleared")).toHaveTextContent("Cleared the stop-loss and the target: they were set for a buy.");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Trend pullback/); // the plan itself was still chosen
+  });
+
   it("a waiting order carries the derived label too", async () => {
     regimes = { default: ranging };
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
     await waitFor(() => expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" })); // the side first: changing it later would clear the levels
     await user.click(plan(t, "Reversal / fade")); // the first time: waits for a price
     await user.type(t.getByLabelText("Enter when the price reaches"), "1010");
     await user.type(t.getByLabelText("Stop-loss"), "1020");
     await user.type(t.getByLabelText("Target"), "980");
-    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));
     await user.click(t.getByRole("button", { name: /Sell RELIANCE, wait for price/ }));
     await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
     expect(posts("/pending-orders")[0].body).toMatchObject({ action: "SELL", trigger_price: 1010, setup_tag: "Range fade" });

@@ -93,6 +93,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const [result, setResult] = useState<PlaceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [another, setAnother] = useState(false);
+  const [cleared, setCleared] = useState<string | null>(null); // what changing the side just took off the form, until the next edit
   useEffect(() => {
     if (!waitingHere) setAnother(false);
   }, [waitingHere]);
@@ -101,7 +102,25 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const t = effectiveTicket(raw, regime);
   const set = <K extends keyof Ticket>(key: K, value: Ticket[K]) => {
     setResult(null);
+    setCleared(null);
     onChange({ ...raw, [key]: value });
+  };
+  // Buy <-> Sell: an entry, stop and target belong to one side (a buy's stop is below its entry, a sell's above), so on the other side they are
+  // wrong, and a stop left on the wrong side is refused or, worse, closes the trade at once. Changing the side takes them off the form and says so;
+  // `extra` rides along in the same change (a plan that implies the side also sets itself). Choosing the side already chosen changes nothing.
+  const setSide = (side: Action, extra: Partial<Ticket> = {}) => {
+    setResult(null);
+    if (side === raw.action) {
+      onChange({ ...raw, ...extra });
+      return;
+    }
+    const had = [
+      raw.orderType === "limit" && raw.entry.trim() !== "" ? "the entry price" : null,
+      raw.stop.trim() !== "" ? "the stop-loss" : null,
+      raw.target.trim() !== "" ? "the target" : null,
+    ].filter((x): x is string => x != null);
+    onChange({ ...raw, ...extra, action: side, entry: "", stop: "", target: "" });
+    setCleared(had.length ? `Cleared ${had.length === 1 ? had[0] : `${had.slice(0, -1).join(", ")} and ${had[had.length - 1]}`}: ${had.length === 1 ? "it was" : "they were"} set for a ${raw.action === "BUY" ? "buy" : "sell"}.` : null);
   };
   const read = marketStateOf(regime); // what the regime badge says; null while it is changing or unavailable
   const state: MarketState | null = raw.planState ?? read;
@@ -120,10 +139,12 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
     if (raw.planKind === kind) return onChange({ ...raw, planKind: null });
     const side = planSide(state, kind);
     const sideOk = side != null && !(hideSideChips && side === "SELL");
-    onChange({
-      ...raw, planKind: kind, ...(sideOk ? { action: side } : {}),
+    const extra: Partial<Ticket> = {
+      planKind: kind,
       ...(kind !== "breakout" && raw.planKind == null && raw.orderType === "market" && raw.entry.trim() === "" && !(Boolean(hideOptionExtras) && t.strategy !== "future") ? { orderType: "limit" as const } : {}),
-    });
+    };
+    if (sideOk) setSide(side, extra);
+    else onChange({ ...raw, ...extra });
   };
   const a = analyzeTicket(t, ctx);
   const checks = checkList(t, a, ctx, regime, budget);
@@ -311,12 +332,17 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       {!hideSideChips && !(hideStrategyChips && isOption) && (
         <div className="chips seg" role="group" aria-label="Side" style={{ margin: "12px 0" }}>
           {(["BUY", "SELL"] as Action[]).map((s) => (
-            <button key={s} className={s === "BUY" ? "buy" : "sell"} aria-pressed={t.action === s} onClick={() => set("action", s)}>
+            <button key={s} className={s === "BUY" ? "buy" : "sell"} aria-pressed={t.action === s} onClick={() => setSide(s)}>
               {s === "BUY" ? <BuyIcon /> : <SellIcon />}
               {ACTION_WORD(s)}
             </button>
           ))}
         </div>
+      )}
+      {cleared && (
+        <p className="faint" role="status" style={{ fontSize: 12, margin: "-6px 0 10px" }} data-testid="side-cleared">
+          {cleared}
+        </p>
       )}
 
       {isOption && !hideMoneynessField && (

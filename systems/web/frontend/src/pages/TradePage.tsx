@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSPropertie
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
 import { getAccounts } from "../api/settings";
-import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel } from "../api/trade";
+import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel, moveWaitingOrder } from "../api/trade";
 import type { OptionGroup, Position, Pretrade, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import type { ChartPaneHandle, DrawTool, PlanLine, PriceField, RangeMsg, StructureReport } from "../chart/ChartPane";
@@ -24,7 +24,7 @@ import { AutoTrader } from "../components/AutoTrader";
 import { loadAutoTraderVisible } from "../autotrader/model";
 import { ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { ExpandIcon } from "../chart/icons";
-import { checkLevelMove, isContractOf, openLevels, toChartTrades, type OpenLevel } from "../chart/trades";
+import { checkLevelMove, checkWaitingMove, isContractOf, openLevels, toChartTrades, waitingLevels, type OpenLevel } from "../chart/trades";
 import { NotesPanel } from "../components/NotesPanel";
 import { buildNoteContext } from "../components/notesModel";
 import { loadAiRead } from "../chart/aiReadStore";
@@ -140,10 +140,17 @@ export function TradePage() {
     [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  // Orders still waiting for their price: listed beside the ticket, and drawn on the chart with the open trades' levels.
+  const waiting = useResource(listWaitingOrders, [], { pollMs: 15_000 });
+
   // The stop and target of open trades, as lines the person can drag.
   const chartLevels = useMemo(
-    () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? openLevels(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups) : [])),
-    [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
+    () =>
+      [0, 1].map((i) => [
+        ...(tools.tradesOn && tradeRows.data ? openLevels(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups) : []),
+        ...(tools.tradesOn && waiting.data ? waitingLevels(ws.panes[i].symbol, waiting.data) : []), // an order still waiting for its price is part of the plan too
+      ]),
+    [tools.tradesOn, tradeRows.data, waiting.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // ---- the notes panel: what the market looks like on the active chart, read when a note is sent ----
   function aiReadFor(i: 0 | 1) {
@@ -167,24 +174,70 @@ export function TradePage() {
       holding: open > 0 ? `${open} open ${base} position${open === 1 ? "" : "s"}` : null,
     });
   }
-  const [levelNote, setLevelNote] = useState<{ text: string; error: boolean } | null>(null);
+  // What dragging a line said. `tradeId` ties it to the trade it was about: once that trade is no longer on the chart (it hit its stop, was
+  // closed or cancelled) the message goes with it, instead of "Stop-loss moved to ..." sitting there about a trade that is over. A confirmation
+  // also fades after a few seconds; an error stays until dismissed (or its trade is gone).
+  const [levelNote, setLevelNote] = useState<{ text: string; error: boolean; tradeId?: string } | null>(null);
   async function moveLevel(pane: 0 | 1, level: Pick<OpenLevel, "kind" | "field" | "tradeId" | "long">, price: number): Promise<boolean> {
-    const word = level.field === "stop" ? "Stop-loss" : "Target";
+    const word = level.field === "stop" ? "Stop-loss" : level.field === "target" ? "Target" : "Trigger price";
+    if (level.kind === "waiting") return moveWaitingLevel(pane, level, price, word);
     const current = chartLevels[pane].find((l) => l.tradeId === level.tradeId && l.field === level.field)?.price ?? null;
     const problem = checkLevelMove(level, price, priceOf(pane), current);
     if (problem) {
-      setLevelNote({ text: problem, error: true });
+      setLevelNote({ text: problem, error: true, tradeId: level.tradeId });
       return false;
     }
     try {
       await moveOpenLevel(level, price, ws.panes[pane].interval);
     } catch (e) {
-      setLevelNote({ text: e instanceof Error ? e.message : "Could not move it. Try again.", error: true });
+      setLevelNote({ text: e instanceof Error ? e.message : "Could not move it. Try again.", error: true, tradeId: level.tradeId });
       return false;
     }
-    setLevelNote({ text: `${word} moved to ${formatPrice(price)}.`, error: false });
+    setLevelNote({ text: `${word} moved to ${formatPrice(price)}.`, error: false, tradeId: level.tradeId });
     tradeRows.reload();
     return true;
+  }
+
+  useEffect(() => {
+    if (!levelNote) return;
+    if (levelNote.tradeId && !chartLevels.some((levels) => levels.some((l) => l.tradeId === levelNote.tradeId))) {
+      setLevelNote(null); // its trade is over
+      return;
+    }
+    if (levelNote.error) return;
+    const timer = window.setTimeout(() => setLevelNote(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [levelNote, chartLevels]);
+
+  // An order still waiting for its price: its lines move on the server (which re-checks them) and the list reloads; the × on its entry line cancels it.
+  async function moveWaitingLevel(pane: 0 | 1, level: Pick<OpenLevel, "field" | "tradeId" | "long">, price: number, word: string): Promise<boolean> {
+    const mine = chartLevels[pane].filter((l) => l.kind === "waiting" && l.tradeId === level.tradeId);
+    const at = (f: OpenLevel["field"]) => mine.find((l) => l.field === f)?.price ?? null;
+    const entry = at("entry");
+    const problem = entry == null ? "That order is no longer waiting." : checkWaitingMove(level, price, { entry, stop: at("stop"), target: at("target") });
+    if (problem) {
+      setLevelNote({ text: problem, error: true, tradeId: level.tradeId });
+      return false;
+    }
+    try {
+      await moveWaitingOrder(level.tradeId, level.field, price);
+    } catch (e) {
+      setLevelNote({ text: e instanceof Error ? e.message : "Could not move it. Try again.", error: true, tradeId: level.tradeId });
+      waiting.reload();
+      return false;
+    }
+    setLevelNote({ text: `${word} of the waiting order moved to ${formatPrice(price)}.`, error: false, tradeId: level.tradeId });
+    waiting.reload();
+    return true;
+  }
+  async function cancelWaitingLevel(level: Pick<OpenLevel, "tradeId">) {
+    try {
+      await cancelWaitingOrder(level.tradeId);
+      setLevelNote({ text: "Waiting order cancelled.", error: false });
+    } catch (e) {
+      setLevelNote({ text: e instanceof Error ? e.message : "Could not cancel it. Try again.", error: true });
+    }
+    waiting.reload();
   }
 
   // ---- account, budget, waiting orders ----
@@ -195,7 +248,6 @@ export function TradePage() {
     { pollMs: 30_000 },
   );
   const accounts = useResource(getAccounts, []);
-  const waiting = useResource(listWaitingOrders, [], { pollMs: 15_000 });
   const activeSpec = ws.panes[active];
   const today = useResource(
     async () => {
@@ -607,6 +659,7 @@ export function TradePage() {
                       trades={chartTrades[i]}
                       levels={chartLevels[i]}
                       onLevelMove={(l, p) => moveLevel(i, l, p)}
+                      onLevelCancel={(l) => void cancelWaitingLevel(l)}
                       oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
                       drawingsHidden={tools.drawingsHidden}
@@ -660,8 +713,9 @@ export function TradePage() {
             />
           )}
           </div>
+          {/* No key on the instrument: it remounted the panel (folding it shut) whenever a click made the other chart active. The panel
+              clears its own draft when the segment or symbol changes. */}
           <NotesPanel
-            key={`${ws.panes[active].segment}:${ws.panes[active].symbol}`}
             segment={ws.panes[active].segment}
             symbol={ws.panes[active].symbol}
             interval={ws.panes[active].interval}

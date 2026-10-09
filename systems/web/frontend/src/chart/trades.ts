@@ -1,5 +1,6 @@
 import { STOP_WIDEN_MESSAGE } from "../pages/tradeModel";
-import type { OptionGroup, Position } from "../api/types";
+import type { OptionGroup, PendingOrder, Position } from "../api/types";
+import { formatPnl } from "../format";
 
 // The person's own trades, shaped for the chart. Plain data and no chart library, so it can be tested
 // without a screen and used by the page without pulling the library into its bundle.
@@ -120,18 +121,26 @@ export type OpenLevel = {
   /** Unique per trade and field: "position:<id>:stop". */
   key: string;
   tradeId: string;
-  kind: "position" | "group";
-  field: "stop" | "target";
+  /** A position, an option group, or an order that is still waiting for its price. */
+  kind: "position" | "group" | "waiting";
+  field: "entry" | "stop" | "target";
   price: number;
-  /** For the tag on the line, e.g. "Stop · Long 10". */
+  /** For the tag on the line, e.g. "Stop · Long 10 · −₹450". */
   label: string;
   long: boolean;
-  /** A stop that moves by itself (trailing) is shown but cannot be dragged: moving it by hand would switch the trailing off. */
+  /** A stop that moves by itself (trailing) is shown but cannot be dragged: moving it by hand would switch the trailing off. The entry line of an
+   * open trade is only ever shown; a waiting order's entry (its trigger), stop and target can all be dragged. */
   draggable: boolean;
+  /** The line carries a small × that cancels the order it belongs to (a waiting order's entry line). */
+  cancellable?: boolean;
 };
 
-/** The stop and target of each open trade on the chart of `base`: a position's own stop and target, and for
- * an option group the stop and target on the underlying's price. A level that is not set has no line. */
+/** What a futures trade makes or loses if it is closed at `price` (before charges): the same sum the server uses for P&L. */
+const resultAt = (long: boolean, entry: number, price: number, quantity: number) => (long ? price - entry : entry - price) * quantity;
+
+/** The stop and target of each open trade on the chart of `base`, with its entry between them: a position's own entry, stop and target, and for
+ * an option group the same on the underlying's price. Each line's tag carries the money: the live result on the entry, and what the stop or
+ * target would make or lose (a futures trade only: an option's result is not a straight line in the underlying). A level that is not set has no line. */
 export function openLevels(base: string, positions: Position[], groups: OptionGroup[]): OpenLevel[] {
   const want = base.trim().toUpperCase();
   const out: OpenLevel[] = [];
@@ -141,18 +150,52 @@ export function openLevels(base: string, positions: Position[], groups: OptionGr
     const long = p.action === "BUY";
     const name = `${long ? "Long" : "Short"} ${qty(p.quantity)}`;
     const trailing = p.trailing_stop_enabled === true;
-    if (p.stop_loss_price != null) add({ tradeId: p.id, kind: "position", field: "stop", price: p.stop_loss_price, label: `Stop · ${name}${trailing ? " (trailing)" : ""}`, long, draggable: !trailing });
-    if (p.target_price != null) add({ tradeId: p.id, kind: "position", field: "target", price: p.target_price, label: `Target · ${name}`, long, draggable: true });
+    const money = (price: number) => ` · ${formatPnl(resultAt(long, p.entry_price, price, p.quantity))}`;
+    if (p.entry_price != null) add({ tradeId: p.id, kind: "position", field: "entry", price: p.entry_price, label: `${name}${p.unrealized_pnl != null ? ` · ${formatPnl(p.unrealized_pnl)}` : ""}`, long, draggable: false });
+    if (p.stop_loss_price != null) add({ tradeId: p.id, kind: "position", field: "stop", price: p.stop_loss_price, label: `Stop · ${name}${trailing ? " (trailing)" : ""}${money(p.stop_loss_price)}`, long, draggable: !trailing });
+    if (p.target_price != null) add({ tradeId: p.id, kind: "position", field: "target", price: p.target_price, label: `Target · ${name}${money(p.target_price)}`, long, draggable: true });
   }
   for (const g of groups) {
     if (g.status !== "OPEN" || g.underlying_symbol.toUpperCase() !== want) continue;
     const long = g.action === "BUY";
     const name = optionLabel(g);
     const trailing = g.spot_stop_loss_trailing_enabled === true;
+    if (g.entry_spot_price != null) add({ tradeId: g.id, kind: "group", field: "entry", price: g.entry_spot_price, label: `${name}${g.unrealized_pnl != null ? ` · ${formatPnl(g.unrealized_pnl)}` : ""}`, long, draggable: false });
     if (g.spot_stop_loss_price != null) add({ tradeId: g.id, kind: "group", field: "stop", price: g.spot_stop_loss_price, label: `Stop · ${name}${trailing ? " (trailing)" : ""}`, long, draggable: !trailing });
     if (g.spot_target_price != null) add({ tradeId: g.id, kind: "group", field: "target", price: g.spot_target_price, label: `Target · ${name}`, long, draggable: true });
   }
   return out;
+}
+
+/** The entry, stop and target of orders still waiting for their price on the chart of `base`, so the plan is on the chart before it is a trade.
+ * All three can be dragged (the server re-checks them) and the entry line has a × that cancels the order. The quantity is only worked out when
+ * the order fires, so there is no money on these. */
+export function waitingLevels(base: string, orders: PendingOrder[]): OpenLevel[] {
+  const want = base.trim().toUpperCase();
+  const out: OpenLevel[] = [];
+  const add = (l: Omit<OpenLevel, "key">) => out.push({ ...l, key: `${l.kind}:${l.tradeId}:${l.field}` });
+  for (const o of orders) {
+    if (o.status !== "pending" || !isContractOf(o.symbol, want)) continue;
+    const long = o.action === "BUY";
+    add({ tradeId: o.id, kind: "waiting", field: "entry", price: o.trigger_price, label: `Waiting ${o.action}`, long, draggable: true, cancellable: true });
+    if (o.stop_loss_price != null) add({ tradeId: o.id, kind: "waiting", field: "stop", price: o.stop_loss_price, label: `Stop · waiting ${o.action}`, long, draggable: true });
+    if (o.target_price != null) add({ tradeId: o.id, kind: "waiting", field: "target", price: o.target_price, label: `Target · waiting ${o.action}`, long, draggable: true });
+  }
+  return out;
+}
+
+/** Why a waiting order's line cannot be moved to `price`, or null when it can: the same rule the server applies (a stop on the losing side of the
+ * trigger, a target on the winning side), judged against the order's own other lines rather than the live price, since the order has not fired.
+ * `levels` are the order's lines as they are now. */
+export function checkWaitingMove(level: Pick<OpenLevel, "field" | "long">, price: number, levels: { entry: number; stop: number | null; target: number | null }): string | null {
+  if (!Number.isFinite(price) || price <= 0) return "That is not a price.";
+  const trigger = level.field === "entry" ? price : levels.entry;
+  const stop = level.field === "stop" ? price : levels.stop;
+  const target = level.field === "target" ? price : levels.target;
+  const side = level.long ? "buy" : "sell";
+  if (stop != null && !(level.long ? stop < trigger : stop > trigger)) return `The stop-loss of a ${side} order has to stay ${level.long ? "below" : "above"} its trigger price (${trigger}).`;
+  if (target != null && !(level.long ? target > trigger : target < trigger)) return `The target of a ${side} order has to stay ${level.long ? "above" : "below"} its trigger price (${trigger}).`;
+  return null;
 }
 
 /** Why a level cannot be moved to `price`, or null when it can. A stop must stay on the losing side of the

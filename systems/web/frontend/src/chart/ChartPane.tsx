@@ -116,6 +116,8 @@ type Props = {
   levels?: OpenLevel[];
   /** A level was dragged to a new price. Answer true if it was accepted; on false the line goes back. */
   onLevelMove?: (level: OpenLevel, price: number) => Promise<boolean> | boolean;
+  /** The × on a waiting order's entry line was clicked: cancel that order. */
+  onLevelCancel?: (level: OpenLevel) => void;
   /** Support and resistance lines read from the option chain (none by default). */
   oiLevels?: OiLevelLine[];
   magnet: boolean;
@@ -570,7 +572,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       }
     }
     for (const l of levels ?? []) {
-      const extendData: PlanLineExtend = { key: l.key, label: l.label, color: l.field === "stop" ? "#e8586a" : "#3ecf8e", dashed: false };
+      const extendData: PlanLineExtend = { key: l.key, label: l.label, color: l.field === "stop" ? "#e8586a" : l.field === "target" ? "#3ecf8e" : "#4c8dff", dashed: l.kind === "waiting", cancellable: l.cancellable === true };
       const points = [{ timestamp: anchor, value: l.price }];
       const existing = levelIds.current.get(l.key);
       if (existing) {
@@ -583,6 +585,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         points,
         extendData,
         lock: !l.draggable,
+        onClick: (e: OverlayEvent) => {
+          if (e.figureKey !== "close") return false;
+          const current = propsRef.current.levels?.find((x) => x.key === l.key);
+          if (current?.cancellable) propsRef.current.onLevelCancel?.(current);
+          return false;
+        },
         onPressedMoveEnd: (e: OverlayEvent) => {
           const v = e.overlay.points[0]?.value;
           const current = propsRef.current.levels?.find((x) => x.key === l.key);
@@ -604,6 +612,14 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         },
       });
       if (typeof id === "string") levelIds.current.set(l.key, id);
+    }
+    // A thin vertical line joining each trade's stop, entry and target, so the three read as one box (rebuilt whole: it is cheap and has no state).
+    chart.removeOverlay({ name: "tradeSpan" });
+    const byTrade = new Map<string, number[]>();
+    for (const l of levels ?? []) byTrade.set(`${l.kind}:${l.tradeId}`, [...(byTrade.get(`${l.kind}:${l.tradeId}`) ?? []), l.price]);
+    for (const prices of byTrade.values()) {
+      if (prices.length < 2) continue;
+      chart.createOverlay({ name: "tradeSpan", groupId: LEVELS_GROUP, lock: true, points: [{ timestamp: anchor, value: Math.min(...prices) }, { timestamp: anchor, value: Math.max(...prices) }] });
     }
   }, [levels, status, epoch]);
 
@@ -722,7 +738,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (selectedRef.current === e.overlay.id) selectedRef.current = null;
       if (pendingRef.current === e.overlay.id) pendingRef.current = null;
       if (!restoringRef.current) {
-        removeTag(e.overlay.id);
+        removeTag(e.overlay.id, true);
         drawnRef.current.delete(e.overlay.id);
         sidesRef.current.delete(e.overlay.id);
         persist();
@@ -766,10 +782,15 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
 
   // ---- the label / alert bell on a drawing: a companion pill, kept in step with its drawing ----
   const tagsRef = useRef<Map<string, string>>(new Map());
-  function removeTag(id: string) {
+  /** `afterLibrary`: from inside the library's own removal callback (a drawing's onRemoved). klinecharts' removeInstance builds its filtered overlay
+   * list while it loops and assigns it back when the loop ends, so a removal made from within that callback is overwritten and the pill comes
+   * back (it then vanished only on a refresh). Removing it one tick later, once the library is done, sticks. */
+  function removeTag(id: string, afterLibrary = false) {
     const tag = tagsRef.current.get(id);
-    if (tag) chartRef.current?.removeOverlay(tag);
     tagsRef.current.delete(id);
+    if (!tag) return;
+    if (afterLibrary) queueMicrotask(() => chartRef.current?.removeOverlay(tag));
+    else chartRef.current?.removeOverlay(tag);
   }
   function syncTag(id: string) {
     const chart = chartRef.current;
@@ -1171,7 +1192,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [pickField]);
 
   // The canvas is invisible to a screen reader, so the same facts are stated in words.
-  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${oiLevels?.length ? ` Option-chain levels: ${oiLevels.map((l) => l.label).join(", ")}.` : ""}${levels?.length ? ` Stops and targets of open trades: ${levels.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
+  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${oiLevels?.length ? ` Option-chain levels: ${oiLevels.map((l) => l.label).join(", ")}.` : ""}${levels?.length ? ` Entries, stops and targets of your open and waiting trades: ${levels.map((l) => `${l.label} at ${formatPrice(l.price)}`).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
 
   return (
     <div className="chart-pane" data-testid="chart-pane">

@@ -26,7 +26,7 @@ export type BreakExtend = { tf: string; kind: "bos" | "choch"; direction: "up" |
 export type TrendMarkExtend = { tf: string; trend: "up" | "down" | "range"; price: number };
 export type SetupExtend = { tf: string; direction: "long" | "short"; status: "confirmed" | "triggered" | "hit_target" | "hit_sl" | "invalidated"; entry: number; stop: number; target: number; rr: number };
 export type DrawTagExtend = { text: string; color: string; edge: "point" | "right" };
-export type PlanLineExtend = { key: string; label: string; color: string; dashed: boolean };
+export type PlanLineExtend = { key: string; label: string; color: string; dashed: boolean; cancellable?: boolean };
 
 const pill = (color: string, size = 10) => ({
   color,
@@ -149,10 +149,35 @@ export function registerChartExtensions(): void {
         { type: "line", attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] }, styles: { color: d.color, size: 1.5, style: d.dashed ? "dashed" : "solid", dashedValue: [6, 4] } },
         {
           type: "text",
-          attrs: { x: bounding.width - 4, y: y - 3, text: `${d.label} ${v.toFixed(2)}`, align: "right", baseline: "bottom" },
+          // A line that can be cancelled leaves room at the right for its ×.
+          attrs: { x: bounding.width - 4 - (d.cancellable ? 22 : 0), y: y - 3, text: `${d.label} ${v.toFixed(2)}`, align: "right", baseline: "bottom" },
           styles: { color: INK, size: 11, weight: "bold", backgroundColor: d.color, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 2 },
         },
+        ...(d.cancellable
+          ? [
+              {
+                // ChartPane's onClick for the level reads this key: a click here cancels the order the line belongs to.
+                key: "close",
+                type: "text",
+                attrs: { x: bounding.width - 4, y: y - 3, text: "×", align: "right", baseline: "bottom" },
+                styles: { color: INK, size: 11, weight: "bold", backgroundColor: "rgba(15, 18, 22, 0.85)", paddingLeft: 6, paddingRight: 6, paddingTop: 1, paddingBottom: 1, borderRadius: 2 },
+              },
+            ]
+          : []),
       ];
+    },
+  });
+
+  // The thin vertical line that joins a trade's stop, entry and target (ChartPane draws one per trade, from its lowest level to its highest).
+  registerOverlay({
+    name: "tradeSpan",
+    totalStep: 3,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ coordinates }) => {
+      if (coordinates.length < 2) return [];
+      const [a, b] = coordinates;
+      if (![a.x, a.y, b.y].every(Number.isFinite)) return [];
+      return [{ type: "line", attrs: { coordinates: [{ x: a.x, y: a.y }, { x: a.x, y: b.y }] }, styles: { color: "rgba(76, 141, 255, 0.55)", size: 1, style: "solid" }, ignoreEvent: true }];
     },
   });
 

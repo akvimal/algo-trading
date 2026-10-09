@@ -200,7 +200,7 @@ describe("armed zones are sent to the server", () => {
     act(() => ref.current!.setSelectedLabel("PDH"));
     expect(c.overlaysNamed("drawTag").map((o) => o.extendData)).toMatchObject([{ text: "PDH", edge: "right" }]);
     act(() => ref.current!.removeSelected());
-    expect(c.overlaysNamed("drawTag")).toEqual([]);
+    await waitFor(() => expect(c.overlaysNamed("drawTag")).toEqual([])); // removed a tick after the drawing, once the library has finished removing it
   });
 
   it("does not arm a level by itself, and sends it only once it is armed", async () => {

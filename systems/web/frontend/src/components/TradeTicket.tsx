@@ -169,7 +169,7 @@ export function TradeTicket({ ticket: t, onChange, ctx, meta, regime, budget, pi
           </div>
         )}
         <div className="stack-notice" role="note" data-testid="waiting-notice" style={{ marginTop: 10 }}>
-          <b>You already have {waitingHere.text}.</b> The form is folded away so it is not a second thought away from the plan.
+          <b>{result?.ok && result.kind === "pending" ? "Placed: " : "You already have "}{waitingHere.text}.</b> The form is folded away so it is not a second thought away from the plan.
           <div className="row" style={{ marginTop: 8, gap: 12, justifyContent: "flex-start" }}>
             <button className="btn btn-small" onClick={waitingHere.cancel}>
               Cancel the waiting order

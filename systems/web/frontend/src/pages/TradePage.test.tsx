@@ -24,6 +24,7 @@ let prices: Record<string, number>;
 let placeManual: (body: any) => Response;
 let placeOption: (body: any) => Response;
 let waiting: Record<string, any>[];
+let patchFails: string | null = null;
 let lotSize: number;
 let attachFails: boolean;
 let candleFailures: number;
@@ -80,6 +81,7 @@ beforeEach(() => {
   profilePrefs = null;
   structure = { ...emptyStructure };
   waiting = [];
+  patchFails = null;
   screenIs(false);
   account = {
     segment: "NSE", starting_balance: 200000, current_balance: 200000, realized_pnl: 0, unrealized_pnl: 0, capital_per_trade: 100000,
@@ -148,6 +150,11 @@ beforeEach(() => {
       if (url.includes("/study-notes")) return json([]);
       if (url.includes("/pending-orders") && method === "POST")
         return json({ id: "w1", segment: "NSE", symbol: body.symbol, action: body.action, strategy: body.strategy, trigger_price: body.trigger_price, stop_loss_price: body.stop_loss_price ?? null, target_price: body.target_price ?? null, status: "pending", status_reason: null, expires_at: "2026-09-27T00:00:00Z", last_price: null }, 201);
+      if (url.includes("/pending-orders/") && method === "PATCH") {
+        if (patchFails) return json({ detail: patchFails }, 409);
+        waiting = waiting.map((w) => (w.id === url.split("/pending-orders/")[1] ? { ...w, ...(body.trigger_price != null ? { trigger_price: body.trigger_price } : {}), ...(body.stop_loss_price != null ? { stop_loss_price: body.stop_loss_price } : {}), ...(body.target_price != null ? { target_price: body.target_price } : {}) } : w));
+        return json(waiting.find((w) => w.id === url.split("/pending-orders/")[1]));
+      }
       if (url.includes("/pending-orders") && method === "DELETE") {
         waiting = [];
         return json({ id: "w1", status: "cancelled" });
@@ -735,6 +742,9 @@ describe("waiting orders", () => {
     expect(posts("/pending-orders")[0].body).toMatchObject({ segment: "NSE", symbol: "RELIANCE", action: "BUY", trigger_price: 980, stop_loss_price: 970, strategy: "future" });
     expect(await t.findByText(/placed when the price reaches 980/)).toBeInTheDocument();
     expect(t.queryByRole("link", { name: "See it in Portfolio" })).not.toBeInTheDocument(); // a waiting order is not a position yet
+    // right after placing it, the notice names that order as just placed rather than "you already have" one (which reads as a duplicate)
+    expect(within(await t.findByTestId("waiting-notice")).getByText(/Placed: a waiting .* order at 980/)).toBeInTheDocument();
+    expect(t.queryByText(/You already have/)).not.toBeInTheDocument();
     const list = within(await screen.findByTestId("waiting"));
     expect(list.getByText("980")).toBeInTheDocument();
     await user.click(list.getByRole("button", { name: "Cancel" }));
@@ -1365,6 +1375,20 @@ describe("drawing tools", () => {
     expect(JSON.parse(localStorage.getItem("web.chart.drawings:NSE:NIFTY")!)[0].points[1].value).toBe(1030);
   });
 
+  it("takes a zone's alert bell off the chart when the zone is deleted, not only after a refresh", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+    await user.click(bar.getByRole("button", { name: "Zone (supply or demand)" }));
+    const zone = c.overlaysNamed("rect").find((o) => o.points.length === 0)!;
+    act(() => c.finishDrawing(zone.id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[10].timestamp, value: 1020 }]));
+    await waitFor(() => expect(c.overlaysNamed("drawTag")).toHaveLength(1)); // a zone is armed as it is drawn, so it carries a bell
+    act(() => c.removeOverlay(zone.id)); // what a right-click or Delete does
+    await waitFor(() => expect(c.overlaysNamed("drawTag")).toHaveLength(0));
+    expect(c.overlaysNamed("rect")).toHaveLength(0);
+  });
+
   it("choosing the same tool again, or the cursor, puts it down without drawing anything", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
@@ -1849,6 +1873,16 @@ describe("two linked charts", () => {
     await user.click(screen.getByRole("button", { name: "NIFTY + BANKNIFTY" }));
     await loaded(1);
   };
+
+  it("keeps the Notes panel open when a click in the other chart makes it the active one", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    await user.click(screen.getByTestId("notes-toggle"));
+    expect(await screen.findByLabelText("Notes on NIFTY")).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getAllByTestId("chart-pane")[1].querySelector(".chart-canvas")!); // the other chart becomes active
+    expect(await screen.findByLabelText("Notes on BANKNIFTY")).toBeInTheDocument(); // the thread follows the active chart's instrument...
+    expect(screen.getByTestId("notes-toggle")).toHaveAttribute("aria-expanded", "true"); // ...without folding shut
+  });
 
   it("shows NIFTY and BANKNIFTY side by side, each with its own price and candles", async () => {
     prices = { default: 1000, NIFTY: 23140.5, BANKNIFTY: 55580.4 };
@@ -3145,7 +3179,9 @@ describe("moving the stop and target of open trades", () => {
     id: "p1", symbol: "RELIANCE", exchange: "NSE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1010, entry_time: iso(8),
     exit_price: null, exit_time: null, pnl: null, unrealized_pnl: -100, status: "OPEN", option_group_id: null, stop_loss_price: 990, target_price: 1030, ...over,
   });
-  const lines = (c: ReturnType<typeof chart>) => c.overlaysNamed("planLine").filter((o) => /^(position|group):/.test(o.extendData.key));
+  // the stop and target lines (the ones that can be dragged); the entry line and the waiting orders' lines are asserted on their own below
+  const lines = (c: ReturnType<typeof chart>) => c.overlaysNamed("planLine").filter((o) => /^(position|group):.*:(stop|target)$/.test(o.extendData.key));
+  const allLevelLines = (c: ReturnType<typeof chart>) => c.overlaysNamed("planLine").filter((o) => /^(position|group|waiting):/.test(o.extendData.key));
   const line = (c: ReturnType<typeof chart>, key: string) => lines(c).find((o) => o.extendData.key === key)!;
   const drag = (c: ReturnType<typeof chart>, key: string, value: number) => act(() => c.moveOverlay(line(c, key).id, [{ timestamp: c.data[c.data.length - 1].timestamp, value }]));
   const puts = (part: string) => calls.filter((c) => c.method === "PUT" && c.url.includes(part));
@@ -3156,11 +3192,106 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(3));
     expect(lines(c).map((o) => [o.extendData.key, o.extendData.label, o.points[0].value]).sort()).toEqual([
-      ["position:nostop:target", "Target · Long 10", 1040],
-      ["position:p1:stop", "Stop · Long 10", 990],
-      ["position:p1:target", "Target · Long 10", 1030],
+      ["position:nostop:target", "Target · Long 10 · +₹300", 1040], // what it would make at the target: (1040 - 1010) x 10
+      ["position:p1:stop", "Stop · Long 10 · −₹200", 990], // and lose at the stop: (990 - 1010) x 10
+      ["position:p1:target", "Target · Long 10 · +₹200", 1030],
     ]);
-    expect(screen.getByTestId("chart-summary")).toHaveTextContent(/Stops and targets of open trades: Stop · Long 10 990/);
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent(/Entries, stops and targets of your open and waiting trades: .*Stop · Long 10 · −₹200 at 990/);
+  });
+
+  it("draws the entry line of an open trade, with its quantity and live result, joined to its stop and target by a thin vertical line", async () => {
+    positionRows = [long(), long({ id: "old", status: "CLOSED", pnl: 5 })];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+    const entry = allLevelLines(c).find((o) => o.extendData.key === "position:p1:entry")!;
+    expect(entry.points[0].value).toBe(1010);
+    expect(entry.extendData).toMatchObject({ label: "Long 10 · −₹100", dashed: false }); // the live result, not the plan
+    expect(entry.handlers.lock).toBe(true); // shown only: the entry is not something to drag
+    const [span] = c.overlaysNamed("tradeSpan");
+    expect(span.points.map((p: any) => p.value)).toEqual([990, 1030]); // from the lowest of its levels to the highest
+    expect(c.overlaysNamed("tradeSpan")).toHaveLength(1); // one per trade
+  });
+
+  it("draws an order that is still waiting for its price as a dashed entry, stop and target", async () => {
+    waiting = [{ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "SELL", strategy: "future", trigger_price: 1020, stop_loss_price: 1030, target_price: 1000, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+    expect(allLevelLines(c).map((o) => [o.extendData.key, o.extendData.label, o.points[0].value, o.extendData.dashed]).sort()).toEqual([
+      ["waiting:w1:entry", "Waiting SELL", 1020, true],
+      ["waiting:w1:stop", "Stop · waiting SELL", 1030, true],
+      ["waiting:w1:target", "Target · waiting SELL", 1000, true],
+    ]);
+    expect(c.overlaysNamed("tradeSpan")).toHaveLength(1);
+  });
+
+  describe("a waiting order's lines on the chart", () => {
+    const order = (over: Record<string, any> = {}) => ({ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "SELL", strategy: "future", trigger_price: 1020, stop_loss_price: 1030, target_price: 1000, status: "pending", status_reason: null, expires_at: "x", last_price: null, ...over });
+    const waitingLine = (c: ReturnType<typeof chart>, field: string) => allLevelLines(c).find((o) => o.extendData.key === `waiting:w1:${field}`)!;
+    const dragWaiting = (c: ReturnType<typeof chart>, field: string, value: number) => act(() => c.moveOverlay(waitingLine(c, field).id, [{ timestamp: c.data[c.data.length - 1].timestamp, value }]));
+    const patches = () => calls.filter((x) => x.method === "PATCH" && x.url.includes("/pending-orders/"));
+
+    it("dragging the stop, the target or the entry moves that level of the order on the server, and says so", async () => {
+      waiting = [order()];
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      dragWaiting(c, "stop", 1035.5555);
+      await waitFor(() => expect(patches()).toHaveLength(1));
+      expect(patches()[0].body).toEqual({ stop_loss_price: 1035.56 });
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss of the waiting order moved to 1,035.56.");
+      dragWaiting(c, "target", 990);
+      await waitFor(() => expect(patches()).toHaveLength(2));
+      expect(patches()[1].body).toEqual({ target_price: 990 });
+      dragWaiting(c, "entry", 1025);
+      await waitFor(() => expect(patches()).toHaveLength(3));
+      expect(patches()[2].body).toEqual({ trigger_price: 1025 });
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Trigger price of the waiting order moved to 1,025.");
+      await waitFor(() => expect(waitingLine(c, "entry").points[0].value).toBe(1025)); // the reload confirms it
+    });
+
+    it("refuses a move that would put the stop or target on the wrong side of the trigger, sends nothing, and puts the line back", async () => {
+      waiting = [order()];
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      dragWaiting(c, "stop", 1010); // a sell's stop belongs above its trigger of 1020
+      expect(await screen.findByTestId("level-note")).toHaveTextContent(/stop-loss of a sell order has to stay above its trigger price/);
+      expect(patches()).toHaveLength(0);
+      await waitFor(() => expect(waitingLine(c, "stop").points[0].value).toBe(1030));
+      dragWaiting(c, "entry", 1035); // the trigger would pass the stop
+      await waitFor(() => expect(waitingLine(c, "entry").points[0].value).toBe(1020));
+      expect(patches()).toHaveLength(0);
+    });
+
+    it("puts the line back and says why when the server refuses (for instance the order has just fired)", async () => {
+      waiting = [order()];
+      patchFails = "this order is already triggered";
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      dragWaiting(c, "target", 990);
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("this order is already triggered");
+      await waitFor(() => expect(waitingLine(c, "target").points[0].value).toBe(1000));
+    });
+
+    it("only the entry line has the ×, and clicking it cancels the order and takes its lines off the chart", async () => {
+      waiting = [order()];
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      expect(waitingLine(c, "entry").extendData.cancellable).toBe(true);
+      expect(waitingLine(c, "stop").extendData.cancellable).toBe(false);
+      act(() => c.click(waitingLine(c, "stop").id, "close")); // a click on a line that has no × does nothing
+      act(() => c.click(waitingLine(c, "entry").id)); // nor does one on the line itself
+      expect(calls.some((x) => x.method === "DELETE")).toBe(false);
+      act(() => c.click(waitingLine(c, "entry").id, "close"));
+      await waitFor(() => expect(calls.some((x) => x.method === "DELETE" && x.url.endsWith("/pending-orders/w1"))).toBe(true));
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Waiting order cancelled.");
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(0));
+      expect(c.overlaysNamed("tradeSpan")).toHaveLength(0);
+    });
   });
 
   it("dragging the stop saves it, says so, and the line stays where it was put", async () => {
@@ -3176,6 +3307,44 @@ describe("moving the stop and target of open trades", () => {
     expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 995.12.");
     await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(995.12)); // the reload confirms it
     expect(line(c, "position:p1:stop").id).toBe(id); // the same line, not a new one
+  });
+
+  it("takes the \"Stop-loss moved\" message away once that trade is over (it hit its stop), and lets a confirmation fade by itself", async () => {
+    positionRows = [long()];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    await waitFor(() => expect(lines(c)).toHaveLength(2));
+    drag(c, "position:p1:stop", 995);
+    expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 995.");
+    positionRows = [long({ status: "CLOSED", exit_price: 995, exit_time: iso(0), pnl: -150, exit_reason: "stop_loss" })]; // the server closed it on the stop
+    act(() => void document.dispatchEvent(new Event("visibilitychange"))); // the page re-reads its trades
+    await waitFor(() => expect(screen.queryByTestId("level-note")).not.toBeInTheDocument());
+  });
+
+  it("a confirmation about a trade that is still open fades after a few seconds, while an error stays", async () => {
+    positionRows = [long()];
+    const real = window.setTimeout.bind(window);
+    const fades: Array<() => void> = []; // the 8-second fade timers, held so the test does not wait for them
+    const spy = vi.spyOn(window, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => (ms === 8_000 ? (fades.push(fn), 0) : real(fn, ms))) as never);
+    try {
+      renderAt("/trade?symbol=RELIANCE");
+      await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+      const c = await loaded();
+      await waitFor(() => expect(lines(c)).toHaveLength(2));
+      drag(c, "position:p1:target", 1040);
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Target moved to 1,040.");
+      await waitFor(() => expect(fades.length).toBeGreaterThan(0));
+      act(() => fades.splice(0).forEach((f) => f()));
+      await waitFor(() => expect(screen.queryByTestId("level-note")).not.toBeInTheDocument());
+      drag(c, "position:p1:stop", 1005); // above the price of a long: refused, and that message does not fade
+      expect(await screen.findByTestId("level-note")).toHaveTextContent(/below the current price/);
+      await new Promise((r) => real(r, 50));
+      expect(fades).toHaveLength(0);
+      expect(screen.getByTestId("level-note")).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("an open trade with no target offers Add line and Pick on chart, and Add line saves a target on the winning side", async () => {
@@ -3383,7 +3552,7 @@ describe("moving the stop and target of open trades", () => {
     renderAt("/trade?symbol=RELIANCE");
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
-    expect(line(c, "position:p1:stop").extendData.label).toBe("Stop · Long 10 (trailing)");
+    expect(line(c, "position:p1:stop").extendData.label).toBe("Stop · Long 10 (trailing) · −₹200");
     expect(line(c, "position:p1:stop").handlers.lock).toBe(true);
     expect(line(c, "position:p1:target").handlers.lock).toBe(false);
   });

@@ -125,17 +125,22 @@ export class FakeChart {
     }
     this.overrides.push(o);
   }
-  removeOverlay(arg?: string | { groupId?: string; id?: string }) {
+  removeOverlay(arg?: string | { groupId?: string; id?: string; name?: string }) {
     this.removedOverlayCalls.push(arg);
     const drop = (id: string) => {
       const ov = this.overlays.get(id);
-      this.overlays.delete(id);
+      // Like klinecharts 9.8's removeInstance: the list without this overlay is built first, onRemoved runs, and that list is assigned back at the end -
+      // so anything removed from INSIDE onRemoved comes back. (A removal made a tick later sticks.)
+      const kept = new Map(this.overlays);
+      kept.delete(id);
       ov?.handlers.onRemoved?.({ overlay: { id, name: ov.name, points: ov.points } });
+      this.overlays = kept;
     };
     if (arg === undefined) [...this.overlays.keys()].forEach(drop);
     else if (typeof arg === "string") drop(arg);
     else if (arg.groupId) [...this.overlays.values()].filter((o) => o.groupId === arg.groupId).forEach((o) => drop(o.id));
     else if (arg.id) drop(arg.id);
+    else if (arg.name) [...this.overlays.values()].filter((o) => o.name === arg.name).forEach((o) => drop(o.id)); // like klinecharts: by name
   }
 
   createIndicator(value: unknown, stack: boolean, pane?: { id?: string }) {
@@ -194,6 +199,11 @@ export class FakeChart {
     if (!ov) return;
     ov.points = points;
     ov.handlers.onPressedMoveEnd?.({ overlay: { id, name: ov.name, points } });
+  }
+  /** A click on an overlay, optionally on one of its figures (by the figure's key, e.g. a line's ×). */
+  click(id: string, figureKey?: string) {
+    const ov = this.overlays.get(id);
+    ov?.handlers.onClick?.({ overlay: { id, name: ov.name, points: ov.points, extendData: ov.extendData }, ...(figureKey ? { figureKey } : {}) });
   }
   doubleClick(id: string) {
     const ov = this.overlays.get(id);

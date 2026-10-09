@@ -403,3 +403,31 @@ def test_the_jobs_endpoint_is_admin_only():
     assert e.value.status_code == 403
     dependants = [d.call for d in jobs_route.router.routes[0].dependant.dependencies]
     assert require_admin in dependants
+
+
+# ---- running a job by hand --------------------------------------------------------------------------------------------
+
+
+def test_run_now_starts_a_listed_job_and_refuses_the_rest(store, monkeypatch):
+    started = []
+    monkeypatch.setattr(scheduler, "start_job_now", lambda job_id: started.append(job_id))
+    assert jobs_route.run_job_now("oi-eod-snapshot-record", _admin=uuid.uuid4()) == {"started": "oi-eod-snapshot-record"}
+    assert started == ["oi-eod-snapshot-record"]
+    for job_id in ("session-summary-nse", "no-such-job"):  # jobs that message people are not offered
+        with pytest.raises(HTTPException) as e:
+            jobs_route.run_job_now(job_id, _admin=uuid.uuid4())
+        assert e.value.status_code == 404
+    assert started == ["oi-eod-snapshot-record"]
+
+
+def test_run_now_refuses_a_job_already_running(store, monkeypatch):
+    monkeypatch.setattr(scheduler, "start_job_now", lambda job_id: pytest.fail("must not start"))
+    monkeypatch.setattr(job_tracker, "any_running", lambda ids: True)
+    with pytest.raises(HTTPException) as e:
+        jobs_route.run_job_now("zone-scan-record", _admin=uuid.uuid4())
+    assert e.value.status_code == 409
+
+
+def test_run_now_requires_an_admin():
+    route = next(r for r in jobs_route.router.routes if getattr(r, "path", "") == "/jobs/{job_id}/run")
+    assert require_admin in [d.call for d in route.dependant.dependencies]

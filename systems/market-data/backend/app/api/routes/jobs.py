@@ -1,19 +1,21 @@
 """GET /jobs - what the background jobs are doing and when they last ran (the tracker is app/domain/job_tracker.py).
 
 Admin only: it is the platform operator's view of the platform's own batch jobs, not part of the product, and a run's
-message can carry a provider error. Reads only what the tracker already wrote; it never starts or stops a job."""
+message can carry a provider error. GET reads only what the tracker already wrote; POST /jobs/{id}/run starts one of a short list of safe-to-repeat scans by hand."""
 
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.adapters.db.models import JobRun
 from app.adapters.db.session import get_db
 from app.auth import require_admin
 from app.domain.models import JobOut, JobRunOut, JobsOut
+from app import scheduler
+from app.domain import job_tracker
 from app.scheduler import job_catalog
 
 router = APIRouter()
@@ -59,6 +61,17 @@ def get_jobs(recent: int = Query(8, ge=1, le=50), db: Session = Depends(get_db),
                 last_run=run_out(last_ended, now) if last_ended else None,
                 last_success=run_out(success, now) if success else None,
                 recent=[run_out(r, now) for r in runs],
+                can_run_now=job_id in scheduler.MANUAL_RUN_JOBS,
             )
         )
     return JobsOut(jobs=jobs)
+
+
+@router.post("/jobs/{job_id}/run", status_code=202)
+def run_job_now(job_id: str, _admin: UUID = Depends(require_admin)):
+    if job_id not in scheduler.MANUAL_RUN_JOBS:
+        raise HTTPException(status_code=404, detail="that job cannot be started by hand")
+    if job_tracker.any_running([job_id]):
+        raise HTTPException(status_code=409, detail="that job is already running")
+    scheduler.start_job_now(job_id)
+    return {"started": job_id}

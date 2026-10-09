@@ -297,6 +297,10 @@ export function TradePage() {
     };
   }, [tradeRows.data, activeSpec.symbol]);
   const hasOpenForInstrument = activeTrades.positions.length > 0 || activeTrades.groups.length > 0;
+  // Until the first answer about the person's open trades and waiting orders is in, "nothing is open here" is only an assumption. Showing the
+  // new-trade form on it meant the form was on screen at load and then, a moment later, was replaced by the open trade's card (or folded away
+  // for a waiting order). A failed load counts as an answer: the form is then the best that can be offered.
+  const tradesKnown = !(tradeRows.loading && !tradeRows.data) && !(waiting.loading && !waiting.data);
   const ctx = account
     ? {
         price: activePrice, lotSize: activeData.resolved?.lot_size ?? 1, capital: account.capital_per_trade, riskPct: account.risk_per_trade_pct,
@@ -776,7 +780,8 @@ export function TradePage() {
                 </p>
               </div>
             )}
-            {ctx && !live && !hasOpenForInstrument && (
+            {ctx && !live && !hasOpenForInstrument && !tradesKnown && <Skeleton lines={6} />}
+            {ctx && !live && !hasOpenForInstrument && tradesKnown && (
               <TradeTicket
                 ticket={ticket}
                 onChange={setTicket}

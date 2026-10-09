@@ -32,6 +32,7 @@ let structure: Record<string, any>;
 let structureFails: boolean;
 let ltpFails: boolean;
 let positionRows: Record<string, any>[];
+let holdPositions: Promise<void> | null = null; // a test sets it to keep the trades request waiting
 let groupRows: Record<string, any>[];
 let tradeCallsFail: boolean;
 let oiFails: boolean;
@@ -70,6 +71,7 @@ beforeEach(() => {
   structureFails = false;
   ltpFails = false;
   positionRows = [];
+  holdPositions = null;
   groupRows = [];
   tradeCallsFail = false;
   oiFails = false;
@@ -186,6 +188,7 @@ beforeEach(() => {
         return json(row ?? {});
       }
       if (url.includes("/positions") || url.includes("/option-groups")) {
+        if (holdPositions) await holdPositions;
         if (tradeCallsFail && q("with_live_pnl") === "true") return json({ detail: "quotes down" }, 503);
         const rows = url.includes("/positions") ? positionRows : groupRows;
         return json(rows.filter((r) => (!q("status") || r.status === q("status")) && (!q("segment") || (r.segment ?? "NSE") === q("segment"))));
@@ -271,6 +274,32 @@ describe("the page", () => {
     expect(t.getByRole("button", { name: "What to trade: Future" })).toBeInTheDocument();
     await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ }));
     expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not show the new-trade form while it is still unknown whether a trade is open: the open trade's card is the first thing shown, not a form that is replaced", async () => {
+    positionRows = [{ id: "p1", symbol: "RELIANCE", exchange: "NSE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), exit_time: null, status: "OPEN", unrealized_pnl: 50, option_group_id: null, stop_loss_price: 990, target_price: null }];
+    let release!: () => void;
+    holdPositions = new Promise<void>((r) => (release = r));
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/positions"))).toBe(true)); // the request is out, and held
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument(); // no form while it is not known
+    expect(screen.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByTestId("ticket-positions")).toBeInTheDocument(); // the open trade
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument(); // and the form never appeared
+    expect(screen.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+  });
+
+  it("shows the form once the answer is that nothing is open, or when the answer cannot be had", async () => {
+    let release!: () => void;
+    holdPositions = new Promise<void>((r) => (release = r));
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByTestId("ticket")).toBeInTheDocument();
   });
 
   it("changes the instrument for one trade from the header badge, and closes the menu once chosen", async () => {

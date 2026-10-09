@@ -14,6 +14,7 @@ import type { PriceField } from "../chart/ChartPane";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import type { Pretrade } from "../api/types";
 import { TextField } from "./Field";
+import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, TrendingIcon } from "./BadgeIcons";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
   { value: "ITM2", label: "2 strikes in the money" },
@@ -24,6 +25,7 @@ const MONEYNESS: { value: Moneyness; label: string }[] = [
 ];
 
 const STATUS_MARK = { good: "✓", warn: "!", bad: "✕", na: "–", info: "·" } as const;
+const PLAN_ICON = { pullback: <PullbackIcon />, breakout: <BreakoutIcon />, reversal: <ReversalIcon /> } as const;
 const STATUS_WORD = { good: "In favour", warn: "Caution", bad: "Against", na: "Not applicable", info: "For information" } as const;
 
 type Props = {
@@ -219,6 +221,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           <div className="chips" role="group" aria-label="Market state">
             {MARKET_STATES.map((m) => (
               <button key={m.value} aria-pressed={state === m.value} onClick={() => chooseState(m.value)}>
+                {m.value === "ranging" ? <RangingIcon /> : <TrendingIcon />}
                 {m.label}
               </button>
             ))}
@@ -229,6 +232,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           <div className="chips" role="group" aria-label="Plan">
             {PLAN_KINDS.map((k) => (
               <button key={k.value} aria-pressed={raw.planKind === k.value} disabled={!planAvailable(state, k.value)} title={!planAvailable(state, k.value) ? "A pullback needs a trend." : undefined} onClick={() => choosePlan(k.value)}>
+                {PLAN_ICON[k.value]}
                 {k.label}
               </button>
             ))}
@@ -246,6 +250,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         <div className="chips seg" role="group" aria-label="Side" style={{ margin: "12px 0" }}>
           {(["BUY", "SELL"] as Action[]).map((s) => (
             <button key={s} className={s === "BUY" ? "buy" : "sell"} aria-pressed={t.action === s} onClick={() => set("action", s)}>
+              {s === "BUY" ? <BuyIcon /> : <SellIcon />}
               {ACTION_WORD(s)}
             </button>
           ))}
@@ -288,12 +293,14 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       {!simplifiedOption && (
         <div className="chips" role="group" aria-label="Order type" style={{ marginBottom: 12 }}>
           <button aria-pressed={!limit} onClick={() => set("orderType", "market")}>
+            <BoltIcon />
             Market
           </button>
           {/* Credit spreads (bull_put_spread/bear_call_spread) can't wait for a price yet - the
               pending-order watcher (app/domain/pending_orders.py) only knows how to build a naked/
               debit-spread leg once triggered, not a credit one. Market-only until that's built. */}
           <button aria-pressed={limit} disabled={t.strategy === "credit_spread"} title={t.strategy === "credit_spread" ? "Not yet supported for a credit spread - place at the market price instead." : undefined} onClick={() => set("orderType", "limit")}>
+            <ClockIcon />
             Wait for a price
           </button>
         </div>

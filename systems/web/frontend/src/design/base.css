@@ -134,7 +134,7 @@ a {
 .pill {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--badge-r);
   font-size: 12px;
   font-weight: 600;
   border: 1px solid var(--border);
@@ -561,14 +561,25 @@ a {
   flex-wrap: wrap;
 }
 .chips button {
-  min-height: 36px;
-  padding: 0 14px;
-  border-radius: 999px;
+  min-height: var(--badge-h);
+  padding: 0 var(--badge-px);
+  border-radius: var(--badge-r);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-dim);
   font-weight: 600;
   cursor: pointer;
+  /* an icon (BadgeIcons) sits before the text with a small gap */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chips button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.badge-icon {
+  flex: none;
 }
 .chips button[aria-pressed="true"],
 .chips button[aria-selected="true"],
@@ -789,8 +800,11 @@ table.t th {
   grid-template-columns: 1fr 1fr;
 }
 .seg button {
+  justify-content: center;
+}
+.seg button {
   min-height: var(--tap);
-  border-radius: var(--radius-sm);
+  border-radius: var(--badge-r);
   font-size: 16px;
 }
 .seg button.buy[aria-pressed="true"] {
@@ -1212,9 +1226,9 @@ table.t th {
   position: relative;
 }
 .chip-btn {
-  min-height: 36px;
-  padding: 0 12px;
-  border-radius: 999px;
+  min-height: var(--badge-h);
+  padding: 0 var(--badge-px);
+  border-radius: var(--badge-r);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-dim);

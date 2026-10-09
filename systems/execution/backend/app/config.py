@@ -27,7 +27,17 @@ class Settings(BaseSettings):
     # independent of the square-off job below. Only positions with a
     # stop_loss_price or target_price set are checked each run, so this
     # can run more often than square-off without scanning every position.
-    exit_monitor_poll_seconds: int = 30
+    # 5s (was 30s, 2026-10-09): a stop is judged on the price at each check, so
+    # the poll interval IS how late a stop can fire after the price crosses it
+    # (30s felt like "waits for the 1-minute candle to close"). The price the
+    # check reads is market-data's own LTP, cached 3s and fetched at most every
+    # 2s (dhan.py QUOTE_CACHE_TTL_SECONDS / MIN_LTP_CALL_INTERVAL_SECONDS), so
+    # the worst case is about 5s + 3s. Lower values just re-read the cache.
+    exit_monitor_poll_seconds: int = 5
+
+    # The P&L history snapshots that used to ride on the exit-monitor tick: their
+    # own, slower job so recording them can never delay a stop-loss check.
+    pnl_snapshot_poll_seconds: int = 30
 
     # Balance/equity history (app/domain/equity_history.py): how often the
     # scheduled job samples every user account, and the timezone that decides

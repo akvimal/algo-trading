@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 _scheduler = BackgroundScheduler()
 _SQUARE_OFF_JOB_ID = "square-off-due"
 _EXIT_MONITOR_JOB_ID = "exit-monitor"
+_PNL_SNAPSHOT_JOB_ID = "pnl-snapshots"
 _BROKER_RECONCILIATION_JOB_ID = "broker-order-reconciliation"
 _EQUITY_SNAPSHOT_JOB_ID = "equity-snapshot"
 _PENDING_ORDERS_JOB_ID = "pending-orders"
@@ -59,18 +60,20 @@ def run_check_exits() -> dict:
     with SessionLocal() as db:
         result = check_exits(db, get_ltp_batch, get_previous_candle, get_candle_history)
         option_result = check_option_group_exits(db, get_ltp_batch, get_candle_history)
-        # P&L history snapshots - piggybacks on this same 30s tick, but
-        # against EVERY open position/group (not just the stop-loss/
-        # target/liquidation-having subset check_exits itself scopes its
-        # own candidate query to) - see position_manager.
-        # record_position_pnl_snapshots' own docstring.
-        record_position_pnl_snapshots(db, get_ltp_batch)
-        record_option_group_pnl_snapshots(db, get_ltp_batch)
     if result["closed_stop_loss"] or result["closed_target"] or result.get("closed_exit_condition") or result["trailed"]:
         logger.info("exit-monitor run: %s", result)
     if option_result["closed_stop_loss"] or option_result["closed_target"] or option_result["trailed"]:
         logger.info("option-group exit-monitor run: %s", option_result)
     return result
+
+
+def run_pnl_snapshots() -> None:
+    """P&L history snapshots, against EVERY open position/group (not just the stop-loss/target/liquidation-having subset the exit monitor scopes
+    its own candidate query to) - see position_manager.record_position_pnl_snapshots' own docstring. They used to ride on the exit-monitor
+    tick; a job of their own means the (slower) recording can never hold up a stop-loss check."""
+    with SessionLocal() as db:
+        record_position_pnl_snapshots(db, get_ltp_batch)
+        record_option_group_pnl_snapshots(db, get_ltp_batch)
 
 
 def run_broker_reconciliation() -> dict:
@@ -105,6 +108,14 @@ def start_scheduler() -> None:
         run_check_exits,
         IntervalTrigger(seconds=settings.exit_monitor_poll_seconds),
         id=_EXIT_MONITOR_JOB_ID,
+        replace_existing=True,
+        max_instances=1,  # a run still going when the next is due is not stacked on: it would only re-read the same prices
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        run_pnl_snapshots,
+        IntervalTrigger(seconds=settings.pnl_snapshot_poll_seconds),
+        id=_PNL_SNAPSHOT_JOB_ID,
         replace_existing=True,
     )
     _scheduler.add_job(

@@ -445,6 +445,44 @@ a {
   display: grid;
   gap: 4px;
 }
+/* Balance and today's result share a row once there is room; a phone stacks them. */
+.hero-row {
+  display: grid;
+  gap: var(--gap, 12px);
+}
+@media (min-width: 600px) {
+  .hero-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  }
+}
+/* Phone: Markets (folded) above the positions. From 900px: positions left, Markets in a sticky column on the right. */
+.today-grid {
+  display: grid;
+  gap: var(--gap, 12px);
+  align-items: start;
+}
+.today-grid > * {
+  min-width: 0;
+}
+@media (min-width: 900px) {
+  .app-main.dash {
+    max-width: 1180px;
+  }
+  .today-grid {
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-areas: "main aside";
+  }
+  .today-main {
+    grid-area: main;
+  }
+  .today-aside {
+    grid-area: aside;
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+  }
+}
 .hero .big {
   font-size: 28px;
   font-weight: 600;

@@ -87,7 +87,10 @@ export function AppShell() {
   }
 
   // The trading workstation needs the whole width: no reading-column limit on this one screen.
-  const wide = useLocation().pathname.startsWith("/trade");
+  const { pathname } = useLocation();
+  const wide = pathname.startsWith("/trade");
+  // Today lays positions and the Markets card side by side, so it gets a wider column than the reading pages.
+  const dash = pathname === "/";
   return (
     <div className="app">
       <nav className={`nav ${collapsed ? "collapsed" : ""}`} aria-label="Main">
@@ -115,7 +118,7 @@ export function AppShell() {
           </div>
         )}
       </nav>
-      <main className={`app-main${wide ? " wide" : ""}`}>
+      <main className={`app-main${wide ? " wide" : ""}${dash ? " dash" : ""}`}>
         <Outlet />
       </main>
     </div>

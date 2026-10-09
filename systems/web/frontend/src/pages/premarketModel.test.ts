@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PremarketIndicator, PremarketInput, PremarketMacro, PremarketReport } from "../api/types";
-import { nseSessionStarted, derivedRows, formatIndicator, formatMove, formatPoints, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "./premarketModel";
+import { defaultMarket, nseSessionStarted, derivedRows, formatIndicator, formatMove, formatPoints, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "./premarketModel";
 
 const inp = (over: Partial<PremarketInput>): PremarketInput => ({
   key: "sp500", label: "S&P 500", group: "us", ok: true, value: 1, change: 0.66, unit: "pct", source: "yahoo", error: null, ...over,
@@ -139,6 +139,23 @@ describe("MCX and crypto briefs", () => {
     const rows = [inp({ key: "gold" }), inp({ key: "brent" }), inp({ key: "dxy" })];
     expect(sections(rows, "MCX").map((s) => s.title)).toEqual(["Metals", "Energy", "Dollar, rupee, yields"]);
     expect(sections([inp({ key: "btc" })], "CRYPTO").map((s) => s.title)).toEqual(["Coins"]);
+  });
+});
+
+describe("defaultMarket (which market Today opens on)", () => {
+  const all = ["NSE", "MCX", "CRYPTO"] as const;
+  const m = [...all];
+  it("picks the market trading right now, NSE first", () => {
+    expect(defaultMarket(m, new Date("2026-10-08T04:30:00Z"))).toBe("NSE"); // Thu 10:00 IST
+    expect(defaultMarket(m, new Date("2026-10-08T11:00:00Z"))).toBe("MCX"); // 16:30 IST, NSE shut, MCX open
+    expect(defaultMarket(m, new Date("2026-10-08T03:30:00Z"))).toBe("NSE"); // 09:00 IST, MCX open but NSE opens next
+  });
+  it("falls to crypto when the Indian markets are shut, and to what the person trades otherwise", () => {
+    expect(defaultMarket(m, new Date("2026-10-08T19:00:00Z"))).toBe("CRYPTO"); // Fri 00:30 IST
+    expect(defaultMarket(m, new Date("2026-10-10T05:00:00Z"))).toBe("CRYPTO"); // Saturday
+    expect(defaultMarket(["NSE", "MCX"], new Date("2026-10-10T05:00:00Z"))).toBe("NSE"); // weekend, no crypto: first they trade
+    expect(defaultMarket(["MCX", "CRYPTO"], new Date("2026-10-08T04:30:00Z"))).toBe("MCX");
+    expect(defaultMarket(["NSE"], new Date("2026-10-08T19:00:00Z"))).toBe("NSE");
   });
 });
 

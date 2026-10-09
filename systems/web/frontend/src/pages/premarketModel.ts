@@ -22,6 +22,18 @@ export function nseSessionStarted(now: Date = new Date()): boolean {
   return Number(get("hour")) * 60 + Number(get("minute")) >= 9 * 60 + 15;
 }
 
+/** The market to show first on Today: the one trading right now (NSE until 15:30, so its morning report leads before the open; then MCX until 23:30; weekdays; crypto always), else crypto, else the first the person trades. Only ever one of `markets`. */
+export function defaultMarket<S extends "NSE" | "MCX" | "CRYPTO">(markets: S[], now: Date = new Date()): S {
+  const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+  const weekday = get("weekday") !== "Sat" && get("weekday") !== "Sun";
+  const minutes = Number(get("hour")) * 60 + Number(get("minute"));
+  const has = (s: "NSE" | "MCX" | "CRYPTO") => markets.find((m) => m === s);
+  if (weekday && minutes >= 6 * 60 && minutes < 15 * 60 + 30 && has("NSE")) return has("NSE") as S; // the morning report from 06:00 until the open, the live pulse until the close
+  if (weekday && minutes >= 9 * 60 && minutes < 23 * 60 + 30 && has("MCX")) return has("MCX") as S;
+  return (has("CRYPTO") ?? markets[0]) as S;
+}
+
 /** What counts as bad news when it rises, per market: for Indian equities crude, the rupee's fall and yields; for MCX
  * commodities a firmer dollar and yields; for crypto a firmer dollar, yields and a rising VIX. */
 const INVERTED: Record<BriefSegment, Set<string>> = {

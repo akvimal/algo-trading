@@ -81,6 +81,7 @@ class AlertChannel(Base):
     user_id = Column(UUID(as_uuid=True), primary_key=True)
     telegram_chat_id = Column(Text, nullable=False)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    zone_alerts = Column(Text, nullable=False, default="all", server_default="all")  # all | close | off - see migration 049
 
 
 class OiEodSnapshot(Base):
@@ -421,6 +422,7 @@ class ZoneWatch(Base):
     last_checked_at = Column(TIMESTAMP(timezone=True))
     last_bar_checked = Column(TIMESTAMP(timezone=True))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    alerts = Column(Text, nullable=False, default="all", server_default="all")  # all | close | off - see migration 049
 
 
 class ZoneEvent(Base):
@@ -445,6 +447,7 @@ class ZoneEvent(Base):
     extreme = Column(Numeric)
     close = Column(Numeric)
     dedupe_key = Column(Text, nullable=False)
+    notified = Column(Boolean, nullable=False, default=True, server_default="true")  # False: recorded but not sent (see migration 049)
 
 
 class ZoneScan(Base):

@@ -312,7 +312,8 @@ CREATE INDEX IF NOT EXISTS idx_news_article_scores_scored_at ON market_data.news
 CREATE TABLE IF NOT EXISTS market_data.alert_channels (
     user_id           UUID PRIMARY KEY,
     telegram_chat_id  TEXT NOT NULL CHECK (telegram_chat_id ~ '^-?[0-9]{3,20}$'),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    zone_alerts       TEXT NOT NULL DEFAULT 'all' CHECK (zone_alerts IN ('all', 'close', 'off'))
 );
 
 -- Ideas published from notes to a Telegram channel (operator only). See migration 043 and app/domain/ideas.py.
@@ -374,6 +375,7 @@ CREATE TABLE IF NOT EXISTS market_data.zone_watches (
     last_checked_at  TIMESTAMPTZ,
     last_bar_checked TIMESTAMPTZ,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    alerts           TEXT NOT NULL DEFAULT 'all' CHECK (alerts IN ('all', 'close', 'off')),
     UNIQUE (user_id, exchange, symbol, kind, lo, hi)
 );
 CREATE INDEX IF NOT EXISTS idx_zone_watches_symbol ON market_data.zone_watches (exchange, symbol);
@@ -395,6 +397,7 @@ CREATE TABLE IF NOT EXISTS market_data.zone_events (
     extreme      NUMERIC,
     close        NUMERIC,
     dedupe_key   TEXT NOT NULL,
+    notified     BOOLEAN NOT NULL DEFAULT TRUE,
     UNIQUE (user_id, dedupe_key)
 );
 CREATE INDEX IF NOT EXISTS idx_zone_events_user_day ON market_data.zone_events (user_id, at DESC);

@@ -124,16 +124,18 @@ def touch_message(symbol: str, role: Optional[str], kind: str, lo: float, hi: fl
 
 
 def outcome_message(symbol: str, role: Optional[str], kind: str, lo: float, hi: float, approach: str, outcome: str, extreme: Optional[float], close: float) -> str:
-    """The second message, at the candle's close: did it hold or break."""
+    """The second message, at the candle's close: did it hold or break. The side it closed on comes from the zone's role first (support holds
+    above, resistance below) and only then from where the price came from: a candle that OPENED inside the zone has no side to have come from."""
     name, band = label(role, kind), band_text(lo, hi)
     came = {"above": "from above", "below": "from below"}.get(approach, "")
     wick = f", {'low' if approach == 'above' else 'high'} {_num(extreme)}" if extreme is not None and approach in ("above", "below") else ""
+    held_side = "above" if role == "support" else "below" if role == "resistance" else ("above" if approach == "above" else "below")
+    broke_side = "above" if held_side == "below" else "below"
+    tested = " ".join(part for part in (f"{symbol} tested your {name} {band}", came) if part) + wick
     if outcome == "held":
-        side = "above" if approach == "above" else "below"
-        return f"✅ {symbol} tested your {name} {band} {came}{wick} and closed back {side} at {_num(close)}: it held"
+        return f"✅ {tested} and closed back {held_side} at {_num(close)}: it held"
     if outcome == "broke":
-        side = "below" if approach == "above" else "above"
-        return f"⚠️ {symbol} closed {side} your {name} {band} at {_num(close)}: it broke"
+        return f"⚠️ {symbol} closed {broke_side} your {name} {band} at {_num(close)}: it broke"
     return f"{symbol} closed inside your {name} {band} at {_num(close)}"
 
 
@@ -233,6 +235,44 @@ def _channels(db: Session) -> dict[UUID, str]:
     return {c.user_id: c.telegram_chat_id for c in db.query(AlertChannel).all()}
 
 
+ALERT_LEVELS = ("all", "close", "off")  # all: the touch and then the verdict; close: only the verdict (held / broke); off: nothing
+_QUIETNESS = {"all": 0, "close": 1, "off": 2}
+# The same kind of event for the same zone is sent at most this often: on a 1-minute chart every candle that touches or closes in a band
+# used to send its own message.
+COOLDOWN = timedelta(minutes=30)
+
+
+def _levels(db: Session) -> dict[UUID, str]:
+    """Each person's own setting for all their zones (alert_channels.zone_alerts)."""
+    return {c.user_id: c.zone_alerts or "all" for c in db.query(AlertChannel).all()}
+
+
+def effective_level(person: Optional[str], zone: Optional[str]) -> str:
+    """The quieter of the person's setting and the zone's own: switching either one down is enough."""
+    return max((person or "all", zone or "all"), key=lambda lv: _QUIETNESS.get(lv, 0))
+
+
+def should_notify(db: Session, w: ZoneWatch, ev: ZoneEvent, person_level: Optional[str]) -> bool:
+    """Is this event worth a message? It is always RECORDED (the recap and the Latest list read it); this only decides the Telegram message.
+    Not when it is switched off, not for 'closed inside' (a candle that ended in the zone is not news - the touch said it was there), not a
+    touch ping in 'close only' mode, and not a repeat of the same kind of event on the same zone within the cooldown."""
+    level = effective_level(person_level, w.alerts)
+    if level == "off" or ev.event == "inside" or (level == "close" and ev.event == "touch"):
+        return False
+    since = (ev.at or datetime.now(timezone.utc)) - COOLDOWN
+    recent = db.query(ZoneEvent).filter(ZoneEvent.watch_id == w.id, ZoneEvent.event == ev.event, ZoneEvent.at >= since, ZoneEvent.dedupe_key != ev.dedupe_key).all()
+    return not any(e.notified is not False for e in recent)  # an event that was itself held back does not start a cooldown
+
+
+def _announce(db: Session, w: ZoneWatch, ev: ZoneEvent, key: str, text: str, channels: dict[UUID, str], levels: dict[UUID, str]) -> bool:
+    """Send the message for a recorded event unless it should be held back. Returns whether one was sent."""
+    ok = should_notify(db, w, ev, levels.get(w.user_id))
+    ev.notified = ok
+    if ok:
+        _send(db, w, key, text, channels)
+    return ok
+
+
 def _record(db: Session, w: ZoneWatch, event: str, key: str, at: datetime, bar_time: Optional[datetime], approach: Optional[str], extreme: Optional[float], close: Optional[float]) -> Optional[ZoneEvent]:
     """Store an event once. Returns it, or None when that event already happened."""
     if db.query(ZoneEvent).filter(ZoneEvent.user_id == w.user_id, ZoneEvent.dedupe_key == key).first() is not None:
@@ -292,6 +332,7 @@ def _check_live(db: Session, batch_quote: BatchQuote, now: datetime) -> int:
             if isinstance(px, (int, float)):
                 quotes[(exchange, sym)] = float(px)
     channels = _channels(db)
+    levels = _levels(db)
     announced = 0
     for w in watches:
         ltp = quotes.get((w.exchange, w.symbol))
@@ -307,10 +348,11 @@ def _check_live(db: Session, batch_quote: BatchQuote, now: datetime) -> int:
         minutes = interval_minutes(w.interval)
         bar = bar_floor(now, minutes)
         key = f"touch:{w.id}:{bar.isoformat()}"
-        if _record(db, w, "touch", key, now, bar, check.approach, None, None) is None:
+        ev = _record(db, w, "touch", key, now, bar, check.approach, None, None)
+        if ev is None:
             continue  # this bar's touch was already announced
-        _send(db, w, key, touch_message(w.symbol, w.role, w.kind, lo, hi, ltp=ltp), channels)
-        announced += 1
+        if _announce(db, w, ev, key, touch_message(w.symbol, w.role, w.kind, lo, hi, ltp=ltp), channels, levels):
+            announced += 1
     db.commit()
     return announced
 
@@ -335,6 +377,7 @@ def _check_bars(db: Session, history: HistoryFetch, now: datetime) -> int:
     if not watches:
         return 0
     channels = _channels(db)
+    levels = _levels(db)
     candles: dict[tuple[str, str, str], list] = {}
     produced = 0
     today = now.astimezone(ZoneInfo(settings.timezone)).date()
@@ -375,12 +418,12 @@ def _check_bars(db: Session, history: HistoryFetch, now: datetime) -> int:
             live = db.query(ZoneEvent).filter(ZoneEvent.user_id == w.user_id, ZoneEvent.watch_id == w.id, ZoneEvent.event == "touch", ZoneEvent.at >= start, ZoneEvent.at < end).first()
             if live is None:
                 tkey = f"touch:{w.id}:{start.isoformat()}"
-                if _record(db, w, "touch", tkey, start, start, approach, wick, None) is not None:
-                    _send(db, w, tkey, touch_message(w.symbol, w.role, w.kind, lo, hi, extreme=wick, when=when), channels)
+                tev = _record(db, w, "touch", tkey, start, start, approach, wick, None)
+                if tev is not None and _announce(db, w, tev, tkey, touch_message(w.symbol, w.role, w.kind, lo, hi, extreme=wick, when=when), channels, levels):
                     produced += 1
             okey = f"out:{w.id}:{start.isoformat()}"
-            if _record(db, w, outcome, okey, end, start, approach, wick, c.close) is not None:
-                _send(db, w, okey, outcome_message(w.symbol, w.role, w.kind, lo, hi, approach, outcome, wick, c.close), channels)
+            oev = _record(db, w, outcome, okey, end, start, approach, wick, c.close)
+            if oev is not None and _announce(db, w, oev, okey, outcome_message(w.symbol, w.role, w.kind, lo, hi, approach, outcome, wick, c.close), channels, levels):
                 produced += 1
         if newest is not None:
             w.last_bar_checked = newest

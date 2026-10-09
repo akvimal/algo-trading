@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
-import { listZoneWatches, removeZoneWatch, type ZoneEvent, type ZoneWatch } from "../api/zoneWatches";
+import { listZoneWatches, removeZoneWatch, setZoneAlerts, setZoneAlertsForAll, type ZoneAlertLevel, type ZoneEvent, type ZoneWatch } from "../api/zoneWatches";
 import { createPriceAlert, deletePriceAlert, getAlertChannel, listPriceAlerts, sendTestAlert, setAlertChannel, type AlertChannel, type AlertDirection, type PriceAlert } from "../api/priceAlerts";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { formatPrice } from "../format";
@@ -59,6 +59,8 @@ export function AlertsPage() {
 const num = (v: number) => formatPrice(v);
 const band = (lo: number, hi: number) => (lo === hi ? num(lo) : `${num(lo)}–${num(hi)}`);
 const ROLE_WORD: Record<string, string> = { support: "support", resistance: "resistance", zone: "zone" };
+const LEVEL_LABEL: Record<ZoneAlertLevel, string> = { all: "All messages", close: "Close only", off: "Off" };
+const LEVEL_HELP = "All: a message when price reaches a zone, then one when the candle closes (held or broke). Close only: just that verdict. Off: nothing, but the zone stays armed and in your recap. The quieter of the all-zones setting and a zone's own wins.";
 const EVENT_WORD: Record<ZoneEvent["event"], string> = { touch: "reached it", held: "tested and held", broke: "closed through it", inside: "closed inside it" };
 
 /** The zones and levels drawn on a chart and armed, as the server holds them: each is watched all day, with every tab closed, and a touch (and then
@@ -75,13 +77,38 @@ function ZonesCard() {
       setError(message(e, "Could not remove it. Try again."));
     }
   }
+  async function setLevel(action: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await action();
+      zones.reload();
+    } catch (e) {
+      setError(message(e, "Could not change that. Try again."));
+    }
+  }
+  const levelSelect = (value: ZoneAlertLevel, label: string, onChange: (v: ZoneAlertLevel) => void) => (
+    <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value as ZoneAlertLevel)}>
+      {(Object.keys(LEVEL_LABEL) as ZoneAlertLevel[]).map((k) => (
+        <option key={k} value={k}>
+          {LEVEL_LABEL[k]}
+        </option>
+      ))}
+    </select>
+  );
   return (
     <>
       <h2 className="section-title">Zones the server is watching</h2>
       <p className="dim" style={{ margin: 0 }} data-testid="zones-help">
         Zones you draw on a chart are armed and watched here with every tab closed. You get a Telegram message when price reaches one, and another when the candle closes to say
         whether it held or broke. It also catches a wick that touched between two checks. A zone follows the browser you drew it in; delete or move it on the chart and it changes here.
+        The same kind of message for one zone is spaced at least 30 minutes apart, and a candle that only closed inside a zone is not messaged.
       </p>
+      {zones.data && (
+        <div className="card row" data-testid="zone-alerts-all" title={LEVEL_HELP}>
+          <span>Telegram messages for all zones</span>
+          {levelSelect(zones.data.alerts ?? "all", "Telegram messages for all zones", (v) => void setLevel(() => setZoneAlertsForAll(v)))}
+        </div>
+      )}
       {zones.loading && <Skeleton lines={2} />}
       {zones.error && <ErrorNotice error={zones.error} onRetry={zones.reload} />}
       {error && <div className="notice error" role="alert">{error}</div>}
@@ -99,9 +126,12 @@ function ZonesCard() {
             <span className={`pill pill-small ${w.role === "support" ? "up" : w.role === "resistance" ? "dn" : ""}`}>{w.kind === "line" ? "level" : ROLE_WORD[w.role ?? "zone"]}</span>{" "}
             <span className="num">{band(w.lo, w.hi)}</span>
           </span>
-          <button className="btn btn-small" onClick={() => void remove(w)} aria-label={`Stop watching ${w.symbol} ${band(w.lo, w.hi)}`}>
-            Stop watching
-          </button>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            {levelSelect(w.alerts ?? "all", `Messages for ${w.symbol} ${band(w.lo, w.hi)}`, (v) => void setLevel(() => setZoneAlerts(w.id, v)))}
+            <button className="btn btn-small" onClick={() => void remove(w)} aria-label={`Stop watching ${w.symbol} ${band(w.lo, w.hi)}`}>
+              Stop watching
+            </button>
+          </span>
         </div>
       ))}
       {zones.data && zones.data.events.length > 0 && (

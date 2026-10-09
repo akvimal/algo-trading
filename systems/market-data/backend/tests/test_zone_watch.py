@@ -87,6 +87,15 @@ def test_the_words_say_what_happened_in_plain_terms():
     assert zw.outcome_message("GOLDM", None, "line", 148_000, 148_000, "above", "inside", None, 148_000).startswith("GOLDM closed inside your level 148,000")
 
 
+def test_a_candle_that_opened_inside_the_zone_still_names_the_right_side():
+    """It has no side it came from, so the words follow the zone's role: a support zone holds ABOVE (was "closed back below ... it held", and a double space)."""
+    held = zw.outcome_message("NIFTY", "support", "zone", 22_265, 22_316, "", "held", None, 22_331)
+    assert held == "✅ NIFTY tested your support zone 22,265–22,316 and closed back above at 22,331: it held"
+    assert zw.outcome_message("NIFTY", "resistance", "zone", 22_400, 22_450, "", "held", None, 22_380) == "✅ NIFTY tested your resistance zone 22,400–22,450 and closed back below at 22,380: it held"
+    assert zw.outcome_message("NIFTY", "support", "zone", 22_265, 22_316, "", "broke", None, 22_250) == "⚠️ NIFTY closed below your support zone 22,265–22,316 at 22,250: it broke"
+    assert zw.outcome_message("NIFTY", "resistance", "zone", 22_400, 22_450, "", "broke", None, 22_470) == "⚠️ NIFTY closed above your resistance zone 22,400–22,450 at 22,470: it broke"
+
+
 def test_a_daily_or_weekly_chart_is_judged_on_hourly_candles():
     assert [zw.eval_interval(i) for i in ("15min", "5min", "60min", "daily", "weekly", "1h", None, "0min")] == ["15min", "5min", "60min", "60min", "60min", "60min", "60min", "60min"]
 
@@ -128,8 +137,8 @@ class Q:
 
 
 class DB:
-    def __init__(self, channels=((ME, "111"),)):
-        self.tables = {ZoneWatch: [], ZoneEvent: [], AlertChannel: [SimpleNamespace(user_id=u, telegram_chat_id=c) for u, c in channels]}
+    def __init__(self, channels=((ME, "111"),), levels=None):
+        self.tables = {ZoneWatch: [], ZoneEvent: [], AlertChannel: [SimpleNamespace(user_id=u, telegram_chat_id=c, zone_alerts=(levels or {}).get(u, "all")) for u, c in channels]}
         self.log = {}
 
     def query(self, model):
@@ -144,7 +153,8 @@ class DB:
     def get(self, model, key):
         if model is NotificationLog:
             return self.log.get(key)
-        return next((r for r in self.tables.get(model, []) if getattr(r, "id", None) == key), None)
+        field = "user_id" if model is AlertChannel else "id"
+        return next((r for r in self.tables.get(model, []) if getattr(r, field, None) == key), None)
 
     def delete(self, row):
         self.tables[type(row)].remove(row)
@@ -230,13 +240,16 @@ def test_a_live_touch_is_announced_once_to_the_owners_own_chat(sent):
     assert len(sent) == 1 and [e.event for e in db.tables[ZoneEvent]] == ["touch"]
 
 
-def test_a_new_bar_announces_a_new_touch(sent):
+def test_a_new_bar_announces_a_new_touch_once_the_cooldown_has_passed(sent):
     db = DB()
     arm(db)
     zw.check_live(db, quotes(148_500), NOW)
     zw.check_live(db, quotes(147_650), NOW + timedelta(seconds=20))
     zw.check_live(db, quotes(148_400), NOW + timedelta(minutes=10))
-    zw.check_live(db, quotes(147_600), NOW + timedelta(minutes=16))  # the next 15-minute bar
+    zw.check_live(db, quotes(147_600), NOW + timedelta(minutes=16))  # the next 15-minute bar: a new touch, but 16 minutes after the last message
+    assert len(sent) == 1 and [e.notified for e in db.tables[ZoneEvent]] == [True, False]  # recorded, not sent
+    zw.check_live(db, quotes(148_400), NOW + timedelta(minutes=30))
+    zw.check_live(db, quotes(147_600), NOW + timedelta(minutes=46))  # past the half hour
     assert len(sent) == 2
 
 
@@ -421,7 +434,7 @@ def test_every_zone_route_needs_a_signed_in_user():
     from app.api.routes import zone_watches as route
     from app.auth import require_user
 
-    for fn in (route.sync, route.list_watches, route.remove):
+    for fn in (route.sync, route.list_watches, route.remove, route.set_all_alerts, route.set_zone_alerts):
         assert inspect.signature(fn).parameters["user"].default.dependency is require_user
 
 
@@ -436,3 +449,93 @@ def test_the_zone_jobs_are_scheduled_in_ist_and_the_morning_list_is_a_cron_at_08
     assert "_check_zone_live" in source and "_check_zone_bars" in source
     cron = re.search(r"_send_zones_morning,\s*CronTrigger\((.*?)\),\s*id=", source, re.S).group(1)
     assert "timezone=settings.timezone" in cron and (settings.zone_morning_hour, settings.zone_morning_minute) == (8, 50)
+
+
+# ---- alert controls: off / close only / all, per person and per zone, and the quieter defaults ---------------------------------------------
+
+
+def _watch_and_events(db, symbol="NIFTY"):
+    w = arm(db, 22_265, 22_316, symbol)
+    return w
+
+
+def _touch(db, w, at, channels=None, price=22_300):
+    zw.check_live(db, quotes(price), now=at)
+
+
+def test_the_person_wide_and_per_zone_settings_both_apply_and_the_quieter_wins():
+    assert zw.effective_level("all", "all") == "all"
+    assert zw.effective_level(None, None) == "all"
+    assert zw.effective_level("all", "close") == "close"
+    assert zw.effective_level("close", "all") == "close"
+    assert zw.effective_level("close", "off") == "off"
+    assert zw.effective_level("off", "all") == "off"
+
+
+def test_a_zone_set_to_off_still_records_what_happened_but_sends_nothing(sent):
+    db = DB()
+    w = arm(db)
+    w.alerts = "off"
+    zw.check_live(db, quotes(148_000), now=NOW)  # first look: learns the side
+    zw.check_live(db, quotes(147_400), now=NOW + timedelta(minutes=1))
+    assert sent == []
+    assert [e.event for e in db.tables[ZoneEvent]] == ["touch"] and db.tables[ZoneEvent][0].notified is False  # kept for the recap
+
+
+def test_close_only_sends_the_verdict_but_not_the_touch_ping(sent):
+    db = DB(levels={ME: "close"})
+    w = arm(db)
+    zw.check_live(db, quotes(148_000), now=NOW)
+    zw.check_live(db, quotes(147_400), now=NOW + timedelta(minutes=1))
+    assert sent == []  # the touch ping is not wanted
+    ev = SimpleNamespace(event="held", at=NOW, dedupe_key="k")
+    assert zw.should_notify(db, w, ev, "close") is True  # but the verdict is
+
+
+def test_a_candle_that_merely_closed_inside_the_zone_is_recorded_not_sent():
+    db = DB()
+    w = arm(db)
+    ev = SimpleNamespace(event="inside", at=NOW, dedupe_key="k")
+    assert zw.should_notify(db, w, ev, "all") is False
+
+
+def test_the_same_event_on_the_same_zone_is_not_sent_again_within_half_an_hour(sent):
+    db = DB()
+    w = arm(db)
+    first = SimpleNamespace(event="held", at=NOW, dedupe_key="a", watch_id=w.id, notified=True)
+    second = SimpleNamespace(event="held", at=NOW + timedelta(minutes=10), dedupe_key="b")
+    third = SimpleNamespace(event="held", at=NOW + timedelta(minutes=31), dedupe_key="c")
+    other = SimpleNamespace(event="broke", at=NOW + timedelta(minutes=10), dedupe_key="d")
+    db.tables[ZoneEvent].append(first)
+    assert zw.should_notify(db, w, second, "all") is False  # a repeat 10 minutes later
+    assert zw.should_notify(db, w, other, "all") is True  # a different kind of event is always news
+    assert zw.should_notify(db, w, third, "all") is True  # past the cooldown
+
+
+def test_an_event_that_was_held_back_does_not_start_the_cooldown(sent):
+    db = DB()
+    w = arm(db)
+    db.tables[ZoneEvent].append(SimpleNamespace(event="held", at=NOW, dedupe_key="a", watch_id=w.id, notified=False))
+    assert zw.should_notify(db, w, SimpleNamespace(event="held", at=NOW + timedelta(minutes=5), dedupe_key="b"), "all") is True
+
+
+def test_the_alert_routes_set_the_person_wide_and_the_per_zone_level_and_refuse_nonsense_and_other_peoples_zones():
+    from fastapi import HTTPException
+
+    from app.api.routes import zone_watches as route
+    from app.auth import User
+
+    db = DB()
+    w = arm(db)
+    assert route.set_all_alerts(route.AlertsIn(alerts="close"), User(ME, False), db).alerts == "close"
+    assert db.tables[AlertChannel][0].zone_alerts == "close"
+    with pytest.raises(HTTPException) as e:
+        route.set_all_alerts(route.AlertsIn(alerts="loud"), User(ME, False), db)
+    assert e.value.status_code == 422
+    with pytest.raises(HTTPException) as e:
+        route.set_all_alerts(route.AlertsIn(alerts="off"), User(YOU, False), db)  # no Telegram chat: nowhere to keep it
+    assert e.value.status_code == 409
+    assert route.set_zone_alerts(str(w.id), route.AlertsIn(alerts="off"), User(ME, False), db).alerts == "off" and w.alerts == "off"
+    with pytest.raises(HTTPException) as e:
+        route.set_zone_alerts(str(w.id), route.AlertsIn(alerts="off"), User(YOU, False), db)
+    assert e.value.status_code == 404

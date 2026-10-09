@@ -20,6 +20,7 @@ let calls: { url: string; method: string; body: any }[];
 let failNext: { status: number; detail: string } | null;
 let currentPrice: number | null;
 let zoneWatches: any[];
+let zoneAlertsAll = "all";
 let zoneEvents: any[];
 
 beforeEach(() => {
@@ -29,6 +30,7 @@ beforeEach(() => {
   failNext = null;
   currentPrice = 71_240;
   zoneWatches = [];
+  zoneAlertsAll = "all";
   zoneEvents = [];
   vi.stubGlobal(
     "fetch",
@@ -41,7 +43,16 @@ beforeEach(() => {
         failNext = null;
         return json({ detail: f.detail }, f.status);
       }
-      if (url.endsWith("/zone-watches") && method === "GET") return json({ watches: zoneWatches, events: zoneEvents });
+      if (url.endsWith("/zone-watches") && method === "GET") return json({ watches: zoneWatches, events: zoneEvents, alerts: zoneAlertsAll });
+      if (url.endsWith("/zone-alerts") && method === "PUT") {
+        zoneAlertsAll = body.alerts;
+        return json({ alerts: body.alerts });
+      }
+      const zalert = url.match(/\/zone-alerts\/([\w-]+)$/);
+      if (zalert && method === "PUT") {
+        zoneWatches = zoneWatches.map((w) => (w.id === zalert[1] ? { ...w, alerts: body.alerts } : w));
+        return json(zoneWatches.find((w) => w.id === zalert[1]));
+      }
       const zdel = url.match(/\/zone-watches\/([\w-]+)$/);
       if (zdel && method === "DELETE") {
         zoneWatches = zoneWatches.filter((w) => w.id !== zdel[1]);
@@ -241,6 +252,22 @@ describe("the zones the server is watching", () => {
     expect(rows[0]).toHaveTextContent("1,47,116–1,47,673");
     expect(rows[1]).toHaveTextContent("level");
     expect(screen.getByTestId("zone-events")).toHaveTextContent(/GOLDM-05Nov2026-FUT 1,47,116–1,47,673 tested and held at 1,48,000/);
+  });
+
+  it("turns Telegram messages for every zone down, and for one zone on its own, without removing anything", async () => {
+    zoneWatches = [goldm];
+    renderPage();
+    const user = userEvent.setup();
+    const all = await screen.findByRole("combobox", { name: "Telegram messages for all zones" });
+    expect(all).toHaveValue("all");
+    await user.selectOptions(all, "close");
+    await waitFor(() => expect(writes("PUT").some((c) => c.url.endsWith("/zone-alerts") && c.body.alerts === "close")).toBe(true));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Telegram messages for all zones" })).toHaveValue("close"));
+    await user.selectOptions(screen.getByRole("combobox", { name: /Messages for GOLDM-05Nov2026-FUT/ }), "off");
+    await waitFor(() => expect(writes("PUT").some((c) => c.url.endsWith("/zone-alerts/z1") && c.body.alerts === "off")).toBe(true));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /Messages for GOLDM-05Nov2026-FUT/ })).toHaveValue("off"));
+    expect(screen.getByTestId("zone-watch")).toBeInTheDocument(); // still armed
+    expect(writes("DELETE")).toHaveLength(0);
   });
 
   it("stops watching a zone when asked, and the list reflects it", async () => {

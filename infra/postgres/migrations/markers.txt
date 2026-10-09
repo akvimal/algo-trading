@@ -51,3 +51,4 @@
 046-zone-watches.sql|market_data.zone_watches|
 047-zone-scan.sql|market_data.zone_scan|
 048-screener-swing-fields.sql|market_data.equity_screener_snapshot|avg_turnover_cr
+049-zone-alert-controls.sql|market_data.zone_watches|alerts

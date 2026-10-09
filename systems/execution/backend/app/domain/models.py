@@ -279,6 +279,15 @@ class PendingOrderCreate(BaseModel):
     allow_stacking: bool = False
 
 
+class PendingOrderUpdate(BaseModel):
+    """PATCH /pending-orders/{id} - move a waiting order's trigger, stop-loss or target (what dragging its lines on the chart does).
+    Only the fields sent change; a level cannot be cleared here (cancel the order and arm it again for that)."""
+
+    trigger_price: Optional[float] = Field(default=None, gt=0)
+    stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    target_price: Optional[float] = Field(default=None, gt=0)
+
+
 class PendingOrderOut(BaseModel):
     id: str
     segment: Literal["NSE", "MCX", "CRYPTO"]

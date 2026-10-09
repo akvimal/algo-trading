@@ -8,7 +8,7 @@ column, update both places.
 import uuid
 
 from sqlalchemy import Boolean, Column, ForeignKey, Text, func, text
-from sqlalchemy.dialects.postgresql import ARRAY, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
 from app.config import settings
@@ -41,6 +41,8 @@ class User(Base):
     # - see UserOut's own comment in app/domain/models.py for why these are two separate columns.
     default_instrument = Column(Text, nullable=False, server_default="future")
     default_option_strategy = Column(Text, nullable=False, server_default="naked")
+    # The same choice per market (migrations/050): {"NSE": {"instrument": "option", "option_strategy": "naked"}}; a market with no entry uses the two above.
+    segment_defaults = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
 
 class BrokerCredentials(Base):

@@ -30,7 +30,7 @@ class FakeDb:
 def user(**over):
     fields = dict(id="00000000-0000-0000-0000-000000000001", email="a@b.c", name="A", created_at=datetime.now(timezone.utc),
                   is_admin=False, risk_acknowledged_at=None, risk_acknowledged_version=None, experience="guided", onboarded_at=None,
-                  default_instrument="future", default_option_strategy="naked")
+                  default_instrument="future", default_option_strategy="naked", segment_defaults={})
     fields.update(over)
     return SimpleNamespace(**fields)
 
@@ -164,3 +164,19 @@ def test_default_instrument_alone_changes_nothing_else():
     row = user(experience="pro", onboarded_at=stamp, default_option_strategy="spread")
     update(row, default_instrument="option")
     assert row.experience == "pro" and row.onboarded_at == stamp and row.default_option_strategy == "spread" and row.default_instrument == "option"
+
+
+def test_segment_defaults_change_only_the_markets_sent():
+    row = user(segment_defaults={"NSE": {"instrument": "option", "option_strategy": "spread"}})
+    update(row, segment_defaults={"CRYPTO": {"instrument": "future"}})
+    assert row.segment_defaults == {
+        "NSE": {"instrument": "option", "option_strategy": "spread"},
+        "CRYPTO": {"instrument": "future", "option_strategy": "naked"},
+    }
+
+
+def test_an_unknown_market_or_instrument_in_segment_defaults_is_refused():
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(segment_defaults={"BSE": {"instrument": "future"}})
+    with pytest.raises(ValidationError):
+        PreferencesUpdate(segment_defaults={"NSE": {"instrument": "spot"}})

@@ -16,12 +16,15 @@ type ProfileValue = {
    * default) when the profile cannot be read. */
   defaultInstrument: "future" | "option";
   defaultOptionStrategy: "naked" | "spread";
+  /** What a fresh ticket starts on in this market: its own choice if there is one, else the general default above. */
+  defaultsFor: (segment: Segment) => { instrument: "future" | "option"; optionStrategy: "naked" | "spread" };
   update: (prefs: {
     experience?: "guided" | "pro";
     onboarded?: boolean;
     markets?: Segment[];
     default_instrument?: "future" | "option";
     default_option_strategy?: "naked" | "spread";
+    segment_defaults?: Profile["segment_defaults"];
   }) => Promise<Profile>;
   reload: () => void;
 };
@@ -59,6 +62,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       markets?: Segment[];
       default_instrument?: "future" | "option";
       default_option_strategy?: "naked" | "spread";
+      segment_defaults?: Profile["segment_defaults"];
     }) => {
       const next = await updatePreferences(prefs);
       setProfile(next);
@@ -76,6 +80,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       markets: profile?.markets?.length ? profile.markets : ["NSE", "MCX", "CRYPTO"],
       defaultInstrument: profile?.default_instrument ?? "future",
       defaultOptionStrategy: profile?.default_option_strategy ?? "naked",
+      defaultsFor: (segment: Segment) => {
+        const own = profile?.segment_defaults?.[segment];
+        return own
+          ? { instrument: own.instrument, optionStrategy: own.option_strategy }
+          : { instrument: profile?.default_instrument ?? "future", optionStrategy: profile?.default_option_strategy ?? "naked" };
+      },
       update,
       reload: () => setTick((n) => n + 1),
     }),

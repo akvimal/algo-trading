@@ -8,7 +8,7 @@ import { useAuth } from "../auth/AuthContext";
 
 export function MorePage() {
   const { session, signOut } = useAuth();
-  const { profile, guided, markets, defaultInstrument, defaultOptionStrategy, update } = useProfile();
+  const { profile, guided, markets, defaultsFor, update } = useProfile();
   const [error, setError] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
 
@@ -32,19 +32,10 @@ export function MorePage() {
     }
   }
 
-  async function chooseInstrument(default_instrument: "future" | "option") {
+  async function chooseDefault(segment: Segment, instrument: "future" | "option", optionStrategy: "naked" | "spread") {
     setTradeError(null);
     try {
-      await update({ default_instrument });
-    } catch (e) {
-      setTradeError(e instanceof ApiError ? e.message : "Could not save. Try again.");
-    }
-  }
-
-  async function chooseOptionStrategy(default_option_strategy: "naked" | "spread") {
-    setTradeError(null);
-    try {
-      await update({ default_option_strategy });
+      await update({ segment_defaults: { [segment]: { instrument, option_strategy: optionStrategy } } });
     } catch (e) {
       setTradeError(e instanceof ApiError ? e.message : "Could not save. Try again.");
     }
@@ -105,29 +96,34 @@ export function MorePage() {
         <div className="card">
           <strong>Default trade instrument</strong>
           <p className="dim" style={{ margin: "2px 0 8px", fontSize: 13 }}>
-            What the trade ticket starts on for a fresh instrument, where options exist.
+            What the trade ticket starts on for a fresh instrument in each market, where options exist.
           </p>
-          <div className="chips" role="radiogroup" aria-label="Default trade instrument" style={{ margin: "8px 0" }}>
-            <button role="radio" aria-checked={defaultInstrument === "future"} onClick={() => void chooseInstrument("future")}>
-              Future
-            </button>
-            <button role="radio" aria-checked={defaultInstrument === "option"} onClick={() => void chooseInstrument("option")}>
-              Option
-            </button>
-          </div>
-          {defaultInstrument === "option" && (
-            <>
-              <strong style={{ display: "block", marginTop: 12 }}>Default option strategy</strong>
-              <div className="chips" role="radiogroup" aria-label="Default option strategy" style={{ margin: "8px 0" }}>
-                <button role="radio" aria-checked={defaultOptionStrategy === "naked"} onClick={() => void chooseOptionStrategy("naked")}>
-                  Naked
-                </button>
-                <button role="radio" aria-checked={defaultOptionStrategy === "spread"} onClick={() => void chooseOptionStrategy("spread")}>
-                  Spread
-                </button>
+          {SEGMENT_CHOICES.filter((c) => markets.includes(c.id)).map((c) => {
+            const d = defaultsFor(c.id);
+            return (
+              <div key={c.id} style={{ margin: "10px 0" }}>
+                <div className="dim" style={{ fontSize: 13 }}>{c.id} · {c.title}</div>
+                <div className="chips" role="radiogroup" aria-label={`${c.id} default instrument`} style={{ margin: "4px 0" }}>
+                  <button role="radio" aria-checked={d.instrument === "future"} onClick={() => void chooseDefault(c.id, "future", d.optionStrategy)}>
+                    Future
+                  </button>
+                  <button role="radio" aria-checked={d.instrument === "option"} onClick={() => void chooseDefault(c.id, "option", d.optionStrategy)}>
+                    Option
+                  </button>
+                </div>
+                {d.instrument === "option" && (
+                  <div className="chips" role="radiogroup" aria-label={`${c.id} default option strategy`} style={{ margin: "4px 0" }}>
+                    <button role="radio" aria-checked={d.optionStrategy === "naked"} onClick={() => void chooseDefault(c.id, "option", "naked")}>
+                      Naked
+                    </button>
+                    <button role="radio" aria-checked={d.optionStrategy === "spread"} onClick={() => void chooseDefault(c.id, "option", "spread")}>
+                      Spread
+                    </button>
+                  </div>
+                )}
               </div>
-            </>
-          )}
+            );
+          })}
           {tradeError && (
             <div className="notice error" role="alert" style={{ marginTop: 8 }}>
               {tradeError}

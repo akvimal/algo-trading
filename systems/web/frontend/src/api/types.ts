@@ -450,6 +450,8 @@ export type Profile = {
   markets: Segment[];
   default_instrument: "future" | "option";
   default_option_strategy: "naked" | "spread";
+  /** The same choice per market; a market with no entry uses the two above. */
+  segment_defaults?: Partial<Record<Segment, { instrument: "future" | "option"; option_strategy: "naked" | "spread" }>>;
 };
 
 export type OrderBlock = {

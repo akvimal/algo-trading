@@ -32,6 +32,11 @@ class TokenResponse(BaseModel):
 Market = Literal["NSE", "MCX", "CRYPTO"]
 
 
+class SegmentDefault(BaseModel):
+    instrument: Literal["future", "option"] = "future"
+    option_strategy: Literal["naked", "spread"] = "naked"
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -52,6 +57,8 @@ class UserOut(BaseModel):
     # it, and someone who always wants a spread should not have to also declare "option" twice.
     default_instrument: Literal["future", "option"] = "future"
     default_option_strategy: Literal["naked", "spread"] = "naked"
+    # The same choice per market; a market without an entry uses the two above.
+    segment_defaults: dict[Market, "SegmentDefault"] = {}
 
 
 class PreferencesUpdate(BaseModel):
@@ -65,6 +72,8 @@ class PreferencesUpdate(BaseModel):
     markets: Optional[list[Market]] = Field(default=None, min_length=1)
     default_instrument: Optional[Literal["future", "option"]] = None
     default_option_strategy: Optional[Literal["naked", "spread"]] = None
+    # Only the markets present change; the others keep what they had.
+    segment_defaults: Optional[dict[Market, SegmentDefault]] = None
 
 
 # All optional - PUT /credentials is a partial update, e.g. setting only

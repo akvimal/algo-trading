@@ -56,7 +56,7 @@ const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default
 export function TradePage() {
   const [params] = useSearchParams();
   const wide = useMediaQuery(WIDE_QUERY);
-  const { markets, defaultInstrument, defaultOptionStrategy } = useProfile();
+  const { markets, defaultsFor } = useProfile();
 
   const urlSymbol = params.get("symbol");
   const urlSegment = params.get("segment");
@@ -264,6 +264,7 @@ export function TradePage() {
   const live = account?.live_trading_enabled;
 
   // ---- the ticket belongs to the active chart ----
+  const { instrument: defaultInstrument, optionStrategy: defaultOptionStrategy } = defaultsFor(activeSpec.segment); // this market's own default
   const [ticket, setTicket] = useState<Ticket>(() => emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
   const [pickField, setPickField] = useState<PriceField | null>(null);
   // The same chart click can instead set the stop or target of an OPEN trade (saved straight away, like

@@ -95,3 +95,6 @@ BEGIN
         ALTER TABLE accounts.users ADD CONSTRAINT users_default_option_strategy_check CHECK (default_option_strategy IN ('naked', 'spread'));
     END IF;
 END $$;
+
+-- Default trade instrument per market (2026-10-09). See migrations/050-segment-trade-defaults.sql.
+ALTER TABLE accounts.users ADD COLUMN IF NOT EXISTS segment_defaults JSONB NOT NULL DEFAULT '{}'::jsonb;

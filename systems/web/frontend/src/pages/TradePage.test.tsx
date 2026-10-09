@@ -339,12 +339,13 @@ describe("the plan picker: market state and plan", () => {
   const down = { regime: "trending_down", adx: 31, atr_percentile: 40, trend: "down", advice: "x" };
   const ranging = { regime: "ranging", adx: 14, atr_percentile: 40, trend: "range", advice: "x" };
   const state = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Market state" })).getByRole("button", { name });
+  const dir = (t: ReturnType<typeof within>, name: "Up" | "Down") => within(t.getByRole("group", { name: "Trend direction" })).getByRole("button", { name });
   const plan = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name });
 
   it("pre-selects what the market is doing from the regime read, and says where that came from", async () => {
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
-    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
     expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "false");
     expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read (ADX 30). Tap another to change it.");
     expect(t.queryByTestId("plan-hint")).not.toBeInTheDocument(); // nothing until a plan is chosen
@@ -355,7 +356,7 @@ describe("the plan picker: market state and plan", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
-    await waitFor(() => expect(state(t, "Trending ↓")).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(dir(t, "Down")).toHaveAttribute("aria-pressed", "true"));
     await user.click(plan(t, "Pullback")); // a downtrend: with it is a Sell, waiting for price to come back up to a zone
     expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" })).toHaveAttribute("aria-pressed", "true");
     expect(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Wait for a price" })).toHaveAttribute("aria-pressed", "true");
@@ -372,7 +373,7 @@ describe("the plan picker: market state and plan", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
-    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
     await user.click(plan(t, "Breakout"));
     expect(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Market" })).toHaveAttribute("aria-pressed", "true");
     expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout. Enter as the previous high is taken.");
@@ -397,23 +398,45 @@ describe("the plan picker: market state and plan", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
-    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
     await user.click(plan(t, "Breakout"));
     expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
     await user.click(state(t, "Ranging"));
     expect(t.getByTestId("market-state-source")).toHaveTextContent("Your read.");
     expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range break\./);
     expect(within(t.getByTestId("plan-block")).getByText("Tagged Range break.")).toBeInTheDocument();
-    await user.click(state(t, "Trending ↑")); // back to what the read says
+    await user.click(state(t, "Trending")); // back to what the read says
     expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
     expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
+  });
+
+  it("a trend has an up/down switch joined to its badge and a range has none; flipping it is your own read, flipping back is following the market again", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true")); // the read is an uptrend
+    expect(dir(t, "Down")).toHaveAttribute("aria-pressed", "false");
+    await user.click(plan(t, "Breakout"));
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Enter as the previous high is taken/);
+    await user.click(dir(t, "Down")); // a downtrend instead: the same plan, now about the previous low, and a Sell
+    expect(dir(t, "Down")).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("Your read.");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Trend breakout\. Enter as the previous low is taken/);
+    await user.click(dir(t, "Up")); // what the market says again: not a pin
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
+    await user.click(state(t, "Ranging"));
+    expect(t.queryByRole("group", { name: "Trend direction" })).not.toBeInTheDocument(); // a range has no direction
+    expect(state(t, "Trending")).toHaveAttribute("aria-pressed", "false");
+    await user.click(state(t, "Trending")); // back to a trend: the direction the market read shows
+    expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
   });
 
   it("choosing Ranging while a pullback is picked drops the pullback, which does not exist there", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
-    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
     await user.click(plan(t, "Pullback"));
     expect(t.getByTestId("plan-hint")).toBeInTheDocument();
     await user.click(state(t, "Ranging"));
@@ -425,7 +448,7 @@ describe("the plan picker: market state and plan", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
-    await waitFor(() => expect(state(t, "Trending ↑")).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
     await user.click(plan(t, "Pullback")); // an uptrend: Buy
     await user.click(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Market" })); // (a pullback starts as "wait for a price", which needs a price typed)
     await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));

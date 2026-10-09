@@ -6,7 +6,7 @@ import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
 import { NOTES_MAX, SETUP_TAGS, TRIGGERS } from "../pages/journalModel";
 import {
-  ACTION_WORD, MARKET_STATES, PLAN_KINDS, analyzeTicket, buildOrder, checkList, effectiveTicket, marketStateOf, optionsAvailable, planAvailable, planHint, planNudges, planRows,
+  ACTION_WORD, PLAN_KINDS, analyzeTicket, buildOrder, checkList, effectiveTicket, marketStateOf, optionsAvailable, planAvailable, planHint, planNudges, planRows,
   planSide, planStatus,
   type Action, type BuildMeta, type DayBudget, type MarketState, type Moneyness, type PlanKind, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
@@ -108,9 +108,12 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   // time for a pullback or reversal, a "wait for a price" entry (they enter at a zone; a breakout can be taken as it goes), both still the person's to change.
   const chooseState = (s: MarketState) => {
     setResult(null);
-    const next = raw.planState === s && read !== s ? null : s; // tapping the pinned one lets go of it, back to the read
-    onChange({ ...raw, planState: next, planKind: raw.planKind && !planAvailable(next ?? read, raw.planKind) ? null : raw.planKind });
+    const next = s === read ? null : s; // choosing what the read already says is following it, not a pin
+    onChange({ ...raw, planState: next, planKind: raw.planKind && !planAvailable(s, raw.planKind) ? null : raw.planKind });
   };
+  // "Trending" on its own: the read's direction if it is a trend, else up (the ↑|↓ switch beside it changes it).
+  const chooseTrending = () => chooseState(read === "trending_up" || read === "trending_down" ? read : (raw.planState === "trending_down" ? "trending_down" : "trending_up"));
+  const trending = state === "trending_up" || state === "trending_down";
   const choosePlan = (kind: PlanKind) => {
     setResult(null);
     if (raw.planKind === kind) return onChange({ ...raw, planKind: null });
@@ -219,12 +222,27 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       {!simplifiedOption && (
         <div className="plan-pick" data-testid="plan-pick" style={{ margin: "12px 0" }}>
           <div className="chips" role="group" aria-label="Market state">
-            {MARKET_STATES.map((m) => (
-              <button key={m.value} aria-pressed={state === m.value} onClick={() => chooseState(m.value)}>
-                {m.value === "ranging" ? <RangingIcon /> : <TrendingIcon />}
-                {m.label}
+            {/* One badge for a trend, with its direction as a small switch joined to it (only a trend has one); a range has none. */}
+            <span className="badge-split">
+              <button aria-pressed={trending} onClick={chooseTrending}>
+                <TrendingIcon />
+                Trending
               </button>
-            ))}
+              {trending && (
+                <span className="badge-dir" role="group" aria-label="Trend direction">
+                  <button aria-label="Up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
+                    ↑
+                  </button>
+                  <button aria-label="Down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
+                    ↓
+                  </button>
+                </span>
+              )}
+            </span>
+            <button aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
+              <RangingIcon />
+              Ranging
+            </button>
           </div>
           <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
             {raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}

@@ -266,11 +266,6 @@ export type DayBudget = { limit: number; lostToday: number } | null;
 // same high or low with a rejection: counter-trend (higher risk) in a trend, and "fade the edge" in a range. The market state decides the risk and
 // the hints, not what the person has to pick: they tap a plan, and the label kept with the trade is one of five (PLAN_TAGS).
 
-export const MARKET_STATES: { value: MarketState; label: string }[] = [
-  { value: "trending_up", label: "Trending ↑" },
-  { value: "trending_down", label: "Trending ↓" },
-  { value: "ranging", label: "Ranging" },
-];
 export const PLAN_KINDS: { value: PlanKind; label: string }[] = [
   { value: "pullback", label: "Pullback" },
   { value: "breakout", label: "Breakout" },

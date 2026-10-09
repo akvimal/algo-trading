@@ -581,6 +581,32 @@ a {
 .badge-icon {
   flex: none;
 }
+/* The Trending badge with its up/down switch joined on its right edge. */
+.chips .badge-split {
+  display: inline-flex;
+}
+.chips .badge-split > button:not(:only-child) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.chips .badge-dir {
+  display: inline-flex;
+}
+.chips .badge-dir button {
+  border-radius: 0;
+  margin-left: -1px;
+  padding: 0 9px;
+  justify-content: center;
+  font-size: 15px;
+}
+.chips .badge-dir button:last-child {
+  border-top-right-radius: var(--badge-r);
+  border-bottom-right-radius: var(--badge-r);
+}
+.chips .badge-dir button[aria-pressed="true"] {
+  position: relative;
+  z-index: 1;
+}
 .chips button[aria-pressed="true"],
 .chips button[aria-selected="true"],
 .chips button[aria-checked="true"] {

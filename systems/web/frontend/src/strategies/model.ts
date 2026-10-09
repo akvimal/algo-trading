@@ -73,7 +73,7 @@ export function ruleConfigSummary(rule: Rule): string {
   if (c.type === "crossover") return "Crosses its indicator's signal line";
   if (c.type === "breakout") return `${c.ltf_interval} breaks its own ${c.ltf_breakout_period}-bar range after a ${c.htf_interval} ${c.htf_breakout_period}-bar breakout`;
   if (c.type === "range_breakout") return `Breaks the last ${c.breakout_period} candles' high or low on ${rule.interval ?? "its own interval"}`;
-  return `${c.direction === "bullish" ? "Bullish" : "Bearish"} multi-condition scan (${c.conditions.length} condition${c.conditions.length === 1 ? "" : "s"}) — edit in the classic app`;
+  return `${c.direction === "bullish" ? "Bullish" : "Bearish"} multi-condition scan (${c.conditions.length} condition${c.conditions.length === 1 ? "" : "s"}) — not editable here yet`;
 }
 
 export const UNDERLYING_TYPE_LABEL: Record<Rule["underlying_type"], string> = {

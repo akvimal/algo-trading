@@ -22,10 +22,22 @@
   --radius-sm: 8px;
   --gutter: 16px;
   --tap: 44px; /* minimum touch target */
+  /* Badges (chips, pills, popover buttons): a rounded rectangle, one size everywhere. 36px tall on a touch screen (close to a tap target),
+     30px where there is a mouse - see the pointer: fine rule below. */
+  --badge-h: 36px;
+  --badge-px: 12px;
+  --badge-r: 7px;
   --nav-h: 60px;
   --sidebar-w: 224px;
   --sidebar-w-collapsed: 64px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (pointer: fine) {
+  :root {
+    --badge-h: 30px;
+    --badge-px: 10px;
+  }
 }
 
 @media (prefers-color-scheme: light) {

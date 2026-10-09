@@ -15,6 +15,9 @@ class Quote(BaseModel):
 class BatchQuoteRequest(BaseModel):
     exchange: str
     symbols: list[str]
+    # Prefer the live tick feed (see app/domain/live_quotes.py): for a caller that needs the price NOW, not the next rate-limited REST answer.
+    # Falls back to the ordinary quote for whatever the feed does not hold fresh, and is ignored for a person's own keys.
+    live: bool = False
 
 
 class BatchQuoteResponse(BaseModel):
@@ -723,6 +726,11 @@ class PriceAlertOut(BaseModel):
     created_at: datetime
     last_triggered_at: Optional[datetime] = None
     trigger_count: int
+    # Crossings that could not be delivered (no chat set, Telegram down...), and why. A one-shot alert stays armed while this is > 0.
+    delivery_failures: int = 0
+    last_error: Optional[str] = None
+    # The price when the alert was created, so the page can say how far away the level is. Only set on the create response.
+    current_price: Optional[float] = None
 
 
 class CustomScreenCreate(BaseModel):
@@ -878,6 +886,19 @@ class EquityScreenerRowOut(BaseModel):
     pct_from_52w_high: Optional[float] = None
     pct_from_52w_low: Optional[float] = None
     proximity: Optional[Literal["near_52w_high", "near_52w_low"]] = None
+    is_fno: bool = False
+    # The index keys the stock belongs to (NIFTY500, NIFTYMIDCAP150, ...); empty for a stock in none of the synced indices (mostly illiquid micro-caps).
+    universes: list[str] = Field(default_factory=list)
+    avg_turnover_cr: Optional[float] = None
+    ret_3m_pct: Optional[float] = None
+    mom_12_1_pct: Optional[float] = None
+    rsi3: Optional[float] = None
+    dist_ema20_pct: Optional[float] = None
+    atr_pct: Optional[float] = None
+    vol_ratio: Optional[float] = None
+    # 0-100 rank (100 = strongest) of the 3-month return and of the 12-1 momentum score among the stocks trading at least Rs 5 Cr a day; None for the rest.
+    rs_3m_pctile: Optional[float] = None
+    rs_12m_pctile: Optional[float] = None
     history: list[EquityScreenerHistoryPoint] = Field(default_factory=list)
 
 
@@ -917,3 +938,104 @@ class JobOut(BaseModel):
 
 class JobsOut(BaseModel):
     jobs: list[JobOut]
+
+
+class PremarketInputOut(BaseModel):
+    key: str
+    label: str
+    group: str
+    ok: bool
+    value: Optional[float] = None
+    change: Optional[float] = None  # % for prices, basis points for the yields (see `unit`)
+    unit: Literal["pct", "bp", "pt"] = "pct"
+    source: str = ""
+    error: Optional[str] = None
+
+
+class PremarketFactorOut(BaseModel):
+    key: str
+    label: str
+    move: Optional[float] = None
+    score: Optional[float] = None
+    weight: float
+
+
+class PremarketRulesOut(BaseModel):
+    score: float
+    bias: Literal["bullish", "bearish", "neutral"]
+    coverage: float
+    gift_gap_pct: Optional[float] = None
+    factors: list[PremarketFactorOut]
+
+
+class PremarketAiOut(BaseModel):
+    bias: Literal["bullish", "bearish", "neutral"]
+    confidence: int
+    one_liner: str
+    reasons: list[str]
+    risks: list[str]
+    watch: str
+    macro_context: Optional[str] = None  # how the domestic backdrop frames bond yields and sentiment (absent on older reports)
+
+
+class PremarketIndicatorOut(BaseModel):
+    key: str
+    label: str
+    unit: Literal["pct", "usd_bn"]
+    ok: bool
+    value: Optional[float] = None
+    previous: Optional[float] = None
+    change: Optional[float] = None
+    period: Optional[date] = None  # the last day of the period the print covers
+    error: Optional[str] = None
+
+
+class PremarketRbiSummaryOut(BaseModel):
+    """An AI summary of the item's FULL text (read once). `stance` is hawkish/dovish/neutral only when the text itself signals
+    a policy direction, else "not about policy"."""
+
+    text: str
+    stance: Literal["hawkish", "dovish", "neutral", "not about policy"]
+    rates: Optional[str] = None  # what the text explicitly says about rates, inflation or liquidity
+    model: Optional[str] = None
+
+
+class PremarketRbiItemOut(BaseModel):
+    title: str
+    url: Optional[str] = None
+    published: Optional[datetime] = None
+    kind: Literal["press release", "speech"]
+    summary: Optional[PremarketRbiSummaryOut] = None
+
+
+class PremarketMacroDerivedOut(BaseModel):
+    real_rate: Optional[float] = None  # repo rate minus CPI inflation, in percentage points
+    spread_10y_repo: Optional[float] = None  # India 10Y yield minus the repo rate, in percentage points
+    india_10y: Optional[float] = None
+
+
+class PremarketMacroOut(BaseModel):
+    indicators: list[PremarketIndicatorOut]
+    derived: PremarketMacroDerivedOut
+    rbi: list[PremarketRbiItemOut]
+
+
+class PremarketReportOut(BaseModel):
+    """GET /premarket - the day's overnight inputs, the rule-based score, and the model's own call on them. `bias` is
+    the model's when it ran, else the rules'; `agree` says whether the two match (None when the model did not run)."""
+
+    day: date
+    generated_at: datetime
+    bias: Literal["bullish", "bearish", "neutral"]
+    agree: Optional[bool] = None
+    model: Optional[str] = None
+    ai_error: Optional[str] = None
+    inputs: list[PremarketInputOut]
+    rules: PremarketRulesOut
+    ai: Optional[PremarketAiOut] = None
+    macro: Optional[PremarketMacroOut] = None
+    # MCX/crypto briefs only: the rules-based read is shown at once and the model's read is still being prepared.
+    ai_pending: bool = False
+    # When the AI read was actually made, and whether this build reused it because the numbers had not meaningfully changed.
+    ai_read_at: Optional[datetime] = None
+    ai_reused: bool = False

@@ -1,4 +1,4 @@
-import { CLASSIC_APP_URL } from "../../config";
+import { Link } from "react-router-dom";
 import type { EquityHistory, LiveEligibility, Performance } from "../../api/types";
 import type { Resource } from "../../hooks/useResource";
 import { EquityChart } from "../../components/EquityChart";
@@ -129,7 +129,7 @@ function Graduation({ elig }: { elig: Resource<LiveEligibility> }) {
         </p>
       )}
       <p style={{ marginBottom: 0 }}>
-        <a href={CLASSIC_APP_URL}>Manage live trading in the classic app</a>
+        <Link to="/more/settings?tab=broker">Manage live trading in Settings</Link>
       </p>
     </div>
   );

@@ -1,4 +1,4 @@
-"""Server-side pending (limit) orders: POST/GET/DELETE /pending-orders.
+"""Server-side pending (limit) orders: POST/GET/PATCH/DELETE /pending-orders.
 See app/domain/pending_orders.py for the semantics (paper only, fires on the
 underlying's first crossing, at-most-once, expires)."""
 
@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user
-from app.domain.models import PendingOrderCreate, PendingOrderOut
-from app.domain.pending_orders import PendingOrderError, cancel_pending_order, create_pending_order, default_deps, list_pending_orders
+from app.domain.models import PendingOrderCreate, PendingOrderOut, PendingOrderUpdate
+from app.domain.pending_orders import PendingOrderError, cancel_pending_order, create_pending_order, default_deps, list_pending_orders, update_pending_order
 from app.domain.position_manager import load_account
 
 router = APIRouter()
@@ -58,6 +58,25 @@ def list_orders(
     if status is not None and status not in _STATUSES:
         raise HTTPException(status_code=422, detail=f"status must be one of {', '.join(_STATUSES)}")
     return [_to_out(r) for r in list_pending_orders(db, user.id, status, limit)]
+
+
+@router.patch("/pending-orders/{order_id}", response_model=PendingOrderOut)
+def move_order(order_id: str, payload: PendingOrderUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Move a waiting order's trigger, stop-loss or target (dragging its lines on the chart). Only while it is still waiting."""
+    try:
+        parsed = uuid.UUID(order_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="pending order not found")
+    try:
+        row = update_pending_order(
+            db, user.id, parsed, default_deps(), trigger_price=payload.trigger_price, stop_loss_price=payload.stop_loss_price,
+            target_price=payload.target_price, token=user.token,
+        )
+    except PendingOrderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    if row is None:
+        raise HTTPException(status_code=404, detail="pending order not found")  # also for someone else's order
+    return _to_out(row)
 
 
 @router.delete("/pending-orders/{order_id}", response_model=PendingOrderOut)

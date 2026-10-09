@@ -18,7 +18,27 @@
 # an override re-declares an empty list; `!reset` is required for that).
 #
 # Usage (VPS only, after setting VPS_DOMAIN and BIND_ADDR=127.0.0.1 in .env):
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile execution up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build \
+#     postgres redis market-data-backend market-data-frontend signal-engine-backend \
+#     execution-backend accounts-backend web-frontend caddy
+#
+# Named explicitly, not a blanket `--profile execution up -d`: the base
+# docker-compose.yml (shared with local dev/test, never edited for VPS-only
+# reasons) still defines shell/signal-engine-frontend/execution-frontend/
+# manual-trading-frontend unconditionally or under the same "execution"
+# profile as the services above - naming exactly what the VPS wants is what
+# actually keeps them from starting, since compose has no per-service "never
+# run this" switch short of removing it from the base file (which would also
+# take it away from local dev/test, so this file doesn't touch that).
+# Retired here (2026-09-30): systems/web/frontend is now the VPS's only
+# frontend for signal-engine/execution/manual-trading's screens - see
+# docs/redesign-rollout-plan.md's "Retiring the classic frontends". If any
+# of the four are still running from a previous deploy, remove them once:
+#   docker compose stop shell signal-engine-frontend execution-frontend manual-trading-frontend
+#   docker compose rm -f shell signal-engine-frontend execution-frontend manual-trading-frontend
+# market-data-frontend stays - it's operator tooling (Dhan/Delta feed
+# status, instrument-master sync, Dhan token renewal), not an end-user
+# screen, and has no web/frontend equivalent.
 #
 # Never used locally - `make up`/`make test-up` only ever reference the
 # base docker-compose.yml, so this file has zero effect on local dev/test.
@@ -27,8 +47,10 @@
 # docs/redesign-rollout-plan.md): REQUIRE_SECURE_CONFIG makes each service
 # refuse to start while any secret is still a placeholder / under 16 characters
 # or CORS is a wildcard (see systems/*/backend/app/secure_config.py), and
-# CORS_ALLOW_ORIGINS lists the ONLY browser origins allowed to call them: the
-# shell and the four frontends, as Caddy serves them (infra/caddy/Caddyfile).
+# CORS_ALLOW_ORIGINS lists the ONLY browser origin allowed to call them:
+# web-frontend, as Caddy serves it (infra/caddy/Caddyfile) - narrowed to just
+# this one origin 2026-09-30 now that it's the VPS's only frontend (see the
+# classic-frontend retirement note above).
 # Before deploying, make sure .env holds real values for ACCOUNTS_JWT_SECRET,
 # ACCOUNTS_CREDENTIALS_ENCRYPTION_KEY, INTERNAL_SERVICE_SECRET and
 # DHAN_POSTBACK_SECRET (node scripts/generate-secrets.js --write) - a service
@@ -37,16 +59,22 @@
 # credentials become undecryptable).
 x-secure-backend-env: &secure-backend-env
   REQUIRE_SECURE_CONFIG: "true"
-  CORS_ALLOW_ORIGINS: "https://${VPS_DOMAIN}:${SHELL_PORT},https://${VPS_DOMAIN}:${SIGNAL_ENGINE_FRONTEND_PORT},https://${VPS_DOMAIN}:${MARKET_DATA_FRONTEND_PORT},https://${VPS_DOMAIN}:${EXECUTION_FRONTEND_PORT},https://${VPS_DOMAIN}:${MANUAL_TRADING_FRONTEND_PORT}"
+  CORS_ALLOW_ORIGINS: "https://${VPS_DOMAIN}:${SHELL_PORT}"
 
 services:
   # Host-port publish removed - Caddy is the only thing that should own
   # these port numbers on the VPS. BIND_ADDR=127.0.0.1 in docker-compose.yml
-  # is now moot for these 9 (fully overridden here), but still applies -
-  # and still matters - to postgres/redis below, which Caddy doesn't front.
-  shell:
-    ports: !reset []
-  signal-engine-frontend:
+  # is now moot for these (fully overridden here), but still applies - and
+  # still matters - to postgres/redis below, which Caddy doesn't front.
+  #
+  # shell/signal-engine-frontend/execution-frontend/manual-trading-frontend
+  # have no block here any more (2026-09-30) - they're not part of this
+  # file's active service list at all now, see the classic-frontend
+  # retirement note above. web-frontend takes over shell's old port
+  # (SHELL_PORT, still named that in .env/Caddyfile - the port number is
+  # what "the default URL" means, not the container behind it) rather than
+  # getting a new one of its own, so nobody has to learn a new port.
+  web-frontend:
     ports: !reset []
   signal-engine-backend:
     ports: !reset []
@@ -56,8 +84,6 @@ services:
   market-data-backend:
     ports: !reset []
     environment: *secure-backend-env
-  execution-frontend:
-    ports: !reset []
   execution-backend:
     ports: !reset []
     environment: *secure-backend-env
@@ -68,8 +94,6 @@ services:
       # Behind Caddy the socket peer is the proxy, so the per-IP login/signup
       # limits must read the real client from X-Forwarded-For (Caddy sets it).
       TRUST_FORWARDED_FOR: "true"
-  manual-trading-frontend:
-    ports: !reset []
 
   caddy:
     image: caddy:2-alpine
@@ -92,15 +116,15 @@ services:
       # to infra/caddy/Caddyfile AND a line here if a new service ever gets
       # its own port.
       - "80:80"
+      # SHELL_PORT still names the variable (unchanged in .env) - it's "the
+      # default URL"'s port number that stays put, only what's behind it
+      # changed (web-frontend, not shell - see infra/caddy/Caddyfile).
       - "${SHELL_PORT}:${SHELL_PORT}"
-      - "${SIGNAL_ENGINE_FRONTEND_PORT}:${SIGNAL_ENGINE_FRONTEND_PORT}"
       - "${SIGNAL_ENGINE_BACKEND_PORT}:${SIGNAL_ENGINE_BACKEND_PORT}"
       - "${MARKET_DATA_FRONTEND_PORT}:${MARKET_DATA_FRONTEND_PORT}"
       - "${MARKET_DATA_BACKEND_PORT}:${MARKET_DATA_BACKEND_PORT}"
-      - "${EXECUTION_FRONTEND_PORT}:${EXECUTION_FRONTEND_PORT}"
       - "${EXECUTION_BACKEND_PORT}:${EXECUTION_BACKEND_PORT}"
       - "${ACCOUNTS_BACKEND_PORT}:${ACCOUNTS_BACKEND_PORT}"
-      - "${MANUAL_TRADING_FRONTEND_PORT}:${MANUAL_TRADING_FRONTEND_PORT}"
     volumes:
       - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       # Cert storage - MUST persist across restarts. Let's Encrypt rate-
@@ -109,8 +133,7 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - shell
-      - signal-engine-frontend
+      - web-frontend
       - signal-engine-backend
       - market-data-frontend
       - market-data-backend

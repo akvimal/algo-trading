@@ -3,6 +3,8 @@ import { useAuth } from "./auth/AuthContext";
 import { ProfileProvider, useProfile } from "./auth/ProfileContext";
 import { Skeleton } from "./components/bits";
 import { AppShell } from "./layout/AppShell";
+import { AiModelsPage } from "./pages/AiModelsPage";
+import { AlertsPage } from "./pages/AlertsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { MorePage } from "./pages/MorePage";
 import { PortfolioPage } from "./pages/PortfolioPage";
@@ -66,8 +68,10 @@ export function App() {
             <Route index element={<MorePage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="notes" element={<NotesPage />} />
+            <Route path="alerts" element={<AlertsPage />} />
             <Route path="strategies" element={<StrategiesPage />} />
             <Route path="jobs" element={<RequireAdmin><JobsPage /></RequireAdmin>} />
+            <Route path="ai-models" element={<RequireAdmin><AiModelsPage /></RequireAdmin>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

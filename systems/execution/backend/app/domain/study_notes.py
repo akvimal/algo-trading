@@ -64,12 +64,12 @@ def _uuid_or_none(value: Optional[str], what: str) -> Optional[uuid.UUID]:
         raise StudyNoteError(422, f"{what} is not a valid id")
 
 
-def to_out(row: db_models.StudyNote, has_snapshot: bool) -> StudyNoteOut:
+def to_out(row: db_models.StudyNote, has_snapshot: bool, has_clean_snapshot: bool = False) -> StudyNoteOut:
     return StudyNoteOut(
         id=str(row.id), segment=row.segment, symbol=row.symbol, interval=row.interval, text=row.text, tag=row.tag,
         context=row.context, position_id=str(row.position_id) if row.position_id is not None else None,
         option_group_id=str(row.option_group_id) if row.option_group_id is not None else None,
-        has_snapshot=has_snapshot, created_at=row.created_at,
+        has_snapshot=has_snapshot, has_clean_snapshot=has_clean_snapshot, created_at=row.created_at,
     )
 
 
@@ -80,15 +80,16 @@ def create_note(db: Session, user_id: uuid.UUID, payload: StudyNoteCreate) -> St
     if payload.context is not None and len(json.dumps(payload.context, default=str)) > MAX_CONTEXT_BYTES:
         raise StudyNoteError(422, "the market context attached to this note is too large")
     png = decode_snapshot(payload.snapshot_png_base64)
+    clean = decode_snapshot(payload.clean_png_base64)
     row = db_models.StudyNote(
         user_id=user_id, segment=payload.segment, symbol=payload.symbol.strip().upper(), interval=payload.interval,
-        text=text, tag=payload.tag, context=payload.context, snapshot_png=png,
+        text=text, tag=payload.tag, context=payload.context, snapshot_png=png, snapshot_clean_png=clean,
         position_id=_uuid_or_none(payload.position_id, "position_id"), option_group_id=_uuid_or_none(payload.option_group_id, "option_group_id"),
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return to_out(row, png is not None)
+    return to_out(row, png is not None, clean is not None)
 
 
 def _day_bounds(day: date) -> tuple[datetime, datetime]:
@@ -134,8 +135,9 @@ def list_notes(
         query = query.filter(N.created_at >= start, N.created_at < end)
     rows = query.order_by(N.created_at.desc()).offset(max(0, offset)).limit(limit).all()
     ids_with_image = _ids_with_snapshot(db, user_id, [r.id for r in rows])
+    ids_with_clean = _ids_with_snapshot(db, user_id, [r.id for r in rows], clean=True)
     ordered = rows if newest_first else list(reversed(rows))
-    return [to_out(r, r.id in ids_with_image) for r in ordered]
+    return [to_out(r, r.id in ids_with_image, r.id in ids_with_clean) for r in ordered]
 
 
 def list_instruments(db: Session, user_id: uuid.UUID) -> list[StudyNoteInstrumentOut]:
@@ -151,19 +153,22 @@ def list_instruments(db: Session, user_id: uuid.UUID) -> list[StudyNoteInstrumen
     return [StudyNoteInstrumentOut(segment=r[0], symbol=r[1], count=int(r[2]), last_at=r[3]) for r in rows]
 
 
-def _ids_with_snapshot(db: Session, user_id: uuid.UUID, ids: list[uuid.UUID]) -> set[uuid.UUID]:
+def _ids_with_snapshot(db: Session, user_id: uuid.UUID, ids: list[uuid.UUID], clean: bool = False) -> set[uuid.UUID]:
     if not ids:
         return set()
     N = db_models.StudyNote
-    rows = db.query(N.id).filter(N.user_id == user_id, N.id.in_(ids), N.snapshot_png.isnot(None)).all()
+    column = N.snapshot_clean_png if clean else N.snapshot_png
+    rows = db.query(N.id).filter(N.user_id == user_id, N.id.in_(ids), column.isnot(None)).all()
     return {r[0] for r in rows}
 
 
-def get_snapshot(db: Session, user_id: uuid.UUID, note_id: uuid.UUID) -> Optional[bytes]:
+def get_snapshot(db: Session, user_id: uuid.UUID, note_id: uuid.UUID, clean: bool = False) -> Optional[bytes]:
+    """The note's picture: the composed one (with the note text and any AI line), or with `clean` the chart-and-header-only one."""
     row = db.get(db_models.StudyNote, note_id)
     if row is None or row.user_id != user_id:
         return None
-    return bytes(row.snapshot_png) if row.snapshot_png is not None else None
+    data = row.snapshot_clean_png if clean else row.snapshot_png
+    return bytes(data) if data is not None else None
 
 
 def delete_note(db: Session, user_id: uuid.UUID, note_id: uuid.UUID) -> bool:

@@ -1,0 +1,167 @@
+[
+  {
+    "name": "long buildup",
+    "row": {
+      "total_call_oi": 1200,
+      "total_put_oi": 1200,
+      "call_oi_change_pct": 20,
+      "put_oi_change_pct": 20,
+      "price_change_pct": 1.5,
+      "call_buildup": "long_buildup",
+      "put_buildup": "long_buildup"
+    },
+    "oi_change_pct": 20.0,
+    "quadrant": "long_buildup",
+    "strong": true
+  },
+  {
+    "name": "short covering",
+    "row": {
+      "total_call_oi": 900,
+      "total_put_oi": 900,
+      "call_oi_change_pct": -10,
+      "put_oi_change_pct": -10,
+      "price_change_pct": 1.0,
+      "call_buildup": "short_covering",
+      "put_buildup": "short_covering"
+    },
+    "oi_change_pct": -10.0,
+    "quadrant": "short_covering",
+    "strong": false
+  },
+  {
+    "name": "short buildup",
+    "row": {
+      "total_call_oi": 1100,
+      "total_put_oi": 1100,
+      "call_oi_change_pct": 10,
+      "put_oi_change_pct": 10,
+      "price_change_pct": -2.0,
+      "call_buildup": "short_buildup",
+      "put_buildup": "short_buildup"
+    },
+    "oi_change_pct": 10.0,
+    "quadrant": "short_buildup",
+    "strong": true
+  },
+  {
+    "name": "long unwinding",
+    "row": {
+      "total_call_oi": 950,
+      "total_put_oi": 950,
+      "call_oi_change_pct": -5,
+      "put_oi_change_pct": -5,
+      "price_change_pct": -0.8,
+      "call_buildup": "long_unwinding",
+      "put_buildup": "long_unwinding"
+    },
+    "oi_change_pct": -5.0,
+    "quadrant": "long_unwinding",
+    "strong": false
+  },
+  {
+    "name": "total change is rebuilt from both sides, weighted by size (a plain average of +50 and -50 would say 0)",
+    "row": {
+      "total_call_oi": 3000,
+      "total_put_oi": 800,
+      "call_oi_change_pct": 50,
+      "put_oi_change_pct": -50,
+      "price_change_pct": 1.2,
+      "call_buildup": "long_buildup",
+      "put_buildup": "short_covering"
+    },
+    "oi_change_pct": 5.556,
+    "quadrant": "long_buildup",
+    "strong": false
+  },
+  {
+    "name": "price move below the floor is noise",
+    "row": {
+      "total_call_oi": 1200,
+      "total_put_oi": 1200,
+      "call_oi_change_pct": 20,
+      "put_oi_change_pct": 20,
+      "price_change_pct": 0.4,
+      "call_buildup": "long_buildup",
+      "put_buildup": "long_buildup"
+    },
+    "oi_change_pct": 20.0,
+    "quadrant": null,
+    "strong": true
+  },
+  {
+    "name": "OI change below the floor is noise",
+    "row": {
+      "total_call_oi": 1020,
+      "total_put_oi": 1020,
+      "call_oi_change_pct": 2,
+      "put_oi_change_pct": 2,
+      "price_change_pct": 3.0,
+      "call_buildup": "long_buildup",
+      "put_buildup": "long_buildup"
+    },
+    "oi_change_pct": 2.0,
+    "quadrant": null,
+    "strong": false
+  },
+  {
+    "name": "exactly at both floors counts",
+    "row": {
+      "total_call_oi": 1050,
+      "total_put_oi": 1050,
+      "call_oi_change_pct": 5,
+      "put_oi_change_pct": 5,
+      "price_change_pct": 0.5,
+      "call_buildup": "long_buildup",
+      "put_buildup": "long_buildup"
+    },
+    "oi_change_pct": 5.0,
+    "quadrant": "long_buildup",
+    "strong": false
+  },
+  {
+    "name": "a missing change figure never qualifies",
+    "row": {
+      "total_call_oi": 1000,
+      "total_put_oi": 1000,
+      "call_oi_change_pct": null,
+      "put_oi_change_pct": 12,
+      "price_change_pct": 2.0,
+      "call_buildup": null,
+      "put_buildup": "long_buildup"
+    },
+    "oi_change_pct": null,
+    "quadrant": null,
+    "strong": false
+  },
+  {
+    "name": "a missing price never qualifies",
+    "row": {
+      "total_call_oi": 1200,
+      "total_put_oi": 1200,
+      "call_oi_change_pct": 20,
+      "put_oi_change_pct": 20,
+      "price_change_pct": null,
+      "call_buildup": null,
+      "put_buildup": null
+    },
+    "oi_change_pct": 20.0,
+    "quadrant": null,
+    "strong": false
+  },
+  {
+    "name": "strong needs both sides to build the same way",
+    "row": {
+      "total_call_oi": 1200,
+      "total_put_oi": 1200,
+      "call_oi_change_pct": 20,
+      "put_oi_change_pct": 20,
+      "price_change_pct": 1.5,
+      "call_buildup": "long_buildup",
+      "put_buildup": "short_buildup"
+    },
+    "oi_change_pct": 20.0,
+    "quadrant": "long_buildup",
+    "strong": false
+  }
+]

@@ -1,0 +1,40 @@
+{
+  "_about": "Hand-maintained India calendar for the Markets panel's Calendar tab (app/domain/market_calendar.py). Dates were checked on 2026-10-08 against the sources below; a date that changes after that is NOT picked up automatically, so refresh this file when the exchanges or MoSPI publish next year's calendars (it runs out at the end of March 2027). MoSPI publishes dates only, not times, and says a date that falls on a holiday moves to the next working day (the code applies that to weekends). MCX session status for September to December comes from broker republications of the MCX circular (Jainam, Upstox); confirm on mcxindia.com.",
+  "checked_on": "2026-10-08",
+  "valid_until": "2027-03-31",
+  "sources": {
+    "nse_holidays": "https://www.nseindia.com/resources/exchange-communication-holidays (cross-checked: Bajaj Broking, Upstox, ClearTax, Tata Mutual Fund)",
+    "mcx_holidays": "https://www.mcxindia.com (circular republished by HDFC Securities, Jainam, Upstox)",
+    "rbi_mpc": "https://www.rbi.org.in/scripts/AnnualPolicy.aspx (schedule notice dated 2026-03-23)",
+    "mospi": "https://www.mospi.gov.in Advance Release Calendar 2026-27 (updated 2026-05-25)"
+  },
+  "holidays": [
+    {"date": "2026-10-02", "name": "Mahatma Gandhi Jayanti", "nse": "closed", "mcx": "closed"},
+    {"date": "2026-10-20", "name": "Dussehra", "nse": "closed", "mcx": "morning_closed"},
+    {"date": "2026-11-08", "name": "Diwali Laxmi Pujan (Sunday)", "nse": "special", "mcx": "special", "detail": "Muhurat trading session; timings to be announced by the exchange."},
+    {"date": "2026-11-10", "name": "Diwali Balipratipada", "nse": "closed", "mcx": "morning_closed"},
+    {"date": "2026-11-24", "name": "Guru Nanak Jayanti", "nse": "closed", "mcx": "morning_closed"},
+    {"date": "2026-12-25", "name": "Christmas", "nse": "closed", "mcx": "closed"}
+  ],
+  "rbi_policy": [
+    {"decision": "2026-12-04", "meeting": "2-4 Dec 2026"},
+    {"decision": "2027-02-05", "meeting": "3-5 Feb 2027"}
+  ],
+  "releases": [
+    {"date": "2026-10-12", "name": "India CPI inflation", "kind": "cpi"},
+    {"date": "2026-10-28", "name": "India industrial production (IIP)", "kind": "iip"},
+    {"date": "2026-11-12", "name": "India CPI inflation", "kind": "cpi"},
+    {"date": "2026-11-28", "name": "India industrial production (IIP)", "kind": "iip"},
+    {"date": "2026-11-30", "name": "India GDP, Q2 FY2026-27", "kind": "gdp"},
+    {"date": "2026-12-12", "name": "India CPI inflation", "kind": "cpi"},
+    {"date": "2026-12-28", "name": "India industrial production (IIP)", "kind": "iip"},
+    {"date": "2027-01-07", "name": "India GDP, first advance estimate FY2026-27", "kind": "gdp"},
+    {"date": "2027-01-12", "name": "India CPI inflation", "kind": "cpi"},
+    {"date": "2027-01-28", "name": "India industrial production (IIP)", "kind": "iip"},
+    {"date": "2027-02-12", "name": "India CPI inflation", "kind": "cpi"},
+    {"date": "2027-02-26", "name": "India GDP, Q3 FY2026-27 and second advance estimate", "kind": "gdp"},
+    {"date": "2027-02-28", "name": "India industrial production (IIP)", "kind": "iip"},
+    {"date": "2027-03-12", "name": "India CPI inflation", "kind": "cpi"},
+    {"date": "2027-03-28", "name": "India industrial production (IIP)", "kind": "iip"}
+  ]
+}

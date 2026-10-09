@@ -66,7 +66,9 @@ CREATE TABLE IF NOT EXISTS market_data.price_alerts (
     last_side         TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_triggered_at TIMESTAMPTZ,
-    trigger_count     INTEGER NOT NULL DEFAULT 0
+    trigger_count     INTEGER NOT NULL DEFAULT 0,
+    delivery_failures INTEGER NOT NULL DEFAULT 0,
+    last_error        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_price_alerts_active
@@ -174,6 +176,14 @@ CREATE TABLE IF NOT EXISTS market_data.equity_screener_snapshot (
     -- rather than an array column - see app/adapters/db/models.py.
     is_fno             BOOLEAN NOT NULL DEFAULT false,
     index_memberships  TEXT,
+    -- descriptive filter/sort fields (migration 048)
+    avg_turnover_cr    DOUBLE PRECISION,
+    ret_3m_pct         DOUBLE PRECISION,
+    mom_12_1_pct       DOUBLE PRECISION,
+    rsi3               DOUBLE PRECISION,
+    dist_ema20_pct     DOUBLE PRECISION,
+    atr_pct            DOUBLE PRECISION,
+    vol_ratio          DOUBLE PRECISION,
     UNIQUE (symbol, snapshot_date)
 );
 
@@ -240,3 +250,182 @@ CREATE TABLE IF NOT EXISTS market_data.job_runs (
     message      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_job_runs_job_started ON market_data.job_runs (job_id, started_at DESC);
+
+-- The morning pre-market bias report, one row per IST day. See migration 037 and app/domain/premarket_report.py.
+CREATE TABLE IF NOT EXISTS market_data.premarket_reports (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    day          DATE NOT NULL UNIQUE,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    bias         TEXT NOT NULL CHECK (bias IN ('bullish', 'bearish', 'neutral')),
+    agree        BOOLEAN,
+    model        TEXT,
+    ai_error     TEXT,
+    inputs       JSONB NOT NULL,
+    rules        JSONB NOT NULL,
+    ai           JSONB,
+    macro        JSONB
+);
+
+-- Which OpenRouter model each AI task uses. See migration 038 and app/domain/ai_models.py.
+CREATE TABLE IF NOT EXISTS market_data.ai_model_settings (
+    task        TEXT PRIMARY KEY,
+    model       TEXT NOT NULL CHECK (btrim(model) <> ''),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by  UUID
+);
+
+-- AI summaries of linked RBI speeches/releases, one per item. See migration 040 and app/domain/rbi_reader.py.
+CREATE TABLE IF NOT EXISTS market_data.rbi_summaries (
+    url         TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    published   TIMESTAMPTZ,
+    stance      TEXT NOT NULL CHECK (stance IN ('hawkish', 'dovish', 'neutral', 'not about policy')),
+    summary     TEXT NOT NULL,
+    rates       TEXT,
+    model       TEXT,
+    read_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    text_hash   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rbi_summaries_text_hash ON market_data.rbi_summaries (text_hash);
+
+-- Process each piece of news once. See migration 041, app/domain/rbi_reader.py and app/domain/news_scores.py.
+CREATE TABLE IF NOT EXISTS market_data.rbi_read_attempts (
+    url              TEXT PRIMARY KEY,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_error       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS market_data.news_article_scores (
+    underlying       TEXT NOT NULL,
+    url              TEXT NOT NULL,
+    relevant         BOOLEAN NOT NULL,
+    relevance_score  INTEGER,
+    why              TEXT,
+    scored_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (underlying, url)
+);
+CREATE INDEX IF NOT EXISTS idx_news_article_scores_scored_at ON market_data.news_article_scores (scored_at);
+
+-- Each user's own Telegram chat for their price alerts. See migration 042 and app/domain/price_alerts.py.
+CREATE TABLE IF NOT EXISTS market_data.alert_channels (
+    user_id           UUID PRIMARY KEY,
+    telegram_chat_id  TEXT NOT NULL CHECK (telegram_chat_id ~ '^-?[0-9]{3,20}$'),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    zone_alerts       TEXT NOT NULL DEFAULT 'all' CHECK (zone_alerts IN ('all', 'close', 'off'))
+);
+
+-- Ideas published from notes to a Telegram channel (operator only). See migration 043 and app/domain/ideas.py.
+CREATE TABLE IF NOT EXISTS market_data.ideas_destination (
+    id                SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    telegram_chat_id  TEXT NOT NULL,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by        UUID
+);
+
+CREATE TABLE IF NOT EXISTS market_data.published_ideas (
+    note_id         UUID PRIMARY KEY,
+    published_by    UUID NOT NULL,
+    chat_id         TEXT NOT NULL,
+    message_ids     JSONB NOT NULL,
+    text            TEXT NOT NULL,
+    has_image       BOOLEAN NOT NULL DEFAULT false,
+    published_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    unpublished_at  TIMESTAMPTZ
+);
+
+-- Telegram notifications a person subscribes to, and the log that sends each item once. See migration 044 and app/domain/notifications.py.
+CREATE TABLE IF NOT EXISTS market_data.notification_subscriptions (
+    user_id     UUID NOT NULL,
+    category    TEXT NOT NULL,
+    enabled     BOOLEAN NOT NULL DEFAULT false,
+    params      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, category)
+);
+
+CREATE TABLE IF NOT EXISTS market_data.notification_log (
+    user_id          UUID NOT NULL,
+    category         TEXT NOT NULL,
+    dedupe_key       TEXT NOT NULL,
+    text             TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sent_at          TIMESTAMPTZ,
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at  TIMESTAMPTZ,
+    last_error       TEXT,
+    PRIMARY KEY (user_id, category, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_log_pending ON market_data.notification_log (created_at) WHERE sent_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_log_user ON market_data.notification_log (user_id, created_at DESC);
+
+-- Zones and levels armed on a chart, watched by the server. See migration 046 and app/domain/zone_watch.py.
+CREATE TABLE IF NOT EXISTS market_data.zone_watches (
+    id               UUID PRIMARY KEY,
+    user_id          UUID NOT NULL,
+    exchange         TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('zone', 'line')),
+    lo               NUMERIC NOT NULL,
+    hi               NUMERIC NOT NULL,
+    interval         TEXT NOT NULL DEFAULT '15min',
+    role             TEXT,
+    last_state       TEXT,
+    last_checked_at  TIMESTAMPTZ,
+    last_bar_checked TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    alerts           TEXT NOT NULL DEFAULT 'all' CHECK (alerts IN ('all', 'close', 'off')),
+    UNIQUE (user_id, exchange, symbol, kind, lo, hi)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_watches_symbol ON market_data.zone_watches (exchange, symbol);
+
+CREATE TABLE IF NOT EXISTS market_data.zone_events (
+    id           BIGSERIAL PRIMARY KEY,
+    watch_id     UUID,
+    user_id      UUID NOT NULL,
+    exchange     TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    lo           NUMERIC NOT NULL,
+    hi           NUMERIC NOT NULL,
+    role         TEXT,
+    event        TEXT NOT NULL CHECK (event IN ('touch', 'held', 'broke', 'inside')),
+    at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    bar_time     TIMESTAMPTZ,
+    approach     TEXT,
+    extreme      NUMERIC,
+    close        NUMERIC,
+    dedupe_key   TEXT NOT NULL,
+    notified     BOOLEAN NOT NULL DEFAULT TRUE,
+    UNIQUE (user_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_events_user_day ON market_data.zone_events (user_id, at DESC);
+
+-- The nightly "F&O stocks at a demand or supply zone" shortlist. See migration 047 and app/domain/zone_scan.py.
+CREATE TABLE IF NOT EXISTS market_data.zone_scan (
+    id                 BIGSERIAL PRIMARY KEY,
+    snapshot_date      DATE NOT NULL,
+    exchange           TEXT NOT NULL,
+    symbol             TEXT NOT NULL,
+    recorded_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    close              DOUBLE PRECISION NOT NULL,
+    daily_trend        TEXT NOT NULL,
+    weekly_trend       TEXT,
+    weekly_bars        INTEGER NOT NULL DEFAULT 0,
+    zone_kind          TEXT CHECK (zone_kind IN ('demand', 'supply')),
+    zone_proximal      DOUBLE PRECISION,
+    zone_distal        DOUBLE PRECISION,
+    zone_position      TEXT CHECK (zone_position IN ('inside', 'approaching')),
+    zone_distance_pct  DOUBLE PRECISION,
+    zone_distance_atr  DOUBLE PRECISION,
+    weekly_zone        BOOLEAN NOT NULL DEFAULT false,
+    weekly_agrees      BOOLEAN NOT NULL DEFAULT false,
+    call_buildup       TEXT,
+    put_buildup        TEXT,
+    oi_agrees          BOOLEAN,
+    tier               TEXT CHECK (tier IN ('A', 'B', 'C')),
+    UNIQUE (symbol, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_scan_date ON market_data.zone_scan (snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_zone_scan_date_tier ON market_data.zone_scan (snapshot_date, tier);

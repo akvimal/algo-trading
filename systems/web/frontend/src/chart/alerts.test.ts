@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertMessage, alertZone, checkAlert, levelText, sideOf } from "./alerts";
+import { SERVER_WATCHED, alertMessage, alertZone, checkAlert, levelText, serverWatches, sideOf } from "./alerts";
 
 const line = (value: number) => ({ name: "horizontalStraightLine", points: [{ value }] });
 const zone = (a: number, b: number) => ({ name: "rect", points: [{ timestamp: 1, value: a }, { timestamp: 2, value: b }] });
@@ -70,5 +70,29 @@ describe("levelText and alertMessage", () => {
   });
   it("uses the arrow of the side it moved to", () => {
     expect(alertMessage("X", { lo: 1, hi: 1 }, "below", "above", "cross")).toContain("▼");
+  });
+});
+
+describe("serverWatches: what the server is asked to watch", () => {
+  const t = 1_700_000_000_000;
+  const armedZone = (a: number, b: number, alert = true) => ({ name: "rect", points: [{ timestamp: t, value: a }, { timestamp: t + 1, value: b }], ...(alert ? { alert: { trigger: "cross" as const } } : {}) });
+  const armedLevel = (v: number, alert = true) => ({ name: "horizontalStraightLine", points: [{ timestamp: t, value: v }], ...(alert ? { alert: { trigger: "cross" as const } } : {}) });
+
+  it("sends an armed zone as a band, whichever corner was drawn first, and an armed level as a band of no width", () => {
+    expect(serverWatches([armedZone(1010, 990), armedZone(100, 110)])).toEqual([{ kind: "zone", lo: 990, hi: 1010 }, { kind: "zone", lo: 100, hi: 110 }]);
+    expect(serverWatches([armedLevel(1015)])).toEqual([{ kind: "line", lo: 1015, hi: 1015 }]);
+  });
+
+  it("leaves out anything not armed", () => {
+    expect(serverWatches([armedZone(990, 1010, false), armedLevel(1015, false)])).toEqual([]);
+  });
+
+  it("keeps a sloped line to the page: its price changes with time", () => {
+    expect(serverWatches([{ name: "segment", points: [{ timestamp: t, value: 100 }, { timestamp: t + 1000, value: 120 }], alert: { trigger: "cross" } }])).toEqual([]);
+    expect(SERVER_WATCHED.has("segment") || SERVER_WATCHED.has("rayLine")).toBe(false);
+  });
+
+  it("leaves out an armed drawing with no price to watch", () => {
+    expect(serverWatches([{ name: "rect", points: [{ timestamp: t, value: 100 }], alert: { trigger: "cross" } }])).toEqual([]);
   });
 });

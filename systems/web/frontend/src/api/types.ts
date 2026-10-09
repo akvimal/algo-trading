@@ -41,6 +41,8 @@ export type Position = {
   live_price?: number | null;
   unrealized_pnl?: number | null;
   status: "OPEN" | "CLOSED" | "REJECTED" | string;
+  /** True only if the entry cleared through a real broker order; otherwise it was a paper trade. */
+  is_live_broker_order?: boolean;
   stop_loss_price: number | null;
   target_price: number | null;
   option_group_id: string | null;
@@ -112,6 +114,102 @@ export type SentimentUnderlying = {
 
 export type MarketSentiment = {
   exchanges: Record<string, { direction: string; strength: string; score: number | null; underlyings: SentimentUnderlying[] }>;
+};
+
+export type CatalogModel = {
+  id: string;
+  name: string;
+  context_length: number | null;
+  /** USD per million tokens. */
+  prompt_per_m: number | null;
+  completion_per_m: number | null;
+  /** Can think before answering. */
+  reasoning: boolean;
+  image_input: boolean;
+  free: boolean;
+};
+
+export type AiModelTask = {
+  task: string;
+  label: string;
+  description: string;
+  /** This task's own choice, or null when it follows the shared default / server setting. */
+  override: string | null;
+  /** What the task actually uses right now. */
+  model: string;
+  source: "task" | "default" | "env";
+};
+
+export type AiModels = { default: string | null; tasks: AiModelTask[] };
+
+export type Bias = "bullish" | "bearish" | "neutral";
+
+export type PremarketInput = {
+  key: string;
+  label: string;
+  group: "us" | "commodity" | "currency" | "yield" | "adr" | "india" | "index" | "sector" | "metals" | "energy" | "macro" | "crypto" | "risk";
+  ok: boolean;
+  value: number | null;
+  /** Percent for prices; basis points when `unit` is "bp" (bond yields); index points when "pt" (the crypto Fear & Greed index). */
+  change: number | null;
+  unit: "pct" | "bp" | "pt";
+  source: string;
+  error: string | null;
+};
+
+export type PremarketIndicator = {
+  key: string;
+  label: string;
+  unit: "pct" | "usd_bn";
+  ok: boolean;
+  value: number | null;
+  previous: number | null;
+  change: number | null;
+  /** The last day of the period the print covers. */
+  period: string | null;
+  error: string | null;
+};
+
+export type PremarketMacro = {
+  indicators: PremarketIndicator[];
+  derived: { real_rate: number | null; spread_10y_repo: number | null; india_10y: number | null };
+  rbi: PremarketRbiItem[];
+};
+
+export type RbiStance = "hawkish" | "dovish" | "neutral" | "not about policy";
+
+export type PremarketRbiItem = {
+  title: string;
+  url: string | null;
+  published: string | null;
+  kind: "press release" | "speech";
+  /** An AI summary of the item's full text, when it has been read. */
+  summary?: { text: string; stance: RbiStance; rates: string | null; model: string | null } | null;
+};
+
+export type PremarketReport = {
+  day: string;
+  generated_at: string;
+  bias: Bias;
+  agree: boolean | null;
+  model: string | null;
+  ai_error: string | null;
+  inputs: PremarketInput[];
+  rules: {
+    score: number;
+    bias: Bias;
+    coverage: number;
+    gift_gap_pct: number | null;
+    factors: { key: string; label: string; move: number | null; score: number | null; weight: number }[];
+  };
+  ai: { bias: Bias; confidence: number; one_liner: string; reasons: string[]; risks: string[]; watch: string; macro_context?: string | null } | null;
+  /** India's domestic macro backdrop. Absent on reports written before it existed. */
+  macro?: PremarketMacro | null;
+  /** MCX and crypto briefs: the rules-based read is shown at once and the model's read is still being prepared. */
+  ai_pending?: boolean;
+  /** When the AI read was actually made, and whether this build reused it because the numbers had not meaningfully changed. */
+  ai_read_at?: string | null;
+  ai_reused?: boolean;
 };
 
 export type Segment = "NSE" | "MCX" | "CRYPTO";
@@ -221,6 +319,22 @@ export type ScreenerRow = {
   pct_from_52w_high: number | null;
   pct_from_52w_low: number | null;
   proximity: Proximity | null;
+  /** The fields below arrive with the screener's descriptive columns (2026-10-08); absent from an older backend and null for a stock with too few bars. */
+  is_fno?: boolean;
+  /** Index keys the stock belongs to (NIFTY500, NIFTYMIDCAP150, ...); empty for a stock in none of them. */
+  universes?: string[];
+  /** 20-day average of close x volume, in Rs crore. */
+  avg_turnover_cr?: number | null;
+  ret_3m_pct?: number | null;
+  /** The 12-1 month momentum score: the close a month ago against the close a year ago. */
+  mom_12_1_pct?: number | null;
+  rsi3?: number | null;
+  dist_ema20_pct?: number | null;
+  atr_pct?: number | null;
+  vol_ratio?: number | null;
+  /** 0-100 rank (100 = strongest) among stocks trading at least Rs 5 Cr a day; null for the rest. */
+  rs_3m_pctile?: number | null;
+  rs_12m_pctile?: number | null;
   history: { snapshot_date: string; close: number }[];
 };
 export type Screener = { snapshot_date: string; rows: ScreenerRow[] };
@@ -405,6 +519,8 @@ export type StudyNote = {
   position_id: string | null;
   option_group_id: string | null;
   has_snapshot: boolean;
+  /** A chart-and-header-only picture was kept too (notes saved before it existed have only the composed one). */
+  has_clean_snapshot?: boolean;
   created_at: string | null;
 };
 
@@ -509,3 +625,56 @@ export type Job = {
   recent: JobRun[];
 };
 export type Jobs = { jobs: Job[] };
+
+/** GET /news — headlines for one symbol with an overall bullish/bearish/neutral read. relevance_score and why are null when the AI step did not run. */
+export type NewsArticle = {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  image_url: string | null;
+  relevance_score: number | null;
+  why: string | null;
+};
+export type NewsDigest = {
+  bias: "bullish" | "bearish" | "neutral";
+  bias_reason: string;
+  digest: string;
+  articles: NewsArticle[];
+};
+
+/** GET /calendar/upcoming — the Markets panel's Calendar tab. `time` is HH:MM IST, or null for an all-day or untimed item. */
+export type CalendarEvent = {
+  date: string;
+  time: string | null;
+  title: string;
+  kind: "global" | "rbi" | "data" | "holiday" | "expiry";
+  impact: "high" | "medium" | "low";
+  detail: string | null;
+  forecast: string | null;
+  previous: string | null;
+  actual: string | null;
+};
+export type UpcomingCalendar = { segment: string; start: string; end: string; events: CalendarEvent[]; notes: string[] };
+
+/** GET /zone-scan — the nightly shortlist of F&O stocks at an untested demand or supply zone. tier: A = a weekly zone of the same kind is also at price and open interest agrees; B = the weekly trend is on the zone's side and OI agrees; C = a daily zone only. */
+export type ZoneScanRow = {
+  symbol: string;
+  exchange: string;
+  close: number;
+  daily_trend: "up" | "down" | "range";
+  weekly_trend: "up" | "down" | "range" | null;
+  tier: "A" | "B" | "C";
+  zone_kind: "demand" | "supply";
+  zone_position: "inside" | "approaching";
+  zone_proximal: number;
+  zone_distal: number;
+  zone_distance_pct: number;
+  zone_distance_atr: number;
+  weekly_zone: boolean;
+  weekly_agrees: boolean;
+  call_buildup: string | null;
+  put_buildup: string | null;
+  oi_agrees: boolean | null;
+};
+export type ZoneScan = { snapshot_date: string | null; rows: ZoneScanRow[] };

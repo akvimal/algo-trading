@@ -99,6 +99,49 @@ def test_the_snapshot_is_stored_and_reported():
     assert db.rows[0].snapshot_png == PNG and out.has_snapshot is True
 
 
+CLEAN = b"\x89PNG\r\n\x1a\n" + b"\x01" * 32
+CLEAN_B64 = base64.b64encode(CLEAN).decode()
+
+
+def test_a_clean_picture_is_kept_separately_from_the_composed_one_and_reported():
+    db = FakeDb()
+    out = create_note(db, ALICE, body(snapshot_png_base64=PNG_B64, clean_png_base64=CLEAN_B64))
+    assert db.rows[0].snapshot_png == PNG and db.rows[0].snapshot_clean_png == CLEAN
+    assert out.has_snapshot is True and out.has_clean_snapshot is True
+
+
+def test_a_note_without_a_clean_picture_says_so():
+    db = FakeDb()
+    out = create_note(db, ALICE, body(snapshot_png_base64=PNG_B64))
+    assert db.rows[0].snapshot_clean_png is None and out.has_snapshot is True and out.has_clean_snapshot is False
+
+
+def test_the_clean_picture_gets_the_same_checks_as_the_other():
+    for raw in ("data:image/jpeg;base64," + CLEAN_B64, "!!!", base64.b64encode(b"GIF89a-no").decode()):
+        with pytest.raises(StudyNoteError):
+            create_note(FakeDb(), ALICE, body(snapshot_png_base64=PNG_B64, clean_png_base64=raw))
+
+
+def test_each_variant_of_the_picture_is_served_only_to_its_owner():
+    row = SimpleNamespace(user_id=ALICE, snapshot_png=PNG, snapshot_clean_png=CLEAN)
+    db = SimpleNamespace(get=lambda model, key: row)
+    assert sn.get_snapshot(db, ALICE, uuid.uuid4()) == PNG
+    assert sn.get_snapshot(db, ALICE, uuid.uuid4(), clean=True) == CLEAN
+    assert sn.get_snapshot(db, uuid.uuid4(), uuid.uuid4(), clean=True) is None  # someone else's note
+    no_clean = SimpleNamespace(get=lambda model, key: SimpleNamespace(user_id=ALICE, snapshot_png=PNG, snapshot_clean_png=None))
+    assert sn.get_snapshot(no_clean, ALICE, uuid.uuid4(), clean=True) is None  # an older note has none
+
+
+def test_the_snapshot_route_offers_only_the_two_variants_and_defaults_to_the_composed_one():
+    from app.api.routes import study_notes as route
+
+    snapshot_route = next(r for r in route.router.routes if r.path == "/study-notes/{note_id}/snapshot")
+    variant = next(p for p in snapshot_route.dependant.query_params if p.name == "variant")
+    assert variant.field_info.default == "full"
+    pattern = next(m.pattern for m in variant.field_info.metadata if hasattr(m, "pattern"))
+    assert pattern == "^(full|clean)$"
+
+
 @pytest.mark.parametrize(
     "raw, why",
     [

@@ -4,7 +4,6 @@ import { ApiError } from "../api/http";
 import type { Segment } from "../api/types";
 import { SEGMENT_CHOICES } from "./onboardingModel";
 import { useProfile } from "../auth/ProfileContext";
-import { CLASSIC_APP_URL } from "../config";
 import { useAuth } from "../auth/AuthContext";
 
 export function MorePage() {
@@ -148,6 +147,17 @@ export function MorePage() {
         </Link>
       </div>
       <div className="card">
+        <Link to="/more/alerts" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+          <span>
+            <strong>Price alerts</strong>
+            <span className="dim" style={{ display: "block", fontSize: 13 }}>
+              Price alerts and daily Telegram messages: the pre-market bias and strong OI buildups, even with the app closed
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </Link>
+      </div>
+      <div className="card">
         <Link to="/more/notes" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
           <span>
             <strong>Notes</strong>
@@ -171,6 +181,19 @@ export function MorePage() {
       </div>
       {session?.isAdmin && (
         <div className="card">
+          <Link to="/more/ai-models" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+            <span>
+              <strong>AI models</strong>
+              <span className="dim" style={{ display: "block", fontSize: 13 }}>
+                Which model runs the news digest, the pre-market bias and the OI read: the same for all, or one each
+              </span>
+            </span>
+            <span aria-hidden="true">›</span>
+          </Link>
+        </div>
+      )}
+      {session?.isAdmin && (
+        <div className="card">
           <Link to="/more/jobs" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
             <span>
               <strong>Background jobs</strong>
@@ -182,12 +205,6 @@ export function MorePage() {
           </Link>
         </div>
       )}
-      <div className="card">
-        <p style={{ marginTop: 0 }}>Alerts and the rest are still in the classic app while this one is built out.</p>
-        <a className="btn" style={{ display: "inline-flex", alignItems: "center", textDecoration: "none" }} href={CLASSIC_APP_URL}>
-          Open classic app
-        </a>
-      </div>
     </div>
   );
 }

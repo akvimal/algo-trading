@@ -19,10 +19,10 @@ from app.api.routes import pending_orders as route
 from app.auth import User
 from app.config import settings
 from app.domain import pending_orders as po
-from app.domain.models import PendingOrderCreate
+from app.domain.models import PendingOrderCreate, PendingOrderUpdate
 from app.domain.pending_orders import (
     Deps, PendingOrderError, UnderlyingUnavailable, UnknownUnderlying, bracket_problem, cancel_pending_order, create_pending_order,
-    crossed, list_pending_orders, process_pending_orders,
+    crossed, list_pending_orders, process_pending_orders, update_pending_order,
 )
 
 ALICE = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -305,6 +305,73 @@ def test_a_cancel_that_loses_the_race_does_not_overwrite_an_order_that_just_fire
         cancel_pending_order(db, ALICE, row.id)
     assert exc.value.status_code == 409 and "already triggered" in exc.value.detail
     assert row.status == "triggered"  # not overwritten with 'cancelled'
+
+
+def test_moving_a_waiting_order_changes_only_what_was_sent_and_checks_the_levels_still_make_sense_together():
+    db = FakeDb()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0})
+    row = arm(db, deps, trigger_price=100.0, stop_loss_price=95.0, target_price=110.0)
+    out = update_pending_order(db, ALICE, row.id, deps, stop_loss_price=96.0)
+    assert (float(out.trigger_price), float(out.stop_loss_price), float(out.target_price)) == (100.0, 96.0, 110.0)
+    assert len(deps.log.price_calls) == 1  # only the arming read the price: a stop move needs no price
+    for kwargs, fragment in [({"stop_loss_price": 101.0}, "stop-loss must be below"), ({"target_price": 99.0}, "target must be above"), ({"trigger_price": 94.0}, "stop-loss must be below")]:
+        with pytest.raises(PendingOrderError) as exc:
+            update_pending_order(db, ALICE, row.id, deps, **kwargs)
+        assert exc.value.status_code == 422 and fragment in exc.value.detail
+    assert (float(row.trigger_price), float(row.stop_loss_price)) == (100.0, 96.0)  # a refused move changes nothing
+
+
+def test_moving_the_trigger_reads_the_price_again_and_works_out_the_starting_side_against_the_new_level():
+    db = FakeDb()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0})
+    row = arm(db, deps, trigger_price=100.0)  # armed from above: fires on the fall to 100
+    assert row.started_above is True
+    out = update_pending_order(db, ALICE, row.id, deps, trigger_price=110.0)  # moved above the price: now fires on the rise
+    assert float(out.trigger_price) == 110.0 and out.started_above is False and out.last_price == 105.0
+    assert len(deps.log.price_calls) == 2
+    with pytest.raises(PendingOrderError) as exc:
+        update_pending_order(db, ALICE, row.id, deps, trigger_price=105.0)  # the price is already there
+    assert exc.value.status_code == 422 and "market order" in exc.value.detail
+
+
+def test_a_move_finds_only_your_own_waiting_order_and_refuses_one_that_has_gone():
+    db = FakeDb()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0})
+    row = arm(db, deps, trigger_price=100.0, stop_loss_price=95.0)
+    assert update_pending_order(db, BOB, row.id, deps, stop_loss_price=96.0) is None
+    assert update_pending_order(db, ALICE, uuid.uuid4(), deps, stop_loss_price=96.0) is None
+    assert update_pending_order(db, ALICE, row.id, deps) is row  # nothing to change
+    cancel_pending_order(db, ALICE, row.id)
+    with pytest.raises(PendingOrderError) as exc:
+        update_pending_order(db, ALICE, row.id, deps, stop_loss_price=96.0)
+    assert exc.value.status_code == 409 and "already cancelled" in exc.value.detail
+
+
+def test_a_move_that_loses_the_race_to_the_watcher_does_not_change_an_order_that_just_fired():
+    db = FakeDb()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0})
+    row = arm(db, deps, trigger_price=100.0, stop_loss_price=95.0)
+    real_get = db.get
+
+    def get_then_lose_the_race(model, key):
+        found = real_get(model, key)
+        found.status = "triggered"  # the watcher claims it after our read, before our UPDATE
+        return found
+
+    db.get = get_then_lose_the_race
+    with pytest.raises(PendingOrderError) as exc:
+        update_pending_order(db, ALICE, row.id, deps, stop_loss_price=96.0)
+    assert exc.value.status_code == 409 and float(row.stop_loss_price) == 95.0
+
+
+def test_moving_the_trigger_maps_a_price_that_cannot_be_read():
+    db = FakeDb()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0})
+    row = arm(db, deps, trigger_price=100.0)
+    deps.underlying_ltp = lambda *a, **k: (_ for _ in ()).throw(UnderlyingUnavailable("feed down"))
+    with pytest.raises(PendingOrderError) as exc:
+        update_pending_order(db, ALICE, row.id, deps, trigger_price=101.0)
+    assert exc.value.status_code == 503 and float(row.trigger_price) == 100.0
 
 
 def test_list_is_scoped_filtered_and_newest_first():
@@ -591,7 +658,30 @@ def test_the_list_and_cancel_routes(route_env):
     assert exc.value.status_code == 409
 
 
-@pytest.mark.parametrize("method, path", [("POST", "/pending-orders"), ("GET", "/pending-orders"), ("DELETE", f"/pending-orders/{uuid.uuid4()}")])
+def test_the_move_route_changes_the_levels_and_maps_the_errors(route_env):
+    db, _ = route_env
+    created = route.arm_pending_order(body(stop_loss_price=95.0), user=me(), db=db)
+    out = route.move_order(created.id, PendingOrderUpdate(stop_loss_price=97.0, target_price=120.0), user=me(), db=db)
+    assert (out.stop_loss_price, out.target_price, out.trigger_price) == (97.0, 120.0, 100.0)
+    with pytest.raises(HTTPException) as exc:
+        route.move_order(created.id, PendingOrderUpdate(stop_loss_price=101.0), user=me(), db=db)
+    assert exc.value.status_code == 422
+    with pytest.raises(HTTPException) as exc:
+        route.move_order(created.id, PendingOrderUpdate(stop_loss_price=96.0), user=me(BOB), db=db)  # someone else's
+    assert exc.value.status_code == 404
+    with pytest.raises(HTTPException) as exc:
+        route.move_order("not-a-uuid", PendingOrderUpdate(), user=me(), db=db)
+    assert exc.value.status_code == 404
+    route.cancel_order(created.id, user=me(), db=db)
+    with pytest.raises(HTTPException) as exc:
+        route.move_order(created.id, PendingOrderUpdate(stop_loss_price=96.0), user=me(), db=db)
+    assert exc.value.status_code == 409
+    for bad in ({"trigger_price": 0}, {"stop_loss_price": -1}):
+        with pytest.raises(ValidationError):
+            PendingOrderUpdate(**bad)
+
+
+@pytest.mark.parametrize("method, path", [("POST", "/pending-orders"), ("GET", "/pending-orders"), ("PATCH", f"/pending-orders/{uuid.uuid4()}"), ("DELETE", f"/pending-orders/{uuid.uuid4()}")])
 def test_every_route_needs_a_login(method, path):
     from fastapi.testclient import TestClient
 

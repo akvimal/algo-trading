@@ -27,7 +27,20 @@ class Settings(BaseSettings):
     # independent of the square-off job below. Only positions with a
     # stop_loss_price or target_price set are checked each run, so this
     # can run more often than square-off without scanning every position.
-    exit_monitor_poll_seconds: int = 30
+    # 2s (was 30s, then 5s; 2026-10-09): a stop is judged on the price at each
+    # check, so the poll interval IS how late a stop can fire after the price
+    # crosses it. The check asks market-data for LIVE prices (scheduler.
+    # get_ltp_batch_live): the feed's own ticks, held in memory, so a check is a
+    # database query and a local HTTP call - not the Dhan REST quote, which is
+    # limited to about one call per two seconds for the whole account and took 1 to
+    # 9 seconds when other pollers queued ahead of it (a 5s poll over that still
+    # let a stop sit past its price). Falls back to the REST quote for any symbol
+    # the feed has no fresh tick for.
+    exit_monitor_poll_seconds: int = 2
+
+    # The P&L history snapshots that used to ride on the exit-monitor tick: their
+    # own, slower job so recording them can never delay a stop-loss check.
+    pnl_snapshot_poll_seconds: int = 30
 
     # Balance/equity history (app/domain/equity_history.py): how often the
     # scheduled job samples every user account, and the timezone that decides

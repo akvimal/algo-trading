@@ -92,6 +92,23 @@ def require_user_id(credentials: Optional[HTTPAuthorizationCredentials] = Depend
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
 
 
+@dataclass(frozen=True)
+class User:
+    user_id: UUID
+    is_admin: bool
+
+
+def require_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> User:
+    """A signed-in person, with their admin flag (read straight off the token, like require_admin). Raises 401 without one."""
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        return User(user_id=UUID(payload["sub"]), is_admin=payload.get("is_admin") is True)
+    except (jwt.PyJWTError, KeyError, ValueError):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired token")
+
+
 def require_admin(credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)) -> UUID:
     """Unlike get_optional_user_id above, this DOES raise - for the Dhan
     platform-credentials/renew-token/feed-status routes (app/api/routes/
@@ -111,3 +128,16 @@ def require_admin(credentials: Optional[HTTPAuthorizationCredentials] = Depends(
     if payload.get("is_admin") is not True:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin access required")
     return user_id
+
+
+def require_operator(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    x_internal_secret: Optional[str] = Header(default=None),
+) -> Optional[UUID]:
+    """For the platform's Dhan token routes: a signed-in admin, OR a caller holding the internal service secret (the ops script inside the
+    container, which has no browser login). Anyone else is refused. These routes can replace the platform's data credentials, so they must never
+    be open to the internet."""
+    secret = settings.internal_service_secret
+    if secret and x_internal_secret and hmac.compare_digest(x_internal_secret.encode(), secret.encode()):
+        return None
+    return require_admin(credentials)

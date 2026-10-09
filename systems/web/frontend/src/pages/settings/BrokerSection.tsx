@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { ApiError, api } from "../../api/http";
-import { checkLiveData, saveCredentials, updateAccount } from "../../api/settings";
+import { checkLiveData, refreshPlatformToken, saveCredentials, updateAccount } from "../../api/settings";
+import { useIsAdmin } from "../../auth/AuthContext";
 import type { Account, Credentials, LiveEligibility } from "../../api/types";
 import { ErrorNotice, Skeleton } from "../../components/bits";
 import { TextField } from "../../components/Field";
 import { formatInr } from "../../format";
 import { useResource, type Resource } from "../../hooks/useResource";
 import { buildCredentialsPatch, buildLiveOnPatch, liveStatus, type KeyField } from "../settingsModel";
+import { refreshMessage } from "../platformTokenModel";
+import { PlatformTokenCard } from "./PlatformTokenCard";
 import { graduation } from "../portfolioModel";
 
 export const LIVE_CONSENT_TEXT =
@@ -17,9 +20,11 @@ const msg = (e: unknown) => (e instanceof ApiError ? e.message : "Something went
 type Props = { creds: Resource<Credentials>; accounts: Account[]; onAccountSaved: () => void };
 
 export function BrokerSection({ creds, accounts, onAccountSaved }: Props) {
+  const isAdmin = useIsAdmin();
   return (
     <div className="stack">
       <DhanCard creds={creds} />
+      {isAdmin && <PlatformTokenCard />}
       {accounts
         .filter((a) => a.segment !== "CRYPTO")
         .map((a) => (
@@ -37,6 +42,7 @@ function StatusPill({ on, yes, no }: { on: boolean; yes: string; no: string }) {
 /** The connection that drives live prices, and later real orders. Secrets are write-only: after
  * saving, only "connected" and a masked client ID ever come back. */
 function DhanCard({ creds }: { creds: Resource<Credentials> }) {
+  const isAdmin = useIsAdmin();
   const [clientId, setClientId] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -52,7 +58,17 @@ function DhanCard({ creds }: { creds: Resource<Credentials> }) {
       await saveCredentials(patch);
       setClientId("");
       setToken("");
-      setResult({ kind: "ok", text: "Saved. Use “Check live data” to confirm it works." });
+      let text = "Saved. Use “Check live data” to confirm it works.";
+      if (isAdmin && patch.dhan_access_token) {
+        // The platform's scans and feed use the owner's saved token: pull it in now rather than waiting for the periodic check.
+        try {
+          const r = refreshMessage(await refreshPlatformToken());
+          text += r.ok ? ` ${r.text.replace("Now using the token saved above.", "The platform\u2019s scans and price feed now use it too.")}` : ` The platform kept its own token: ${r.text}`;
+        } catch {
+          text += " The platform will pick it up within a few minutes.";
+        }
+      }
+      setResult({ kind: "ok", text });
       creds.reload();
     } catch (e) {
       setResult({ kind: "error", text: msg(e) });

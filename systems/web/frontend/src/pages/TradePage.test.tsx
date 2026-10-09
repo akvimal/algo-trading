@@ -24,6 +24,7 @@ let prices: Record<string, number>;
 let placeManual: (body: any) => Response;
 let placeOption: (body: any) => Response;
 let waiting: Record<string, any>[];
+let patchFails: string | null = null;
 let lotSize: number;
 let attachFails: boolean;
 let candleFailures: number;
@@ -31,6 +32,7 @@ let structure: Record<string, any>;
 let structureFails: boolean;
 let ltpFails: boolean;
 let positionRows: Record<string, any>[];
+let holdPositions: Promise<void> | null = null; // a test sets it to keep the trades request waiting
 let groupRows: Record<string, any>[];
 let tradeCallsFail: boolean;
 let oiFails: boolean;
@@ -69,6 +71,7 @@ beforeEach(() => {
   structureFails = false;
   ltpFails = false;
   positionRows = [];
+  holdPositions = null;
   groupRows = [];
   tradeCallsFail = false;
   oiFails = false;
@@ -80,6 +83,7 @@ beforeEach(() => {
   profilePrefs = null;
   structure = { ...emptyStructure };
   waiting = [];
+  patchFails = null;
   screenIs(false);
   account = {
     segment: "NSE", starting_balance: 200000, current_balance: 200000, realized_pnl: 0, unrealized_pnl: 0, capital_per_trade: 100000,
@@ -148,6 +152,11 @@ beforeEach(() => {
       if (url.includes("/study-notes")) return json([]);
       if (url.includes("/pending-orders") && method === "POST")
         return json({ id: "w1", segment: "NSE", symbol: body.symbol, action: body.action, strategy: body.strategy, trigger_price: body.trigger_price, stop_loss_price: body.stop_loss_price ?? null, target_price: body.target_price ?? null, status: "pending", status_reason: null, expires_at: "2026-09-27T00:00:00Z", last_price: null }, 201);
+      if (url.includes("/pending-orders/") && method === "PATCH") {
+        if (patchFails) return json({ detail: patchFails }, 409);
+        waiting = waiting.map((w) => (w.id === url.split("/pending-orders/")[1] ? { ...w, ...(body.trigger_price != null ? { trigger_price: body.trigger_price } : {}), ...(body.stop_loss_price != null ? { stop_loss_price: body.stop_loss_price } : {}), ...(body.target_price != null ? { target_price: body.target_price } : {}) } : w));
+        return json(waiting.find((w) => w.id === url.split("/pending-orders/")[1]));
+      }
       if (url.includes("/pending-orders") && method === "DELETE") {
         waiting = [];
         return json({ id: "w1", status: "cancelled" });
@@ -179,6 +188,7 @@ beforeEach(() => {
         return json(row ?? {});
       }
       if (url.includes("/positions") || url.includes("/option-groups")) {
+        if (holdPositions) await holdPositions;
         if (tradeCallsFail && q("with_live_pnl") === "true") return json({ detail: "quotes down" }, 503);
         const rows = url.includes("/positions") ? positionRows : groupRows;
         return json(rows.filter((r) => (!q("status") || r.status === q("status")) && (!q("segment") || (r.segment ?? "NSE") === q("segment"))));
@@ -253,21 +263,65 @@ describe("the page", () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
     expect(await t.findByLabelText("Number of lots")).toBeInTheDocument();
+    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ })); // the instrument is a badge in the header that opens a menu
     expect(t.getByRole("button", { name: "Option spread" })).toBeInTheDocument();
+    expect(t.getByRole("button", { name: "Option" })).toBeInTheDocument();
   });
 
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
+    expect(t.getByRole("button", { name: "What to trade: Future" })).toBeInTheDocument();
+    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ }));
     expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not show the new-trade form while it is still unknown whether a trade is open: the open trade's card is the first thing shown, not a form that is replaced", async () => {
+    positionRows = [{ id: "p1", symbol: "RELIANCE", exchange: "NSE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), exit_time: null, status: "OPEN", unrealized_pnl: 50, option_group_id: null, stop_loss_price: 990, target_price: null }];
+    let release!: () => void;
+    holdPositions = new Promise<void>((r) => (release = r));
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/positions"))).toBe(true)); // the request is out, and held
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument(); // no form while it is not known
+    expect(screen.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByTestId("ticket-positions")).toBeInTheDocument(); // the open trade
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument(); // and the form never appeared
+    expect(screen.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
+  });
+
+  it("shows the form once the answer is that nothing is open, or when the answer cannot be had", async () => {
+    let release!: () => void;
+    holdPositions = new Promise<void>((r) => (release = r));
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByTestId("ticket")).toBeInTheDocument();
+  });
+
+  it("changes the instrument for one trade from the header badge, and closes the menu once chosen", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const t = await ticket();
+    expect(t.queryByRole("group", { name: "What to trade" })).not.toBeInTheDocument(); // no row of its own, and the menu is shut
+    await user.click(t.getByRole("button", { name: "What to trade: Future" }));
+    await user.click(t.getByRole("button", { name: "Option" }));
+    expect(t.queryByRole("group", { name: "What to trade" })).not.toBeInTheDocument(); // closed
+    expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument();
+    expect(t.getByLabelText("Strike")).toBeInTheDocument(); // the option-only field follows
   });
 
   it("starts the ticket on the person's preferred option style, on a symbol that has options", async () => {
     profilePrefs = { default_instrument: "option", default_option_strategy: "spread" };
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
-    await waitFor(() => expect(t.getByRole("button", { name: "Option spread" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option spread" })).toBeInTheDocument());
+    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ }));
     expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "false");
+    expect(t.getByRole("button", { name: "Option spread" })).toHaveAttribute("aria-pressed", "true");
     expect(t.getByLabelText("Strike")).toBeInTheDocument(); // the option-only strike field follows
   });
 
@@ -283,12 +337,12 @@ describe("the page", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     let t = await ticket();
-    await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument());
     await user.type(t.getByLabelText("Stop-loss"), "900");
     await user.click(t.getByRole("button", { name: /Buy NIFTY, paper order/ }));
     await waitFor(() => expect(posts("/option-groups/manual")).toHaveLength(1));
     t = within(await screen.findByTestId("ticket"));
-    expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument();
   });
 
   it("marks the plan on the chart and shows the risk in rupees as you type", async () => {
@@ -327,6 +381,157 @@ describe("the page", () => {
   });
 });
 
+describe("the plan picker: market state and plan", () => {
+  beforeEach(() => screenIs(true));
+  const down = { regime: "trending_down", adx: 31, atr_percentile: 40, trend: "down", advice: "x" };
+  const ranging = { regime: "ranging", adx: 14, atr_percentile: 40, trend: "range", advice: "x" };
+  const state = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Market state" })).getByRole("button", { name });
+  const dir = (t: ReturnType<typeof within>, name: "Up" | "Down") => within(t.getByRole("group", { name: "Trend direction" })).getByRole("button", { name });
+  const plan = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name });
+
+  it("pre-selects what the market is doing from the regime read, and says where that came from", async () => {
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
+    expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "false");
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read (ADX 30). Tap another to change it.");
+    expect(t.queryByTestId("plan-hint")).not.toBeInTheDocument(); // nothing until a plan is chosen
+  });
+
+  it("a plan sets the side the market implies and says how to enter; a pullback or reversal waits for a price, a breakout can be taken at once", async () => {
+    regimes = { default: down };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Down")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Pullback")); // a downtrend: with it is a Sell, waiting for price to come back up to a zone
+    expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Wait for a price" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend pullback. Wait for price to come back to a zone, then go with the trend.");
+    await user.click(plan(t, "Reversal / fade")); // against a downtrend: a Buy
+    expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Buy" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Trend reversal\. Against the trend/);
+    expect(await t.findByTestId("plan-nudge")).toHaveTextContent(/riskier plan.*half your usual size/);
+    await user.click(plan(t, "Reversal / fade")); // tapping it again lets go of it
+    expect(t.queryByTestId("plan-hint")).not.toBeInTheDocument();
+  });
+
+  it("a breakout leaves a market order a market order", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Breakout"));
+    expect(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Market" })).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout. Enter as the previous high is taken.");
+  });
+
+  it("in a range a pullback is not offered, the label is Range fade or Range break, and the person picks the side", async () => {
+    regimes = { default: ranging };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "true"));
+    expect(plan(t, "Pullback")).toBeDisabled();
+    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));
+    await user.click(plan(t, "Reversal / fade"));
+    expect(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" })).toHaveAttribute("aria-pressed", "true"); // the plan does not say: it stays
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range fade\. Fade the edge/);
+    await user.click(plan(t, "Breakout"));
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range break\. Enter as an edge that has been tested twice or more breaks/);
+  });
+
+  it("the person can overrule the read, and the label follows; tapping the read again lets go of the override", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Breakout"));
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
+    await user.click(state(t, "Ranging"));
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("Your read.");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range break\./);
+    expect(within(t.getByTestId("plan-block")).getByText("Tagged Range break.")).toBeInTheDocument();
+    await user.click(state(t, "Trending")); // back to what the read says
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
+  });
+
+  it("a trend has an up/down switch joined to its badge and a range has none; flipping it is your own read, flipping back is following the market again", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true")); // the read is an uptrend
+    expect(dir(t, "Down")).toHaveAttribute("aria-pressed", "false");
+    await user.click(plan(t, "Breakout"));
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Enter as the previous high is taken/);
+    await user.click(dir(t, "Down")); // a downtrend instead: the same plan, now about the previous low, and a Sell
+    expect(dir(t, "Down")).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("Your read.");
+    expect(t.getByTestId("plan-hint")).toHaveTextContent(/Trend breakout\. Enter as the previous low is taken/);
+    await user.click(dir(t, "Up")); // what the market says again: not a pin
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
+    await user.click(state(t, "Ranging"));
+    expect(t.queryByRole("group", { name: "Trend direction" })).not.toBeInTheDocument(); // a range has no direction
+    expect(state(t, "Trending")).toHaveAttribute("aria-pressed", "false");
+    await user.click(state(t, "Trending")); // back to a trend: the direction the market read shows
+    expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true");
+    expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
+  });
+
+  it("choosing Ranging while a pullback is picked drops the pullback, which does not exist there", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Pullback"));
+    expect(t.getByTestId("plan-hint")).toBeInTheDocument();
+    await user.click(state(t, "Ranging"));
+    expect(t.queryByTestId("plan-hint")).not.toBeInTheDocument();
+    expect(plan(t, "Pullback")).toBeDisabled();
+  });
+
+  it("warns, without blocking, when the side is against the plan", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Pullback")); // an uptrend: Buy
+    await user.click(within(t.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Market" })); // (a pullback starts as "wait for a price", which needs a price typed)
+    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));
+    expect(await t.findByTestId("plan-nudge")).toHaveTextContent(/against the plan: a pullback in an uptrend is a Buy/);
+    expect(t.getByRole("button", { name: /Sell RELIANCE/ })).toBeEnabled();
+  });
+
+  it("keeps what you saw, the reason and the confidence in one optional, closed section that says what is in it", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    const notes = t.getByTestId("ticket-notes");
+    expect(notes).not.toHaveAttribute("open");
+    expect(within(notes).getByText("Notes (optional)")).toBeInTheDocument();
+    await user.selectOptions(t.getByLabelText("What did you see?"), "Fair value gap");
+    await user.click(t.getByRole("button", { name: "3" }));
+    expect(within(notes).getByText(/Notes \(optional\) · Fair value gap · confidence 3/)).toBeInTheDocument();
+  });
+
+  it("a waiting order carries the derived label too", async () => {
+    regimes = { default: ranging };
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    const t = await ticket();
+    await waitFor(() => expect(state(t, "Ranging")).toHaveAttribute("aria-pressed", "true"));
+    await user.click(plan(t, "Reversal / fade")); // the first time: waits for a price
+    await user.type(t.getByLabelText("Enter when the price reaches"), "1010");
+    await user.type(t.getByLabelText("Stop-loss"), "1020");
+    await user.type(t.getByLabelText("Target"), "980");
+    await user.click(within(t.getByRole("group", { name: "Side" })).getByRole("button", { name: "Sell" }));
+    await user.click(t.getByRole("button", { name: /Sell RELIANCE, wait for price/ }));
+    await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
+    expect(posts("/pending-orders")[0].body).toMatchObject({ action: "SELL", trigger_price: 1010, setup_tag: "Range fade" });
+  });
+});
+
 describe("placing", () => {
   it("places a market order at the live price, sized by the server from the stop, and links to Portfolio", async () => {
     const user = userEvent.setup();
@@ -334,15 +539,16 @@ describe("placing", () => {
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    await user.click(within(t.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
+    await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" })); // the regime read is an uptrend: a trend breakout
+    await user.selectOptions(t.getByLabelText("What did you see?"), "Order block");
     await user.type(t.getByLabelText(/Reason/), "Retested the daily OB and held.");
     await user.click(t.getByRole("button", { name: "4" }));
     await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
     await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
     expect(posts("/positions/manual")[0].body).toMatchObject({
       segment: "NSE", symbol: "RELIANCE", action: "BUY", instrument_type: "spot", price: 1000, order_type: "market",
-      stop_loss_price: 990, target_price: 1030, setup_tag: "Breakout", confidence: 4, risk_managed: true, trend_followed: true, entry_interval: "15min",
-      notes: "Retested the daily OB and held.",
+      stop_loss_price: 990, target_price: 1030, setup_tag: "Trend breakout", confidence: 4, risk_managed: true, trend_followed: true, entry_interval: "15min",
+      notes: "Saw: Order block. Retested the daily OB and held.", // what was seen first, then their own words
     });
     expect("quantity" in posts("/positions/manual")[0].body).toBe(false);
     expect(await t.findByText("Paper order placed.")).toBeInTheDocument();
@@ -516,35 +722,47 @@ async function pickLayout(user: ReturnType<typeof userEvent.setup>, name: string
 describe("the plan on the ticket", () => {
   beforeEach(() => screenIs(true));
 
-  it("is one block: the plan chip as its header, a row for each thing you control, and no tally", async () => {
+  it("is one block: the plan chip as its header and what is not about a field, with the stop, size and reward marks on the fields themselves", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
     const block = within(t.getByTestId("plan-block"));
     expect(block.getByText("Your plan")).toBeInTheDocument();
     expect(block.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
-    expect(block.getByText("No stop: your risk is open-ended.")).toBeInTheDocument();
-    expect(block.getByText("No target: the reward is unplanned.")).toBeInTheDocument();
-    expect(block.getByText("Not tagged.")).toBeInTheDocument();
-    expect(block.getByText("At the market.")).toBeInTheDocument();
+    // the stop and the reward are marks beside their own fields (the words are the mark's tooltip)
+    expect(within(t.getByTestId("t-stop-status-icon")).queryByText(/./)).toBeNull(); // an icon, no text of its own
+    expect(t.getByTestId("t-stop-status-icon")).toHaveAccessibleName("No stop: your risk is open-ended.");
+    expect(t.getByTestId("t-target-status-icon")).toHaveAccessibleName("No target: the reward is unplanned.");
+    expect(t.queryByTestId("t-stop-status")).not.toBeInTheDocument(); // the mark alone: no line of words under the stop or the target
+    expect(t.queryByTestId("t-target-status")).not.toBeInTheDocument();
+    expect(block.queryByText("No stop: your risk is open-ended.")).not.toBeInTheDocument(); // no longer a row of the block
+    expect(block.getByText("Not tagged: pick a plan above.")).toBeInTheDocument(); // needs attention: shown straight away
+    expect(block.getByTestId("plan-calm")).not.toHaveAttribute("open"); // the rows that are only for information are one closed line
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
-    await user.click(within(block.getByRole("group", { name: "Setup" })).getByRole("button", { name: "Breakout" }));
-    expect(await block.findByText("Tagged Breakout.")).toBeInTheDocument();
-    expect(block.getByText(/At the system size/)).toBeInTheDocument();
-    expect(block.getByText(/3\.0 to 1, your minimum is/)).toBeInTheDocument();
+    await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" }));
+    expect(await block.findByText("Tagged Trend breakout.")).toBeInTheDocument();
+    expect(block.queryByText("Not tagged: pick a plan above.")).not.toBeInTheDocument();
+    // everything is fine now: a tick beside each field (no words under them), and nothing for the plan block to flag
+    await waitFor(() => expect(t.getByTestId("t-stop-status-icon")).toHaveAccessibleName("At 990."));
+    expect(t.queryByTestId("t-stop-status")).not.toBeInTheDocument();
+    expect(t.getByTestId("t-target-status-icon")).toHaveAccessibleName(/3\.0 to 1, your minimum is/);
+    expect(t.queryByTestId("t-target-status")).not.toBeInTheDocument();
+    expect(t.getByTestId("t-lots-status-icon")).toHaveAccessibleName(/At the system size/);
+    expect(block.getByText(/All checks \(\d+\) are fine/)).toBeInTheDocument();
     expect(block.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R 3\.0/);
     expect(block.queryByText(/in favour/)).not.toBeInTheDocument();
   });
 
-  it("warns when the size was typed above the system size", async () => {
+  it("marks the size field, and says why under it, when the size was typed above the system size", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Number of shares"), "5000");
-    expect(await within(t.getByTestId("plan-block")).findByText(/Above the system size/)).toBeInTheDocument();
-    expect(within(t.getByTestId("plan-block")).getAllByRole("img", { name: "Caution" }).length).toBeGreaterThan(0);
+    expect(await t.findByTestId("t-lots-status")).toHaveTextContent(/Above the system size/);
+    expect(t.getByTestId("t-lots-status-icon")).toHaveAccessibleName(/Above the system size/);
+    expect(within(t.getByTestId("plan-block")).queryByText(/Above the system size/)).not.toBeInTheDocument();
   });
 
   it("shows today: a cooldown with its minutes, trades against the cap, and room under the loss limit", async () => {
@@ -605,7 +823,7 @@ describe("the plan on the ticket", () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
     await loaded();
-    await waitFor(() => expect(t.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument());
     expect(t.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
     await user.click(t.getByRole("button", { name: "Add stop line" }));
     await user.click(t.getByRole("button", { name: "Add target line" }));
@@ -735,6 +953,9 @@ describe("waiting orders", () => {
     expect(posts("/pending-orders")[0].body).toMatchObject({ segment: "NSE", symbol: "RELIANCE", action: "BUY", trigger_price: 980, stop_loss_price: 970, strategy: "future" });
     expect(await t.findByText(/placed when the price reaches 980/)).toBeInTheDocument();
     expect(t.queryByRole("link", { name: "See it in Portfolio" })).not.toBeInTheDocument(); // a waiting order is not a position yet
+    // right after placing it, the notice names that order as just placed rather than "you already have" one (which reads as a duplicate)
+    expect(within(await t.findByTestId("waiting-notice")).getByText(/Placed: a waiting .* order at 980/)).toBeInTheDocument();
+    expect(t.queryByText(/You already have/)).not.toBeInTheDocument();
     const list = within(await screen.findByTestId("waiting"));
     expect(list.getByText("980")).toBeInTheDocument();
     await user.click(list.getByRole("button", { name: "Cancel" }));
@@ -800,6 +1021,7 @@ describe("options", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
+    await user.click(await t.findByRole("button", { name: /^What to trade/ }));
     await user.click(await t.findByRole("button", { name: "Option spread" }));
     await user.selectOptions(t.getByLabelText("Strike"), "OTM1");
     await user.type(t.getByLabelText("Stop-loss"), "990");
@@ -1365,6 +1587,20 @@ describe("drawing tools", () => {
     expect(JSON.parse(localStorage.getItem("web.chart.drawings:NSE:NIFTY")!)[0].points[1].value).toBe(1030);
   });
 
+  it("takes a zone's alert bell off the chart when the zone is deleted, not only after a refresh", async () => {
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=NIFTY");
+    const c = await loaded();
+    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+    await user.click(bar.getByRole("button", { name: "Zone (supply or demand)" }));
+    const zone = c.overlaysNamed("rect").find((o) => o.points.length === 0)!;
+    act(() => c.finishDrawing(zone.id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[10].timestamp, value: 1020 }]));
+    await waitFor(() => expect(c.overlaysNamed("drawTag")).toHaveLength(1)); // a zone is armed as it is drawn, so it carries a bell
+    act(() => c.removeOverlay(zone.id)); // what a right-click or Delete does
+    await waitFor(() => expect(c.overlaysNamed("drawTag")).toHaveLength(0));
+    expect(c.overlaysNamed("rect")).toHaveLength(0);
+  });
+
   it("choosing the same tool again, or the cursor, puts it down without drawing anything", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
@@ -1850,6 +2086,16 @@ describe("two linked charts", () => {
     await loaded(1);
   };
 
+  it("keeps the Notes panel open when a click in the other chart makes it the active one", async () => {
+    const user = userEvent.setup();
+    await pair(user);
+    await user.click(screen.getByTestId("notes-toggle"));
+    expect(await screen.findByLabelText("Notes on NIFTY")).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getAllByTestId("chart-pane")[1].querySelector(".chart-canvas")!); // the other chart becomes active
+    expect(await screen.findByLabelText("Notes on BANKNIFTY")).toBeInTheDocument(); // the thread follows the active chart's instrument...
+    expect(screen.getByTestId("notes-toggle")).toHaveAttribute("aria-expanded", "true"); // ...without folding shut
+  });
+
   it("shows NIFTY and BANKNIFTY side by side, each with its own price and candles", async () => {
     prices = { default: 1000, NIFTY: 23140.5, BANKNIFTY: 55580.4 };
     const user = userEvent.setup();
@@ -2096,6 +2342,7 @@ describe("saved combos", () => {
 
     await openCombos(user);
     await user.click(screen.getByRole("button", { name: "+ Save NIFTY + RELIANCE" }));
+    await openCombos(user); // saving closes the menu
     expect(await screen.findByRole("button", { name: "NIFTY + RELIANCE" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /\+ Save/ })).not.toBeInTheDocument(); // now saved: nothing more to offer
     expect(JSON.parse(localStorage.getItem("web.workstation.combos")!)).toHaveLength(2);
@@ -2136,6 +2383,7 @@ describe("saved combos", () => {
 
     await openCombos(user);
     await user.click(screen.getByRole("button", { name: "+ Save NIFTY 15m + NIFTY 1h" }));
+    await openCombos(user); // saving closes the menu
     expect(await screen.findByRole("button", { name: "NIFTY 15m + NIFTY 1h" })).toBeInTheDocument();
     const saved = JSON.parse(localStorage.getItem("web.workstation.combos")!);
     expect(saved).toHaveLength(2);
@@ -2890,13 +3138,13 @@ describe("alerts on drawings", () => {
   const bar = () => screen.getByRole("group", { name: "Alerts on drawings" });
   const flash = () => screen.queryByTestId("alert-flash");
 
-  it("offers an alert on a selected line, reading out its level, and says it works only while the page is open", async () => {
+  it("offers an alert on a selected line, reading out its level, and says what only works while the page is open", async () => {
     const { select } = await open([level(1015)]);
     expect(screen.queryByRole("group", { name: "Alerts on drawings" })).not.toBeInTheDocument(); // nothing selected, nothing armed
     select("horizontalStraightLine");
     expect(within(bar()).getByText("1,015")).toBeInTheDocument();
     expect(within(bar()).getByRole("button", { name: "Alert me" })).toHaveAttribute("aria-pressed", "false");
-    expect(within(bar()).getByText(/only while this page is open/)).toBeInTheDocument();
+    expect(within(bar()).getByTestId("alert-limits")).toHaveTextContent(/Zones and horizontal levels are also watched by the server and sent to your Telegram, with this page closed\. A sloped line fires only while this page is open/);
   });
 
   it("arms it, keeps it with the drawing, and counts it", async () => {
@@ -3143,7 +3391,9 @@ describe("moving the stop and target of open trades", () => {
     id: "p1", symbol: "RELIANCE", exchange: "NSE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1010, entry_time: iso(8),
     exit_price: null, exit_time: null, pnl: null, unrealized_pnl: -100, status: "OPEN", option_group_id: null, stop_loss_price: 990, target_price: 1030, ...over,
   });
-  const lines = (c: ReturnType<typeof chart>) => c.overlaysNamed("planLine").filter((o) => /^(position|group):/.test(o.extendData.key));
+  // the stop and target lines (the ones that can be dragged); the entry line and the waiting orders' lines are asserted on their own below
+  const lines = (c: ReturnType<typeof chart>) => c.overlaysNamed("planLine").filter((o) => /^(position|group):.*:(stop|target)$/.test(o.extendData.key));
+  const allLevelLines = (c: ReturnType<typeof chart>) => c.overlaysNamed("planLine").filter((o) => /^(position|group|waiting):/.test(o.extendData.key));
   const line = (c: ReturnType<typeof chart>, key: string) => lines(c).find((o) => o.extendData.key === key)!;
   const drag = (c: ReturnType<typeof chart>, key: string, value: number) => act(() => c.moveOverlay(line(c, key).id, [{ timestamp: c.data[c.data.length - 1].timestamp, value }]));
   const puts = (part: string) => calls.filter((c) => c.method === "PUT" && c.url.includes(part));
@@ -3154,11 +3404,106 @@ describe("moving the stop and target of open trades", () => {
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(3));
     expect(lines(c).map((o) => [o.extendData.key, o.extendData.label, o.points[0].value]).sort()).toEqual([
-      ["position:nostop:target", "Target · Long 10", 1040],
-      ["position:p1:stop", "Stop · Long 10", 990],
-      ["position:p1:target", "Target · Long 10", 1030],
+      ["position:nostop:target", "Target · Long 10 · +₹300", 1040], // what it would make at the target: (1040 - 1010) x 10
+      ["position:p1:stop", "Stop · Long 10 · −₹200", 990], // and lose at the stop: (990 - 1010) x 10
+      ["position:p1:target", "Target · Long 10 · +₹200", 1030],
     ]);
-    expect(screen.getByTestId("chart-summary")).toHaveTextContent(/Stops and targets of open trades: Stop · Long 10 990/);
+    expect(screen.getByTestId("chart-summary")).toHaveTextContent(/Entries, stops and targets of your open and waiting trades: .*Stop · Long 10 · −₹200 at 990/);
+  });
+
+  it("draws the entry line of an open trade, with its quantity and live result, joined to its stop and target by a thin vertical line", async () => {
+    positionRows = [long(), long({ id: "old", status: "CLOSED", pnl: 5 })];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+    const entry = allLevelLines(c).find((o) => o.extendData.key === "position:p1:entry")!;
+    expect(entry.points[0].value).toBe(1010);
+    expect(entry.extendData).toMatchObject({ label: "Long 10 · −₹100", dashed: false }); // the live result, not the plan
+    expect(entry.handlers.lock).toBe(true); // shown only: the entry is not something to drag
+    const [span] = c.overlaysNamed("tradeSpan");
+    expect(span.points.map((p: any) => p.value)).toEqual([990, 1030]); // from the lowest of its levels to the highest
+    expect(c.overlaysNamed("tradeSpan")).toHaveLength(1); // one per trade
+  });
+
+  it("draws an order that is still waiting for its price as a dashed entry, stop and target", async () => {
+    waiting = [{ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "SELL", strategy: "future", trigger_price: 1020, stop_loss_price: 1030, target_price: 1000, status: "pending", status_reason: null, expires_at: "x", last_price: null }];
+    renderAt("/trade?symbol=RELIANCE");
+    const c = await loaded();
+    await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+    expect(allLevelLines(c).map((o) => [o.extendData.key, o.extendData.label, o.points[0].value, o.extendData.dashed]).sort()).toEqual([
+      ["waiting:w1:entry", "Waiting SELL", 1020, true],
+      ["waiting:w1:stop", "Stop · waiting SELL", 1030, true],
+      ["waiting:w1:target", "Target · waiting SELL", 1000, true],
+    ]);
+    expect(c.overlaysNamed("tradeSpan")).toHaveLength(1);
+  });
+
+  describe("a waiting order's lines on the chart", () => {
+    const order = (over: Record<string, any> = {}) => ({ id: "w1", segment: "NSE", symbol: "RELIANCE", action: "SELL", strategy: "future", trigger_price: 1020, stop_loss_price: 1030, target_price: 1000, status: "pending", status_reason: null, expires_at: "x", last_price: null, ...over });
+    const waitingLine = (c: ReturnType<typeof chart>, field: string) => allLevelLines(c).find((o) => o.extendData.key === `waiting:w1:${field}`)!;
+    const dragWaiting = (c: ReturnType<typeof chart>, field: string, value: number) => act(() => c.moveOverlay(waitingLine(c, field).id, [{ timestamp: c.data[c.data.length - 1].timestamp, value }]));
+    const patches = () => calls.filter((x) => x.method === "PATCH" && x.url.includes("/pending-orders/"));
+
+    it("dragging the stop, the target or the entry moves that level of the order on the server, and says so", async () => {
+      waiting = [order()];
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      dragWaiting(c, "stop", 1035.5555);
+      await waitFor(() => expect(patches()).toHaveLength(1));
+      expect(patches()[0].body).toEqual({ stop_loss_price: 1035.56 });
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss of the waiting order moved to 1,035.56.");
+      dragWaiting(c, "target", 990);
+      await waitFor(() => expect(patches()).toHaveLength(2));
+      expect(patches()[1].body).toEqual({ target_price: 990 });
+      dragWaiting(c, "entry", 1025);
+      await waitFor(() => expect(patches()).toHaveLength(3));
+      expect(patches()[2].body).toEqual({ trigger_price: 1025 });
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Trigger price of the waiting order moved to 1,025.");
+      await waitFor(() => expect(waitingLine(c, "entry").points[0].value).toBe(1025)); // the reload confirms it
+    });
+
+    it("refuses a move that would put the stop or target on the wrong side of the trigger, sends nothing, and puts the line back", async () => {
+      waiting = [order()];
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      dragWaiting(c, "stop", 1010); // a sell's stop belongs above its trigger of 1020
+      expect(await screen.findByTestId("level-note")).toHaveTextContent(/stop-loss of a sell order has to stay above its trigger price/);
+      expect(patches()).toHaveLength(0);
+      await waitFor(() => expect(waitingLine(c, "stop").points[0].value).toBe(1030));
+      dragWaiting(c, "entry", 1035); // the trigger would pass the stop
+      await waitFor(() => expect(waitingLine(c, "entry").points[0].value).toBe(1020));
+      expect(patches()).toHaveLength(0);
+    });
+
+    it("puts the line back and says why when the server refuses (for instance the order has just fired)", async () => {
+      waiting = [order()];
+      patchFails = "this order is already triggered";
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      dragWaiting(c, "target", 990);
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("this order is already triggered");
+      await waitFor(() => expect(waitingLine(c, "target").points[0].value).toBe(1000));
+    });
+
+    it("only the entry line has the ×, and clicking it cancels the order and takes its lines off the chart", async () => {
+      waiting = [order()];
+      renderAt("/trade?symbol=RELIANCE");
+      const c = await loaded();
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(3));
+      expect(waitingLine(c, "entry").extendData.cancellable).toBe(true);
+      expect(waitingLine(c, "stop").extendData.cancellable).toBe(false);
+      act(() => c.click(waitingLine(c, "stop").id, "close")); // a click on a line that has no × does nothing
+      act(() => c.click(waitingLine(c, "entry").id)); // nor does one on the line itself
+      expect(calls.some((x) => x.method === "DELETE")).toBe(false);
+      act(() => c.click(waitingLine(c, "entry").id, "close"));
+      await waitFor(() => expect(calls.some((x) => x.method === "DELETE" && x.url.endsWith("/pending-orders/w1"))).toBe(true));
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Waiting order cancelled.");
+      await waitFor(() => expect(allLevelLines(c)).toHaveLength(0));
+      expect(c.overlaysNamed("tradeSpan")).toHaveLength(0);
+    });
   });
 
   it("dragging the stop saves it, says so, and the line stays where it was put", async () => {
@@ -3174,6 +3519,44 @@ describe("moving the stop and target of open trades", () => {
     expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 995.12.");
     await waitFor(() => expect(line(c, "position:p1:stop").points[0].value).toBe(995.12)); // the reload confirms it
     expect(line(c, "position:p1:stop").id).toBe(id); // the same line, not a new one
+  });
+
+  it("takes the \"Stop-loss moved\" message away once that trade is over (it hit its stop), and lets a confirmation fade by itself", async () => {
+    positionRows = [long()];
+    renderAt("/trade?symbol=RELIANCE");
+    await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+    const c = await loaded();
+    await waitFor(() => expect(lines(c)).toHaveLength(2));
+    drag(c, "position:p1:stop", 995);
+    expect(await screen.findByTestId("level-note")).toHaveTextContent("Stop-loss moved to 995.");
+    positionRows = [long({ status: "CLOSED", exit_price: 995, exit_time: iso(0), pnl: -150, exit_reason: "stop_loss" })]; // the server closed it on the stop
+    act(() => void document.dispatchEvent(new Event("visibilitychange"))); // the page re-reads its trades
+    await waitFor(() => expect(screen.queryByTestId("level-note")).not.toBeInTheDocument());
+  });
+
+  it("a confirmation about a trade that is still open fades after a few seconds, while an error stays", async () => {
+    positionRows = [long()];
+    const real = window.setTimeout.bind(window);
+    const fades: Array<() => void> = []; // the 8-second fade timers, held so the test does not wait for them
+    const spy = vi.spyOn(window, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => (ms === 8_000 ? (fades.push(fn), 0) : real(fn, ms))) as never);
+    try {
+      renderAt("/trade?symbol=RELIANCE");
+      await waitFor(() => expect(screen.getByTestId("price-0")).toHaveTextContent("1,000"));
+      const c = await loaded();
+      await waitFor(() => expect(lines(c)).toHaveLength(2));
+      drag(c, "position:p1:target", 1040);
+      expect(await screen.findByTestId("level-note")).toHaveTextContent("Target moved to 1,040.");
+      await waitFor(() => expect(fades.length).toBeGreaterThan(0));
+      act(() => fades.splice(0).forEach((f) => f()));
+      await waitFor(() => expect(screen.queryByTestId("level-note")).not.toBeInTheDocument());
+      drag(c, "position:p1:stop", 1005); // above the price of a long: refused, and that message does not fade
+      expect(await screen.findByTestId("level-note")).toHaveTextContent(/below the current price/);
+      await new Promise((r) => real(r, 50));
+      expect(fades).toHaveLength(0);
+      expect(screen.getByTestId("level-note")).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("an open trade with no target offers Add line and Pick on chart, and Add line saves a target on the winning side", async () => {
@@ -3381,7 +3764,7 @@ describe("moving the stop and target of open trades", () => {
     renderAt("/trade?symbol=RELIANCE");
     const c = await loaded();
     await waitFor(() => expect(lines(c)).toHaveLength(2));
-    expect(line(c, "position:p1:stop").extendData.label).toBe("Stop · Long 10 (trailing)");
+    expect(line(c, "position:p1:stop").extendData.label).toBe("Stop · Long 10 (trailing) · −₹200");
     expect(line(c, "position:p1:stop").handlers.lock).toBe(true);
     expect(line(c, "position:p1:target").handlers.lock).toBe(false);
   });

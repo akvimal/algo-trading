@@ -10,7 +10,7 @@ this system, otherwise in-memory-cache-only by design, now has one.
 
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Column, Date, Float, Integer, Numeric, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, Column, Date, Float, Integer, Numeric, SmallInteger, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base
 
@@ -67,6 +67,21 @@ class PriceAlert(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_triggered_at = Column(TIMESTAMP(timezone=True))
     trigger_count = Column(Integer, nullable=False, default=0)
+    # Consecutive failed attempts to deliver a crossing, and why the last one failed. See app/domain/price_alerts.py.
+    delivery_failures = Column(Integer, nullable=False, default=0)
+    last_error = Column(Text)
+
+
+class AlertChannel(Base):
+    """A user's own Telegram chat id for their price alerts (the bot is the platform's). See migration 042."""
+
+    __tablename__ = "alert_channels"
+    __table_args__ = {"schema": SCHEMA}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
+    telegram_chat_id = Column(Text, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    zone_alerts = Column(Text, nullable=False, default="all", server_default="all")  # all | close | off - see migration 049
 
 
 class OiEodSnapshot(Base):
@@ -145,6 +160,14 @@ class EquityScreenerSnapshot(Base):
     # this ORM otherwise has no other use for.
     is_fno = Column(Boolean, nullable=False, server_default="false")
     index_memberships = Column(Text)
+    # Descriptive fields for the Screener page's universe, liquidity and relative-strength filters (migration 048; app/domain/equity_screener.py's swing_fields).
+    avg_turnover_cr = Column(Float)
+    ret_3m_pct = Column(Float)
+    mom_12_1_pct = Column(Float)
+    rsi3 = Column(Float)
+    dist_ema20_pct = Column(Float)
+    atr_pct = Column(Float)
+    vol_ratio = Column(Float)
 
 
 class EquityDailyBar(Base):
@@ -237,3 +260,222 @@ class JobRun(Base):
     done = Column(Integer, nullable=False, default=0)
     tally = Column(JSONB)
     message = Column(Text)
+
+
+class PremarketReport(Base):
+    """The morning pre-market bias report, one row per IST day (a refresh replaces that day's row). `inputs` are the
+    fetched overnight figures, `rules` the deterministic score, `ai` the model's own call (NULL when it did not run -
+    see `ai_error`). See app/domain/premarket_report.py, migration 037 and infra/postgres/init/05-market-data.sql."""
+
+    __tablename__ = "premarket_reports"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    day = Column(Date, nullable=False, unique=True)
+    generated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    bias = Column(Text, nullable=False)
+    agree = Column(Boolean)
+    model = Column(Text)
+    ai_error = Column(Text)
+    inputs = Column(JSONB, nullable=False)
+    rules = Column(JSONB, nullable=False)
+    ai = Column(JSONB)
+    macro = Column(JSONB)  # India's domestic macro backdrop, see app/providers/macro.py
+
+
+class AiModelSetting(Base):
+    """The OpenRouter model chosen for one AI task, or for every task without its own ('default'). See
+    app/domain/ai_models.py, migration 038 and infra/postgres/init/05-market-data.sql."""
+
+    __tablename__ = "ai_model_settings"
+    __table_args__ = {"schema": SCHEMA}
+
+    task = Column(Text, primary_key=True)
+    model = Column(Text, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    updated_by = Column(UUID(as_uuid=True))
+
+
+class RbiSummary(Base):
+    """The AI summary of one RBI speech / release, kept so each item is read once. See app/domain/rbi_reader.py,
+    migration 040 and infra/postgres/init/05-market-data.sql."""
+
+    __tablename__ = "rbi_summaries"
+    __table_args__ = {"schema": SCHEMA}
+
+    url = Column(Text, primary_key=True)
+    kind = Column(Text, nullable=False)
+    title = Column(Text, nullable=False)
+    published = Column(TIMESTAMP(timezone=True))
+    stance = Column(Text, nullable=False)
+    summary = Column(Text, nullable=False)
+    rates = Column(Text)
+    model = Column(Text)
+    read_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    text_hash = Column(Text, index=True)  # same text under another url reuses the summary
+
+
+class RbiReadAttempt(Base):
+    """A failed attempt to read an RBI item, so it backs off and eventually stops being retried. See app/domain/rbi_reader.py."""
+
+    __tablename__ = "rbi_read_attempts"
+    __table_args__ = {"schema": SCHEMA}
+
+    url = Column(Text, primary_key=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    last_attempt_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    last_error = Column(Text)
+
+
+class NewsArticleScore(Base):
+    """What the model made of one news article for one instrument, so it is judged once. `relevant` False = the model dropped it
+    as irrelevant (remembered so it is not re-sent). See app/domain/news_scores.py."""
+
+    __tablename__ = "news_article_scores"
+    __table_args__ = {"schema": SCHEMA}
+
+    underlying = Column(Text, primary_key=True)
+    url = Column(Text, primary_key=True)
+    relevant = Column(Boolean, nullable=False)
+    relevance_score = Column(Integer)
+    why = Column(Text)
+    scored_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+
+
+class IdeasDestination(Base):
+    """The one chat/channel ideas are posted to (a one-row table: id is always 1). See migration 043 and app/domain/ideas.py."""
+
+    __tablename__ = "ideas_destination"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(SmallInteger, primary_key=True, default=1)
+    telegram_chat_id = Column(Text, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    updated_by = Column(UUID(as_uuid=True))
+
+
+class PublishedIdea(Base):
+    """A note that was published as an idea: which Telegram messages, where, exactly what was sent, and when it went out / was
+    taken down. See migration 043 and app/domain/ideas.py."""
+
+    __tablename__ = "published_ideas"
+    __table_args__ = {"schema": SCHEMA}
+
+    note_id = Column(UUID(as_uuid=True), primary_key=True)
+    published_by = Column(UUID(as_uuid=True), nullable=False)
+    chat_id = Column(Text, nullable=False)
+    message_ids = Column(JSONB, nullable=False)
+    text = Column(Text, nullable=False)
+    has_image = Column(Boolean, nullable=False, default=False)
+    published_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    unpublished_at = Column(TIMESTAMP(timezone=True))
+
+
+class NotificationSubscription(Base):
+    """A category of Telegram notification a user has switched on, with their settings. See migration 044 and app/domain/notifications.py."""
+
+    __tablename__ = "notification_subscriptions"
+    __table_args__ = {"schema": SCHEMA}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
+    category = Column(Text, primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    params = Column(JSONB, nullable=False, default=dict)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+
+
+class NotificationLog(Base):
+    """One notification to one person, identified by (user, category, dedupe key) so it is sent once; `sent_at` stays NULL while it is
+    still being retried. See migration 044 and app/domain/notifications.py."""
+
+    __tablename__ = "notification_log"
+    __table_args__ = {"schema": SCHEMA}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
+    category = Column(Text, primary_key=True)
+    dedupe_key = Column(Text, primary_key=True)
+    text = Column(Text, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    sent_at = Column(TIMESTAMP(timezone=True))
+    attempts = Column(Integer, nullable=False, default=0)
+    last_attempt_at = Column(TIMESTAMP(timezone=True))
+    last_error = Column(Text)
+
+
+
+class ZoneWatch(Base):
+    """A zone (price band) or level a person armed on a chart, watched by the server. See migration 046 and app/domain/zone_watch.py."""
+
+    __tablename__ = "zone_watches"
+    __table_args__ = (UniqueConstraint("user_id", "exchange", "symbol", "kind", "lo", "hi"), {"schema": SCHEMA})
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    kind = Column(Text, nullable=False)
+    lo = Column(Numeric, nullable=False)
+    hi = Column(Numeric, nullable=False)
+    interval = Column(Text, nullable=False, default="15min")
+    role = Column(Text)
+    last_state = Column(Text)
+    last_checked_at = Column(TIMESTAMP(timezone=True))
+    last_bar_checked = Column(TIMESTAMP(timezone=True))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    alerts = Column(Text, nullable=False, default="all", server_default="all")  # all | close | off - see migration 049
+
+
+class ZoneEvent(Base):
+    """What happened to a zone: a touch, and how the candle that touched it closed. Kept after the zone is removed. See migration 046."""
+
+    __tablename__ = "zone_events"
+    __table_args__ = (UniqueConstraint("user_id", "dedupe_key"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    watch_id = Column(UUID(as_uuid=True))
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    kind = Column(Text, nullable=False)
+    lo = Column(Numeric, nullable=False)
+    hi = Column(Numeric, nullable=False)
+    role = Column(Text)
+    event = Column(Text, nullable=False)
+    at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    bar_time = Column(TIMESTAMP(timezone=True))
+    approach = Column(Text)
+    extreme = Column(Numeric)
+    close = Column(Numeric)
+    dedupe_key = Column(Text, nullable=False)
+    notified = Column(Boolean, nullable=False, default=True, server_default="true")  # False: recorded but not sent (see migration 049)
+
+
+class ZoneScan(Base):
+    """One row per (symbol, snapshot_date) for every F&O stock with enough stored daily bars: the daily and weekly structure read, the nearest
+    untested trend-aligned daily zone at or approaching price, the open-interest labels it was set against and the resulting tier. See migration
+    047 and app/domain/zone_scan.py. Every day is kept so the tiers can be reviewed against what happened next."""
+
+    __tablename__ = "zone_scan"
+    __table_args__ = (UniqueConstraint("symbol", "snapshot_date"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    snapshot_date = Column(Date, nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    recorded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    close = Column(Float, nullable=False)
+    daily_trend = Column(Text, nullable=False)
+    weekly_trend = Column(Text)
+    weekly_bars = Column(Integer, nullable=False, server_default="0")
+    zone_kind = Column(Text)
+    zone_proximal = Column(Float)
+    zone_distal = Column(Float)
+    zone_position = Column(Text)
+    zone_distance_pct = Column(Float)
+    zone_distance_atr = Column(Float)
+    weekly_zone = Column(Boolean, nullable=False, server_default="false")
+    weekly_agrees = Column(Boolean, nullable=False, server_default="false")
+    call_buildup = Column(Text)
+    put_buildup = Column(Text)
+    oi_agrees = Column(Boolean)
+    tier = Column(Text)

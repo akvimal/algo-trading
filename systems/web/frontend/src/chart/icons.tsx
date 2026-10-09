@@ -92,3 +92,20 @@ export const ChartIcon = () => (
     <rect x="14.5" y="6" width="5" height="9" rx="1" />
   </svg>
 );
+
+/** A clock with a back arrow: "open the history". */
+export const HistoryIcon = () => (
+  <svg {...small}>
+    <path d="M3 12a9 9 0 103-6.7L3 8" />
+    <path d="M3 3v5h5" />
+    <path d="M12 8v4l3 2" />
+  </svg>
+);
+
+/** Two opposite arrows: "open the trade ticket". */
+export const TradeIcon = () => (
+  <svg {...small}>
+    <path d="M4 8h15M15 4l4 4-4 4" />
+    <path d="M20 16H5M9 12l-4 4 4 4" />
+  </svg>
+);

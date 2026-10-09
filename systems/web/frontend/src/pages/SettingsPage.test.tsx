@@ -21,6 +21,9 @@ let creds: Record<string, any>;
 let putAccount: (segment: string, body: any) => Response;
 let putCreds: (body: any) => Response;
 let ltp: () => Response;
+let platformStatus: Record<string, any>;
+let refreshResult: () => Response;
+let renewResult: () => Response;
 
 const mkAccount = (segment: string, over: object = {}) => ({
   segment, starting_balance: 200000, current_balance: 200000, realized_pnl: 0, unrealized_pnl: 0, capital_per_trade: 10000,
@@ -44,6 +47,9 @@ beforeEach(() => {
     return json(creds);
   };
   ltp = () => json({ exchange: "NSE", symbol: "RELIANCE", ltp: 1226, provider: "dhan-nse" });
+  platformStatus = { token_expires_at: new Date(Date.now() + 20 * 3_600_000).toISOString(), has_access_token: true, dhan_client_id: "1101" };
+  refreshResult = () => json({ adopted: true, reason: "now using the token saved in Settings", token_expires_at: platformStatus.token_expires_at });
+  renewResult = () => json({ renewed: true, adopted_saved_token: false, saved_back_to_settings: true, expiry_time: null });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -60,6 +66,9 @@ beforeEach(() => {
       if (url.endsWith("/accounts") && method === "GET") return json(accounts);
       if (url.endsWith("/credentials") && method === "PUT") return putCreds(body);
       if (url.endsWith("/credentials")) return json(creds);
+      if (url.includes("/dhan/token-status")) return json(platformStatus);
+      if (url.endsWith("/dhan/refresh") && method === "POST") return refreshResult();
+      if (url.endsWith("/dhan/renew-token") && method === "POST") return renewResult();
       if (url.includes("/quotes/ltp")) return ltp();
       if (url.includes("/live-eligibility/"))
         return json({ segment: "NSE", enforced: true, eligible: false, requirements: [{ key: "trades", label: "Costed trades", required: "30", actual: "3", met: false }, { key: "days", label: "Days", required: "14", actual: "20", met: true }] });
@@ -319,5 +328,97 @@ describe("the add-keys prompt elsewhere", () => {
     renderAt("/");
     const link = await screen.findByRole("link", { name: "Add Dhan keys" });
     expect(link).toHaveAttribute("href", "/more/settings?tab=broker");
+  });
+});
+
+
+describe("the platform data token (admin only)", () => {
+  const asAdmin = () => setToken(jwt({ sub: "u1", email: "me@x.com", is_admin: true, exp: Math.floor(Date.now() / 1000) + 3600 }), "me@x.com");
+  const posts = (suffix: string) => calls.filter((c) => c.method === "POST" && c.url.endsWith(suffix));
+
+  it("is not shown to a person who is not an admin", async () => {
+    renderAt("/more/settings?tab=broker");
+    await screen.findByText("Not connected");
+    expect(screen.queryByTestId("platform-token")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.url.includes("/dhan/"))).toBe(false); // and nothing about it is even asked for
+  });
+
+  it("shows an admin how long the platform token has left", async () => {
+    asAdmin();
+    renderAt("/more/settings?tab=broker");
+    const card = await screen.findByTestId("platform-token");
+    expect(await within(card).findByTestId("platform-token-expiry")).toHaveTextContent(/Valid for 19h|Valid for 20h/);
+    expect(within(card).getByText(/saved on the card below/)).toBeInTheDocument();
+  });
+
+  it("says plainly when the token is long expired (the case that broke the scans for days)", async () => {
+    asAdmin();
+    platformStatus = { ...platformStatus, token_expires_at: new Date(Date.now() - 5 * 86_400_000).toISOString() };
+    renderAt("/more/settings?tab=broker");
+    expect(await screen.findByTestId("platform-token-expiry")).toHaveTextContent(/Expired 5 days ago/);
+  });
+
+  it("pulls the saved token in at once when asked, and reports what the server decided", async () => {
+    asAdmin();
+    const user = userEvent.setup();
+    renderAt("/more/settings?tab=broker");
+    await user.click(await screen.findByRole("button", { name: "Use my saved token now" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Now using the token saved above.");
+    expect(posts("/dhan/refresh")).toHaveLength(1);
+    refreshResult = () => json({ adopted: false, reason: "the token saved in Settings has already expired" });
+    await user.click(screen.getByRole("button", { name: "Use my saved token now" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The token saved in Settings has already expired.");
+  });
+
+  it("renews on request, and says so when the renewed token could not be saved back", async () => {
+    asAdmin();
+    const user = userEvent.setup();
+    renderAt("/more/settings?tab=broker");
+    await user.click(await screen.findByRole("button", { name: "Renew now" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/Renewed for a fresh 24 hours and saved back/);
+    renewResult = () => json({ renewed: true, saved_back_to_settings: false });
+    await user.click(screen.getByRole("button", { name: "Renew now" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/could not be saved back/);
+  });
+
+  it("shows Dhan's refusal in its own words when a renewal is rejected", async () => {
+    asAdmin();
+    renewResult = () => json({ detail: "Dhan rejected the renewal request (401) - the current token may already be expired; generate a new one from Dhan Web" }, 502);
+    const user = userEvent.setup();
+    renderAt("/more/settings?tab=broker");
+    await user.click(await screen.findByRole("button", { name: "Renew now" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Dhan rejected the renewal request/);
+  });
+
+  it("an admin saving a token on the Dhan card gets the platform to use it straight away, and is told", async () => {
+    asAdmin();
+    creds = { ...creds, has_dhan: true, dhan_client_id_masked: "****1234" };
+    const user = userEvent.setup();
+    renderAt("/more/settings?tab=broker");
+    await user.type(await screen.findByLabelText("New access token"), "freshtoken");
+    await user.click(screen.getByRole("button", { name: "Update" }));
+    await waitFor(() => expect(posts("/dhan/refresh")).toHaveLength(1));
+    expect(await screen.findByText(/scans and price feed now use it too/)).toBeInTheDocument();
+  });
+
+  it("does not claim the platform uses a token it refused, and says why", async () => {
+    asAdmin();
+    refreshResult = () => json({ adopted: false, reason: "the token saved in Settings has already expired" });
+    creds = { ...creds, has_dhan: true, dhan_client_id_masked: "****1234" };
+    const user = userEvent.setup();
+    renderAt("/more/settings?tab=broker");
+    await user.type(await screen.findByLabelText("New access token"), "stale");
+    await user.click(screen.getByRole("button", { name: "Update" }));
+    expect(await screen.findByText(/The platform kept its own token: The token saved in Settings has already expired\./)).toBeInTheDocument();
+  });
+
+  it("a person who is not an admin saving a token does not touch the platform", async () => {
+    creds = { ...creds, has_dhan: true, dhan_client_id_masked: "****1234" };
+    const user = userEvent.setup();
+    renderAt("/more/settings?tab=broker");
+    await user.type(await screen.findByLabelText("New access token"), "mine");
+    await user.click(screen.getByRole("button", { name: "Update" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PUT" && c.url.endsWith("/credentials"))).toHaveLength(1));
+    expect(posts("/dhan/refresh")).toHaveLength(0);
   });
 });

@@ -160,7 +160,9 @@ services:
       # shares its DHAN_ACCESS_TOKEN with another auto-renewing stack -
       # dev/test each use their own separate token instead, so both stay
       # at the default. See app/config.py/app/scheduler.py.
-      DHAN_TOKEN_RENEW_INTERVAL_HOURS: ${DHAN_TOKEN_RENEW_INTERVAL_HOURS:-20}
+      DHAN_TOKEN_RENEW_INTERVAL_HOURS: ${DHAN_TOKEN_RENEW_INTERVAL_HOURS:-6}
+      # The platform's Dhan token comes from the operator's saved Settings keys (see docs/architecture.md, "One source for the platform's Dhan token").
+      PLATFORM_DHAN_FROM_ACCOUNTS: ${PLATFORM_DHAN_FROM_ACCOUNTS:-true}
       # Manual override for Dhan's own SEM_LOT_UNITS, confirmed wrong for
       # MCX commodities (every FUTCOM row reports 1 regardless of real
       # contract size). Each commodity's real trading-unit/quotation-unit
@@ -200,6 +202,9 @@ services:
       # still evaluate/persist, nothing gets pushed (see app/domain/notify.py).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_IDEAS_BOT_TOKEN: ${TELEGRAM_IDEAS_BOT_TOKEN:-}
+      IDEAS_DISCLAIMER: ${IDEAS_DISCLAIMER:-}
+      IDEAS_REGISTRATION_LINE: ${IDEAS_REGISTRATION_LINE:-}
       # OpenRouter (Live Chart's News tab AI digest, see app/providers/news.py -
       # raw headlines come from free RSS feeds, no key needed there) - see app/config.py.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -320,6 +325,8 @@ services:
       # service that returns a decrypted plaintext secret, since its
       # caller is a trusted service rather than a user with a JWT.
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      # Whose saved Dhan keys the platform uses (empty: the first admin).
+      PLATFORM_DHAN_OWNER_EMAIL: ${PLATFORM_DHAN_OWNER_EMAIL:-}
     ports:
       - "${BIND_ADDR:-0.0.0.0}:${ACCOUNTS_BACKEND_PORT}:8000"
     depends_on:

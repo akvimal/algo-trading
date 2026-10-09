@@ -140,6 +140,12 @@ export async function setFeeling(kind: "position" | "group", tradeId: string, fe
 }
 
 export const listWaitingOrders = () => api<PendingOrder[]>("execution", "/pending-orders?status=pending");
+/** Moves a waiting order's trigger (the entry line), stop-loss or target; the server checks the three still make sense together. */
+export const moveWaitingOrder = (id: string, field: "entry" | "stop" | "target", price: number) =>
+  api<PendingOrder>("execution", `/pending-orders/${id}`, {
+    method: "PATCH",
+    json: field === "entry" ? { trigger_price: price } : field === "stop" ? { stop_loss_price: price } : { target_price: price },
+  });
 export const cancelWaitingOrder = (id: string) => api<PendingOrder>("execution", `/pending-orders/${id}`, { method: "DELETE" });
 
 export type PlaceResult = {

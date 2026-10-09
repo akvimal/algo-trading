@@ -279,6 +279,15 @@ class PendingOrderCreate(BaseModel):
     allow_stacking: bool = False
 
 
+class PendingOrderUpdate(BaseModel):
+    """PATCH /pending-orders/{id} - move a waiting order's trigger, stop-loss or target (what dragging its lines on the chart does).
+    Only the fields sent change; a level cannot be cleared here (cancel the order and arm it again for that)."""
+
+    trigger_price: Optional[float] = Field(default=None, gt=0)
+    stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    target_price: Optional[float] = Field(default=None, gt=0)
+
+
 class PendingOrderOut(BaseModel):
     id: str
     segment: Literal["NSE", "MCX", "CRYPTO"]
@@ -322,6 +331,8 @@ class StudyNoteCreate(BaseModel):
     position_id: Optional[str] = Field(default=None, max_length=36)
     option_group_id: Optional[str] = Field(default=None, max_length=36)
     snapshot_png_base64: Optional[str] = None
+    # The same chart with only a header (no note text, no AI line), kept for publishing the note as an idea.
+    clean_png_base64: Optional[str] = None
 
 
 class StudyNoteOut(BaseModel):
@@ -335,6 +346,7 @@ class StudyNoteOut(BaseModel):
     position_id: Optional[str] = None
     option_group_id: Optional[str] = None
     has_snapshot: bool = False
+    has_clean_snapshot: bool = False
     created_at: Optional[datetime] = None
 
 

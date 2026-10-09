@@ -1,21 +1,26 @@
 import type { ChecklistItem, Segment } from "../api/types";
 
-// The reason a trade was taken, picked on the ticket and here. Same list as the classic
-// app's SETUP_TAGS (systems/manual-trading/frontend/src/manualOrder.ts): results are grouped
-// by these exact strings, so the two must not drift while both apps exist.
+// The plan a trade was taken on, picked on the ticket (market state x plan, see tradeModel's planTag): five labels. Results are grouped by these
+// exact strings.
+export const PLAN_TAGS = ["Trend pullback", "Trend breakout", "Trend reversal", "Range break", "Range fade"] as const;
+
+// What a trade can be tagged with in the journal: the five plans above, and the older reasons the classic app's SETUP_TAGS
+// (systems/manual-trading/frontend/src/manualOrder.ts) still uses - old trades keep theirs, and results are grouped by these exact strings.
 export const SETUP_TAGS = [
+  ...PLAN_TAGS,
   "OB retest",
   "BOS continuation",
   "FVG fill",
   "S/R bounce",
   "Breakout",
   "OI reversal",
-  "Trend pullback",
-  "Range fade",
   "News",
   "Revenge / FOMO",
   "Other",
 ] as const;
+
+// "What did you see?" on the ticket: an optional note of the trigger, kept in the order's notes rather than in its tag, so the tag stays one of five.
+export const TRIGGERS = ["Order block", "Fair value gap", "Support / resistance", "Break of structure", "Open-interest shift", "News"] as const;
 
 export const NOTES_MAX = 2000;
 

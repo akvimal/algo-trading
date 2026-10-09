@@ -5,5 +5,4 @@ interface ImportMetaEnv {
   readonly VITE_MARKET_DATA_PORT?: string;
   readonly VITE_ACCOUNTS_PORT?: string;
   readonly VITE_SIGNAL_ENGINE_PORT?: string;
-  readonly VITE_SHELL_PORT?: string;
 }

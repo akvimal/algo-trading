@@ -19,8 +19,8 @@ from uuid import UUID
 import requests
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from app.adapters.accounts_client import get_user_dhan_credentials_strict
-from app.auth import require_user_id
+from app.adapters.accounts_client import forget_user_credentials, get_user_dhan_credentials_strict
+from app.auth import require_operator, require_user_id
 from app.config import settings
 from app.domain.models import (
     ComboMarginRequest,
@@ -36,18 +36,21 @@ from app.domain.models import (
     OrderResponse,
     PlaceOrderRequest,
 )
-from app.providers.dhan import DhanProvider, current_access_token, renew_access_token, renew_token_status, set_manual_credentials
+from app.providers.dhan import DhanProvider, current_access_token, renew_token_status
+from app.providers import platform_dhan
 from app.providers.dhan_feed import feed_status, start_feed, subscribe
 from app.providers.router import get_provider
 
 logger = logging.getLogger(__name__)
 
 # The platform operator's own ops surface (Dhan data-provider credentials,
-# token renewal, live-feed status/subscribe). No login required (removed
-# 2026-08-29 at the user's request) - this is a single-operator, self-
-# hosted platform, and gating the screen an operator needs in order to get
-# quotes working at all added friction without protecting anything a
-# person on this same box couldn't already do.
+# token renewal, live-feed subscribe). These need an ADMIN login (or the internal
+# service secret, for the ops script inside the container). Login was removed from
+# them on 2026-08-29 on the reasoning that this is a self-hosted single-operator box
+# where anyone who could call them could already do the same thing; that stopped
+# being true once it is reachable on a public VPS: anyone could replace the platform's
+# Dhan credentials with a single request. Read-only status (token-status, token-expiry,
+# feed-status) stays open: the shell's expiry banner polls it with no login.
 router = APIRouter()
 
 
@@ -60,12 +63,29 @@ def token_expiry():
     return {"token_expires_at": renew_token_status()["token_expires_at"]}
 
 
-@router.post("/dhan/renew-token")
+@router.post("/dhan/renew-token", dependencies=[Depends(require_operator)])
 def renew_token():
+    """Adopt a fresher token saved in Settings, renew with Dhan, and save the renewed token back to the account (one source). The new token itself
+    is never returned."""
     try:
-        return renew_access_token()
+        return platform_dhan.renew_platform_token()
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/dhan/forget-my-credentials")
+def forget_my_credentials(user_id: UUID = Depends(require_user_id)):
+    """Called by the web app right after a person saves new Dhan keys on Settings: market-data keeps each person's saved keys for 5 minutes, so
+    without this their old (possibly expired) token kept being sent and the first live-data check after saving failed with a 401. Only drops the
+    caller's own cached entry; nothing else is touched."""
+    forget_user_credentials(user_id)
+    return {"forgotten": True}
+
+
+@router.post("/dhan/refresh", dependencies=[Depends(require_operator)])
+def refresh_token():
+    """Use the Dhan token saved on the Settings page now, instead of waiting for the next periodic check (only if it outlives the one in use)."""
+    return {**platform_dhan.refresh_from_accounts(), **token_status()}
 
 
 @router.get("/dhan/token-status")
@@ -77,16 +97,17 @@ def token_status():
         **renew_token_status(),
         "dhan_client_id": settings.dhan_client_id,
         "has_access_token": bool(current_access_token()),
+        # Whether the scheduled renewal is due and, if not, why not (too young, or waiting for a scan): no secret in it.
+        "renewal": platform_dhan.renewal_state(),
     }
 
 
-@router.put("/dhan/credentials")
+@router.put("/dhan/credentials", dependencies=[Depends(require_operator)])
 def update_credentials(payload: DhanCredentialsUpdate):
-    """The UI's 'Data provider keys' form - sets both the Dhan client ID
-    and access token at runtime, no restart needed (see
-    set_manual_credentials' own docstring for the in-memory-only caveat)."""
-    set_manual_credentials(payload.client_id, payload.access_token)
-    return token_status()
+    """Set the platform's Dhan client ID and access token: in use at once, kept across restarts, and saved as the platform owner's token on the
+    Settings page (so there is one copy, not two)."""
+    saved = platform_dhan.set_platform_credentials(payload.client_id, payload.access_token)
+    return {**token_status(), **saved}
 
 
 @router.get("/dhan/feed-status")
@@ -94,7 +115,7 @@ def get_feed_status():
     return feed_status()
 
 
-@router.post("/dhan/feed/subscribe")
+@router.post("/dhan/feed/subscribe", dependencies=[Depends(require_operator)])
 def subscribe_feed(payload: FeedSubscribeRequest):
     start_feed()
     try:

@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/http";
-import type { Account, MarketSentiment, OptionGroup, Position } from "../api/types";
+import type { Account, OptionGroup, Position } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
+import { MarketsCard } from "../components/MarketsCard";
 import { PerformanceSnapshot } from "../components/PerformanceSnapshot";
 import { PositionCard } from "../components/PositionCard";
 import { formatInr, formatPnl } from "../format";
@@ -35,9 +36,6 @@ export function TodayPage() {
   const today = useResource(loadToday, [], { pollMs: POLL_MS });
   // Open spot and futures results follow the price socket between polls.
   const live = useLivePositions(today.data?.positions);
-  // Sentiment is context, not the point of the screen: it loads on its own and its failure
-  // never blocks (or replaces) the positions above it.
-  const pulse = useResource(() => api<MarketSentiment>("marketData", "/options/sentiment"), [], { pollMs: 60_000 });
 
   if (today.loading) return <Skeleton lines={5} />;
   if (today.error && !today.data) return <ErrorNotice error={today.error} onRetry={today.reload} />;
@@ -55,6 +53,7 @@ export function TodayPage() {
 
   return (
     <div className="stack">
+      <div className="hero-row">
       <div className="card hero">
         <span className="dim">Paper balance</span>
         <span className="big num">{formatInr(paperBalance(accounts) + liveDelta)}</span>
@@ -91,9 +90,18 @@ export function TodayPage() {
           </>
         )}
       </div>
+      </div>
 
       {today.error && <ErrorNotice error={today.error} onRetry={today.reload} />}
 
+      {/* One column on a phone (Markets folded under the P&L); from 900px positions on the left and Markets in a sticky column on the right. */}
+      <div className="today-grid">
+      {markets.length > 0 && (
+        <aside className="today-aside">
+          <MarketsCard markets={markets} />
+        </aside>
+      )}
+      <div className="stack today-main">
       {guided && <FirstWeekCard steps={firstWeek(positions, groups)} />}
 
       <div className="tabs" role="group" aria-label="Trade type">
@@ -127,25 +135,8 @@ export function TodayPage() {
       )}
 
       <PerformanceSnapshot markets={accounts.map((a) => a.segment)} />
-
-      <h2 className="section-title">Market pulse</h2>
-      {pulse.loading && <Skeleton lines={2} />}
-      {pulse.error && <ErrorNotice error={pulse.error} onRetry={pulse.reload} />}
-      {pulse.data && (
-        <div className="card stack">
-          {Object.entries(pulse.data.exchanges).map(([exchange, s]) => (
-            <div className="row" key={exchange}>
-              <span>{exchange}</span>
-              <span className="pill">
-                {s.direction} · {s.strength}
-              </span>
-            </div>
-          ))}
-          <span className="faint" style={{ fontSize: 12 }}>
-            Open-interest reading, for context only. It is not a recommendation.
-          </span>
-        </div>
-      )}
+      </div>
+      </div>
     </div>
   );
 }

@@ -134,7 +134,7 @@ a {
 .pill {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--badge-r);
   font-size: 12px;
   font-weight: 600;
   border: 1px solid var(--border);
@@ -445,6 +445,44 @@ a {
   display: grid;
   gap: 4px;
 }
+/* Balance and today's result share a row once there is room; a phone stacks them. */
+.hero-row {
+  display: grid;
+  gap: var(--gap, 12px);
+}
+@media (min-width: 600px) {
+  .hero-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  }
+}
+/* Phone: Markets (folded) above the positions. From 900px: positions left, Markets in a sticky column on the right. */
+.today-grid {
+  display: grid;
+  gap: var(--gap, 12px);
+  align-items: start;
+}
+.today-grid > * {
+  min-width: 0;
+}
+@media (min-width: 900px) {
+  .app-main.dash {
+    max-width: 1180px;
+  }
+  .today-grid {
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-areas: "main aside";
+  }
+  .today-main {
+    grid-area: main;
+  }
+  .today-aside {
+    grid-area: aside;
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+  }
+}
 .hero .big {
   font-size: 28px;
   font-weight: 600;
@@ -561,14 +599,62 @@ a {
   flex-wrap: wrap;
 }
 .chips button {
-  min-height: 36px;
-  padding: 0 14px;
-  border-radius: 999px;
+  min-height: var(--badge-h);
+  padding: 0 var(--badge-px);
+  border-radius: var(--badge-r);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-dim);
   font-weight: 600;
   cursor: pointer;
+  /* an icon (BadgeIcons) sits before the text with a small gap */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chips button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.badge-icon {
+  flex: none;
+}
+/* Joined badges (Trending | Ranging, and the up/down pair): one control of two segments that share their borders. The pressed one is raised so
+   its accent border is not covered by its neighbour's. */
+.chips .badge-split {
+  display: inline-flex;
+}
+.chips .badge-split > button {
+  border-radius: 0;
+}
+.chips .badge-split > button + button {
+  margin-left: -1px;
+}
+.chips .badge-split > button:first-child {
+  border-top-left-radius: var(--badge-r);
+  border-bottom-left-radius: var(--badge-r);
+}
+.chips .badge-split > button:last-child {
+  border-top-right-radius: var(--badge-r);
+  border-bottom-right-radius: var(--badge-r);
+}
+.chips .badge-split > button[aria-pressed="true"] {
+  position: relative;
+  z-index: 1;
+}
+.chips .badge-dir > button {
+  padding: 0 10px;
+  justify-content: center;
+  font-size: 15px;
+}
+/* The instrument menu in the ticket's header: as wide as its items, not the popover's 320px (right-aligned, that ran off the card's left edge). */
+.popover-panel:has(.instrument-menu) {
+  width: max-content;
+  min-width: 170px;
+}
+.chips.instrument-menu button {
+  justify-content: flex-start;
+  white-space: nowrap;
 }
 .chips button[aria-pressed="true"],
 .chips button[aria-selected="true"],
@@ -789,8 +875,11 @@ table.t th {
   grid-template-columns: 1fr 1fr;
 }
 .seg button {
+  justify-content: center;
+}
+.seg button {
   min-height: var(--tap);
-  border-radius: var(--radius-sm);
+  border-radius: var(--badge-r);
   font-size: 16px;
 }
 .seg button.buy[aria-pressed="true"] {
@@ -920,6 +1009,49 @@ table.t th {
 }
 .field-head > label > span {
   margin-bottom: 4px;
+}
+/* A label with a status mark beside it (Field's `status`): the pair is one flexible item, like a bare label. */
+.field-head > .field-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.field-head > .field-title > label {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.field-head > .field-title > label > span {
+  margin-bottom: 0;
+}
+.ticket .field-head > .field-title > label > span {
+  font-size: 12px;
+}
+.field-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+.field-status.good {
+  color: var(--up);
+}
+.field-status.warn {
+  color: var(--warn);
+}
+.field-status.bad {
+  color: var(--dn);
+}
+/* The ticket's risk / reward / R:R as three badges, with entry and size on one quiet line under them. */
+.summary-badges {
+  margin: 4px 0 12px;
+}
+.summary-badges .pill {
+  font-size: 13px;
+  padding: 3px 9px;
+}
+.summary-badges .pill b {
+  font-weight: 700;
 }
 
 .link-btn {
@@ -1212,9 +1344,9 @@ table.t th {
   position: relative;
 }
 .chip-btn {
-  min-height: 36px;
-  padding: 0 12px;
-  border-radius: 999px;
+  min-height: var(--badge-h);
+  padding: 0 var(--badge-px);
+  border-radius: var(--badge-r);
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-dim);
@@ -2214,4 +2346,97 @@ table.t th {
   gap: 4px 10px;
   padding: 6px 0;
   border-top: 1px solid var(--border);
+}
+
+/* Pre-market card (components/PremarketCard.tsx). The headline must not carry an inline margin: it would override the
+   .stack gap and sit flush under the badge row. */
+.premarket-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.premarket-bias {
+  padding: 4px 14px;
+  font-size: 14px;
+  border-width: 1.5px;
+}
+.premarket-headline {
+  margin-bottom: 0;
+  line-height: 1.45;
+}
+.premarket-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* the label typed for the selected line, level or zone */
+.ws-style .style-label {
+  width: 150px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border, #3a424d);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+/* Icon-only link buttons (scan result cards): a comfortable tap target around the icon. */
+.link-btn.icon-only {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+.link-btn.icon-only[aria-expanded="true"] {
+  background: var(--accent-soft, rgba(125, 125, 125, 0.18));
+  border-radius: 6px;
+}
+
+/* The market badge's panel (pre-market + news): wider than a normal menu so the report reads without sideways scrolling. */
+.popover-panel:has(.market-info) {
+  width: min(440px, 90vw);
+}
+.workstation:not(.wide) .popover-panel:has(.market-info) {
+  width: auto;
+}
+.market-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.market-info-news {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Calendar tab rows: time, what it is, and its impact. */
+.calendar-row {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.calendar-time {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.calendar-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

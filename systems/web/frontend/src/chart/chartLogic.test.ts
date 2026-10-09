@@ -349,7 +349,7 @@ describe("trades on the chart", () => {
   });
 });
 
-import { checkLevelMove, openLevels } from "./trades";
+import { checkLevelMove, checkWaitingMove, openLevels, waitingLevels } from "./trades";
 
 describe("open trade levels", () => {
   const level = (field: "stop" | "target", long: boolean) => ({ field, long });
@@ -372,9 +372,42 @@ describe("open trade levels", () => {
   });
 
   it("makes a level of each stop and target that is set on an open trade of this instrument", () => {
-    const pos = (over: object) => ({ id: "p", symbol: "NIFTY-Sep2026-FUT", action: "BUY", quantity: 65, status: "OPEN", option_group_id: null, stop_loss_price: 100, target_price: null, ...over }) as never;
+    const pos = (over: object) => ({ id: "p", symbol: "NIFTY-Sep2026-FUT", action: "BUY", quantity: 65, entry_price: 110, status: "OPEN", option_group_id: null, stop_loss_price: 100, target_price: null, ...over }) as never;
     const levels = openLevels("NIFTY", [pos({}), pos({ id: "closed", status: "CLOSED" }), pos({ id: "leg", option_group_id: "g" }), pos({ id: "other", symbol: "BANKNIFTY-Sep2026-FUT" })], []);
-    expect(levels.map((l) => [l.key, l.price, l.draggable])).toEqual([["position:p:stop", 100, true]]);
+    expect(levels.map((l) => [l.key, l.price, l.draggable]).filter((l) => l[0] !== "position:p:entry")).toEqual([["position:p:stop", 100, true]]);
+  });
+
+  it("adds the entry line, with the live result, and the money at the stop and target of a futures trade (a short is the other way round)", () => {
+    const pos = (over: object) => ({ id: "p", symbol: "NIFTY-Sep2026-FUT", action: "BUY", quantity: 10, entry_price: 1010, unrealized_pnl: 250, status: "OPEN", option_group_id: null, stop_loss_price: 990, target_price: 1030, ...over }) as never;
+    const labels = (l: ReturnType<typeof openLevels>) => l.map((x) => [x.field, x.label, x.draggable]);
+    expect(labels(openLevels("NIFTY", [pos({})], []))).toEqual([["entry", "Long 10 · +₹250", false], ["stop", "Stop · Long 10 · −₹200", true], ["target", "Target · Long 10 · +₹200", true]]);
+    expect(labels(openLevels("NIFTY", [pos({ action: "SELL", stop_loss_price: 1030, target_price: 990, unrealized_pnl: -40 })], []))).toEqual([["entry", "Short 10 · −₹40", false], ["stop", "Stop · Short 10 · −₹200", true], ["target", "Target · Short 10 · +₹200", true]]);
+    expect(openLevels("NIFTY", [pos({ unrealized_pnl: null })], [])[0].label).toBe("Long 10"); // no live result yet: no money
+  });
+
+  it("makes lines for an order still waiting for its price, with no money (the quantity is only worked out when it fires) and none for one that has gone", () => {
+    const order = (over: object) => ({ id: "w", segment: "NSE", symbol: "NIFTY", action: "SELL", strategy: "future", trigger_price: 22467.6, stop_loss_price: 22483.11, target_price: 22322.51, status: "pending", ...over }) as never;
+    const out = waitingLevels("NIFTY", [order({}), order({ id: "done", status: "triggered" }), order({ id: "other", symbol: "BANKNIFTY" })]);
+    expect(out.map((l) => [l.key, l.label, l.price, l.draggable, l.cancellable ?? false])).toEqual([
+      ["waiting:w:entry", "Waiting SELL", 22467.6, true, true], // the entry line is the one with the ×
+      ["waiting:w:stop", "Stop · waiting SELL", 22483.11, true, false],
+      ["waiting:w:target", "Target · waiting SELL", 22322.51, true, false],
+    ]);
+  });
+
+  it("judges a waiting order's lines against each other, the way the server does, not against the live price", () => {
+    const sell = { entry: 22467.6, stop: 22483.11, target: 22322.51 };
+    expect(checkWaitingMove({ field: "stop", long: false }, 22490, sell)).toBeNull();
+    expect(checkWaitingMove({ field: "stop", long: false }, 22460, sell)).toMatch(/stop-loss of a sell order has to stay above its trigger price \(22467.6\)/);
+    expect(checkWaitingMove({ field: "target", long: false }, 22300, sell)).toBeNull();
+    expect(checkWaitingMove({ field: "target", long: false }, 22470, sell)).toMatch(/target of a sell order has to stay below/);
+    expect(checkWaitingMove({ field: "entry", long: false }, 22480, sell)).toBeNull(); // moving the trigger keeps both on their sides
+    expect(checkWaitingMove({ field: "entry", long: false }, 22490, sell)).toMatch(/stop-loss of a sell order has to stay above its trigger price \(22490\)/); // it would pass the stop
+    const buy = { entry: 100, stop: 95, target: null };
+    expect(checkWaitingMove({ field: "stop", long: true }, 99, buy)).toBeNull();
+    expect(checkWaitingMove({ field: "stop", long: true }, 101, buy)).toMatch(/stop-loss of a buy order has to stay below/);
+    expect(checkWaitingMove({ field: "target", long: true }, 105, buy)).toBeNull(); // no target yet: a new one only has to be on the winning side
+    expect(checkWaitingMove({ field: "entry", long: true }, Number.NaN, buy)).toBe("That is not a price.");
   });
 });
 

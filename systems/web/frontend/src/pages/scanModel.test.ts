@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, classifyBuildup, oiDays, oiSignal, oiStrength, oiWindowChange, tradeLink, visible } from "./scanModel";
+import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, haveLiquidity, inUniverse, sizeLabel, universeCounts, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, totalOiChangePct, tradeLink, visible } from "./scanModel";
+import QUADRANT_CASES from "./fixtures/oi_quadrant_cases.json";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
   symbol, exchange: "NSE", snapshot_date: "2026-09-25", spot_price: 100, total_call_oi: 1000, total_put_oi: 1000, pcr: 1,
@@ -238,5 +239,99 @@ describe("per-stock OI history", () => {
     expect(w.putPct).toBeCloseTo(8.9, 5);
     expect(oiWindowChange([hist[0]], 5)).toEqual({ callPct: null, putPct: null, from: null });
     expect(oiWindowChange(hist, 2).from).toBe("2026-09-25"); // two days of change start from the point before them
+  });
+});
+
+
+// The same cases market-data's tests run against its Python version (tests/fixtures/oi_quadrant_cases.json): if the two ever disagree one of them fails.
+describe("the four quadrants (price against total OI), shared cases with the Telegram digest", () => {
+  for (const c of QUADRANT_CASES as { name: string; row: never; oi_change_pct: number | null; quadrant: string | null; strong: boolean }[]) {
+    it(c.name, () => {
+      const total = totalOiChangePct(c.row);
+      if (c.oi_change_pct === null) expect(total).toBeNull();
+      else expect(total).toBeCloseTo(c.oi_change_pct, 1);
+      expect(oiQuadrant(c.row)).toBe(c.quadrant);
+      expect(oiSignal(c.row, 10) !== null).toBe(c.strong);
+    });
+  }
+
+  const row = (symbol: string, price: number, oiPct: number) => oi(symbol, { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: oiPct, put_oi_change_pct: oiPct, price_change_pct: price });
+
+  it("filters to one quadrant and reads the biggest total OI change first, whichever way the OI moved", () => {
+    const rows = [row("SMALL", 1, 8), row("BIG", 2, 40), row("MID", 1.5, 20), row("DOWN", 1, -25), row("NOISE", 0.1, 50)];
+    const lb = filterOi(rows, { ...OI_DEFAULTS, signal: "long_buildup", sort: "oi_total" });
+    expect(lb.map((r) => r.symbol)).toEqual(["BIG", "MID", "SMALL"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, signal: "short_covering", sort: "oi_total" }).map((r) => r.symbol)).toEqual(["DOWN"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, signal: "short_buildup" })).toEqual([]);
+  });
+
+  it("sorts every stock by the size of its total OI change, up or down, with an unknown one last", () => {
+    const rows = [row("UP", 1, 10), row("DOWN", 1, -30), oi("NOPE", { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: null, put_oi_change_pct: null })];
+    expect(filterOi(rows, { ...OI_DEFAULTS, sort: "oi_total" }).map((r) => r.symbol)).toEqual(["DOWN", "UP", "NOPE"]);
+  });
+
+  it("keeps the older strong two-sided filters working beside the quadrants", () => {
+    const rows = [oi("BULL", { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: 30, put_oi_change_pct: 30, price_change_pct: 1, call_buildup: "long_buildup", put_buildup: "long_buildup" }), oi("LONELY", { total_call_oi: 1000, total_put_oi: 1000, call_oi_change_pct: 60, put_oi_change_pct: 0, price_change_pct: 1, call_buildup: "long_buildup", put_buildup: "long_buildup" })];
+    expect(filterOi(rows, { ...OI_DEFAULTS, signal: "strong_bull" }).map((r) => r.symbol)).toEqual(["BULL"]);
+  });
+});
+
+describe("Screener universe, liquidity and relative strength", () => {
+  const rows = [
+    scr("LARGE", { universes: ["NIFTY500", "NIFTY100"], is_fno: true, avg_turnover_cr: 900, rs_12m_pctile: 95, mom_12_1_pct: 40, ret_3m_pct: 5, dist_ema20_pct: -1, rsi3: 12 }),
+    scr("MID", { universes: ["NIFTY500", "NIFTYMIDCAP150"], avg_turnover_cr: 40, rs_12m_pctile: 70, mom_12_1_pct: 20, ret_3m_pct: 9, dist_ema20_pct: -4, rsi3: 30 }),
+    scr("SMALL", { universes: ["NIFTY500", "NIFTYSMALLCAP250"], avg_turnover_cr: 6, rs_12m_pctile: 50, mom_12_1_pct: 5, ret_3m_pct: -2, dist_ema20_pct: 2, rsi3: 80 }),
+    scr("THIN", { universes: ["NIFTY500", "NIFTYSMALLCAP250"], avg_turnover_cr: 2, rs_12m_pctile: null, mom_12_1_pct: 90, ret_3m_pct: 50, dist_ema20_pct: 6, rsi3: 95 }),
+    scr("OUTSIDE", { universes: [], avg_turnover_cr: 25, rs_12m_pctile: 85, mom_12_1_pct: 30, ret_3m_pct: 7, dist_ema20_pct: -2, rsi3: 20 }),
+  ];
+  const all = { ...SCREENER_DEFAULTS, universe: "all" as const, liquid: false };
+  const names = (f: Partial<typeof SCREENER_DEFAULTS>, data = rows) => filterScreener(data, { ...all, ...f }).map((r) => r.symbol);
+
+  it("opens on the Nifty 500, liquid stocks only", () => {
+    expect(SCREENER_DEFAULTS).toMatchObject({ universe: "nifty500", liquid: true });
+    expect(names({ universe: "nifty500", liquid: true }).sort()).toEqual(["LARGE", "MID", "SMALL"]);
+  });
+
+  it("each universe picks its own index, F&O, or the stocks outside the Nifty 500", () => {
+    expect(names({ universe: "large" })).toEqual(["LARGE"]);
+    expect(names({ universe: "mid" })).toEqual(["MID"]);
+    expect(names({ universe: "small" }).sort()).toEqual(["SMALL", "THIN"]);
+    expect(names({ universe: "fno" })).toEqual(["LARGE"]);
+    expect(names({ universe: "other" })).toEqual(["OUTSIDE"]);
+    expect(inUniverse(rows[4], "all")).toBe(true);
+  });
+
+  it("liquid only keeps stocks trading at least Rs 5 Cr a day, and the chip counts follow it", () => {
+    expect(names({ liquid: true }).sort()).toEqual(["LARGE", "MID", "OUTSIDE", "SMALL"]);
+    expect(universeCounts(rows, true)).toMatchObject({ all: 4, nifty500: 3, small: 1, other: 1 });
+    expect(universeCounts(rows, false)).toMatchObject({ all: 5, nifty500: 4, small: 2 });
+  });
+
+  it("the relative-strength cut keeps the top slice by rank, and drops a stock with no rank", () => {
+    expect(names({ rs: "10" })).toEqual(["LARGE"]);
+    expect(names({ rs: "20" }).sort()).toEqual(["LARGE", "OUTSIDE"]);
+    expect(names({ rs: "40" }).sort()).toEqual(["LARGE", "MID", "OUTSIDE"]);
+    expect(names({ rs: "any" })).toContain("THIN");
+  });
+
+  it("the new sorts put the biggest first, the pullback sorts the most pulled-back first, and a missing value last", () => {
+    expect(names({ sort: "mom" })).toEqual(["THIN", "LARGE", "OUTSIDE", "MID", "SMALL"]);
+    expect(names({ sort: "rs" })).toEqual(["LARGE", "OUTSIDE", "MID", "SMALL", "THIN"]); // THIN has no rank
+    expect(names({ sort: "turnover" })[0]).toBe("LARGE");
+    expect(names({ sort: "ema20" })).toEqual(["MID", "OUTSIDE", "LARGE", "SMALL", "THIN"]); // furthest below the 20-day EMA first
+    expect(names({ sort: "rsi3" })).toEqual(["LARGE", "OUTSIDE", "MID", "SMALL", "THIN"]); // lowest RSI first
+  });
+
+  it("a filter whose data is not there yet is skipped rather than hiding every stock", () => {
+    const old = [scr("A"), scr("B")]; // an older backend: no universes, no traded value
+    expect(haveLiquidity(old)).toBe(false);
+    expect(names({ universe: "nifty500", liquid: true }, old)).toEqual(["A", "B"]);
+    expect(names({ rs: "10" }, old)).toEqual([]); // but a rank cut with no ranks has nothing to keep
+  });
+
+  it("labels a stock by the biggest index it is in", () => {
+    expect(rows.map((r) => sizeLabel(r))).toEqual(["Large", "Mid", "Small", "Small", "Outside Nifty 500"]);
+    expect(sizeLabel({ universes: ["NIFTY500"] })).toBe("Nifty 500");
+    expect(sizeLabel({})).toBeNull();
   });
 });

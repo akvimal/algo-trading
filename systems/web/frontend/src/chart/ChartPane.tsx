@@ -3,17 +3,19 @@ import { ActionType, OverlayMode, dispose, init, type Chart, type Crosshair, typ
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
-import { ALERTABLE, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
+import { ALERTABLE, SERVER_WATCHED, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
   DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
   STRUCTURE_TIMEFRAMES, TEXT_DRAWING_MAX, type DrawingsChangedDetail, type StoredDrawing, type StructureConfig,
 } from "./config";
-import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type PlanLineExtend } from "./overlays";
+import { ACCENT } from "./colors";
+import { PEER_GROUP, PLAN_GROUP, OI_GROUP, LEVELS_GROUP, STRUCTURE_GROUP, TRADES_GROUP, registerChartExtensions, type DrawTagExtend, type PlanLineExtend } from "./overlays";
 import { liveSetups, getStructure, structureOverlays, type TrendByTf } from "./structure";
 import { averageTrueRange, rollLiveBar, type Bar } from "./liveBar";
 import { mergeStyle, sanitizeStyle, toOverlayStyles, type DrawingStyle } from "./drawingStyle";
 import { withDevicePixelRatio } from "./snapshot";
+import { scheduleZoneSync } from "./zoneSync";
 import { chartStyles, prefersLight } from "./theme";
 import type { OiLevelLine } from "./oiLevels";
 import type { ChartTrade, OpenLevel, TradeMarkerExtend } from "./trades";
@@ -31,6 +33,8 @@ export type ChartPaneHandle = {
   removeSelected: () => void;
   /** Arm the selected drawing (or, with null, disarm it). Only lines and zones can be armed. */
   setSelectedAlert: (trigger: Trigger | null) => void;
+  /** Put a short label on the selected line, ray, level or zone (empty removes it). */
+  setSelectedLabel: (text: string) => void;
   /** How far the instrument typically moves in one bar of this chart (null until enough bars have loaded) -
    * what a starting stop or target line is measured in, so it lands inside the part of the chart on screen. */
   typicalMove: () => number | null;
@@ -41,11 +45,52 @@ export type ChartPaneHandle = {
   /** Make the selected drawing's look the default for new drawings of its kind (true), or clear that default (false). */
   setSelectedStyleAsDefault: (on: boolean) => void;
   /** The chart as it is on screen (candles, indicators, drawings, structure, trade markers) as a PNG data URL, or
-   * the reason there is no picture to take (still loading, failed to load, the browser could not draw it). */
-  snapshot: () => ChartImage;
+   * the reason there is no picture to take (still loading, failed to load, the browser could not draw it).
+   * `withoutTrades` takes the picture with the person's own trading hidden (the trade plan's entry/stop/target, their open trades'
+   * levels with their profit label, and the entry/exit markers), then shows it again: the picture a published idea needs. */
+  snapshot: (opts?: { withoutTrades?: boolean }) => ChartImage;
 };
 
-export type ChartImage = { url: string } | { problem: string };
+export type ChartImage = { url: string; scale?: number } | { problem: string };
+
+/** The least height, in layout pixels, a chart is exported at: a short pane is made this tall for the capture. */
+const SNAPSHOT_MIN_HEIGHT = 560;
+
+/** The overlay groups that show the person's own trading. */
+export const TRADE_GROUPS = [PLAN_GROUP, LEVELS_GROUP, TRADES_GROUP];
+
+/** Draw the chart to a PNG with the library's own export (the chart's DOM canvases cannot be read back instead: it paints them off-screen,
+ * so they come out blank). Everything on it first; then without overlays in case one of them cannot be drawn; then both again at a pixel
+ * ratio of 1, for a chart too large (or a screen too dense) for the browser to allocate the full-size canvas, which makes it return an
+ * empty "data:,". */
+function exportChart(chart: Chart): ChartImage {
+  const background = getComputedStyle(document.body).backgroundColor || "#0f1216";
+  const tried: string[] = [];
+  // Sharpest first: at least twice the screen's pixel ratio (a picture shared elsewhere is looked at bigger than the chart is on screen),
+  // then the screen's own, then ratio 1 for a chart too large to allocate the bigger canvas.
+  const dpr = window.devicePixelRatio || 1;
+  const sharp = Math.max(2, dpr);
+  const attempts: { overlays: boolean; ratio: number | null }[] = [
+    { overlays: true, ratio: sharp },
+    { overlays: true, ratio: null },
+    { overlays: false, ratio: null },
+    { overlays: true, ratio: 1 },
+    { overlays: false, ratio: 1 },
+  ];
+  for (const a of attempts) {
+    const label = `${a.overlays ? "with" : "without"} overlays${a.ratio != null ? ` at ratio ${a.ratio}` : ""}`;
+    try {
+      const run = () => chart.getConvertPictureUrl(a.overlays, "png", background);
+      const url = a.ratio != null ? withDevicePixelRatio(a.ratio, run) : run();
+      if (url && url.startsWith("data:image")) return { url, scale: a.ratio ?? dpr };
+      tried.push(`export ${label} gave no image`);
+    } catch (e) {
+      console.warn(`chart snapshot ${label} failed`, e);
+      tried.push(`export ${label}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return { problem: `the browser could not draw the chart as an image (${tried.join("; ")})` };
+}
 
 /** The visible window of a chart, in terms another chart can follow: the size of a bar and the time at the
  * right-hand edge. `seq` makes each message distinct. */
@@ -71,6 +116,8 @@ type Props = {
   levels?: OpenLevel[];
   /** A level was dragged to a new price. Answer true if it was accepted; on false the line goes back. */
   onLevelMove?: (level: OpenLevel, price: number) => Promise<boolean> | boolean;
+  /** The × on a waiting order's entry line was clicked: cancel that order. */
+  onLevelCancel?: (level: OpenLevel) => void;
   /** Support and resistance lines read from the option chain (none by default). */
   oiLevels?: OiLevelLine[];
   magnet: boolean;
@@ -104,6 +151,7 @@ const REFRESH_MS = 30_000;
 const STRUCTURE_REFRESH_MS = 2 * 60_000;
 const MAX_AUTO_RETRIES = 8;
 const USER_DRAWINGS = "user-drawings";
+const DRAW_TAGS = "draw-tags";
 
 const magnetMode = (on: boolean): OverlayMode => (on ? OverlayMode.WeakMagnet : OverlayMode.Normal);
 
@@ -524,7 +572,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       }
     }
     for (const l of levels ?? []) {
-      const extendData: PlanLineExtend = { key: l.key, label: l.label, color: l.field === "stop" ? "#e8586a" : "#3ecf8e", dashed: false };
+      const extendData: PlanLineExtend = { key: l.key, label: l.label, color: l.field === "stop" ? "#e8586a" : l.field === "target" ? "#3ecf8e" : "#4c8dff", dashed: l.kind === "waiting", cancellable: l.cancellable === true };
       const points = [{ timestamp: anchor, value: l.price }];
       const existing = levelIds.current.get(l.key);
       if (existing) {
@@ -537,6 +585,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         points,
         extendData,
         lock: !l.draggable,
+        onClick: (e: OverlayEvent) => {
+          if (e.figureKey !== "close") return false;
+          const current = propsRef.current.levels?.find((x) => x.key === l.key);
+          if (current?.cancellable) propsRef.current.onLevelCancel?.(current);
+          return false;
+        },
         onPressedMoveEnd: (e: OverlayEvent) => {
           const v = e.overlay.points[0]?.value;
           const current = propsRef.current.levels?.find((x) => x.key === l.key);
@@ -558,6 +612,14 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         },
       });
       if (typeof id === "string") levelIds.current.set(l.key, id);
+    }
+    // A thin vertical line joining each trade's stop, entry and target, so the three read as one box (rebuilt whole: it is cheap and has no state).
+    chart.removeOverlay({ name: "tradeSpan" });
+    const byTrade = new Map<string, number[]>();
+    for (const l of levels ?? []) byTrade.set(`${l.kind}:${l.tradeId}`, [...(byTrade.get(`${l.kind}:${l.tradeId}`) ?? []), l.price]);
+    for (const prices of byTrade.values()) {
+      if (prices.length < 2) continue;
+      chart.createOverlay({ name: "tradeSpan", groupId: LEVELS_GROUP, lock: true, points: [{ timestamp: anchor, value: Math.min(...prices) }, { timestamp: anchor, value: Math.max(...prices) }] });
     }
   }, [levels, status, epoch]);
 
@@ -593,7 +655,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [oiLevels, status, epoch]);
 
   // ---- drawings: saved per instrument, restored after every load ----
-  const persist = () => saveDrawings(propsRef.current.exchange, propsRef.current.symbol, [...drawnRef.current.values()], instanceIdRef.current);
+  const persist = () => {
+    const all = [...drawnRef.current.values()];
+    saveDrawings(propsRef.current.exchange, propsRef.current.symbol, all, instanceIdRef.current);
+    // the armed zones and levels are also watched by the server, so a touch reaches Telegram with every tab closed
+    scheduleZoneSync(propsRef.current.exchange, propsRef.current.symbol, propsRef.current.interval, all);
+  };
 
   // A drawing being dragged. The library only reports the end of a drag when the mouse is released over the chart's own plot area: let
   // go over the price axis, between two panes or outside the window and that report never comes, so the change was neither saved nor
@@ -610,6 +677,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         if (!overlay || !drawnRef.current.has(id)) return;
         drawnRef.current.set(id, serialize(overlay));
         sidesRef.current.delete(id);
+        syncTag(id);
         persist();
         emitDrawing();
       }, 0);
@@ -634,7 +702,17 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         emitDrawing();
         return false;
       }
-      drawnRef.current.set(e.overlay.id, serialize(e.overlay));
+      const drawn = serialize(e.overlay);
+      // A zone is drawn to be watched: it is armed straight away (the person can switch it off), and starts from where the price is now.
+      const arm = e.overlay.name === "rect" && !drawn.alert;
+      drawnRef.current.set(e.overlay.id, arm ? { ...drawn, alert: { trigger: "cross" } } : drawn);
+      if (arm) {
+        const z = alertZone(drawn);
+        const price = propsRef.current.price;
+        if (price != null && z) sidesRef.current.set(e.overlay.id, sideOf(price, z));
+        emitArmed();
+      }
+      syncTag(e.overlay.id);
       persist();
       emitDrawing();
       return false;
@@ -651,6 +729,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       draggingRef.current = null;
       drawnRef.current.set(e.overlay.id, serialize(e.overlay));
       sidesRef.current.delete(e.overlay.id); // it moved: the next price only learns its side, it cannot cross
+      syncTag(e.overlay.id);
       persist();
       emitDrawing();
       return false;
@@ -659,6 +738,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       if (selectedRef.current === e.overlay.id) selectedRef.current = null;
       if (pendingRef.current === e.overlay.id) pendingRef.current = null;
       if (!restoringRef.current) {
+        removeTag(e.overlay.id, true);
         drawnRef.current.delete(e.overlay.id);
         sidesRef.current.delete(e.overlay.id);
         persist();
@@ -688,14 +768,52 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const alert = drawnRef.current.get(o.id)?.alert;
     const text = o.name === "textNote" ? ((o.extendData as { text?: string } | undefined)?.text ?? drawnRef.current.get(o.id)?.text) : undefined;
     const saved = drawnRef.current.get(o.id);
+    const label = saved?.label;
     const style = saved ? saved.style : pendingStyleRef.current; // a new drawing starts from the default look; a finished one keeps its own
     return {
       name: o.name,
       points: o.points.map((p) => ({ timestamp: pointTimestamp(p, anchorRef.current), value: p.value })),
       ...(alert ? { alert } : {}),
       ...(text ? { text } : {}),
+      ...(label ? { label } : {}),
       ...(style ? { style } : {}),
     };
+  }
+
+  // ---- the label / alert bell on a drawing: a companion pill, kept in step with its drawing ----
+  const tagsRef = useRef<Map<string, string>>(new Map());
+  /** `afterLibrary`: from inside the library's own removal callback (a drawing's onRemoved). klinecharts' removeInstance builds its filtered overlay
+   * list while it loops and assigns it back when the loop ends, so a removal made from within that callback is overwritten and the pill comes
+   * back (it then vanished only on a refresh). Removing it one tick later, once the library is done, sticks. */
+  function removeTag(id: string, afterLibrary = false) {
+    const tag = tagsRef.current.get(id);
+    tagsRef.current.delete(id);
+    if (!tag) return;
+    if (afterLibrary) queueMicrotask(() => chartRef.current?.removeOverlay(tag));
+    else chartRef.current?.removeOverlay(tag);
+  }
+  function syncTag(id: string) {
+    const chart = chartRef.current;
+    const d = drawnRef.current.get(id);
+    if (!chart) return;
+    const bell = d?.alert ? (d.alert.trigger === "close" ? "🔔 close" : "🔔") : "";
+    const text = [bell, d?.label].filter(Boolean).join(" ");
+    const p0 = d?.points[0];
+    if (!d || d.name === "textNote" || !text || !p0 || typeof p0.value !== "number") {
+      removeTag(id);
+      return;
+    }
+    // A zone's pill sits on its top edge; every other drawing's at its own first point.
+    const top = d.name === "rect" ? Math.max(...d.points.map((p) => p.value ?? -Infinity)) : p0.value;
+    const point = toChartPoint({ ...p0, value: Number.isFinite(top) ? top : p0.value }, anchorRef.current);
+    const extendData: DrawTagExtend = { text, color: d.style?.color ?? ACCENT, edge: d.name === "horizontalStraightLine" || d.name === "priceLine" ? "right" : "point" };
+    const existing = tagsRef.current.get(id);
+    if (existing) {
+      chart.overrideOverlay({ id: existing, points: [point], extendData, visible: !propsRef.current.drawingsHidden });
+      return;
+    }
+    const tag = chart.createOverlay({ name: "drawTag", groupId: DRAW_TAGS, lock: true, visible: !propsRef.current.drawingsHidden, points: [point], extendData });
+    if (typeof tag === "string") tagsRef.current.set(id, tag);
   }
 
   /** Put a drawing's look on the chart now. */
@@ -704,6 +822,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     if (!chart) return;
     if (name === "textNote") chart.overrideOverlay({ id, extendData: { text: text ?? "", style } });
     else {
+      if (name === "rect") chart.overrideOverlay({ id, extendData: { noMid: style?.noMid === true } });
       const styles = toOverlayStyles(name, style);
       if (styles) chart.overrideOverlay({ id, styles });
     }
@@ -747,8 +866,10 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const selection: SelectionInfo | null = d
       ? {
           alertable: ALERTABLE.has(d.name),
+          server: SERVER_WATCHED.has(d.name),
           trigger: d.alert?.trigger ?? null,
           level: levelText(d),
+          ...(d.label ? { label: d.label } : {}),
           look: { name: d.name, style: d.style ?? {}, hasDefault: loadDrawingDefaults()[d.name] !== undefined },
         }
       : null;
@@ -786,6 +907,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     if (!chart) return;
     // Wipe only the drawings (by id): the plan and structure layers are theirs to manage.
     restoringRef.current = true;
+    for (const id of [...tagsRef.current.keys()]) removeTag(id);
     for (const id of drawnRef.current.keys()) chart.removeOverlay(id);
     drawnRef.current.clear();
     for (const d of loadDrawings(propsRef.current.exchange, propsRef.current.symbol)) {
@@ -795,16 +917,25 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         points: d.points.map((p) => toChartPoint(p, anchorRef.current)),
         mode: magnetMode(propsRef.current.magnet),
         ...(d.name === "textNote" ? { extendData: { text: d.text ?? "", style: d.style } } : {}),
+        ...(d.name === "rect" ? { extendData: { noMid: d.style?.noMid === true } } : {}),
         ...(toOverlayStyles(d.name, d.style) ? { styles: toOverlayStyles(d.name, d.style) } : {}),
         ...handlers(),
       });
-      if (typeof id === "string") drawnRef.current.set(id, d);
+      if (typeof id === "string") {
+        drawnRef.current.set(id, d);
+        syncTag(id);
+      }
     }
     restoringRef.current = false;
     sidesRef.current.clear();
     // A restored alert starts from where the price is now, not from whichever tick happens to come next.
     if (propsRef.current.price != null) seedAlerts(propsRef.current.price);
     emitArmed();
+    // Zones armed before the server watched them (or on this browser's last visit) are sent now. Only when there are some: an empty set is sent
+    // when the person deletes a zone, never on load, because a browser with no drawings (another device, cleared storage) must not wipe the
+    // zones the server already watches for them.
+    const all = [...drawnRef.current.values()];
+    if (all.some((d) => d.alert && SERVER_WATCHED.has(d.name))) scheduleZoneSync(propsRef.current.exchange, propsRef.current.symbol, propsRef.current.interval, all);
   }
 
   useEffect(() => {
@@ -831,6 +962,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     const chart = chartRef.current;
     if (!chart) return;
     for (const id of drawnRef.current.keys()) chart.overrideOverlay({ id, visible: !drawingsHidden, mode: magnetMode(magnet) });
+    chart.overrideOverlay({ groupId: DRAW_TAGS, visible: !drawingsHidden });
   }, [drawingsHidden, magnet, epoch]);
 
   useImperativeHandle(ref, () => ({
@@ -846,6 +978,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         groupId: USER_DRAWINGS,
         mode: magnetMode(propsRef.current.magnet),
         ...(tool === "textNote" ? { extendData: { text: "", style: start } } : {}),
+        ...(tool === "rect" ? { extendData: { noMid: start?.noMid === true } } : {}),
         ...(toOverlayStyles(tool, start) ? { styles: toOverlayStyles(tool, start) } : {}),
         ...handlers(),
       });
@@ -860,6 +993,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     clearDrawings() {
       const chart = chartRef.current;
       if (!chart) return;
+      for (const id of [...tagsRef.current.keys()]) removeTag(id);
       for (const id of [...drawnRef.current.keys()]) chart.removeOverlay(id);
       drawnRef.current.clear();
       sidesRef.current.clear();
@@ -876,6 +1010,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       void _old;
       drawnRef.current.set(id, style ? { ...rest, style } : rest);
       applyStyle(id, d.name, style, d.text);
+      syncTag(id);
       persist();
       emitDrawing();
     },
@@ -908,36 +1043,32 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     typicalMove() {
       return averageTrueRange(barsRef.current);
     },
-    snapshot(): ChartImage {
+    snapshot(opts?: { withoutTrades?: boolean }): ChartImage {
       const chart = chartRef.current;
       if (!chart) return { problem: "the chart is not on screen" };
       if (statusRef.current === "loading") return { problem: "the chart is still loading its candles" };
       if (statusRef.current === "error") return { problem: "the chart has not loaded - fix the message shown on it first (for example a Dhan token problem)" };
-      const background = getComputedStyle(document.body).backgroundColor || "#0f1216";
-      const tried: string[] = [];
-      // The library's own export (the chart's DOM canvases cannot be read back instead: it paints them off-screen, so they
-      // come out blank). Everything on it first; then without overlays in case one of them cannot be drawn; then both again
-      // at a pixel ratio of 1, for a chart too large (or a screen too dense) for the browser to allocate the full-size
-      // canvas, which makes it return an empty "data:,".
-      const attempts: { overlays: boolean; ratio1: boolean }[] = [
-        { overlays: true, ratio1: false },
-        { overlays: false, ratio1: false },
-        { overlays: true, ratio1: true },
-        { overlays: false, ratio1: true },
-      ];
-      for (const a of attempts) {
-        const label = `${a.overlays ? "with" : "without"} overlays${a.ratio1 ? " at ratio 1" : ""}`;
-        try {
-          const run = () => chart.getConvertPictureUrl(a.overlays, "png", background);
-          const url = a.ratio1 ? withDevicePixelRatio(1, run) : run();
-          if (url && url.startsWith("data:image")) return { url };
-          tried.push(`export ${label} gave no image`);
-        } catch (e) {
-          console.warn(`chart snapshot ${label} failed`, e);
-          tried.push(`export ${label}: ${e instanceof Error ? e.message : String(e)}`);
-        }
+      const hidden = opts?.withoutTrades ? TRADE_GROUPS : [];
+      for (const groupId of hidden) chart.overrideOverlay({ groupId, visible: false });
+      // A short chart pane makes a squashed picture (the order blocks and OI levels run into each other): for the capture the chart is
+      // made reasonably tall, then put back at once, in the same step, so nothing is painted at the other size.
+      const box = containerRef.current;
+      const extra = box ? Math.max(0, SNAPSHOT_MIN_HEIGHT - box.clientHeight) : 0;
+      const prevBottom = box?.style.bottom ?? "";
+      if (box && extra > 0) {
+        box.style.bottom = `${-extra}px`;
+        chart.resize();
       }
-      return { problem: `the browser could not draw the chart as an image (${tried.join("; ")})` };
+      try {
+        return exportChart(chart);
+      } finally {
+        if (box && extra > 0) {
+          box.style.bottom = prevBottom;
+          chart.resize();
+        }
+        // Shown again whatever happened, so a failed export never leaves the person's own trade lines missing from their chart.
+        for (const groupId of hidden) chart.overrideOverlay({ groupId, visible: true });
+      }
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);
@@ -954,9 +1085,22 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       const price = propsRef.current.price;
       const z = trigger ? alertZone(d) : null;
       if (price != null && z) sidesRef.current.set(id, sideOf(price, z));
+      syncTag(id);
       persist();
       emitDrawing();
       emitArmed();
+    },
+    setSelectedLabel(text) {
+      const id = selectedRef.current;
+      const d = id ? drawnRef.current.get(id) : undefined;
+      if (!id || !d || d.name === "textNote") return;
+      const { label: _old, ...rest } = d;
+      void _old;
+      const label = text.trim().slice(0, TEXT_DRAWING_MAX);
+      drawnRef.current.set(id, label ? { ...rest, label } : rest);
+      syncTag(id);
+      persist();
+      emitDrawing();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
@@ -1048,7 +1192,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   }, [pickField]);
 
   // The canvas is invisible to a screen reader, so the same facts are stated in words.
-  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${oiLevels?.length ? ` Option-chain levels: ${oiLevels.map((l) => l.label).join(", ")}.` : ""}${levels?.length ? ` Stops and targets of open trades: ${levels.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
+  const summary = `${symbol}, ${def.label} candles.${price != null ? ` Last price ${formatPrice(price)}.` : ""}${plan.length ? ` Marked levels: ${plan.map((l) => `${l.label} ${formatPrice(l.price)}`).join(", ")}.` : ""}${oiLevels?.length ? ` Option-chain levels: ${oiLevels.map((l) => l.label).join(", ")}.` : ""}${levels?.length ? ` Entries, stops and targets of your open and waiting trades: ${levels.map((l) => `${l.label} at ${formatPrice(l.price)}`).join(", ")}.` : ""}${trades?.length ? ` Your trades on this chart: ${trades.map((t) => `${t.label}${t.state === "open" ? " (open)" : ""}`).join(", ")}.` : ""}`;
 
   return (
     <div className="chart-pane" data-testid="chart-pane">

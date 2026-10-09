@@ -263,6 +263,53 @@ def cancel_pending_order(db: Session, user_id: uuid.UUID, order_id: uuid.UUID) -
     return row
 
 
+def update_pending_order(
+    db: Session, user_id: uuid.UUID, order_id: uuid.UUID, deps: Deps, *,
+    trigger_price: Optional[float] = None, stop_loss_price: Optional[float] = None, target_price: Optional[float] = None, token: Optional[str] = None,
+) -> Optional[db_models.PendingOrder]:
+    """Move a waiting order's trigger, stop-loss and/or target. None if there is no such order for this user; PendingOrderError(409) if it is no
+    longer pending, 422 if the new levels no longer make sense together (a stop on the winning side, a trigger the price is already at).
+
+    A moved trigger re-reads the price: the order fires on the FIRST CROSSING of the trigger, so which side the price starts from has to be
+    worked out again against the new level. The write is one conditional UPDATE like cancel's, so an order the watcher has just claimed is not
+    changed after the fact (the watcher's own claim is what makes a fire happen once)."""
+    P = db_models.PendingOrder
+    row = db.get(P, order_id)
+    if row is None or row.user_id != user_id:
+        return None
+    if row.status != "pending":
+        raise PendingOrderError(409, f"this order is already {row.status}")
+    trigger = trigger_price if trigger_price is not None else float(row.trigger_price)
+    stop = stop_loss_price if stop_loss_price is not None else (float(row.stop_loss_price) if row.stop_loss_price is not None else None)
+    target = target_price if target_price is not None else (float(row.target_price) if row.target_price is not None else None)
+    problem = bracket_problem(row.action, trigger, stop, target)
+    if problem:
+        raise PendingOrderError(422, problem)
+    values: dict = {}
+    if trigger_price is not None and trigger_price != float(row.trigger_price):
+        try:
+            ltp = deps.underlying_ltp(row.segment, row.symbol, token=token) if token else deps.underlying_ltp(row.segment, row.symbol)
+        except UnknownUnderlying:
+            raise PendingOrderError(404, f"unknown symbol {row.symbol} on {row.segment}")
+        except UnderlyingUnavailable as exc:
+            raise PendingOrderError(503, f"could not get a live price for {row.symbol} to move the order: {exc}")
+        if ltp == trigger_price:
+            raise PendingOrderError(422, "the price is already at the trigger: place a market order instead")
+        values.update({P.trigger_price: trigger_price, P.started_above: ltp > trigger_price, P.last_price: ltp})
+    if stop_loss_price is not None:
+        values[P.stop_loss_price] = stop_loss_price
+    if target_price is not None:
+        values[P.target_price] = target_price
+    if not values:
+        return row
+    updated = db.query(P).filter(P.id == order_id, P.user_id == user_id, P.status == "pending").update(values, synchronize_session=False)
+    db.commit()
+    db.refresh(row)
+    if updated != 1:
+        raise PendingOrderError(409, f"this order is already {row.status}")
+    return row
+
+
 def list_pending_orders(db: Session, user_id: uuid.UUID, status: Optional[str] = None, limit: int = 100) -> list[db_models.PendingOrder]:
     P = db_models.PendingOrder
     rows = db.query(P).filter(P.user_id == user_id).order_by(P.created_at.desc()).all()

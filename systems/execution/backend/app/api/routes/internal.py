@@ -8,6 +8,8 @@ dependency (same as health.router) - market-data has no user bearer token to
 forward here, only the shared secret."""
 
 import logging
+from datetime import date
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
@@ -16,6 +18,7 @@ from app.adapters.db import models
 from app.adapters.db.session import get_db
 from app.config import settings
 from app.domain.position_manager import settle_live_position_exit
+from app.domain.session_summary import trader_day
 
 logger = logging.getLogger(__name__)
 
@@ -118,3 +121,13 @@ _STATUS_MAP = {
     "CANCELLED": "cancelled",
     "EXPIRED": "cancelled",
 }
+
+
+@router.get("/session-summary", dependencies=[Depends(_require_internal_secret)])
+def session_summary(user_id: UUID, segment: str, day: date, db: Session = Depends(get_db)):
+    """One user's trading for one IST day (paper and live apart, what is still open, the discipline score): what market-data's post-session
+    Telegram summary reports. Service-to-service only, so a user id is taken as given."""
+    seg = segment.upper()
+    if seg not in ("NSE", "MCX", "CRYPTO"):
+        raise HTTPException(status_code=404, detail=f"unknown segment {segment}")
+    return trader_day(db, user_id, seg, day)

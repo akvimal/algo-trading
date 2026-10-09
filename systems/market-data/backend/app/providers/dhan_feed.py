@@ -114,6 +114,7 @@ _consecutive_failures = 0  # drives exponential backoff - reset in _on_open
 _last_error: Optional[str] = None
 _last_ticks: dict[tuple[str, str], dict] = {}  # (exchange, symbol) -> {price, ltt, received_at}
 _subscribed: set[tuple[str, str]] = set()  # (exchange, symbol) ever subscribed - re-sent on reconnect
+_tick_monotonic: dict[tuple[str, str], float] = {}  # (exchange, symbol) -> time.monotonic() of the latest tick, to judge its age without parsing a timestamp
 _symbol_by_segment_security: dict[tuple[str, str], tuple[str, str]] = {}  # (segment_key, security_id) -> (exchange, symbol)
 _ws_app: Optional["websocket.WebSocketApp"] = None
 
@@ -123,6 +124,22 @@ def _backoff_delay(consecutive_failures: int) -> int:
     consecutive failure since the last successful connection, capped at
     RECONNECT_DELAY_MAX_SECONDS. Pure, directly unit-testable."""
     return min(RECONNECT_DELAY_BASE_SECONDS * (2 ** max(consecutive_failures - 1, 0)), RECONNECT_DELAY_MAX_SECONDS)
+
+
+def is_subscribed(exchange: str, symbol: str) -> bool:
+    with _lock:
+        return (exchange, symbol) in _subscribed
+
+
+def fresh_price(exchange: str, symbol: str, max_age_seconds: float) -> Optional[float]:
+    """The feed's latest price for this symbol if it arrived within `max_age_seconds`, else None. In-process, no network: the REST quote call is
+    rate-limited to about one per two seconds for the whole account, so a price the feed already holds is both faster and free."""
+    with _lock:
+        tick = _last_ticks.get((exchange, symbol))
+        at = _tick_monotonic.get((exchange, symbol))
+    if tick is None or at is None or (time.monotonic() - at) > max_age_seconds:
+        return None
+    return float(tick["price"])
 
 
 def feed_status() -> dict:
@@ -203,6 +220,7 @@ def _handle_ticker(parsed: dict) -> None:
             "received_at": datetime.now(timezone.utc).isoformat(),
         }
         _last_ticks[target] = tick
+        _tick_monotonic[target] = time.monotonic()
     _publish_tick(target[0], target[1], tick)
 
 

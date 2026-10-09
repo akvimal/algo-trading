@@ -25,7 +25,8 @@ export type FvgExtend = { kind: "bullish" | "bearish"; top: number; bottom: numb
 export type BreakExtend = { tf: string; kind: "bos" | "choch"; direction: "up" | "down"; price: number };
 export type TrendMarkExtend = { tf: string; trend: "up" | "down" | "range"; price: number };
 export type SetupExtend = { tf: string; direction: "long" | "short"; status: "confirmed" | "triggered" | "hit_target" | "hit_sl" | "invalidated"; entry: number; stop: number; target: number; rr: number };
-export type PlanLineExtend = { key: string; label: string; color: string; dashed: boolean };
+export type DrawTagExtend = { text: string; color: string; edge: "point" | "right" };
+export type PlanLineExtend = { key: string; label: string; color: string; dashed: boolean; cancellable?: boolean };
 
 const pill = (color: string, size = 10) => ({
   color,
@@ -39,6 +40,12 @@ const pill = (color: string, size = 10) => ({
 });
 
 const NO_DEFAULTS = { needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false } as const;
+
+/** The zone's midline colour: its own border colour at half strength (a neutral grey when the border is not a plain hex). */
+function midColor(border: unknown): string {
+  const m = typeof border === "string" ? /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(border) : null;
+  return m ? `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, 0.5)` : "rgba(170, 180, 190, 0.5)";
+}
 
 let registered = false;
 
@@ -56,12 +63,24 @@ export function registerChartExtensions(): void {
     createPointFigures: ({ coordinates, overlay }) => {
       if (coordinates.length < 2) return [];
       const [a, b] = coordinates;
+      const showMid = (overlay.extendData as { noMid?: boolean } | undefined)?.noMid !== true;
       return [
         {
           type: "polygon",
           attrs: { coordinates: [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y: b.y }, { x: a.x, y: b.y }] },
           styles: { ...(overlay.styles?.polygon ?? {}), style: "stroke_fill" },
         },
+        // The zone's midpoint (50%): a thin dashed line, lighter than the border.
+        ...(showMid
+          ? [
+              {
+                type: "line",
+                attrs: { coordinates: [{ x: a.x, y: (a.y + b.y) / 2 }, { x: b.x, y: (a.y + b.y) / 2 }] },
+                styles: { style: "dashed", dashedValue: [4, 4], size: 1, color: midColor(overlay.styles?.polygon?.borderColor) },
+                ignoreEvent: true,
+              },
+            ]
+          : []),
       ];
     },
   });
@@ -90,6 +109,29 @@ export function registerChartExtensions(): void {
     },
   });
 
+  // The words and/or the alert bell on a drawing (line, ray, level, zone): a small pill that belongs to its drawing. The chart pane
+  // creates, moves and removes it alongside the drawing; it takes no clicks. A horizontal level has no useful left end (it spans the
+  // chart), so its pill sits at the right edge, against the price axis; everything else sits at the drawing's own anchor point.
+  registerOverlay({
+    name: "drawTag",
+    totalStep: 1,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ coordinates, overlay, bounding }) => {
+      const c0 = coordinates[0];
+      const d = overlay.extendData as DrawTagExtend | undefined;
+      if (!c0 || !d?.text || !Number.isFinite(c0.y)) return [];
+      const atRight = d.edge === "right";
+      return [
+        {
+          type: "text",
+          attrs: { x: atRight ? bounding.width - 6 : c0.x, y: c0.y - 2, text: d.text, align: atRight ? "right" : "left", baseline: "bottom" },
+          styles: { color: INK, size: 11, weight: "bold", backgroundColor: d.color, borderRadius: 3, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1 },
+          ignoreEvent: true,
+        },
+      ];
+    },
+  });
+
   // A level of the trade plan (entry, stop, target): a full-width line with a label at the price axis.
   // Its figures take pointer events, so the person can grab it and drag it to a new price; the chart
   // reports the new price when the drag ends (see ChartPane) and the ticket follows.
@@ -107,10 +149,35 @@ export function registerChartExtensions(): void {
         { type: "line", attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] }, styles: { color: d.color, size: 1.5, style: d.dashed ? "dashed" : "solid", dashedValue: [6, 4] } },
         {
           type: "text",
-          attrs: { x: bounding.width - 4, y: y - 3, text: `${d.label} ${v.toFixed(2)}`, align: "right", baseline: "bottom" },
+          // A line that can be cancelled leaves room at the right for its ×.
+          attrs: { x: bounding.width - 4 - (d.cancellable ? 22 : 0), y: y - 3, text: `${d.label} ${v.toFixed(2)}`, align: "right", baseline: "bottom" },
           styles: { color: INK, size: 11, weight: "bold", backgroundColor: d.color, paddingLeft: 4, paddingRight: 4, paddingTop: 1, paddingBottom: 1, borderRadius: 2 },
         },
+        ...(d.cancellable
+          ? [
+              {
+                // ChartPane's onClick for the level reads this key: a click here cancels the order the line belongs to.
+                key: "close",
+                type: "text",
+                attrs: { x: bounding.width - 4, y: y - 3, text: "×", align: "right", baseline: "bottom" },
+                styles: { color: INK, size: 11, weight: "bold", backgroundColor: "rgba(15, 18, 22, 0.85)", paddingLeft: 6, paddingRight: 6, paddingTop: 1, paddingBottom: 1, borderRadius: 2 },
+              },
+            ]
+          : []),
       ];
+    },
+  });
+
+  // The thin vertical line that joins a trade's stop, entry and target (ChartPane draws one per trade, from its lowest level to its highest).
+  registerOverlay({
+    name: "tradeSpan",
+    totalStep: 3,
+    ...NO_DEFAULTS,
+    createPointFigures: ({ coordinates }) => {
+      if (coordinates.length < 2) return [];
+      const [a, b] = coordinates;
+      if (![a.x, a.y, b.y].every(Number.isFinite)) return [];
+      return [{ type: "line", attrs: { coordinates: [{ x: a.x, y: a.y }, { x: a.x, y: b.y }] }, styles: { color: "rgba(76, 141, 255, 0.55)", size: 1, style: "solid" }, ignoreEvent: true }];
     },
   });
 

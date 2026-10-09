@@ -8,7 +8,7 @@ import { StyleBar } from "./StyleBar";
 const sel = (name: string, style: DrawingStyle = {}, hasDefault = false): SelectionInfo => ({ alertable: false, trigger: null, level: null, look: { name, style, hasDefault } });
 
 function bar(selection: SelectionInfo | null) {
-  const handlers = { onStyle: vi.fn(), onReset: vi.fn(), onDefault: vi.fn() };
+  const handlers = { onStyle: vi.fn(), onReset: vi.fn(), onDefault: vi.fn(), onLabel: vi.fn() };
   render(<StyleBar selection={selection} {...handlers} />);
   return handlers;
 }

@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -6,9 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.data_access import data_credentials
 from app.auth import Caller, get_caller
 from app.domain.dhan_retry import interactive_retry
+from app.domain.live_quotes import split_live
 from app.domain.models import BatchQuoteRequest, BatchQuoteResponse, Quote
 from app.providers.router import get_provider
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -39,7 +42,18 @@ def get_ltp_batch(payload: BatchQuoteRequest, caller: Caller = Depends(get_calle
     try:
         provider = get_provider(payload.exchange)
         credentials = data_credentials(caller, payload.exchange)
-        prices = interactive_retry(provider.get_ltp_batch, payload.symbols, credentials)
+        fresh: dict[str, float] = {}
+        missing = list(payload.symbols)
+        if payload.live and credentials is None:  # the platform credential only: a person's own keys keep their own REST budget
+            fresh, missing = split_live(payload.exchange, payload.symbols)
+        prices = dict(fresh)
+        if missing:
+            try:
+                prices.update(interactive_retry(provider.get_ltp_batch, missing, credentials))
+            except RuntimeError:
+                if not fresh:
+                    raise
+                logger.warning("live quote: the REST fallback failed for %d symbol(s); answering with the feed's ticks only", len(missing))
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

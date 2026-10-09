@@ -135,7 +135,8 @@ describe("Today", () => {
     expect(screen.getByRole("meter", { name: /daily loss budget/i })).toHaveAttribute("aria-valuenow", "350");
     expect(screen.getByText(/SL 2,480/)).toBeInTheDocument();
     expect(screen.getByText(/Target not set/)).toBeInTheDocument();
-    expect(await screen.findByText(/bullish/)).toBeInTheDocument();
+    expect(await screen.findByText(/OI bullish · moderate/)).toBeInTheDocument(); // the Markets card's header, for the market trading first
+    expect(screen.getByRole("region", { name: "Markets" })).toBeInTheDocument();
   });
 
   it("shows performance and a discipline score on Today, scoped to the account's own segment", async () => {
@@ -200,7 +201,7 @@ describe("Today", () => {
     });
     renderApp("/");
     expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument();
-    expect(await screen.findByText(/That did not load/)).toBeInTheDocument();
+    expect(await screen.findByText(/OI read unavailable/)).toBeInTheDocument();
   });
 
   it("welcomes a brand-new user with no trades", async () => {

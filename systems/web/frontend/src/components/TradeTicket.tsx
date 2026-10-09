@@ -6,7 +6,7 @@ import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
 import { NOTES_MAX, SETUP_TAGS, TRIGGERS } from "../pages/journalModel";
 import {
-  ACTION_WORD, PLAN_KINDS, analyzeTicket, buildOrder, checkList, effectiveTicket, marketStateOf, optionsAvailable, planAvailable, planHint, planNudges, planRows,
+  ACTION_WORD, PLAN_KINDS, analyzeTicket, buildOrder, checkList, cryptoLeverage, effectiveTicket, marketStateOf, optionsAvailable, planAvailable, planHint, planNudges, planRows,
   planSide, planStatus,
   type Action, type BuildMeta, type DayBudget, type MarketState, type Moneyness, type PlanKind, type RegimeRead, type Ticket, type TicketContext,
 } from "../pages/tradeModel";
@@ -147,6 +147,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
     else onChange({ ...raw, ...extra });
   };
   const a = analyzeTicket(t, ctx);
+  const lev = ctx.segment === "CRYPTO" ? cryptoLeverage(a.entry, t.action === "BUY", ctx.leverage ?? 1) : null;
   const checks = checkList(t, a, ctx, regime, budget);
   const fieldValue: Record<PriceField, string> = { entry: t.entry, stop: t.stop, target: t.target };
   const pickAction = (f: PriceField) =>
@@ -465,6 +466,19 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
             Entry at <span className="num">{a.entry == null ? "–" : formatPrice(a.entry)}</span> · Size <span className="num">{a.lots == null ? "by the server" : `${a.lots}${a.lotsAuto ? " (auto)" : ""}`}</span>
           </div>
+          {ctx.segment === "CRYPTO" && !isOption && (
+            <div className="faint" style={{ fontSize: 12, marginTop: 4 }} data-testid="crypto-note">
+              {ctx.usdinr == null ? (
+                <>Set the USD/INR rate in Settings: until then crypto orders are refused and the risk cannot be shown in rupees.</>
+              ) : (
+                <>
+                  Priced in dollars, shown in rupees at ₹{ctx.usdinr}/$
+                  {lev && <> · {lev.leverage}× leverage, liquidated near <span className="num">${formatPrice(lev.liquidation)}</span> ({lev.awayPct.toFixed(1)}% {t.action === "BUY" ? "below" : "above"} entry)</>}
+                  {a.lots != null && a.entry != null && <> · margin about <span className="num">{formatInr(((a.lots * ctx.lotSize * a.entry) / (ctx.leverage ?? 1)) * ctx.usdinr)}</span></>}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 

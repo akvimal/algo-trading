@@ -22,6 +22,8 @@ export type Account = {
   slippage_bps: number;
   max_order_value: number | null;
   live_trading_consent_at: string | null;
+  /** Crypto margin multiplier (1 = none); the same column exists, unused, on the other markets. */
+  leverage?: number;
 };
 
 export type Position = {
@@ -40,6 +42,14 @@ export type Position = {
   pnl: number | null;
   live_price?: number | null;
   unrealized_pnl?: number | null;
+  /** `pnl` and `unrealized_pnl` are rupees for every trade (see api/rupees.ts); a crypto trade's dollar figures are kept here. */
+  pnl_native?: number | null;
+  unrealized_pnl_native?: number | null;
+  pnl_inr?: number | null;
+  unrealized_pnl_inr?: number | null;
+  currency?: "INR" | "USD";
+  /** Rupees per unit of the trade's own currency: 1, or the USD/INR rate for crypto (null when none is set). */
+  fx?: number | null;
   status: "OPEN" | "CLOSED" | "REJECTED" | string;
   /** True only if the entry cleared through a real broker order; otherwise it was a paper trade. */
   is_live_broker_order?: boolean;
@@ -85,6 +95,12 @@ export type OptionGroup = {
   live_combined_price?: number | null;
   live_spot_price?: number | null;
   unrealized_pnl?: number | null;
+  pnl_native?: number | null;
+  unrealized_pnl_native?: number | null;
+  pnl_inr?: number | null;
+  unrealized_pnl_inr?: number | null;
+  currency?: "INR" | "USD";
+  fx?: number | null;
   status: string;
   pnl: number | null;
   entry_time: string;
@@ -450,6 +466,8 @@ export type Profile = {
   markets: Segment[];
   default_instrument: "future" | "option";
   default_option_strategy: "naked" | "spread";
+  /** The same choice per market; a market with no entry uses the two above. */
+  segment_defaults?: Partial<Record<Segment, { instrument: "future" | "option"; option_strategy: "naked" | "spread" }>>;
 };
 
 export type OrderBlock = {

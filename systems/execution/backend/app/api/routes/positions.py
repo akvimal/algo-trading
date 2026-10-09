@@ -25,6 +25,8 @@ from app.domain.position_manager import (
     check_exits,
     compute_strategy_performance,
     compute_unrealized_pnl,
+    fx_of,
+    inr_of,
     load_settings,
     open_manual_position,
     square_off_all_open,
@@ -67,8 +69,14 @@ def _authorized_owner_id(row_user_id: Optional[uuid.UUID], user: User) -> uuid.U
     raise HTTPException(status_code=404, detail="position not found")
 
 
-def _position_to_out(row: db_models.Position, live_price: Optional[float] = None, unrealized_pnl: Optional[float] = None) -> dict:
+def _position_to_out(row: db_models.Position, live_price: Optional[float] = None, unrealized_pnl: Optional[float] = None, usdinr: Optional[float] = None) -> dict:
+    pnl = float(row.pnl) if row.pnl is not None else None
     return {
+        # pnl and unrealized_pnl are in the position's own currency (dollars for CRYPTO); the _inr pair is the same in rupees.
+        "currency": "USD" if row.segment == "CRYPTO" else "INR",
+        "fx": fx_of(row, usdinr),
+        "pnl_inr": inr_of(row, pnl, usdinr),
+        "unrealized_pnl_inr": inr_of(row, unrealized_pnl, usdinr),
         "id": str(row.id),
         "signal_id": str(row.signal_id),
         # None for manually-opened positions (Manual tab) - no Strategy at all, see docs/architecture.md.
@@ -197,8 +205,9 @@ def _query_positions(
     quote = functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch
     mtm = compute_unrealized_pnl(rows, quote) if with_live_pnl else {}
 
+    usdinr = load_settings(db, user_id).usdinr_rate if any(r.segment == "CRYPTO" for r in rows) else None
     return [
-        _position_to_out(r, live_price=mtm[r.id][0] if r.id in mtm else None, unrealized_pnl=mtm[r.id][1] if r.id in mtm else None)
+        _position_to_out(r, live_price=mtm[r.id][0] if r.id in mtm else None, unrealized_pnl=mtm[r.id][1] if r.id in mtm else None, usdinr=usdinr)
         for r in rows
     ]
 

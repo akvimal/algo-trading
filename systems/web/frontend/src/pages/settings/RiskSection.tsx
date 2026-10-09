@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "../../api/http";
-import { resetAccount, updateAccount } from "../../api/settings";
+import { getUsdInr, resetAccount, saveUsdInr, updateAccount } from "../../api/settings";
 import type { Account } from "../../api/types";
 import { TextField, ToggleField } from "../../components/Field";
 import { formatInr } from "../../format";
-import { buildAccountPatch, draftFrom, hasErrors, type AccountDraft, type DraftErrors } from "../settingsModel";
+import { buildAccountPatch, draftFrom, hasErrors, parseUsdInr, type AccountDraft, type DraftErrors } from "../settingsModel";
 
 /** Risk limits and paper-account behaviour for one segment. These apply to paper orders now
  * and to live ones later: the point is that the limits are yours and the server keeps them. */
@@ -13,6 +13,10 @@ export function RiskSection({ account, onSaved }: { account: Account; onSaved: (
   const [attempted, setAttempted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  // Crypto is priced in dollars while capital is rupees: the rate between them is a setting of its own (not part of the account), kept by hand.
+  const [rate, setRate] = useState("");
+  const [savedRate, setSavedRate] = useState<number | null>(null);
+  const [rateLoaded, setRateLoaded] = useState(false);
 
   // A different segment (or a saved value coming back) replaces the form's starting point.
   useEffect(() => {
@@ -23,22 +27,44 @@ export function RiskSection({ account, onSaved }: { account: Account; onSaved: (
   // when the person moves to another segment.
   useEffect(() => setMessage(null), [account.segment]);
 
+  useEffect(() => {
+    if (account.segment !== "CRYPTO") return;
+    let live = true;
+    getUsdInr()
+      .then((r) => {
+        if (!live) return;
+        setSavedRate(r);
+        setRate(r == null ? "" : String(r));
+        setRateLoaded(true);
+      })
+      .catch(() => live && setRateLoaded(true));
+    return () => {
+      live = false;
+    };
+  }, [account.segment]);
+
   const set = <K extends keyof AccountDraft>(key: K, value: AccountDraft[K]) => setDraft((d) => ({ ...d, [key]: value }));
   // "Changed" compares the form to what was loaded, not the patch: an invalid value produces no
   // patch, and Save must stay usable then so the person is told what is wrong.
   const { errors: live } = buildAccountPatch(account, draft);
   const errors: DraftErrors = attempted ? live : {};
-  const dirty = JSON.stringify(draft) !== JSON.stringify(draftFrom(account));
   const seg = account.segment;
+  const rateErrorLive = seg === "CRYPTO" && rateLoaded && (rate.trim() !== "" || savedRate == null) ? parseUsdInr(rate).error : null;
+  const rateChanged = seg === "CRYPTO" && rateLoaded && rate.trim() !== "" && Number(rate) !== savedRate;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(draftFrom(account)) || rateChanged;
 
   async function save() {
     const { patch, errors } = buildAccountPatch(account, draft);
     setAttempted(true);
-    if (hasErrors(errors)) return;
+    if (hasErrors(errors) || (seg === "CRYPTO" && rateChanged && parseUsdInr(rate).error)) return;
     setBusy(true);
     setMessage(null);
     try {
-      await updateAccount(seg, patch);
+      if (Object.keys(patch).length > 0) await updateAccount(seg, patch);
+      if (seg === "CRYPTO" && rateChanged) {
+        const saved = await saveUsdInr(parseUsdInr(rate).rate as number);
+        setSavedRate(saved.usdinr_rate);
+      }
       setMessage({ kind: "ok", text: "Saved." });
       onSaved();
     } catch (e) {
@@ -59,6 +85,16 @@ export function RiskSection({ account, onSaved }: { account: Account; onSaved: (
         <ToggleField id={`${seg}-lots`} label="Size trades by risk" hint="Work out the quantity from your stop-loss and risk per trade, instead of capital per trade." checked={draft.enforce_risk_based_lots} onChange={(v) => set("enforce_risk_based_lots", v)} />
         <TextField id={`${seg}-rr`} label="Smallest reward-to-risk ratio" value={draft.min_reward_risk_ratio} onChange={(v) => set("min_reward_risk_ratio", v)} error={errors.min_reward_risk_ratio} hint="A trade whose target is less than this many times its risk is flagged. 2 means the target is at least twice the stop distance." />
       </div>
+
+      {seg === "CRYPTO" && (
+        <div className="card">
+          <h2 className="section-title" style={{ margin: "0 0 12px" }}>
+            Dollars and leverage
+          </h2>
+          <TextField id="CRYPTO-usdinr" label="Rupees per US dollar" suffix="₹" inputMode="decimal" value={rate} onChange={setRate} error={attempted || rate.trim() !== "" ? rateErrorLive ?? undefined : undefined} placeholder={rateLoaded ? "Not set" : "Loading…"} hint={savedRate == null && rateLoaded ? "Not set yet: crypto orders are refused until it is. Crypto is priced in dollars and your capital is in rupees; this is the rate between them. It is kept by hand, so update it when the dollar moves." : "Crypto is priced in dollars and your capital is in rupees; this is the rate between them. It is kept by hand, so update it when the dollar moves. A closed trade keeps the rate it closed at."} />
+          <TextField id="CRYPTO-leverage" label="Leverage" suffix="×" inputMode="decimal" value={draft.leverage} onChange={(v) => set("leverage", v)} error={errors.leverage} hint="Your capital per trade is the margin; leverage multiplies how much it buys. At 5×, ₹10,000 buys about ₹50,000 of crypto. A move against you of about 1 ÷ leverage (less a small margin) liquidates the trade and loses the whole margin." />
+        </div>
+      )}
 
       <div className="card">
         <h2 className="section-title" style={{ margin: "0 0 12px" }}>

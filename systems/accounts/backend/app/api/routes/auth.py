@@ -90,6 +90,10 @@ def update_preferences(payload: PreferencesUpdate, user: models.User = Depends(g
         user.default_instrument = payload.default_instrument
     if payload.default_option_strategy is not None:
         user.default_option_strategy = payload.default_option_strategy
+    if payload.segment_defaults is not None:
+        merged = dict(user.segment_defaults or {})
+        merged.update({seg: d.model_dump() for seg, d in payload.segment_defaults.items()})
+        user.segment_defaults = merged
     if payload.onboarded is True and user.onboarded_at is None:
         user.onboarded_at = datetime.now(timezone.utc)
     elif payload.onboarded is False:

@@ -12,6 +12,7 @@ export type AccountDraft = {
   require_stop_loss: boolean;
   apply_charges: boolean;
   enforce_risk_based_lots: boolean;
+  leverage: string; // crypto only: the margin multiplier
 };
 
 export type DraftErrors = Partial<Record<keyof AccountDraft, string>>;
@@ -29,6 +30,7 @@ export function draftFrom(a: Account): AccountDraft {
     require_stop_loss: a.require_stop_loss,
     apply_charges: a.apply_charges,
     enforce_risk_based_lots: a.enforce_risk_based_lots,
+    leverage: String(a.leverage ?? 1),
   };
 }
 
@@ -62,6 +64,12 @@ export function buildAccountPatch(a: Account, d: AccountDraft): { patch: Record<
   if (slip === null || Number.isNaN(slip) || slip < 0 || slip > 500) errors.slippage_bps = "Enter 0 to 500.";
   else if (slip !== a.slippage_bps) patch.slippage_bps = slip;
 
+  if (a.segment === "CRYPTO") {
+    const lev = num(d.leverage);
+    if (lev === null || Number.isNaN(lev) || lev < 1 || lev > 100) errors.leverage = "Enter 1 to 100 (1 means no leverage).";
+    else if (lev !== (a.leverage ?? 1)) patch.leverage = lev;
+  }
+
   const t = d.square_off_time.trim();
   if (t !== "" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) errors.square_off_time = "Use 24-hour time like 15:15, or leave blank.";
   else if (t !== hhmm(a.square_off_time)) patch.square_off_time = t === "" ? null : t;
@@ -70,6 +78,13 @@ export function buildAccountPatch(a: Account, d: AccountDraft): { patch: Record<
     if (d[key] !== a[key]) patch[key] = d[key];
   }
   return { patch, errors };
+}
+
+/** The USD/INR rate as typed: a number above 0, or null with the problem. */
+export function parseUsdInr(text: string): { rate: number | null; error: string | null } {
+  const n = num(text);
+  if (n === null || Number.isNaN(n) || n <= 0) return { rate: null, error: "Enter the rupees per US dollar, for example 88.5." };
+  return { rate: n, error: null };
 }
 
 export const hasErrors = (e: DraftErrors) => Object.keys(e).length > 0;

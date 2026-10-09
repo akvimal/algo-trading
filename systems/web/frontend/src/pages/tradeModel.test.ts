@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, effectiveTicket, emptyTicketFor, favorable, instrumentFor, isFresh, marketStateOf, optionsAvailable, parseTradeParams, planAvailable, planHint, planNudges, planRows, planSide, planStatus, planTag, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, cryptoLeverage, effectiveTicket, emptyTicketFor, favorable, instrumentFor, isFresh, marketStateOf, optionsAvailable, parseTradeParams, planAvailable, planHint, planNudges, planRows, planSide, planStatus, planTag, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -495,5 +495,57 @@ describe("the plan: market state x plan", () => {
     expect(o.body).toMatchObject({ setup_tag: "Range fade", notes: "Saw: Order block. Second test." });
     const noWords = effectiveTicket(ticket({ stop: "990", trigger: "News" }), null);
     expect(buildOrder(noWords, analyzeTicket(noWords, ctx()), ctx(), { instrument: "spot", interval: "15min", trendFollowed: false }).body).toMatchObject({ notes: "Saw: News." });
+  });
+});
+
+describe("crypto: dollars in, rupees out", () => {
+  // BTCUSD: lot 0.001, price $80,000, capital ₹100,000 at ₹90/$ = $1,111.11, 5x leverage
+  const btc = (over: Partial<TicketContext> = {}) => ctx({ price: 80000, lotSize: 0.001, segment: "CRYPTO", symbol: "BTCUSD", usdinr: 90, leverage: 5, ...over });
+
+  it("shows the risk and reward in rupees, through the rate", () => {
+    const a = analyzeTicket(ticket({ lots: "100", stop: "79000", target: "82000" }), btc());
+    // 100 lots x 0.001 = 0.1 BTC; $1,000 a unit to the stop = $100 = ₹9,000; $2,000 to the target = $200 = ₹18,000
+    expect(a.riskAmount).toBeCloseTo(9000);
+    expect(a.rewardAmount).toBeCloseTo(18000);
+  });
+
+  it("has no rupee figure at all while no rate is set, rather than dollars called rupees", () => {
+    const a = analyzeTicket(ticket({ lots: "100", stop: "79000", target: "82000" }), btc({ usdinr: null }));
+    expect(a.riskAmount).toBeNull();
+    expect(a.rewardAmount).toBeNull();
+    expect(a.lots).toBe(100);
+  });
+
+  it("works out the size the server will use: the risk allows it, the margin caps it", () => {
+    // risk 1% of $1,111.11 = $11.11; a $1,000 stop costs $1 a lot (0.001 BTC), so 11 lots
+    expect(analyzeTicket(ticket({ stop: "79000" }), btc()).lots).toBe(11);
+    // a $20 stop: $11.11 / (20 x 0.001) = 555 lots by risk; the margin buys 5 x 1,111.11 / (80,000 x 0.001) = 69 lots, so 69
+    expect(analyzeTicket(ticket({ stop: "79980" }), btc()).lots).toBe(69);
+  });
+
+  it("more leverage buys more with the same capital", () => {
+    const at = (leverage: number) => analyzeTicket(ticket({}), btc({ leverage })).lots;
+    expect(at(1)).toBe(13);
+    expect(at(5)).toBe(69);
+  });
+
+  it("warns when the stop is beyond where the trade would be liquidated", () => {
+    // 10x: liquidated about 9.5% away, so 72,400 for a buy at 80,000
+    const far = analyzeTicket(ticket({ stop: "70000", lots: "1" }), btc({ leverage: 10 }));
+    expect(far.warnings.some((w) => /liquidated near 72400\.00/.test(w))).toBe(true);
+    const near = analyzeTicket(ticket({ stop: "78000", lots: "1" }), btc({ leverage: 10 }));
+    expect(near.warnings.some((w) => /liquidated/.test(w))).toBe(false);
+  });
+});
+
+describe("cryptoLeverage", () => {
+  it("is liquidated a little before 1 / leverage away, either way round", () => {
+    expect(cryptoLeverage(100, true, 10)?.liquidation).toBeCloseTo(100 * (1 - 0.095));
+    expect(cryptoLeverage(100, false, 10)?.liquidation).toBeCloseTo(100 * (1 + 0.095));
+    expect(cryptoLeverage(100, true, 10)?.awayPct).toBeCloseTo(9.5);
+  });
+  it("has nothing to say at 1x or without an entry", () => {
+    expect(cryptoLeverage(100, true, 1)).toBeNull();
+    expect(cryptoLeverage(null, true, 10)).toBeNull();
   });
 });

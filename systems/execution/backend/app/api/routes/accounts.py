@@ -20,7 +20,7 @@ from app.domain.equity_history import record_reset_point
 from app.domain.live_gate import CONSENT_VERSION, LIVE_SEGMENTS, format_problems, unmet_requirements
 from app.domain.models import AccountUpdate, AdminResetAllConfirm, StrategyAccountCreate, StrategyAccountUpdate
 from app.domain.track_record import evaluate_for_account, evaluate_for_user_segment, unmet_messages
-from app.domain.position_manager import compute_unrealized_pnl, get_live_trading_status, load_account
+from app.domain.position_manager import _usdinr_rate_by_user, compute_unrealized_pnl, get_live_trading_status, inr_of, load_account
 
 router = APIRouter()
 
@@ -96,7 +96,12 @@ def _unrealized_pnl(db: Session, open_positions: list, token: Optional[str] = No
         return 0.0
     # The caller's own token (when a user is asking): their positions are valued on THEIR keys.
     mtm = compute_unrealized_pnl(open_positions, functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch)
-    return sum(pnl for _, pnl in mtm.values())
+    if not mtm:
+        return 0.0
+    # A crypto position's result is in dollars and the account is in rupees.
+    rates = _usdinr_rate_by_user(db, open_positions) if any(getattr(p, "segment", None) == "CRYPTO" for p in open_positions) else {}
+    by_id = {p.id: p for p in open_positions}
+    return sum(inr_of(by_id[pid], pnl, rates.get(by_id[pid].user_id)) or 0.0 for pid, (_, pnl) in mtm.items())
 
 
 def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) -> dict:

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +27,9 @@ beforeEach(() => {
       const method = init?.method ?? "GET";
       if (url.endsWith("/auth/me") && method === "GET") return json(profile);
       if (url.endsWith("/auth/me/preferences") && method === "PUT") {
-        profile = { ...profile, ...JSON.parse(init!.body as string) };
+        const body = JSON.parse(init!.body as string);
+        const { segment_defaults, ...rest } = body;
+        profile = { ...profile, ...rest, ...(segment_defaults ? { segment_defaults: { ...(profile.segment_defaults ?? {}), ...segment_defaults } } : {}) };
         return json(profile);
       }
       return json({ detail: `unrouted ${url}` }, 404);
@@ -47,43 +49,55 @@ function renderAt(path: string) {
   );
 }
 
-describe("default trade instrument", () => {
-  it("starts on Future, with no option-strategy choice shown, when nothing has been chosen", async () => {
+describe("default trade instrument, per market", () => {
+  it("starts every market on Future, with no option-strategy choice shown, when nothing has been chosen", async () => {
     renderAt("/more");
-    expect(await screen.findByRole("radio", { name: "Future" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("radio", { name: "Option" })).toHaveAttribute("aria-checked", "false");
-    expect(screen.queryByText("Default option strategy")).not.toBeInTheDocument();
+    expect(await screen.findByRole("radiogroup", { name: "NSE default instrument" })).toBeInTheDocument();
+    for (const m of ["MCX", "CRYPTO"]) expect(screen.getByRole("radiogroup", { name: `${m} default instrument` })).toBeInTheDocument();
+    expect(screen.getAllByRole("radio", { name: "Future", checked: true })).toHaveLength(3);
+    expect(screen.queryByRole("radiogroup", { name: /default option strategy/ })).not.toBeInTheDocument();
   });
 
-  it("choosing Option saves it and reveals naked/spread, defaulting to naked", async () => {
+  it("choosing Option for one market saves only that market and reveals its naked/spread, defaulting to naked", async () => {
     const user = userEvent.setup();
     renderAt("/more");
-    await user.click(await screen.findByRole("radio", { name: "Option" }));
-    await waitFor(() => expect(screen.getByRole("radio", { name: "Option" })).toHaveAttribute("aria-checked", "true"));
-    expect(profile.default_instrument).toBe("option");
-    expect(screen.getByRole("radio", { name: "Naked" })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByRole("radio", { name: "Spread" })).toHaveAttribute("aria-checked", "false");
+    const nse = within(await screen.findByRole("radiogroup", { name: "NSE default instrument" }));
+    await user.click(nse.getByRole("radio", { name: "Option" }));
+    await waitFor(() => expect(profile.segment_defaults.NSE).toEqual({ instrument: "option", option_strategy: "naked" }));
+    const style = within(screen.getByRole("radiogroup", { name: "NSE default option strategy" }));
+    expect(style.getByRole("radio", { name: "Naked" })).toHaveAttribute("aria-checked", "true");
+    expect(profile.segment_defaults.CRYPTO).toBeUndefined();
+    expect(screen.getAllByRole("radiogroup", { name: /default option strategy/ })).toHaveLength(1);
+    expect(profile.default_instrument).toBe("future"); // the general default is untouched
   });
 
-  it("choosing Spread saves it independently of the instrument choice", async () => {
-    profile.default_instrument = "option";
+  it("choosing Spread keeps the instrument, and Future hides the style again", async () => {
+    profile.segment_defaults = { MCX: { instrument: "option", option_strategy: "naked" } };
     const user = userEvent.setup();
     renderAt("/more");
-    await user.click(await screen.findByRole("radio", { name: "Spread" }));
-    await waitFor(() => expect(screen.getByRole("radio", { name: "Spread" })).toHaveAttribute("aria-checked", "true"));
-    expect(profile.default_option_strategy).toBe("spread");
-    expect(profile.default_instrument).toBe("option"); // unaffected
+    const style = within(await screen.findByRole("radiogroup", { name: "MCX default option strategy" }));
+    await user.click(style.getByRole("radio", { name: "Spread" }));
+    await waitFor(() => expect(profile.segment_defaults.MCX).toEqual({ instrument: "option", option_strategy: "spread" }));
+    await user.click(within(screen.getByRole("radiogroup", { name: "MCX default instrument" })).getByRole("radio", { name: "Future" }));
+    await waitFor(() => expect(screen.queryByRole("radiogroup", { name: "MCX default option strategy" })).not.toBeInTheDocument());
   });
 
-  it("hides the option-strategy choice again once switched back to Future, without losing the saved style", async () => {
+  it("a market with no choice of its own follows the general default", async () => {
     profile.default_instrument = "option";
     profile.default_option_strategy = "spread";
-    const user = userEvent.setup();
+    profile.segment_defaults = { CRYPTO: { instrument: "future", option_strategy: "naked" } };
     renderAt("/more");
-    expect(await screen.findByText("Default option strategy")).toBeInTheDocument();
-    await user.click(screen.getByRole("radio", { name: "Future" }));
-    await waitFor(() => expect(screen.queryByText("Default option strategy")).not.toBeInTheDocument());
-    expect(profile.default_option_strategy).toBe("spread"); // still there, just not shown
+    const nse = within(await screen.findByRole("radiogroup", { name: "NSE default instrument" }));
+    expect(nse.getByRole("radio", { name: "Option" })).toHaveAttribute("aria-checked", "true");
+    expect(within(screen.getByRole("radiogroup", { name: "NSE default option strategy" })).getByRole("radio", { name: "Spread" })).toHaveAttribute("aria-checked", "true");
+    expect(within(screen.getByRole("radiogroup", { name: "CRYPTO default instrument" })).getByRole("radio", { name: "Future" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("only lists the markets they practise", async () => {
+    profile.markets = ["NSE"];
+    renderAt("/more");
+    await screen.findByRole("radiogroup", { name: "NSE default instrument" });
+    expect(screen.queryByRole("radiogroup", { name: "MCX default instrument" })).not.toBeInTheDocument();
   });
 
   it("shows a notice and keeps the old choice if saving fails", async () => {
@@ -98,8 +112,9 @@ describe("default trade instrument", () => {
     );
     const user = userEvent.setup();
     renderAt("/more");
-    await user.click(await screen.findByRole("radio", { name: "Option" }));
+    const nse = within(await screen.findByRole("radiogroup", { name: "NSE default instrument" }));
+    await user.click(nse.getByRole("radio", { name: "Option" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/server down|Could not save/);
-    expect(screen.getByRole("radio", { name: "Future" })).toHaveAttribute("aria-checked", "true"); // unchanged
+    expect(nse.getByRole("radio", { name: "Future" })).toHaveAttribute("aria-checked", "true"); // unchanged
   });
 });

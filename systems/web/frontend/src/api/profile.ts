@@ -11,4 +11,5 @@ export const updatePreferences = (prefs: {
   markets?: Segment[];
   default_instrument?: "future" | "option";
   default_option_strategy?: "naked" | "spread";
+  segment_defaults?: Partial<Record<Segment, { instrument: "future" | "option"; option_strategy: "naked" | "spread" }>>;
 }) => api<Profile>("accounts", "/auth/me/preferences", { method: "PUT", json: prefs });

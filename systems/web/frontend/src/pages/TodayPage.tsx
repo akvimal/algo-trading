@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/http";
-import type { Account, OptionGroup, Position } from "../api/types";
+import type { Account } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
@@ -13,6 +13,7 @@ import { useLivePositions } from "../hooks/useLivePositions";
 import { useResource } from "../hooks/useResource";
 import { firstWeek } from "./onboardingModel";
 import { dayPnl, inMode, lossBudget, openGroups, openPositions, paperBalance, type Mode } from "./todayModel";
+import { groupsApi, positionsApi } from "../api/rupees";
 
 const POLL_MS = 15_000;
 const MODES: { id: Mode; label: string }[] = [
@@ -24,8 +25,8 @@ const MODES: { id: Mode; label: string }[] = [
 async function loadToday() {
   const [accounts, positions, groups] = await Promise.all([
     api<Account[]>("execution", "/accounts"),
-    api<Position[]>("execution", "/positions?with_live_pnl=true&limit=200"),
-    api<OptionGroup[]>("execution", "/option-groups?with_live_pnl=true&limit=200"),
+    positionsApi("/positions?with_live_pnl=true&limit=200"),
+    groupsApi("/option-groups?with_live_pnl=true&limit=200"),
   ]);
   return { accounts, positions, groups };
 }

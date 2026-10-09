@@ -57,7 +57,8 @@ function initialTicket(symbol: string, defaultInstrument: DefaultInstrument, def
  * account with live trading on gets the same notice the Trade
  * page shows instead of a ticket reaching for real money from inside a scan card. */
 export function ScanTradePanel({ exchange, symbol, oiDefaultView }: Props) {
-  const { defaultInstrument, defaultOptionStrategy } = useProfile();
+  const { defaultsFor } = useProfile();
+  const { instrument: defaultInstrument, optionStrategy: defaultOptionStrategy } = defaultsFor(exchange as Segment);
   const accounts = useResource(getAccounts, []);
   const { price } = useScanLivePrice(exchange, symbol);
   const regime = useResource(() => getRegime(exchange, symbol, REGIME_INTERVAL), [exchange, symbol]);

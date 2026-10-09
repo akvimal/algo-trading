@@ -2,6 +2,10 @@ import { api } from "./http";
 import type { Account, Credentials, Ltp, Segment } from "./types";
 import type { KeyField } from "../pages/settingsModel";
 
+/** The USD/INR rate crypto trades are sized and credited at: set by hand, null until it is. */
+export const getUsdInr = () => api<{ usdinr_rate: number | null }>("execution", "/settings").then((s) => s.usdinr_rate);
+export const saveUsdInr = (usdinr_rate: number) => api<{ usdinr_rate: number | null }>("execution", "/settings", { method: "PUT", json: { usdinr_rate } });
+
 export const getAccounts = () => api<Account[]>("execution", "/accounts");
 
 /** Partial update: only the keys present are changed; an explicit null clears a limit. */

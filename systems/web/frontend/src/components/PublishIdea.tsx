@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, api } from "../api/http";
+import { ApiError } from "../api/http";
 import { previewIdea, publishIdea, snapshotDataUrl, unpublishIdea, type IdeaPreview, type PublishedIdea } from "../api/ideas";
-import type { OptionGroup, Position, StudyNote } from "../api/types";
+import type { StudyNote } from "../api/types";
 import { canPublish, closedTradesFor, deliveryNote, publishedLabel, toIdeaRequest, type ClosedTrade } from "../pages/ideasModel";
+import { groupsApi, positionsApi } from "../api/rupees";
 
 const message = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
 
@@ -36,7 +37,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
   useEffect(() => {
     if (!open || trades !== null) return;
     let live = true;
-    Promise.all([api<Position[]>("execution", "/positions?limit=200"), api<OptionGroup[]>("execution", "/option-groups?limit=200")])
+    Promise.all([positionsApi("/positions?limit=200"), groupsApi("/option-groups?limit=200")])
       .then(([positions, groups]) => live && setTrades(closedTradesFor(note, positions, groups)))
       .catch(() => {
         if (live) {

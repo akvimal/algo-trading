@@ -330,6 +330,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         for (const b of bars) merged.set(b.timestamp, b);
         barsRef.current = [...merged.values()].sort((a, b) => a.timestamp - b.timestamp);
         anchorRef.current = { timestamps: barsRef.current.map((b) => b.timestamp) };
+        repinDrawings();
       }
     }
 
@@ -361,6 +362,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       chart.updateData(next);
       barsRef.current = last && last.timestamp === next.timestamp ? [...bars.slice(0, -1), next] : [...bars, next];
       anchorRef.current = { timestamps: barsRef.current.map((b) => b.timestamp) };
+      if (!last || last.timestamp !== next.timestamp) repinDrawings();
     }
     if (tickPrice == null) return;
     // Armed drawings: one that has not been looked at yet only learns which side it is on; a new bar
@@ -902,6 +904,17 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   // SIBLING pane showing the same instrument, at whatever interval, just changed them (the
   // DRAWINGS_CHANGED_EVENT listener further down) - drawings are shared across every interval of
   // one instrument by design (see drawingsKey's own comment in config.ts).
+  /** A drawing sits on a bar NUMBER, not a time, so it stays put only while the bars before it do: a new bar (or older history) arriving makes the
+   * number mean a different time, and a zone reaching past the newest bar slides one bar later with every new bar. Put each drawing's points back
+   * on the times they were saved at, against the bars as they are now. Not while one is being dragged. */
+  function repinDrawings() {
+    const chart = chartRef.current;
+    if (!chart || draggingRef.current || pendingRef.current) return;
+    for (const [id, d] of drawnRef.current) {
+      chart.overrideOverlay({ id, points: d.points.map((p) => toChartPoint(p, anchorRef.current)) });
+    }
+  }
+
   function reloadDrawings() {
     const chart = chartRef.current;
     if (!chart) return;

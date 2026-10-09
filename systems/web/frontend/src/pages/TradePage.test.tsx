@@ -729,11 +729,12 @@ describe("the plan on the ticket", () => {
     const block = within(t.getByTestId("plan-block"));
     expect(block.getByText("Your plan")).toBeInTheDocument();
     expect(block.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
-    // the stop and the reward are marks beside their own fields, with the words under them while they need a look
+    // the stop and the reward are marks beside their own fields (the words are the mark's tooltip)
     expect(within(t.getByTestId("t-stop-status-icon")).queryByText(/./)).toBeNull(); // an icon, no text of its own
     expect(t.getByTestId("t-stop-status-icon")).toHaveAccessibleName("No stop: your risk is open-ended.");
-    expect(t.getByTestId("t-stop-status")).toHaveTextContent("No stop: your risk is open-ended.");
-    expect(t.getByTestId("t-target-status")).toHaveTextContent("No target: the reward is unplanned.");
+    expect(t.getByTestId("t-target-status-icon")).toHaveAccessibleName("No target: the reward is unplanned.");
+    expect(t.queryByTestId("t-stop-status")).not.toBeInTheDocument(); // the mark alone: no line of words under the stop or the target
+    expect(t.queryByTestId("t-target-status")).not.toBeInTheDocument();
     expect(block.queryByText("No stop: your risk is open-ended.")).not.toBeInTheDocument(); // no longer a row of the block
     expect(block.getByText("Not tagged: pick a plan above.")).toBeInTheDocument(); // needs attention: shown straight away
     expect(block.getByTestId("plan-calm")).not.toHaveAttribute("open"); // the rows that are only for information are one closed line

@@ -157,9 +157,11 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   // The plan rows for the three fields (stop, size, reward) now sit on the fields themselves, as a mark beside the label: the same words, the same
   // status, so the plan block below keeps only what is not about a field.
   const allRows = planRows(t, a, ctx, today);
+  // The stop and the target carry the mark alone (its tooltip has the words; the plan chip above already says "stop set, reward unplanned" and the
+  // R:R against the minimum): no line under their inputs. The size field still says why under it.
   const fieldStatus = (key: "stop" | "size" | "reward"): FieldStatus | undefined => {
     const r = allRows.find((x) => x.key === key);
-    return r ? { tone: r.status, text: r.detail } : undefined;
+    return r ? { tone: r.status, text: r.detail, quiet: key !== "size" } : undefined;
   };
   const stock = meta.instrument === "spot";
   const options = optionsForced ?? optionsAvailable(ctx.symbol);

@@ -581,31 +581,42 @@ a {
 .badge-icon {
   flex: none;
 }
-/* The Trending badge with its up/down switch joined on its right edge. */
+/* Joined badges (Trending | Ranging, and the up/down pair): one control of two segments that share their borders. The pressed one is raised so
+   its accent border is not covered by its neighbour's. */
 .chips .badge-split {
   display: inline-flex;
 }
-.chips .badge-split > button:not(:only-child) {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-.chips .badge-dir {
-  display: inline-flex;
-}
-.chips .badge-dir button {
+.chips .badge-split > button {
   border-radius: 0;
-  margin-left: -1px;
-  padding: 0 9px;
-  justify-content: center;
-  font-size: 15px;
 }
-.chips .badge-dir button:last-child {
+.chips .badge-split > button + button {
+  margin-left: -1px;
+}
+.chips .badge-split > button:first-child {
+  border-top-left-radius: var(--badge-r);
+  border-bottom-left-radius: var(--badge-r);
+}
+.chips .badge-split > button:last-child {
   border-top-right-radius: var(--badge-r);
   border-bottom-right-radius: var(--badge-r);
 }
-.chips .badge-dir button[aria-pressed="true"] {
+.chips .badge-split > button[aria-pressed="true"] {
   position: relative;
   z-index: 1;
+}
+.chips .badge-dir > button {
+  padding: 0 10px;
+  justify-content: center;
+  font-size: 15px;
+}
+/* The instrument menu in the ticket's header: as wide as its items, not the popover's 320px (right-aligned, that ran off the card's left edge). */
+.popover-panel:has(.instrument-menu) {
+  width: max-content;
+  min-width: 170px;
+}
+.chips.instrument-menu button {
+  justify-content: flex-start;
+  white-space: nowrap;
 }
 .chips button[aria-pressed="true"],
 .chips button[aria-selected="true"],

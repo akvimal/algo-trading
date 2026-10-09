@@ -238,7 +238,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           {options && !hideStrategyChips && (
             <Popover label="What to trade" text={instrumentLabel} icon={instrumentIcon} buttonLabel={`What to trade: ${instrumentLabel}`} align="right">
               {(close) => (
-                <div className="chips" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                <div className="chips instrument-menu" style={{ flexDirection: "column", alignItems: "stretch" }}>
                   {instrumentChoices.map((c) => (
                     <button
                       key={c.value}
@@ -263,27 +263,28 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       {!simplifiedOption && (
         <div className="plan-pick" data-testid="plan-pick" style={{ margin: "12px 0" }}>
           <div className="chips" role="group" aria-label="Market state">
-            {/* One badge for a trend, with its direction as a small switch joined to it (only a trend has one); a range has none. */}
+            {/* Trending | Ranging is one toggle (two joined segments, one pressed); the up/down switch is a second, joined pair that only
+                appears beside it while Trending is the one pressed (a range has no direction). */}
             <span className="badge-split">
               <button aria-pressed={trending} onClick={chooseTrending}>
                 <TrendingIcon />
                 Trending
               </button>
-              {trending && (
-                <span className="badge-dir" role="group" aria-label="Trend direction">
-                  <button aria-label="Up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
-                    ↑
-                  </button>
-                  <button aria-label="Down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
-                    ↓
-                  </button>
-                </span>
-              )}
+              <button aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
+                <RangingIcon />
+                Ranging
+              </button>
             </span>
-            <button aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
-              <RangingIcon />
-              Ranging
-            </button>
+            {trending && (
+              <span className="badge-split badge-dir" role="group" aria-label="Trend direction">
+                <button aria-label="Up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
+                  ↑
+                </button>
+                <button aria-label="Down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
+                  ↓
+                </button>
+              </span>
+            )}
           </div>
           <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
             {raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}

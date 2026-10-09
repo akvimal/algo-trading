@@ -693,15 +693,19 @@ async function pickLayout(user: ReturnType<typeof userEvent.setup>, name: string
 describe("the plan on the ticket", () => {
   beforeEach(() => screenIs(true));
 
-  it("is one block: the plan chip as its header, a row for each thing you control, and no tally", async () => {
+  it("is one block: the plan chip as its header and what is not about a field, with the stop, size and reward marks on the fields themselves", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
     const block = within(t.getByTestId("plan-block"));
     expect(block.getByText("Your plan")).toBeInTheDocument();
     expect(block.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
-    expect(block.getByText("No stop: your risk is open-ended.")).toBeInTheDocument();
-    expect(block.getByText("No target: the reward is unplanned.")).toBeInTheDocument();
+    // the stop and the reward are marks beside their own fields, with the words under them while they need a look
+    expect(within(t.getByTestId("t-stop-status-icon")).queryByText(/./)).toBeNull(); // an icon, no text of its own
+    expect(t.getByTestId("t-stop-status-icon")).toHaveAccessibleName("No stop: your risk is open-ended.");
+    expect(t.getByTestId("t-stop-status")).toHaveTextContent("No stop: your risk is open-ended.");
+    expect(t.getByTestId("t-target-status")).toHaveTextContent("No target: the reward is unplanned.");
+    expect(block.queryByText("No stop: your risk is open-ended.")).not.toBeInTheDocument(); // no longer a row of the block
     expect(block.getByText("Not tagged: pick a plan above.")).toBeInTheDocument(); // needs attention: shown straight away
     expect(block.getByTestId("plan-calm")).not.toHaveAttribute("open"); // the rows that are only for information are one closed line
     await user.type(t.getByLabelText("Stop-loss"), "990");
@@ -709,22 +713,26 @@ describe("the plan on the ticket", () => {
     await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" }));
     expect(await block.findByText("Tagged Trend breakout.")).toBeInTheDocument();
     expect(block.queryByText("Not tagged: pick a plan above.")).not.toBeInTheDocument();
-    // everything is fine now, so there is nothing to read: the checks are one closed line, and the rows are still there when it is opened
+    // everything is fine now: a tick beside each field (no words under them), and nothing for the plan block to flag
+    await waitFor(() => expect(t.getByTestId("t-stop-status-icon")).toHaveAccessibleName("At 990."));
+    expect(t.queryByTestId("t-stop-status")).not.toBeInTheDocument();
+    expect(t.getByTestId("t-target-status-icon")).toHaveAccessibleName(/3\.0 to 1, your minimum is/);
+    expect(t.queryByTestId("t-target-status")).not.toBeInTheDocument();
+    expect(t.getByTestId("t-lots-status-icon")).toHaveAccessibleName(/At the system size/);
     expect(block.getByText(/All checks \(\d+\) are fine/)).toBeInTheDocument();
-    expect(block.getByText(/At the system size/)).toBeInTheDocument();
-    expect(block.getByText(/3\.0 to 1, your minimum is/)).toBeInTheDocument();
     expect(block.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R 3\.0/);
     expect(block.queryByText(/in favour/)).not.toBeInTheDocument();
   });
 
-  it("warns when the size was typed above the system size", async () => {
+  it("marks the size field, and says why under it, when the size was typed above the system size", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Number of shares"), "5000");
-    expect(await within(t.getByTestId("plan-block")).findByText(/Above the system size/)).toBeInTheDocument();
-    expect(within(t.getByTestId("plan-block")).getAllByRole("img", { name: "Caution" }).length).toBeGreaterThan(0);
+    expect(await t.findByTestId("t-lots-status")).toHaveTextContent(/Above the system size/);
+    expect(t.getByTestId("t-lots-status-icon")).toHaveAccessibleName(/Above the system size/);
+    expect(within(t.getByTestId("plan-block")).queryByText(/Above the system size/)).not.toBeInTheDocument();
   });
 
   it("shows today: a cooldown with its minutes, trades against the cap, and room under the loss limit", async () => {

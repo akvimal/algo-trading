@@ -13,7 +13,7 @@ import {
 import type { PriceField } from "../chart/ChartPane";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import type { Pretrade } from "../api/types";
-import { TextField } from "./Field";
+import { TextField, type FieldStatus } from "./Field";
 import { Popover } from "../chart/Popover";
 import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, FutureIcon, OptionIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, SpreadIcon, TrendingIcon } from "./BadgeIcons";
 
@@ -154,6 +154,13 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       </span>
     ) : undefined;
   const marketRead = checks.filter((c) => c.key === "regime" || c.key === "trend");
+  // The plan rows for the three fields (stop, size, reward) now sit on the fields themselves, as a mark beside the label: the same words, the same
+  // status, so the plan block below keeps only what is not about a field.
+  const allRows = planRows(t, a, ctx, today);
+  const fieldStatus = (key: "stop" | "size" | "reward"): FieldStatus | undefined => {
+    const r = allRows.find((x) => x.key === key);
+    return r ? { tone: r.status, text: r.detail } : undefined;
+  };
   const stock = meta.instrument === "spot";
   const options = optionsForced ?? optionsAvailable(ctx.symbol);
   const instrumentChoices: { value: Ticket["strategy"]; label: string; icon: JSX.Element }[] = [
@@ -381,8 +388,8 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           placeholder already say what is needed, and dropping them is what kept this compact. */}
       {!simplifiedOption && (
         <div className="field-row">
-          <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} value={t.stop} onChange={(v) => set("stop", v)} />
-          <TextField id="t-target" label="Target" action={pickAction("target")} value={t.target} onChange={(v) => set("target", v)} />
+          <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} status={fieldStatus("stop")} value={t.stop} onChange={(v) => set("stop", v)} />
+          <TextField id="t-target" label="Target" action={pickAction("target")} status={fieldStatus("reward")} value={t.target} onChange={(v) => set("target", v)} />
         </div>
       )}
       {!simplifiedOption && (
@@ -395,6 +402,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           // page's ticket) let a stock's own option order through.
           label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
           value={t.lots}
+          status={fieldStatus("size")}
           onChange={(v) => set("lots", v)}
           placeholder={
             isOption || ctx.segment === "CRYPTO"
@@ -413,28 +421,22 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       )}
 
       {!simplifiedOption && (
-        <dl className="summary" data-testid="summary">
-          <div>
-            <dt>Entry</dt>
-            <dd className="num">{a.entry == null ? "–" : formatPrice(a.entry)}</dd>
+        <div className="summary-badges" data-testid="summary">
+          <div className="chips">
+            <span className="pill dn">
+              You risk <b>{a.riskAmount == null ? "–" : formatInr(a.riskAmount)}</b>
+            </span>
+            <span className="pill up">
+              You could make <b>{a.rewardAmount == null ? "–" : formatInr(a.rewardAmount)}</b>
+            </span>
+            <span className="pill">
+              <b>{a.rr == null ? "–" : `${a.rr.toFixed(1)} : 1`}</b>
+            </span>
           </div>
-          <div>
-            <dt>Size</dt>
-            <dd className="num">{a.lots == null ? "By the server" : `${a.lots}${a.lotsAuto ? " (auto)" : ""}`}</dd>
+          <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+            Entry at <span className="num">{a.entry == null ? "–" : formatPrice(a.entry)}</span> · Size <span className="num">{a.lots == null ? "by the server" : `${a.lots}${a.lotsAuto ? " (auto)" : ""}`}</span>
           </div>
-          <div>
-            <dt>You risk</dt>
-            <dd className="num dn">{a.riskAmount == null ? "–" : formatInr(a.riskAmount)}</dd>
-          </div>
-          <div>
-            <dt>You could make</dt>
-            <dd className="num up">{a.rewardAmount == null ? "–" : formatInr(a.rewardAmount)}</dd>
-          </div>
-          <div>
-            <dt>Reward to risk</dt>
-            <dd className="num">{a.rr == null ? "–" : `${a.rr.toFixed(1)} : 1`}</dd>
-          </div>
-        </dl>
+        </div>
       )}
 
       {!simplifiedOption && (
@@ -450,7 +452,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           })()}
           {(() => {
             // What needs attention is always shown; the rest (all fine, or only for information) folds into one line.
-            const rows = planRows(t, a, ctx, today);
+            const rows = allRows.filter((r) => r.key !== "stop" && r.key !== "size" && r.key !== "reward");
             const flagged = rows.filter((r) => r.status === "warn" || r.status === "bad");
             const calm = rows.filter((r) => r.status !== "warn" && r.status !== "bad");
             const line = (r: (typeof rows)[number]) => (

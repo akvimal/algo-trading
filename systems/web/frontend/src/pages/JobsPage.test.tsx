@@ -26,15 +26,21 @@ const job = (over: object = {}) => ({
 let jobs: object[];
 let jobsStatus = 200;
 let jobCalls = 0;
+let runCalls: string[] = [];
 
 beforeEach(() => {
   jobsStatus = 200;
   jobCalls = 0;
+  runCalls = [];
   jobs = [job()];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       if (url.endsWith("/auth/me")) return json({ id: "u1", email: "me@x.com", name: "Me", is_admin: true, experience: "pro", onboarded_at: "2026-09-01T00:00:00Z", markets: ["NSE"], default_instrument: "future", default_option_strategy: "naked" });
+      if (url.includes("/jobs/") && url.endsWith("/run")) {
+        runCalls.push(url);
+        return json({ started: "oi-eod-snapshot-record" }, 202);
+      }
       if (url.includes("/jobs")) {
         jobCalls++;
         return jobsStatus === 200 ? json({ jobs }) : json({ detail: "admin access required" }, jobsStatus);
@@ -169,5 +175,26 @@ describe("Background jobs page", () => {
     renderAt("/more/jobs");
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     expect(screen.queryByTestId("job-card")).not.toBeInTheDocument();
+  });
+
+  it("starts a job by hand only after a confirmation, and not at all if cancelled", async () => {
+    jobs = [job({ can_run_now: true })];
+    const user = userEvent.setup();
+    renderAt("/more/jobs");
+    await user.click(await screen.findByRole("button", { name: "Run now" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(runCalls).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Run now" }));
+    expect(screen.getByText(/Run OI buildup snapshot now\?/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Yes, run it" }));
+    await waitFor(() => expect(runCalls).toHaveLength(1));
+    expect(runCalls[0]).toContain("/jobs/oi-eod-snapshot-record/run");
+  });
+
+  it("offers no Run now for a job that cannot be started by hand, or one already running", async () => {
+    jobs = [job({ job_id: "a", label: "A" }), job({ job_id: "b", label: "B", can_run_now: true, running: run({ status: "running", finished_at: null }) })];
+    renderAt("/more/jobs");
+    await screen.findByText("A");
+    expect(screen.queryByRole("button", { name: "Run now" })).toBeNull();
   });
 });

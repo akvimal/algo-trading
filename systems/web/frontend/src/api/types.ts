@@ -641,6 +641,8 @@ export type Job = {
   last_success: JobRun | null;
   /** Newest first, including one still running. */
   recent: JobRun[];
+  /** An admin may start it by hand. */
+  can_run_now?: boolean;
 };
 export type Jobs = { jobs: Job[] };
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/http";
+import { ApiError, api } from "../api/http";
 import type { Job, JobRun, Jobs } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { useResource } from "../hooks/useResource";
@@ -35,7 +35,7 @@ export function JobsPage() {
       )}
       <div className="stack" data-testid="job-list">
         {jobs.map((job) => (
-          <JobCard key={job.job_id} job={job} />
+          <JobCard key={job.job_id} job={job} onStarted={data.reload} />
         ))}
       </div>
     </div>
@@ -55,7 +55,49 @@ function Counts({ run }: { run: JobRun }) {
   return parts.length ? <span className="dim">{parts.join(" · ")}</span> : null;
 }
 
-function JobCard({ job }: { job: Job }) {
+function RunNow({ job, onStarted }: { job: Job; onStarted: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function start() {
+    setStarting(true);
+    setError(null);
+    try {
+      await api("marketData", `/jobs/${job.job_id}/run`, { method: "POST" });
+      setAsking(false);
+      onStarted();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not start it. Try again.");
+    } finally {
+      setStarting(false);
+    }
+  }
+  if (!asking) {
+    return (
+      <button className="link-btn" style={{ justifySelf: "start" }} onClick={() => setAsking(true)}>
+        Run now
+      </button>
+    );
+  }
+  return (
+    <div className="stack" role="group" aria-label={`Run ${job.label} now`} style={{ gap: 6 }}>
+      <p className="dim" style={{ margin: 0, fontSize: 13 }}>
+        Run {job.label} now? It uses today's data and updates today's rows in place, so running it again is safe. It can take several minutes.
+      </p>
+      <div className="row" style={{ justifyContent: "start", gap: 8 }}>
+        <button className="btn" disabled={starting} onClick={() => void start()}>
+          {starting ? "Starting…" : "Yes, run it"}
+        </button>
+        <button className="link-btn" disabled={starting} onClick={() => setAsking(false)}>
+          Cancel
+        </button>
+      </div>
+      {error && <div className="job-message" role="alert">{error}</div>}
+    </div>
+  );
+}
+
+function JobCard({ job, onStarted }: { job: Job; onStarted: () => void }) {
   const [open, setOpen] = useState(false);
   const top = headline(job);
   const running = job.running;
@@ -109,6 +151,7 @@ function JobCard({ job }: { job: Job }) {
           {job.last_success.tally && tallyParts(job.last_success.tally).length ? ` · ${tallyParts(job.last_success.tally).join(" · ")}` : ""}
         </div>
       )}
+      {job.can_run_now && !running && <RunNow job={job} onStarted={onStarted} />}
       {!top && <p className="dim" style={{ margin: 0, fontSize: 13 }}>It has not run since runs started being recorded.</p>}
 
       {job.recent.length > 0 && (

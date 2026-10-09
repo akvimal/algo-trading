@@ -934,6 +934,7 @@ class JobOut(BaseModel):
     last_run: Optional[JobRunOut] = None  # the latest run that has ended, however it ended
     last_success: Optional[JobRunOut] = None  # the latest run that ended 'succeeded'
     recent: list[JobRunOut] = []  # newest first, including one still running
+    can_run_now: bool = False  # an admin may start it by hand (POST /jobs/{id}/run)
 
 
 class JobsOut(BaseModel):

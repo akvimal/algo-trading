@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -757,6 +758,23 @@ def job_catalog() -> list[dict]:
         scheduled = _scheduler.get_job(job_id)
         out.append({"job_id": job_id, "label": label, "schedule": schedule, "what": what, "next_run_at": getattr(scheduled, "next_run_time", None)})
     return out
+
+
+# Jobs an admin may start by hand from the Background jobs page: the heavy end-of-day scans, which are safe to run again (each writes today's rows in
+# place) and are the ones worth re-running after a restart cut one off. The jobs that message subscribers are left out on purpose.
+MANUAL_RUN_JOBS = {
+    "oi-eod-snapshot-record": _record_oi_eod_snapshot,
+    "equity-screener-snapshot-record": _record_equity_screener_snapshot,
+    "zone-scan-record": _record_zone_scan,
+    "premarket-report-record": _record_premarket_report,
+    "instrument-sync-daily": _sync_all,
+}
+
+
+def start_job_now(job_id: str) -> None:
+    """Runs one of MANUAL_RUN_JOBS on its own thread, right now. The caller has already checked the id and that it is not running."""
+    fn = MANUAL_RUN_JOBS[job_id]
+    threading.Thread(target=fn, name=f"manual-{job_id}", daemon=True).start()
 
 
 def start_scheduler() -> None:

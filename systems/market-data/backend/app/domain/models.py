@@ -15,6 +15,9 @@ class Quote(BaseModel):
 class BatchQuoteRequest(BaseModel):
     exchange: str
     symbols: list[str]
+    # Prefer the live tick feed (see app/domain/live_quotes.py): for a caller that needs the price NOW, not the next rate-limited REST answer.
+    # Falls back to the ordinary quote for whatever the feed does not hold fresh, and is ignored for a person's own keys.
+    live: bool = False
 
 
 class BatchQuoteResponse(BaseModel):

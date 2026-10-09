@@ -56,10 +56,16 @@ def run_square_off_due() -> dict:
     return result
 
 
+def get_ltp_batch_live(exchange: str, symbols: list[str], **kwargs) -> dict[str, float]:
+    """The stop-loss / target check reads prices from market-data's live tick feed (falling back to the ordinary quote for what the feed does not
+    hold yet): a stop should fire on the price now, and the rate-limited REST quote it used to wait on took anywhere from 1 to 9 seconds."""
+    return get_ltp_batch(exchange, symbols, live=True, **kwargs)
+
+
 def run_check_exits() -> dict:
     with SessionLocal() as db:
-        result = check_exits(db, get_ltp_batch, get_previous_candle, get_candle_history)
-        option_result = check_option_group_exits(db, get_ltp_batch, get_candle_history)
+        result = check_exits(db, get_ltp_batch_live, get_previous_candle, get_candle_history)
+        option_result = check_option_group_exits(db, get_ltp_batch_live, get_candle_history)
     if result["closed_stop_loss"] or result["closed_target"] or result.get("closed_exit_condition") or result["trailed"]:
         logger.info("exit-monitor run: %s", result)
     if option_result["closed_stop_loss"] or option_result["closed_target"] or option_result["trailed"]:

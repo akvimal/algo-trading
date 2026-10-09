@@ -53,7 +53,7 @@ def _auth_headers(token: Optional[str], on_behalf_of=None) -> dict:
     return headers
 
 
-def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None, on_behalf_of=None) -> dict[str, float]:
+def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None, on_behalf_of=None, live: bool = False) -> dict[str, float]:
     """All symbols for one exchange in a single market-data call - see
     position_manager.compute_unrealized_pnl/square_off_all_open, which
     call this once per exchange instead of once per position.
@@ -70,7 +70,7 @@ def get_ltp_batch(exchange: str, symbols: list[str], token: Optional[str] = None
     try:
         resp = requests.post(
             f"{settings.market_data_base_url}/quotes/ltp/batch",
-            json={"exchange": exchange, "symbols": symbols},
+            json={"exchange": exchange, "symbols": symbols, **({"live": True} if live else {})},
             headers=_auth_headers(token, on_behalf_of),
             timeout=settings.market_data_timeout_seconds,
         )

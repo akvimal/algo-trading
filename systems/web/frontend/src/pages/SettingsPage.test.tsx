@@ -24,6 +24,7 @@ let ltp: () => Response;
 let platformStatus: Record<string, any>;
 let refreshResult: () => Response;
 let renewResult: () => Response;
+let usdinr: number | null;
 
 const mkAccount = (segment: string, over: object = {}) => ({
   segment, starting_balance: 200000, current_balance: 200000, realized_pnl: 0, unrealized_pnl: 0, capital_per_trade: 10000,
@@ -34,6 +35,7 @@ const mkAccount = (segment: string, over: object = {}) => ({
 
 beforeEach(() => {
   calls = [];
+  usdinr = null;
   accounts = [mkAccount("NSE"), mkAccount("MCX", { capital_per_trade: 7777 }), mkAccount("CRYPTO", { square_off_time: null })];
   creds = { has_dhan: false, has_delta: false, has_openrouter: false, dhan_client_id_masked: null };
   putAccount = (segment, body) => {
@@ -63,6 +65,11 @@ beforeEach(() => {
         a.current_balance = a.starting_balance;
         return json(a);
       }
+      if (url.endsWith("/settings") && method === "PUT") {
+        usdinr = body.usdinr_rate;
+        return json({ usdinr_rate: usdinr });
+      }
+      if (url.endsWith("/settings")) return json({ usdinr_rate: usdinr });
       if (url.endsWith("/accounts") && method === "GET") return json(accounts);
       if (url.endsWith("/credentials") && method === "PUT") return putCreds(body);
       if (url.endsWith("/credentials")) return json(creds);
@@ -169,6 +176,56 @@ describe("risk limits", () => {
     await user.click(screen.getByRole("button", { name: "Crypto" }));
     await waitFor(() => expect(screen.getByLabelText("Square off open trades at")).toHaveValue(""));
     expect(screen.queryByLabelText(/Include brokerage/)).not.toBeInTheDocument();
+  });
+});
+
+describe("crypto: dollars and leverage", () => {
+  it("is only on the crypto tab", async () => {
+    const user = userEvent.setup();
+    renderAt("/more/settings");
+    await screen.findByLabelText("Capital per trade");
+    expect(screen.queryByLabelText("Leverage")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Crypto" }));
+    expect(await screen.findByLabelText("Leverage")).toHaveValue("1");
+    expect(screen.getByLabelText("Rupees per US dollar")).toBeInTheDocument();
+  });
+
+  it("saves the rate and the leverage together, and says when no rate is set yet", async () => {
+    const user = userEvent.setup();
+    renderAt("/more/settings");
+    await user.click(await screen.findByRole("button", { name: "Crypto" }));
+    expect(await screen.findByText(/crypto orders are refused until it is/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Rupees per US dollar"), "88.5");
+    await user.clear(screen.getByLabelText("Leverage"));
+    await user.type(screen.getByLabelText("Leverage"), "5");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(usdinr).toBe(88.5));
+    expect(puts("/accounts/CRYPTO")[0].body).toEqual({ leverage: 5 });
+    expect(puts("/settings")[0].body).toEqual({ usdinr_rate: 88.5 });
+  });
+
+  it("saves the rate alone without touching the account", async () => {
+    usdinr = 90;
+    const user = userEvent.setup();
+    renderAt("/more/settings");
+    await user.click(await screen.findByRole("button", { name: "Crypto" }));
+    await waitFor(() => expect(screen.getByLabelText("Rupees per US dollar")).toHaveValue("90"));
+    await user.clear(screen.getByLabelText("Rupees per US dollar"));
+    await user.type(screen.getByLabelText("Rupees per US dollar"), "91");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(usdinr).toBe(91));
+    expect(puts("/accounts/CRYPTO")).toHaveLength(0);
+  });
+
+  it("refuses a leverage outside 1 to 100, with nothing sent", async () => {
+    const user = userEvent.setup();
+    renderAt("/more/settings");
+    await user.click(await screen.findByRole("button", { name: "Crypto" }));
+    await user.clear(await screen.findByLabelText("Leverage"));
+    await user.type(screen.getByLabelText("Leverage"), "500");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/Enter 1 to 100/)).toBeInTheDocument();
+    expect(puts("/accounts/CRYPTO")).toHaveLength(0);
   });
 });
 

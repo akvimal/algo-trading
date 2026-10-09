@@ -21,7 +21,7 @@ charges and slippage are also reported separately so the cost is visible.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -67,6 +67,13 @@ class TradeRecord:
     exit_price: Optional[float] = None
     entry_time: Optional[datetime] = None
     label: Optional[str] = None
+    # Rupees per unit of this trade's own currency: 1 for NSE/MCX, the USD/INR rate it closed at for CRYPTO. pnl, charges and slippage_cost stay in the
+    # trade's own currency (so the R multiple, a ratio against its dollar entry and stop, is right); the totals are converted with this.
+    fx: float = 1.0
+
+    @property
+    def pnl_inr(self) -> Optional[float]:
+        return self.pnl * self.fx if self.pnl is not None else None
 
 
 def day_key(moment: datetime) -> date:
@@ -200,15 +207,17 @@ class PerformanceStats:
 def compute_performance(trades: list[TradeRecord]) -> Optional[PerformanceStats]:
     """None when there is nothing with a P&L. Trades are considered in exit
     order for the losing-streak figure."""
-    counted = sorted((t for t in trades if t.pnl is not None), key=lambda t: t.exit_time)
-    if not counted:
+    own = sorted((t for t in trades if t.pnl is not None), key=lambda t: t.exit_time)
+    if not own:
         return None
+    r_values = [r for r in (_realized_r(t) for t in own) if r is not None]  # a ratio: in the trade's own currency
+    # Everything else is money, in rupees.
+    counted = [replace(t, pnl=t.pnl * t.fx, charges=t.charges * t.fx, slippage_cost=t.slippage_cost * t.fx) for t in own]
     wins = [t.pnl for t in counted if t.pnl > 0]
     losses = [t.pnl for t in counted if t.pnl < 0]
     total = sum(t.pnl for t in counted)
     charges = sum(t.charges for t in counted)
     slippage = sum(t.slippage_cost for t in counted)
-    r_values = [r for r in (_realized_r(t) for t in counted) if r is not None]
     streak = worst_streak = 0
     for t in counted:
         streak = streak + 1 if t.pnl < 0 else 0
@@ -256,7 +265,18 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
     NULL, the same "manual only" the frontend pages use): single positions that
     are not option legs, plus whole option groups. `since` (an IST date) drops
     trades that closed before it."""
+    from app.domain.position_manager import load_settings  # local: position_manager is a heavy module and nothing else here needs it
+
     P, G = db_models.Position, db_models.OptionPositionGroup
+    current_rate = load_settings(db, user_id).usdinr_rate if segment == "CRYPTO" else None
+
+    def fx_of(row) -> float:
+        if segment != "CRYPTO":
+            return 1.0
+        closed_at = getattr(row, "usdinr_at_close", None)
+        rate = float(closed_at) if closed_at is not None else current_rate
+        return rate if rate is not None else 1.0
+
     positions = (
         db.query(P)
         .filter(P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.segment == segment, P.option_group_id.is_(None), P.exit_time.isnot(None))
@@ -280,7 +300,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             order_type=p.order_type, entry_setup_tag=p.entry_setup_tag, entry_confidence=p.entry_confidence, setup_tag=p.setup_tag,
             confidence=p.confidence, reviewed=_reviewed(p.reviewed_at, p.notes), auto_traded=bool(p.auto_traded),
             charges=_f(p.charges) or 0.0, slippage_cost=_f(p.slippage_cost) or 0.0, costs_applied=p.charges is not None,
-            live=bool(p.is_live_broker_order),
+            live=bool(p.is_live_broker_order), fx=fx_of(p),
             side=_side(getattr(p, "action", None)), exit_price=_f(getattr(p, "exit_price", None)), entry_time=getattr(p, "entry_time", None),
         )
         for p in positions
@@ -291,7 +311,7 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
             order_type=g.order_type, entry_setup_tag=g.entry_setup_tag, entry_confidence=g.entry_confidence, setup_tag=g.setup_tag,
             confidence=g.confidence, reviewed=_reviewed(g.reviewed_at, g.notes), auto_traded=bool(g.auto_traded),
             charges=_f(g.charges) or 0.0, slippage_cost=_f(g.slippage_cost) or 0.0, costs_applied=g.charges is not None,
-            live=g.id in live_groups,
+            live=g.id in live_groups, fx=fx_of(g),
             side=_side(getattr(g, "action", None)), entry_time=getattr(g, "created_at", None), label=getattr(g, "strategy_type", None),
         )
         for g in groups

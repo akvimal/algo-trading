@@ -136,7 +136,7 @@ export type OpenLevel = {
 };
 
 /** What a futures trade makes or loses if it is closed at `price` (before charges): the same sum the server uses for P&L. */
-const resultAt = (long: boolean, entry: number, price: number, quantity: number) => (long ? price - entry : entry - price) * quantity;
+const resultAt = (long: boolean, entry: number, price: number, quantity: number, fx: number) => (long ? price - entry : entry - price) * quantity * fx;
 
 /** The stop and target of each open trade on the chart of `base`, with its entry between them: a position's own entry, stop and target, and for
  * an option group the same on the underlying's price. Each line's tag carries the money: the live result on the entry, and what the stop or
@@ -150,7 +150,8 @@ export function openLevels(base: string, positions: Position[], groups: OptionGr
     const long = p.action === "BUY";
     const name = `${long ? "Long" : "Short"} ${qty(p.quantity)}`;
     const trailing = p.trailing_stop_enabled === true;
-    const money = (price: number) => ` · ${formatPnl(resultAt(long, p.entry_price, price, p.quantity))}`;
+    const fx = p.fx ?? (p.currency === "USD" ? null : 1); // dollars to rupees for a crypto trade; none without a rate, so then no money on the tag
+    const money = (price: number) => (fx == null ? "" : ` · ${formatPnl(resultAt(long, p.entry_price, price, p.quantity, fx))}`);
     if (p.entry_price != null) add({ tradeId: p.id, kind: "position", field: "entry", price: p.entry_price, label: `${name}${p.unrealized_pnl != null ? ` · ${formatPnl(p.unrealized_pnl)}` : ""}`, long, draggable: false });
     if (p.stop_loss_price != null) add({ tradeId: p.id, kind: "position", field: "stop", price: p.stop_loss_price, label: `Stop · ${name}${trailing ? " (trailing)" : ""}${money(p.stop_loss_price)}`, long, draggable: !trailing });
     if (p.target_price != null) add({ tradeId: p.id, kind: "position", field: "target", price: p.target_price, label: `Target · ${name}${money(p.target_price)}`, long, draggable: true });

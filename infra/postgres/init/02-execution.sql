@@ -1147,3 +1147,7 @@ ALTER TABLE execution.positions ADD CONSTRAINT positions_emotion_tag_check CHECK
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS emotion_tag TEXT;
 ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_emotion_tag_check;
 ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_emotion_tag_check CHECK (emotion_tag IN ('calm', 'fearful', 'greedy', 'fomo'));
+
+-- The USD/INR rate a CRYPTO trade's P&L was credited at (2026-10-09). See migrations/051-usdinr-at-close.sql.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS usdinr_at_close NUMERIC;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS usdinr_at_close NUMERIC;

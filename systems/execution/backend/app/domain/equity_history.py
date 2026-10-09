@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings
-from app.domain.position_manager import compute_unrealized_pnl
+from app.domain.position_manager import _usdinr_rate_by_user, compute_unrealized_pnl, inr_of
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,7 @@ def record_equity_snapshots(db: Session, get_ltp_batch: Callable, now: Optional[
     for pos in open_positions:
         by_account[(pos.user_id, pos.segment)].append(pos)
     live = compute_unrealized_pnl(open_positions, get_ltp_batch) if open_positions else {}
+    rates = _usdinr_rate_by_user(db, open_positions) if any(p.segment == "CRYPTO" for p in open_positions) else {}  # a crypto position's P&L is in dollars; the balance is rupees
 
     written = skipped_incomplete = unchanged = failed = 0
     for account in accounts:
@@ -175,7 +176,11 @@ def record_equity_snapshots(db: Session, get_ltp_batch: Callable, now: Optional[
             if any(p.id not in live for p in positions):
                 skipped_incomplete += 1
                 continue
-            unrealized = sum(live[p.id][1] for p in positions)
+            converted = [inr_of(p, live[p.id][1], rates.get(p.user_id)) for p in positions]
+            if any(c is None for c in converted):  # a crypto position and no rate to value it at: skip rather than record dollars as rupees
+                skipped_incomplete += 1
+                continue
+            unrealized = sum(converted)
             balance = float(account.current_balance)
 
             existing_today = (

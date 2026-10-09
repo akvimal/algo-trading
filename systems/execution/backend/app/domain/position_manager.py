@@ -605,6 +605,23 @@ def _apply_position_slippage(pos, account) -> float:
     return cost
 
 
+def fx_of(row, current_rate: Optional[float]) -> Optional[float]:
+    """Rupees per unit of the position's own currency: 1 for NSE/MCX; for CRYPTO (dollars) the rate the trade closed at (what the balance actually
+    received), else the current rate for an open trade or one closed before that was recorded. None for CRYPTO with no rate to convert at."""
+    if row.segment != "CRYPTO":
+        return 1.0
+    closed_at = getattr(row, "usdinr_at_close", None)
+    return float(closed_at) if closed_at is not None else current_rate
+
+
+def inr_of(row, value: Optional[float], current_rate: Optional[float]) -> Optional[float]:
+    """`value` (a P&L in the position's own currency) in rupees; None when there is no value or no rate to convert it at. See fx_of."""
+    if value is None:
+        return None
+    fx = fx_of(row, current_rate)
+    return value * fx if fx is not None else None
+
+
 def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] = None) -> None:
     """Sets pos.pnl (always in the position's own native currency - raw
     USD for CRYPTO, INR for NSE/MCX, matching entry_price/exit_price so
@@ -627,6 +644,8 @@ def _apply_realized_pnl(pos, account, pnl: float, usdinr_rate: Optional[float] =
     pnl -= _apply_position_charges(pos, account)
     pnl -= _apply_position_slippage(pos, account)
     pos.pnl = pnl
+    if pos.segment == "CRYPTO" and usdinr_rate is not None:
+        pos.usdinr_at_close = usdinr_rate
     if account is None:
         logger.error("no account found for segment %s - position %s closed without a balance update", pos.segment, pos.id)
         return

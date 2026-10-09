@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
-import type { DisciplineV2, EquityHistory, LiveEligibility, OptionGroup, Performance, Position, Segment } from "../api/types";
+import type { DisciplineV2, EquityHistory, LiveEligibility, Performance, Segment } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { SEGMENTS } from "../config";
 import { useProfile } from "../auth/ProfileContext";
@@ -11,6 +11,7 @@ import { OverviewTab } from "./portfolio/OverviewTab";
 import { PositionsTab } from "./portfolio/PositionsTab";
 import { ReviewTab } from "./portfolio/ReviewTab";
 import { closedTrades } from "./portfolioModel";
+import { groupsApi, positionsApi } from "../api/rupees";
 
 const TABS = [
   { id: "overview", label: "Overview" },
@@ -31,16 +32,16 @@ function parseTab(v: string | null): TabId {
 
 async function loadOpen(segment: Segment) {
   const [positions, groups] = await Promise.all([
-    api<Position[]>("execution", `/positions?segment=${segment}&status=OPEN&with_live_pnl=true&limit=200`),
-    api<OptionGroup[]>("execution", `/option-groups?segment=${segment}&status=OPEN&with_live_pnl=true&limit=200`),
+    positionsApi(`/positions?segment=${segment}&status=OPEN&with_live_pnl=true&limit=200`),
+    groupsApi(`/option-groups?segment=${segment}&status=OPEN&with_live_pnl=true&limit=200`),
   ]);
   return { positions, groups };
 }
 
 async function loadClosed(segment: Segment) {
   const [positions, groups] = await Promise.all([
-    api<Position[]>("execution", `/positions?segment=${segment}&status=CLOSED&limit=300`),
-    api<OptionGroup[]>("execution", `/option-groups?segment=${segment}&status=CLOSED&limit=300`),
+    positionsApi(`/positions?segment=${segment}&status=CLOSED&limit=300`),
+    groupsApi(`/option-groups?segment=${segment}&status=CLOSED&limit=300`),
   ]);
   return closedTrades(positions, groups);
 }

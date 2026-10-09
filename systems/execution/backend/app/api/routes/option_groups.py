@@ -56,7 +56,7 @@ from app.domain.option_position_manager import (
     update_group_stop_loss,
     update_group_target,
 )
-from app.domain.position_manager import load_settings
+from app.domain.position_manager import fx_of, inr_of, load_settings
 
 router = APIRouter()
 
@@ -77,8 +77,15 @@ def _group_to_out(
     live_combined_price: Optional[float] = None,
     unrealized_pnl: Optional[float] = None,
     live_spot_price: Optional[float] = None,
+    usdinr: Optional[float] = None,
 ) -> dict:
+    pnl = float(row.pnl) if row.pnl is not None else None
     return {
+        # pnl and unrealized_pnl are in the group's own currency (dollars for CRYPTO); the _inr pair is the same in rupees.
+        "currency": "USD" if row.segment == "CRYPTO" else "INR",
+        "fx": fx_of(row, usdinr),
+        "pnl_inr": inr_of(row, pnl, usdinr),
+        "unrealized_pnl_inr": inr_of(row, unrealized_pnl, usdinr),
         "id": str(row.id),
         "signal_id": str(row.signal_id),
         # None = manually opened (Manual tab, no auto-provisioned Strategy
@@ -233,6 +240,7 @@ def _query_option_groups(
     quote = functools.partial(get_ltp_batch, token=token) if token else get_ltp_batch
     mtm = compute_group_unrealized_pnl(rows, legs, quote) if with_live_pnl else {}
 
+    usdinr = load_settings(db, user_id).usdinr_rate if any(r.segment == "CRYPTO" for r in rows) else None
     result = []
     for r in rows:
         group_mtm = mtm.get(r.id)
@@ -245,6 +253,7 @@ def _query_option_groups(
                 live_combined_price=group_mtm["combined_price"] if group_mtm else None,
                 unrealized_pnl=group_mtm["unrealized_pnl"] if group_mtm else None,
                 live_spot_price=group_mtm["spot_price"] if group_mtm else None,
+                usdinr=usdinr,
             )
         )
     return result

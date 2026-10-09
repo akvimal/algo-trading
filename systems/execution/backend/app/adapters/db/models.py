@@ -305,6 +305,8 @@ class OptionPositionGroup(Base):
     charges_detail = Column(JSONB(none_as_null=True))
     # Slippage netted into pnl at close (own currency); NULL = none applied. See app/domain/slippage.py.
     slippage_cost = Column(Numeric)
+    # The USD/INR rate a CRYPTO trade's P&L was credited at (migrations/051); NULL for NSE/MCX and for trades closed before it existed.
+    usdinr_at_close = Column(Numeric)
     status = Column(Text, nullable=False, default="OPEN")
     rejection_reason = Column(Text)
     exit_reason = Column(Text)
@@ -433,6 +435,8 @@ class Position(Base):
     charges_detail = Column(JSONB(none_as_null=True))
     # Slippage netted into pnl at close (own currency); NULL = none applied. See app/domain/slippage.py.
     slippage_cost = Column(Numeric)
+    # The USD/INR rate a CRYPTO trade's P&L was credited at (migrations/051); NULL for NSE/MCX and for trades closed before it existed.
+    usdinr_at_close = Column(Numeric)
     # Also reused (not CRYPTO-only) for an NSE MTF positional spot position's
     # own capital posted - see infra/postgres/init/02-execution.sql.
     margin_posted = Column(Numeric)

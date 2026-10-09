@@ -26,9 +26,16 @@ export function liveSubscriptions(positions: Position[]): QuoteSubscription[] {
   return [...seen.values()].slice(0, MAX_LIVE_SYMBOLS);
 }
 
-/** The result of an open position at a price, the same arithmetic the server uses. */
-export const resultAt = (p: Pick<Position, "action" | "entry_price" | "quantity">, price: number) =>
-  (p.action === "BUY" ? price - p.entry_price : p.entry_price - price) * p.quantity;
+/** Rupees per unit of the position's own currency: 1 for the Indian markets, the USD/INR rate for a crypto position (null when none is set, so
+ * its result cannot be worked out here and keeps the server's figure). */
+export const fxOf = (p: Pick<Position, "currency" | "fx">): number | null => p.fx ?? (p.currency === "USD" ? null : 1);
+
+/** The result of an open position at a price, in rupees, the same arithmetic the server uses (a price distance times the quantity, in the
+ * position's own currency, times the rate). null when a crypto position has no rate. */
+export const resultAt = (p: Pick<Position, "action" | "entry_price" | "quantity" | "currency" | "fx">, price: number): number | null => {
+  const fx = fxOf(p);
+  return fx == null ? null : (p.action === "BUY" ? price - p.entry_price : p.entry_price - price) * p.quantity * fx;
+};
 
 export type Applied = {
   positions: Position[];
@@ -44,6 +51,7 @@ export function applyLivePrices(positions: Position[], prices: Prices): Applied 
     const price = isLive(p) ? prices[priceKey(p.exchange, p.symbol)] : undefined;
     if (price == null || !Number.isFinite(price) || price <= 0) return p;
     const pnl = resultAt(p, price);
+    if (pnl == null) return p;
     delta[p.segment] = (delta[p.segment] ?? 0) + (pnl - (p.unrealized_pnl ?? 0));
     return { ...p, live_price: price, unrealized_pnl: pnl };
   });

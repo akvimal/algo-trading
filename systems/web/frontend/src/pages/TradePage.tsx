@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
-import { getAccounts } from "../api/settings";
+import { getAccounts, getUsdInr } from "../api/settings";
 import { cancelWaitingOrder, listWaitingOrders, loadChartTrades, moveOpenLevel, moveWaitingOrder } from "../api/trade";
 import type { OptionGroup, Position, Pretrade, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
@@ -49,6 +49,7 @@ import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
 import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, isFresh, type Ticket } from "./tradeModel";
+import { groupsApi, positionsApi } from "../api/rupees";
 
 // The chart library is large and only this screen needs it, so it loads on demand.
 const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default: m.ChartPane })));
@@ -252,8 +253,8 @@ export function TradePage() {
   const today = useResource(
     async () => {
       const [positions, groups] = await Promise.all([
-        api<Position[]>("execution", `/positions?segment=${activeSpec.segment}&limit=200`),
-        api<OptionGroup[]>("execution", `/option-groups?segment=${activeSpec.segment}&limit=200`),
+        positionsApi(`/positions?segment=${activeSpec.segment}&limit=200`),
+        groupsApi(`/option-groups?segment=${activeSpec.segment}&limit=200`),
       ]);
       return dayPnl(positions, groups);
     },
@@ -302,10 +303,12 @@ export function TradePage() {
   // new-trade form on it meant the form was on screen at load and then, a moment later, was replaced by the open trade's card (or folded away
   // for a waiting order). A failed load counts as an answer: the form is then the best that can be offered.
   const tradesKnown = !(tradeRows.loading && !tradeRows.data) && !(waiting.loading && !waiting.data);
+  const usdinr = useResource(getUsdInr, [], { enabled: activeSpec.segment === "CRYPTO" }); // crypto is priced in dollars; capital and every total are rupees
   const ctx = account
     ? {
         price: activePrice, lotSize: activeData.resolved?.lot_size ?? 1, capital: account.capital_per_trade, riskPct: account.risk_per_trade_pct,
         minRR: account.min_reward_risk_ratio, requireStop: account.require_stop_loss, segment: activeSpec.segment, symbol: activeSpec.symbol,
+        usdinr: activeSpec.segment === "CRYPTO" ? (usdinr.data ?? null) : undefined, leverage: activeSpec.segment === "CRYPTO" ? (account.leverage ?? 1) : undefined,
       }
     : null;
   const analysis = ctx ? analyzeTicket(ticket, ctx) : null;

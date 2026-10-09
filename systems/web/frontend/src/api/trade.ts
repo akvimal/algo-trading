@@ -2,6 +2,7 @@ import { api } from "./http";
 import type { AiRead, Candle, Ltp, MarketRegime, OiSummary, OptionChain, OptionGroup, OptionLegPreview, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 import type { OpenLevel } from "../chart/trades";
+import { groupsApi, positionsApi } from "./rupees";
 
 export const resolveUnderlying = (segment: Segment, symbol: string) =>
   api<ResolvedUnderlying>("marketData", `/instruments/resolve?segment=${segment}&underlying=${encodeURIComponent(symbol)}`);
@@ -12,9 +13,9 @@ export const resolveUnderlying = (segment: Segment, symbol: string) =>
  * policy='add_position', or any manual order - manual orders always allow it) can leave more than
  * one open, but never many. */
 export const getOpenPositionsFor = (exchange: Segment, symbol: string) =>
-  api<Position[]>("execution", `/positions?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&status=OPEN&with_live_pnl=true&limit=10`);
+  positionsApi(`/positions?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&status=OPEN&with_live_pnl=true&limit=10`);
 export const getOpenOptionGroupsFor = (exchange: Segment, symbol: string) =>
-  api<OptionGroup[]>("execution", `/option-groups?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&status=OPEN&with_live_pnl=true&limit=10`);
+  groupsApi(`/option-groups?segment=${exchange}&symbol=${encodeURIComponent(symbol)}&status=OPEN&with_live_pnl=true&limit=10`);
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -40,10 +41,10 @@ export const getRegime = (exchange: string, symbol: string, interval: string) =>
 export async function loadChartTrades(segments: Segment[]): Promise<{ positions: Position[]; groups: OptionGroup[] }> {
   const none = <T,>() => [] as T[];
   const calls = segments.flatMap((s) => [
-    api<Position[]>("execution", `/positions?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<Position>),
-    api<Position[]>("execution", `/positions?segment=${s}&status=CLOSED&limit=50`).catch(none<Position>),
-    api<OptionGroup[]>("execution", `/option-groups?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<OptionGroup>),
-    api<OptionGroup[]>("execution", `/option-groups?segment=${s}&status=CLOSED&limit=50`).catch(none<OptionGroup>),
+    positionsApi(`/positions?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<Position>),
+    positionsApi(`/positions?segment=${s}&status=CLOSED&limit=50`).catch(none<Position>),
+    groupsApi(`/option-groups?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<OptionGroup>),
+    groupsApi(`/option-groups?segment=${s}&status=CLOSED&limit=50`).catch(none<OptionGroup>),
   ]);
   const results = await Promise.all(calls);
   return {

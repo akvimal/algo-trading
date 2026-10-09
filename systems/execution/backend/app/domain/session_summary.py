@@ -34,7 +34,7 @@ def classify(t: TradeRecord) -> dict:
         issues.append("market entry")
     if by_hand:
         issues.append("closed by hand")
-    pnl = t.pnl or 0.0
+    pnl = t.pnl_inr or 0.0
     if pnl > 0:
         verdict = "good_win" if followed else "lucky_win"
     elif pnl < 0:
@@ -50,7 +50,7 @@ def _trade_view(t: TradeRecord) -> dict:
     if t.entry_time is not None and t.exit_time is not None:
         held = max(0, int((t.exit_time - t.entry_time).total_seconds() // 60))
     return {
-        "symbol": t.symbol, "label": t.label, "side": t.side, "pnl": t.pnl, "r": round(r, 2) if r is not None else None,
+        "symbol": t.symbol, "label": t.label, "side": t.side, "pnl": t.pnl_inr, "r": round(r, 2) if r is not None else None,
         "entry": t.entry_price, "exit": t.exit_price, "held_minutes": held, "exit_reason": t.exit_reason, **classify(t),
     }
 
@@ -75,28 +75,28 @@ class ModeDay:
 
 def _leg(t: TradeRecord) -> dict:
     r = _realized_r(t)
-    return {"symbol": t.symbol, "pnl": t.pnl, "r": round(r, 2) if r is not None else None, "exit_reason": t.exit_reason}
+    return {"symbol": t.symbol, "pnl": t.pnl_inr, "r": round(r, 2) if r is not None else None, "exit_reason": t.exit_reason}
 
 
 def _mode_day(trades: list[TradeRecord]) -> Optional[ModeDay]:
-    counted = sorted((t for t in trades if t.pnl is not None), key=lambda t: t.exit_time, reverse=True)
+    counted = sorted((t for t in trades if t.pnl_inr is not None), key=lambda t: t.exit_time, reverse=True)
     if not counted:
         return None
     followed = [t for t in counted if classify(t)["followed"]]
     broke = [t for t in counted if not classify(t)["followed"]]
     return ModeDay(
         trades=len(counted),
-        wins=sum(1 for t in counted if t.pnl > 0),
-        losses=sum(1 for t in counted if t.pnl < 0),
-        net_pnl=sum(t.pnl for t in counted),
+        wins=sum(1 for t in counted if t.pnl_inr > 0),
+        losses=sum(1 for t in counted if t.pnl_inr < 0),
+        net_pnl=sum(t.pnl_inr for t in counted),
         charges=sum(t.charges for t in counted),
         with_plan=sum(1 for t in counted if _has_plan(t)),
-        best=_leg(max(counted, key=lambda t: t.pnl)),
-        worst=_leg(min(counted, key=lambda t: t.pnl)),
+        best=_leg(max(counted, key=lambda t: t.pnl_inr)),
+        worst=_leg(min(counted, key=lambda t: t.pnl_inr)),
         followed_count=len(followed),
-        followed_pnl=sum(t.pnl for t in followed),
+        followed_pnl=sum(t.pnl_inr for t in followed),
         broke_count=len(broke),
-        broke_pnl=sum(t.pnl for t in broke),
+        broke_pnl=sum(t.pnl_inr for t in broke),
         items=[_trade_view(t) for t in counted[:MAX_TRADES_LISTED]],
         more=max(0, len(counted) - MAX_TRADES_LISTED),
     )
@@ -160,8 +160,8 @@ def trader_day(db: Session, user_id: UUID, segment: str, day: date) -> dict:
         d = _mode_day([t for t in today if t.live is flag])
         out[mode] = d.__dict__ if d else None
     paper_all = [t for t in manual if not t.live]
-    day_pnl = sum(t.pnl for t in today if not t.live and t.pnl is not None)
-    month_pnl = sum(t.pnl for t in paper_all if t.pnl is not None and (day_key(t.exit_time).year, day_key(t.exit_time).month) == (day.year, day.month))
+    day_pnl = sum(t.pnl_inr for t in today if not t.live and t.pnl_inr is not None)
+    month_pnl = sum(t.pnl_inr for t in paper_all if t.pnl_inr is not None and (day_key(t.exit_time).year, day_key(t.exit_time).month) == (day.year, day.month))
     score = compute_discipline(everything, 30).get("score")
     return {
         "segment": segment,

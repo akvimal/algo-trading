@@ -53,3 +53,4 @@
 048-screener-swing-fields.sql|market_data.equity_screener_snapshot|avg_turnover_cr
 049-zone-alert-controls.sql|market_data.zone_watches|alerts
 050-segment-trade-defaults.sql|accounts.users|segment_defaults
+051-usdinr-at-close.sql|execution.positions|usdinr_at_close

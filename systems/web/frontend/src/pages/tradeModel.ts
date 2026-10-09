@@ -127,6 +127,16 @@ export function emptyTicketFor(symbol: string, defaultInstrument: DefaultInstrum
   return { ...EMPTY_TICKET, strategy };
 }
 
+/** Crypto's margin maths (the same as the server's): the margin posted is the notional over the leverage, and the trade is liquidated when the price
+ * moves against it by about 1 / leverage less the maintenance margin (0.5%). Null at 1× (nothing borrowed) or without an entry. */
+export const MAINTENANCE_MARGIN = 0.005;
+export function cryptoLeverage(entry: number | null, buy: boolean, leverage: number): { leverage: number; liquidation: number; awayPct: number } | null {
+  if (entry == null || !(leverage > 1)) return null;
+  const away = 1 / leverage - MAINTENANCE_MARGIN;
+  if (!(away > 0)) return null;
+  return { leverage, liquidation: buy ? entry * (1 - away) : entry * (1 + away), awayPct: away * 100 };
+}
+
 export type TicketContext = {
   price: number | null; // live price of the underlying
   lotSize: number;
@@ -136,6 +146,9 @@ export type TicketContext = {
   requireStop: boolean;
   segment: Segment;
   symbol: string;
+  /** Crypto only: rupees per dollar (null until one is set) and the account's margin multiplier. Prices are dollars, capital is rupees. */
+  usdinr?: number | null;
+  leverage?: number;
 };
 
 const num = (s: string): number | null => {
@@ -238,16 +251,32 @@ export function analyzeTicket(t: Ticket, ctx: TicketContext): Analysis {
   // rupee risk cannot be worked out here); crypto capital is rupees while its price is dollars.
   const lotsAuto = typedLots === null;
   let lots: number | null = null;
-  if (!isOption(t.strategy) && ctx.segment !== "CRYPTO") {
+  const crypto = ctx.segment === "CRYPTO" && !isOption(t.strategy);
+  if (crypto && lotsAuto && entry != null && ctx.usdinr) {
+    // The server's own rule for an order without a size: the lots the stop lets you risk, held to what the margin buys (capital in dollars times
+    // leverage), and at least one. With no stop it is all the margin buys.
+    const capitalUsd = ctx.capital / ctx.usdinr;
+    const buyable = Math.max(1, Math.floor((capitalUsd * (ctx.leverage ?? 1)) / (entry * ctx.lotSize)));
+    const distance = validStop !== null ? Math.abs(entry - validStop) : 0;
+    lots = distance > 0 ? Math.max(1, Math.min(Math.floor((capitalUsd * ctx.riskPct) / 100 / (distance * ctx.lotSize)), buyable)) : buyable;
+  } else if (crypto && !lotsAuto && Number.isFinite(typedLots)) {
+    lots = typedLots;
+  } else if (!isOption(t.strategy) && ctx.segment !== "CRYPTO") {
     lots = lotsAuto ? (validStop !== null ? riskLots(ctx.capital, ctx.riskPct, entry, validStop, ctx.lotSize) : null) : Number.isFinite(typedLots) ? typedLots : null;
   } else if (!lotsAuto && Number.isFinite(typedLots)) {
     lots = typedLots;
   }
 
   const units = lots != null ? lots * ctx.lotSize : null;
-  const riskAmount = units != null && entry != null && validStop !== null ? units * Math.abs(entry - validStop) : null;
-  const rewardAmount = units != null && entry != null && validTarget !== null ? units * Math.abs(validTarget - entry) : null;
+  // Money is rupees: a crypto price distance is dollars, so it goes through the rate (none set: no figure rather than a wrong one).
+  const fx = ctx.segment === "CRYPTO" ? (ctx.usdinr ?? null) : 1;
+  const riskAmount = fx != null && units != null && entry != null && validStop !== null ? units * Math.abs(entry - validStop) * fx : null;
+  const rewardAmount = fx != null && units != null && entry != null && validTarget !== null ? units * Math.abs(validTarget - entry) * fx : null;
   const budget = (ctx.capital * ctx.riskPct) / 100;
+  const lev = crypto ? cryptoLeverage(entry, buy, ctx.leverage ?? 1) : null;
+  if (lev && validStop !== null && (buy ? validStop <= lev.liquidation : validStop >= lev.liquidation)) {
+    warnings.push(`At ${lev.leverage}× leverage the trade is liquidated near ${lev.liquidation.toFixed(2)}, before your stop-loss: the stop would never be reached.`);
+  }
   if (riskAmount != null && !lotsAuto && riskAmount > budget) warnings.push(`This size risks more than your ${ctx.riskPct}% per trade.`);
 
   return { entry, stop: validStop, target: validTarget, rr, lots, lotsAuto, riskAmount, rewardAmount, errors, warnings };

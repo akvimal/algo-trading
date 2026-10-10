@@ -106,8 +106,9 @@ export class FakeChart {
   convertToPixel(point: { value?: number }) {
     return { x: 120, y: 1000 - (point.value ?? 0) };
   }
-  convertFromPixel(coords: { y?: number }[]) {
-    return coords.map((c) => ({ value: 1000 - (c.y ?? 0) }));
+  convertFromPixel(coords: { x?: number; y?: number }[]) {
+    // x is the bar's index here (a test points at a bar by its position), y maps to a price as above.
+    return coords.map((c) => ({ value: 1000 - (c.y ?? 0), dataIndex: c.x ?? 0 }));
   }
 
   createOverlay(o: any) {

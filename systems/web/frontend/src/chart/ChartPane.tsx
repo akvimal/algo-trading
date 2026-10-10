@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ActionType, OverlayMode, dispose, init, type Chart, type Crosshair, type Overlay, type OverlayEvent } from "klinecharts";
+import { levelWithOtherEnd, snapZoneCorner } from "./snap";
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
@@ -695,7 +696,73 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     // eslint-disable-next-line react-hooks/exhaustive-deps -- serialize/persist/emitDrawing read refs and propsRef only
   }, []);
 
+  // ---- drawing aids: a zone's corners snap to a candle's high/low with the magnet on; Shift keeps a line level ----
+  const shiftRef = useRef(false);
+  useEffect(() => {
+    const set = (down: boolean) => (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftRef.current = down;
+    };
+    const up = set(false);
+    const down = set(true);
+    const reset = () => {
+      shiftRef.current = false;
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", reset);
+    };
+  }, []);
+
+  /** The price a drawing's point at `index` should take, given what is held down and the magnet; null leaves the library's own value. */
+  function adjustedValue(overlay: Overlay, index: number, point: { dataIndex?: number; value?: number }): number | null {
+    const chart = chartRef.current;
+    if (!chart || point.value == null) return null;
+    if (shiftRef.current) {
+      const flat = levelWithOtherEnd(overlay.name, index, overlay.points.map((p) => p.value));
+      if (flat != null) return flat;
+    }
+    if (overlay.name === "rect" && propsRef.current.magnet && typeof point.dataIndex === "number") {
+      const candle = chart.getDataList()[point.dataIndex];
+      if (!candle) return null;
+      // The magnet's own sensitivity (8 px) as a price distance on this chart's scale.
+      const ys = chart.convertFromPixel([{ x: 0, y: 0 }, { x: 0, y: 8 }], { paneId: "candle_pane" }) as Array<{ value?: number }>;
+      const reach = ys?.[0]?.value != null && ys?.[1]?.value != null ? Math.abs(ys[1].value - ys[0].value) : 0;
+      return snapZoneCorner(point.value, candle, reach);
+    }
+    return null;
+  }
+
   const handlers = () => ({
+    // While a drawing is being placed, the library has just put its point under the cursor (and under its own magnet): adjust it.
+    onDrawing: (e: OverlayEvent) => {
+      const index = e.figureIndex ?? e.overlay.points.length - 1;
+      const point = e.overlay.points[index];
+      if (point) {
+        const value = adjustedValue(e.overlay, index, point);
+        if (value != null) point.value = value;
+      }
+      return false;
+    },
+    // Dragging a corner or an end of a finished drawing: the library would set the point itself, so do it here with the adjustment.
+    onPressedMoving: (e: OverlayEvent) => {
+      const index = e.figureIndex ?? -1;
+      if (index < 0 || !/point_\d+$/.test(e.figureKey ?? "") || e.x == null || e.y == null) return false;
+      const wants = shiftRef.current || (e.overlay.name === "rect" && propsRef.current.magnet);
+      const chart = chartRef.current;
+      const instance = e.overlay as unknown as { eventPressedPointMove?: (point: unknown, index: number) => void };
+      if (!wants || !chart || typeof instance.eventPressedPointMove !== "function") return false;
+      const found = chart.convertFromPixel([{ x: e.x, y: e.y }], { paneId: "candle_pane" });
+      const point = (Array.isArray(found) ? found[0] : found) as { dataIndex?: number; timestamp?: number; value?: number } | undefined;
+      if (!point || point.value == null) return false;
+      const value = adjustedValue(e.overlay, index, point);
+      if (value == null) return false;
+      instance.eventPressedPointMove({ ...point, value }, index);
+      return true;
+    },
     onDrawEnd: (e: OverlayEvent) => {
       pendingRef.current = null;
       if (e.overlay.name === "textNote") {

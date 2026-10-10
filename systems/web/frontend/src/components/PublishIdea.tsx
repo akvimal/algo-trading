@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/http";
 import { previewIdea, publishIdea, snapshotDataUrl, unpublishIdea, type IdeaPreview, type PublishedIdea } from "../api/ideas";
 import type { StudyNote } from "../api/types";
-import { canPublish, closedTradesFor, deliveryNote, publishedLabel, toIdeaRequest, type ClosedTrade } from "../pages/ideasModel";
+import { canAttachAnalysis, canPublish, closedTradesFor, deliveryNote, publishedLabel, toIdeaRequest, type ClosedTrade } from "../pages/ideasModel";
+import { useIdeaAnalysis } from "../hooks/useIdeaAnalysis";
+import { AttachAnalysis } from "./AttachAnalysis";
 import { groupsApi, positionsApi } from "../api/rupees";
 
 const message = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
@@ -22,6 +24,9 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
   const [trades, setTrades] = useState<ClosedTrade[] | null>(null); // the person's closed trades on this instrument; null until loaded
   const [tradesProblem, setTradesProblem] = useState<string | null>(null);
   const [tradeId, setTradeId] = useState("");
+  const [includeAnalysis, setIncludeAnalysis] = useState(false);
+  const analysis = useIdeaAnalysis(note.symbol, open && includeAnalysis && canAttachAnalysis(note));
+  const waitingForAnalysis = includeAnalysis && !analysis.analysis;
   const snapshot = useRef<string | null>(null);
   const label = publishedLabel(state);
   // A note saved after the clean picture existed has one (the chart with only a header); an older one has only the composed picture.
@@ -30,7 +35,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
 
   async function request() {
     if (includeImage && note.has_snapshot && !snapshot.current) snapshot.current = await snapshotDataUrl(note.id, variant);
-    return toIdeaRequest(note, { includeContext, snapshot: includeImage ? snapshot.current : null, trade: attached?.request ?? null });
+    return toIdeaRequest(note, { includeContext, snapshot: includeImage ? snapshot.current : null, trade: attached?.request ?? null, analysis: includeAnalysis ? analysis.analysis : null });
   }
 
   // Closed trades are fetched once, when the panel is first opened.
@@ -56,6 +61,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
     let live = true;
     setPreview(null);
     setError(null);
+    if (waitingForAnalysis) return; // the preview is built once the analysis is in: what is shown is exactly what is posted
     (async () => {
       try {
         const p = await previewIdea(await request());
@@ -68,7 +74,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, includeContext, includeImage, tradeId]);
+  }, [open, includeContext, includeImage, tradeId, includeAnalysis, analysis.analysis]);
 
   async function publish() {
     setBusy(true);
@@ -156,6 +162,9 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
           </span>
         </label>
       )}
+      {canAttachAnalysis(note) && (
+        <AttachAnalysis id={`analysis-${note.id}`} symbol={note.symbol} checked={includeAnalysis} onChange={setIncludeAnalysis} state={analysis} />
+      )}
       <div className="stack" data-testid="idea-trade">
         <label htmlFor={`trade-${note.id}`} className="dim" style={{ fontSize: 13 }}>
           Attach a closed trade (optional)
@@ -179,7 +188,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
           says whether it was paper or live. It never shows quantity, lots, rupee amounts, charges or your balance.
         </span>
       </div>
-      {!preview && !error && <span className="faint">Building the preview…</span>}
+      {!preview && !error && !waitingForAnalysis && <span className="faint">Building the preview…</span>}
       {preview && (
         <>
           <div className="dim" style={{ fontSize: 12 }}>This is exactly what will be posted{preview.destination_hint ? ` to ${preview.destination_hint}` : ""}. {deliveryNote(preview.messages, preview.has_image)}</div>
@@ -192,7 +201,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       )}
       {error && <div className="notice error" role="alert">{error}</div>}
       <div className="row" style={{ justifyContent: "flex-start" }}>
-        <button className="btn btn-primary btn-small" onClick={() => void publish()} disabled={busy || !preview || !preview.destination_hint}>
+        <button className="btn btn-primary btn-small" onClick={() => void publish()} disabled={busy || !preview || !preview.destination_hint || waitingForAnalysis}>
           {busy ? "Publishing…" : "Publish now"}
         </button>
         <button className="btn btn-small" onClick={() => { setOpen(false); setError(null); }} disabled={busy}>

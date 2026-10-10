@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { addNote, listNotes } from "../api/notes";
 import { previewIdea, publishIdea, type IdeaPreview } from "../api/ideas";
 import { useIsAdmin } from "../auth/AuthContext";
-import { canPublish, publishableContext } from "../pages/ideasModel";
+import { canAttachAnalysis, canPublish, publishableContext } from "../pages/ideasModel";
+import { useIdeaAnalysis } from "../hooks/useIdeaAnalysis";
+import { AttachAnalysis } from "./AttachAnalysis";
 import { ApiError } from "../api/http";
 import type { AiRead, NoteContext, NoteTag, Segment } from "../api/types";
 import type { ChartImage } from "../chart/ChartPane";
@@ -50,13 +52,18 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
   const [preview, setPreview] = useState<IdeaPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const publishable = isAdmin && canPublish({ tag }) && draft.trim() !== "";
+  // The AI analysis of the stock can go out with the idea (NSE stocks): it is read when the box is ticked and the preview waits for it.
+  const [withAnalysis, setWithAnalysis] = useState(false);
+  const analysis = useIdeaAnalysis(symbol, publish && publishable && withAnalysis && canAttachAnalysis({ segment }));
+  const analysisPending = publish && withAnalysis && !analysis.analysis;
   const ideaBody = (noteId: string, image?: string | null) => ({
     note_id: noteId, segment, symbol, interval, tag: tag ?? "", text: draft.trim(), context: publishableContext(getContext()), include_context: true,
     ...(image ? { snapshot_png_base64: image } : {}),
+    ...(publish && withAnalysis && analysis.analysis ? { analysis: analysis.analysis } : {}),
   });
   // What would be posted, shown while the person writes (text only: the picture is taken when they save).
   useEffect(() => {
-    if (!publish || !publishable) {
+    if (!publish || !publishable || analysisPending) {
       setPreview(null);
       setPreviewError(null);
       return;
@@ -72,7 +79,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publish, publishable, draft, tag]);
+  }, [publish, publishable, draft, tag, withAnalysis, analysis.analysis]);
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
   // Only the latest few sit under the chart; the whole history, by instrument, is on its own page.
   const notes = useResource(() => listNotes({ segment, symbol, limit: RECENT }), [segment, symbol], { enabled: open });
@@ -148,6 +155,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
         }
       }
       setPublish(false);
+      setWithAnalysis(false);
       setDraft("");
       setTag(null);
       notes.reload();
@@ -245,6 +253,9 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
                 <label className="check">
                   <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} /> Publish as an idea when saving
                 </label>
+                {publish && canAttachAnalysis({ segment }) && (
+                  <AttachAnalysis id="notes-analysis" symbol={symbol} checked={withAnalysis} onChange={setWithAnalysis} state={analysis} />
+                )}
                 {publish && previewError && <span className="error-text" role="alert">{previewError}</span>}
                 {publish && preview && (
                   <>
@@ -278,7 +289,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
               <label className="notes-attach" title="Keep a picture of the chart, with this note on it, with the note">
                 <input type="checkbox" checked={attach} onChange={(e) => setAttach(e.target.checked)} /> Attach snapshot
               </label>
-              <button className="btn btn-small" aria-label="Save note" disabled={busy || draft.trim() === ""} onClick={() => void send()} title="Save note (Ctrl+Enter)">
+              <button className="btn btn-small" aria-label="Save note" disabled={busy || draft.trim() === "" || analysisPending} onClick={() => void send()} title="Save note (Ctrl+Enter)">
                 {busy ? "Saving…" : "Save"}
               </button>
             </div>

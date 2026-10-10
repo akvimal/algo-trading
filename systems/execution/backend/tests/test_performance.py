@@ -165,6 +165,8 @@ def _matches(row, c):
     current = getattr(row, key)
     if op is operators.eq:
         return current == value
+    if op is operators.ne:
+        return current != value
     if op is operators.is_not:
         return current is not None
     if op is operators.is_:
@@ -205,7 +207,7 @@ def pos(**over):
         user_id=ALICE, strategy_id=None, status="CLOSED", segment="NSE", option_group_id=None, symbol="TCS", pnl=100, entry_price=100,
         stop_loss_price=90, target_price=130, quantity=10, exit_time=datetime(2026, 9, 10, 6, 0, tzinfo=timezone.utc), exit_reason="target",
         order_type="limit", entry_setup_tag="a", entry_confidence=3, setup_tag="a", confidence=3, reviewed_at=None, notes=None,
-        auto_traded=False, charges=None, slippage_cost=None, is_live_broker_order=False,
+        auto_traded=False, charges=None, slippage_cost=None, is_live_broker_order=False, horizon="intraday",
     )
     row.update(over)
     return SimpleNamespace(**row)
@@ -259,7 +261,7 @@ def test_since_drops_trades_that_closed_before_that_ist_date():
 
 
 def account(user=ALICE, segment="NSE"):
-    return SimpleNamespace(id=uuid.uuid4(), user_id=user, segment=segment, starting_balance=100000.0, current_balance=100000.0)
+    return SimpleNamespace(id=uuid.uuid4(), user_id=user, segment=segment, book="intraday", starting_balance=100000.0, current_balance=100000.0)
 
 
 def snap(acc, day, *, reset=False, equity=100000.0):
@@ -324,3 +326,28 @@ def test_the_route_needs_a_login():
     from app.main import app
 
     assert TestClient(app).get("/performance/NSE").status_code == 401
+
+
+# --- the two books -------------------------------------------------------------------------------------------------------------
+
+
+def test_the_intraday_book_leaves_out_a_positional_hold_and_the_positional_book_is_only_those():
+    day, swing = pos(symbol="DAY"), pos(symbol="SWING", horizon="positional")
+    db = FakeDb(positions=[day, swing], groups=[grp()])
+    assert sorted(t.symbol for t in load_manual_trades(db, ALICE, "NSE")) == ["DAY", "NIFTY"]
+    assert [t.symbol for t in load_manual_trades(db, ALICE, "NSE", book="positional")] == ["SWING"]  # an option spread is never positional
+
+
+def test_the_performance_route_reads_the_asked_for_book_and_its_own_account():
+    from app.api.routes.performance import get_performance
+
+    intraday = account()
+    intraday.book = "intraday"
+    swing_acc = account()
+    swing_acc.book = "positional"
+    db = FakeDb(accounts=[intraday, swing_acc], positions=[pos(symbol="DAY"), pos(symbol="SWING", horizon="positional", pnl=300)])
+    user = SimpleNamespace(id=ALICE)
+    day_out = get_performance("NSE", scope="epoch", discipline_days=30, user=user, db=db)  # (called directly: no Query defaults)
+    swing_out = get_performance("NSE", scope="epoch", discipline_days=30, book="positional", user=user, db=db)
+    assert day_out.book == "intraday" and swing_out.book == "positional"
+    assert day_out.performance.trades == 1 and swing_out.performance.trades == 1

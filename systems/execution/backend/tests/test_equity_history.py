@@ -137,11 +137,11 @@ class FakeDb:
 
 
 def account(user=ALICE, segment="NSE", balance=100000.0, starting=100000.0):
-    return SimpleNamespace(id=uuid.uuid4(), user_id=user, segment=segment, starting_balance=starting, current_balance=balance)
+    return SimpleNamespace(id=uuid.uuid4(), user_id=user, segment=segment, book="intraday", starting_balance=starting, current_balance=balance)
 
 
 def position(user=ALICE, segment="NSE", symbol="TCS", action="BUY", entry=100.0, qty=10):
-    return SimpleNamespace(id=uuid.uuid4(), user_id=user, segment=segment, status="OPEN", exchange="NSE", symbol=symbol, action=action, entry_price=entry, quantity=qty)
+    return SimpleNamespace(id=uuid.uuid4(), user_id=user, segment=segment, status="OPEN", exchange="NSE", symbol=symbol, action=action, entry_price=entry, quantity=qty, horizon="intraday")
 
 
 def ltp(prices):
@@ -369,3 +369,16 @@ def test_the_scheduler_registers_the_job(monkeypatch):
     monkeypatch.setattr(scheduler.settings, "equity_snapshot_poll_seconds", 0)
     scheduler.start_scheduler()
     assert "equity-snapshot" not in added  # 0 disables it
+
+
+def test_a_positional_hold_marks_the_positional_account_only_not_the_intraday_one_too():
+    day_acc = account(balance=100000.0)
+    swing_acc = account(balance=100000.0)
+    swing_acc.book = "positional"
+    swing = position(symbol="INFY", entry=100.0, qty=10)
+    swing.horizon = "positional"
+    db = FakeDb([day_acc, swing_acc], [position(entry=100.0, qty=10), swing])
+    record_equity_snapshots(db, ltp({"TCS": 110.0, "INFY": 120.0}), now=NOON)
+    by_account = {r.account_id: r for r in db.snapshots()}
+    assert by_account[day_acc.id].unrealized_pnl == pytest.approx(100.0)  # the TCS day trade, not the INFY swing
+    assert by_account[swing_acc.id].unrealized_pnl == pytest.approx(200.0)  # the INFY swing, not the TCS day trade

@@ -36,7 +36,7 @@ def get_discipline(
     seg = segment.upper()
     if seg not in _SEGMENTS:
         raise HTTPException(status_code=404, detail=f"unknown segment {segment}")
-    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg).first()
+    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg, book="intraday").first()
     since = epoch_start(db, account) if (scope == "epoch" and account is not None) else None
     facts = load_trade_facts(db, user.id, seg, since)
 
@@ -83,7 +83,7 @@ def get_pretrade(
     seg = segment.upper()
     if seg not in _SEGMENTS:
         raise HTTPException(status_code=404, detail=f"unknown segment {segment}")
-    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg).first()
+    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg, book="intraday").first()
     cfg = dv2.DisciplineConfig.from_settings(
         min_rr=float(account.min_reward_risk_ratio) if account is not None else 2.0,
         daily_loss_limit=float(account.max_daily_loss) if account is not None and account.max_daily_loss is not None else None,

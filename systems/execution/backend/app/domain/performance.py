@@ -260,11 +260,14 @@ def _f(value) -> Optional[float]:
     return float(value) if value is not None else None
 
 
-def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date] = None) -> list[TradeRecord]:
+def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date] = None, book: str = "intraday") -> list[TradeRecord]:
     """The caller's own closed MANUAL trades for one segment (strategy_id IS
     NULL, the same "manual only" the frontend pages use): single positions that
     are not option legs, plus whole option groups. `since` (an IST date) drops
-    trades that closed before it."""
+    trades that closed before it.
+
+    `book` picks which of the user's two paper balances the trades belong to: 'intraday' (everything that is not a multi-day hold,
+    the default) or 'positional' (spot holds with horizon='positional'; an option group is never positional)."""
     from app.domain.position_manager import load_settings  # local: position_manager is a heavy module and nothing else here needs it
 
     P, G = db_models.Position, db_models.OptionPositionGroup
@@ -277,13 +280,19 @@ def load_manual_trades(db: Session, user_id, segment: str, since: Optional[date]
         rate = float(closed_at) if closed_at is not None else current_rate
         return rate if rate is not None else 1.0
 
+    positional = book == "positional"
     positions = (
         db.query(P)
-        .filter(P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.segment == segment, P.option_group_id.is_(None), P.exit_time.isnot(None))
+        .filter(
+            P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.segment == segment, P.option_group_id.is_(None), P.exit_time.isnot(None),
+            P.horizon == "positional" if positional else P.horizon != "positional",
+        )
         .all()
     )
     groups = (
-        db.query(G)
+        []
+        if positional
+        else db.query(G)
         .filter(G.user_id == user_id, G.strategy_id.is_(None), G.status == "CLOSED", G.segment == segment, G.exit_time.isnot(None))
         .all()
     )

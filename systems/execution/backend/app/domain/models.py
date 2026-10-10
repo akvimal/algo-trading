@@ -244,6 +244,8 @@ class PerformanceStatsOut(BaseModel):
 class PerformanceOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     scope: Literal["epoch", "all"]
+    # Which paper balance these trades belong to: the everyday intraday one or the hard-separate positional one.
+    book: Literal["intraday", "positional"] = "intraday"
     # The IST date the counted trades start from (the latest reset marker) when scope='epoch'.
     since: Optional[date] = None
     performance: Optional[PerformanceStatsOut] = None

@@ -878,6 +878,7 @@ def _today_realized_pnl(db: Session, user_id: uuid.UUID, segment: str, timezone:
         .filter(db_models.Position.segment == segment)
         .filter(db_models.Position.status == "CLOSED")
         .filter(db_models.Position.exit_time >= start_of_day)
+        .filter(db_models.Position.horizon != "positional")  # the daily loss cap is about the account that can go live; the positional book is paper only
         .all()
     )
     return sum(float(p.pnl) for p in rows if p.pnl is not None)

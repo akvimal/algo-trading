@@ -35,15 +35,17 @@ def get_performance(
     segment: str,
     scope: Literal["epoch", "all"] = "epoch",
     discipline_days: int = Query(30, ge=1, le=365),
+    book: Literal["intraday", "positional"] = "intraday",
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     seg = segment.upper()
     if seg not in _SEGMENTS:
         raise HTTPException(status_code=404, detail=f"unknown segment {segment}")
-    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg).first()
+    book = book if isinstance(book, str) else "intraday"  # a handler called directly gets the default object, not its value
+    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg, book=book).first()
     since = epoch_start(db, account) if (scope == "epoch" and account is not None) else None
-    trades = load_manual_trades(db, user.id, seg, since)
+    trades = load_manual_trades(db, user.id, seg, since, book)
 
     equity = None
     if account is not None:
@@ -58,7 +60,7 @@ def get_performance(
 
     perf = compute_performance([t for t in trades if not t.auto_traded])
     return PerformanceOut(
-        segment=seg, scope=scope, since=since,
+        segment=seg, scope=scope, since=since, book=book,
         performance=PerformanceStatsOut(**asdict(perf)) if perf is not None else None,
         discipline=_discipline_out(compute_discipline(trades, discipline_days)),
         equity=equity,

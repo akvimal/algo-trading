@@ -40,7 +40,7 @@ import { MarketInfoMenu } from "../workstation/MarketInfoMenu";
 import { addCombo, applyCombo, loadCombos, removeCombo, saveCombos, type Combo } from "../workstation/combos";
 import {
   loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSplit, setSymbol,
-  withUrlSymbol, type WorkstationState,
+  withUrlLayout, withUrlSymbol, urlAsksForLayout, type WorkstationState,
 } from "../workstation/state";
 import { OiStrip } from "../chart/OiStrip";
 import { oiStripItems } from "../chart/oiStripModel";
@@ -61,20 +61,32 @@ export function TradePage() {
 
   const urlSymbol = params.get("symbol");
   const urlSegment = params.get("segment");
+  const urlLayout = params.get("layout");
+  const urlIntervals = params.get("intervals");
   // Off by default; turned on in Settings — see autotrader/model.ts.
   const [autoTraderVisible] = useState(loadAutoTraderVisible);
-  const [ws, setWs] = useState<WorkstationState>(() => withUrlSymbol(loadWorkstation(), urlSymbol, urlSegment));
-  useEffect(() => saveWorkstation(ws), [ws]);
+  const [ws, setWs] = useState<WorkstationState>(() => withUrlLayout(withUrlSymbol(loadWorkstation(), urlSymbol, urlSegment), urlLayout, urlIntervals));
+  // A link that asked for its own layout (weekly + daily side by side) must not overwrite the setup the person saved just by being opened: it is
+  // kept for this tab, and saved from the first change the person makes themselves.
+  const skipSave = useRef(urlAsksForLayout(urlLayout, urlIntervals));
+  useEffect(() => {
+    if (skipSave.current) {
+      skipSave.current = false;
+      return;
+    }
+    saveWorkstation(ws);
+  }, [ws]);
   const [combos, setCombos] = useState<Combo[]>(loadCombos);
   useEffect(() => saveCombos(combos), [combos]);
   // A link from Scan while this screen is already open changes the first chart.
-  const lastUrl = useRef(`${urlSymbol}|${urlSegment}`);
+  const lastUrl = useRef(`${urlSymbol}|${urlSegment}|${urlLayout}|${urlIntervals}`);
   useEffect(() => {
-    const key = `${urlSymbol}|${urlSegment}`;
+    const key = `${urlSymbol}|${urlSegment}|${urlLayout}|${urlIntervals}`;
     if (key === lastUrl.current) return;
     lastUrl.current = key;
-    setWs((cur) => withUrlSymbol(cur, urlSymbol, urlSegment));
-  }, [urlSymbol, urlSegment]);
+    if (urlAsksForLayout(urlLayout, urlIntervals)) skipSave.current = true;
+    setWs((cur) => withUrlLayout(withUrlSymbol(cur, urlSymbol, urlSegment), urlLayout, urlIntervals));
+  }, [urlSymbol, urlSegment, urlLayout, urlIntervals]);
 
   // ---- what the person has switched on the charts (shared by both) ----
   const [indicators, setIndicators] = useState<string[]>(() => loadIndicators());

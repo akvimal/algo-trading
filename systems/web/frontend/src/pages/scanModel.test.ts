@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, haveLiquidity, inUniverse, sizeLabel, universeCounts, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, totalOiChangePct, tradeLink, visible } from "./scanModel";
+import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, haveLiquidity, inUniverse, sizeLabel, universeCounts, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, totalOiChangePct, fullTradeLink, tradeLink, visible } from "./scanModel";
 import QUADRANT_CASES from "./fixtures/oi_quadrant_cases.json";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
@@ -105,6 +105,8 @@ describe("helpers", () => {
 
   it("links a symbol to the chart, encoded", () => {
     expect(tradeLink("M&M")).toBe("/trade?symbol=M%26M&segment=NSE");
+    // the "full Trade page" link from a scan card: the same stock, weekly and daily side by side
+    expect(fullTradeLink("M&M")).toBe("/trade?symbol=M%26M&segment=NSE&layout=side&intervals=weekly,daily");
   });
 });
 

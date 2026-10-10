@@ -12,7 +12,7 @@ import { ChartIcon, HistoryIcon, TradeIcon } from "../chart/icons";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { ScanTradePanel } from "./ScanTradePanel";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, tradeLink, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, visible,
   UNIVERSES, UNIVERSE_LABEL, haveLiquidity, sizeLabel, universeCounts, ZONE_TIER_HELP, zonePlace, zoneTrends, type OiFilters, type OiSignal, type OiSort, type RsCut, type ScreenerFilters, type ScreenerSort, type ZoneFilter,
 } from "./scanModel";
 import {
@@ -414,7 +414,7 @@ function OiCard({
       )}
       {(expanded || tradeOpen) && (
         <p style={{ margin: "2px 0 0" }}>
-          <Link to={tradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
+          <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
       )}
     </div>
@@ -622,7 +622,7 @@ function ScreenerCard({
       )}
       {(expanded || tradeOpen) && (
         <p style={{ margin: "2px 0 0" }}>
-          <Link to={tradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
+          <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
       )}
     </div>
@@ -834,7 +834,7 @@ function CustomScreenScan() {
                     )}
                     {(isExpanded || isTradeOpen) && (
                       <p style={{ margin: "2px 0 0" }}>
-                        <Link to={tradeLink(m.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
+                        <Link to={fullTradeLink(m.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
                       </p>
                     )}
                   </div>

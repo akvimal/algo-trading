@@ -86,6 +86,26 @@ export function withUrlSymbol(saved: WorkstationState, symbol: string | null, se
   return { ...saved, panes: [{ ...saved.panes[0], symbol: p.symbol, segment: p.segment }, saved.panes[1]], active: 0 };
 }
 
+/** A link can also ask for a two-chart layout of its instrument: `layout=side|stack` and `intervals=<left>,<right>` (for example weekly,daily).
+ * Both charts then show the first chart's instrument at those two sizes, kept independent (the interval link is switched off, or changing one
+ * would change the other). Anything missing or not recognised leaves the setup as it was. */
+export function withUrlLayout(s: WorkstationState, layout: string | null, intervals: string | null): WorkstationState {
+  if (layout !== "side" && layout !== "stack") return s;
+  const [a, b] = (intervals ?? "").split(",").map((x) => x.trim());
+  if (!a || !b || !VALID_INTERVALS.has(a) || !VALID_INTERVALS.has(b)) return s;
+  const { symbol, segment } = s.panes[0];
+  return {
+    ...s,
+    layout,
+    panes: [{ symbol, segment, interval: a }, { symbol, segment, interval: b }],
+    active: 0,
+    links: { ...s.links, interval: false },
+  };
+}
+
+/** Whether a URL asks for the layout above (so the page can avoid saving it over the person's own setup just for opening a link). */
+export const urlAsksForLayout = (layout: string | null, intervals: string | null): boolean => withUrlLayout(DEFAULT_STATE, layout, intervals) !== DEFAULT_STATE;
+
 export const paneCount = (s: WorkstationState) => (s.layout === "single" ? 1 : 2);
 
 export const setSplit = (s: WorkstationState, split: number): WorkstationState => ({ ...s, split: clampSplit(split) });

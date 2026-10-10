@@ -2129,6 +2129,31 @@ describe("layout and the ticket panel", () => {
   });
 });
 
+describe("a link that asks for weekly and daily side by side", () => {
+  beforeEach(() => screenIs(true));
+
+  it("shows the stock on two charts, weekly then daily, and leaves the saved setup alone", async () => {
+    const mine = JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "15min" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "15min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } });
+    localStorage.setItem("web.workstation", mine);
+    renderAt("/trade?symbol=TCS&segment=NSE&layout=side&intervals=weekly,daily");
+    await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(2));
+    expect(document.querySelector(".ws-grid")!.className).toContain("layout-side");
+    const panes = screen.getAllByTestId("chart-pane");
+    expect(panes[0].closest("[aria-label]")?.getAttribute("aria-label")).toBe("TCS chart");
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("symbol=TCS") && c.url.includes("interval=weekly"))).toBe(true));
+    expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("symbol=TCS") && c.url.includes("interval=daily"))).toBe(true);
+    // opening a link is not a change to the person's own setup
+    expect(localStorage.getItem("web.workstation")).toBe(mine);
+  });
+
+  it("a link without a layout still opens the saved one", async () => {
+    localStorage.setItem("web.workstation", JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "15min" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "15min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } }));
+    renderAt("/trade?symbol=TCS&segment=NSE");
+    await loaded(0);
+    expect(screen.getAllByTestId("chart-pane")).toHaveLength(1);
+  });
+});
+
 describe("two linked charts", () => {
   beforeEach(() => screenIs(true));
   const pair = async (user: ReturnType<typeof userEvent.setup>) => {

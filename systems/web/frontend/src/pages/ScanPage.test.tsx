@@ -489,7 +489,7 @@ describe("OI buildup", () => {
       await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("interval=daily") && c.url.includes("symbol=TCS"))).toBe(true));
       // The full Trade page is still one tap away - not lost, just no longer the default action.
       const full = tcs.getByRole("link", { name: /Open the full Trade page/ });
-      expect(full).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE");
+      expect(full).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE&layout=side&intervals=weekly,daily"); // weekly | daily side by side
       expect(full).toHaveAttribute("target", "_blank"); // opens in a new tab, so the scan stays where it is
       expect(full).toHaveAttribute("rel", expect.stringContaining("noopener"));
     });
@@ -892,7 +892,7 @@ describe("Screener", () => {
     await user.click(sbin.getByRole("button", { name: "Chart" }));
     expect(await sbin.findByTestId("chart-pane")).toBeInTheDocument();
     expect(sbin.getByRole("button", { name: "1d" })).toHaveAttribute("aria-pressed", "true");
-    expect(sbin.getByRole("link", { name: /Open the full Trade page/ })).toHaveAttribute("href", "/trade?symbol=SBIN&segment=NSE");
+    expect(sbin.getByRole("link", { name: /Open the full Trade page/ })).toHaveAttribute("href", "/trade?symbol=SBIN&segment=NSE&layout=side&intervals=weekly,daily");
     await user.click(itc.getByRole("button", { name: "Chart" })); // opening the second closes the first
     expect(sbin.queryByTestId("chart-pane")).not.toBeInTheDocument();
     expect(await itc.findByTestId("chart-pane")).toBeInTheDocument();

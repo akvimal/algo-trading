@@ -228,6 +228,8 @@ def check_trade(t: Trade) -> None:
 
 
 _ARROW = {"bullish": "▲", "bearish": "▼", "neutral": "◆"}
+_DOT = {"bullish": "🟢", "bearish": "🔴", "neutral": "🟡"}  # a lean at a glance: green up, red down, yellow undecided
+_AGREEMENT_MARK = {"aligned": "✅", "conflicting": "⚠️", "mixed": "➖", "technical_only": "📈"}
 _AGREEMENT_WORDS = {
     "aligned": "chart and business agree", "mixed": "only one side leans", "conflicting": "chart and business disagree", "technical_only": "chart only",
 }
@@ -240,6 +242,19 @@ def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
 
+def _clip_sentence(text: str, n: int) -> str:
+    """Like _clip, but a cut lands at the end of a sentence when one ends in the last part of the allowance (so a summary does not stop
+    mid-thought), and otherwise at a word."""
+    text = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]", " ", text or "")).strip()
+    if len(text) <= n:
+        return text
+    head = text[:n]
+    end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if end >= int(n * 0.5):
+        return head[: end + 1]
+    return head[: head.rfind(" ")].rstrip(" ,;:-") + "…" if " " in head else head.rstrip() + "…"
+
+
 def _bias(b: Optional[str]) -> str:
     return f"{_ARROW.get(b or '', '◆')} {b or 'neutral'}"
 
@@ -248,32 +263,46 @@ def _level(label: str, lv: AnalysisLevel, sign: str) -> str:
     return f"{label} {_price(lv.low)}–{_price(lv.high)} ({sign}{abs(lv.distance_pct):.1f}%)"
 
 
-def analysis_block(a: Analysis) -> str:
-    """The analysis as the post shows it: the verdict, the chart's lean and its first reasons, the business's lean and a line on it, the
-    strongest points either way, the nearest levels, and a notice that it is machine-made. Written here from the fields, never sent as text."""
+def _levels_line(a: Analysis) -> Optional[str]:
+    parts = [x for x in (_level("Resistance", a.resistance, "+") if a.resistance else None, _level("Support", a.support, "−") if a.support else None) if x]
+    return " · ".join(parts) if parts else None
+
+
+def analysis_block(a: Analysis, compact: bool = False) -> str:
+    """The analysis as the post shows it. `compact` is for a post that carries the analysis card as its picture (the chart, both reads, the
+    reasons and the levels are drawn there): a few lines with a coloured marker for each lean, the verdict and the nearest levels. Without
+    a picture it is written out: the chart's first reasons, the business's summary and the strongest points either way. Written here from
+    the fields, never sent as text."""
     when = ""
     if a.price is not None:
-        when = f" · price {_price(a.price)}"
+        when = f" · {_price(a.price)}"
         if a.as_of:
             when += f" ({_clip(a.as_of, 12)})"
     lines = [f"🔎 AI analysis{when}"]
-    overall = f"overall {_bias(a.overall)}" + (f" ({_clip(a.overall_strength, 10)})" if a.overall_strength else "")
-    lines.append(f"Verdict: {_clip(a.verdict, 120)}. {_AGREEMENT_WORDS.get(a.agreement, '').capitalize()} · {overall}.")
-    points = " · ".join(_clip(p, 90) for p in a.chart_points[:3] if p and p.strip())
-    lines.append(f"Chart {_bias(a.chart_bias)}" + (f": {points}" if points else ""))
+    sure = f" ({a.business_confidence * 100:.0f}% sure)" if a.business_confidence is not None and 0 <= a.business_confidence <= 1 else ""
+    strength = f" ({_clip(a.overall_strength, 10)})" if a.overall_strength else ""
+    leans = f"{_DOT.get(a.chart_bias, '🟡')} Chart {a.chart_bias}"
     if a.business_bias:
-        sure = f" ({a.business_confidence * 100:.0f}% sure)" if a.business_confidence is not None and 0 <= a.business_confidence <= 1 else ""
-        summary = f": {_clip(a.business_summary, 200)}" if a.business_summary else ""
-        lines.append(f"Business {_bias(a.business_bias)}{sure}{summary}")
+        leans += f"  ·  {_DOT.get(a.business_bias, '🟡')} Business {a.business_bias}{sure}"
+    lines.append(leans)
+    mark = _AGREEMENT_MARK.get(a.agreement, "")
+    lines.append(f"{mark} {_clip(a.verdict, 120)}".strip())
+    if not compact:
+        lines.append(f"Overall {_bias(a.overall)}{strength} · {_AGREEMENT_WORDS.get(a.agreement, '')}.")
+        points = " · ".join(_clip(p, 90) for p in a.chart_points[:3] if p and p.strip())
+        if points:
+            lines.append(f"Chart: {points}")
+        if a.business_bias and a.business_summary:
+            lines.append(f"Business: {_clip_sentence(a.business_summary, 240)}")
         pros = [_clip(p, 90) for p in (a.pros or [])[:2] if p and p.strip()]
         cons = [_clip(c, 90) for c in (a.cons or [])[:2] if c and c.strip()]
         if pros:
             lines.append("✓ " + " · ".join(pros))
         if cons:
             lines.append("✕ " + " · ".join(cons))
-    levels = [x for x in (_level("resistance", a.resistance, "+") if a.resistance else None, _level("support", a.support, "−") if a.support else None) if x]
-    if levels:
-        lines.append("Nearby: " + " · ".join(levels))
+    nearby = _levels_line(a)
+    if nearby:
+        lines.append(f"📍 {nearby}")
     lines.append(ANALYSIS_NOTICE)
     return "\n".join(lines)
 
@@ -290,7 +319,8 @@ def build_text(idea: Idea) -> str:
     """The whole post as text: header, the note, the market line (if asked for) and the disclaimer."""
     blocks = [header(idea), idea.text.strip()]
     if idea.analysis is not None:
-        blocks.append(analysis_block(idea.analysis))
+        # With a picture the analysis is drawn on it (the card the page composes), so the words are kept to a glance.
+        blocks.append(analysis_block(idea.analysis, compact=idea.image is not None))
     if idea.trade is not None:
         blocks.append(trade_block(idea.trade))
     if idea.include_context:

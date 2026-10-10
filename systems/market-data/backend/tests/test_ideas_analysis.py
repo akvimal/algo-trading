@@ -1,12 +1,13 @@
 """An AI analysis attached to a published idea: what the post shows, what it can never show, and that the server writes the words."""
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api.routes import ideas as route
 from app.domain import ideas
 from tests.test_ideas import ADMIN, FakeDB, FakeTelegram, make_idea, payload
+
+PNG = b"\x89PNG" + b"0" * 8
 
 
 def analysis(**over):
@@ -36,16 +37,59 @@ def analysis_in(**over):
 # ---- what the section says -------------------------------------------------------------------------------------------------------------
 
 
-def test_the_block_reads_verdict_chart_business_strengths_concerns_and_nearby_levels():
+def test_written_out_without_a_picture_it_reads_the_leans_the_verdict_the_reasons_and_the_nearby_levels():
     lines = ideas.analysis_block(analysis()).split("\n")
-    assert lines[0] == "🔎 AI analysis · price 366.10 (2026-10-12)"
-    assert lines[1] == "Verdict: Price is rising, but the business case is weak. Chart and business disagree · overall ▲ bullish (strong)."
-    assert lines[2] == "Chart ▲ bullish: Weekly: price is above its 50-week average · Trend strength is strong (ADX 31, rising) · Volume is above its 20-bar average"
-    assert lines[3] == "Business ◆ neutral (65% sure): Strong growth, but a very high price to book and no dividend."
-    assert lines[4] == "✓ Profit growth 31% a year · Working capital days down"
-    assert lines[5] == "✕ Trades at 109 times book value · No dividend"
-    assert lines[6] == "Nearby: resistance 380.00–392.00 (+3.8%) · support 340.00–348.00 (−5.2%)"
-    assert lines[7] == ideas.ANALYSIS_NOTICE
+    assert lines[0] == "🔎 AI analysis · 366.10 (2026-10-12)"
+    assert lines[1] == "🟢 Chart bullish  ·  🟡 Business neutral (65% sure)"
+    assert lines[2] == "⚠️ Price is rising, but the business case is weak"
+    assert lines[3] == "Overall ▲ bullish (strong) · chart and business disagree."
+    assert lines[4] == "Chart: Weekly: price is above its 50-week average · Trend strength is strong (ADX 31, rising) · Volume is above its 20-bar average"
+    assert lines[5] == "Business: Strong growth, but a very high price to book and no dividend."
+    assert lines[6] == "✓ Profit growth 31% a year · Working capital days down"
+    assert lines[7] == "✕ Trades at 109 times book value · No dividend"
+    assert lines[8] == "📍 Resistance 380.00–392.00 (+3.8%) · Support 340.00–348.00 (−5.2%)"
+    assert lines[9] == ideas.ANALYSIS_NOTICE
+
+
+def test_with_a_picture_it_is_a_few_lines_because_the_card_carries_the_rest():
+    lines = ideas.analysis_block(analysis(), compact=True).split("\n")
+    assert lines == [
+        "🔎 AI analysis · 366.10 (2026-10-12)",
+        "🟢 Chart bullish  ·  🟡 Business neutral (65% sure)",
+        "⚠️ Price is rising, but the business case is weak",
+        "📍 Resistance 380.00–392.00 (+3.8%) · Support 340.00–348.00 (−5.2%)",
+        ideas.ANALYSIS_NOTICE,
+    ]
+
+
+def test_each_lean_has_its_own_colour_and_each_agreement_its_own_mark():
+    for bias, dot in (("bullish", "🟢"), ("bearish", "🔴"), ("neutral", "🟡")):
+        assert f"{dot} Chart {bias}" in ideas.analysis_block(analysis(chart_bias=bias), compact=True)
+    for agreement, mark in (("aligned", "✅"), ("conflicting", "⚠️"), ("mixed", "➖"), ("technical_only", "📈")):
+        assert f"\n{mark} " in ideas.analysis_block(analysis(agreement=agreement), compact=True)
+
+
+def test_a_post_with_a_picture_uses_the_short_form_and_one_without_uses_the_written_out_form():
+    with_picture = ideas.build_text(make_idea(analysis=analysis(), image=PNG))
+    without = ideas.build_text(make_idea(analysis=analysis()))
+    assert "Working capital days down" not in with_picture and "Working capital days down" in without
+    assert len(with_picture) < len(without) - 300
+
+
+def test_a_summary_stops_at_the_end_of_a_sentence_not_mid_thought():
+    summary = (
+        "RR Kabel Ltd shows strong historical profit growth and a consistent dividend payout, coupled with a growing distribution network. "
+        "While the stock is trading at a premium to its book value, the overall outlook for the next year stays positive."
+    )
+    block = ideas.analysis_block(analysis(business_summary=summary))
+    line = next(x for x in block.split("\n") if x.startswith("Business:"))
+    assert line.endswith("growing distribution network.") and "…" not in line
+
+
+def test_when_no_sentence_ends_in_time_it_cuts_at_a_word_with_an_ellipsis():
+    out = ideas._clip_sentence("word " * 100, 40)
+    assert out.endswith("…") and len(out) <= 41 and out.rstrip("…").endswith("word")
+    assert ideas._clip_sentence("short", 40) == "short"
 
 
 def test_only_the_first_three_chart_points_and_two_strengths_and_concerns_are_shown():
@@ -56,16 +100,16 @@ def test_only_the_first_three_chart_points_and_two_strengths_and_concerns_are_sh
 def test_a_chart_only_analysis_has_no_business_lines():
     block = ideas.analysis_block(analysis(agreement="technical_only", business_bias=None, business_confidence=None, business_summary=None, pros=None, cons=None))
     assert "Business" not in block and "✓" not in block and "✕" not in block
-    assert "Chart only" in block and block.endswith(ideas.ANALYSIS_NOTICE)
+    assert "📈 " in block and block.endswith(ideas.ANALYSIS_NOTICE)
 
 
 def test_missing_levels_and_price_are_simply_left_out():
     block = ideas.analysis_block(analysis(price=None, as_of=None, support=None, resistance=None))
-    assert block.split("\n")[0] == "🔎 AI analysis" and "Nearby" not in block
+    assert block.split("\n")[0] == "🔎 AI analysis" and "📍" not in block
 
 
 def test_one_level_only_is_shown_without_a_separator():
-    assert ideas.analysis_block(analysis(support=None)).split("\n")[-2] == "Nearby: resistance 380.00–392.00 (+3.8%)"
+    assert ideas.analysis_block(analysis(support=None)).split("\n")[-2] == "📍 Resistance 380.00–392.00 (+3.8%)"
 
 
 def test_long_or_messy_text_is_trimmed_to_one_short_line():
@@ -94,10 +138,15 @@ def test_a_post_without_an_analysis_is_exactly_what_it_was():
     assert "AI analysis" not in ideas.build_text(make_idea())
 
 
-def test_with_a_chart_the_longer_post_goes_as_a_photo_with_a_header_then_the_full_text():
-    plan = ideas.plan_post(make_idea(analysis=analysis(), image=b"\x89PNG" + b"0" * 10))
-    assert [kind for kind, _ in plan.messages] == ["photo", "text"]
-    assert plan.messages[0][1] == ideas.header(make_idea()) and "AI analysis" in plan.messages[1][1]
+def test_with_a_chart_a_typical_post_with_the_analysis_is_one_photo_with_everything_as_its_caption():
+    plan = ideas.plan_post(make_idea(analysis=analysis(), image=PNG))
+    assert [kind for kind, _ in plan.messages] == ["photo"]
+    assert len(plan.text) <= ideas.CAPTION_MAX and "AI analysis" in plan.text and plan.text.endswith(ideas.disclaimer())
+
+
+def test_a_very_long_note_still_falls_back_to_a_photo_with_a_header_then_the_text():
+    plan = ideas.plan_post(make_idea(text="n" * 480, analysis=analysis(), image=PNG))
+    assert [kind for kind, _ in plan.messages] == ["photo", "text"] and plan.messages[0][1] == ideas.header(make_idea())
 
 
 def test_an_analysis_with_no_verdict_is_refused():

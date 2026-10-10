@@ -43,6 +43,8 @@ class Account(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), nullable=True)
     segment = Column(Text, nullable=False)  # 'NSE' | 'MCX' | 'CRYPTO'
+    # 'intraday' = the everyday paper balance, 'positional' = the hard-separate balance for multi-day spot trades (migration 053).
+    book = Column(Text, nullable=False, default="intraday")
     starting_balance = Column(Numeric, nullable=False)
     current_balance = Column(Numeric, nullable=False)  # debited/credited by realized P&L on close
     capital_per_trade = Column(Numeric, nullable=False)

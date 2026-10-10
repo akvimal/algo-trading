@@ -800,6 +800,15 @@ class ManualPositionCreate(BaseModel):
     # (some users delete every 'plan' item) - validate_plan_checklist
     # passes it when there are no active 'plan' items either.
     plan_checklist: list[ChecklistAnswer] = []
+    # 'positional' = a multi-day hold on the user's own positional book (own balance, never squared off at the end of the day).
+    # Spot only and paper only: see _check_positional.
+    horizon: Literal["intraday", "positional"] = "intraday"
+
+    @model_validator(mode="after")
+    def _check_positional(self) -> "ManualPositionCreate":
+        if self.horizon == "positional" and self.instrument_type != "spot":
+            raise ValueError("a positional trade must be spot")
+        return self
 
     @model_validator(mode="after")
     def _check_stop_loss_config(self) -> "ManualPositionCreate":

@@ -373,6 +373,7 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         notes=payload.notes,
         auto_traded=payload.auto_traded,
         entry_interval=payload.entry_interval,
+        horizon=payload.horizon,
     )
     return _position_to_out(row)
 

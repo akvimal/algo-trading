@@ -282,7 +282,7 @@ def reset_env(monkeypatch):
         live_trading_consent_at=None, live_trading_consent_version=None, require_stop_loss=False, max_order_value=None,
         max_daily_loss=None, default_interval=None, default_higher_interval=None, updated_at=NOON,
     )
-    monkeypatch.setattr(accounts_route, "load_account", lambda db, uid, seg: acc)
+    monkeypatch.setattr(accounts_route, "load_account", lambda db, uid, seg, book="intraday": acc)
     monkeypatch.setattr(accounts_route, "_to_out", lambda db, row, token=None: row)
     return acc, ResetDb([acc])
 

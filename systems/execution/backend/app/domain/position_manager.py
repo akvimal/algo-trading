@@ -365,15 +365,33 @@ def load_settings(db: Session, user_id: Optional[uuid.UUID] = None) -> Execution
     )
 
 
-def load_account(db: Session, user_id: Optional[uuid.UUID], segment: str) -> Optional[db_models.Account]:
+BOOKS = ("intraday", "positional")
+
+
+def book_of(horizon: Optional[str], user_id: Optional[uuid.UUID]) -> str:
+    """Which of a user's two paper balances a trade lives on: a positional trade belongs to the positional book, everything else
+    to the intraday one. The platform's own automated flow (no user) always uses its single account, whatever the horizon, as before."""
+    return "positional" if horizon == "positional" and user_id is not None else "intraday"
+
+
+def _account_key(user_id: Optional[uuid.UUID], segment: str, book: str = "intraday") -> tuple:
+    """The key _accounts_by_segment files an account under: (user_id, segment) as it always was, plus the book for the positional one."""
+    return (user_id, segment) if book == "intraday" else (user_id, segment, book)
+
+
+def load_account(db: Session, user_id: Optional[uuid.UUID], segment: str, book: str = "intraday") -> Optional[db_models.Account]:
     """user_id=None loads the legacy platform-wide account for `segment`
     (automated flow) - always expected to already exist, returns None if
     somehow missing, same as before this function took a user_id at all.
     A SaaS user's own account (user_id set) is created lazily, with the
     same starting defaults the platform seed uses, the first time it's
     needed - a new signup's first manual order shouldn't fail just
-    because they haven't visited a Settings page yet."""
-    row = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment).one_or_none()
+    because they haven't visited a Settings page yet.
+
+    `book` picks which of a user's two balances: 'intraday' (the default, everything that existed before) or 'positional', the
+    hard-separate balance for multi-day spot trades. A positional account is created the same lazy way but never force-closes
+    (no square-off time, whatever the segment's default is)."""
+    row = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment, book=book).one_or_none()
     if row is None and user_id is not None:
         defaults = _DEFAULT_ACCOUNT_DEFAULTS.get(segment)
         if defaults is None:
@@ -381,18 +399,19 @@ def load_account(db: Session, user_id: Optional[uuid.UUID], segment: str) -> Opt
         row = db_models.Account(
             user_id=user_id,
             segment=segment,
+            book=book,
             starting_balance=defaults["starting_balance"],
             current_balance=defaults["starting_balance"],
             capital_per_trade=50000,
             risk_per_trade_pct=1.0,
-            square_off_time=defaults["square_off_time"],
+            square_off_time=defaults["square_off_time"] if book == "intraday" else None,
         )
         db.add(row)
         db.commit()
     return row
 
 
-def load_capital_account(db: Session, user_id: Optional[uuid.UUID], segment: str, strategy_id: Optional[str]):
+def load_capital_account(db: Session, user_id: Optional[uuid.UUID], segment: str, strategy_id: Optional[str], book: str = "intraday"):
     """The account to size against and credit/debit realized P&L on - a
     strategy_id with a execution.strategy_accounts row of its own gets
     THAT (isolated capital pool), everything else (no strategy_id at all -
@@ -410,7 +429,7 @@ def load_capital_account(db: Session, user_id: Optional[uuid.UUID], segment: str
         strategy_account = db.get(db_models.StrategyAccount, uuid.UUID(str(strategy_id)))
         if strategy_account is not None:
             return strategy_account
-    return load_account(db, user_id, segment)
+    return load_account(db, user_id, segment, book)
 
 
 def _strategy_accounts_by_id(db: Session, positions: list) -> dict[str, db_models.StrategyAccount]:
@@ -440,7 +459,7 @@ def _resolve_capital_account(pos, accounts_by_segment: dict, strategy_accounts: 
         account = strategy_accounts.get(str(pos.strategy_id))
         if account is not None:
             return account
-    return accounts_by_segment.get((pos.user_id, pos.segment))
+    return accounts_by_segment.get(_account_key(pos.user_id, pos.segment, book_of(getattr(pos, "horizon", None), pos.user_id)))
 
 
 def _accounts_by_segment(db: Session, positions: list) -> dict[tuple, db_models.Account]:
@@ -455,11 +474,11 @@ def _accounts_by_segment(db: Session, positions: list) -> dict[tuple, db_models.
     user, plus the legacy NULL one), so segment alone is no longer unique.
     Split into two queries (NULL user_id vs. real ones) since SQL tuple-IN
     comparisons don't match NULL members."""
-    pairs = {(pos.user_id, pos.segment) for pos in positions}
-    if not pairs:
+    keys = {_account_key(pos.user_id, pos.segment, book_of(getattr(pos, "horizon", None), pos.user_id)) for pos in positions}
+    if not keys:
         return {}
-    null_segments = {segment for uid, segment in pairs if uid is None}
-    user_pairs = {(uid, segment) for uid, segment in pairs if uid is not None}
+    null_segments = {k[1] for k in keys if k[0] is None}
+    user_keys = {(k[0], k[1], k[2] if len(k) > 2 else "intraday") for k in keys if k[0] is not None}
 
     rows: list[db_models.Account] = []
     if null_segments:
@@ -468,13 +487,15 @@ def _accounts_by_segment(db: Session, positions: list) -> dict[tuple, db_models.
             .filter(db_models.Account.user_id.is_(None), db_models.Account.segment.in_(null_segments))
             .all()
         )
-    if user_pairs:
+    if user_keys:
         from sqlalchemy import tuple_
 
         rows.extend(
-            db.query(db_models.Account).filter(tuple_(db_models.Account.user_id, db_models.Account.segment).in_(user_pairs)).all()
+            db.query(db_models.Account)
+            .filter(tuple_(db_models.Account.user_id, db_models.Account.segment, db_models.Account.book).in_(user_keys))
+            .all()
         )
-    return {(row.user_id, row.segment): row for row in rows}
+    return {_account_key(row.user_id, row.segment, row.book): row for row in rows}
 
 
 def _usdinr_rate_by_user(db: Session, positions: list) -> dict:
@@ -1805,6 +1826,7 @@ def open_manual_position(
     notes: Optional[str] = None,
     auto_traded: bool = False,
     entry_interval: Optional[str] = None,
+    horizon: str = "intraday",
 ) -> db_models.Position:
     """Manual tab (spot/future only - option orders go through the sibling
     open_manual_option_group in option_position_manager.py instead, which
@@ -1870,11 +1892,17 @@ def open_manual_position(
     function waits for its postback to confirm TRADED before creating any
     Position row at all - see submit_live_order's own docstring."""
     signal_id = uuid.uuid4()
+    # `horizon='positional'` (spot only, paper only) is a multi-day hold on the user's own positional book: its own balance, never
+    # force-squared-off at the end of the day, not subject to the intraday window or the intraday margin, and never sent to the broker.
+    positional = horizon == "positional"
+    book = book_of(horizon, user_id)
 
-    if not is_supported("intraday", instrument_type):
+    if not is_supported(horizon, instrument_type):
         row = _reject_manual(
             db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
-            f"unsupported instrument_type ({instrument_type}) - only spot/future is handled here",
+            f"unsupported instrument_type ({instrument_type}) - only spot/future is handled here"
+            if not positional
+            else f"a positional trade must be spot ({instrument_type} is not supported yet)",
         )
         db.commit()
         return row
@@ -1914,7 +1942,7 @@ def open_manual_position(
             db.commit()
             return row
 
-    account = load_account(db, user_id, segment)
+    account = load_account(db, user_id, segment, book)
     if account is None:
         row = _reject_manual(
             db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
@@ -1937,7 +1965,7 @@ def open_manual_position(
         return row
 
     now = datetime.now(dt_timezone.utc)
-    if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
+    if not positional and not is_within_intraday_window(now, account.square_off_time, settings.timezone):
         row = _reject_manual(
             db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
             f"received outside intraday window (square-off is {account.square_off_time})",
@@ -1951,7 +1979,8 @@ def open_manual_position(
     # duplicate_signal_policy. counter_signal_policy stays close_and_flip,
     # same as everywhere else.
     conflict_check = SimpleNamespace(action=action, duplicate_signal_policy="add_position", counter_signal_policy="close_and_flip")
-    open_positions = db.query(db_models.Position).filter_by(user_id=user_id, symbol=symbol, status="OPEN").all()
+    # A positional trade and an intraday one on the same symbol are separate books: neither flips or blocks the other.
+    open_positions = db.query(db_models.Position).filter_by(user_id=user_id, symbol=symbol, status="OPEN", horizon=horizon).all()
     positions_to_close, reject_reason = _resolve_signal_conflicts(open_positions, conflict_check)
     if reject_reason is not None:
         row = _reject_manual(db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price, reject_reason)
@@ -1984,7 +2013,7 @@ def open_manual_position(
         effective_capital = effective_capital / settings.usdinr_rate
         risk_capital = effective_capital  # in USD now, still before leverage
         effective_capital = effective_capital * float(account.leverage)
-    elif segment == "NSE" and instrument_type == "spot" and float(account.leverage) > 1:
+    elif not positional and segment == "NSE" and instrument_type == "spot" and float(account.leverage) > 1:
         # Intraday MIS margin - same account.leverage field/reasoning as
         # open_position's own identical elif (this function is always
         # horizon='intraday', see its own docstring) - no interest cost,
@@ -2057,7 +2086,7 @@ def open_manual_position(
     # by this function entirely). is_supported() at the top of this
     # function already guarantees instrument_type is spot/future here.
     broker_order = None
-    if is_live_enabled(account) and segment in ("NSE", "MCX"):
+    if not positional and is_live_enabled(account) and segment in ("NSE", "MCX"):
         # Live-broker-adapter P2 (see docs/architecture.md) - trips the
         # kill-switch-equivalent for THIS account for the rest of today
         # once its realized loss reaches the configured cap. Only gates
@@ -2101,7 +2130,7 @@ def open_manual_position(
     # (see docs/architecture.md's Trade discipline checklist section), so
     # this can never hit the NSE MTF branch inside _open_delta_fee_fields.
     open_fee, margin_posted, liquidation_price, _mtf_interest_rate_pct = _open_delta_fee_fields(
-        segment, instrument_type, "intraday", action, price, final_quantity, account, account, settings.usdinr_rate, use_margin=False
+        segment, instrument_type, horizon, action, price, final_quantity, account, account, settings.usdinr_rate, use_margin=False
     )
 
     # Discipline v2: what the system's own risk sizing would have bought here, kept next to what was actually bought so a
@@ -2120,7 +2149,7 @@ def open_manual_position(
         exchange=segment,
         segment=segment,
         action=action,
-        horizon="intraday",
+        horizon=horizon,
         instrument_type=instrument_type,
         quantity=final_quantity,
         system_quantity=system_quantity,
@@ -2137,7 +2166,8 @@ def open_manual_position(
         stop_loss_percent=stop_loss_percent,
         stop_loss_indicator_type=stop_loss_indicator_type,
         stop_loss_indicator_params=stop_loss_indicator_params,
-        square_off_time=square_off_time if square_off_time is not None else account.square_off_time,
+        # A positional hold never force-closes (an intraday-only concept), whatever the caller passes.
+        square_off_time=None if positional else (square_off_time if square_off_time is not None else account.square_off_time),
         open_fee=open_fee,
         margin_posted=margin_posted,
         liquidation_price=liquidation_price,
@@ -2556,7 +2586,12 @@ def square_off_all_open(db: Session, user_id: uuid.UUID, get_ltp_batch: GetLtpBa
     A position whose quote fetch fails is left OPEN (not rejected - it's a
     real paper position, just not closeable right now) so the next
     scheduled run or a manual retry can close it."""
-    open_positions = db.query(db_models.Position).filter_by(user_id=user_id, status="OPEN").all()
+    # A positional (multi-day) hold is not part of "square off everything": it is closed on its own, deliberately.
+    open_positions = (
+        db.query(db_models.Position)
+        .filter(db_models.Position.user_id == user_id, db_models.Position.status == "OPEN", db_models.Position.horizon != "positional")
+        .all()
+    )
     quotes = _quotes_by_exchange(open_positions, get_ltp_batch)
     accounts = _accounts_by_segment(db, open_positions)
     strategy_accounts = _strategy_accounts_by_id(db, open_positions)
@@ -2650,7 +2685,7 @@ def square_off_position(
         if broker_order.average_fill_price is not None:
             cmp_price = float(broker_order.average_fill_price)
 
-    account = load_capital_account(db, user_id, pos.segment, pos.strategy_id)
+    account = load_capital_account(db, user_id, pos.segment, pos.strategy_id, book_of(pos.horizon, pos.user_id))
     usdinr_rate = load_settings(db, user_id).usdinr_rate
     raw_pnl = compute_pnl(pos.action, float(pos.entry_price), cmp_price, close_quantity)
 
@@ -3104,7 +3139,7 @@ def settle_live_position_exit(db: Session, pos: db_models.Position, exit_price: 
     vice versa)."""
     if pos.status != "OPEN":
         return
-    account = load_capital_account(db, pos.user_id, pos.segment, pos.strategy_id)
+    account = load_capital_account(db, pos.user_id, pos.segment, pos.strategy_id, book_of(pos.horizon, pos.user_id))
     usdinr_rate = load_settings(db, pos.user_id).usdinr_rate
     raw_pnl = compute_pnl(pos.action, float(pos.entry_price), exit_price, float(pos.quantity))
     pos.exit_price = exit_price

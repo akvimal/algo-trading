@@ -180,7 +180,7 @@ def account_state(monkeypatch):
     state = {"live": False}
     from app.domain import position_manager as pm
 
-    monkeypatch.setattr(pm, "load_account", lambda db, uid, seg: SimpleNamespace(live_trading_enabled=state["live"]))
+    monkeypatch.setattr(pm, "load_account", lambda db, uid, seg, book="intraday": SimpleNamespace(live_trading_enabled=state["live"]))
     monkeypatch.setattr(pm, "load_settings", lambda db, uid: SimpleNamespace())
     return state
 
@@ -624,7 +624,7 @@ def route_env(monkeypatch):
     deps = fake_deps({("NSE", "NIFTY"): 105.0})
     monkeypatch.setattr(route, "default_deps", lambda: deps)
     state = {"live": False}
-    monkeypatch.setattr(route, "load_account", lambda db, uid, seg: SimpleNamespace(live_trading_enabled=state["live"]))
+    monkeypatch.setattr(route, "load_account", lambda db, uid, seg, book="intraday": SimpleNamespace(live_trading_enabled=state["live"]))
     return db, state
 
 

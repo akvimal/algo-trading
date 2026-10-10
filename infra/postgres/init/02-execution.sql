@@ -132,7 +132,10 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     max_order_value      NUMERIC CHECK (max_order_value > 0),
     max_daily_loss        NUMERIC CHECK (max_daily_loss > 0),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_accounts_user_segment UNIQUE NULLS NOT DISTINCT (user_id, segment)
+    -- 'intraday' = the segment's everyday paper balance; 'positional' = a hard-separate balance for multi-day spot trades
+    -- (migration 053). One row per (user, segment, book).
+    book                TEXT NOT NULL DEFAULT 'intraday' CHECK (book IN ('intraday', 'positional')),
+    CONSTRAINT uq_accounts_user_segment_book UNIQUE NULLS NOT DISTINCT (user_id, segment, book)
 );
 
 -- Pre-existing volumes created before min_reward_risk_ratio/
@@ -198,7 +201,7 @@ VALUES
     (NULL, 'NSE', 200000, 200000, 50000, 1.0, '15:00:00'),
     (NULL, 'MCX', 200000, 200000, 50000, 1.0, '22:00:00'),
     (NULL, 'CRYPTO', 200000, 200000, 50000, 1.0, NULL)
-ON CONFLICT ON CONSTRAINT uq_accounts_user_segment DO NOTHING;
+ON CONFLICT ON CONSTRAINT uq_accounts_user_segment_book DO NOTHING;
 
 -- One row per paper position, one row per resolved signal regardless of
 -- outcome (OPEN/CLOSED/REJECTED) - horizon/instrument_type are carried

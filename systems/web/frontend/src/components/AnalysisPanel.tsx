@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { getAnalysis, screenshotUrl, type StockAnalysis } from "../api/analysis";
 import { formatDay, formatPrice } from "../format";
-import { AGREEMENT_LABEL, AGREEMENT_TONE, BIAS_ARROW, BIAS_WORD, biasTone, ladder, percent, readAge } from "./analysisModel";
+import { AGREEMENT_LABEL, AGREEMENT_TONE, BIAS_ARROW, BIAS_WORD, biasTone, ladder, leanStrength, percent, readAge } from "./analysisModel";
 
 /** "AI analysis" for one stock on a scan card. Nothing happens until the button is pressed: the first read of a stock opens its screener.in page
  * and asks an AI (up to about a minute, on the person's own OpenRouter key); after that it is quick. It shows ONE verdict first (what the chart and
@@ -76,9 +76,9 @@ export function AnalysisPanel({ symbol }: { symbol: string }) {
               <span className={`pill ${AGREEMENT_TONE[v.agreement]}`} data-testid="analysis-agreement">
                 {AGREEMENT_LABEL[v.agreement]}
               </span>
-              <span className={`pill ${tone}`}>
+              <span className={`pill ${tone}`} title={v.confidence > 0 ? `${percent(v.confidence)} of the weighted votes point this way` : undefined}>
                 Overall {BIAS_ARROW[v.bias]} {BIAS_WORD[v.bias]}
-                {v.confidence > 0 ? ` · ${percent(v.confidence)}` : ""}
+                {v.confidence > 0 ? ` · ${leanStrength(v.confidence)}` : ""}
               </span>
             </div>
             <p className="dim" style={{ margin: "6px 0 0", fontSize: 13 }}>
@@ -90,9 +90,9 @@ export function AnalysisPanel({ symbol }: { symbol: string }) {
             <section aria-label="The chart" className="analysis-col">
               <div className="analysis-col-head">
                 <strong>The chart</strong>
-                <span className={`pill ${biasTone(t.bias)}`}>
+                <span className={`pill ${biasTone(t.bias)}`} title={t.confidence > 0 ? `${percent(t.confidence)} of the weighted votes point this way` : undefined}>
                   {BIAS_ARROW[t.bias]} {BIAS_WORD[t.bias]}
-                  {t.confidence > 0 ? ` · ${percent(t.confidence)}` : ""}
+                  {t.confidence > 0 ? ` · ${leanStrength(t.confidence)}` : ""}
                 </span>
               </div>
               <ul className="analysis-list">

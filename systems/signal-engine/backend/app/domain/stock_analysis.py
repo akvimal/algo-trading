@@ -25,6 +25,8 @@ Bias = Literal["bullish", "bearish", "neutral"]
 Agreement = Literal["aligned", "mixed", "conflicting", "technical_only"]
 
 MIN_BARS = 50
+# A support or resistance zone further than this from the price says little about where it goes next, so it is not drawn.
+MAX_LEVEL_DISTANCE_PCT = 30.0
 
 
 class Level(BaseModel):
@@ -211,9 +213,20 @@ def build_analysis(
     )
 
     price = daily.close
-    support, resistance = nearest_levels(weekly, daily, price)
+    all_support, all_resistance = nearest_levels(weekly, daily, price)
+    support = [l for l in all_support if l.distance_pct <= MAX_LEVEL_DISTANCE_PCT]
+    resistance = [l for l in all_resistance if l.distance_pct <= MAX_LEVEL_DISTANCE_PCT]
     # The structure and order-block votes read well as they are; the trend/ADX ones are restated above in plainer words.
     extra = [_clean(s.reason) for s in tech.signals if s.category in ("structure", "order_blocks") and s.weight > 0]
+    # What the missing levels mean is worth saying: no zone above the price means it is at or near its highs; none close below means a long fall to the next shelf.
+    if not all_resistance:
+        extra.append("Nothing overhead: price is at or near its highs, so there is no resistance to measure against")
+    elif not resistance:
+        extra.append(f"No resistance close by: the nearest zone is {all_resistance[0].distance_pct:.0f}% above")
+    if not support and all_support:
+        extra.append(f"No support close by: the nearest zone is {all_support[0].distance_pct:.0f}% below")
+    elif not all_support:
+        extra.append("No support below: price is near its lows")
     technical = TechnicalView(
         bias=tech.bias, confidence=tech.confidence, trend_strength=tech.trend_strength,
         points=technical_points(weekly, daily, extra), support=support, resistance=resistance,

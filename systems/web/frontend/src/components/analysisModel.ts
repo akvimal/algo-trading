@@ -14,6 +14,12 @@ export const AGREEMENT_LABEL: Record<Agreement, string> = {
 /** How much weight to put behind the picture: agreement is firmer, disagreement is a caution, the rest is in between. */
 export const AGREEMENT_TONE: Record<Agreement, "up" | "dn" | "warn" | ""> = { aligned: "up", conflicting: "warn", mixed: "", technical_only: "" };
 
+/** How firmly the votes lean one way, in words. The number behind it is the share of the weighted votes pointing that way: it says how much of the
+ * evidence agrees, not how likely the move is, so it is not shown as a percentage next to a lean. */
+export function leanStrength(confidence: number): "strong" | "moderate" | "slight" {
+  return confidence >= 0.75 ? "strong" : confidence >= 0.4 ? "moderate" : "slight";
+}
+
 export const percent = (v: number | null | undefined): string => (v == null ? "" : `${Math.round(v * 100)}%`);
 
 /** How old a read is, in a few words. */

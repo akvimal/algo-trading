@@ -119,6 +119,27 @@ class TestTheChartInPlainWords:
         assert a.technical.support == [] and a.technical.resistance == []
 
 
+class TestWhenThereAreNoLevelsNearby:
+    def test_a_stock_at_its_highs_says_nothing_is_overhead(self):
+        a = build(weekly=snap(close=100, support=[(80, 85)]), daily=snap("daily", close=100, support=[(90, 95)]), fund=None)
+        assert a.technical.resistance == []
+        assert any("Nothing overhead" in p for p in a.technical.points)
+
+    def test_a_shelf_far_below_is_not_drawn_but_is_mentioned(self):
+        a = build(weekly=snap(close=100, support=[(40, 45)], resistance=[(110, 112)]), daily=snap("daily", close=100, support=[(30, 35)], resistance=[(105, 106)]), fund=None)
+        assert a.technical.support == []  # 55% and 65% away: too far to say anything about where it goes next
+        assert any("No support close by: the nearest zone is 55% below" in p for p in a.technical.points)
+        assert [(l.low, l.high) for l in a.technical.resistance] == [(105, 106), (110, 112)]
+
+    def test_a_zone_just_inside_the_limit_is_kept(self):
+        a = build(weekly=snap(close=100), daily=snap("daily", close=100, support=[(65, 70)]), fund=None)
+        assert [(l.low, l.high) for l in a.technical.support] == [(65, 70)]  # 30% away
+
+    def test_a_stock_near_its_lows_has_no_support_below(self):
+        a = build(weekly=snap(close=100, resistance=[(110, 115)]), daily=snap("daily", close=100, resistance=[(105, 108)]), fund=None)
+        assert any("No support below" in p for p in a.technical.points)
+
+
 class TestTheBusinessInShortForm:
     def test_pros_and_cons_are_trimmed_to_three_and_a_line(self):
         long_con = "x" * 300

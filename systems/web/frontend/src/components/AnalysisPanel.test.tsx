@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StockAnalysis } from "../api/analysis";
 import { AnalysisPanel } from "./AnalysisPanel";
-import { ladder, readAge } from "./analysisModel";
+import { ladder, leanStrength, readAge } from "./analysisModel";
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -81,7 +81,7 @@ describe("the analysis card", () => {
     expect(verdict).toHaveTextContent("Price is rising, but the business case is weak");
     expect(screen.getByTestId("analysis-agreement")).toHaveTextContent("Chart and business disagree");
     expect(screen.getByTestId("analysis-agreement")).toHaveClass("warn");
-    expect(verdict).toHaveTextContent("Overall ▲ Bullish · 64%");
+    expect(verdict).toHaveTextContent("Overall ▲ Bullish · moderate");
     expect(verdict).toHaveTextContent(/so size and expectations should be smaller/);
     expect(verdict).toHaveClass("up");
   });
@@ -89,7 +89,7 @@ describe("the analysis card", () => {
   it("puts the chart and the business side by side, each with its own lean", async () => {
     await open(userEvent.setup());
     const chart = within(screen.getByRole("region", { name: "The chart" }));
-    expect(chart.getByText(/▲ Bullish · 80%/)).toBeInTheDocument();
+    expect(chart.getByText(/▲ Bullish · strong/)).toBeInTheDocument();
     expect(chart.getByText("Trend strength is strong (ADX 31, rising)")).toBeInTheDocument();
     const business = within(screen.getByRole("region", { name: "The business" }));
     expect(business.getByText(/◆ Neutral · 65%/)).toBeInTheDocument();
@@ -188,6 +188,10 @@ describe("the model", () => {
     const rows = ladder(analysis());
     expect(rows.map((r) => `${r.kind}:${r.low}`)).toEqual(["resistance:410", "resistance:380", "price:366.1", "support:340"]);
     expect(rows.find((r) => r.kind === "support")!.distancePct).toBe(-5);
+  });
+
+  it("describes how firmly the votes lean in words, not as a probability", () => {
+    expect([1, 0.8, 0.75, 0.6, 0.4, 0.3, 0.1].map(leanStrength)).toEqual(["strong", "strong", "strong", "moderate", "moderate", "slight", "slight"]);
   });
 
   it("says how old a read is", () => {

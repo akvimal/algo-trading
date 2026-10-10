@@ -3,7 +3,7 @@ import type { MarketRegime } from "../api/types";
 import { directionOf } from "./direction";
 import { applyCombo, isActiveCombo, type Combo } from "./combos";
 import {
-  DEFAULT_STATE, loadWorkstation, paneCount, saveWorkstation, setInterval as setIv, setLayout, setLinks, setSymbol, withUrlSymbol,
+  DEFAULT_STATE, loadWorkstation, paneCount, saveWorkstation, setInterval as setIv, setLayout, setLinks, setSymbol, urlAsksForLayout, withUrlLayout, withUrlSymbol,
 } from "./state";
 
 const NIFTY_BANKNIFTY: Combo = { id: "nifty-banknifty", label: "NIFTY + BANKNIFTY", a: { symbol: "NIFTY", segment: "NSE", interval: "15min" }, b: { symbol: "BANKNIFTY", segment: "NSE", interval: "15min" } };
@@ -53,6 +53,30 @@ describe("workstation state", () => {
     expect(s.layout).toBe("side");
     expect(s.active).toBe(0);
     expect(withUrlSymbol(saved, null, null)).toBe(saved);
+  });
+
+  it("a link can ask for two charts of its stock, weekly on the left and daily on the right, each keeping its own interval", () => {
+    const saved = withUrlSymbol({ ...DEFAULT_STATE, layout: "single" as const }, "reliance", "NSE");
+    const s = withUrlLayout(saved, "side", "weekly,daily");
+    expect(s.layout).toBe("side");
+    expect(s.panes.map((p) => `${p.symbol}@${p.interval}`)).toEqual(["RELIANCE@weekly", "RELIANCE@daily"]);
+    expect(s.links.interval).toBe(false); // or changing one chart's size would change the other
+    expect(s.active).toBe(0);
+    // changing the left one afterwards leaves the right one alone
+    expect(setIv(s, 0, "60min").panes.map((p) => p.interval)).toEqual(["60min", "daily"]);
+    expect(withUrlLayout(saved, "stack", "weekly,daily").layout).toBe("stack");
+  });
+
+  it("anything the link gets wrong leaves the setup exactly as it was", () => {
+    const saved = DEFAULT_STATE;
+    expect(withUrlLayout(saved, null, "weekly,daily")).toBe(saved);
+    expect(withUrlLayout(saved, "side", null)).toBe(saved);
+    expect(withUrlLayout(saved, "grid", "weekly,daily")).toBe(saved);
+    expect(withUrlLayout(saved, "side", "weekly")).toBe(saved);
+    expect(withUrlLayout(saved, "side", "weekly,fortnightly")).toBe(saved);
+    expect(urlAsksForLayout("side", "weekly,daily")).toBe(true);
+    expect(urlAsksForLayout("side", "nonsense")).toBe(false);
+    expect(urlAsksForLayout(null, null)).toBe(false);
   });
 
   it("the pair puts the two indices side by side at the combo's own saved interval, not whatever the workstation was already showing", () => {

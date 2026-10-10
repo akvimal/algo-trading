@@ -34,6 +34,7 @@ export const IndicatorsIcon = () => wrap(<><path d="M3 17l5-6 4 3 5-8 4 5" /><pa
 export const StructureIcon = () => wrap(<><rect x="4" y="4" width="16" height="5" rx="1" /><rect x="4" y="11" width="10" height="4" rx="1" /><rect x="4" y="17" width="14" height="3" rx="1" /></>);
 export const OiStripIcon = () => wrap(<><rect x="3" y="7" width="18" height="10" rx="2" /><path d="M7 14v-2M11 14v-4M15 14v-3" /></>);
 export const SparkleIcon = () => wrap(<><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" /></>);
+export const BellIcon = () => wrap(<><path d="M6 17h12l-1.5-2V10a4.5 4.5 0 00-9 0v5z" /><path d="M10 20a2 2 0 004 0" /></>);
 export const MagnetIcon = () => wrap(<><path d="M6 4v8a6 6 0 0012 0V4" /><path d="M6 8h4M14 8h4" /></>);
 export const EyeIcon = () => wrap(<><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>);
 export const EyeOffIcon = () => wrap(<><path d="M3 3l18 18" /><path d="M10.6 6.1A10 10 0 0112 6c6 0 10 6 10 6a17 17 0 01-3 3.6M6.6 6.6A16 16 0 002 12s4 7 10 7c1.6 0 3-.4 4.3-1" /></>);

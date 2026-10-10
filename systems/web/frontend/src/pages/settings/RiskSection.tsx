@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
 import { ApiError } from "../../api/http";
 import { getUsdInr, resetAccount, saveUsdInr, updateAccount } from "../../api/settings";
-import type { Account } from "../../api/types";
+import type { Account, Book } from "../../api/types";
 import { TextField, ToggleField } from "../../components/Field";
 import { formatInr } from "../../format";
 import { buildAccountPatch, draftFrom, hasErrors, parseUsdInr, type AccountDraft, type DraftErrors } from "../settingsModel";
 
 /** Risk limits and paper-account behaviour for one segment. These apply to paper orders now
  * and to live ones later: the point is that the limits are yours and the server keeps them. */
-export function RiskSection({ account, onSaved }: { account: Account; onSaved: () => void }) {
+export function RiskSection({ account, onSaved, book = "intraday" }: { account: Account; onSaved: () => void; book?: Book }) {
+  // The positional book is paper only and never force-closed: a daily loss limit and a square-off time have no meaning there.
+  const positional = book === "positional";
   const [draft, setDraft] = useState<AccountDraft>(() => draftFrom(account));
   const [attempted, setAttempted] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -60,7 +62,7 @@ export function RiskSection({ account, onSaved }: { account: Account; onSaved: (
     setBusy(true);
     setMessage(null);
     try {
-      if (Object.keys(patch).length > 0) await updateAccount(seg, patch);
+      if (Object.keys(patch).length > 0) await updateAccount(seg, patch, book);
       if (seg === "CRYPTO" && rateChanged) {
         const saved = await saveUsdInr(parseUsdInr(rate).rate as number);
         setSavedRate(saved.usdinr_rate);
@@ -100,9 +102,9 @@ export function RiskSection({ account, onSaved }: { account: Account; onSaved: (
         <h2 className="section-title" style={{ margin: "0 0 12px" }}>
           Safety limits
         </h2>
-        <TextField id={`${seg}-loss`} label="Daily loss limit" suffix="₹" value={draft.max_daily_loss} onChange={(v) => set("max_daily_loss", v)} error={errors.max_daily_loss} placeholder="No limit" hint="Shown as a meter on Today. Leave blank for no limit." />
+        {!positional && <TextField id={`${seg}-loss`} label="Daily loss limit" suffix="₹" value={draft.max_daily_loss} onChange={(v) => set("max_daily_loss", v)} error={errors.max_daily_loss} placeholder="No limit" hint="Shown as a meter on Today. Leave blank for no limit." />}
         <ToggleField id={`${seg}-sl`} label="Require a stop-loss on every order" hint="An order without a stop-loss is refused." checked={draft.require_stop_loss} onChange={(v) => set("require_stop_loss", v)} />
-        <TextField id={`${seg}-sqoff`} label="Square off open trades at" inputMode="text" value={draft.square_off_time} onChange={(v) => set("square_off_time", v)} error={errors.square_off_time} placeholder="Never" hint={seg === "CRYPTO" ? "Crypto trades all day, so this is usually left blank." : "24-hour time, for example 15:15. Intraday trades still open then are closed for you."} />
+        {!positional && <TextField id={`${seg}-sqoff`} label="Square off open trades at" inputMode="text" value={draft.square_off_time} onChange={(v) => set("square_off_time", v)} error={errors.square_off_time} placeholder="Never" hint={seg === "CRYPTO" ? "Crypto trades all day, so this is usually left blank." : "24-hour time, for example 15:15. Intraday trades still open then are closed for you."} />}
       </div>
 
       <div className="card">
@@ -129,14 +131,14 @@ export function RiskSection({ account, onSaved }: { account: Account; onSaved: (
         </button>
       </div>
 
-      <ResetCard account={account} onSaved={onSaved} />
+      <ResetCard account={account} onSaved={onSaved} book={book} />
     </div>
   );
 }
 
 /** Starting over. Resetting also starts a new equity curve, and the live-trading track record
  * counts from it, so it is guarded by typing a word and says so plainly. */
-function ResetCard({ account, onSaved }: { account: Account; onSaved: () => void }) {
+function ResetCard({ account, onSaved, book }: { account: Account; onSaved: () => void; book: Book }) {
   const [amount, setAmount] = useState(String(account.starting_balance));
   const [word, setWord] = useState("");
   const [busy, setBusy] = useState(false);
@@ -160,8 +162,8 @@ function ResetCard({ account, onSaved }: { account: Account; onSaved: () => void
     try {
       // A new amount re-baselines the account (and starts the new curve) in one call; the same
       // amount is a plain reset.
-      if (n !== account.starting_balance) await updateAccount(account.segment, { starting_balance: n });
-      else await resetAccount(account.segment);
+      if (n !== account.starting_balance) await updateAccount(account.segment, { starting_balance: n }, book);
+      else await resetAccount(account.segment, book);
       setWord("");
       setDone(true);
       onSaved();
@@ -178,7 +180,7 @@ function ResetCard({ account, onSaved }: { account: Account; onSaved: () => void
         Start over
       </h2>
       <p style={{ marginTop: 0 }}>
-        Sets your paper balance back to {formatInr(n > 0 && Number.isFinite(n) ? n : account.starting_balance)} and starts a new equity curve. Your open trades and history stay. The live-trading track record counts from the new start.
+        Sets your paper balance back to {formatInr(n > 0 && Number.isFinite(n) ? n : account.starting_balance)} and starts a new equity curve. Your open trades and history stay. {book === "positional" ? "" : " The live-trading track record counts from the new start."}
       </p>
       <TextField id={`${account.segment}-start`} label="Starting balance" suffix="₹" value={amount} onChange={setAmount} error={valid ? undefined : "Enter an amount above 0."} />
       <TextField id={`${account.segment}-resetword`} label='Type RESET to confirm' inputMode="text" value={word} onChange={setWord} />

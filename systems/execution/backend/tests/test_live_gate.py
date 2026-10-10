@@ -159,7 +159,7 @@ def creds(monkeypatch):
 
 
 def put_account(row, update, segment="NSE", u=None, monkeypatch=None):
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     return accounts_route.update_account(segment, update, user=u or user(), db=FakeDb())
 
 
@@ -276,7 +276,7 @@ def test_re_enabling_after_a_disable_demands_fresh_consent(creds):
 
 
 def put_platform(row, update):
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     return accounts_route.update_platform_account("NSE", update, admin=user(admin=True), db=FakeDb())
 
 

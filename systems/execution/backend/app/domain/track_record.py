@@ -120,7 +120,7 @@ def evaluate_for_user_segment(db: Session, user_id, segment: str, th: Optional[T
     """The requirements for one user on one segment. A user with no account for it yet has
     traded nothing, so every requirement is unmet at zero (an account is created lazily on
     first use, so its absence just means "no record")."""
-    account = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment).first()
+    account = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment, book="intraday").first()
     if account is None:
         return evaluate(
             th or Thresholds.from_settings(), apply_charges=False, slippage_bps=0.0, qualifying_trades=0, days_tracked=0,

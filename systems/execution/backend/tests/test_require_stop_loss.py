@@ -35,7 +35,7 @@ def run(monkeypatch, *, require, **order):
     list of rejection reasons recorded."""
     reasons = []
     account = SimpleNamespace(require_stop_loss=require, square_off_time=None)
-    monkeypatch.setattr(pm, "load_account", lambda db, user_id, segment: account)
+    monkeypatch.setattr(pm, "load_account", lambda db, user_id, segment, book="intraday": account)
     # Anything after the stop-loss gate: make the very next gate reject with a
     # distinguishable reason so a pass-through is observable.
     monkeypatch.setattr(pm, "is_within_intraday_window", lambda *a, **k: False)
@@ -135,7 +135,7 @@ def account_route(monkeypatch):
 
 def test_the_route_toggles_and_reports_the_switch(account_route):
     row = _account_row(require_stop_loss=False)
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     user = User(id=ME, token="t", is_admin=False)
     out = accounts_route.update_account("NSE", AccountUpdate(require_stop_loss=True), user=user, db=RouteDb())
     assert row.require_stop_loss is True and out["require_stop_loss"] is True
@@ -145,6 +145,6 @@ def test_the_route_toggles_and_reports_the_switch(account_route):
 
 def test_omitting_the_field_leaves_it_unchanged(account_route):
     row = _account_row(require_stop_loss=True)
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     accounts_route.update_account("NSE", AccountUpdate(capital_per_trade=1234), user=User(id=ME, token="t"), db=RouteDb())
     assert row.require_stop_loss is True

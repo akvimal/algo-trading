@@ -1,4 +1,5 @@
 import { api } from "./http";
+import { uploadTradeSnapshot } from "./tradeSnapshots";
 import type { AiRead, Candle, Ltp, MarketRegime, OiSummary, OptionChain, OptionGroup, OptionLegPreview, PendingOrder, Position, ResolvedUnderlying, Segment, SentimentHistoryDay } from "./types";
 import type { OrderRequest } from "../pages/tradeModel";
 import type { OpenLevel } from "../chart/trades";
@@ -116,16 +117,37 @@ const ATR_INTERVALS = new Set(["1min", "3min", "5min", "15min", "25min", "30min"
 
 /** Moves the stop or target of an open trade to a new price. A position's target has its own route; an
  * option group's stop and target are levels of the underlying. */
-export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number, interval?: string): Promise<void> {
+export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number, interval?: string, note?: string): Promise<void> {
   // The chart interval the person trades on, so the server can judge a tight trail against that interval's ATR.
   const atr = interval && ATR_INTERVALS.has(interval) ? { atr_interval: interval } : {};
+  // The person's own reason for the move: only a spot/future position keeps one (an option group's levels take none).
+  const why = note?.trim() && level.kind === "position" ? { note: note.trim() } : {};
   const base = level.kind === "position" ? `/positions/${level.tradeId}` : `/option-groups/${level.tradeId}`;
   const [path, body] =
     level.kind === "position"
-      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price, ...atr }] : [`${base}/target`, { target_price: price }]
+      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price, ...atr, ...why }] : [`${base}/target`, { target_price: price, ...why }]
       : level.field === "stop" ? [`${base}/spot-stop-loss`, { spot_stop_loss_price: price, ...atr }] : [`${base}/spot-target`, { spot_target_price: price }];
   await api("execution", path, { method: "PUT", json: body });
 }
+
+/** One stop-loss / target move on a spot/future trade, with the person's own reason if they gave one (GET /positions/{id}/events). */
+export type TradeEvent = {
+  id: string;
+  field: "stop_loss" | "target";
+  move: string;
+  source: "user" | "auto_trail" | "system";
+  accepted: boolean;
+  old_price: number | null;
+  new_price: number | null;
+  refused_reason: string | null;
+  note: string | null;
+  created_at: string;
+};
+export const listTradeEvents = (positionId: string) => api<TradeEvent[]>("execution", `/positions/${positionId}/events`);
+
+/** Closes one spot/future position, with an optional note on why (kept as a review note on the trade). */
+export const squareOffPosition = (positionId: string, note?: string) =>
+  api("execution", `/positions/${positionId}/square-off${note?.trim() ? `?note=${encodeURIComponent(note.trim())}` : ""}`, { method: "POST" });
 
 /** Switches the one-tap auto-trail of an open trade on or off: the stop stays put until the trade is one initial risk in profit,
  * then moves to breakeven and trails by an ATR multiple. `interval` is the chart interval the person trades on. */
@@ -149,6 +171,10 @@ export const moveWaitingOrder = (id: string, field: "entry" | "stop" | "target",
   });
 export const cancelWaitingOrder = (id: string) => api<PendingOrder>("execution", `/pending-orders/${id}`, { method: "DELETE" });
 
+/** Extras for an order: the chart as planned, a finished PNG data URL taken just before the order is sent (drawings, indicators and the planned entry,
+ * stop and target on it). It is kept with the trade as its plan at entry. */
+export type PlaceExtras = { planPicture?: string | null };
+
 export type PlaceResult = {
   ok: boolean;
   /** Plain-language outcome to show the person. */
@@ -162,13 +188,27 @@ type Placed = { id?: string; status?: string; rejection_reason?: string | null }
 
 /** Sends the order. A rejection from the server (an over-budget order, a stop on the wrong side)
  * comes back as a message, not a crash: the person sees why and can change the ticket. */
-export async function placeOrder(req: OrderRequest): Promise<PlaceResult> {
+export async function placeOrder(req: OrderRequest, extras: PlaceExtras = {}): Promise<PlaceResult> {
+  const picture = extras.planPicture || null;
   if (req.kind === "pending") {
-    const o = await api<PendingOrder>("execution", req.path, { method: "POST", json: req.body });
+    // A waiting order carries its plan picture; the server attaches it to the position when the order fills.
+    const o = await api<PendingOrder>("execution", req.path, { method: "POST", json: picture ? { ...req.body, plan_snapshot_png_base64: picture } : req.body });
     return { ok: true, kind: "pending", message: `Order waiting. It is placed when the price reaches ${o.trigger_price}. It stays armed for up to a day, even with the app closed.` };
   }
   const placed = await api<Placed>("execution", req.path, { method: "POST", json: req.body });
   if (placed.status === "REJECTED") return { ok: false, kind: req.kind, message: placed.rejection_reason ?? "The order was rejected." };
+
+  // The plan picture is kept with the trade that has just opened. It never fails the order: the trade is placed either way, and the person is told.
+  let pictureWarning: string | undefined;
+  if (picture && placed.id) {
+    const b = req.body as { price?: number; stop_loss_price?: number; target_price?: number };
+    const levels = req.kind === "option" ? { entry: null, stop: req.stop, target: req.target } : { entry: b.price ?? null, stop: b.stop_loss_price ?? null, target: b.target_price ?? null };
+    try {
+      await uploadTradeSnapshot({ kind: req.kind === "option" ? "group" : "position", id: placed.id }, picture, { kind: "entry", caption: "The plan at entry", ...levels });
+    } catch {
+      pictureWarning = "The chart picture could not be saved with the trade. You can add one from the trade's Snapshots.";
+    }
+  }
 
   if (req.kind === "option" && placed.id) {
     // For an option the stop and target are levels of the underlying, attached right after it
@@ -179,7 +219,7 @@ export async function placeOrder(req: OrderRequest): Promise<PlaceResult> {
     if (req.target != null) await api("execution", `/option-groups/${placed.id}/spot-target`, { method: "PUT", json: { spot_target_price: req.target } }).catch(() => missed.push("target"));
     if (req.combinedStop != null) await api("execution", `/option-groups/${placed.id}/stop-loss`, { method: "PUT", json: { stop_loss_price: req.combinedStop } }).catch(() => missed.push("combined stop-loss"));
     if (req.combinedTarget != null) await api("execution", `/option-groups/${placed.id}/target`, { method: "PUT", json: { target_price: req.combinedTarget } }).catch(() => missed.push("combined target"));
-    if (missed.length) return { ok: true, kind: "option", message: "Paper order placed.", warning: `The ${missed.join(" and ")} did not attach. Set it from Portfolio → Positions.` };
+    if (missed.length) return { ok: true, kind: "option", message: "Paper order placed.", warning: [`The ${missed.join(" and ")} did not attach. Set it from Portfolio → Positions.`, pictureWarning].filter(Boolean).join(" ") };
   }
-  return { ok: true, kind: req.kind, message: "Paper order placed." };
+  return { ok: true, kind: req.kind, message: "Paper order placed.", ...(pictureWarning ? { warning: pictureWarning } : {}) };
 }

@@ -44,6 +44,40 @@ class TradeIn(BaseModel):
     result_pct: Optional[float] = Field(default=None, ge=-100, le=100000)
 
 
+Bias = Literal["bullish", "bearish", "neutral"]
+
+
+class AnalysisLevelIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    low: float = Field(gt=0, lt=1e9)
+    high: float = Field(gt=0, lt=1e9)
+    distance_pct: float = Field(ge=0, le=1000)
+
+
+class AnalysisIn(BaseModel):
+    """An AI analysis of the stock to show with the idea (see ideas.Analysis). Only these fields exist and anything else is refused
+    (extra="forbid"); the post's wording is written by the server from them, and each text is trimmed there."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    verdict: str = Field(min_length=1, max_length=300)
+    agreement: Literal["aligned", "mixed", "conflicting", "technical_only"]
+    overall: Bias
+    overall_strength: Optional[Literal["strong", "moderate", "slight"]] = None
+    chart_bias: Bias
+    chart_points: list[str] = Field(default_factory=list, max_length=8)
+    price: Optional[float] = Field(default=None, gt=0, lt=1e9)
+    as_of: Optional[str] = Field(default=None, max_length=12)
+    business_bias: Optional[Bias] = None
+    business_confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    business_summary: Optional[str] = Field(default=None, max_length=1000)
+    pros: list[str] = Field(default_factory=list, max_length=8)
+    cons: list[str] = Field(default_factory=list, max_length=8)
+    support: Optional[AnalysisLevelIn] = None
+    resistance: Optional[AnalysisLevelIn] = None
+
+
 class IdeaIn(BaseModel):
     note_id: UUID
     segment: Literal["NSE", "MCX", "CRYPTO"]
@@ -55,6 +89,7 @@ class IdeaIn(BaseModel):
     include_context: bool = True
     snapshot_png_base64: Optional[str] = None
     trade: Optional[TradeIn] = None
+    analysis: Optional[AnalysisIn] = None
 
 
 class DestinationIn(BaseModel):
@@ -89,6 +124,15 @@ def _hint(chat: Optional[str]) -> Optional[str]:
     return None if not chat else (chat if chat.startswith("@") else f"…{chat[-4:]}")
 
 
+def _analysis(a: Optional[AnalysisIn]) -> Optional[ideas.Analysis]:
+    if a is None:
+        return None
+    data = a.model_dump()
+    for key in ("support", "resistance"):
+        data[key] = ideas.AnalysisLevel(**data[key]) if data[key] else None
+    return ideas.Analysis(**data)
+
+
 def _idea(payload: IdeaIn) -> ideas.Idea:
     try:
         image = ideas.decode_image(payload.snapshot_png_base64)
@@ -98,6 +142,7 @@ def _idea(payload: IdeaIn) -> ideas.Idea:
         note_id=payload.note_id, segment=payload.segment, symbol=payload.symbol.strip().upper(), interval=payload.interval,
         tag=payload.tag, text=payload.text, context=payload.context, include_context=payload.include_context, image=image,
         trade=ideas.Trade(**payload.trade.model_dump()) if payload.trade else None,
+        analysis=_analysis(payload.analysis),
     )
 
 

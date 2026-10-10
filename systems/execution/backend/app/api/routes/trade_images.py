@@ -1,21 +1,19 @@
-"""Screenshots/chart snapshots attached to a closed manual trade for future
-review (Manual tab only) - see infra/postgres/init/02-execution.sql's own
-comment on execution.trade_images for the full design. Upload isn't
-restricted to CLOSED trades server-side (nothing here reads status at all)
-- ManualTab.tsx only ever surfaces the upload control in a trade's own
-history row, which is closed-trades-only by construction, so that scoping
-lives entirely on the frontend rather than as a server-side rule."""
+"""Chart snapshots kept with a trade (see infra/postgres/init/02-execution.sql's own comment on execution.trade_images, and
+app/domain/trade_snapshots.py): the plan at entry, pictures taken later after the chart, the stop or the target was changed, and pictures the
+person adds by hand. Open or closed: nothing here reads the trade's status, so a live position can be photographed again and again.
+Each picture says what it is (kind), carries the levels in force when it was taken and an optional caption."""
 
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user
+from app.domain import trade_snapshots
 
 router = APIRouter()
 
@@ -23,37 +21,59 @@ _ALLOWED_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8MB - a chart screenshot, not a photo library
 
 
+def _num(v) -> Optional[float]:
+    return float(v) if v is not None else None
+
+
 def _image_to_out(row: db_models.TradeImage) -> dict:
     return {
         "id": str(row.id),
         "content_type": row.content_type,
         "uploaded_at": row.uploaded_at.isoformat() if row.uploaded_at is not None else None,
+        "kind": row.kind or "upload",
+        "caption": row.caption,
+        "entry_price": _num(row.entry_price),
+        "stop_price": _num(row.stop_price),
+        "target_price": _num(row.target_price),
     }
 
 
 async def _save_image(
-    db: Session, file: UploadFile, *, position_id: Optional[uuid.UUID] = None, option_group_id: Optional[uuid.UUID] = None
+    db: Session,
+    file: UploadFile,
+    *,
+    position_id: Optional[uuid.UUID] = None,
+    option_group_id: Optional[uuid.UUID] = None,
+    kind: str = "upload",
+    caption: Optional[str] = None,
+    entry_price: Optional[float] = None,
+    stop_price: Optional[float] = None,
+    target_price: Optional[float] = None,
 ) -> db_models.TradeImage:
     if file.content_type not in _ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=422, detail=f"unsupported image type {file.content_type!r} - use PNG/JPEG/WEBP/GIF")
+    if kind not in trade_snapshots.KINDS:
+        raise HTTPException(status_code=422, detail=f"kind must be one of {', '.join(trade_snapshots.KINDS)}")
     data = await file.read()
     if len(data) > _MAX_IMAGE_BYTES:
         raise HTTPException(status_code=422, detail=f"image too large - max {_MAX_IMAGE_BYTES // (1024 * 1024)}MB")
-    row = db_models.TradeImage(
-        position_id=position_id,
-        option_group_id=option_group_id,
-        content_type=file.content_type,
-        image_data=data,
+    return trade_snapshots.add_image(
+        db, data=data, content_type=file.content_type, position_id=position_id, option_group_id=option_group_id, kind=kind, caption=caption,
+        entry=entry_price, stop=stop_price, target=target_price,
     )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
 
 
 @router.post("/positions/{position_id}/images")
 async def upload_position_image(
-    position_id: str, file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    position_id: str,
+    file: UploadFile = File(...),
+    kind: str = Form("upload"),
+    caption: Optional[str] = Form(None),
+    entry_price: Optional[float] = Form(None),
+    stop_price: Optional[float] = Form(None),
+    target_price: Optional[float] = Form(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     try:
         parsed_id = uuid.UUID(position_id)
@@ -62,7 +82,7 @@ async def upload_position_image(
     owner = db.get(db_models.Position, parsed_id)
     if owner is None or owner.user_id != user.id:
         raise HTTPException(status_code=404, detail="position not found")
-    row = await _save_image(db, file, position_id=parsed_id)
+    row = await _save_image(db, file, position_id=parsed_id, kind=kind, caption=caption, entry_price=entry_price, stop_price=stop_price, target_price=target_price)
     return _image_to_out(row)
 
 
@@ -81,7 +101,15 @@ def list_position_images(position_id: str, user: User = Depends(get_current_user
 
 @router.post("/option-groups/{group_id}/images")
 async def upload_option_group_image(
-    group_id: str, file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    group_id: str,
+    file: UploadFile = File(...),
+    kind: str = Form("upload"),
+    caption: Optional[str] = Form(None),
+    entry_price: Optional[float] = Form(None),
+    stop_price: Optional[float] = Form(None),
+    target_price: Optional[float] = Form(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     try:
         parsed_id = uuid.UUID(group_id)
@@ -90,7 +118,7 @@ async def upload_option_group_image(
     owner = db.get(db_models.OptionPositionGroup, parsed_id)
     if owner is None or owner.user_id != user.id:
         raise HTTPException(status_code=404, detail="option group not found")
-    row = await _save_image(db, file, option_group_id=parsed_id)
+    row = await _save_image(db, file, option_group_id=parsed_id, kind=kind, caption=caption, entry_price=entry_price, stop_price=stop_price, target_price=target_price)
     return _image_to_out(row)
 
 

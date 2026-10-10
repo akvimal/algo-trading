@@ -3,7 +3,10 @@ import { Link } from "react-router-dom";
 import { addNote, listNotes } from "../api/notes";
 import { previewIdea, publishIdea, type IdeaPreview } from "../api/ideas";
 import { useIsAdmin } from "../auth/AuthContext";
-import { canPublish, publishableContext } from "../pages/ideasModel";
+import { canAttachAnalysis, canPublish, publishableContext } from "../pages/ideasModel";
+import { useIdeaAnalysis } from "../hooks/useIdeaAnalysis";
+import { useAnalysisCard } from "../hooks/useAnalysisCard";
+import { AttachAnalysis } from "./AttachAnalysis";
 import { ApiError } from "../api/http";
 import type { AiRead, NoteContext, NoteTag, Segment } from "../api/types";
 import type { ChartImage } from "../chart/ChartPane";
@@ -13,6 +16,8 @@ import { CopyIcon, DownloadIcon, ListIcon } from "../chart/icons";
 import { formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
 import { NoteRow } from "./NoteRow";
+import { NoteTrade } from "./NoteTrade";
+import { useNoteTrades } from "../hooks/useNoteTrades";
 import { NOTE_MAX, NOTE_TAGS, groupByDay } from "./notesModel";
 
 /** How many of the latest notes on the instrument are shown under the chart. */
@@ -48,13 +53,26 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
   const [preview, setPreview] = useState<IdeaPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const publishable = isAdmin && canPublish({ tag }) && draft.trim() !== "";
-  const ideaBody = (noteId: string, image?: string | null) => ({
+  // The AI analysis of the stock can go out with the idea (NSE stocks): it is read when the box is ticked and the preview waits for it.
+  const [withAnalysis, setWithAnalysis] = useState(false);
+  const analysis = useIdeaAnalysis(symbol, publish && publishable && withAnalysis && canAttachAnalysis({ segment }));
+  // With the analysis the post's picture is a card: the live chart (chart and header only, never the person's own trade lines) under the verdict, both
+  // reads and the price levels. What the preview shows is the picture that is posted.
+  const card = useAnalysisCard({
+    enabled: publish && publishable && withAnalysis && canAttachAnalysis({ segment }),
+    analysis: analysis.analysis,
+    title: `${symbol} · ${interval.replace("min", "m")}`,
+    getChart: cleanChart,
+  });
+  const analysisPending = publish && withAnalysis && (!analysis.analysis || !card.settled);
+  const ideaBody = (noteId: string, picture?: string | null) => ({
     note_id: noteId, segment, symbol, interval, tag: tag ?? "", text: draft.trim(), context: publishableContext(getContext()), include_context: true,
-    ...(image ? { snapshot_png_base64: image } : {}),
+    ...((publish && withAnalysis && card.card ? card.card : picture) ? { snapshot_png_base64: (publish && withAnalysis && card.card ? card.card : picture) as string } : {}),
+    ...(publish && withAnalysis && analysis.analysis ? { analysis: analysis.analysis } : {}),
   });
   // What would be posted, shown while the person writes (text only: the picture is taken when they save).
   useEffect(() => {
-    if (!publish || !publishable) {
+    if (!publish || !publishable || analysisPending) {
       setPreview(null);
       setPreviewError(null);
       return;
@@ -70,11 +88,12 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publish, publishable, draft, tag]);
+  }, [publish, publishable, draft, tag, withAnalysis, analysis.analysis, card.card, card.settled]);
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
   // Only the latest few sit under the chart; the whole history, by instrument, is on its own page.
   const notes = useResource(() => listNotes({ segment, symbol, limit: RECENT }), [segment, symbol], { enabled: open });
   const list = notes.data ?? [];
+  const trades = useNoteTrades(list);
   const threadEnd = useRef<HTMLDivElement>(null);
 
   // A different instrument is a different thread (and a different half-written note).
@@ -89,6 +108,23 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
 
   // Why the last attempt to take a picture failed, so the message says what to do rather than "not ready".
   const lastProblem = useRef("the chart is not ready");
+
+  /** The chart with only its header (no note, no AI line, none of the person's own trade lines): what a published picture is built on. */
+  async function cleanChart(): Promise<string | null> {
+    const bare = getChartImage({ withoutTrades: true });
+    if ("problem" in bare) return null;
+    const ctx = getContext();
+    return composeSnapshot({
+      chart: bare.url,
+      scale: bare.scale,
+      title: `${symbol} · ${interval.replace("min", "m")}`,
+      oiItems: getOiItems?.() ?? null,
+      subtitle: `${new Date().toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}${ctx.price != null ? ` · ${formatPrice(ctx.price)}` : ""}`,
+      note: "",
+      tag: null,
+      aiLine: null,
+    });
+  }
 
   /** The picture kept with the note (chart, header, the words, the tag, the AI line) and a second, clean one (chart and header only) that a
    * published idea uses instead, because the first is flattened and its words and AI line cannot be taken off afterwards. */
@@ -145,6 +181,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
         }
       }
       setPublish(false);
+      setWithAnalysis(false);
       setDraft("");
       setTag(null);
       notes.reload();
@@ -204,7 +241,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
               <div key={g.label}>
                 {g.label !== "Today" && <div className="notes-day">{g.label}</div>}
                 {g.notes.map((n) => (
-                  <NoteRow key={n.id} note={n} onDeleted={notes.reload} />
+                  <NoteRow key={n.id} note={n} onDeleted={notes.reload} extra={<NoteTrade note={n} trade={trades.byId[n.id]} onChanged={trades.reload} />} />
                 ))}
               </div>
             ))}
@@ -242,6 +279,11 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
                 <label className="check">
                   <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} /> Publish as an idea when saving
                 </label>
+                {publish && canAttachAnalysis({ segment }) && (
+                  <AttachAnalysis id="notes-analysis" symbol={symbol} checked={withAnalysis} onChange={setWithAnalysis} state={analysis} />
+                )}
+                {publish && withAnalysis && card.problem && <span className="faint" role="status">{card.problem}.</span>}
+                {publish && withAnalysis && card.card && <img src={card.card} alt="The analysis card that will be posted" data-testid="analysis-card-preview" style={{ width: "100%", borderRadius: 8 }} />}
                 {publish && previewError && <span className="error-text" role="alert">{previewError}</span>}
                 {publish && preview && (
                   <>
@@ -275,7 +317,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
               <label className="notes-attach" title="Keep a picture of the chart, with this note on it, with the note">
                 <input type="checkbox" checked={attach} onChange={(e) => setAttach(e.target.checked)} /> Attach snapshot
               </label>
-              <button className="btn btn-small" aria-label="Save note" disabled={busy || draft.trim() === ""} onClick={() => void send()} title="Save note (Ctrl+Enter)">
+              <button className="btn btn-small" aria-label="Save note" disabled={busy || draft.trim() === "" || analysisPending} onClick={() => void send()} title="Save note (Ctrl+Enter)">
                 {busy ? "Saving…" : "Save"}
               </button>
             </div>

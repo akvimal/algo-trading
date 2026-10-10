@@ -119,7 +119,7 @@ def stats_over(trades: list[TradeRecord], day: date, days: int = STATS_DAYS) -> 
 def open_now(db: Session, user_id: UUID, segment: str) -> int:
     """Manual positions (single, and whole spreads) still open."""
     P, G = db_models.Position, db_models.OptionPositionGroup
-    singles = db.query(P).filter(P.user_id == user_id, P.strategy_id.is_(None), P.status == "OPEN", P.segment == segment, P.option_group_id.is_(None)).count()
+    singles = db.query(P).filter(P.user_id == user_id, P.strategy_id.is_(None), P.status == "OPEN", P.segment == segment, P.option_group_id.is_(None), P.horizon != "positional").count()
     groups = db.query(G).filter(G.user_id == user_id, G.strategy_id.is_(None), G.status == "OPEN", G.segment == segment).count()
     return singles + groups
 
@@ -127,7 +127,7 @@ def open_now(db: Session, user_id: UUID, segment: str) -> int:
 def account_view(db: Session, user_id: UUID, segment: str, day_pnl: float, month_pnl: float) -> Optional[dict]:
     """The paper account: its balance, how much today moved it, how far it is from where it started, and the recent equity curve.
     A day's change is the day's realized net result, because the balance is credited by exactly that when a trade closes."""
-    account = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment).first()
+    account = db.query(db_models.Account).filter_by(user_id=user_id, segment=segment, book="intraday").first()
     if account is None:
         return None
     balance = float(account.current_balance)

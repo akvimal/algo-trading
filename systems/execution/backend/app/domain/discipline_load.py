@@ -21,9 +21,13 @@ def _event_fact(e: db_models.PositionEvent) -> dv2.EventFact:
 
 def load_trade_facts(db: Session, user_id, segment: str, since: Optional[date] = None) -> list[dv2.TradeFacts]:
     P, G, E = db_models.Position, db_models.OptionPositionGroup, db_models.PositionEvent
+    # Discipline v2 scores the intraday habit; a multi-day hold on the positional book has its own performance view.
     positions = (
         db.query(P)
-        .filter(P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.segment == segment, P.option_group_id.is_(None), P.exit_time.isnot(None))
+        .filter(
+            P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.segment == segment, P.option_group_id.is_(None), P.exit_time.isnot(None),
+            P.horizon != "positional",
+        )
         .all()
     )
     groups = (
@@ -106,7 +110,7 @@ def todays_activity(db: Session, user_id, segment: str, now: datetime, tz: str) 
     start = datetime.combine(day, datetime.min.time(), tzinfo=ZoneInfo(tz)) - timedelta(hours=1)  # a little slack; filtered below
     positions = (
         db.query(P)
-        .filter(P.user_id == user_id, P.strategy_id.is_(None), P.segment == segment, P.option_group_id.is_(None), P.status.in_(("OPEN", "CLOSED")), P.entry_time >= start)
+        .filter(P.user_id == user_id, P.strategy_id.is_(None), P.segment == segment, P.option_group_id.is_(None), P.status.in_(("OPEN", "CLOSED")), P.entry_time >= start, P.horizon != "positional")
         .all()
     )
     groups = db.query(G).filter(G.user_id == user_id, G.strategy_id.is_(None), G.segment == segment, G.status.in_(("OPEN", "CLOSED")), G.created_at >= start).all()

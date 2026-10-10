@@ -1,19 +1,22 @@
 import { api } from "./http";
-import type { Account, Credentials, Ltp, Segment } from "./types";
+import type { Account, Book, Credentials, Ltp, Segment } from "./types";
 import type { KeyField } from "../pages/settingsModel";
 
 /** The USD/INR rate crypto trades are sized and credited at: set by hand, null until it is. */
 export const getUsdInr = () => api<{ usdinr_rate: number | null }>("execution", "/settings").then((s) => s.usdinr_rate);
 export const saveUsdInr = (usdinr_rate: number) => api<{ usdinr_rate: number | null }>("execution", "/settings", { method: "PUT", json: { usdinr_rate } });
 
-export const getAccounts = () => api<Account[]>("execution", "/accounts");
+/** The query string that names a book; nothing for the everyday one, so its URLs are what they always were. */
+const bookQuery = (book: Book) => (book === "positional" ? "?book=positional" : "");
+
+export const getAccounts = (book: Book = "intraday") => api<Account[]>("execution", `/accounts${bookQuery(book)}`);
 
 /** Partial update: only the keys present are changed; an explicit null clears a limit. */
-export const updateAccount = (segment: Segment, patch: Record<string, unknown>) =>
-  api<Account>("execution", `/accounts/${segment}`, { method: "PUT", json: patch });
+export const updateAccount = (segment: Segment, patch: Record<string, unknown>, book: Book = "intraday") =>
+  api<Account>("execution", `/accounts/${segment}${bookQuery(book)}`, { method: "PUT", json: patch });
 
 /** Sets the balance back to the starting balance and starts a new equity curve. */
-export const resetAccount = (segment: Segment) => api<Account>("execution", `/accounts/${segment}/reset`, { method: "POST" });
+export const resetAccount = (segment: Segment, book: Book = "intraday") => api<Account>("execution", `/accounts/${segment}/reset${bookQuery(book)}`, { method: "POST" });
 
 export const getCredentials = () => api<Credentials>("accounts", "/credentials");
 

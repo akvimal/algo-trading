@@ -651,6 +651,15 @@ describe("placing", () => {
     expect(puts("/positions/p1/stop-loss")[0].body).toEqual({ stop_loss_price: 985 });
   });
 
+  it("offers a snapshot of the chart on an open trade, because the chart is open right there", async () => {
+    positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: 1100, option_group_id: null, unrealized_pnl: 0 }];
+    renderAt("/trade?symbol=RELIANCE");
+    const list = within(await screen.findByTestId("ticket-positions"));
+    await userEvent.setup().click(list.getByRole("button", { name: "Snapshots" }));
+    expect(await list.findByRole("button", { name: "Save a snapshot of the chart now" })).toBeInTheDocument();
+    expect(list.queryByRole("link", { name: "Trade page" })).not.toBeInTheDocument(); // no "go to the Trade page": this is it
+  });
+
   it("fetches positions for the ticket even with 'My trades' off on the chart", async () => {
     localStorage.setItem("web.chart.tools", JSON.stringify({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: false, oiLevelsOn: false }));
     positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
@@ -2126,6 +2135,31 @@ describe("layout and the ticket panel", () => {
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: /^(1×1|2×1|1×2)/ }));
     expect(screen.getByLabelText("Sync crosshair")).not.toBeChecked();
+  });
+});
+
+describe("a link that asks for weekly and daily side by side", () => {
+  beforeEach(() => screenIs(true));
+
+  it("shows the stock on two charts, weekly then daily, and leaves the saved setup alone", async () => {
+    const mine = JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "15min" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "15min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } });
+    localStorage.setItem("web.workstation", mine);
+    renderAt("/trade?symbol=TCS&segment=NSE&layout=side&intervals=weekly,daily");
+    await waitFor(() => expect(screen.getAllByTestId("chart-pane")).toHaveLength(2));
+    expect(document.querySelector(".ws-grid")!.className).toContain("layout-side");
+    const panes = screen.getAllByTestId("chart-pane");
+    expect(panes[0].closest("[aria-label]")?.getAttribute("aria-label")).toBe("TCS chart");
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("symbol=TCS") && c.url.includes("interval=weekly"))).toBe(true));
+    expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("symbol=TCS") && c.url.includes("interval=daily"))).toBe(true);
+    // opening a link is not a change to the person's own setup
+    expect(localStorage.getItem("web.workstation")).toBe(mine);
+  });
+
+  it("a link without a layout still opens the saved one", async () => {
+    localStorage.setItem("web.workstation", JSON.stringify({ layout: "single", panes: [{ symbol: "NIFTY", segment: "NSE", interval: "15min" }, { symbol: "BANKNIFTY", segment: "NSE", interval: "15min" }], active: 0, ticketOpen: true, links: { crosshair: true, scale: false, interval: true } }));
+    renderAt("/trade?symbol=TCS&segment=NSE");
+    await loaded(0);
+    expect(screen.getAllByTestId("chart-pane")).toHaveLength(1);
   });
 });
 

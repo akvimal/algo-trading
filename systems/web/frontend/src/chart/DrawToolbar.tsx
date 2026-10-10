@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { DrawTool } from "./ChartPane";
-import { ChannelIcon, CursorIcon, EyeIcon, EyeOffIcon, FibIcon, HLineIcon, MagnetIcon, PriceLineIcon, RayIcon, TextIcon, TrashIcon, TrendLineIcon, XIcon, ZoneIcon } from "./icons";
+import { ChannelIcon, CursorIcon, EyeIcon, EyeOffIcon, FibIcon, HLineIcon, BellIcon, MagnetIcon, PriceLineIcon, RayIcon, TextIcon, TrashIcon, TrendLineIcon, XIcon, ZoneIcon } from "./icons";
 
 const TOOLS: { tool: DrawTool; label: string; icon: ReactNode }[] = [
   { tool: "segment", label: "Trend line", icon: <TrendLineIcon /> },
@@ -18,6 +18,9 @@ type Props = {
   onTool: (tool: DrawTool | null) => void;
   magnet: boolean;
   onMagnet: () => void;
+  /** Whether a new zone is armed with an alert as it is drawn; the button is shown only where the page can keep the choice. */
+  zoneAlert?: boolean;
+  onZoneAlert?: () => void;
   hidden: boolean;
   onHidden: () => void;
   onClear: () => void;
@@ -29,7 +32,7 @@ type Props = {
 
 /** The vertical strip of drawing tools down the chart's left edge. Picking a tool arms it for the next
  * drag on the chart; picking it again, or the cursor, puts it down. Drawings are saved per instrument. */
-export function DrawToolbar({ active, onTool, magnet, onMagnet, hidden, onHidden, onClear, hasSelection, onDeleteSelected, analysis }: Props) {
+export function DrawToolbar({ active, onTool, magnet, onMagnet, zoneAlert, onZoneAlert, hidden, onHidden, onClear, hasSelection, onDeleteSelected, analysis }: Props) {
   return (
     <div className="draw-toolbar" role="toolbar" aria-label="Drawing tools" aria-orientation="vertical">
       <button className="tool" aria-label="Cursor" title="Cursor (stop drawing)" aria-pressed={active === null} onClick={() => onTool(null)}>
@@ -44,6 +47,17 @@ export function DrawToolbar({ active, onTool, magnet, onMagnet, hidden, onHidden
       <button className="tool" aria-label="Magnet" title="Snap to candle highs, lows and closes" aria-pressed={magnet} onClick={onMagnet}>
         <MagnetIcon />
       </button>
+      {onZoneAlert && (
+        <button
+          className="tool"
+          aria-label="Alert on new zones"
+          title={zoneAlert ? "New zones are armed with an alert as you draw them (click to switch this off)" : "New zones are drawn without an alert (click to arm them as you draw)"}
+          aria-pressed={zoneAlert === true}
+          onClick={onZoneAlert}
+        >
+          <BellIcon />
+        </button>
+      )}
       <button className="tool" aria-label={hidden ? "Show drawings" : "Hide drawings"} title={hidden ? "Show drawings" : "Hide drawings"} aria-pressed={hidden} onClick={onHidden}>
         {hidden ? <EyeOffIcon /> : <EyeIcon />}
       </button>

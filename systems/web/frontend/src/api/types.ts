@@ -4,8 +4,12 @@
 
 export type TokenResponse = { access_token: string; token_type: string };
 
+/** Which of the two paper balances: the everyday one, or the hard-separate one for multi-day (positional) spot holds. */
+export type Book = "intraday" | "positional";
+
 export type Account = {
   segment: "NSE" | "MCX" | "CRYPTO";
+  book?: Book;
   starting_balance: number;
   current_balance: number;
   realized_pnl: number;
@@ -280,6 +284,7 @@ export type Discipline = {
 
 export type Performance = {
   segment: Segment;
+  book?: Book;
   scope: "epoch" | "all";
   since: string | null;
   performance: PerformanceStats | null;
@@ -445,7 +450,7 @@ export type PendingOrder = {
   segment: Segment;
   symbol: string;
   action: "BUY" | "SELL";
-  strategy: "future" | "naked" | "spread";
+  strategy: "future" | "naked" | "spread" | "spot";
   trigger_price: number;
   stop_loss_price: number | null;
   target_price: number | null;

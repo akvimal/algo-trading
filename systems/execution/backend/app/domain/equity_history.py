@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings
-from app.domain.position_manager import _usdinr_rate_by_user, compute_unrealized_pnl, inr_of
+from app.domain.position_manager import _usdinr_rate_by_user, book_of, compute_unrealized_pnl, inr_of
 
 logger = logging.getLogger(__name__)
 
@@ -163,16 +163,16 @@ def record_equity_snapshots(db: Session, get_ltp_batch: Callable, now: Optional[
     open_positions = (
         db.query(db_models.Position).filter(db_models.Position.status == "OPEN", db_models.Position.user_id.isnot(None)).all()
     )
-    by_account: dict[tuple[uuid.UUID, str], list] = defaultdict(list)
+    by_account: dict[tuple[uuid.UUID, str, str], list] = defaultdict(list)
     for pos in open_positions:
-        by_account[(pos.user_id, pos.segment)].append(pos)
+        by_account[(pos.user_id, pos.segment, book_of(pos.horizon, pos.user_id))].append(pos)
     live = compute_unrealized_pnl(open_positions, get_ltp_batch) if open_positions else {}
     rates = _usdinr_rate_by_user(db, open_positions) if any(p.segment == "CRYPTO" for p in open_positions) else {}  # a crypto position's P&L is in dollars; the balance is rupees
 
     written = skipped_incomplete = unchanged = failed = 0
     for account in accounts:
         try:
-            positions = by_account.get((account.user_id, account.segment), [])
+            positions = by_account.get((account.user_id, account.segment, account.book), [])
             if any(p.id not in live for p in positions):
                 skipped_incomplete += 1
                 continue

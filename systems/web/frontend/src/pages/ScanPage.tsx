@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/http";
+import { AnalysisPanel } from "../components/AnalysisPanel";
 import { createCustomScreen, deleteCustomScreen, listCustomScreens, previewCustomScreen, runCustomScreen, updateCustomScreen } from "../api/customScreens";
 import type { ZoneScan, ZoneScanRow, Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
@@ -12,7 +13,7 @@ import { ChartIcon, HistoryIcon, TradeIcon } from "../chart/icons";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { ScanTradePanel } from "./ScanTradePanel";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, tradeLink, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, visible,
   UNIVERSES, UNIVERSE_LABEL, haveLiquidity, sizeLabel, universeCounts, ZONE_TIER_HELP, zonePlace, zoneTrends, type OiFilters, type OiSignal, type OiSort, type RsCut, type ScreenerFilters, type ScreenerSort, type ZoneFilter,
 } from "./scanModel";
 import {
@@ -413,9 +414,12 @@ function OiCard({
         </div>
       )}
       {(expanded || tradeOpen) && (
-        <p style={{ margin: "2px 0 0" }}>
-          <Link to={tradeLink(r.symbol)}>Open the full Trade page →</Link>
+        <>
+          <p style={{ margin: "2px 0 0" }}>
+          <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
+          <AnalysisPanel symbol={r.symbol} />
+        </>
       )}
     </div>
   );
@@ -621,9 +625,12 @@ function ScreenerCard({
         </div>
       )}
       {(expanded || tradeOpen) && (
-        <p style={{ margin: "2px 0 0" }}>
-          <Link to={tradeLink(r.symbol)}>Open the full Trade page →</Link>
+        <>
+          <p style={{ margin: "2px 0 0" }}>
+          <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
+          <AnalysisPanel symbol={r.symbol} />
+        </>
       )}
     </div>
   );
@@ -833,9 +840,12 @@ function CustomScreenScan() {
                       </div>
                     )}
                     {(isExpanded || isTradeOpen) && (
-                      <p style={{ margin: "2px 0 0" }}>
-                        <Link to={tradeLink(m.symbol)}>Open the full Trade page →</Link>
+                      <>
+                        <p style={{ margin: "2px 0 0" }}>
+                        <Link to={fullTradeLink(m.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
                       </p>
+                        <AnalysisPanel symbol={m.symbol} />
+                      </>
                     )}
                   </div>
                 );

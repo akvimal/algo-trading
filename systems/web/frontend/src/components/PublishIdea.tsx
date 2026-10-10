@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/http";
 import { previewIdea, publishIdea, snapshotDataUrl, unpublishIdea, type IdeaPreview, type PublishedIdea } from "../api/ideas";
 import type { StudyNote } from "../api/types";
-import { canPublish, closedTradesFor, deliveryNote, publishedLabel, toIdeaRequest, type ClosedTrade } from "../pages/ideasModel";
+import { canAttachAnalysis, canPublish, closedTradesFor, deliveryNote, publishedLabel, toIdeaRequest, type ClosedTrade } from "../pages/ideasModel";
+import { useIdeaAnalysis } from "../hooks/useIdeaAnalysis";
+import { useAnalysisCard } from "../hooks/useAnalysisCard";
+import { AttachAnalysis } from "./AttachAnalysis";
 import { groupsApi, positionsApi } from "../api/rupees";
 
 const message = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
@@ -22,6 +25,16 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
   const [trades, setTrades] = useState<ClosedTrade[] | null>(null); // the person's closed trades on this instrument; null until loaded
   const [tradesProblem, setTradesProblem] = useState<string | null>(null);
   const [tradeId, setTradeId] = useState("");
+  const [includeAnalysis, setIncludeAnalysis] = useState(false);
+  const analysis = useIdeaAnalysis(note.symbol, open && includeAnalysis && canAttachAnalysis(note));
+  // With the analysis the post's picture is a card: the chart the note was saved with (when it has one) under the verdict, both reads and the levels.
+  const card = useAnalysisCard({
+    enabled: open && includeAnalysis,
+    analysis: analysis.analysis,
+    title: `${note.symbol} · ${note.interval ? note.interval.replace("min", "m") : "chart"}`,
+    getChart: async () => (note.has_snapshot ? snapshotDataUrl(note.id, note.has_clean_snapshot ? "clean" : "full") : null),
+  });
+  const waitingForAnalysis = includeAnalysis && (!analysis.analysis || !card.settled);
   const snapshot = useRef<string | null>(null);
   const label = publishedLabel(state);
   // A note saved after the clean picture existed has one (the chart with only a header); an older one has only the composed picture.
@@ -30,7 +43,12 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
 
   async function request() {
     if (includeImage && note.has_snapshot && !snapshot.current) snapshot.current = await snapshotDataUrl(note.id, variant);
-    return toIdeaRequest(note, { includeContext, snapshot: includeImage ? snapshot.current : null, trade: attached?.request ?? null });
+    return toIdeaRequest(note, {
+      includeContext,
+      snapshot: includeAnalysis && card.card ? card.card : includeImage ? snapshot.current : null,
+      trade: attached?.request ?? null,
+      analysis: includeAnalysis ? analysis.analysis : null,
+    });
   }
 
   // Closed trades are fetched once, when the panel is first opened.
@@ -56,6 +74,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
     let live = true;
     setPreview(null);
     setError(null);
+    if (waitingForAnalysis) return; // the preview is built once the analysis is in: what is shown is exactly what is posted
     (async () => {
       try {
         const p = await previewIdea(await request());
@@ -68,7 +87,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, includeContext, includeImage, tradeId]);
+  }, [open, includeContext, includeImage, tradeId, includeAnalysis, analysis.analysis, card.card, card.settled]);
 
   async function publish() {
     setBusy(true);
@@ -145,16 +164,20 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       </label>
       {note.has_snapshot && (
         <label className="check" htmlFor={`img-${note.id}`}>
-          <input id={`img-${note.id}`} type="checkbox" checked={includeImage} onChange={(e) => setIncludeImage(e.target.checked)} />
+          <input id={`img-${note.id}`} type="checkbox" checked={includeImage && !includeAnalysis} disabled={includeAnalysis} onChange={(e) => setIncludeImage(e.target.checked)} />
           <span>
             Include the chart image
             <span className="faint" style={{ display: "block", fontSize: 12 }}>
+              {includeAnalysis ? "The AI analysis card already has the chart on it. " : ""}
               {note.has_clean_snapshot
                 ? "The chart with a header only. It can still show lines you drew, including your own trades, so look at it first."
                 : "This is the picture saved with the note: it also shows your note text and any AI read line, as well as lines you drew, including your own trades. Notes saved from now on keep a chart-only picture too."}
             </span>
           </span>
         </label>
+      )}
+      {canAttachAnalysis(note) && (
+        <AttachAnalysis id={`analysis-${note.id}`} symbol={note.symbol} checked={includeAnalysis} onChange={setIncludeAnalysis} state={analysis} />
       )}
       <div className="stack" data-testid="idea-trade">
         <label htmlFor={`trade-${note.id}`} className="dim" style={{ fontSize: 13 }}>
@@ -179,7 +202,9 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
           says whether it was paper or live. It never shows quantity, lots, rupee amounts, charges or your balance.
         </span>
       </div>
-      {!preview && !error && <span className="faint">Building the preview…</span>}
+      {includeAnalysis && card.problem && <div className="notice" role="status">{card.problem}.</div>}
+      {includeAnalysis && card.card && <img src={card.card} alt="The analysis card that will be posted" data-testid="analysis-card-preview" style={{ width: "100%", borderRadius: 8 }} />}
+      {!preview && !error && !waitingForAnalysis && <span className="faint">Building the preview…</span>}
       {preview && (
         <>
           <div className="dim" style={{ fontSize: 12 }}>This is exactly what will be posted{preview.destination_hint ? ` to ${preview.destination_hint}` : ""}. {deliveryNote(preview.messages, preview.has_image)}</div>
@@ -192,7 +217,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       )}
       {error && <div className="notice error" role="alert">{error}</div>}
       <div className="row" style={{ justifyContent: "flex-start" }}>
-        <button className="btn btn-primary btn-small" onClick={() => void publish()} disabled={busy || !preview || !preview.destination_hint}>
+        <button className="btn btn-primary btn-small" onClick={() => void publish()} disabled={busy || !preview || !preview.destination_hint || waitingForAnalysis}>
           {busy ? "Publishing…" : "Publish now"}
         </button>
         <button className="btn btn-small" onClick={() => { setOpen(false); setError(null); }} disabled={busy}>

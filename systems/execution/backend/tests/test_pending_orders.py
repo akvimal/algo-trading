@@ -180,7 +180,7 @@ def account_state(monkeypatch):
     state = {"live": False}
     from app.domain import position_manager as pm
 
-    monkeypatch.setattr(pm, "load_account", lambda db, uid, seg: SimpleNamespace(live_trading_enabled=state["live"]))
+    monkeypatch.setattr(pm, "load_account", lambda db, uid, seg, book="intraday": SimpleNamespace(live_trading_enabled=state["live"]))
     monkeypatch.setattr(pm, "load_settings", lambda db, uid: SimpleNamespace())
     return state
 
@@ -587,12 +587,13 @@ def test_a_fired_future_is_placed_as_a_limit_order_at_the_trigger_price_with_no_
     seen = {}
     monkeypatch.setattr(pm, "open_manual_position", lambda *a, **k: seen.update(args=a, kwargs=k) or SimpleNamespace(status="OPEN"))
     order = SimpleNamespace(user_id=ALICE, segment="NSE", symbol="NIFTY", action="BUY", trigger_price=100, quantity=None, stop_loss_price=95,
-                            target_price=120, trend_followed=True, risk_managed=True, setup_tag="pullback", confidence=4, entry_interval="5m")
+                            target_price=120, trend_followed=True, risk_managed=True, setup_tag="pullback", confidence=4, entry_interval="5m", notes="why")
     po.default_deps().open_future(FakeDb(), order, SimpleNamespace())
     a, k = seen["args"], seen["kwargs"]
     assert a[:8] == (ALICE, "NSE", "NIFTY", "BUY", "future", 100.0, None, 95.0)  # entry = the trigger, quantity left to risk-sizing
     assert k["order_type"] == "limit" and k["token"] is None and k["auto_traded"] is False
     assert (k["target_price"], k["trend_followed"], k["risk_managed"], k["setup_tag"], k["confidence"], k["entry_interval"]) == (120.0, True, True, "pullback", 4, "5m")
+    assert k["notes"] == "why"
 
 
 def test_a_fired_option_order_is_placed_as_a_limit_group_with_the_right_style(monkeypatch):
@@ -601,7 +602,8 @@ def test_a_fired_option_order_is_placed_as_a_limit_group_with_the_right_style(mo
     seen = {}
     monkeypatch.setattr(opm, "open_manual_option_group", lambda *a, **k: seen.update(args=a, kwargs=k) or SimpleNamespace(status="OPEN"))
     order = SimpleNamespace(user_id=ALICE, segment="NSE", symbol="NIFTY", action="BUY", strategy="spread", moneyness="OTM1", quantity=2,
-                            trend_followed=False, risk_managed=False, setup_tag=None, confidence=None, entry_interval=None)
+                            trend_followed=False, risk_managed=False, setup_tag=None, confidence=None, entry_interval=None,
+                            expiry=None, spread_width=None, primary_strike=None, second_strike=None, notes=None)
     po.default_deps().open_option(FakeDb(), order, SimpleNamespace())
     a, k = seen["args"], seen["kwargs"]
     assert a[:9] == (ALICE, "NSE", "NIFTY", "BUY", "spread", "OTM1", None, "combined", 2.0)
@@ -624,7 +626,7 @@ def route_env(monkeypatch):
     deps = fake_deps({("NSE", "NIFTY"): 105.0})
     monkeypatch.setattr(route, "default_deps", lambda: deps)
     state = {"live": False}
-    monkeypatch.setattr(route, "load_account", lambda db, uid, seg: SimpleNamespace(live_trading_enabled=state["live"]))
+    monkeypatch.setattr(route, "load_account", lambda db, uid, seg, book="intraday": SimpleNamespace(live_trading_enabled=state["live"]))
     return db, state
 
 
@@ -792,3 +794,109 @@ def test_holds_open_position_counts_contracts_of_the_underlying_and_option_group
 def test_holds_open_position_is_none_when_nothing_matches_and_singular_for_one():
     assert po.holds_open_position(_HoldingsDb([_pos("BANKNIFTY-Oct2026-FUT")], []), ALICE, "NSE", "NIFTY") is None
     assert po.holds_open_position(_HoldingsDb([], [SimpleNamespace()]), ALICE, "NSE", "NIFTY") == "1 open NIFTY position"
+
+
+# --- positional (multi-day spot) orders ---------------------------------------------------------------------------------------
+
+
+def test_a_positional_order_must_be_a_spot_order_and_the_other_way_round():
+    assert body(strategy="spot", horizon="positional").horizon == "positional"
+    assert body().horizon == "intraday"
+    with pytest.raises(Exception):
+        body(strategy="future", horizon="positional")
+    with pytest.raises(Exception):
+        body(strategy="spot")  # an intraday spot order is the 'future' strategy, as before
+
+
+def test_a_swing_order_and_a_day_order_on_the_same_symbol_are_independent():
+    db = FakeDb()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0})
+    day = arm(db, deps)
+    swing = arm(db, deps, strategy="spot", horizon="positional", trigger_price=90.0)
+    assert day.status == "pending" and swing.status == "pending" and swing.horizon == "positional"
+    again = arm(db, deps, strategy="spot", horizon="positional", trigger_price=92.0)  # a new swing order replaces the old swing one only
+    assert swing.status == "cancelled" and again.status == "pending" and day.status == "pending"
+
+
+def test_a_positional_order_opens_through_the_spot_opener_and_is_linked_to_its_plan_note():
+    db = FakeDb()
+    opened = []
+
+    def open_spot(db_, order, exec_settings):
+        opened.append((order.strategy, order.horizon))
+        return SimpleNamespace(id=uuid.uuid4(), status="OPEN", rejection_reason=None)
+
+    note_id = uuid.uuid4()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0}, open_spot=open_spot)
+    row = arm(db, deps, strategy="spot", horizon="positional", trigger_price=100.0, source_note_id=str(note_id))
+    assert row.source_note_id == note_id
+    counts, deps = run(db, {("NSE", "NIFTY"): 99.0}, open_spot=open_spot)
+    assert counts["triggered"] == 1 and opened == [("spot", "positional")] and deps.log.futures == []
+
+
+def test_a_positional_order_asks_about_a_positional_hold_only():
+    db = FakeDb()
+    asked = []
+    deps = fake_deps({("NSE", "NIFTY"): 105.0}, open_spot=lambda *a: SimpleNamespace(id=uuid.uuid4(), status="OPEN", rejection_reason=None))
+    arm(db, deps, strategy="spot", horizon="positional", trigger_price=100.0)
+    run(db, {("NSE", "NIFTY"): 99.0}, holds_open=lambda *a: asked.append(a) or None, open_spot=deps.open_spot)
+    assert asked and asked[0][-1] == "positional"
+
+
+def test_the_plan_note_follows_the_trade_once_and_only_for_its_owner():
+    from app.domain.pending_orders import link_note_to_position
+
+    note = SimpleNamespace(user_id=ALICE, position_id=None)
+    other = SimpleNamespace(user_id=uuid.uuid4(), position_id=None)
+    taken = SimpleNamespace(user_id=ALICE, position_id=uuid.uuid4())
+
+    class Db:
+        commits = 0
+
+        def __init__(self, n):
+            self.n = n
+
+        def get(self, model, key):
+            return self.n
+
+        def commit(self):
+            Db.commits += 1
+
+    pid = uuid.uuid4()
+    link_note_to_position(Db(note), ALICE, uuid.uuid4(), pid)
+    assert note.position_id == pid
+    link_note_to_position(Db(other), ALICE, uuid.uuid4(), pid)  # someone else's note
+    assert other.position_id is None
+    keep = taken.position_id
+    link_note_to_position(Db(taken), ALICE, uuid.uuid4(), pid)  # already points at a trade
+    assert taken.position_id == keep
+
+
+# --- an option order remembers the legs it was armed for ---------------------------------------------------------------------
+
+
+def test_an_option_order_keeps_the_exact_strikes_expiry_width_and_reason_it_was_armed_with():
+    row = arm(FakeDb(), fake_deps({("NSE", "NIFTY"): 105.0}), strategy="spread", primary_strike=23200, second_strike=23300, expiry="2026-10-27", spread_width=2, notes="  breakout retest  ")
+    assert (float(row.primary_strike), float(row.second_strike), row.expiry, row.spread_width, row.notes) == (23200.0, 23300.0, "2026-10-27", 2, "breakout retest")
+
+
+def test_strikes_only_make_sense_on_an_option_order():
+    with pytest.raises(Exception):
+        body(strategy="future", primary_strike=23200)
+    with pytest.raises(Exception):
+        body(strategy="naked", primary_strike=23200, second_strike=23300)  # a naked option has one strike
+    assert body(strategy="naked", primary_strike=23200, expiry="2026-10-27").primary_strike == 23200
+
+
+def test_a_fired_option_order_opens_the_legs_it_was_armed_for_not_a_fresh_pick(monkeypatch):
+    from app.domain import option_position_manager as opm
+
+    seen = {}
+    monkeypatch.setattr(opm, "open_manual_option_group", lambda *a, **k: seen.update(args=a, kwargs=k) or SimpleNamespace(status="OPEN"))
+    order = SimpleNamespace(user_id=ALICE, segment="NSE", symbol="NIFTY", action="BUY", strategy="spread", moneyness="ATM", quantity=None,
+                            trend_followed=False, risk_managed=False, setup_tag=None, confidence=None, entry_interval=None,
+                            expiry="2026-10-27", spread_width=3, primary_strike=23200, second_strike=23300, notes="why")
+    po.default_deps().open_option(FakeDb(), order, SimpleNamespace())
+    a, k = seen["args"], seen["kwargs"]
+    assert a[6] == "2026-10-27"  # the expiry the strikes came from
+    assert (k["primary_strike"], k["second_strike"], k["spread_width"], k["notes"]) == (23200.0, 23300.0, 3, "why")

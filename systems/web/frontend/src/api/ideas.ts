@@ -22,6 +22,26 @@ export type TradeRequest = {
   result_pct: number | null;
 };
 
+/** What is sent of an AI analysis (the Scan page's): only these fields exist and the server refuses any other. The post's wording is written
+ * by the server from them, so a client sends facts and never the text of the post. */
+export type IdeaAnalysis = {
+  verdict: string;
+  agreement: "aligned" | "mixed" | "conflicting" | "technical_only";
+  overall: "bullish" | "bearish" | "neutral";
+  overall_strength: "strong" | "moderate" | "slight" | null;
+  chart_bias: "bullish" | "bearish" | "neutral";
+  chart_points: string[];
+  price: number | null;
+  as_of: string | null;
+  business_bias: "bullish" | "bearish" | "neutral" | null;
+  business_confidence: number | null;
+  business_summary: string | null;
+  pros: string[];
+  cons: string[];
+  support: { low: number; high: number; distance_pct: number } | null;
+  resistance: { low: number; high: number; distance_pct: number } | null;
+};
+
 export type IdeaRequest = {
   note_id: string;
   segment: string;
@@ -33,6 +53,7 @@ export type IdeaRequest = {
   include_context: boolean;
   snapshot_png_base64?: string;
   trade?: TradeRequest;
+  analysis?: IdeaAnalysis;
 };
 
 export type IdeaPreview = { text: string; messages: number; has_image: boolean; destination_hint: string | null; disclaimer?: string };

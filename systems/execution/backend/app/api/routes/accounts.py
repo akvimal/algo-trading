@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,14 @@ from app.domain.position_manager import _usdinr_rate_by_user, compute_unrealized
 router = APIRouter()
 
 _SEGMENTS = ("NSE", "MCX", "CRYPTO")
+
+# Which of a user's two paper balances a request is about: the everyday intraday one (the default) or the positional one.
+Book = Query(default="intraday", pattern="^(intraday|positional)$")
+
+
+def _book(book) -> str:
+    """The book a request means. A handler called directly (as the tests do) gets the Query object itself as its default."""
+    return book if isinstance(book, str) else "intraday"
 
 
 def _as_float(v) -> Optional[float]:
@@ -105,9 +113,14 @@ def _unrealized_pnl(db: Session, open_positions: list, token: Optional[str] = No
 
 
 def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) -> dict:
+    # Only the trades that live on THIS balance: a positional hold is marked against the positional book, not the intraday one.
+    book = getattr(row, "book", "intraday")
     open_positions = db.query(db_models.Position).filter_by(user_id=row.user_id, segment=row.segment, status="OPEN").all()
+    if row.user_id is not None:
+        open_positions = [p for p in open_positions if (getattr(p, "horizon", None) == "positional") == (book == "positional")]
     return {
         "segment": row.segment,
+        "book": book,
         "starting_balance": float(row.starting_balance),
         "current_balance": float(row.current_balance),
         # Realized P&L is just current_balance vs. where it started - no
@@ -139,17 +152,20 @@ def _to_out(db: Session, row: db_models.Account, token: Optional[str] = None) ->
 
 
 @router.get("/accounts")
-def list_accounts(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_accounts(book: str = Book, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """One row per segment - always exactly NSE/MCX/CRYPTO, one per SaaS
     user (created lazily with sensible defaults - see load_account - the
     first time each is touched, so a brand-new signup always sees all 3
     immediately rather than 404ing until they've placed a trade)."""
-    rows = {seg: load_account(db, user.id, seg) for seg in _SEGMENTS}
-    return [_to_out(db, rows[s], token=user.token) for s in _SEGMENTS if rows[s] is not None]
+    book = _book(book)
+    # A positional hold is spot only and commodities have no spot, so there is no positional account to create (or show) for MCX.
+    segments = [s for s in _SEGMENTS if not (book == "positional" and s == "MCX")]
+    rows = {seg: load_account(db, user.id, seg, book) for seg in segments}
+    return [_to_out(db, rows[s], token=user.token) for s in segments if rows[s] is not None]
 
 
 @router.put("/accounts/{segment}")
-def update_account(segment: str, update: AccountUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_account(segment: str, update: AccountUpdate, book: str = Book, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """starting_balance/capital_per_trade/risk_per_trade_pct/
     min_reward_risk_ratio/enforce_risk_based_lots/leverage/
     leverage_buffer_pct/mtf_annual_interest_rate_pct/square_off_time are
@@ -166,8 +182,12 @@ def update_account(segment: str, update: AccountUpdate, user: User = Depends(get
     default_interval/default_higher_interval follow the same
     model_fields_set-distinguished pattern - an explicit null clears a
     previously-set default rather than leaving it unchanged. Personal
-    account only - see app/domain/models.py's AccountUpdate."""
-    row = load_account(db, user.id, segment.upper())
+    account only - see app/domain/models.py's AccountUpdate. `?book=positional` edits the positional balance instead
+    (own starting balance, capital per trade and risk; paper only, so it can never be switched live)."""
+    book = _book(book)
+    if book == "positional" and update.live_trading_enabled:
+        raise HTTPException(status_code=422, detail="the positional book is paper only: it cannot trade live")
+    row = load_account(db, user.id, segment.upper(), book)
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
     if update.starting_balance is not None:
@@ -379,11 +399,11 @@ def reset_user_accounts_and_trades(
 
 
 @router.post("/accounts/{segment}/reset")
-def reset_account(segment: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def reset_account(segment: str, book: str = Book, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Resets current_balance back to starting_balance - does not touch
     capital_per_trade/risk_per_trade_pct or any positions. A manual reset
     for testing, same spirit as DELETE /positions but decoupled from it."""
-    row = load_account(db, user.id, segment.upper())
+    row = load_account(db, user.id, segment.upper(), _book(book))
     if row is None:
         raise HTTPException(status_code=404, detail=f"no account for segment {segment}")
     row.current_balance = row.starting_balance

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NoteContext, OptionGroup, Position, StudyNote } from "../api/types";
-import { canPublish, closedTradesFor, deliveryNote, looksLikeDestination, onInstrument, publishableContext, publishedLabel, toIdeaRequest, usableStop } from "./ideasModel";
+import type { StockAnalysis } from "../api/analysis";
+import { canAttachAnalysis, canPublish, closedTradesFor, deliveryNote, looksLikeDestination, onInstrument, publishableContext, publishedLabel, toIdeaAnalysis, toIdeaRequest, usableStop } from "./ideasModel";
 
 const note = (over: Partial<StudyNote> = {}): StudyNote => ({
   id: "n1", segment: "NSE", symbol: "NIFTY", interval: "15min", text: "Watching 23,100 for a retest.", tag: "plan", context: null, position_id: null,
@@ -151,3 +152,51 @@ describe("closedTradesFor", () => {
   });
 });
 
+
+describe("the AI analysis in a post", () => {
+  const stock = (over: Partial<StockAnalysis> = {}): StockAnalysis => ({
+    symbol: "X", as_of: "2026-10-12", price: 100,
+    verdict: { bias: "bearish", confidence: 0.2, agreement: "conflicting", headline: "Price is rising, but the business case is weak", reading: "long reading that is never sent" },
+    technical: {
+      bias: "bullish", confidence: 0.9, trend_strength: "trending", points: ["a", "b", "c", "d", "e"],
+      support: [{ low: 90, high: 95, basis: "s", timeframe: "daily", distance_pct: 5 }], resistance: [{ low: 105, high: 110, basis: "r", timeframe: "weekly", distance_pct: 5 }, { low: 120, high: 125, basis: "r", timeframe: "weekly", distance_pct: 20 }],
+    },
+    fundamental: { available: true, bias: "bearish", confidence: 0.8, summary: "Costly.", pros: ["p1", "p2", "p3"], cons: ["c1", "c2", "c3"], reasons: ["why"], fetched_at: "2026-10-01T00:00:00Z", note: null, needs_key: false },
+    signals: [{ category: "trend", direction: "bullish", text: "never sent" }],
+    ...over,
+  });
+
+  it("is only for NSE stocks", () => {
+    expect(canAttachAnalysis({ segment: "NSE" })).toBe(true);
+    expect(canAttachAnalysis({ segment: "MCX" })).toBe(false);
+    expect(canAttachAnalysis({ segment: "CRYPTO" })).toBe(false);
+  });
+
+  it("is cut down to the verdict, the first reasons, and the nearest level either side", () => {
+    expect(toIdeaAnalysis(stock())).toEqual({
+      verdict: "Price is rising, but the business case is weak", agreement: "conflicting", overall: "bearish", overall_strength: "slight", chart_bias: "bullish",
+      chart_points: ["a", "b", "c", "d"], price: 100, as_of: "2026-10-12", business_bias: "bearish", business_confidence: 0.8, business_summary: "Costly.",
+      pros: ["p1", "p2"], cons: ["c1", "c2"], support: { low: 90, high: 95, distance_pct: 5 }, resistance: { low: 105, high: 110, distance_pct: 5 },
+    });
+  });
+
+  it("sends nothing from a business read that is not there", () => {
+    const a = toIdeaAnalysis(stock({ fundamental: { available: false, bias: null, confidence: null, summary: null, pros: [], cons: [], reasons: [], fetched_at: null, note: "needs a key", needs_key: true } }));
+    expect(a).toMatchObject({ business_bias: null, business_confidence: null, business_summary: null, pros: [], cons: [] });
+    expect(JSON.stringify(a)).not.toContain("needs a key");
+  });
+
+  it("carries no lean strength when the votes are tied, and no level when there is none", () => {
+    const a = toIdeaAnalysis(stock({ verdict: { bias: "neutral", confidence: 0, agreement: "mixed", headline: "h", reading: "r" }, technical: { ...stock().technical, support: [], resistance: [] } }));
+    expect(a.overall_strength).toBeNull();
+    expect(a.support).toBeNull();
+    expect(a.resistance).toBeNull();
+  });
+
+  it("goes into the request only when there is one", () => {
+    const n = note();
+    expect(toIdeaRequest(n, { includeContext: true })).not.toHaveProperty("analysis");
+    expect(toIdeaRequest(n, { includeContext: true, analysis: null })).not.toHaveProperty("analysis");
+    expect(toIdeaRequest(n, { includeContext: true, analysis: toIdeaAnalysis(stock()) })).toHaveProperty("analysis.verdict", "Price is rising, but the business case is weak");
+  });
+});

@@ -164,10 +164,15 @@ describe("saved chart settings", () => {
     });
   });
 
-  it("tool settings default off - except the trades and the OI strip, which start on", () => {
-    expect(loadTools()).toEqual({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false, oiStripOn: true, priceHidden: false });
-    saveTools({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
-    expect(loadTools()).toEqual({ magnet: true, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
+  it("tool settings default off - except the trades, the OI strip and the zone alert, which start on", () => {
+    expect(loadTools()).toEqual({ magnet: false, zoneAlert: true, drawingsHidden: false, indicatorsHidden: false, tradesOn: true, oiLevelsOn: false, oiStripOn: true, priceHidden: false });
+    saveTools({ magnet: true, zoneAlert: false, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
+    expect(loadTools()).toEqual({ magnet: true, zoneAlert: false, drawingsHidden: false, indicatorsHidden: true, tradesOn: false, oiLevelsOn: true, oiStripOn: false, priceHidden: true });
+  });
+
+  it("an older saved settings record, from before the zone alert had a switch, keeps new zones armed", () => {
+    localStorage.setItem("web.chart.tools", JSON.stringify({ magnet: true }));
+    expect(loadTools().zoneAlert).toBe(true);
   });
 
   it("an older saved settings record, from before the OI strip had a switch, keeps the strip on", () => {

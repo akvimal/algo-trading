@@ -255,6 +255,10 @@ export function compactCount(n: number): string {
 /** The symbol to chart for a scan row: where the Trade screen takes it. */
 export const tradeLink = (symbol: string) => `/trade?symbol=${encodeURIComponent(symbol)}&segment=NSE`;
 
+/** The "full Trade page" link on a scan card: the same instrument on two charts side by side, weekly on the left and daily on the right,
+ * the swing view a scan result is read in. (The interval link is off in that layout so each chart keeps its own.) */
+export const fullTradeLink = (symbol: string) => `${tradeLink(symbol)}&layout=side&intervals=weekly,daily`;
+
 /** One day of the per-stock OI history: how call and put open interest and the price moved against the day before. */
 export type OiDay = {
   date: string;

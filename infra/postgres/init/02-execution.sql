@@ -132,7 +132,10 @@ CREATE TABLE IF NOT EXISTS execution.accounts (
     max_order_value      NUMERIC CHECK (max_order_value > 0),
     max_daily_loss        NUMERIC CHECK (max_daily_loss > 0),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_accounts_user_segment UNIQUE NULLS NOT DISTINCT (user_id, segment)
+    -- 'intraday' = the segment's everyday paper balance; 'positional' = a hard-separate balance for multi-day spot trades
+    -- (migration 053). One row per (user, segment, book).
+    book                TEXT NOT NULL DEFAULT 'intraday' CHECK (book IN ('intraday', 'positional')),
+    CONSTRAINT uq_accounts_user_segment_book UNIQUE NULLS NOT DISTINCT (user_id, segment, book)
 );
 
 -- Pre-existing volumes created before min_reward_risk_ratio/
@@ -198,7 +201,7 @@ VALUES
     (NULL, 'NSE', 200000, 200000, 50000, 1.0, '15:00:00'),
     (NULL, 'MCX', 200000, 200000, 50000, 1.0, '22:00:00'),
     (NULL, 'CRYPTO', 200000, 200000, 50000, 1.0, NULL)
-ON CONFLICT ON CONSTRAINT uq_accounts_user_segment DO NOTHING;
+ON CONFLICT ON CONSTRAINT uq_accounts_user_segment_book DO NOTHING;
 
 -- One row per paper position, one row per resolved signal regardless of
 -- outcome (OPEN/CLOSED/REJECTED) - horizon/instrument_type are carried
@@ -786,6 +789,12 @@ CREATE TABLE IF NOT EXISTS execution.trade_images (
     content_type    TEXT NOT NULL,
     image_data      BYTEA NOT NULL,
     uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- What the picture is and what the trade looked like when it was taken (migration 056).
+    kind            TEXT NOT NULL DEFAULT 'upload' CHECK (kind IN ('upload', 'entry', 'update')),
+    caption         TEXT,
+    entry_price     NUMERIC,
+    stop_price      NUMERIC,
+    target_price    NUMERIC,
     CHECK ((position_id IS NULL) <> (option_group_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_trade_images_position ON execution.trade_images (position_id) WHERE position_id IS NOT NULL;
@@ -1049,7 +1058,7 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     symbol           TEXT NOT NULL,
     action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
-    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread')),
+    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread', 'spot')),
     moneyness        TEXT CHECK (moneyness IN ('ITM2', 'ITM1', 'ATM', 'OTM1', 'OTM2')),
     trigger_price    NUMERIC NOT NULL CHECK (trigger_price > 0),
     started_above    BOOLEAN NOT NULL,
@@ -1071,12 +1080,23 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     position_id      UUID,
     option_group_id  UUID,
     -- May this order open a second position on an instrument already held? Default no: see migrations/030.
-    allow_stacking   BOOLEAN NOT NULL DEFAULT false
+    allow_stacking   BOOLEAN NOT NULL DEFAULT false,
+    -- 'positional' = opens a multi-day spot hold on the positional book (migration 054); source_note_id = the plan note it was armed from.
+    horizon          TEXT NOT NULL DEFAULT 'intraday' CHECK (horizon IN ('intraday', 'positional')),
+    source_note_id   UUID,
+    -- The chart as planned when the order was placed; attached to the position when it fills (migration 056).
+    plan_snapshot    BYTEA,
+    -- The legs an option order was armed for (an explicit strike per leg and the expiry it came from), and the person's reason (migration 055).
+    primary_strike   NUMERIC,
+    second_strike    NUMERIC,
+    expiry           TEXT,
+    spread_width     SMALLINT,
+    notes            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_orders_one_live_per_symbol
-    ON execution.pending_orders (user_id, segment, symbol) WHERE status = 'pending';
+    ON execution.pending_orders (user_id, segment, symbol, horizon) WHERE status = 'pending';
 
 -- See migrations/031-study-notes.sql.
 CREATE TABLE IF NOT EXISTS execution.study_notes (
@@ -1124,6 +1144,8 @@ CREATE TABLE IF NOT EXISTS execution.position_events (
     atr_interval     TEXT,
     -- A stop tightened to within N x ATR of price, other than a move to breakeven once price is +1R. NULL = not judged.
     tight_trail      BOOLEAN,
+    -- The person's own reason for the move (optional; migration 052).
+    note             TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (position_id IS NOT NULL OR option_group_id IS NOT NULL)
 );

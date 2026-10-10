@@ -51,7 +51,7 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
     if (t) paneRef.current?.startDrawing(t);
     else paneRef.current?.cancelDrawing();
   };
-  const toggle = (key: "magnet" | "drawingsHidden") =>
+  const toggle = (key: "magnet" | "zoneAlert" | "drawingsHidden") =>
     setTools((t) => {
       const next = { ...t, [key]: !t[key] };
       saveTools(next);
@@ -67,6 +67,8 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
           onTool={chooseTool}
           magnet={tools.magnet}
           onMagnet={() => toggle("magnet")}
+          zoneAlert={tools.zoneAlert}
+          onZoneAlert={() => toggle("zoneAlert")}
           hidden={tools.drawingsHidden}
           onHidden={() => toggle("drawingsHidden")}
           onClear={() => paneRef.current?.clearDrawings()}
@@ -86,6 +88,7 @@ export function ScanChartPanel({ exchange, symbol }: Props) {
             structure={EMPTY_STRUCTURE}
             plan={[]}
             magnet={tools.magnet}
+            zoneAlert={tools.zoneAlert}
             drawingsHidden={tools.drawingsHidden}
             pickField={null}
             onPick={() => {}}

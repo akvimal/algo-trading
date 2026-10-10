@@ -231,7 +231,7 @@ def account_route():
 
 def test_the_route_toggles_and_reports_apply_charges(account_route):
     row = _account_row(apply_charges=False)
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     user = User(id=ME, token="t", is_admin=False)
     out = accounts_route.update_account("NSE", AccountUpdate(apply_charges=True), user=user, db=RouteDb())
     assert row.apply_charges is True and out["apply_charges"] is True
@@ -241,7 +241,7 @@ def test_the_route_toggles_and_reports_apply_charges(account_route):
 
 def test_omitting_apply_charges_leaves_it_unchanged(account_route):
     row = _account_row(apply_charges=True)
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     accounts_route.update_account("NSE", AccountUpdate(capital_per_trade=1234), user=User(id=ME, token="t"), db=RouteDb())
     assert row.apply_charges is True
 

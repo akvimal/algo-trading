@@ -101,3 +101,20 @@ def test_the_route_maps_each_outcome_to_its_status(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         route.edit_target("not-a-uuid", p, user=user(ALICE), db=FakeDb(row()))
     assert exc.value.status_code == 404
+
+
+def test_a_note_given_with_the_move_is_kept_on_the_logged_event_and_blank_is_dropped():
+    class Db(FakeDb):
+        def __init__(self, r):
+            super().__init__(r)
+            self.added = []
+
+        def add(self, obj):
+            self.added.append(obj)
+
+    db = Db(row("BUY", 100))
+    pm.update_target(db, ALICE, PID, 110, note="  T1 hit, letting the rest run  ")
+    assert db.added[0].note == "T1 hit, letting the rest run"
+    db = Db(row("BUY", 100))
+    pm.update_target(db, ALICE, PID, 110, note="   ")
+    assert db.added[0].note is None

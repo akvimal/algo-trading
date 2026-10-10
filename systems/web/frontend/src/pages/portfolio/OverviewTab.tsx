@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import type { EquityHistory, LiveEligibility, Performance } from "../../api/types";
+import type { Book, EquityHistory, LiveEligibility, Performance } from "../../api/types";
 import type { Resource } from "../../hooks/useResource";
 import { EquityChart } from "../../components/EquityChart";
 import { ErrorNotice, Signed, Skeleton } from "../../components/bits";
@@ -10,11 +10,13 @@ import { curveChange, fillEquityCurve, graduation, type Trade } from "../portfol
 type Props = {
   equity: Resource<EquityHistory>;
   perf: Resource<Performance>;
-  elig: Resource<LiveEligibility>;
+  /** Null on the positional book: graduation to live trading is about the everyday account only. */
+  elig: Resource<LiveEligibility> | null;
   trades: Trade[] | null;
+  book?: Book;
 };
 
-export function OverviewTab({ equity, perf, elig, trades }: Props) {
+export function OverviewTab({ equity, perf, elig, trades, book = "intraday" }: Props) {
   const stats = equity.data?.stats ?? null;
   const change = curveChange(stats);
   const curve = equity.data ? fillEquityCurve(equity.data.points, stats?.since) : [];
@@ -23,7 +25,7 @@ export function OverviewTab({ equity, perf, elig, trades }: Props) {
   return (
     <div className="stack">
       <div className="card">
-        <div className="dim">Paper account equity</div>
+        <div className="dim">{book === "positional" ? "Positional account equity" : "Paper account equity"}</div>
         {equity.loading && <Skeleton lines={3} />}
         {equity.error && <ErrorNotice error={equity.error} onRetry={equity.reload} />}
         {equity.data && !stats && <p style={{ margin: "6px 0 0" }}>No equity history yet. It is recorded once a day, so the curve starts after your first trading day ends.</p>}
@@ -65,7 +67,7 @@ export function OverviewTab({ equity, perf, elig, trades }: Props) {
         )}
       </div>
 
-      <Graduation elig={elig} />
+      {elig && <Graduation elig={elig} />}
 
       <h2 className="section-title">Recent fills</h2>
       {trades == null ? (

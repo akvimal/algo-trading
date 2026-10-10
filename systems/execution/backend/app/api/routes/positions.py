@@ -10,6 +10,8 @@ from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
 from app.auth import User, get_current_user, require_admin
 from app.domain import stop_rules
+from app.domain.pending_orders import link_note_to_position
+from app.domain.study_notes import create_note
 from app.domain.stop_rules import DEFAULT_ATR_INTERVAL
 from app.domain.models import (
     AutoTrailUpdate,
@@ -18,6 +20,7 @@ from app.domain.models import (
     ReviewSubmit,
     SquareOffTimeUpdate,
     StopLossUpdate,
+    StudyNoteCreate,
     TargetUpdate,
     TradeTagsUpdate,
 )
@@ -371,7 +374,13 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         notes=payload.notes,
         auto_traded=payload.auto_traded,
         entry_interval=payload.entry_interval,
+        horizon=payload.horizon,
     )
+    if payload.source_note_id and row.status == "OPEN":
+        try:
+            link_note_to_position(db, user.id, uuid.UUID(payload.source_note_id.strip()), row.id)
+        except ValueError:
+            pass  # not a valid note id: the trade is already placed, the link is only a convenience
     return _position_to_out(row)
 
 
@@ -446,6 +455,7 @@ def edit_stop_loss(position_id: str, payload: StopLossUpdate, user: User = Depen
         functools.partial(get_candle_history, token=user.token),
         context=context,
         atr_interval=atr_interval,
+        note=payload.note,
     )
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
@@ -492,7 +502,7 @@ def edit_target(position_id: str, payload: TargetUpdate, user: User = Depends(ge
     if row.status != "OPEN":
         raise HTTPException(status_code=409, detail=f"position is {row.status}, not OPEN")
 
-    row, reject_reason = update_target(db, owner_id, parsed_id, payload.target_price)
+    row, reject_reason = update_target(db, owner_id, parsed_id, payload.target_price, note=payload.note)
     if reject_reason is not None:
         raise HTTPException(status_code=422, detail=reject_reason)
     return _position_to_out(row)
@@ -621,6 +631,7 @@ def check_exits_now(db: Session = Depends(get_db)):
 def square_off_one(
     position_id: str,
     quantity: Optional[float] = Query(default=None, gt=0),
+    note: Optional[str] = Query(default=None, max_length=500),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -656,7 +667,38 @@ def square_off_one(
         raise HTTPException(status_code=401, detail="closing a live position requires an authenticated request")
     if result["status"] == "live_order_failed":
         raise HTTPException(status_code=502, detail=f"real closing order failed - position is still OPEN: {result['reason']}")
+    # An optional exit note ("why I got out") is kept as a `review` study note linked to the trade, so it sits on its timeline.
+    if note and note.strip() and owner_id is not None:
+        create_note(db, owner_id, StudyNoteCreate(segment=pos.segment, symbol=pos.symbol, text=note.strip(), tag="review", position_id=str(pos.id)))
     return result
+
+
+@router.get("/positions/{position_id}/events")
+def position_timeline(position_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The trade's stop-loss / target moves, oldest first, each with the person's own note if they gave one."""
+    try:
+        parsed_id = uuid.UUID(position_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="position not found")
+    pos = db.get(db_models.Position, parsed_id)
+    if pos is None:
+        raise HTTPException(status_code=404, detail="position not found")
+    _authorized_owner_id(pos.user_id, user)
+    rows = (
+        db.query(db_models.PositionEvent)
+        .filter(db_models.PositionEvent.position_id == parsed_id)
+        .order_by(db_models.PositionEvent.created_at)
+        .all()
+    )
+    return [
+        {
+            "id": str(e.id), "field": e.field, "move": e.move, "source": e.source, "accepted": e.accepted,
+            "old_price": float(e.old_price) if e.old_price is not None else None,
+            "new_price": float(e.new_price) if e.new_price is not None else None,
+            "refused_reason": e.refused_reason, "note": e.note, "created_at": e.created_at,
+        }
+        for e in rows
+    ]
 
 
 @router.delete("/positions")

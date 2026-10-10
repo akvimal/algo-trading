@@ -439,6 +439,11 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
         ...common, strategy: t.strategy, moneyness: t.moneyness, trigger_price: a.entry,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
         ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, allow_stacking: t.allowStacking, ...journal,
+        // An option order waits with the exact legs the ticket showed (a strike per leg and the expiry they came from), not a fresh pick when it fires.
+        ...(t.strategy !== "future" && t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
+        ...(t.strategy === "spread" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
+        ...(t.strategy !== "future" && t.expiry != null ? { expiry: t.expiry } : {}),
+        ...(t.strategy === "spread" ? { spread_width: t.spreadWidth } : {}),
       },
     };
   }

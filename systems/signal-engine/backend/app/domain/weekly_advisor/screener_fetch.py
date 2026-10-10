@@ -241,7 +241,7 @@ def _row_to_analysis(row: db_models.WeeklyAdvisorFundamentals) -> FundamentalAna
     )
 
 
-def get_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None) -> Optional[FundamentalAnalysis]:
+def get_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None, force: bool = False) -> Optional[FundamentalAnalysis]:
     """Cache-first: a row fetched within the last
     weekly_advisor_fundamentals_cache_days is returned as-is - no
     Playwright, no OpenRouter call. Past that TTL (or "first time", no row
@@ -252,12 +252,15 @@ def get_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None) -> O
     whole recommendation over an optional input. A screenshot-capture
     failure with an existing (stale) row still returns that stale read
     rather than nothing - better than silently dropping the vote just
-    because today's re-scrape happened to fail."""
+    because today's re-scrape happened to fail.
+
+    `force` skips the TTL and captures a fresh screenshot now (the on-demand "refresh" on the Scan page: the
+    caller is responsible for not allowing it too often - see app/api/routes/fundamentals.py)."""
     db = SessionLocal()
     try:
         row = db.get(db_models.WeeklyAdvisorFundamentals, symbol)
         ttl = timedelta(days=settings.weekly_advisor_fundamentals_cache_days)
-        if row is not None and datetime.now(timezone.utc) - row.fetched_at < ttl:
+        if not force and row is not None and datetime.now(timezone.utc) - row.fetched_at < ttl:
             return _row_to_analysis(row)
 
         try:
@@ -288,6 +291,47 @@ def get_fundamentals(symbol: str, openrouter_api_key: Optional[str] = None) -> O
         return _row_to_analysis(row)
     except Exception:
         logger.exception("weekly-advisor fundamentals: get_fundamentals failed for %s", symbol)
+        db.rollback()
+        return None
+    finally:
+        db.close()
+
+
+def has_cached(symbol: str) -> bool:
+    """Whether a screenshot for this symbol is already stored (so an AI read can be made from it without opening a browser)."""
+    db = SessionLocal()
+    try:
+        return db.get(db_models.WeeklyAdvisorFundamentals, symbol) is not None
+    finally:
+        db.close()
+
+
+def reanalyze_cached(symbol: str, openrouter_api_key: Optional[str] = None) -> Optional[FundamentalAnalysis]:
+    """Reads the already-stored screenshot again with the AI, without a new capture: for a row whose first read failed (no key
+    at the time, or the model call failed) and is otherwise trusted as "fresh" for the whole cache window. None when nothing is
+    stored or the read fails again. Never raises."""
+    db = SessionLocal()
+    try:
+        row = db.get(db_models.WeeklyAdvisorFundamentals, symbol)
+        if row is None:
+            return None
+        analysis = _analyze_via_ai(symbol, bytes(row.screenshot), openrouter_api_key)
+        if analysis is None:
+            return _row_to_analysis(row)
+        now = datetime.now(timezone.utc)
+        row.bias = analysis.get("bias")
+        row.confidence = analysis.get("confidence")
+        row.summary = analysis.get("summary")
+        row.pros = analysis.get("pros")
+        row.cons = analysis.get("cons")
+        row.reasons = analysis.get("reasons")
+        row.ai_model = settings.openrouter_vision_model
+        row.analyzed_at = now
+        db.commit()
+        db.refresh(row)
+        return _row_to_analysis(row)
+    except Exception:
+        logger.exception("fundamentals: re-reading the stored screenshot failed for %s", symbol)
         db.rollback()
         return None
     finally:

@@ -1,4 +1,6 @@
-import type { IdeaRequest, PublishedIdea, TradeRequest } from "../api/ideas";
+import type { IdeaAnalysis, IdeaRequest, PublishedIdea, TradeRequest } from "../api/ideas";
+import type { StockAnalysis } from "../api/analysis";
+import { leanStrength } from "../components/analysisModel";
 import type { NoteContext, OptionGroup, Position, StudyNote } from "../api/types";
 import { formatDay, formatTime } from "../format";
 
@@ -18,7 +20,35 @@ export function publishableContext(ctx: NoteContext | null): Record<string, unkn
   return out;
 }
 
-export function toIdeaRequest(note: StudyNote, opts: { includeContext: boolean; snapshot?: string | null; trade?: TradeRequest | null }): IdeaRequest {
+/** The AI analysis is for an NSE stock (the weekly and daily history it reads is NSE's), so it is only offered for those. */
+export const canAttachAnalysis = (note: { segment: string }): boolean => note.segment === "NSE";
+
+/** The short form of an analysis that goes into a post: the verdict, the chart's and the business's lean, their first reasons, and the nearest
+ * level either side. The rest of the analysis stays on the Scan card. */
+export function toIdeaAnalysis(a: StockAnalysis): IdeaAnalysis {
+  const f = a.fundamental;
+  const business = f.available && f.bias != null;
+  const lv = (l: { low: number; high: number; distance_pct: number } | undefined) => (l ? { low: l.low, high: l.high, distance_pct: l.distance_pct } : null);
+  return {
+    verdict: a.verdict.headline,
+    agreement: a.verdict.agreement,
+    overall: a.verdict.bias,
+    overall_strength: a.verdict.confidence > 0 ? leanStrength(a.verdict.confidence) : null,
+    chart_bias: a.technical.bias,
+    chart_points: a.technical.points.slice(0, 4),
+    price: a.price,
+    as_of: a.as_of,
+    business_bias: business ? f.bias : null,
+    business_confidence: business ? f.confidence : null,
+    business_summary: business ? f.summary : null,
+    pros: business ? f.pros.slice(0, 2) : [],
+    cons: business ? f.cons.slice(0, 2) : [],
+    support: lv(a.technical.support[0]),
+    resistance: lv(a.technical.resistance[0]),
+  };
+}
+
+export function toIdeaRequest(note: StudyNote, opts: { includeContext: boolean; snapshot?: string | null; trade?: TradeRequest | null; analysis?: IdeaAnalysis | null }): IdeaRequest {
   return {
     note_id: note.id,
     segment: note.segment,
@@ -30,6 +60,7 @@ export function toIdeaRequest(note: StudyNote, opts: { includeContext: boolean; 
     include_context: opts.includeContext,
     ...(opts.snapshot ? { snapshot_png_base64: opts.snapshot } : {}),
     ...(opts.trade ? { trade: opts.trade } : {}),
+    ...(opts.analysis ? { analysis: opts.analysis } : {}),
   };
 }
 

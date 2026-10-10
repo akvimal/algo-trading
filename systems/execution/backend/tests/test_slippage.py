@@ -218,7 +218,7 @@ def account_route():
 
 def test_the_route_sets_and_reports_slippage_bps(account_route):
     row = _account_row(slippage_bps=0)
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     out = accounts_route.update_account("NSE", AccountUpdate(slippage_bps=7.5), user=User(id=ME, token="t", is_admin=False), db=RouteDb())
     assert row.slippage_bps == 7.5 and out["slippage_bps"] == 7.5
     out = accounts_route.update_account("NSE", AccountUpdate(slippage_bps=0), user=User(id=ME, token="t", is_admin=False), db=RouteDb())
@@ -227,7 +227,7 @@ def test_the_route_sets_and_reports_slippage_bps(account_route):
 
 def test_omitting_it_leaves_it_unchanged(account_route):
     row = _account_row(slippage_bps=5)
-    accounts_route.load_account = lambda db, uid, seg: row
+    accounts_route.load_account = lambda db, uid, seg, book="intraday": row
     accounts_route.update_account("NSE", AccountUpdate(capital_per_trade=1234), user=User(id=ME, token="t"), db=RouteDb())
     assert row.slippage_bps == 5
 

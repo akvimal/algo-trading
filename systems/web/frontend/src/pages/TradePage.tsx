@@ -29,6 +29,7 @@ import { NotesPanel } from "../components/NotesPanel";
 import { buildNoteContext } from "../components/notesModel";
 import { loadAiRead } from "../chart/aiReadStore";
 import { PositionCard } from "../components/PositionCard";
+import { composeTradePicture, type PictureLevels } from "../chart/tradePicture";
 import { TradeTicket } from "../components/TradeTicket";
 import { formatPnl, formatPrice } from "../format";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
@@ -40,7 +41,7 @@ import { MarketInfoMenu } from "../workstation/MarketInfoMenu";
 import { addCombo, applyCombo, loadCombos, removeCombo, saveCombos, type Combo } from "../workstation/combos";
 import {
   loadWorkstation, paneCount, saveWorkstation, setInterval as setPaneInterval, setLayout, setLinks, setSplit, setSymbol,
-  withUrlSymbol, type WorkstationState,
+  withUrlLayout, withUrlSymbol, urlAsksForLayout, type WorkstationState,
 } from "../workstation/state";
 import { OiStrip } from "../chart/OiStrip";
 import { oiStripItems } from "../chart/oiStripModel";
@@ -61,20 +62,40 @@ export function TradePage() {
 
   const urlSymbol = params.get("symbol");
   const urlSegment = params.get("segment");
+  const urlLayout = params.get("layout");
+  const urlIntervals = params.get("intervals");
+  // A picture of the active chart as it is on screen (the person's drawings and indicators, the plan or open-trade lines), under a header that says what
+  // it is and what the trade's levels are: kept with a trade as its plan at entry, or as an update after the chart, stop or target was changed.
+  async function takePicture(label: string, levels: PictureLevels, caption = ""): Promise<string | null> {
+    const image = paneRefs[active].current?.snapshot();
+    if (!image || "problem" in image) return null;
+    return composeTradePicture({ chart: image, symbol: activeSpec.symbol, interval: activeSpec.interval, label, levels, caption });
+  }
+
   // Off by default; turned on in Settings — see autotrader/model.ts.
   const [autoTraderVisible] = useState(loadAutoTraderVisible);
-  const [ws, setWs] = useState<WorkstationState>(() => withUrlSymbol(loadWorkstation(), urlSymbol, urlSegment));
-  useEffect(() => saveWorkstation(ws), [ws]);
+  const [ws, setWs] = useState<WorkstationState>(() => withUrlLayout(withUrlSymbol(loadWorkstation(), urlSymbol, urlSegment), urlLayout, urlIntervals));
+  // A link that asked for its own layout (weekly + daily side by side) must not overwrite the setup the person saved just by being opened: it is
+  // kept for this tab, and saved from the first change the person makes themselves.
+  const skipSave = useRef(urlAsksForLayout(urlLayout, urlIntervals));
+  useEffect(() => {
+    if (skipSave.current) {
+      skipSave.current = false;
+      return;
+    }
+    saveWorkstation(ws);
+  }, [ws]);
   const [combos, setCombos] = useState<Combo[]>(loadCombos);
   useEffect(() => saveCombos(combos), [combos]);
   // A link from Scan while this screen is already open changes the first chart.
-  const lastUrl = useRef(`${urlSymbol}|${urlSegment}`);
+  const lastUrl = useRef(`${urlSymbol}|${urlSegment}|${urlLayout}|${urlIntervals}`);
   useEffect(() => {
-    const key = `${urlSymbol}|${urlSegment}`;
+    const key = `${urlSymbol}|${urlSegment}|${urlLayout}|${urlIntervals}`;
     if (key === lastUrl.current) return;
     lastUrl.current = key;
-    setWs((cur) => withUrlSymbol(cur, urlSymbol, urlSegment));
-  }, [urlSymbol, urlSegment]);
+    if (urlAsksForLayout(urlLayout, urlIntervals)) skipSave.current = true;
+    setWs((cur) => withUrlLayout(withUrlSymbol(cur, urlSymbol, urlSegment), urlLayout, urlIntervals));
+  }, [urlSymbol, urlSegment, urlLayout, urlIntervals]);
 
   // ---- what the person has switched on the charts (shared by both) ----
   const [indicators, setIndicators] = useState<string[]>(() => loadIndicators());
@@ -548,6 +569,8 @@ export function TradePage() {
             onTool={chooseTool}
             magnet={tools.magnet}
             onMagnet={() => setTools((t) => ({ ...t, magnet: !t.magnet }))}
+            zoneAlert={tools.zoneAlert}
+            onZoneAlert={() => setTools((t) => ({ ...t, zoneAlert: !t.zoneAlert }))}
             hidden={tools.drawingsHidden}
             onHidden={() => setTools((t) => ({ ...t, drawingsHidden: !t.drawingsHidden }))}
             onClear={() => paneRefs[active].current?.clearDrawings()}
@@ -670,6 +693,7 @@ export function TradePage() {
                       onLevelCancel={(l) => void cancelWaitingLevel(l)}
                       oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
+                      zoneAlert={tools.zoneAlert}
                       drawingsHidden={tools.drawingsHidden}
                       pickField={active === i ? (levelPick?.field ?? pickField) : null}
                       onPick={onPick}
@@ -813,6 +837,7 @@ export function TradePage() {
                     : null
                 }
                 suggested={suggested}
+                capturePlan={(levels) => takePicture("Plan at entry", levels)}
                 onPlaced={() => {
                   waiting.reload();
                   today.reload();
@@ -836,10 +861,10 @@ export function TradePage() {
                 </p>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
-                    <PositionCard key={p.id} kind="position" item={p} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} />
+                    <PositionCard key={p.id} kind="position" item={p} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} snapshotCapture={takePicture} />
                   ))}
                   {activeTrades.groups.map((g) => (
-                    <PositionCard key={g.id} kind="group" item={g} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} />
+                    <PositionCard key={g.id} kind="group" item={g} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} snapshotCapture={takePicture} />
                   ))}
                 </div>
               </>

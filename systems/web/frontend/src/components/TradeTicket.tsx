@@ -67,8 +67,9 @@ type Props = {
    * Scan page's bias-driven leg table) already exposes a strike stepper wired to the same
    * ticket.moneyness field, so the two controls never fight for the same line. */
   hideMoneynessField?: boolean;
-  /** Drops Order type (Market/"Wait for a price"), Stop-loss, Target, Lots, the Entry/Size/risk
-   * summary, "Before you place" and Confidence for an OPTION order only (a plain spot/future
+  /** Drops Stop-loss and Target (except for a "Wait for a price" order, which needs them as levels of the underlying), Lots, the Entry/Size/risk
+   * summary, "Before you place" and Confidence for an OPTION order only. Order type (Market/"Wait for a price") stays: a waiting order is how an
+   * option is queued while the market is closed (a plain spot/future
    * order keeps all of them, and "Why this trade?" stays for options too) - the Scan page's own
    * leg table already shows what's being bought/sold, its live price, the real max profit/loss/
    * margin, and its own combined stop-loss %/target % (see ScanOptionBias.tsx), all more specific
@@ -82,12 +83,15 @@ type Props = {
    * plain NSE stock with no F&O, which cannot be shorted without margin/derivatives: only a long
    * (BUY) position is ever placeable there, so offering Sell would just invite a rejection later. */
   hideSideChips?: boolean;
+  /** Takes a picture of the chart as it is now, for keeping with the trade as its plan at entry: called just before the order is sent, so it shows
+   * the person's drawings and indicators and the planned entry, stop and target. Returns a finished PNG data URL, or null when it cannot. */
+  capturePlan?: (levels: { entry: number | null; stop: number | null; target: number | null }) => Promise<string | null>;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -207,7 +211,16 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
     setError(null);
     setResult(null);
     try {
-      const outcome = await placeOrder(buildOrder(t, now, ctx, meta));
+      // The chart is photographed BEFORE the order goes: it still shows the plan lines (entry, stop, target) the person drew the trade on.
+      let planPicture: string | null = null;
+      if (capturePlan) {
+        try {
+          planPicture = await capturePlan({ entry: now.entry, stop: now.stop, target: now.target });
+        } catch {
+          planPicture = null; // a picture that cannot be taken never stops the order
+        }
+      }
+      const outcome = await placeOrder(buildOrder(t, now, ctx, meta), { planPicture });
       if (outcome.ok) onPlaced();
       setResult(outcome);
     } catch (e) {
@@ -359,14 +372,11 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         </label>
       )}
 
-      {/* Market/"Wait for a price" and the spot-based Stop-loss/Target below are a spot/future
-          concept (a limit order waits for the underlying to reach a level; a spot stop-loss
-          protects against the underlying moving further than expected) - for a simplified option
-          order in Scan, the leg table's own Debit/Credit-aware combined stop-loss %/target %
-          (ScanOptionBias.tsx) already covers this, more precisely (as a fraction of the position's
-          own bounded max loss/profit, not an arbitrary underlying level). TradePage's own option
-          ticket (hideOptionExtras not set there) still gets all of this, unchanged. */}
-      {!simplifiedOption && (
+      {/* Market/"Wait for a price". A simplified option order in Scan (the F&O view) gets the same choice: "Wait for a price" arms the
+          order on the server at a level of the underlying, so it can be queued while the market is closed and fires in the next session.
+          Its stop-loss and target are levels of the underlying too (shown below only for a waiting order); the leg table's combined
+          stop-loss %/target % are taken from the premium once the position exists, so they apply to an order placed now, not a waiting one. */}
+      {(
         <div className="chips" role="group" aria-label="Order type" style={{ marginBottom: 12 }}>
           <button aria-pressed={!limit} onClick={() => set("orderType", "market")}>
             <BoltIcon />
@@ -416,7 +426,12 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           placeholder ("Auto from your risk"/"Sized for you"), so it gets the full row below
           instead of a cramped third column. No hints here (unlike Entry above): the label and
           placeholder already say what is needed, and dropping them is what kept this compact. */}
-      {!simplifiedOption && (
+      {simplifiedOption && limit && (
+        <div className="faint" style={{ fontSize: 12, marginBottom: 8 }} data-testid="waiting-option-note">
+          A waiting order is placed when the price reaches your level. Set a stop-loss and target here as levels of the {ctx.symbol} price; the leg table's stop-loss and target % apply only to an order placed now.
+        </div>
+      )}
+      {(!simplifiedOption || limit) && (
         <div className="field-row">
           <TextField id="t-stop" label={ctx.requireStop ? "Stop-loss (required)" : "Stop-loss"} action={pickAction("stop")} status={fieldStatus("stop")} value={t.stop} onChange={(v) => set("stop", v)} />
           <TextField id="t-target" label="Target" action={pickAction("target")} status={fieldStatus("reward")} value={t.target} onChange={(v) => set("target", v)} />

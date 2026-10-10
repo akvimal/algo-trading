@@ -20,7 +20,11 @@ _SEGMENTS = ("NSE", "MCX", "CRYPTO")
 
 @router.get("/equity-history/{segment}", response_model=EquityHistoryOut)
 def get_equity_history(
-    segment: str, days: int = Query(90, ge=1, le=730), user: User = Depends(get_current_user), db: Session = Depends(get_db)
+    segment: str,
+    days: int = Query(90, ge=1, le=730),
+    book: str = Query("intraday", pattern="^(intraday|positional)$"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """`points` covers the last `days` days; `stats` always covers the whole
     current curve (so a short window cannot make a drawdown disappear). Only
@@ -28,7 +32,8 @@ def get_equity_history(
     seg = segment.upper()
     if seg not in _SEGMENTS:
         raise HTTPException(status_code=404, detail=f"unknown segment {segment}")
-    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg).first()
+    book = book if isinstance(book, str) else "intraday"  # a handler called directly gets the default object, not its value
+    account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg, book=book).first()
     if account is None:
         return EquityHistoryOut(segment=seg, days=days, points=[], stats=None)
 

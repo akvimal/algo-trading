@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ActionType, OverlayMode, dispose, init, type Chart, type Crosshair, type Overlay, type OverlayEvent } from "klinecharts";
+import { candleAtOrBefore, levelWithOtherEnd, snapZoneCorner, zoneOnWick, type Wick } from "./snap";
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
@@ -121,6 +122,8 @@ type Props = {
   /** Support and resistance lines read from the option chain (none by default). */
   oiLevels?: OiLevelLine[];
   magnet: boolean;
+  /** Arm a zone with an alert the moment it is drawn (default true). It can still be switched off, and on, per zone afterwards. */
+  zoneAlert?: boolean;
   drawingsHidden: boolean;
   /** Set while the person is choosing a price on the chart for a ticket field. */
   pickField: PriceField | null;
@@ -695,7 +698,89 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     // eslint-disable-next-line react-hooks/exhaustive-deps -- serialize/persist/emitDrawing read refs and propsRef only
   }, []);
 
+  // ---- drawing aids: a zone's corners snap to a candle's high/low with the magnet on; Shift keeps a line level ----
+  const shiftRef = useRef(false);
+  useEffect(() => {
+    const set = (down: boolean) => (e: KeyboardEvent) => {
+      if (e.key === "Shift") shiftRef.current = down;
+    };
+    const up = set(false);
+    const down = set(true);
+    const reset = () => {
+      shiftRef.current = false;
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", reset);
+    };
+  }, []);
+
+  /** The price a drawing's point at `index` should take, given what is held down and the magnet; null leaves the library's own value. */
+  function adjustedValue(overlay: Overlay, index: number, point: { dataIndex?: number; value?: number }): number | null {
+    const chart = chartRef.current;
+    if (!chart || point.value == null) return null;
+    if (shiftRef.current) {
+      const flat = levelWithOtherEnd(overlay.name, index, overlay.points.map((p) => p.value));
+      if (flat != null) return flat;
+    }
+    if (overlay.name === "rect" && propsRef.current.magnet && typeof point.dataIndex === "number") {
+      const candle = chart.getDataList()[point.dataIndex];
+      if (!candle) return null;
+      // The magnet's own sensitivity (8 px) as a price distance on this chart's scale.
+      const ys = chart.convertFromPixel([{ x: 0, y: 0 }, { x: 0, y: 8 }], { paneId: "candle_pane" }) as Array<{ value?: number }>;
+      const reach = ys?.[0]?.value != null && ys?.[1]?.value != null ? Math.abs(ys[1].value - ys[0].value) : 0;
+      return snapZoneCorner(point.value, candle, reach);
+    }
+    return null;
+  }
+
+  // The candle a zone sits on when a whole-zone drag begins (its left edge): holding Shift while dragging puts its top and bottom on that
+  // candle's high and low, wherever the drag has taken it in time.
+  const zoneOriginRef = useRef<{ id: string; wick: Wick } | null>(null);
+
   const handlers = () => ({
+    // While a drawing is being placed, the library has just put its point under the cursor (and under its own magnet): adjust it.
+    onDrawing: (e: OverlayEvent) => {
+      const index = e.figureIndex ?? e.overlay.points.length - 1;
+      const point = e.overlay.points[index];
+      if (point) {
+        const value = adjustedValue(e.overlay, index, point);
+        if (value != null) point.value = value;
+      }
+      return false;
+    },
+    // Dragging a corner or an end of a finished drawing: the library would set the point itself, so do it here with the adjustment.
+    onPressedMoving: (e: OverlayEvent) => {
+      const origin = zoneOriginRef.current;
+      if (origin && origin.id === e.overlay.id && shiftRef.current && !/point_\d+$/.test(e.figureKey ?? "")) {
+        // Let the library move the zone as usual, then put its edges on the origin candle (the next tick: its own move runs right after this).
+        const id = e.overlay.id;
+        queueMicrotask(() => {
+          const o = chartRef.current?.getOverlayById?.(id);
+          if (!o || o.points.length < 2 || o.points[0].value == null || o.points[1].value == null) return;
+          const [a, b] = zoneOnWick([o.points[0].value, o.points[1].value], origin.wick);
+          chartRef.current?.overrideOverlay({ id, points: [{ ...o.points[0], value: a }, { ...o.points[1], value: b }] });
+        });
+        return false;
+      }
+      const index = e.figureIndex ?? -1;
+      if (index < 0 || !/point_\d+$/.test(e.figureKey ?? "") || e.x == null || e.y == null) return false;
+      const wants = shiftRef.current || (e.overlay.name === "rect" && propsRef.current.magnet);
+      const chart = chartRef.current;
+      const instance = e.overlay as unknown as { eventPressedPointMove?: (point: unknown, index: number) => void };
+      if (!wants || !chart || typeof instance.eventPressedPointMove !== "function") return false;
+      const found = chart.convertFromPixel([{ x: e.x, y: e.y }], { paneId: "candle_pane" });
+      const point = (Array.isArray(found) ? found[0] : found) as { dataIndex?: number; timestamp?: number; value?: number } | undefined;
+      if (!point || point.value == null) return false;
+      const value = adjustedValue(e.overlay, index, point);
+      if (value == null) return false;
+      instance.eventPressedPointMove({ ...point, value }, index);
+      return true;
+    },
     onDrawEnd: (e: OverlayEvent) => {
       pendingRef.current = null;
       if (e.overlay.name === "textNote") {
@@ -706,7 +791,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       }
       const drawn = serialize(e.overlay);
       // A zone is drawn to be watched: it is armed straight away (the person can switch it off), and starts from where the price is now.
-      const arm = e.overlay.name === "rect" && !drawn.alert;
+      const arm = e.overlay.name === "rect" && !drawn.alert && propsRef.current.zoneAlert !== false;
       drawnRef.current.set(e.overlay.id, arm ? { ...drawn, alert: { trigger: "cross" } } : drawn);
       if (arm) {
         const z = alertZone(drawn);
@@ -725,6 +810,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     },
     onPressedMoveStart: (e: OverlayEvent) => {
       draggingRef.current = e.overlay.id;
+      zoneOriginRef.current = null;
+      if (e.overlay.name === "rect" && e.overlay.points.length >= 2 && !/point_\d+$/.test(e.figureKey ?? "")) {
+        const left = Math.min(...e.overlay.points.map((p) => p.timestamp ?? Infinity));
+        const candle = chartRef.current ? candleAtOrBefore(chartRef.current.getDataList(), Number.isFinite(left) ? left : undefined) : null;
+        if (candle) zoneOriginRef.current = { id: e.overlay.id, wick: { high: candle.high, low: candle.low } };
+      }
       return false;
     },
     onPressedMoveEnd: (e: OverlayEvent) => {

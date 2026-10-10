@@ -244,6 +244,8 @@ class PerformanceStatsOut(BaseModel):
 class PerformanceOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     scope: Literal["epoch", "all"]
+    # Which paper balance these trades belong to: the everyday intraday one or the hard-separate positional one.
+    book: Literal["intraday", "positional"] = "intraday"
     # The IST date the counted trades start from (the latest reset marker) when scope='epoch'.
     since: Optional[date] = None
     performance: Optional[PerformanceStatsOut] = None
@@ -261,7 +263,7 @@ class PendingOrderCreate(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str = Field(min_length=1, max_length=64)  # the logical underlying, e.g. NIFTY
     action: Literal["BUY", "SELL"]
-    strategy: Literal["future", "naked", "spread"] = "future"
+    strategy: Literal["future", "naked", "spread", "spot"] = "future"
     moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"  # options only
     trigger_price: float = Field(gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
@@ -277,6 +279,36 @@ class PendingOrderCreate(BaseModel):
     # False (default): if a position or option group on this instrument is open when the price is hit, the
     # order is cancelled with a reason instead of stacking a second trade. True: add to it deliberately.
     allow_stacking: bool = False
+    # 'positional' opens a multi-day SPOT hold on the user's own positional book (strategy must be 'spot'); never squared off at the end of the day.
+    horizon: Literal["intraday", "positional"] = "intraday"
+    # The plan note this order was armed from ("Trade this plan"): the note then follows the trade it produced.
+    source_note_id: Optional[str] = Field(default=None, max_length=36)
+    # An option order armed from the Scan ticket remembers the exact legs it showed: a strike per leg and the expiry they came from take
+    # precedence over `moneyness`, as for a market order. `notes` is the person's reason for the trade.
+    primary_strike: Optional[float] = Field(default=None, gt=0)
+    second_strike: Optional[float] = Field(default=None, gt=0)
+    expiry: Optional[str] = Field(default=None, max_length=20)
+    spread_width: Optional[int] = Field(default=None, ge=1, le=20)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+    # The chart as planned (drawings, indicators and the entry / stop / target lines), a PNG composed by the page. Kept with the order and attached to
+    # the position, as its plan at entry, when the order fills.
+    plan_snapshot_png_base64: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_legs(self) -> "PendingOrderCreate":
+        if self.strategy in ("future", "spot") and any(v is not None for v in (self.primary_strike, self.second_strike, self.expiry, self.spread_width)):
+            raise ValueError("strikes, an expiry and a spread width only apply to an option order")
+        if self.strategy == "naked" and self.second_strike is not None:
+            raise ValueError("a naked option has one strike")
+        return self
+
+    @model_validator(mode="after")
+    def _check_horizon(self) -> "PendingOrderCreate":
+        if self.horizon == "positional" and self.strategy != "spot":
+            raise ValueError("a positional order must be a spot order")
+        if self.strategy == "spot" and self.horizon != "positional":
+            raise ValueError("a spot pending order is positional: set horizon to 'positional'")
+        return self
 
 
 class PendingOrderUpdate(BaseModel):
@@ -293,7 +325,7 @@ class PendingOrderOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str
     action: Literal["BUY", "SELL"]
-    strategy: Literal["future", "naked", "spread"]
+    strategy: Literal["future", "naked", "spread", "spot"]
     moneyness: Optional[str] = None
     trigger_price: float
     started_above: bool
@@ -315,6 +347,8 @@ class PendingOrderOut(BaseModel):
     position_id: Optional[str] = None
     option_group_id: Optional[str] = None
     allow_stacking: bool = False
+    horizon: Literal["intraday", "positional"] = "intraday"
+    source_note_id: Optional[str] = None
 
 
 class StudyNoteCreate(BaseModel):
@@ -800,6 +834,17 @@ class ManualPositionCreate(BaseModel):
     # (some users delete every 'plan' item) - validate_plan_checklist
     # passes it when there are no active 'plan' items either.
     plan_checklist: list[ChecklistAnswer] = []
+    # 'positional' = a multi-day hold on the user's own positional book (own balance, never squared off at the end of the day).
+    # Spot only and paper only: see _check_positional.
+    horizon: Literal["intraday", "positional"] = "intraday"
+    # The plan note this trade was placed from ("Trade this plan"): once the position opens, the note follows it.
+    source_note_id: Optional[str] = Field(default=None, max_length=36)
+
+    @model_validator(mode="after")
+    def _check_positional(self) -> "ManualPositionCreate":
+        if self.horizon == "positional" and self.instrument_type != "spot":
+            raise ValueError("a positional trade must be spot")
+        return self
 
     @model_validator(mode="after")
     def _check_stop_loss_config(self) -> "ManualPositionCreate":
@@ -952,6 +997,7 @@ class StopLossUpdate(BaseModel):
     # The chart interval the person is trading on - the ATR a "tight trail" is judged against is taken at this interval.
     # Optional: without it the judgement uses 15min.
     atr_interval: Optional[Literal["1min", "3min", "5min", "15min", "25min", "30min", "60min"]] = None
+    note: Optional[str] = Field(default=None, max_length=500)  # why the stop moved: optional, kept on the trade's timeline
 
     @model_validator(mode="after")
     def _check_stop_loss_config(self) -> "StopLossUpdate":
@@ -979,6 +1025,7 @@ class TargetUpdate(BaseModel):
     below), whose price can legitimately be negative."""
 
     target_price: float = Field(gt=0)
+    note: Optional[str] = Field(default=None, max_length=500)  # why the target moved: optional, kept on the trade's timeline
 
 
 class CombinedStopLossUpdate(BaseModel):

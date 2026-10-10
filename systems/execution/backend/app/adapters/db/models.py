@@ -43,6 +43,8 @@ class Account(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), nullable=True)
     segment = Column(Text, nullable=False)  # 'NSE' | 'MCX' | 'CRYPTO'
+    # 'intraday' = the everyday paper balance, 'positional' = the hard-separate balance for multi-day spot trades (migration 053).
+    book = Column(Text, nullable=False, default="intraday")
     starting_balance = Column(Numeric, nullable=False)
     current_balance = Column(Numeric, nullable=False)  # debited/credited by realized P&L on close
     capital_per_trade = Column(Numeric, nullable=False)
@@ -240,6 +242,12 @@ class TradeImage(Base):
     content_type = Column(Text, nullable=False)
     image_data = Column(LargeBinary, nullable=False)
     uploaded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    # What the picture is and what the trade looked like when it was taken (migration 056).
+    kind = Column(Text, nullable=False, default="upload")
+    caption = Column(Text)
+    entry_price = Column(Numeric)
+    stop_price = Column(Numeric)
+    target_price = Column(Numeric)
 
 
 class OptionPositionGroup(Base):
@@ -542,7 +550,7 @@ class PendingOrder(Base):
     segment = Column(Text, nullable=False)
     symbol = Column(Text, nullable=False)
     action = Column(Text, nullable=False)
-    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread'
+    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread' | 'spot' (positional)
     moneyness = Column(Text)
     trigger_price = Column(Numeric, nullable=False)
     started_above = Column(Boolean, nullable=False)
@@ -565,6 +573,17 @@ class PendingOrder(Base):
     option_group_id = Column(UUID(as_uuid=True))
     # May this order open a second position on an instrument already held? Default no: see migrations/030.
     allow_stacking = Column(Boolean, nullable=False, default=False)
+    # 'positional' opens a multi-day spot hold on the positional book; source_note_id is the plan note it was armed from (migration 054).
+    horizon = Column(Text, nullable=False, default="intraday")
+    source_note_id = Column(UUID(as_uuid=True))
+    # The chart as planned when the order was placed; attached to the position when it fills (migration 056).
+    plan_snapshot = deferred(Column(LargeBinary))
+    # The legs an option order was armed for, and the person's reason (migration 055).
+    primary_strike = Column(Numeric)
+    second_strike = Column(Numeric)
+    expiry = Column(Text)
+    spread_width = Column(SmallInteger)
+    notes = Column(Text)
 
 
 class StudyNote(Base):
@@ -664,4 +683,5 @@ class PositionEvent(Base):
     atr = Column(Numeric)
     atr_interval = Column(Text)
     tight_trail = Column(Boolean)
+    note = Column(Text)  # the person's own reason for the move (migration 052)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

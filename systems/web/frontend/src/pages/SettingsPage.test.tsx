@@ -17,6 +17,7 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
 type Call = { url: string; method: string; body: any };
 let calls: Call[];
 let accounts: Record<string, any>[];
+let positionalAccounts: Record<string, any>[];
 let creds: Record<string, any>;
 let putAccount: (segment: string, body: any) => Response;
 let putCreds: (body: any) => Response;
@@ -37,6 +38,10 @@ beforeEach(() => {
   calls = [];
   usdinr = null;
   accounts = [mkAccount("NSE"), mkAccount("MCX", { capital_per_trade: 7777 }), mkAccount("CRYPTO", { square_off_time: null })];
+  positionalAccounts = [
+    mkAccount("NSE", { book: "positional", starting_balance: 500000, current_balance: 500000, capital_per_trade: 50000, square_off_time: null }),
+    mkAccount("CRYPTO", { book: "positional", square_off_time: null }),
+  ];
   creds = { has_dhan: false, has_delta: false, has_openrouter: false, dhan_client_id_masked: null };
   putAccount = (segment, body) => {
     const a = accounts.find((x) => x.segment === segment)!;
@@ -58,10 +63,16 @@ beforeEach(() => {
       const method = init?.method ?? "GET";
       const body = init?.body ? JSON.parse(init.body as string) : undefined;
       calls.push({ url, method, body });
-      const acct = url.match(/\/accounts\/(NSE|MCX|CRYPTO)(\/reset)?$/);
-      if (acct && method === "PUT") return putAccount(acct[1], body);
+      const acct = url.match(/\/accounts\/(NSE|MCX|CRYPTO)(\/reset)?(\?book=positional)?$/);
+      const list = url.includes("book=positional") ? positionalAccounts : accounts;
+      if (acct && method === "PUT") {
+        const a = list.find((x) => x.segment === acct[1])!;
+        Object.assign(a, body);
+        if (body.starting_balance) a.current_balance = body.starting_balance;
+        return list === accounts ? putAccount(acct[1], body) : json(a);
+      }
       if (acct && method === "POST") {
-        const a = accounts.find((x) => x.segment === acct[1])!;
+        const a = list.find((x) => x.segment === acct[1])!;
         a.current_balance = a.starting_balance;
         return json(a);
       }
@@ -71,6 +82,7 @@ beforeEach(() => {
       }
       if (url.endsWith("/settings")) return json({ usdinr_rate: usdinr });
       if (url.endsWith("/accounts") && method === "GET") return json(accounts);
+      if (url.endsWith("/accounts?book=positional") && method === "GET") return json(positionalAccounts);
       if (url.endsWith("/credentials") && method === "PUT") return putCreds(body);
       if (url.endsWith("/credentials")) return json(creds);
       if (url.includes("/dhan/token-status")) return json(platformStatus);
@@ -176,6 +188,46 @@ describe("risk limits", () => {
     await user.click(screen.getByRole("button", { name: "Crypto" }));
     await waitFor(() => expect(screen.getByLabelText("Square off open trades at")).toHaveValue(""));
     expect(screen.queryByLabelText(/Include brokerage/)).not.toBeInTheDocument();
+  });
+});
+
+describe("the positional book", () => {
+  it("has its own account: the everyday one is untouched, and the daily loss limit and square-off time are not offered", async () => {
+    const user = userEvent.setup();
+    renderAt("/more/settings");
+    expect(await screen.findByLabelText("Capital per trade")).toHaveValue("10000");
+    await user.click(screen.getByRole("button", { name: "Positional" }));
+    await waitFor(() => expect(screen.getByLabelText("Capital per trade")).toHaveValue("50000"));
+    expect(calls.some((c) => c.url.endsWith("/accounts?book=positional"))).toBe(true);
+    expect(screen.queryByLabelText("Daily loss limit")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Square off open trades at")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Require a stop-loss/)).toBeInTheDocument();
+  });
+
+  it("saves to the positional account only", async () => {
+    const user = userEvent.setup();
+    renderAt("/more/settings?book=positional");
+    const capital = await screen.findByLabelText("Capital per trade");
+    await user.clear(capital);
+    await user.type(capital, "75000");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(puts("/accounts/NSE?book=positional")).toHaveLength(1));
+    expect(puts("/accounts/NSE?book=positional")[0].body).toEqual({ capital_per_trade: 75000 });
+    expect(accounts.find((a) => a.segment === "NSE")!.capital_per_trade).toBe(10000);
+  });
+
+  it("starting over resets the positional balance, not the everyday one", async () => {
+    const user = userEvent.setup();
+    renderAt("/more/settings?book=positional");
+    await user.type(await screen.findByLabelText("Type RESET to confirm"), "RESET");
+    await user.click(screen.getByRole("button", { name: "Reset account" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/accounts/NSE/reset?book=positional"))).toBe(true));
+  });
+
+  it("commodities have no positional book", async () => {
+    renderAt("/more/settings?segment=MCX&book=positional");
+    expect(await screen.findByLabelText("Capital per trade")).toHaveValue("7777");
+    expect(screen.queryByRole("button", { name: "Positional" })).not.toBeInTheDocument();
   });
 });
 

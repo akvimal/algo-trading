@@ -191,6 +191,67 @@ describe("Portfolio positions and history", () => {
   });
 });
 
+describe("the positional book", () => {
+  const swing = (over: object = {}) => closedPos({ id: "s1", symbol: "SWINGCO", horizon: "positional", pnl: 900, ...over });
+  const withSwing = () =>
+    mockFetch({
+      "/equity-history/": () => json(equity),
+      "/performance/": () => json(perf(null)),
+      "/discipline/": () => json(dv2(null)),
+      "/live-eligibility/": () => json(elig),
+      "/option-groups": () => json([]),
+      "/positions": (url) =>
+        url.includes("status=OPEN")
+          ? json([
+              { ...closedPos({ id: "o1", symbol: "DAYCO", status: "OPEN", exit_time: null, pnl: null }), unrealized_pnl: 10 },
+              { ...swing({ id: "o2", symbol: "HOLDCO", status: "OPEN", exit_time: null, pnl: null }), unrealized_pnl: 20 },
+            ])
+          : json([closedPos({ id: "t1", symbol: "DAYCO", pnl: 180 }), swing()]),
+    });
+
+  it("asks for the positional equity and performance, and does not ask for discipline or graduation", async () => {
+    const calls = withSwing();
+    const user = userEvent.setup();
+    renderAt("/portfolio");
+    await screen.findByText("₹2,01,430");
+    await user.click(screen.getByRole("button", { name: "Positional" }));
+    await waitFor(() => expect(calls.some((c) => c.includes("/equity-history/NSE") && c.includes("book=positional"))).toBe(true));
+    expect(calls.some((c) => c.includes("/performance/NSE?book=positional"))).toBe(true);
+    expect(await screen.findByText("Positional account equity")).toBeInTheDocument();
+    expect(screen.queryByText(/Graduation to live trading/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Review" })).not.toBeInTheDocument();
+    const positionalCalls = calls.slice(calls.findIndex((c) => c.includes("book=positional")));
+    expect(positionalCalls.some((c) => c.includes("/discipline/") || c.includes("/live-eligibility/"))).toBe(false);
+  });
+
+  it("shows only the multi-day holds there, and only the everyday trades on the everyday book", async () => {
+    withSwing();
+    const user = userEvent.setup();
+    renderAt("/portfolio?tab=history");
+    const history = await screen.findByTestId("history");
+    expect(within(history).getByText("DAYCO")).toBeInTheDocument();
+    expect(within(history).queryByText("SWINGCO")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Positional" }));
+    await waitFor(() => expect(within(screen.getByTestId("history")).getByText("SWINGCO")).toBeInTheDocument());
+    expect(within(screen.getByTestId("history")).queryByText("DAYCO")).not.toBeInTheDocument();
+  });
+
+  it("lists only the open holds of the chosen book", async () => {
+    withSwing();
+    renderAt("/portfolio?tab=positions&book=positional");
+    expect(await screen.findByText(/HOLDCO/)).toBeInTheDocument();
+    expect(screen.queryByText(/DAYCO/)).not.toBeInTheDocument();
+  });
+
+  it("commodities have no positional book", async () => {
+    withSwing();
+    renderAt("/portfolio?segment=MCX&book=positional");
+    await screen.findByText("₹2,01,430");
+    expect(screen.queryByRole("button", { name: "Positional" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Review" })).toBeInTheDocument();
+  });
+});
+
 describe("Review", () => {
   it("explains the score, its parts and the unreviewed journal", async () => {
     happy(62);

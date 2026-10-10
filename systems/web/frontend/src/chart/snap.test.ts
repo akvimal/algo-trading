@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { levelWithOtherEnd, snapZoneCorner } from "./snap";
+import { candleAtOrBefore, levelWithOtherEnd, snapZoneCorner, zoneOnWick } from "./snap";
 
 const candle = { high: 110, low: 100 };
 
@@ -38,5 +38,27 @@ describe("holding Shift on a line", () => {
     expect(levelWithOtherEnd("fibonacciLine", 1, [100, 108])).toBeNull();
     expect(levelWithOtherEnd("segment", 1, [100])).toBeNull(); // the first end is still being placed
     expect(levelWithOtherEnd("segment", 1, [undefined, 108])).toBeNull();
+  });
+});
+
+describe("the candle a zone began on", () => {
+  const bars = [{ timestamp: 100 }, { timestamp: 200 }, { timestamp: 300 }, { timestamp: 400 }];
+  it("is the last bar at or before the time", () => {
+    expect(candleAtOrBefore(bars, 300)).toBe(bars[2]);
+    expect(candleAtOrBefore(bars, 350)).toBe(bars[2]);
+    expect(candleAtOrBefore(bars, 100)).toBe(bars[0]);
+    expect(candleAtOrBefore(bars, 999)).toBe(bars[3]);
+  });
+  it("is none before the first bar, or with nothing to look at", () => {
+    expect(candleAtOrBefore(bars, 50)).toBeNull();
+    expect(candleAtOrBefore([], 300)).toBeNull();
+    expect(candleAtOrBefore(bars, undefined)).toBeNull();
+  });
+});
+
+describe("a zone put on a candle's range", () => {
+  it("the upper corner takes the high and the lower the low, whichever corner was drawn first", () => {
+    expect(zoneOnWick([1008, 1002], candle)).toEqual([110, 100]);
+    expect(zoneOnWick([1002, 1008], candle)).toEqual([100, 110]);
   });
 });

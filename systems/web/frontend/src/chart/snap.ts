@@ -16,6 +16,24 @@ export function snapZoneCorner(value: number, candle: Wick, reach: number): numb
   return value - candle.low <= candle.high - value ? candle.low : candle.high;
 }
 
+/** The candle a zone began on: the last one that starts at or before `timestamp` (bars are in time order). Null before the first bar. */
+export function candleAtOrBefore<T extends { timestamp: number }>(bars: readonly T[], timestamp: number | undefined): T | null {
+  if (typeof timestamp !== "number" || bars.length === 0 || timestamp < bars[0].timestamp) return null;
+  let lo = 0;
+  let hi = bars.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (bars[mid].timestamp <= timestamp) lo = mid;
+    else hi = mid - 1;
+  }
+  return bars[lo];
+}
+
+/** A zone's two corner prices moved onto a candle's range, keeping which corner is the upper one: the upper takes the high, the lower the low. */
+export function zoneOnWick(corners: readonly [number, number], wick: Wick): [number, number] {
+  return corners[0] >= corners[1] ? [wick.high, wick.low] : [wick.low, wick.high];
+}
+
 /** The price a line's end takes while Shift is held: the other end's, so the line is flat. Null when it does not apply (a drawing that is not a
  * line, or no other end to match yet). */
 export function levelWithOtherEnd(tool: string, index: number, values: Array<number | undefined>): number | null {

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ActionType, OverlayMode, dispose, init, type Chart, type Crosshair, type Overlay, type OverlayEvent } from "klinecharts";
-import { levelWithOtherEnd, snapZoneCorner } from "./snap";
+import { candleAtOrBefore, levelWithOtherEnd, snapZoneCorner, zoneOnWick, type Wick } from "./snap";
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
@@ -736,6 +736,10 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     return null;
   }
 
+  // The candle a zone sits on when a whole-zone drag begins (its left edge): holding Shift while dragging puts its top and bottom on that
+  // candle's high and low, wherever the drag has taken it in time.
+  const zoneOriginRef = useRef<{ id: string; wick: Wick } | null>(null);
+
   const handlers = () => ({
     // While a drawing is being placed, the library has just put its point under the cursor (and under its own magnet): adjust it.
     onDrawing: (e: OverlayEvent) => {
@@ -749,6 +753,18 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     },
     // Dragging a corner or an end of a finished drawing: the library would set the point itself, so do it here with the adjustment.
     onPressedMoving: (e: OverlayEvent) => {
+      const origin = zoneOriginRef.current;
+      if (origin && origin.id === e.overlay.id && shiftRef.current && !/point_\d+$/.test(e.figureKey ?? "")) {
+        // Let the library move the zone as usual, then put its edges on the origin candle (the next tick: its own move runs right after this).
+        const id = e.overlay.id;
+        queueMicrotask(() => {
+          const o = chartRef.current?.getOverlayById?.(id);
+          if (!o || o.points.length < 2 || o.points[0].value == null || o.points[1].value == null) return;
+          const [a, b] = zoneOnWick([o.points[0].value, o.points[1].value], origin.wick);
+          chartRef.current?.overrideOverlay({ id, points: [{ ...o.points[0], value: a }, { ...o.points[1], value: b }] });
+        });
+        return false;
+      }
       const index = e.figureIndex ?? -1;
       if (index < 0 || !/point_\d+$/.test(e.figureKey ?? "") || e.x == null || e.y == null) return false;
       const wants = shiftRef.current || (e.overlay.name === "rect" && propsRef.current.magnet);
@@ -792,6 +808,12 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     },
     onPressedMoveStart: (e: OverlayEvent) => {
       draggingRef.current = e.overlay.id;
+      zoneOriginRef.current = null;
+      if (e.overlay.name === "rect" && e.overlay.points.length >= 2 && !/point_\d+$/.test(e.figureKey ?? "")) {
+        const left = Math.min(...e.overlay.points.map((p) => p.timestamp ?? Infinity));
+        const candle = chartRef.current ? candleAtOrBefore(chartRef.current.getDataList(), Number.isFinite(left) ? left : undefined) : null;
+        if (candle) zoneOriginRef.current = { id: e.overlay.id, wick: { high: candle.high, low: candle.low } };
+      }
       return false;
     },
     onPressedMoveEnd: (e: OverlayEvent) => {

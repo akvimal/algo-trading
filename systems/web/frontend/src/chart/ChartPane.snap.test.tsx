@@ -114,3 +114,53 @@ describe("holding Shift on a line", () => {
     fireEvent.keyUp(window, { key: "Shift" });
   });
 });
+
+describe("dragging a whole zone with Shift held", () => {
+  const corners = (c: FakeChart, left: number, right: number, a: number, b: number) => [
+    { timestamp: c.data[left].timestamp, value: a },
+    { timestamp: c.data[right].timestamp, value: b },
+  ];
+
+  it("puts its top and bottom on the high and low of the candle it started on, wherever it is dragged to in time", async () => {
+    const h = await drawing("rect", false);
+    const c = FakeChart.instances[0];
+    const ov = c.overlaysNamed("rect").pop()!;
+    // the zone starts on bar 3 (range 990-1010), covering bars 3 to 6
+    h.onPressedMoveStart({ overlay: { id: ov.id, name: "rect", points: corners(c, 3, 6, 1008, 1002) }, figureKey: "overlay_polygon_0" });
+    fireEvent.keyDown(window, { key: "Shift" });
+    // the library has moved it to bars 10-13 and up by 18
+    ov.points = corners(c, 10, 13, 1026, 1020);
+    expect(h.onPressedMoving({ overlay: { id: ov.id, name: "rect", points: ov.points }, figureKey: "overlay_polygon_0", x: 1, y: 1 })).toBe(false); // the library still moves it
+    await waitFor(() => expect(c.overlays.get(ov.id)!.points.map((p: { value: number }) => p.value)).toEqual([1010, 990]));
+    expect(c.overlays.get(ov.id)!.points.map((p: { timestamp: number }) => p.timestamp)).toEqual([c.data[10].timestamp, c.data[13].timestamp]); // its time position is untouched
+    fireEvent.keyUp(window, { key: "Shift" });
+  });
+
+  it("keeps which corner is the upper one", async () => {
+    const h = await drawing("rect", false);
+    const c = FakeChart.instances[0];
+    const ov = c.overlaysNamed("rect").pop()!;
+    h.onPressedMoveStart({ overlay: { id: ov.id, name: "rect", points: corners(c, 3, 6, 1002, 1008) }, figureKey: "overlay_polygon_0" }); // drawn bottom-left to top-right
+    fireEvent.keyDown(window, { key: "Shift" });
+    ov.points = corners(c, 4, 7, 1012, 1018);
+    h.onPressedMoving({ overlay: { id: ov.id, name: "rect", points: ov.points }, figureKey: "overlay_polygon_0", x: 1, y: 1 });
+    await waitFor(() => expect(c.overlays.get(ov.id)!.points.map((p: { value: number }) => p.value)).toEqual([990, 1010]));
+    fireEvent.keyUp(window, { key: "Shift" });
+  });
+
+  it("does nothing without Shift, and does not touch a corner drag", async () => {
+    const h = await drawing("rect", false);
+    const c = FakeChart.instances[0];
+    const ov = c.overlaysNamed("rect").pop()!;
+    h.onPressedMoveStart({ overlay: { id: ov.id, name: "rect", points: corners(c, 3, 6, 1008, 1002) }, figureKey: "overlay_polygon_0" });
+    ov.points = corners(c, 10, 13, 1026, 1020);
+    h.onPressedMoving({ overlay: { id: ov.id, name: "rect", points: ov.points }, figureKey: "overlay_polygon_0", x: 1, y: 1 });
+    await Promise.resolve();
+    expect(c.overlays.get(ov.id)!.points.map((p: { value: number }) => p.value)).toEqual([1026, 1020]); // as the library left it
+    fireEvent.keyDown(window, { key: "Shift" });
+    expect(h.onPressedMoving({ overlay: { id: ov.id, name: "rect", points: ov.points }, figureKey: "overlay_point_1", figureIndex: 1, x: 1, y: 1 })).toBe(false); // a corner: the earlier behaviour
+    await Promise.resolve();
+    expect(c.overlays.get(ov.id)!.points.map((p: { value: number }) => p.value)).toEqual([1026, 1020]);
+    fireEvent.keyUp(window, { key: "Shift" });
+  });
+});

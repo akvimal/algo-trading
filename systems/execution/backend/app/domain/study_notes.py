@@ -176,3 +176,69 @@ def delete_note(db: Session, user_id: uuid.UUID, note_id: uuid.UUID) -> bool:
     deleted = db.query(N).filter(N.id == note_id, N.user_id == user_id).delete(synchronize_session=False)
     db.commit()
     return deleted == 1
+
+
+# ---- where a plan note's trade stands --------------------------------------------------------------------------------------------
+
+_ENDED = ("expired", "cancelled", "rejected", "failed")
+
+
+def _f(v) -> Optional[float]:
+    return float(v) if v is not None else None
+
+
+def r_multiple(action: str, entry, exit_, initial_stop) -> Optional[float]:
+    """How the trade ended as a multiple of the risk it was planned with (entry to its first stop); None when there was no stop to measure by."""
+    if entry is None or exit_ is None or initial_stop is None:
+        return None
+    risk = abs(float(entry) - float(initial_stop))
+    if risk <= 0:
+        return None
+    direction = 1 if action == "BUY" else -1
+    return round(direction * (float(exit_) - float(entry)) / risk, 2)
+
+
+def note_trades(db: Session, user_id: uuid.UUID, note_ids: list[uuid.UUID]) -> list[dict]:
+    """For each of the caller's own notes that has produced (or is waiting to produce) a trade: the order waiting for its price, or the
+    position it became and how it stands. A note with neither is simply absent. The state is one of
+    waiting (a Limit entry armed), open, closed (with its R multiple), or ended (the order expired, was cancelled or was refused)."""
+    if not note_ids:
+        return []
+    S, P, O = db_models.StudyNote, db_models.Position, db_models.PendingOrder
+    notes = {n.id: n for n in db.query(S).filter(S.user_id == user_id, S.id.in_(note_ids)).all()}
+    if not notes:
+        return []
+    orders = db.query(O).filter(O.user_id == user_id, O.source_note_id.in_(list(notes))).order_by(O.created_at.desc()).all()
+    latest_order: dict[uuid.UUID, db_models.PendingOrder] = {}
+    for o in orders:
+        latest_order.setdefault(o.source_note_id, o)
+    position_ids = [n.position_id for n in notes.values() if n.position_id is not None]
+    positions = {p.id: p for p in db.query(P).filter(P.user_id == user_id, P.id.in_(position_ids)).all()} if position_ids else {}
+
+    out = []
+    for note_id, note in notes.items():
+        order = latest_order.get(note_id)
+        pos = positions.get(note.position_id) if note.position_id is not None else None
+        if pos is None and order is None:
+            continue
+        item: dict = {"note_id": str(note_id), "state": "none", "order": None, "position": None, "r_multiple": None}
+        if order is not None:
+            item["order"] = {
+                "id": str(order.id), "status": order.status, "status_reason": order.status_reason, "trigger_price": _f(order.trigger_price),
+                "stop_loss_price": _f(order.stop_loss_price), "target_price": _f(order.target_price), "expires_at": order.expires_at.isoformat(),
+                "last_price": _f(order.last_price),
+            }
+        if pos is not None:
+            item["position"] = {
+                "id": str(pos.id), "status": pos.status, "action": pos.action, "horizon": pos.horizon, "quantity": _f(pos.quantity),
+                "entry_price": _f(pos.entry_price), "exit_price": _f(pos.exit_price), "pnl": _f(pos.pnl), "exit_reason": pos.exit_reason,
+                "stop_loss_price": _f(pos.stop_loss_price), "initial_stop_loss_price": _f(pos.initial_stop_loss_price),
+                "target_price": _f(pos.target_price), "segment": pos.segment,
+            }
+            item["state"] = "closed" if pos.status == "CLOSED" else "open"
+            if pos.status == "CLOSED":
+                item["r_multiple"] = r_multiple(pos.action, pos.entry_price, pos.exit_price, pos.initial_stop_loss_price)
+        elif order is not None:
+            item["state"] = "waiting" if order.status == "pending" else "ended" if order.status in _ENDED else "ended"
+        out.append(item)
+    return out

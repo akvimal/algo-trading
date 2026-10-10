@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user
 from app.domain.models import StudyNoteCreate, StudyNoteInstrumentOut, StudyNoteOut
-from app.domain.study_notes import StudyNoteError, create_note, delete_note, get_snapshot, list_instruments, list_notes
+from app.domain.study_notes import StudyNoteError, create_note, delete_note, get_snapshot, list_instruments, list_notes, note_trades
 
 router = APIRouter()
 
@@ -54,6 +54,23 @@ def get_notes(
 def get_note_instruments(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Every instrument the caller has notes on, most recently written first, with a count."""
     return list_instruments(db, user.id)
+
+
+@router.get("/study-notes/trades")
+def get_note_trades(
+    ids: str = Query(description="Comma-separated note ids (at most 100)", max_length=4000),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Where each of these plan notes' trade stands: the Limit order waiting for its price, or the position it became (open, or closed with
+    its R multiple). A note that has produced no trade is left out. Only the caller's own notes are ever looked at."""
+    parsed = []
+    for raw in ids.split(",")[:100]:
+        try:
+            parsed.append(uuid.UUID(raw.strip()))
+        except ValueError:
+            continue
+    return note_trades(db, user.id, parsed)
 
 
 @router.get("/study-notes/{note_id}/snapshot")

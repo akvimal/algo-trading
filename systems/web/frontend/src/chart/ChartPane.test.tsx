@@ -160,6 +160,34 @@ describe("armed zones are sent to the server", () => {
     return { c, id: ov.id };
   };
 
+  it("does not arm a zone drawn while the zone alert is switched off, and sends nothing for it", async () => {
+    const ref = createRef<ChartPaneHandle>();
+    render(cloneElement(chartEl(1000), { ref, zoneAlert: false }));
+    const { c } = await (async () => {
+      const chart = await loaded();
+      act(() => ref.current!.startDrawing("rect"));
+      const ov = chart.overlaysNamed("rect").filter((o) => o.points.length === 0).pop()!;
+      act(() => chart.finishDrawing(ov.id, [{ timestamp: chart.data[3].timestamp, value: 1010 }, { timestamp: chart.data[4].timestamp, value: 990 }]));
+      return { c: chart, id: ov.id };
+    })();
+    expect(c.overlaysNamed("rect").length).toBeGreaterThan(0); // the zone is there
+    expect(JSON.parse(localStorage.getItem(KEY)!)[0].alert).toBeUndefined(); // ... but not armed
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sent).toEqual([]);
+  });
+
+  it("an armed zone can still be switched on afterwards when it was drawn without an alert", async () => {
+    const ref = createRef<ChartPaneHandle>();
+    render(cloneElement(chartEl(1000), { ref, zoneAlert: false }));
+    const c = await loaded();
+    act(() => ref.current!.startDrawing("rect"));
+    const ov = c.overlaysNamed("rect").filter((o) => o.points.length === 0).pop()!;
+    act(() => c.finishDrawing(ov.id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[4].timestamp, value: 990 }]));
+    act(() => c.overlays.get(ov.id)!.handlers.onSelected?.({ overlay: { id: ov.id, name: "rect", points: c.overlays.get(ov.id)!.points } }));
+    act(() => ref.current!.setSelectedAlert("cross"));
+    expect(JSON.parse(localStorage.getItem(KEY)!)[0].alert).toEqual({ trigger: "cross" });
+  });
+
   it("arms a zone the moment it is drawn and sends it, to the instrument's own address with the chart's candle size", async () => {
     const ref = withRef();
     await draw(ref, "rect", [{ value: 1010 }, { value: 990 }]);

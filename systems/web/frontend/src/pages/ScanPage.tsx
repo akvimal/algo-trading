@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/http";
+import { FundamentalsPanel } from "../components/FundamentalsPanel";
 import { createCustomScreen, deleteCustomScreen, listCustomScreens, previewCustomScreen, runCustomScreen, updateCustomScreen } from "../api/customScreens";
 import type { ZoneScan, ZoneScanRow, Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
@@ -413,9 +414,12 @@ function OiCard({
         </div>
       )}
       {(expanded || tradeOpen) && (
-        <p style={{ margin: "2px 0 0" }}>
+        <>
+          <p style={{ margin: "2px 0 0" }}>
           <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
+          <FundamentalsPanel symbol={r.symbol} />
+        </>
       )}
     </div>
   );
@@ -621,9 +625,12 @@ function ScreenerCard({
         </div>
       )}
       {(expanded || tradeOpen) && (
-        <p style={{ margin: "2px 0 0" }}>
+        <>
+          <p style={{ margin: "2px 0 0" }}>
           <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
+          <FundamentalsPanel symbol={r.symbol} />
+        </>
       )}
     </div>
   );
@@ -833,9 +840,12 @@ function CustomScreenScan() {
                       </div>
                     )}
                     {(isExpanded || isTradeOpen) && (
-                      <p style={{ margin: "2px 0 0" }}>
+                      <>
+                        <p style={{ margin: "2px 0 0" }}>
                         <Link to={fullTradeLink(m.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
                       </p>
+                        <FundamentalsPanel symbol={m.symbol} />
+                      </>
                     )}
                   </div>
                 );

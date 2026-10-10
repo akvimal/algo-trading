@@ -560,6 +560,8 @@ export function TradePage() {
             onTool={chooseTool}
             magnet={tools.magnet}
             onMagnet={() => setTools((t) => ({ ...t, magnet: !t.magnet }))}
+            zoneAlert={tools.zoneAlert}
+            onZoneAlert={() => setTools((t) => ({ ...t, zoneAlert: !t.zoneAlert }))}
             hidden={tools.drawingsHidden}
             onHidden={() => setTools((t) => ({ ...t, drawingsHidden: !t.drawingsHidden }))}
             onClear={() => paneRefs[active].current?.clearDrawings()}
@@ -682,6 +684,7 @@ export function TradePage() {
                       onLevelCancel={(l) => void cancelWaitingLevel(l)}
                       oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
+                      zoneAlert={tools.zoneAlert}
                       drawingsHidden={tools.drawingsHidden}
                       pickField={active === i ? (levelPick?.field ?? pickField) : null}
                       onPick={onPick}

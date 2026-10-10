@@ -122,6 +122,8 @@ type Props = {
   /** Support and resistance lines read from the option chain (none by default). */
   oiLevels?: OiLevelLine[];
   magnet: boolean;
+  /** Arm a zone with an alert the moment it is drawn (default true). It can still be switched off, and on, per zone afterwards. */
+  zoneAlert?: boolean;
   drawingsHidden: boolean;
   /** Set while the person is choosing a price on the chart for a ticket field. */
   pickField: PriceField | null;
@@ -789,7 +791,7 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
       }
       const drawn = serialize(e.overlay);
       // A zone is drawn to be watched: it is armed straight away (the person can switch it off), and starts from where the price is now.
-      const arm = e.overlay.name === "rect" && !drawn.alert;
+      const arm = e.overlay.name === "rect" && !drawn.alert && propsRef.current.zoneAlert !== false;
       drawnRef.current.set(e.overlay.id, arm ? { ...drawn, alert: { trigger: "cross" } } : drawn);
       if (arm) {
         const z = alertZone(drawn);

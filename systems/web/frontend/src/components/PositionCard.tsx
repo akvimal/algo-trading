@@ -114,7 +114,7 @@ export function PositionCard(props: Props) {
     setBusy(true);
     setError(null);
     try {
-      await moveOpenLevel({ kind: props.kind, field: editing, tradeId: item.id }, price, props.interval, why);
+      await moveOpenLevel({ kind: props.kind, field: editing, tradeId: item.id }, price, undefined, why);
       setEditing(null);
       props.onChanged();
     } catch (e) {

@@ -48,37 +48,61 @@ def _to_out(a: screener_fetch.FundamentalAnalysis, refreshed: bool) -> Fundament
     )
 
 
-def _key_required() -> HTTPException:
-    return HTTPException(
-        status_code=409,
-        detail="Fundamentals are read by AI and need an OpenRouter key: add yours in Settings.",
-        headers={"X-Error-Code": "openrouter_key_required"},
-    )
+KEY_REQUIRED_CODE = "openrouter_key_required"
+KEY_REQUIRED_MESSAGE = "Fundamentals are read by AI and need an OpenRouter key: add yours in Settings."
 
 
-@router.get("/fundamentals/{symbol}", response_model=FundamentalsOut)
-def get_stock_fundamentals(symbol: str, refresh: bool = Query(default=False), caller: Caller = Depends(get_caller)):
-    sym = symbol.strip().upper()
+class FundamentalsProblem(Exception):
+    """Why a fundamentals read could not be made: an HTTP status and a message a person can act on (and a code when it is the missing key)."""
+
+    def __init__(self, status_code: int, detail: str, code: Optional[str] = None):
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+        self.code = code
+
+
+def valid_symbol(raw: str) -> str:
+    sym = raw.strip().upper()
     if not _SYMBOL.match(sym):
         raise HTTPException(status_code=422, detail="not a valid NSE symbol")
-    key = (accounts_client.get_user_openrouter_key(caller.user_id) if caller.user_id else None) or settings.openrouter_api_key or None
+    return sym
+
+
+def caller_key(caller: Caller) -> Optional[str]:
+    """The key a read is paid for with: the caller's own saved OpenRouter key, else the platform's, else none."""
+    return (accounts_client.get_user_openrouter_key(caller.user_id) if caller.user_id else None) or settings.openrouter_api_key or None
+
+
+def read_fundamentals(sym: str, key: Optional[str], refresh: bool = False) -> tuple[screener_fetch.FundamentalAnalysis, bool]:
+    """The stock's AI fundamentals read and whether a fresh capture was made for it. Raises FundamentalsProblem when there is none to give."""
     cached = screener_fetch.has_cached(sym)
     if not key and not cached:
-        raise _key_required()  # nothing to read from yet, and nothing to read it with: do not open a browser for nothing
+        raise FundamentalsProblem(409, KEY_REQUIRED_MESSAGE, KEY_REQUIRED_CODE)  # nothing to read from, nothing to read it with: no browser for nothing
 
     analysis = screener_fetch.get_fundamentals(sym, key)
     if analysis is None:
-        raise HTTPException(status_code=503, detail=f"Could not read screener.in for {sym}. It may not be listed there, or the site is unavailable right now.")
+        raise FundamentalsProblem(503, f"Could not read screener.in for {sym}. It may not be listed there, or the site is unavailable right now.")
     refreshed = False
     if analysis.bias is None:
         # A stored page whose first read failed (no key then, or a model hiccup): read the same page again, without a new capture.
         if not key:
-            raise _key_required()
+            raise FundamentalsProblem(409, KEY_REQUIRED_MESSAGE, KEY_REQUIRED_CODE)
         analysis = screener_fetch.reanalyze_cached(sym, key) or analysis
         if analysis.bias is None:
-            raise HTTPException(status_code=502, detail="The AI could not read this company's page right now. Try again in a minute.")
+            raise FundamentalsProblem(502, "The AI could not read this company's page right now. Try again in a minute.")
     elif refresh and key and analysis.fetched_at is not None and datetime.now(timezone.utc) - analysis.fetched_at >= REFRESH_AFTER:
         fresh = screener_fetch.get_fundamentals(sym, key, force=True)
         if fresh is not None and fresh.bias is not None:
             analysis, refreshed = fresh, True
+    return analysis, refreshed
+
+
+@router.get("/fundamentals/{symbol}", response_model=FundamentalsOut)
+def get_stock_fundamentals(symbol: str, refresh: bool = Query(default=False), caller: Caller = Depends(get_caller)):
+    sym = valid_symbol(symbol)
+    try:
+        analysis, refreshed = read_fundamentals(sym, caller_key(caller), refresh)
+    except FundamentalsProblem as p:
+        raise HTTPException(status_code=p.status_code, detail=p.detail, headers={"X-Error-Code": p.code} if p.code else None)
     return _to_out(analysis, refreshed)

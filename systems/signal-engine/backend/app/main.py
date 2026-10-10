@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.secure_config import cors_origins, enforce_secure_config
 from app.api.routes import (
+    analysis,
     fundamentals,
     health,
     indicators,
@@ -55,6 +56,7 @@ app.include_router(rules.router)
 app.include_router(saved_backtests.router)
 app.include_router(signals.router)
 app.include_router(strategies.router)
+app.include_router(analysis.router)
 app.include_router(fundamentals.router)
 app.include_router(watchlists.router)
 app.include_router(weekly_advisor.router)

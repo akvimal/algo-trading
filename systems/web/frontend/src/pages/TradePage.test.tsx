@@ -651,6 +651,15 @@ describe("placing", () => {
     expect(puts("/positions/p1/stop-loss")[0].body).toEqual({ stop_loss_price: 985 });
   });
 
+  it("offers a snapshot of the chart on an open trade, because the chart is open right there", async () => {
+    positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: 1100, option_group_id: null, unrealized_pnl: 0 }];
+    renderAt("/trade?symbol=RELIANCE");
+    const list = within(await screen.findByTestId("ticket-positions"));
+    await userEvent.setup().click(list.getByRole("button", { name: "Snapshots" }));
+    expect(await list.findByRole("button", { name: "Save a snapshot of the chart now" })).toBeInTheDocument();
+    expect(list.queryByRole("link", { name: "Trade page" })).not.toBeInTheDocument(); // no "go to the Trade page": this is it
+  });
+
   it("fetches positions for the ticket even with 'My trades' off on the chart", async () => {
     localStorage.setItem("web.chart.tools", JSON.stringify({ magnet: false, drawingsHidden: false, indicatorsHidden: false, tradesOn: false, oiLevelsOn: false }));
     positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];

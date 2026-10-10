@@ -83,12 +83,15 @@ type Props = {
    * plain NSE stock with no F&O, which cannot be shorted without margin/derivatives: only a long
    * (BUY) position is ever placeable there, so offering Sell would just invite a rejection later. */
   hideSideChips?: boolean;
+  /** Takes a picture of the chart as it is now, for keeping with the trade as its plan at entry: called just before the order is sent, so it shows
+   * the person's drawings and indicators and the planned entry, stop and target. Returns a finished PNG data URL, or null when it cannot. */
+  capturePlan?: (levels: { entry: number | null; stop: number | null; target: number | null }) => Promise<string | null>;
 };
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips }: Props) {
+export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -208,7 +211,16 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
     setError(null);
     setResult(null);
     try {
-      const outcome = await placeOrder(buildOrder(t, now, ctx, meta));
+      // The chart is photographed BEFORE the order goes: it still shows the plan lines (entry, stop, target) the person drew the trade on.
+      let planPicture: string | null = null;
+      if (capturePlan) {
+        try {
+          planPicture = await capturePlan({ entry: now.entry, stop: now.stop, target: now.target });
+        } catch {
+          planPicture = null; // a picture that cannot be taken never stops the order
+        }
+      }
+      const outcome = await placeOrder(buildOrder(t, now, ctx, meta), { planPicture });
       if (outcome.ok) onPlaced();
       setResult(outcome);
     } catch (e) {

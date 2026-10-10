@@ -7,6 +7,8 @@ import { ScanChartPanel } from "../pages/ScanChartPanel";
 import { isNakedOption, isSpreadOption, nakedMetrics, spreadMetrics } from "./positionMetrics";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import { Signed } from "./bits";
+import { TradeSnapshots } from "./TradeSnapshots";
+import type { PictureLevels } from "../chart/tradePicture";
 
 type Field = "stop" | "target";
 
@@ -14,9 +16,13 @@ type Field = "stop" | "target";
  * ticket): put a starting line on the chart, or arm the chart so the next click sets the price. */
 type ChartHelp = { pickingField: Field | null; onAddLine: (field: Field) => void; onPick: (field: Field | null) => void };
 
+/** Takes a picture of the chart as it is on screen now, as a finished PNG with its header, these levels and this caption (or null when it cannot).
+ * Offered where a chart is open for this instrument (the Trade page); elsewhere the Snapshots view only lists and shows what was saved. */
+export type SnapshotCapture = (label: string, levels: PictureLevels, caption: string) => Promise<string | null>;
+
 type Props =
-  | { kind: "position"; item: Position; onChanged: () => void; compact?: boolean; chart?: ChartHelp; interval?: string }
-  | { kind: "group"; item: OptionGroup; onChanged: () => void; compact?: boolean; chart?: ChartHelp; interval?: string };
+  | { kind: "position"; item: Position; onChanged: () => void; compact?: boolean; chart?: ChartHelp; interval?: string; snapshotCapture?: SnapshotCapture }
+  | { kind: "group"; item: OptionGroup; onChanged: () => void; compact?: boolean; chart?: ChartHelp; interval?: string; snapshotCapture?: SnapshotCapture };
 
 /** One open trade: what it is, its P&L, and its stop/target - either as plain text or, tapped, a
  * small inline editor (moveOpenLevel, the same route a chart-line drag already uses). An option
@@ -40,6 +46,7 @@ export function PositionCard(props: Props) {
   const [why, setWhy] = useState(""); // optional reason for a stop/target move
   const [exitNote, setExitNote] = useState(""); // optional reason for getting out
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [events, setEvents] = useState<TradeEvent[] | null>(null);
 
   const isPos = props.kind === "position";
@@ -306,6 +313,9 @@ export function PositionCard(props: Props) {
             {historyOpen ? "Hide history" : "History"}
           </button>
         )}
+        <button className="btn btn-small" aria-pressed={snapshotsOpen} onClick={() => setSnapshotsOpen((v) => !v)} title="The chart saved with this trade: the plan at entry and every update">
+          {snapshotsOpen ? "Hide snapshots" : "Snapshots"}
+        </button>
         {/* Option positions only, per the card's own docstring - a spot/future row has no strike/
             expiry decision riding on the underlying's shape the way an option position does. */}
         {g && !props.chart && (
@@ -328,6 +338,15 @@ export function PositionCard(props: Props) {
           </button>
         )}
       </div>
+      {snapshotsOpen && (
+        <TradeSnapshots
+          trade={{ kind: props.kind, id: item.id }}
+          symbol={title}
+          segment={p ? p.segment : (g!.segment ?? "NSE")}
+          levels={() => ({ entry: p ? p.entry_price : (g!.entry_spot_price ?? null), stop: p ? p.stop_loss_price : g!.spot_stop_loss_price, target: p ? p.target_price : g!.spot_target_price })}
+          capture={props.snapshotCapture}
+        />
+      )}
       {chartOpen && g && !props.chart && (
         <div style={{ marginTop: 12 }}>
           <ScanChartPanel exchange={g.segment ?? "NSE"} symbol={g.underlying_symbol} />

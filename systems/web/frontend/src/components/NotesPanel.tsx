@@ -5,6 +5,7 @@ import { previewIdea, publishIdea, type IdeaPreview } from "../api/ideas";
 import { useIsAdmin } from "../auth/AuthContext";
 import { canAttachAnalysis, canPublish, publishableContext } from "../pages/ideasModel";
 import { useIdeaAnalysis } from "../hooks/useIdeaAnalysis";
+import { useAnalysisCard } from "../hooks/useAnalysisCard";
 import { AttachAnalysis } from "./AttachAnalysis";
 import { ApiError } from "../api/http";
 import type { AiRead, NoteContext, NoteTag, Segment } from "../api/types";
@@ -55,10 +56,18 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
   // The AI analysis of the stock can go out with the idea (NSE stocks): it is read when the box is ticked and the preview waits for it.
   const [withAnalysis, setWithAnalysis] = useState(false);
   const analysis = useIdeaAnalysis(symbol, publish && publishable && withAnalysis && canAttachAnalysis({ segment }));
-  const analysisPending = publish && withAnalysis && !analysis.analysis;
-  const ideaBody = (noteId: string, image?: string | null) => ({
+  // With the analysis the post's picture is a card: the live chart (chart and header only, never the person's own trade lines) under the verdict, both
+  // reads and the price levels. What the preview shows is the picture that is posted.
+  const card = useAnalysisCard({
+    enabled: publish && publishable && withAnalysis && canAttachAnalysis({ segment }),
+    analysis: analysis.analysis,
+    title: `${symbol} · ${interval.replace("min", "m")}`,
+    getChart: cleanChart,
+  });
+  const analysisPending = publish && withAnalysis && (!analysis.analysis || !card.settled);
+  const ideaBody = (noteId: string, picture?: string | null) => ({
     note_id: noteId, segment, symbol, interval, tag: tag ?? "", text: draft.trim(), context: publishableContext(getContext()), include_context: true,
-    ...(image ? { snapshot_png_base64: image } : {}),
+    ...((publish && withAnalysis && card.card ? card.card : picture) ? { snapshot_png_base64: (publish && withAnalysis && card.card ? card.card : picture) as string } : {}),
     ...(publish && withAnalysis && analysis.analysis ? { analysis: analysis.analysis } : {}),
   });
   // What would be posted, shown while the person writes (text only: the picture is taken when they save).
@@ -79,7 +88,7 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
       window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publish, publishable, draft, tag, withAnalysis, analysis.analysis]);
+  }, [publish, publishable, draft, tag, withAnalysis, analysis.analysis, card.card, card.settled]);
   const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
   // Only the latest few sit under the chart; the whole history, by instrument, is on its own page.
   const notes = useResource(() => listNotes({ segment, symbol, limit: RECENT }), [segment, symbol], { enabled: open });
@@ -99,6 +108,23 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
 
   // Why the last attempt to take a picture failed, so the message says what to do rather than "not ready".
   const lastProblem = useRef("the chart is not ready");
+
+  /** The chart with only its header (no note, no AI line, none of the person's own trade lines): what a published picture is built on. */
+  async function cleanChart(): Promise<string | null> {
+    const bare = getChartImage({ withoutTrades: true });
+    if ("problem" in bare) return null;
+    const ctx = getContext();
+    return composeSnapshot({
+      chart: bare.url,
+      scale: bare.scale,
+      title: `${symbol} · ${interval.replace("min", "m")}`,
+      oiItems: getOiItems?.() ?? null,
+      subtitle: `${new Date().toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}${ctx.price != null ? ` · ${formatPrice(ctx.price)}` : ""}`,
+      note: "",
+      tag: null,
+      aiLine: null,
+    });
+  }
 
   /** The picture kept with the note (chart, header, the words, the tag, the AI line) and a second, clean one (chart and header only) that a
    * published idea uses instead, because the first is flattened and its words and AI line cannot be taken off afterwards. */
@@ -256,6 +282,8 @@ export function NotesPanel({ segment, symbol, interval, getContext, getChartImag
                 {publish && canAttachAnalysis({ segment }) && (
                   <AttachAnalysis id="notes-analysis" symbol={symbol} checked={withAnalysis} onChange={setWithAnalysis} state={analysis} />
                 )}
+                {publish && withAnalysis && card.problem && <span className="faint" role="status">{card.problem}.</span>}
+                {publish && withAnalysis && card.card && <img src={card.card} alt="The analysis card that will be posted" data-testid="analysis-card-preview" style={{ width: "100%", borderRadius: 8 }} />}
                 {publish && previewError && <span className="error-text" role="alert">{previewError}</span>}
                 {publish && preview && (
                   <>

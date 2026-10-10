@@ -175,7 +175,7 @@ describe("the AI analysis in a post", () => {
   it("is cut down to the verdict, the first reasons, and the nearest level either side", () => {
     expect(toIdeaAnalysis(stock())).toEqual({
       verdict: "Price is rising, but the business case is weak", agreement: "conflicting", overall: "bearish", overall_strength: "slight", chart_bias: "bullish",
-      chart_points: ["a", "b", "c"], price: 100, as_of: "2026-10-12", business_bias: "bearish", business_confidence: 0.8, business_summary: "Costly.",
+      chart_points: ["a", "b", "c", "d"], price: 100, as_of: "2026-10-12", business_bias: "bearish", business_confidence: 0.8, business_summary: "Costly.",
       pros: ["p1", "p2"], cons: ["c1", "c2"], support: { low: 90, high: 95, distance_pct: 5 }, resistance: { low: 105, high: 110, distance_pct: 5 },
     });
   });

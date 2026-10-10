@@ -35,7 +35,7 @@ export function toIdeaAnalysis(a: StockAnalysis): IdeaAnalysis {
     overall: a.verdict.bias,
     overall_strength: a.verdict.confidence > 0 ? leanStrength(a.verdict.confidence) : null,
     chart_bias: a.technical.bias,
-    chart_points: a.technical.points.slice(0, 3),
+    chart_points: a.technical.points.slice(0, 4),
     price: a.price,
     as_of: a.as_of,
     business_bias: business ? f.bias : null,

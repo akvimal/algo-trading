@@ -82,7 +82,7 @@ describe("publishing with the AI analysis", () => {
     expect(calls.some((c) => c.url.endsWith("/analysis/CUPID"))).toBe(true);
     expect(lastPreview().analysis).toEqual({
       verdict: "The trend is up; the business read is mixed", agreement: "mixed", overall: "bullish", overall_strength: "strong", chart_bias: "bullish",
-      chart_points: ["one", "two", "three"], price: 366.1, as_of: "2026-10-12", business_bias: "neutral", business_confidence: 0.65,
+      chart_points: ["one", "two", "three", "four"], price: 366.1, as_of: "2026-10-12", business_bias: "neutral", business_confidence: 0.65,
       business_summary: "Strong growth, costly.", pros: ["p1", "p2"], cons: ["c1", "c2"],
       support: { low: 340, high: 348, distance_pct: 5.2 }, resistance: null,
     });

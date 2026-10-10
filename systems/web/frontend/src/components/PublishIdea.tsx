@@ -4,6 +4,7 @@ import { previewIdea, publishIdea, snapshotDataUrl, unpublishIdea, type IdeaPrev
 import type { StudyNote } from "../api/types";
 import { canAttachAnalysis, canPublish, closedTradesFor, deliveryNote, publishedLabel, toIdeaRequest, type ClosedTrade } from "../pages/ideasModel";
 import { useIdeaAnalysis } from "../hooks/useIdeaAnalysis";
+import { useAnalysisCard } from "../hooks/useAnalysisCard";
 import { AttachAnalysis } from "./AttachAnalysis";
 import { groupsApi, positionsApi } from "../api/rupees";
 
@@ -26,7 +27,14 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
   const [tradeId, setTradeId] = useState("");
   const [includeAnalysis, setIncludeAnalysis] = useState(false);
   const analysis = useIdeaAnalysis(note.symbol, open && includeAnalysis && canAttachAnalysis(note));
-  const waitingForAnalysis = includeAnalysis && !analysis.analysis;
+  // With the analysis the post's picture is a card: the chart the note was saved with (when it has one) under the verdict, both reads and the levels.
+  const card = useAnalysisCard({
+    enabled: open && includeAnalysis,
+    analysis: analysis.analysis,
+    title: `${note.symbol} · ${note.interval ? note.interval.replace("min", "m") : "chart"}`,
+    getChart: async () => (note.has_snapshot ? snapshotDataUrl(note.id, note.has_clean_snapshot ? "clean" : "full") : null),
+  });
+  const waitingForAnalysis = includeAnalysis && (!analysis.analysis || !card.settled);
   const snapshot = useRef<string | null>(null);
   const label = publishedLabel(state);
   // A note saved after the clean picture existed has one (the chart with only a header); an older one has only the composed picture.
@@ -35,7 +43,12 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
 
   async function request() {
     if (includeImage && note.has_snapshot && !snapshot.current) snapshot.current = await snapshotDataUrl(note.id, variant);
-    return toIdeaRequest(note, { includeContext, snapshot: includeImage ? snapshot.current : null, trade: attached?.request ?? null, analysis: includeAnalysis ? analysis.analysis : null });
+    return toIdeaRequest(note, {
+      includeContext,
+      snapshot: includeAnalysis && card.card ? card.card : includeImage ? snapshot.current : null,
+      trade: attached?.request ?? null,
+      analysis: includeAnalysis ? analysis.analysis : null,
+    });
   }
 
   // Closed trades are fetched once, when the panel is first opened.
@@ -74,7 +87,7 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, includeContext, includeImage, tradeId, includeAnalysis, analysis.analysis]);
+  }, [open, includeContext, includeImage, tradeId, includeAnalysis, analysis.analysis, card.card, card.settled]);
 
   async function publish() {
     setBusy(true);
@@ -151,10 +164,11 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
       </label>
       {note.has_snapshot && (
         <label className="check" htmlFor={`img-${note.id}`}>
-          <input id={`img-${note.id}`} type="checkbox" checked={includeImage} onChange={(e) => setIncludeImage(e.target.checked)} />
+          <input id={`img-${note.id}`} type="checkbox" checked={includeImage && !includeAnalysis} disabled={includeAnalysis} onChange={(e) => setIncludeImage(e.target.checked)} />
           <span>
             Include the chart image
             <span className="faint" style={{ display: "block", fontSize: 12 }}>
+              {includeAnalysis ? "The AI analysis card already has the chart on it. " : ""}
               {note.has_clean_snapshot
                 ? "The chart with a header only. It can still show lines you drew, including your own trades, so look at it first."
                 : "This is the picture saved with the note: it also shows your note text and any AI read line, as well as lines you drew, including your own trades. Notes saved from now on keep a chart-only picture too."}
@@ -188,6 +202,8 @@ export function PublishIdea({ note, state, onChanged }: { note: StudyNote; state
           says whether it was paper or live. It never shows quantity, lots, rupee amounts, charges or your balance.
         </span>
       </div>
+      {includeAnalysis && card.problem && <div className="notice" role="status">{card.problem}.</div>}
+      {includeAnalysis && card.card && <img src={card.card} alt="The analysis card that will be posted" data-testid="analysis-card-preview" style={{ width: "100%", borderRadius: 8 }} />}
       {!preview && !error && !waitingForAnalysis && <span className="faint">Building the preview…</span>}
       {preview && (
         <>

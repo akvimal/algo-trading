@@ -9,6 +9,8 @@ import { ChartIcon } from "../chart/icons";
 import { IdeasChannelCard } from "../components/IdeasChannelCard";
 import { PublishIdea } from "../components/PublishIdea";
 import { NoteRow } from "../components/NoteRow";
+import { NoteTrade } from "../components/NoteTrade";
+import { useNoteTrades } from "../hooks/useNoteTrades";
 import { NOTE_TAGS, groupByDay } from "../components/notesModel";
 import { useResource } from "../hooks/useResource";
 
@@ -33,6 +35,7 @@ export function NotesPage() {
   const request = useRef(0);
   const instruments = useResource(listNoteInstruments, []);
   const isAdmin = useIsAdmin();
+  const trades = useNoteTrades(items);
   // Which of the notes on screen have been published as ideas (operator only).
   const [published, setPublished] = useState<Record<string, PublishedIdea>>({});
   useEffect(() => {
@@ -146,7 +149,12 @@ export function NotesPage() {
                 note={n}
                 showInstrument={!symbol}
                 onDeleted={refresh}
-                extra={isAdmin ? <PublishIdea note={n} state={published[n.id]} onChanged={(p) => setPublished((cur) => ({ ...cur, [p.note_id]: p }))} /> : undefined}
+                extra={
+                  <>
+                    <NoteTrade note={n} trade={trades.byId[n.id]} onChanged={trades.reload} />
+                    {isAdmin && <PublishIdea note={n} state={published[n.id]} onChanged={(p) => setPublished((cur) => ({ ...cur, [p.note_id]: p }))} />}
+                  </>
+                }
               />
             ))}
           </div>

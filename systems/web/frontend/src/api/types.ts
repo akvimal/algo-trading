@@ -445,7 +445,7 @@ export type PendingOrder = {
   segment: Segment;
   symbol: string;
   action: "BUY" | "SELL";
-  strategy: "future" | "naked" | "spread";
+  strategy: "future" | "naked" | "spread" | "spot";
   trigger_price: number;
   stop_loss_price: number | null;
   target_price: number | null;

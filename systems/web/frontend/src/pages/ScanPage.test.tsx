@@ -733,9 +733,10 @@ describe("OI buildup", () => {
       expect(posted).toBeDefined();
     });
 
-    it("places an option order straight from the card - defaults to Option, no spot-oriented chrome at all", async () => {
-      // Defaults to Option (no click needed) - and no Order type/Stop-loss/Target/Lots/checks/
-      // Confidence for an option trade here (hideOptionExtras): every option position this
+    it("places an option order straight from the card - defaults to Option, no spot-oriented chrome beyond Market / Wait for a price", async () => {
+      // Defaults to Option (no click needed) - and no Stop-loss/Target/Lots/checks/Confidence for a
+      // market option trade here (hideOptionExtras); only the Market / "Wait for a price" choice stays,
+      // so an order can be queued while the market is closed: every option position this
       // platform can place is already risk-capped by construction, so analyzeTicket never
       // requires a stop-loss for one regardless of the account's own require_stop_loss setting.
       const user = userEvent.setup();
@@ -744,7 +745,8 @@ describe("OI buildup", () => {
       const tcs = within(within(list).getAllByTestId("oi-card")[0]);
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       await tcs.findByTestId("ticket");
-      expect(tcs.queryByRole("group", { name: "Order type" })).not.toBeInTheDocument();
+      expect(within(tcs.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Market" })).toHaveAttribute("aria-pressed", "true");
+      expect(within(tcs.getByRole("group", { name: "Order type" })).getByRole("button", { name: "Wait for a price" })).toBeInTheDocument();
       expect(tcs.queryByLabelText("Stop-loss")).not.toBeInTheDocument();
       expect(tcs.queryByTestId("checks")).not.toBeInTheDocument();
       expect(tcs.getByLabelText("Why this trade? (helps your review later)")).toBeInTheDocument(); // kept, unlike the rest
@@ -752,7 +754,7 @@ describe("OI buildup", () => {
       await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/option-groups/manual"))).toBe(true));
     });
 
-    it("hides Stop-loss/Order type for an option trade even when the account requires a stop-loss", async () => {
+    it("hides Stop-loss for a market option trade even when the account requires a stop-loss", async () => {
       account.require_stop_loss = true;
       const user = userEvent.setup();
       renderAt("/scan");
@@ -761,7 +763,6 @@ describe("OI buildup", () => {
       await user.click(tcs.getByRole("button", { name: "Trade" }));
       await tcs.findByTestId("ticket");
       expect(tcs.queryByLabelText(/Stop-loss/)).not.toBeInTheDocument();
-      expect(tcs.queryByRole("group", { name: "Order type" })).not.toBeInTheDocument();
       // Not blocked by the account's own requirement either - placing still works.
       await user.click(tcs.getByRole("button", { name: /Buy TCS, paper order/ }));
       await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/option-groups/manual"))).toBe(true));

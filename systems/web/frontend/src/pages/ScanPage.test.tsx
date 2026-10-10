@@ -488,7 +488,10 @@ describe("OI buildup", () => {
       expect(tcs.getByRole("button", { name: "Zone (supply or demand)" })).toBeInTheDocument();
       await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("interval=daily") && c.url.includes("symbol=TCS"))).toBe(true));
       // The full Trade page is still one tap away - not lost, just no longer the default action.
-      expect(tcs.getByRole("link", { name: /Open the full Trade page/ })).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE");
+      const full = tcs.getByRole("link", { name: /Open the full Trade page/ });
+      expect(full).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE");
+      expect(full).toHaveAttribute("target", "_blank"); // opens in a new tab, so the scan stays where it is
+      expect(full).toHaveAttribute("rel", expect.stringContaining("noopener"));
     });
 
     it("closes again on a second click, and only one card's chart is open at a time", async () => {

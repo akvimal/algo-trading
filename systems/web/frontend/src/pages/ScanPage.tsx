@@ -414,7 +414,7 @@ function OiCard({
       )}
       {(expanded || tradeOpen) && (
         <p style={{ margin: "2px 0 0" }}>
-          <Link to={tradeLink(r.symbol)}>Open the full Trade page →</Link>
+          <Link to={tradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
       )}
     </div>
@@ -622,7 +622,7 @@ function ScreenerCard({
       )}
       {(expanded || tradeOpen) && (
         <p style={{ margin: "2px 0 0" }}>
-          <Link to={tradeLink(r.symbol)}>Open the full Trade page →</Link>
+          <Link to={tradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
         </p>
       )}
     </div>
@@ -834,7 +834,7 @@ function CustomScreenScan() {
                     )}
                     {(isExpanded || isTradeOpen) && (
                       <p style={{ margin: "2px 0 0" }}>
-                        <Link to={tradeLink(m.symbol)}>Open the full Trade page →</Link>
+                        <Link to={tradeLink(m.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
                       </p>
                     )}
                   </div>

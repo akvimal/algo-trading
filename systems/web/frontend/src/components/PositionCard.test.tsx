@@ -226,3 +226,45 @@ describe("squaring off", () => {
     expect(screen.getByRole("button", { name: "Square off" })).toBeInTheDocument();
   });
 });
+
+describe("the trade journal notes", () => {
+  it("sends the optional reason along with a stop-loss move", async () => {
+    const user = userEvent.setup();
+    render(<PositionCard kind="position" item={position()} onChanged={onChanged()} />);
+    await user.click(screen.getByRole("button", { name: "Edit sl" }));
+    await user.clear(screen.getByLabelText("SL"));
+    await user.type(screen.getByLabelText("SL"), "990");
+    await user.type(screen.getByLabelText(/Why are you moving the sl/i), "T1 hit, locking profit");
+    await user.click(screen.getByRole("button", { name: "Save sl" }));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/stop-loss"))).toBe(true));
+    expect(calls.find((c) => c.url.includes("/stop-loss"))!.body).toEqual({ stop_loss_price: 990, note: "T1 hit, locking profit" });
+  });
+
+  it("offers no reason box for an option group, whose levels keep none", async () => {
+    const user = userEvent.setup();
+    render(<PositionCard kind="group" item={group()} onChanged={onChanged()} />);
+    await user.click(screen.getByRole("button", { name: "Edit sl" }));
+    expect(screen.queryByLabelText(/Why are you moving/i)).not.toBeInTheDocument();
+  });
+
+  it("sends the exit note as ?note= when squaring off a position", async () => {
+    const user = userEvent.setup();
+    render(<PositionCard kind="position" item={position()} onChanged={onChanged()} />);
+    await user.click(screen.getByRole("button", { name: "Square off" }));
+    await user.type(screen.getByLabelText(/Why are you getting out/i), "thesis broke");
+    await user.click(screen.getByRole("button", { name: "Confirm square off" }));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/positions/p1/square-off"))).toBe(true));
+    expect(calls.find((c) => c.url.includes("/square-off"))!.url).toContain("?note=thesis%20broke");
+  });
+
+  it("shows the trade's history of stop and target moves with their notes", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetch).mockImplementationOnce(async () =>
+      json([{ id: "e1", field: "stop_loss", move: "tighten", source: "user", accepted: true, old_price: 980, new_price: 990, refused_reason: null, note: "locking profit", created_at: "2026-09-28T05:00:00Z" }]),
+    );
+    render(<PositionCard kind="position" item={position()} onChanged={onChanged()} />);
+    await user.click(screen.getByRole("button", { name: "History" }));
+    expect(await screen.findByText(/locking profit/)).toBeInTheDocument();
+    expect(screen.getByTestId("trade-history")).toHaveTextContent("SL 980 → 990");
+  });
+});

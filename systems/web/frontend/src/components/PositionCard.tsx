@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/http";
-import { moveOpenLevel, setAutoTrail } from "../api/trade";
+import { listTradeEvents, moveOpenLevel, setAutoTrail, squareOffPosition, type TradeEvent } from "../api/trade";
 import type { OptionGroup, Position } from "../api/types";
 import { formatPct, formatPnl, formatPrice, formatTime } from "../format";
 import { ScanChartPanel } from "../pages/ScanChartPanel";
@@ -37,6 +37,10 @@ export function PositionCard(props: Props) {
   const [editing, setEditing] = useState<Field | null>(null);
   const [draft, setDraft] = useState("");
   const [chartOpen, setChartOpen] = useState(false);
+  const [why, setWhy] = useState(""); // optional reason for a stop/target move
+  const [exitNote, setExitNote] = useState(""); // optional reason for getting out
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [events, setEvents] = useState<TradeEvent[] | null>(null);
 
   const isPos = props.kind === "position";
   const { item, compact } = props;
@@ -66,8 +70,8 @@ export function PositionCard(props: Props) {
     setBusy(true);
     setError(null);
     try {
-      const path = isPos ? `/positions/${item.id}/square-off` : `/option-groups/${item.id}/square-off`;
-      await api("execution", path, { method: "POST" });
+      if (isPos) await squareOffPosition(item.id, exitNote);
+      else await api("execution", `/option-groups/${item.id}/square-off`, { method: "POST" });
       // Stay disabled/"Closing…" on success - props.onChanged() reloads the parent's list, which
       // is what actually makes this card go away (it's now CLOSED). Flipping busy back to false
       // here would re-enable "Confirm square off" for the moment before that reload lands,
@@ -95,6 +99,7 @@ export function PositionCard(props: Props) {
 
   function startEdit(field: Field, current: number | null) {
     setEditing(field);
+    setWhy("");
     setDraft(current != null ? String(current) : "");
     setError(null);
   }
@@ -109,7 +114,7 @@ export function PositionCard(props: Props) {
     setBusy(true);
     setError(null);
     try {
-      await moveOpenLevel({ kind: props.kind, field: editing, tradeId: item.id }, price);
+      await moveOpenLevel({ kind: props.kind, field: editing, tradeId: item.id }, price, props.interval, why);
       setEditing(null);
       props.onChanged();
     } catch (e) {
@@ -118,6 +123,19 @@ export function PositionCard(props: Props) {
       setBusy(false);
     }
   }
+
+  // The trade's timeline of stop/target moves, fetched when it is opened (spot/future only: an option group keeps none).
+  useEffect(() => {
+    if (!historyOpen || !isPos) return;
+    let live = true;
+    setEvents(null);
+    listTradeEvents(item.id)
+      .then((e) => live && setEvents(e))
+      .catch(() => live && setEvents([]));
+    return () => {
+      live = false;
+    };
+  }, [historyOpen, isPos, item.id, stop, target]);
 
   function level(field: Field, value: number | null) {
     const label = field === "stop" ? "SL" : "Target";
@@ -141,6 +159,22 @@ export function PositionCard(props: Props) {
               if (e.key === "Escape") setEditing(null);
             }}
           />
+          {isPos && (
+            <input
+              className="pos-level-input"
+              style={{ width: 150 }}
+              placeholder="Why? (optional)"
+              aria-label={`Why are you moving the ${label.toLowerCase()}? (optional)`}
+              maxLength={500}
+              value={why}
+              disabled={busy}
+              onChange={(e) => setWhy(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveEdit();
+                if (e.key === "Escape") setEditing(null);
+              }}
+            />
+          )}
           <button className="icon-btn" aria-label={`Save ${label.toLowerCase()}`} disabled={busy} onClick={() => void saveEdit()}>
             ✓
           </button>
@@ -239,7 +273,39 @@ export function PositionCard(props: Props) {
           {error}
         </div>
       )}
+      {confirming && isPos && (
+        <input
+          className="pos-level-input"
+          style={{ width: "100%" }}
+          placeholder="Why are you getting out? (optional)"
+          aria-label="Why are you getting out? (optional)"
+          maxLength={500}
+          value={exitNote}
+          disabled={busy}
+          onChange={(e) => setExitNote(e.target.value)}
+        />
+      )}
+      {historyOpen && isPos && (
+        <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0, fontSize: 12 }} data-testid="trade-history">
+          {events === null && <li className="faint">Loading…</li>}
+          {events !== null && events.length === 0 && <li className="faint">No stop or target moves yet.</li>}
+          {events?.map((e) => (
+            <li key={e.id}>
+              <span className="dim">{formatTime(e.created_at)}</span> {e.field === "stop_loss" ? "SL" : "Target"}{" "}
+              {e.old_price != null ? formatPrice(e.old_price) : "none"} → {e.new_price != null ? formatPrice(e.new_price) : "none"}
+              {!e.accepted && <span className="dn"> (refused)</span>}
+              {e.source !== "user" && <span className="faint"> · {e.source.replace("_", "-")}</span>}
+              {e.note && <div className="faint">"{e.note}"</div>}
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="row" style={{ justifyContent: "flex-end" }}>
+        {isPos && (
+          <button className="btn btn-small" aria-pressed={historyOpen} onClick={() => setHistoryOpen((v) => !v)}>
+            {historyOpen ? "Hide history" : "History"}
+          </button>
+        )}
         {/* Option positions only, per the card's own docstring - a spot/future row has no strike/
             expiry decision riding on the underlying's shape the way an option position does. */}
         {g && !props.chart && (

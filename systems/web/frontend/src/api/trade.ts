@@ -116,16 +116,37 @@ const ATR_INTERVALS = new Set(["1min", "3min", "5min", "15min", "25min", "30min"
 
 /** Moves the stop or target of an open trade to a new price. A position's target has its own route; an
  * option group's stop and target are levels of the underlying. */
-export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number, interval?: string): Promise<void> {
+export async function moveOpenLevel(level: Pick<OpenLevel, "kind" | "field" | "tradeId">, price: number, interval?: string, note?: string): Promise<void> {
   // The chart interval the person trades on, so the server can judge a tight trail against that interval's ATR.
   const atr = interval && ATR_INTERVALS.has(interval) ? { atr_interval: interval } : {};
+  // The person's own reason for the move: only a spot/future position keeps one (an option group's levels take none).
+  const why = note?.trim() && level.kind === "position" ? { note: note.trim() } : {};
   const base = level.kind === "position" ? `/positions/${level.tradeId}` : `/option-groups/${level.tradeId}`;
   const [path, body] =
     level.kind === "position"
-      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price, ...atr }] : [`${base}/target`, { target_price: price }]
+      ? level.field === "stop" ? [`${base}/stop-loss`, { stop_loss_price: price, ...atr, ...why }] : [`${base}/target`, { target_price: price, ...why }]
       : level.field === "stop" ? [`${base}/spot-stop-loss`, { spot_stop_loss_price: price, ...atr }] : [`${base}/spot-target`, { spot_target_price: price }];
   await api("execution", path, { method: "PUT", json: body });
 }
+
+/** One stop-loss / target move on a spot/future trade, with the person's own reason if they gave one (GET /positions/{id}/events). */
+export type TradeEvent = {
+  id: string;
+  field: "stop_loss" | "target";
+  move: string;
+  source: "user" | "auto_trail" | "system";
+  accepted: boolean;
+  old_price: number | null;
+  new_price: number | null;
+  refused_reason: string | null;
+  note: string | null;
+  created_at: string;
+};
+export const listTradeEvents = (positionId: string) => api<TradeEvent[]>("execution", `/positions/${positionId}/events`);
+
+/** Closes one spot/future position, with an optional note on why (kept as a review note on the trade). */
+export const squareOffPosition = (positionId: string, note?: string) =>
+  api("execution", `/positions/${positionId}/square-off${note?.trim() ? `?note=${encodeURIComponent(note.trim())}` : ""}`, { method: "POST" });
 
 /** Switches the one-tap auto-trail of an open trade on or off: the stop stays put until the trade is one initial risk in profit,
  * then moves to breakeven and trails by an ATR multiple. `interval` is the chart interval the person trades on. */

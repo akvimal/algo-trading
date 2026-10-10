@@ -148,6 +148,7 @@ def record_event(
     context: MoveContext = NO_CONTEXT,
     atr_interval: Optional[str] = None,
     tight_trail: Optional[bool] = None,
+    note: Optional[str] = None,
 ) -> db_models.PositionEvent:
     """Adds the row to the session. The caller commits it with the change it describes - or, for a refused attempt,
     commits just this row."""
@@ -167,6 +168,7 @@ def record_event(
         atr=atr,
         atr_interval=atr_interval if atr is not None else None,
         tight_trail=tight_trail,
+        note=(note or "").strip() or None,
     )
     db.add(event)
     return event

@@ -1124,6 +1124,8 @@ CREATE TABLE IF NOT EXISTS execution.position_events (
     atr_interval     TEXT,
     -- A stop tightened to within N x ATR of price, other than a move to breakeven once price is +1R. NULL = not judged.
     tight_trail      BOOLEAN,
+    -- The person's own reason for the move (optional; migration 052).
+    note             TEXT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (position_id IS NOT NULL OR option_group_id IS NOT NULL)
 );

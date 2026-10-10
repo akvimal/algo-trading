@@ -2207,7 +2207,7 @@ def update_square_off_time(
 
 
 def update_target(
-    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float, source: str = "user"
+    db: Session, user_id: Optional[uuid.UUID], position_id: uuid.UUID, target_price: float, source: str = "user", note: Optional[str] = None
 ) -> tuple[Optional[db_models.Position], Optional[str]]:
     """Moves an open position's take-profit. Returns (row, reject_reason):
     (None, None) for a missing or someone else's row, (row, reason) with the
@@ -2232,6 +2232,7 @@ def update_target(
         old_price=_num(row.target_price),
         new_price=target_price,
         source=source,
+        note=note,
     )
     row.target_price = target_price
     db.commit()
@@ -2293,6 +2294,7 @@ def update_stop_loss(
     context: stop_rules.MoveContext = stop_rules.NO_CONTEXT,
     atr_interval: Optional[str] = None,
     source: str = "user",
+    note: Optional[str] = None,
 ) -> tuple[Optional[db_models.Position], Optional[str]]:
     """Generically useful, not manual-only - editing SL on any already-open
     position, including (new) attaching or replacing a trailing,
@@ -2336,6 +2338,7 @@ def update_stop_loss(
             tight_trail=stop_rules.judge_tight_trail(
                 row.action, move, float(row.entry_price), _num(row.initial_stop_loss_price), new_price, context[0], context[1]
             ),
+            note=note,
         )
 
     def _guard(new_price: Optional[float]) -> tuple[str, Optional[str]]:

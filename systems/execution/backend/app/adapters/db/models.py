@@ -664,4 +664,5 @@ class PositionEvent(Base):
     atr = Column(Numeric)
     atr_interval = Column(Text)
     tight_trail = Column(Boolean)
+    note = Column(Text)  # the person's own reason for the move (migration 052)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())

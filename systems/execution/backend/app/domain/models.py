@@ -290,6 +290,9 @@ class PendingOrderCreate(BaseModel):
     expiry: Optional[str] = Field(default=None, max_length=20)
     spread_width: Optional[int] = Field(default=None, ge=1, le=20)
     notes: Optional[str] = Field(default=None, max_length=2000)
+    # The chart as planned (drawings, indicators and the entry / stop / target lines), a PNG composed by the page. Kept with the order and attached to
+    # the position, as its plan at entry, when the order fills.
+    plan_snapshot_png_base64: Optional[str] = None
 
     @model_validator(mode="after")
     def _check_legs(self) -> "PendingOrderCreate":

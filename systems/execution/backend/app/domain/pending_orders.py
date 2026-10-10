@@ -46,6 +46,8 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings
+from app.domain import trade_snapshots
+from app.domain.study_notes import StudyNoteError, decode_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +241,8 @@ def link_note_to_position(db: Session, user_id: uuid.UUID, note_id: Optional[uui
     if note is not None and note.user_id == user_id and note.position_id is None:
         note.position_id = position_id
         db.commit()
+        # The note's own picture (the chart as it was when the plan was written) becomes the trade's plan at entry.
+        trade_snapshots.copy_note_snapshot(db, note, position_id)
 
 
 def create_pending_order(
@@ -288,6 +292,10 @@ def create_pending_order(
         primary_strike=payload.primary_strike, second_strike=payload.second_strike, expiry=payload.expiry,
         spread_width=payload.spread_width, notes=(payload.notes or "").strip() or None,
     )
+    try:
+        row.plan_snapshot = decode_snapshot(payload.plan_snapshot_png_base64)
+    except StudyNoteError as exc:
+        raise PendingOrderError(exc.status_code, exc.detail)
     db.add(row)
     db.commit()
     return row
@@ -403,6 +411,7 @@ def _place(db: Session, order, deps: Deps) -> str:
             rejected, reason, position_id, group_id = row.status == "REJECTED", row.rejection_reason, row.id, None
             if not rejected:
                 link_note_to_position(db, user_id, order.source_note_id, position_id)
+                trade_snapshots.attach_plan_snapshot(db, order, position_id=position_id)
         else:
             row = deps.open_option(db, order, exec_settings)
             rejected, reason, position_id, group_id = row.status == "REJECTED", row.rejection_reason, None, row.id
@@ -418,6 +427,7 @@ def _place(db: Session, order, deps: Deps) -> str:
                         warnings.append(f"the {label} did not attach")
                 if warnings:
                     reason = "opened, but " + " and ".join(warnings) + ": set it on the position"
+                trade_snapshots.attach_plan_snapshot(db, order, option_group_id=group_id)
     except Exception as exc:
         db.rollback()
         logger.exception("pending order %s could not be placed", order_id)

@@ -242,6 +242,12 @@ class TradeImage(Base):
     content_type = Column(Text, nullable=False)
     image_data = Column(LargeBinary, nullable=False)
     uploaded_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    # What the picture is and what the trade looked like when it was taken (migration 056).
+    kind = Column(Text, nullable=False, default="upload")
+    caption = Column(Text)
+    entry_price = Column(Numeric)
+    stop_price = Column(Numeric)
+    target_price = Column(Numeric)
 
 
 class OptionPositionGroup(Base):
@@ -570,6 +576,8 @@ class PendingOrder(Base):
     # 'positional' opens a multi-day spot hold on the positional book; source_note_id is the plan note it was armed from (migration 054).
     horizon = Column(Text, nullable=False, default="intraday")
     source_note_id = Column(UUID(as_uuid=True))
+    # The chart as planned when the order was placed; attached to the position when it fills (migration 056).
+    plan_snapshot = deferred(Column(LargeBinary))
     # The legs an option order was armed for, and the person's reason (migration 055).
     primary_strike = Column(Numeric)
     second_strike = Column(Numeric)

@@ -789,6 +789,12 @@ CREATE TABLE IF NOT EXISTS execution.trade_images (
     content_type    TEXT NOT NULL,
     image_data      BYTEA NOT NULL,
     uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- What the picture is and what the trade looked like when it was taken (migration 056).
+    kind            TEXT NOT NULL DEFAULT 'upload' CHECK (kind IN ('upload', 'entry', 'update')),
+    caption         TEXT,
+    entry_price     NUMERIC,
+    stop_price      NUMERIC,
+    target_price    NUMERIC,
     CHECK ((position_id IS NULL) <> (option_group_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_trade_images_position ON execution.trade_images (position_id) WHERE position_id IS NOT NULL;
@@ -1078,6 +1084,8 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     -- 'positional' = opens a multi-day spot hold on the positional book (migration 054); source_note_id = the plan note it was armed from.
     horizon          TEXT NOT NULL DEFAULT 'intraday' CHECK (horizon IN ('intraday', 'positional')),
     source_note_id   UUID,
+    -- The chart as planned when the order was placed; attached to the position when it fills (migration 056).
+    plan_snapshot    BYTEA,
     -- The legs an option order was armed for (an explicit strike per leg and the expiry it came from), and the person's reason (migration 055).
     primary_strike   NUMERIC,
     second_strike    NUMERIC,

@@ -58,3 +58,4 @@
 053-accounts-book.sql|execution.accounts|book
 054-pending-positional.sql|execution.pending_orders|horizon
 055-pending-option-legs.sql|execution.pending_orders|primary_strike
+056-trade-snapshots.sql|execution.trade_images|kind

@@ -97,6 +97,8 @@ class Deps:
     set_spot_target: Callable
     # (db, user_id, segment, symbol) -> a description of what is already held, or None. Left unset = never skip.
     holds_open: Optional[Callable] = None
+    # (db, order, exec_settings) -> Position: a positional spot hold on the positional book. Left unset = a positional order fails.
+    open_spot: Optional[Callable] = None
 
 
 _RESOLVE_TTL_SECONDS = 3600
@@ -158,13 +160,29 @@ def default_deps() -> Deps:
             setup_tag=o.setup_tag, confidence=o.confidence, entry_interval=o.entry_interval, auto_traded=False,
         )
 
-    return Deps(underlying_ltp, open_future, open_option, update_group_spot_stop_loss, update_group_spot_target, holds_open_position)
+    def open_spot(db, o, exec_settings):
+        return open_manual_position(
+            o.user_id, o.segment, o.symbol, o.action, "spot", float(o.trigger_price),
+            float(o.quantity) if o.quantity is not None else None,
+            float(o.stop_loss_price) if o.stop_loss_price is not None else None,
+            exec_settings, db, resolve_underlying,
+            get_previous_candle=get_previous_candle, get_candle_history=get_candle_history,
+            plan_checklist=[], order_type="limit", token=None,
+            target_price=float(o.target_price) if o.target_price is not None else None,
+            trend_followed=o.trend_followed, risk_managed=o.risk_managed, setup_tag=o.setup_tag, confidence=o.confidence,
+            auto_traded=False, entry_interval=o.entry_interval, horizon="positional",
+        )
+
+    return Deps(underlying_ltp, open_future, open_option, update_group_spot_stop_loss, update_group_spot_target, holds_open_position, open_spot)
 
 
-def holds_open_position(db: Session, user_id: uuid.UUID, segment: str, symbol: str) -> Optional[str]:
+def holds_open_position(db: Session, user_id: uuid.UUID, segment: str, symbol: str, horizon: str = "intraday") -> Optional[str]:
     """What the person already holds open on this underlying, or None. A future/spot position is stored under
     its resolved contract (NIFTY-Sep2026-FUT) or the bare symbol, an option group under the bare underlying;
-    option legs (which carry an option_group_id) are left to their group so one trade is not counted twice."""
+    option legs (which carry an option_group_id) are left to their group so one trade is not counted twice.
+
+    `horizon` picks the book: an intraday order is only blocked by an intraday hold, a positional one by a positional hold (a
+    swing position on the same symbol is a different book and must not stop, or be stopped by, a day trade)."""
     sym = symbol.strip().upper()
     pos = db_models.Position
     held = (
@@ -172,10 +190,16 @@ def holds_open_position(db: Session, user_id: uuid.UUID, segment: str, symbol: s
         .filter(pos.user_id == user_id, pos.segment == segment, pos.status == "OPEN", pos.option_group_id.is_(None))
         .all()
     )
-    mine = [p for p in held if p.symbol.upper() == sym or p.symbol.upper().startswith(f"{sym}-")]
+    positional = horizon == "positional"
+    mine = [
+        p for p in held
+        if (p.symbol.upper() == sym or p.symbol.upper().startswith(f"{sym}-")) and ((getattr(p, "horizon", None) == "positional") == positional)
+    ]
     grp = db_models.OptionPositionGroup
     groups = (
-        db.query(grp)
+        []
+        if positional  # options are never positional
+        else db.query(grp)
         .filter(grp.user_id == user_id, grp.segment == segment, grp.underlying_symbol == sym, grp.status == "OPEN")
         .all()
     )
@@ -190,6 +214,26 @@ def holds_open_position(db: Session, user_id: uuid.UUID, segment: str, symbol: s
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _uuid_or_none(value: Optional[str]) -> Optional[uuid.UUID]:
+    if not value or not value.strip():
+        return None
+    try:
+        return uuid.UUID(value.strip())
+    except ValueError:
+        raise PendingOrderError(422, "source_note_id is not a valid id")
+
+
+def link_note_to_position(db: Session, user_id: uuid.UUID, note_id: Optional[uuid.UUID], position_id: Optional[uuid.UUID]) -> None:
+    """The plan note an order was armed from follows the trade it produced: the note's position_id is set once the order has filled.
+    A note that is not this user's, or already points at a trade, is left alone."""
+    if note_id is None or position_id is None:
+        return
+    note = db.get(db_models.StudyNote, note_id)
+    if note is not None and note.user_id == user_id and note.position_id is None:
+        note.position_id = position_id
+        db.commit()
 
 
 def create_pending_order(
@@ -220,7 +264,7 @@ def create_pending_order(
 
     P = db_models.PendingOrder
     existing = db.query(P).filter(P.user_id == user_id, P.status == "pending").all()
-    same = [r for r in existing if r.segment == payload.segment and r.symbol == symbol]
+    same = [r for r in existing if r.segment == payload.segment and r.symbol == symbol and (r.horizon or "intraday") == payload.horizon]
     if len(existing) - len(same) >= settings.max_pending_orders_per_user:
         raise PendingOrderError(422, f"too many pending orders (at most {settings.max_pending_orders_per_user})")
     for old in same:  # one live order per symbol: arming a new one replaces it
@@ -234,7 +278,8 @@ def create_pending_order(
         quantity=payload.quantity, trend_followed=payload.trend_followed, risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag, confidence=payload.confidence, entry_interval=payload.entry_interval,
         status="pending", expires_at=now + timedelta(minutes=ttl), last_price=ltp, last_checked_at=now,
-        allow_stacking=bool(payload.allow_stacking),
+        allow_stacking=bool(payload.allow_stacking), horizon=payload.horizon,
+        source_note_id=_uuid_or_none(payload.source_note_id),
     )
     db.add(row)
     db.commit()
@@ -336,15 +381,21 @@ def _place(db: Session, order, deps: Deps) -> str:
     from app.domain.position_manager import load_account, load_settings
 
     order_id, user_id = order.id, order.user_id
-    account = load_account(db, user_id, order.segment)
+    positional = (order.horizon or "intraday") == "positional"
+    account = load_account(db, user_id, order.segment, "positional" if positional else "intraday")
     if account is not None and account.live_trading_enabled:
         _finish(db, order_id, "failed", "the account went live while this order was armed: pending orders are paper-only, so it was not placed")
         return "failed"
     try:
         exec_settings = load_settings(db, user_id)
-        if order.strategy == "future":
-            row = deps.open_future(db, order, exec_settings)
+        if order.strategy in ("future", "spot"):
+            opener = deps.open_spot if order.strategy == "spot" else deps.open_future
+            if opener is None:
+                raise RuntimeError("this watcher cannot place a positional order")
+            row = opener(db, order, exec_settings)
             rejected, reason, position_id, group_id = row.status == "REJECTED", row.rejection_reason, row.id, None
+            if not rejected:
+                link_note_to_position(db, user_id, order.source_note_id, position_id)
         else:
             row = deps.open_option(db, order, exec_settings)
             rejected, reason, position_id, group_id = row.status == "REJECTED", row.rejection_reason, None, row.id
@@ -413,7 +464,13 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
         # Manual trades are independent of the signal-conflict policies, so without this a waiting order would
         # quietly stack a second position on one already open. Skip it (cancelled, with the reason) unless the
         # person said adding was the point. One conditional UPDATE, like every other exit from 'pending'.
-        held = deps.holds_open(db, r.user_id, r.segment, r.symbol) if deps.holds_open is not None and not r.allow_stacking else None
+        held = None
+        if deps.holds_open is not None and not r.allow_stacking:
+            held = (
+                deps.holds_open(db, r.user_id, r.segment, r.symbol, "positional")
+                if (r.horizon or "intraday") == "positional"
+                else deps.holds_open(db, r.user_id, r.segment, r.symbol)
+            )
         if held:
             skipped = (
                 db.query(P)

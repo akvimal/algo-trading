@@ -261,7 +261,7 @@ class PendingOrderCreate(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str = Field(min_length=1, max_length=64)  # the logical underlying, e.g. NIFTY
     action: Literal["BUY", "SELL"]
-    strategy: Literal["future", "naked", "spread"] = "future"
+    strategy: Literal["future", "naked", "spread", "spot"] = "future"
     moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"  # options only
     trigger_price: float = Field(gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
@@ -277,6 +277,18 @@ class PendingOrderCreate(BaseModel):
     # False (default): if a position or option group on this instrument is open when the price is hit, the
     # order is cancelled with a reason instead of stacking a second trade. True: add to it deliberately.
     allow_stacking: bool = False
+    # 'positional' opens a multi-day SPOT hold on the user's own positional book (strategy must be 'spot'); never squared off at the end of the day.
+    horizon: Literal["intraday", "positional"] = "intraday"
+    # The plan note this order was armed from ("Trade this plan"): the note then follows the trade it produced.
+    source_note_id: Optional[str] = Field(default=None, max_length=36)
+
+    @model_validator(mode="after")
+    def _check_horizon(self) -> "PendingOrderCreate":
+        if self.horizon == "positional" and self.strategy != "spot":
+            raise ValueError("a positional order must be a spot order")
+        if self.strategy == "spot" and self.horizon != "positional":
+            raise ValueError("a spot pending order is positional: set horizon to 'positional'")
+        return self
 
 
 class PendingOrderUpdate(BaseModel):
@@ -293,7 +305,7 @@ class PendingOrderOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str
     action: Literal["BUY", "SELL"]
-    strategy: Literal["future", "naked", "spread"]
+    strategy: Literal["future", "naked", "spread", "spot"]
     moneyness: Optional[str] = None
     trigger_price: float
     started_above: bool
@@ -315,6 +327,8 @@ class PendingOrderOut(BaseModel):
     position_id: Optional[str] = None
     option_group_id: Optional[str] = None
     allow_stacking: bool = False
+    horizon: Literal["intraday", "positional"] = "intraday"
+    source_note_id: Optional[str] = None
 
 
 class StudyNoteCreate(BaseModel):
@@ -803,6 +817,8 @@ class ManualPositionCreate(BaseModel):
     # 'positional' = a multi-day hold on the user's own positional book (own balance, never squared off at the end of the day).
     # Spot only and paper only: see _check_positional.
     horizon: Literal["intraday", "positional"] = "intraday"
+    # The plan note this trade was placed from ("Trade this plan"): once the position opens, the note follows it.
+    source_note_id: Optional[str] = Field(default=None, max_length=36)
 
     @model_validator(mode="after")
     def _check_positional(self) -> "ManualPositionCreate":

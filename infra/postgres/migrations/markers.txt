@@ -56,3 +56,4 @@
 051-usdinr-at-close.sql|execution.positions|usdinr_at_close
 052-position-event-note.sql|execution.position_events|note
 053-accounts-book.sql|execution.accounts|book
+054-pending-positional.sql|execution.pending_orders|horizon

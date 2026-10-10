@@ -34,14 +34,16 @@ def _to_out(row) -> PendingOrderOut:
         triggered_at=row.triggered_at, last_price=_f(row.last_price), last_checked_at=row.last_checked_at,
         position_id=str(row.position_id) if row.position_id is not None else None,
         option_group_id=str(row.option_group_id) if row.option_group_id is not None else None,
-        allow_stacking=bool(row.allow_stacking),
+        allow_stacking=bool(row.allow_stacking), horizon=row.horizon or "intraday",
+        source_note_id=str(row.source_note_id) if row.source_note_id is not None else None,
     )
 
 
 @router.post("/pending-orders", response_model=PendingOrderOut, status_code=201)
 def arm_pending_order(payload: PendingOrderCreate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Arms a limit order the SERVER watches. Refused on a live account (paper only)."""
-    account = load_account(db, user.id, payload.segment)
+    # A positional order is placed on the positional book, which is paper only; the segment's live switch is about the intraday one.
+    account = load_account(db, user.id, payload.segment) if payload.horizon == "intraday" else None
     is_live = bool(account is not None and account.live_trading_enabled)
     try:
         row = create_pending_order(db, user.id, payload, default_deps(), is_live, token=user.token)

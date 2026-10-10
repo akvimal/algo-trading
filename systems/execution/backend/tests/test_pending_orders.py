@@ -792,3 +792,79 @@ def test_holds_open_position_counts_contracts_of_the_underlying_and_option_group
 def test_holds_open_position_is_none_when_nothing_matches_and_singular_for_one():
     assert po.holds_open_position(_HoldingsDb([_pos("BANKNIFTY-Oct2026-FUT")], []), ALICE, "NSE", "NIFTY") is None
     assert po.holds_open_position(_HoldingsDb([], [SimpleNamespace()]), ALICE, "NSE", "NIFTY") == "1 open NIFTY position"
+
+
+# --- positional (multi-day spot) orders ---------------------------------------------------------------------------------------
+
+
+def test_a_positional_order_must_be_a_spot_order_and_the_other_way_round():
+    assert body(strategy="spot", horizon="positional").horizon == "positional"
+    assert body().horizon == "intraday"
+    with pytest.raises(Exception):
+        body(strategy="future", horizon="positional")
+    with pytest.raises(Exception):
+        body(strategy="spot")  # an intraday spot order is the 'future' strategy, as before
+
+
+def test_a_swing_order_and_a_day_order_on_the_same_symbol_are_independent():
+    db = FakeDb()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0})
+    day = arm(db, deps)
+    swing = arm(db, deps, strategy="spot", horizon="positional", trigger_price=90.0)
+    assert day.status == "pending" and swing.status == "pending" and swing.horizon == "positional"
+    again = arm(db, deps, strategy="spot", horizon="positional", trigger_price=92.0)  # a new swing order replaces the old swing one only
+    assert swing.status == "cancelled" and again.status == "pending" and day.status == "pending"
+
+
+def test_a_positional_order_opens_through_the_spot_opener_and_is_linked_to_its_plan_note():
+    db = FakeDb()
+    opened = []
+
+    def open_spot(db_, order, exec_settings):
+        opened.append((order.strategy, order.horizon))
+        return SimpleNamespace(id=uuid.uuid4(), status="OPEN", rejection_reason=None)
+
+    note_id = uuid.uuid4()
+    deps = fake_deps({("NSE", "NIFTY"): 105.0}, open_spot=open_spot)
+    row = arm(db, deps, strategy="spot", horizon="positional", trigger_price=100.0, source_note_id=str(note_id))
+    assert row.source_note_id == note_id
+    counts, deps = run(db, {("NSE", "NIFTY"): 99.0}, open_spot=open_spot)
+    assert counts["triggered"] == 1 and opened == [("spot", "positional")] and deps.log.futures == []
+
+
+def test_a_positional_order_asks_about_a_positional_hold_only():
+    db = FakeDb()
+    asked = []
+    deps = fake_deps({("NSE", "NIFTY"): 105.0}, open_spot=lambda *a: SimpleNamespace(id=uuid.uuid4(), status="OPEN", rejection_reason=None))
+    arm(db, deps, strategy="spot", horizon="positional", trigger_price=100.0)
+    run(db, {("NSE", "NIFTY"): 99.0}, holds_open=lambda *a: asked.append(a) or None, open_spot=deps.open_spot)
+    assert asked and asked[0][-1] == "positional"
+
+
+def test_the_plan_note_follows_the_trade_once_and_only_for_its_owner():
+    from app.domain.pending_orders import link_note_to_position
+
+    note = SimpleNamespace(user_id=ALICE, position_id=None)
+    other = SimpleNamespace(user_id=uuid.uuid4(), position_id=None)
+    taken = SimpleNamespace(user_id=ALICE, position_id=uuid.uuid4())
+
+    class Db:
+        commits = 0
+
+        def __init__(self, n):
+            self.n = n
+
+        def get(self, model, key):
+            return self.n
+
+        def commit(self):
+            Db.commits += 1
+
+    pid = uuid.uuid4()
+    link_note_to_position(Db(note), ALICE, uuid.uuid4(), pid)
+    assert note.position_id == pid
+    link_note_to_position(Db(other), ALICE, uuid.uuid4(), pid)  # someone else's note
+    assert other.position_id is None
+    keep = taken.position_id
+    link_note_to_position(Db(taken), ALICE, uuid.uuid4(), pid)  # already points at a trade
+    assert taken.position_id == keep

@@ -10,6 +10,7 @@ from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
 from app.auth import User, get_current_user, require_admin
 from app.domain import stop_rules
+from app.domain.pending_orders import link_note_to_position
 from app.domain.study_notes import create_note
 from app.domain.stop_rules import DEFAULT_ATR_INTERVAL
 from app.domain.models import (
@@ -375,6 +376,11 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         entry_interval=payload.entry_interval,
         horizon=payload.horizon,
     )
+    if payload.source_note_id and row.status == "OPEN":
+        try:
+            link_note_to_position(db, user.id, uuid.UUID(payload.source_note_id.strip()), row.id)
+        except ValueError:
+            pass  # not a valid note id: the trade is already placed, the link is only a convenience
     return _position_to_out(row)
 
 

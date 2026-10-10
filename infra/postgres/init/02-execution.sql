@@ -1052,7 +1052,7 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     symbol           TEXT NOT NULL,
     action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
-    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread')),
+    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread', 'spot')),
     moneyness        TEXT CHECK (moneyness IN ('ITM2', 'ITM1', 'ATM', 'OTM1', 'OTM2')),
     trigger_price    NUMERIC NOT NULL CHECK (trigger_price > 0),
     started_above    BOOLEAN NOT NULL,
@@ -1074,12 +1074,15 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     position_id      UUID,
     option_group_id  UUID,
     -- May this order open a second position on an instrument already held? Default no: see migrations/030.
-    allow_stacking   BOOLEAN NOT NULL DEFAULT false
+    allow_stacking   BOOLEAN NOT NULL DEFAULT false,
+    -- 'positional' = opens a multi-day spot hold on the positional book (migration 054); source_note_id = the plan note it was armed from.
+    horizon          TEXT NOT NULL DEFAULT 'intraday' CHECK (horizon IN ('intraday', 'positional')),
+    source_note_id   UUID
 );
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pending_orders_one_live_per_symbol
-    ON execution.pending_orders (user_id, segment, symbol) WHERE status = 'pending';
+    ON execution.pending_orders (user_id, segment, symbol, horizon) WHERE status = 'pending';
 
 -- See migrations/031-study-notes.sql.
 CREATE TABLE IF NOT EXISTS execution.study_notes (

@@ -544,7 +544,7 @@ class PendingOrder(Base):
     segment = Column(Text, nullable=False)
     symbol = Column(Text, nullable=False)
     action = Column(Text, nullable=False)
-    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread'
+    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread' | 'spot' (positional)
     moneyness = Column(Text)
     trigger_price = Column(Numeric, nullable=False)
     started_above = Column(Boolean, nullable=False)
@@ -567,6 +567,9 @@ class PendingOrder(Base):
     option_group_id = Column(UUID(as_uuid=True))
     # May this order open a second position on an instrument already held? Default no: see migrations/030.
     allow_stacking = Column(Boolean, nullable=False, default=False)
+    # 'positional' opens a multi-day spot hold on the positional book; source_note_id is the plan note it was armed from (migration 054).
+    horizon = Column(Text, nullable=False, default="intraday")
+    source_note_id = Column(UUID(as_uuid=True))
 
 
 class StudyNote(Base):

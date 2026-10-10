@@ -1077,7 +1077,13 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     allow_stacking   BOOLEAN NOT NULL DEFAULT false,
     -- 'positional' = opens a multi-day spot hold on the positional book (migration 054); source_note_id = the plan note it was armed from.
     horizon          TEXT NOT NULL DEFAULT 'intraday' CHECK (horizon IN ('intraday', 'positional')),
-    source_note_id   UUID
+    source_note_id   UUID,
+    -- The legs an option order was armed for (an explicit strike per leg and the expiry it came from), and the person's reason (migration 055).
+    primary_strike   NUMERIC,
+    second_strike    NUMERIC,
+    expiry           TEXT,
+    spread_width     SMALLINT,
+    notes            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);

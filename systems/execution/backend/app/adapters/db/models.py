@@ -570,6 +570,12 @@ class PendingOrder(Base):
     # 'positional' opens a multi-day spot hold on the positional book; source_note_id is the plan note it was armed from (migration 054).
     horizon = Column(Text, nullable=False, default="intraday")
     source_note_id = Column(UUID(as_uuid=True))
+    # The legs an option order was armed for, and the person's reason (migration 055).
+    primary_strike = Column(Numeric)
+    second_strike = Column(Numeric)
+    expiry = Column(Text)
+    spread_width = Column(SmallInteger)
+    notes = Column(Text)
 
 
 class StudyNote(Base):

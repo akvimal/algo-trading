@@ -283,6 +283,21 @@ class PendingOrderCreate(BaseModel):
     horizon: Literal["intraday", "positional"] = "intraday"
     # The plan note this order was armed from ("Trade this plan"): the note then follows the trade it produced.
     source_note_id: Optional[str] = Field(default=None, max_length=36)
+    # An option order armed from the Scan ticket remembers the exact legs it showed: a strike per leg and the expiry they came from take
+    # precedence over `moneyness`, as for a market order. `notes` is the person's reason for the trade.
+    primary_strike: Optional[float] = Field(default=None, gt=0)
+    second_strike: Optional[float] = Field(default=None, gt=0)
+    expiry: Optional[str] = Field(default=None, max_length=20)
+    spread_width: Optional[int] = Field(default=None, ge=1, le=20)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _check_legs(self) -> "PendingOrderCreate":
+        if self.strategy in ("future", "spot") and any(v is not None for v in (self.primary_strike, self.second_strike, self.expiry, self.spread_width)):
+            raise ValueError("strikes, an expiry and a spread width only apply to an option order")
+        if self.strategy == "naked" and self.second_strike is not None:
+            raise ValueError("a naked option has one strike")
+        return self
 
     @model_validator(mode="after")
     def _check_horizon(self) -> "PendingOrderCreate":

@@ -587,12 +587,13 @@ def test_a_fired_future_is_placed_as_a_limit_order_at_the_trigger_price_with_no_
     seen = {}
     monkeypatch.setattr(pm, "open_manual_position", lambda *a, **k: seen.update(args=a, kwargs=k) or SimpleNamespace(status="OPEN"))
     order = SimpleNamespace(user_id=ALICE, segment="NSE", symbol="NIFTY", action="BUY", trigger_price=100, quantity=None, stop_loss_price=95,
-                            target_price=120, trend_followed=True, risk_managed=True, setup_tag="pullback", confidence=4, entry_interval="5m")
+                            target_price=120, trend_followed=True, risk_managed=True, setup_tag="pullback", confidence=4, entry_interval="5m", notes="why")
     po.default_deps().open_future(FakeDb(), order, SimpleNamespace())
     a, k = seen["args"], seen["kwargs"]
     assert a[:8] == (ALICE, "NSE", "NIFTY", "BUY", "future", 100.0, None, 95.0)  # entry = the trigger, quantity left to risk-sizing
     assert k["order_type"] == "limit" and k["token"] is None and k["auto_traded"] is False
     assert (k["target_price"], k["trend_followed"], k["risk_managed"], k["setup_tag"], k["confidence"], k["entry_interval"]) == (120.0, True, True, "pullback", 4, "5m")
+    assert k["notes"] == "why"
 
 
 def test_a_fired_option_order_is_placed_as_a_limit_group_with_the_right_style(monkeypatch):
@@ -601,7 +602,8 @@ def test_a_fired_option_order_is_placed_as_a_limit_group_with_the_right_style(mo
     seen = {}
     monkeypatch.setattr(opm, "open_manual_option_group", lambda *a, **k: seen.update(args=a, kwargs=k) or SimpleNamespace(status="OPEN"))
     order = SimpleNamespace(user_id=ALICE, segment="NSE", symbol="NIFTY", action="BUY", strategy="spread", moneyness="OTM1", quantity=2,
-                            trend_followed=False, risk_managed=False, setup_tag=None, confidence=None, entry_interval=None)
+                            trend_followed=False, risk_managed=False, setup_tag=None, confidence=None, entry_interval=None,
+                            expiry=None, spread_width=None, primary_strike=None, second_strike=None, notes=None)
     po.default_deps().open_option(FakeDb(), order, SimpleNamespace())
     a, k = seen["args"], seen["kwargs"]
     assert a[:9] == (ALICE, "NSE", "NIFTY", "BUY", "spread", "OTM1", None, "combined", 2.0)
@@ -868,3 +870,33 @@ def test_the_plan_note_follows_the_trade_once_and_only_for_its_owner():
     keep = taken.position_id
     link_note_to_position(Db(taken), ALICE, uuid.uuid4(), pid)  # already points at a trade
     assert taken.position_id == keep
+
+
+# --- an option order remembers the legs it was armed for ---------------------------------------------------------------------
+
+
+def test_an_option_order_keeps_the_exact_strikes_expiry_width_and_reason_it_was_armed_with():
+    row = arm(FakeDb(), fake_deps({("NSE", "NIFTY"): 105.0}), strategy="spread", primary_strike=23200, second_strike=23300, expiry="2026-10-27", spread_width=2, notes="  breakout retest  ")
+    assert (float(row.primary_strike), float(row.second_strike), row.expiry, row.spread_width, row.notes) == (23200.0, 23300.0, "2026-10-27", 2, "breakout retest")
+
+
+def test_strikes_only_make_sense_on_an_option_order():
+    with pytest.raises(Exception):
+        body(strategy="future", primary_strike=23200)
+    with pytest.raises(Exception):
+        body(strategy="naked", primary_strike=23200, second_strike=23300)  # a naked option has one strike
+    assert body(strategy="naked", primary_strike=23200, expiry="2026-10-27").primary_strike == 23200
+
+
+def test_a_fired_option_order_opens_the_legs_it_was_armed_for_not_a_fresh_pick(monkeypatch):
+    from app.domain import option_position_manager as opm
+
+    seen = {}
+    monkeypatch.setattr(opm, "open_manual_option_group", lambda *a, **k: seen.update(args=a, kwargs=k) or SimpleNamespace(status="OPEN"))
+    order = SimpleNamespace(user_id=ALICE, segment="NSE", symbol="NIFTY", action="BUY", strategy="spread", moneyness="ATM", quantity=None,
+                            trend_followed=False, risk_managed=False, setup_tag=None, confidence=None, entry_interval=None,
+                            expiry="2026-10-27", spread_width=3, primary_strike=23200, second_strike=23300, notes="why")
+    po.default_deps().open_option(FakeDb(), order, SimpleNamespace())
+    a, k = seen["args"], seen["kwargs"]
+    assert a[6] == "2026-10-27"  # the expiry the strikes came from
+    assert (k["primary_strike"], k["second_strike"], k["spread_width"], k["notes"]) == (23200.0, 23300.0, 3, "why")

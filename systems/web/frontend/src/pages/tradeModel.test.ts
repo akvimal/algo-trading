@@ -236,6 +236,26 @@ describe("buildOrder", () => {
     expect("price" in o.body).toBe(false);
   });
 
+  it("a waiting option order carries the exact legs the ticket showed, so it opens those and not a fresh pick", () => {
+    const t = ticket({ orderType: "limit", entry: "23100", strategy: "spread", moneyness: "OTM1", primaryStrike: 23200, secondStrike: 23300, expiry: "2026-10-27", spreadWidth: 2, reason: "retest" });
+    const c = ctx({ price: 23000, symbol: "NIFTY", lotSize: 65 });
+    const o = buildOrder(t, analyzeTicket(t, c), c, { ...meta, instrument: "future" });
+    expect(o.kind).toBe("pending");
+    expect(o.body).toMatchObject({ strategy: "spread", trigger_price: 23100, primary_strike: 23200, second_strike: 23300, expiry: "2026-10-27", spread_width: 2, notes: "retest" });
+  });
+
+  it("a waiting naked option sends one strike and no second leg, and a waiting spot order sends no strikes at all", () => {
+    const naked = ticket({ orderType: "limit", entry: "23100", strategy: "naked", primaryStrike: 23200, secondStrike: 23300, expiry: "2026-10-27" });
+    const c = ctx({ price: 23000, symbol: "NIFTY", lotSize: 65 });
+    const o = buildOrder(naked, analyzeTicket(naked, c), c, { ...meta, instrument: "future" });
+    expect(o.body).toMatchObject({ primary_strike: 23200, expiry: "2026-10-27" });
+    expect("second_strike" in o.body).toBe(false);
+    expect("spread_width" in o.body).toBe(false);
+    const spot = ticket({ orderType: "limit", entry: "980", stop: "970", primaryStrike: 23200, expiry: "2026-10-27" });
+    const s2 = buildOrder(spot, analyzeTicket(spot, ctx()), ctx(), meta);
+    expect("primary_strike" in s2.body || "expiry" in s2.body).toBe(false);
+  });
+
   it("an option order goes to the option route, with the stop and target carried for the follow-up calls", () => {
     const t = ticket({ strategy: "spread", moneyness: "OTM1", stop: "22900", target: "23300" });
     const c = ctx({ price: 23000, symbol: "NIFTY", lotSize: 65 });

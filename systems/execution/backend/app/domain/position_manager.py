@@ -308,6 +308,10 @@ def is_supported(horizon: str, instrument_type: str) -> bool:
     return horizon == "positional" and instrument_type == "spot"
 
 
+# Appended to the reason a manual order is refused after the square-off time: what the person can do instead.
+OUTSIDE_WINDOW_HINT = " Intraday orders cannot be placed after that: use 'Wait for a price' to queue one for the next session."
+
+
 def is_within_intraday_window(now: datetime, square_off_time: Optional[time], tz_name: str) -> bool:
     """square_off_time is the position's SEGMENT's own configured cutoff
     (execution.accounts.square_off_time) now, not a per-Strategy value -
@@ -1969,7 +1973,7 @@ def open_manual_position(
     if not positional and not is_within_intraday_window(now, account.square_off_time, settings.timezone):
         row = _reject_manual(
             db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
-            f"received outside intraday window (square-off is {account.square_off_time})",
+            f"received outside intraday window (square-off is {account.square_off_time})." + OUTSIDE_WINDOW_HINT,
         )
         db.commit()
         return row

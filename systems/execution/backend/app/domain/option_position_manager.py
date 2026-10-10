@@ -79,6 +79,7 @@ from app.domain.position_manager import (
     compute_risk_based_quantity,
     compute_stop_loss_percent_price,
     compute_target_percent_price,
+    OUTSIDE_WINDOW_HINT,
     is_within_intraday_window,
     load_account,
     load_capital_account,
@@ -871,7 +872,7 @@ def open_manual_option_group(
     if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
         row = _reject_manual_group(
             db, user_id, signal_id, symbol, segment, action, strategy_type,
-            f"received outside intraday window (square-off is {account.square_off_time})",
+            f"received outside intraday window (square-off is {account.square_off_time})." + OUTSIDE_WINDOW_HINT,
         )
         db.commit()
         return row

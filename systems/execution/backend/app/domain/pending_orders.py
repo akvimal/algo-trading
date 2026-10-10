@@ -148,16 +148,21 @@ def default_deps() -> Deps:
             plan_checklist=[], order_type="limit", token=None,
             target_price=float(o.target_price) if o.target_price is not None else None,
             trend_followed=o.trend_followed, risk_managed=o.risk_managed, setup_tag=o.setup_tag, confidence=o.confidence,
-            auto_traded=False, entry_interval=o.entry_interval,
+            auto_traded=False, entry_interval=o.entry_interval, notes=o.notes,
         )
 
     def open_option(db, o, exec_settings):
+        # The legs the order was armed for (an explicit strike per leg and the expiry they came from) win over the moneyness,
+        # exactly as they do for a market order.
         return open_manual_option_group(
             o.user_id, o.segment, o.symbol, o.action, "spread" if o.strategy == "spread" else "naked", o.moneyness or "ATM",
-            None, "combined", float(o.quantity) if o.quantity is not None else None, exec_settings, db, resolve_underlying,
+            o.expiry, "combined", float(o.quantity) if o.quantity is not None else None, exec_settings, db, resolve_underlying,
             get_expiry_list, get_option_chain, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size,
+            spread_width=o.spread_width,
+            primary_strike=float(o.primary_strike) if o.primary_strike is not None else None,
+            second_strike=float(o.second_strike) if o.second_strike is not None else None,
             plan_checklist=[], order_type="limit", trend_followed=o.trend_followed, risk_managed=o.risk_managed,
-            setup_tag=o.setup_tag, confidence=o.confidence, entry_interval=o.entry_interval, auto_traded=False,
+            setup_tag=o.setup_tag, confidence=o.confidence, notes=o.notes, entry_interval=o.entry_interval, auto_traded=False,
         )
 
     def open_spot(db, o, exec_settings):
@@ -170,7 +175,7 @@ def default_deps() -> Deps:
             plan_checklist=[], order_type="limit", token=None,
             target_price=float(o.target_price) if o.target_price is not None else None,
             trend_followed=o.trend_followed, risk_managed=o.risk_managed, setup_tag=o.setup_tag, confidence=o.confidence,
-            auto_traded=False, entry_interval=o.entry_interval, horizon="positional",
+            auto_traded=False, entry_interval=o.entry_interval, horizon="positional", notes=o.notes,
         )
 
     return Deps(underlying_ltp, open_future, open_option, update_group_spot_stop_loss, update_group_spot_target, holds_open_position, open_spot)
@@ -280,6 +285,8 @@ def create_pending_order(
         status="pending", expires_at=now + timedelta(minutes=ttl), last_price=ltp, last_checked_at=now,
         allow_stacking=bool(payload.allow_stacking), horizon=payload.horizon,
         source_note_id=_uuid_or_none(payload.source_note_id),
+        primary_strike=payload.primary_strike, second_strike=payload.second_strike, expiry=payload.expiry,
+        spread_width=payload.spread_width, notes=(payload.notes or "").strip() or None,
     )
     db.add(row)
     db.commit()

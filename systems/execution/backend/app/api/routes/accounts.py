@@ -157,8 +157,11 @@ def list_accounts(book: str = Book, user: User = Depends(get_current_user), db: 
     user (created lazily with sensible defaults - see load_account - the
     first time each is touched, so a brand-new signup always sees all 3
     immediately rather than 404ing until they've placed a trade)."""
-    rows = {seg: load_account(db, user.id, seg, _book(book)) for seg in _SEGMENTS}
-    return [_to_out(db, rows[s], token=user.token) for s in _SEGMENTS if rows[s] is not None]
+    book = _book(book)
+    # A positional hold is spot only and commodities have no spot, so there is no positional account to create (or show) for MCX.
+    segments = [s for s in _SEGMENTS if not (book == "positional" and s == "MCX")]
+    rows = {seg: load_account(db, user.id, seg, book) for seg in segments}
+    return [_to_out(db, rows[s], token=user.token) for s in segments if rows[s] is not None]
 
 
 @router.put("/accounts/{segment}")

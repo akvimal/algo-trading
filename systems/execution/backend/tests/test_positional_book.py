@@ -129,3 +129,15 @@ def test_an_intraday_order_still_uses_the_intraday_book_and_the_window(monkeypat
 def test_a_positional_future_is_refused(monkeypatch):
     row, seen, _ = _open(monkeypatch, instrument_type="future", horizon="positional")
     assert row.status == "REJECTED" and "must be spot" in seen["rejections"][0]
+
+
+def test_the_positional_account_list_has_no_commodities_and_creates_none_for_them(monkeypatch):
+    from app.api.routes import accounts as route
+
+    asked = []
+    monkeypatch.setattr(route, "load_account", lambda db, uid, seg, book="intraday": asked.append((seg, book)) or SimpleNamespace(segment=seg, book=book))
+    monkeypatch.setattr(route, "_to_out", lambda db, row, token=None: {"segment": row.segment, "book": row.book})
+    user = SimpleNamespace(id=ME, token="t")
+    assert [a["segment"] for a in route.list_accounts(book="positional", user=user, db=None)] == ["NSE", "CRYPTO"]
+    assert ("MCX", "positional") not in asked
+    assert [a["segment"] for a in route.list_accounts(book="intraday", user=user, db=None)] == ["NSE", "MCX", "CRYPTO"]

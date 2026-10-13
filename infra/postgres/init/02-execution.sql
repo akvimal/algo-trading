@@ -1058,7 +1058,7 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     segment          TEXT NOT NULL CHECK (segment IN ('NSE', 'MCX', 'CRYPTO')),
     symbol           TEXT NOT NULL,
     action           TEXT NOT NULL CHECK (action IN ('BUY', 'SELL')),
-    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread', 'spot')),
+    strategy         TEXT NOT NULL CHECK (strategy IN ('future', 'naked', 'spread', 'credit_spread', 'spot')),
     moneyness        TEXT CHECK (moneyness IN ('ITM2', 'ITM1', 'ATM', 'OTM1', 'OTM2')),
     trigger_price    NUMERIC NOT NULL CHECK (trigger_price > 0),
     started_above    BOOLEAN NOT NULL,
@@ -1091,7 +1091,11 @@ CREATE TABLE IF NOT EXISTS execution.pending_orders (
     second_strike    NUMERIC,
     expiry           TEXT,
     spread_width     SMALLINT,
-    notes            TEXT
+    notes            TEXT,
+    -- A market order placed while the market is closed: no price trigger, placed on the first pass after the open (migration 057).
+    fire_when_open   BOOLEAN NOT NULL DEFAULT false,
+    combined_stop_loss_price NUMERIC,
+    combined_target_price NUMERIC
 );
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON execution.pending_orders (status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_user ON execution.pending_orders (user_id, status);

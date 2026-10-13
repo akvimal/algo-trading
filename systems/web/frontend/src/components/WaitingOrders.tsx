@@ -3,7 +3,7 @@ import { cancelWaitingOrder } from "../api/trade";
 import type { PendingOrder } from "../api/types";
 import { formatPrice } from "../format";
 
-const KIND: Record<PendingOrder["strategy"], string> = { spot: "Stock", future: "Future", naked: "Option", spread: "Spread" };
+const KIND: Record<PendingOrder["strategy"], string> = { spot: "Stock", future: "Future", naked: "Option", spread: "Debit spread", credit_spread: "Credit spread" };
 
 /** Orders that have not opened yet. They hold no position, so the one thing to do with them is cancel. */
 export function WaitingOrders({ orders, onChanged }: { orders: PendingOrder[]; onChanged: () => void }) {
@@ -43,7 +43,13 @@ export function WaitingOrders({ orders, onChanged }: { orders: PendingOrder[]; o
                 {w.horizon === "positional" ? " · positional" : ""}
               </span>
               <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                opens at <span className="num">{formatPrice(w.trigger_price)}</span>
+                {w.fire_when_open ? (
+                    "opens when the market opens, at the latest prices"
+                  ) : (
+                    <>
+                      opens at <span className="num">{formatPrice(w.trigger_price)}</span>
+                    </>
+                  )}
                 {w.last_price != null ? ` · now ${formatPrice(w.last_price)}` : ""}
                 {w.quantity != null ? ` · qty ${w.quantity}` : ""}
               </span>

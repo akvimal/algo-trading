@@ -193,6 +193,7 @@ export async function placeOrder(req: OrderRequest, extras: PlaceExtras = {}): P
   if (req.kind === "pending") {
     // A waiting order carries its plan picture; the server attaches it to the position when the order fills.
     const o = await api<PendingOrder>("execution", req.path, { method: "POST", json: picture ? { ...req.body, plan_snapshot_png_base64: picture } : req.body });
+    if (o.fire_when_open) return { ok: true, kind: "pending", message: "Market is closed. The order waits and is placed when the market opens, at the latest prices. You can cancel it until then." };
     return { ok: true, kind: "pending", message: `Order waiting. It is placed when the price reaches ${o.trigger_price}. It stays armed for up to a day, even with the app closed.` };
   }
   const placed = await api<Placed>("execution", req.path, { method: "POST", json: req.body });

@@ -465,7 +465,7 @@ export type PendingOrder = {
   segment: Segment;
   symbol: string;
   action: "BUY" | "SELL";
-  strategy: "future" | "naked" | "spread" | "spot";
+  strategy: "future" | "naked" | "spread" | "credit_spread" | "spot";
   trigger_price: number;
   stop_loss_price: number | null;
   target_price: number | null;
@@ -475,6 +475,7 @@ export type PendingOrder = {
   last_price: number | null;
   allow_stacking: boolean;
   quantity?: number | null;
+  fire_when_open?: boolean;
   moneyness?: string | null;
   horizon?: "intraday" | "positional";
 };

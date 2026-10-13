@@ -12,7 +12,7 @@ vi.mock("../api/trade", () => ({
   },
 }));
 
-const order = { id: "w1", segment: "NSE", symbol: "ADANIGREEN", action: "SELL", strategy: "spread", trigger_price: 1020.5, stop_loss_price: 1050, target_price: null, status: "pending", status_reason: null, expires_at: "", last_price: 1011, allow_stacking: false, quantity: 600, horizon: "positional" } as any;
+const order = { id: "w1", segment: "NSE", symbol: "ADANIGREEN", action: "SELL", strategy: "credit_spread", trigger_price: 1020.5, stop_loss_price: 1050, target_price: null, status: "pending", status_reason: null, expires_at: "", last_price: 1011, allow_stacking: false, quantity: 600, horizon: "positional" } as any;
 
 describe("WaitingOrders", () => {
   beforeEach(() => {
@@ -30,7 +30,7 @@ describe("WaitingOrders", () => {
     render(<WaitingOrders orders={[order]} onChanged={onChanged} />);
     const row = screen.getByTestId("waiting-order");
     expect(row).toHaveTextContent("ADANIGREEN");
-    expect(row).toHaveTextContent("Spread");
+    expect(row).toHaveTextContent("Credit spread");
     expect(row).toHaveTextContent("positional");
     expect(row).toHaveTextContent("qty 600");
     expect(screen.queryByRole("button", { name: /square off/i })).not.toBeInTheDocument();

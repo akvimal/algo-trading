@@ -6,6 +6,10 @@ import { App } from "../App";
 import { AuthProvider } from "../auth/AuthContext";
 import { setToken } from "../auth/token";
 import { FakeChart } from "../test/fakeKlinecharts";
+
+// The ticket asks whether the market is trading; tests decide, so none of them depends on the time of day they run at.
+let marketOpen = true;
+vi.mock("./marketHours", () => ({ marketIsOpen: () => marketOpen }));
 import { FakeWebSocket } from "../test/fakeSocket";
 
 function jwt(claims: object): string {
@@ -1086,6 +1090,9 @@ describe("waiting orders", () => {
 });
 
 describe("options", () => {
+  beforeEach(() => {
+    marketOpen = true;
+  });
   const spread = async () => {
     lotSize = 65;
     const user = userEvent.setup();
@@ -1109,6 +1116,15 @@ describe("options", () => {
     expect(puts("/option-groups/g1/spot-target")[0].body).toEqual({ spot_target_price: 1030 });
     expect(await t.findByText("Paper order placed.")).toBeInTheDocument();
     expect(t.queryByText(/did not attach/)).not.toBeInTheDocument();
+  });
+
+  it("waits for the open when the market is closed, then places at the latest prices; it can be cancelled meanwhile", async () => {
+    marketOpen = false;
+    const { t } = await spread();
+    await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
+    expect(posts("/option-groups/manual")).toHaveLength(0); // nothing opened at stale prices
+    expect(posts("/pending-orders")[0].body).toMatchObject({ segment: "NSE", symbol: "NIFTY", strategy: "spread", fire_when_open: true, stop_loss_price: 990, target_price: 1030 });
+    expect(posts("/pending-orders")[0].body).not.toHaveProperty("trigger_price");
   });
 
   it("says so when the stop would not attach, rather than pretending it is protected", async () => {

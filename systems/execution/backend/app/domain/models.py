@@ -263,9 +263,15 @@ class PendingOrderCreate(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str = Field(min_length=1, max_length=64)  # the logical underlying, e.g. NIFTY
     action: Literal["BUY", "SELL"]
-    strategy: Literal["future", "naked", "spread", "spot"] = "future"
+    strategy: Literal["future", "naked", "spread", "credit_spread", "spot"] = "future"
     moneyness: Literal["ITM2", "ITM1", "ATM", "OTM1", "OTM2"] = "ATM"  # options only
-    trigger_price: float = Field(gt=0)
+    # None only with fire_when_open: the order has no price trigger, so the stop and target are judged against the price when it is armed.
+    trigger_price: Optional[float] = Field(default=None, gt=0)
+    # A market order placed while the market is closed: it waits and is placed at the latest prices on the first pass after the open.
+    fire_when_open: bool = False
+    # A spread's own premium stop/target (from the ticket's % of max loss/profit), attached right after it opens.
+    combined_stop_loss_price: Optional[float] = Field(default=None, gt=0)
+    combined_target_price: Optional[float] = Field(default=None, gt=0)
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
     target_price: Optional[float] = Field(default=None, gt=0)
     quantity: Optional[float] = Field(default=None, gt=0)  # None = risk-size at fill
@@ -304,10 +310,20 @@ class PendingOrderCreate(BaseModel):
 
     @model_validator(mode="after")
     def _check_horizon(self) -> "PendingOrderCreate":
-        if self.horizon == "positional" and self.strategy != "spot":
-            raise ValueError("a positional order must be a spot order")
+        if self.horizon == "positional" and self.strategy == "future":
+            raise ValueError("a positional order must be a spot or option order")
         if self.strategy == "spot" and self.horizon != "positional":
             raise ValueError("a spot pending order is positional: set horizon to 'positional'")
+        return self
+
+    @model_validator(mode="after")
+    def _check_trigger(self) -> "PendingOrderCreate":
+        if self.trigger_price is None and not self.fire_when_open:
+            raise ValueError("trigger_price is required unless the order waits for the market to open")
+        if self.fire_when_open and self.strategy in ("future", "spot"):
+            raise ValueError("only an option order can wait for the market to open")
+        if (self.combined_stop_loss_price is not None or self.combined_target_price is not None) and self.strategy not in ("spread", "credit_spread"):
+            raise ValueError("a combined stop-loss or target only applies to a spread")
         return self
 
 
@@ -325,13 +341,14 @@ class PendingOrderOut(BaseModel):
     segment: Literal["NSE", "MCX", "CRYPTO"]
     symbol: str
     action: Literal["BUY", "SELL"]
-    strategy: Literal["future", "naked", "spread", "spot"]
+    strategy: Literal["future", "naked", "spread", "credit_spread", "spot"]
     moneyness: Optional[str] = None
     trigger_price: float
     started_above: bool
     stop_loss_price: Optional[float] = None
     target_price: Optional[float] = None
     quantity: Optional[float] = None
+    fire_when_open: bool = False
     trend_followed: bool
     risk_managed: bool
     setup_tag: Optional[str] = None

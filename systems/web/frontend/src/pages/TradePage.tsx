@@ -851,7 +851,7 @@ export function TradePage() {
                 waitingHere={
                   mine.length > 0
                     ? {
-                        text: mine.length === 1 ? `a waiting ${mine[0].action} order at ${formatPrice(mine[0].trigger_price)}` : `${mine.length} waiting orders`,
+                        text: mine.length === 1 ? (mine[0].fire_when_open ? `a ${mine[0].action} order waiting for the market to open` : `a waiting ${mine[0].action} order at ${formatPrice(mine[0].trigger_price)}`) : `${mine.length} waiting orders`,
                         cancel: () => void Promise.all(mine.map((w) => cancelWaitingOrder(w.id).catch(() => undefined))).finally(() => waiting.reload()),
                       }
                     : null
@@ -900,7 +900,7 @@ export function TradePage() {
                   {mine.map((w) => (
                     <div className="list-row" key={w.id}>
                       <span>
-                        <span className={`pill ${w.action === "BUY" ? "up" : "dn"}`}>{w.action}</span> {w.symbol} at <span className="num">{formatPrice(w.trigger_price)}</span>
+                        <span className={`pill ${w.action === "BUY" ? "up" : "dn"}`}>{w.action}</span> {w.symbol} {w.fire_when_open ? "when the market opens" : <>at <span className="num">{formatPrice(w.trigger_price)}</span></>}
                         <span className="faint" style={{ display: "block", fontSize: 12 }}>
                           {w.stop_loss_price != null ? `stop ${formatPrice(w.stop_loss_price)}` : "no stop"}
                           {w.target_price != null ? ` · target ${formatPrice(w.target_price)}` : ""}

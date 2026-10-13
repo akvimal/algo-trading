@@ -419,7 +419,13 @@ export type OrderRequest =
     }
   | { kind: "pending"; path: string; body: Record<string, unknown> };
 
-export type BuildMeta = { instrument: "spot" | "future"; interval: string; trendFollowed: boolean };
+export type BuildMeta = {
+  instrument: "spot" | "future";
+  interval: string;
+  trendFollowed: boolean;
+  /** The market is shut: an option order at the market price waits for the open (and is placed then at the latest prices) instead of opening at stale ones. */
+  marketClosed?: boolean;
+};
 
 /** The request for this ticket. A market order goes straight in at the live price; a limit order
  * is armed on the server, which watches the price and fires it (so it works with the app closed). */
@@ -450,6 +456,24 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
         ...(t.strategy === "spread" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
         ...(t.strategy !== "future" && t.expiry != null ? { expiry: t.expiry } : {}),
         ...(t.strategy === "spread" ? { spread_width: t.spreadWidth } : {}),
+      },
+    };
+  }
+  if (t.strategy !== "future" && meta.marketClosed) {
+    return {
+      kind: "pending",
+      path: "/pending-orders",
+      body: {
+        ...common, strategy: t.strategy, moneyness: t.moneyness, fire_when_open: true,
+        ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal,
+        ...(t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
+        ...(t.strategy !== "naked" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
+        ...(t.expiry != null ? { expiry: t.expiry } : {}),
+        ...(t.strategy !== "naked" ? { spread_width: t.spreadWidth } : {}),
+        ...(t.holdOvernight ? { horizon: "positional" } : {}),
+        ...(t.combinedStopLossPrice != null ? { combined_stop_loss_price: t.combinedStopLossPrice } : {}),
+        ...(t.combinedTargetPrice != null ? { combined_target_price: t.combinedTargetPrice } : {}),
       },
     };
   }

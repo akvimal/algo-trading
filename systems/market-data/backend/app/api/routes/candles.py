@@ -2,7 +2,7 @@ import logging
 import re
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -157,6 +157,8 @@ def _fill_yahoo_gaps(candles: list[Candle], caller: Caller, symbol: str, interva
     for the last few weeks fill those days in; the current weekly bar is then
     rebuilt from the filled dailies. Best-effort - any Dhan failure (no token,
     rate limit) returns Yahoo's series untouched."""
+    if not candles or to_date < date.today() - timedelta(days=3):
+        return candles  # a range that ended long ago has no recent day to fill
     try:
         recent_from = max(from_date, date.fromordinal(to_date.toordinal() - _GAP_FILL_DAYS))
         daily = candles if interval == "daily" else fetch_candle_history_cached(

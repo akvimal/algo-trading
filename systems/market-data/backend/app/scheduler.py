@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import func
 
-from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, SentimentHistory, ZoneScan
+from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, OiStrikeSnapshot, SentimentHistory, ZoneScan
 from app.adapters.db.session import SessionLocal
 from app.config import settings
 from app.domain import job_tracker
@@ -18,6 +18,7 @@ from app.domain.job_tracker import tracked
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.models import Candle
 from app.domain.oi_buildup import PreviousSnapshot, compute_eod_buildup
+from app.domain.oi_strikes import RECORDED_UNDERLYINGS, RETENTION_DAYS, nearest_expiry, strike_rows
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
 from app.domain.zone_scan import read_zones, tier_for
@@ -203,6 +204,47 @@ def _record_sentiment_history() -> None:
         run.tick(tally["ok"] + tally["failed"], tally)
     except Exception as exc:
         logger.exception("scheduled sentiment history recording failed")
+        db.rollback()
+        run.fail(f"{type(exc).__name__}: {exc}"[:300])
+    finally:
+        db.close()
+
+
+@tracked("oi-strike-record", "OI by strike recorder", keep=288, keep_skips=False)
+def _record_oi_strikes() -> None:
+    """Saves the open interest of the strikes around the money for NIFTY and BANKNIFTY, every five minutes while the market is in session, on the
+    platform credential. Dhan has no history of intraday OI, so this is the history an OI-based intraday strategy is tested against. Rows older than
+    RETENTION_DAYS are removed."""
+    run = job_tracker.current()
+    tally = {"ok": 0, "failed": 0}
+    db = SessionLocal()
+    try:
+        now = datetime.now(ZoneInfo(settings.timezone))
+        for exchange, symbols in RECORDED_UNDERLYINGS.items():
+            if not is_within_session(exchange, now):
+                continue
+            provider = get_provider(exchange)
+            for symbol in symbols:
+                try:
+                    resolved = provider.resolve_underlying(symbol)
+                    expiry = nearest_expiry(provider.get_expiry_list(resolved.chart_symbol)) if resolved else None
+                    chain = provider.get_option_chain(resolved.chart_symbol, expiry) if expiry else None
+                    rows = strike_rows(chain) if chain else []
+                except Exception:
+                    logger.exception("oi strike snapshot failed for %s", symbol)
+                    rows = []
+                if not rows:
+                    tally["failed"] += 1
+                    continue
+                tally["ok"] += 1
+                db.add_all(OiStrikeSnapshot(recorded_at=now, exchange=exchange, symbol=symbol, **r) for r in rows)
+        db.query(OiStrikeSnapshot).filter(OiStrikeSnapshot.recorded_at < now - timedelta(days=RETENTION_DAYS)).delete(synchronize_session=False)
+        db.commit()
+        if not tally["ok"] and not tally["failed"]:
+            run.skip("no market in session")
+        run.tick(tally["ok"] + tally["failed"], tally)
+    except Exception as exc:
+        logger.exception("scheduled OI strike recording failed")
         db.rollback()
         run.fail(f"{type(exc).__name__}: {exc}"[:300])
     finally:
@@ -820,6 +862,12 @@ def start_scheduler() -> None:
         # means every row already falls on one, no rounding needed downstream.
         CronTrigger(minute=f"*/{settings.sentiment_history_interval_minutes}", timezone=settings.timezone),
         id="sentiment-history-record",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _record_oi_strikes,
+        CronTrigger(day_of_week="mon-fri", minute=f"*/{settings.sentiment_history_interval_minutes}", timezone=settings.timezone),
+        id="oi-strike-record",
         replace_existing=True,
     )
     _scheduler.add_job(

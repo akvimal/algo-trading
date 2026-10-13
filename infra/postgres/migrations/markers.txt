@@ -60,3 +60,5 @@
 055-pending-option-legs.sql|execution.pending_orders|primary_strike
 056-trade-snapshots.sql|execution.trade_images|kind
 057-pending-at-open.sql|execution.pending_orders|fire_when_open
+058-oi-strike-snapshot.sql|market_data.oi_strike_snapshot|
+059-spread-bot.sql|execution.spread_bot_settings|

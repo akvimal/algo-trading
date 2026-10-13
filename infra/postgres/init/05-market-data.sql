@@ -138,6 +138,27 @@ CREATE INDEX IF NOT EXISTS idx_oi_eod_snapshot_symbol_date
 CREATE INDEX IF NOT EXISTS idx_oi_eod_snapshot_date
     ON market_data.oi_eod_snapshot (snapshot_date);
 
+-- Open interest by strike every five minutes through the NSE session, NIFTY and BANKNIFTY, nearest expiry, the strikes around the money (migration 058).
+-- Dhan has no history of intraday OI, so this table is the history; built up going forward only. Pruned after 90 days by the recorder.
+CREATE TABLE IF NOT EXISTS market_data.oi_strike_snapshot (
+    id           BIGSERIAL PRIMARY KEY,
+    recorded_at  TIMESTAMPTZ NOT NULL,
+    exchange     TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    expiry       TEXT NOT NULL,
+    spot_price   DOUBLE PRECISION NOT NULL,
+    strike       DOUBLE PRECISION NOT NULL,
+    ce_oi        BIGINT,
+    pe_oi        BIGINT,
+    ce_prev_oi   BIGINT,
+    pe_prev_oi   BIGINT,
+    ce_ltp       DOUBLE PRECISION,
+    pe_ltp       DOUBLE PRECISION,
+    ce_iv        DOUBLE PRECISION,
+    pe_iv        DOUBLE PRECISION
+);
+CREATE INDEX IF NOT EXISTS idx_oi_strike_snapshot_symbol_time ON market_data.oi_strike_snapshot (symbol, recorded_at DESC);
+
 -- One row per (symbol, snapshot_date) - the EOD momentum/trend +
 -- 52-week-proximity equity screener (see app/scheduler.py's
 -- _record_equity_screener_snapshot + app/domain/equity_screener.py).

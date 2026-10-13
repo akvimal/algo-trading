@@ -6,7 +6,7 @@ update both places.
 
 import uuid
 
-from sqlalchemy import Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func, text
+from sqlalchemy import BigInteger, Boolean, Column, Date, ForeignKey, Integer, LargeBinary, Numeric, SmallInteger, Text, Time, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import declarative_base, deferred
 
@@ -588,6 +588,41 @@ class PendingOrder(Base):
     fire_when_open = Column(Boolean, nullable=False, default=False)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
+
+
+class SpreadBotSettings(Base):
+    """One user's switch and limits for the intraday credit-spread bot (app/domain/spread_bot.py, migration 059). Off by default."""
+
+    __tablename__ = "spread_bot_settings"
+    __table_args__ = {"schema": SCHEMA}
+
+    user_id = Column(UUID(as_uuid=True), primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    risk_pct = Column(Numeric, nullable=False, default=1)
+    symbols = Column(Text, nullable=False, default="NIFTY,BANKNIFTY")
+    entry_from = Column(Time, nullable=False)
+    entry_to = Column(Time, nullable=False)
+    min_votes = Column(SmallInteger, nullable=False, default=3)
+    width_strikes = Column(SmallInteger, nullable=False, default=2)
+    max_trades_per_day = Column(SmallInteger, nullable=False, default=2)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class SpreadBotDecision(Base):
+    """Every decision the spread bot makes - entered, skipped or failed, and why - with the reads and numbers behind it."""
+
+    __tablename__ = "spread_bot_decisions"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    symbol = Column(Text, nullable=False)
+    decided_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    outcome = Column(Text, nullable=False)
+    reason = Column(Text, nullable=False)
+    votes = Column(JSONB)
+    detail = Column(JSONB)
+    group_id = Column(UUID(as_uuid=True))
 
 
 class StudyNote(Base):

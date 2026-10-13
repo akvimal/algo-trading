@@ -46,6 +46,30 @@ class SentimentHistory(Base):
     error = Column(Text)
 
 
+class OiStrikeSnapshot(Base):
+    """Open interest by strike at one moment, for NIFTY/BANKNIFTY (app/scheduler.py's _record_oi_strikes, migration 058). Dhan keeps no history of
+    intraday OI, so these rows are the history an OI-based intraday strategy is tested against."""
+
+    __tablename__ = "oi_strike_snapshot"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    recorded_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    exchange = Column(Text, nullable=False)
+    symbol = Column(Text, nullable=False)
+    expiry = Column(Text, nullable=False)
+    spot_price = Column(Float, nullable=False)
+    strike = Column(Float, nullable=False)
+    ce_oi = Column(BigInteger)
+    pe_oi = Column(BigInteger)
+    ce_prev_oi = Column(BigInteger)
+    pe_prev_oi = Column(BigInteger)
+    ce_ltp = Column(Float)
+    pe_ltp = Column(Float)
+    ce_iv = Column(Float)
+    pe_iv = Column(Float)
+
+
 class PriceAlert(Base):
     """A standalone price alert - a level + direction the scheduler polls
     the LTP against and pushes to Telegram on a crossing. See

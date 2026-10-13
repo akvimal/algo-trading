@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/http";
-import type { Account } from "../api/types";
+import { listWaitingOrders } from "../api/trade";
+import type { Account, PendingOrder } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { FirstWeekCard } from "../components/FirstWeekCard";
 import { MarketsCard } from "../components/MarketsCard";
 import { PerformanceSnapshot } from "../components/PerformanceSnapshot";
 import { PositionCard } from "../components/PositionCard";
+import { WaitingOrders } from "../components/WaitingOrders";
 import { formatInr, formatPnl } from "../format";
 import { useLivePositions } from "../hooks/useLivePositions";
 import { useResource } from "../hooks/useResource";
@@ -23,12 +25,13 @@ const MODES: { id: Mode; label: string }[] = [
 ];
 
 async function loadToday() {
-  const [accounts, positions, groups] = await Promise.all([
+  const [accounts, positions, groups, waiting] = await Promise.all([
     api<Account[]>("execution", "/accounts"),
     positionsApi("/positions?with_live_pnl=true&limit=200"),
     groupsApi("/option-groups?with_live_pnl=true&limit=200"),
+    listWaitingOrders().catch(() => [] as PendingOrder[]),
   ]);
-  return { accounts, positions, groups };
+  return { accounts, positions, groups, waiting };
 }
 
 export function TodayPage() {
@@ -51,6 +54,10 @@ export function TodayPage() {
   const budget = lossBudget(accounts, pnl.total);
   const shownPositions = mode === "options" ? [] : openPositions(positions).filter((p) => inMode(p, mode));
   const shownGroups = mode === "options" ? openGroups(groups) : [];
+  // A waiting order sits in the tab its trade will open in.
+  const shownWaiting = today.data.waiting.filter((w) =>
+    mode === "options" ? w.strategy === "naked" || w.strategy === "spread" : w.strategy !== "naked" && w.strategy !== "spread" && (w.horizon ?? "intraday") === mode,
+  );
 
   return (
     <div className="stack">
@@ -134,6 +141,8 @@ export function TodayPage() {
           ))}
         </div>
       )}
+
+      <WaitingOrders orders={shownWaiting} onChanged={today.reload} />
 
       <PerformanceSnapshot markets={accounts.map((a) => a.segment)} />
       </div>

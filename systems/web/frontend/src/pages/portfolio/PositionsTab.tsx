@@ -1,11 +1,15 @@
-import type { OptionGroup, Position } from "../../api/types";
+import { listWaitingOrders } from "../../api/trade";
+import type { OptionGroup, PendingOrder, Position } from "../../api/types";
+import { useResource } from "../../hooks/useResource";
 import type { Resource } from "../../hooks/useResource";
 import { Empty, ErrorNotice, Skeleton } from "../../components/bits";
 import { PositionCard } from "../../components/PositionCard";
+import { WaitingOrders } from "../../components/WaitingOrders";
 import { openGroups, openPositions } from "../todayModel";
 
 /** `positions` are the open ones valued at live prices, when the price socket is up; otherwise the polled ones. */
 export function PositionsTab({ open, positions: livePositions, live = false }: { open: Resource<{ positions: Position[]; groups: OptionGroup[] }>; positions?: Position[]; live?: boolean }) {
+  const waiting = useResource(() => listWaitingOrders().catch(() => [] as PendingOrder[]), []);
   if (open.loading) return <Skeleton lines={4} />;
   if (open.error && !open.data) return <ErrorNotice error={open.error} onRetry={open.reload} />;
   if (!open.data) return null;
@@ -34,6 +38,7 @@ export function PositionsTab({ open, positions: livePositions, live = false }: {
           ))}
         </>
       )}
+      <WaitingOrders orders={waiting.data ?? []} onChanged={waiting.reload} />
     </div>
   );
 }

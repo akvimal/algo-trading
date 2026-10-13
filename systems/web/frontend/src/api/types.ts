@@ -474,6 +474,9 @@ export type PendingOrder = {
   expires_at: string;
   last_price: number | null;
   allow_stacking: boolean;
+  quantity?: number | null;
+  moneyness?: string | null;
+  horizon?: "intraday" | "positional";
 };
 
 export type Profile = {

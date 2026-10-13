@@ -349,6 +349,10 @@ class PendingOrderOut(BaseModel):
     target_price: Optional[float] = None
     quantity: Optional[float] = None
     fire_when_open: bool = False
+    primary_strike: Optional[float] = None
+    second_strike: Optional[float] = None
+    expiry: Optional[str] = None
+    spread_width: Optional[int] = None
     trend_followed: bool
     risk_managed: bool
     setup_tag: Optional[str] = None

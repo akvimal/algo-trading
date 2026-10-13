@@ -476,6 +476,10 @@ export type PendingOrder = {
   allow_stacking: boolean;
   quantity?: number | null;
   fire_when_open?: boolean;
+  primary_strike?: number | null;
+  second_strike?: number | null;
+  expiry?: string | null;
+  spread_width?: number | null;
   moneyness?: string | null;
   horizon?: "intraday" | "positional";
 };

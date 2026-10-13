@@ -46,3 +46,12 @@ describe("WaitingOrders", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Already triggered");
   });
 });
+
+describe("WaitingOrders legs", () => {
+  it("lists the strikes and expiry a spread was armed with, or says they are chosen at the open", () => {
+    const { rerender } = render(<WaitingOrders orders={[{ ...order, primary_strike: 1280, second_strike: 1320, expiry: "2026-10-27" }]} onChanged={() => {}} />);
+    expect(screen.getByTestId("waiting-legs")).toHaveTextContent("strikes 1280 / 1320 · expiry 2026-10-27");
+    rerender(<WaitingOrders orders={[{ ...order, moneyness: "OTM1" }]} onChanged={() => {}} />);
+    expect(screen.getByTestId("waiting-legs")).toHaveTextContent("OTM1 strike chosen at the open · nearest expiry");
+  });
+});

@@ -77,6 +77,20 @@ export type Position = {
   auto_traded?: boolean;
 };
 
+/** One leg of an option group, as the groups API returns it. `live_price`/`unrealized_pnl` only come with `with_live_pnl=true`. */
+export type OptionLeg = {
+  id: string;
+  symbol: string;
+  action: "BUY" | "SELL";
+  quantity: number | null;
+  entry_price: number;
+  exit_price: number | null;
+  pnl: number | null;
+  status: string;
+  live_price?: number | null;
+  unrealized_pnl?: number | null;
+};
+
 export type OptionGroup = {
   id: string;
   underlying_symbol: string;
@@ -121,6 +135,7 @@ export type OptionGroup = {
   review_notes?: string | null;
   strategy_id?: string | null;
   auto_traded?: boolean;
+  legs?: OptionLeg[];
 };
 
 export type SentimentUnderlying = {

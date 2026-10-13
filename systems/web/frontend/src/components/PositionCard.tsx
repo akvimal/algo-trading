@@ -253,6 +253,21 @@ export function PositionCard(props: Props) {
           </span>
         </div>
       )}
+      {g && g.legs && g.legs.length > 0 && (
+        <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0, fontSize: 12 }} data-testid="pos-legs" aria-label="Legs">
+          {g.legs.map((leg) => (
+            <li key={leg.id} className="row">
+              <span>
+                <span className={`pill pill-small ${leg.action === "BUY" ? "up" : "dn"}`}>{leg.action}</span> {leg.symbol}
+              </span>
+              <span className="num dim">
+                {leg.quantity ?? "–"} @ {formatPrice(leg.entry_price)}
+                {leg.live_price != null && ` → ${formatPrice(leg.live_price)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       <div className="pos-sub">
         {level("stop", stop)}
         {level("target", target)}

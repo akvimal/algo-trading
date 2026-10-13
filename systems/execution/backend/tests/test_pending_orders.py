@@ -975,3 +975,16 @@ def test_a_credit_spreads_negative_combined_stop_and_target_are_accepted_and_att
     run(db, {("NSE", "ITC"): 261.0}, now=MONDAY_OPEN,
         set_combined_stop=lambda d, u, g, p: combined.append(("stop", p)), set_combined_target=lambda d, u, g, p: combined.append(("target", p)))
     assert row.status == "triggered" and combined == [("stop", -29.85), ("target", -0.7)]
+
+
+def test_a_closed_market_order_still_arms_when_the_feed_has_no_price_if_the_charts_price_is_sent():
+    def no_price(segment, symbol, token=None, owner=None):
+        raise UnderlyingUnavailable("no price for ITC")
+
+    deps = fake_deps({}, underlying_ltp=no_price)
+    mk = lambda **o: PendingOrderCreate(segment="NSE", symbol="itc", action="SELL", strategy="credit_spread", fire_when_open=True, **o)
+    row = create_pending_order(FakeDb(), ALICE, mk(trigger_price=261.0, stop_loss_price=270.0), deps, False, now=CLOSED)
+    assert row.status == "pending" and float(row.trigger_price) == 261.0
+    with pytest.raises(PendingOrderError) as err:
+        create_pending_order(FakeDb(), ALICE, mk(), deps, False, now=CLOSED)
+    assert err.value.status_code == 503

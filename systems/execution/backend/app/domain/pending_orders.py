@@ -299,7 +299,11 @@ def create_pending_order(
     except UnknownUnderlying:
         raise PendingOrderError(404, f"unknown symbol {symbol} on {payload.segment}")
     except UnderlyingUnavailable as exc:
-        raise PendingOrderError(503, f"could not get a live price for {symbol} to arm the order: {exc}")
+        # With the market shut the feed often has no live price. An order that waits for the open does not need one: the price the
+        # person's chart showed (sent as trigger_price) is only what its stop and target are checked against.
+        if not (waits_for_open and payload.trigger_price is not None):
+            raise PendingOrderError(503, f"could not get a live price for {symbol} to arm the order: {exc}")
+        ltp = payload.trigger_price
     trigger = ltp if waits_for_open else payload.trigger_price
     if waits_for_open:
         problem = bracket_problem(payload.action, trigger, payload.stop_loss_price, payload.target_price)

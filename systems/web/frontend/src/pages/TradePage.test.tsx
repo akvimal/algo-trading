@@ -1124,7 +1124,7 @@ describe("options", () => {
     await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
     expect(posts("/option-groups/manual")).toHaveLength(0); // nothing opened at stale prices
     expect(posts("/pending-orders")[0].body).toMatchObject({ segment: "NSE", symbol: "NIFTY", strategy: "spread", fire_when_open: true, stop_loss_price: 990, target_price: 1030 });
-    expect(posts("/pending-orders")[0].body).not.toHaveProperty("trigger_price");
+    expect(posts("/pending-orders")[0].body).toHaveProperty("trigger_price"); // the chart's price, so the order can be armed when the feed has none
   });
 
   it("says so when the stop would not attach, rather than pretending it is protected", async () => {

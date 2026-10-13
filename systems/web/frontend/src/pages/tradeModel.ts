@@ -464,7 +464,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       kind: "pending",
       path: "/pending-orders",
       body: {
-        ...common, strategy: t.strategy, moneyness: t.moneyness, fire_when_open: true,
+        ...common, strategy: t.strategy, moneyness: t.moneyness, fire_when_open: true, ...(a.entry != null ? { trigger_price: a.entry } : {}),
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
         ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal,
         ...(t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),

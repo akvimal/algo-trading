@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, haveLiquidity, inUniverse, sizeLabel, universeCounts, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, totalOiChangePct, fullTradeLink, tradeLink, visible } from "./scanModel";
+import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, haveLiquidity, inUniverse, sizeLabel, universeCounts, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, tradeLink, visible } from "./scanModel";
 import QUADRANT_CASES from "./fixtures/oi_quadrant_cases.json";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
@@ -335,5 +335,11 @@ describe("Screener universe, liquidity and relative strength", () => {
     expect(rows.map((r) => sizeLabel(r))).toEqual(["Large", "Mid", "Small", "Small", "Outside Nifty 500"]);
     expect(sizeLabel({ universes: ["NIFTY500"] })).toBe("Nifty 500");
     expect(sizeLabel({})).toBeNull();
+  });
+});
+
+describe("oiTradeLink", () => {
+  it("opens the credit-spread option form leaning the way the card reads", () => {
+    expect(oiTradeLink("TCS", "SELL")).toBe("/trade?symbol=TCS&segment=NSE&layout=side&intervals=weekly,daily&form=credit&view=SELL");
   });
 });

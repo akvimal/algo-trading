@@ -20,6 +20,10 @@ Quotes come from the platform credential, like the existing exit-monitor jobs.
 Note for the own-keys data model (docs/redesign-rollout-plan.md, decision 1):
 background jobs will need a per-user credential path.
 
+Market orders placed while the market is closed (`fire_when_open`): an option order that has no price trigger. It waits, cancellable like any
+waiting order, and the watcher places it on the first pass after the market opens, resolving the legs at the live premiums then. `trigger_price`
+is only the underlying's price when it was armed (the stop and target are judged against it); the order never fires on a crossing.
+
 Stacking: unless the order was armed with allow_stacking, firing is SKIPPED (cancelled, with a reason) when the
 person already holds an open position or option group on that underlying - manual trades are independent of the
 Strategy signal-conflict policies, so this is the only thing stopping a second waiting order from doubling up.
@@ -39,8 +43,9 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -75,6 +80,22 @@ def crossed(started_above: bool, trigger_price: float, ltp: float) -> bool:
     return ltp <= trigger_price if started_above else ltp >= trigger_price
 
 
+# When each market trades (local exchange time, Monday to Friday). A holiday is not known here: an order waiting over one places at the next
+# pass inside these hours, on whatever prices the feed then has.
+_SESSIONS = {"NSE": (dt_time(9, 15), dt_time(15, 30)), "MCX": (dt_time(9, 0), dt_time(23, 30))}
+_EXCHANGE_TZ = "Asia/Kolkata"  # NSE and MCX both trade on Indian time
+_WAIT_FOR_OPEN_TTL_MINUTES = 5 * 1440  # a Friday-evening order must still be there on Monday
+
+
+def market_is_open(segment: str, now: datetime) -> bool:
+    """Is this segment trading right now? CRYPTO never closes."""
+    session = _SESSIONS.get(segment)
+    if session is None:
+        return True
+    local = now.astimezone(ZoneInfo(_EXCHANGE_TZ))
+    return local.weekday() < 5 and session[0] <= local.time() < session[1]
+
+
 def bracket_problem(action: str, trigger: float, stop: Optional[float], target: Optional[float]) -> Optional[str]:
     """A stop must sit on the losing side of the trigger and a target on the
     winning side (same rule as the frontend's validateBracket)."""
@@ -101,6 +122,9 @@ class Deps:
     holds_open: Optional[Callable] = None
     # (db, order, exec_settings) -> Position: a positional spot hold on the positional book. Left unset = a positional order fails.
     open_spot: Optional[Callable] = None
+    # (db, user_id, group_id, price): the spread's own premium stop/target. Left unset = a combined level on an order is not attached.
+    set_combined_stop: Optional[Callable] = None
+    set_combined_target: Optional[Callable] = None
 
 
 _RESOLVE_TTL_SECONDS = 3600
@@ -114,7 +138,9 @@ def default_deps() -> Deps:
         get_candle_history, get_expiry_list, get_ltp_batch, get_lot_size, get_option_chain, get_previous_candle,
         resolve_symbol_by_security_id, resolve_underlying,
     )
-    from app.domain.option_position_manager import open_manual_option_group, update_group_spot_stop_loss, update_group_spot_target
+    from app.domain.option_position_manager import (
+        open_manual_option_group, update_group_spot_stop_loss, update_group_spot_target, update_group_stop_loss, update_group_target,
+    )
     from app.domain.position_manager import open_manual_position
 
     def underlying_ltp(segment: str, symbol: str, token: Optional[str] = None, owner=None) -> float:
@@ -157,7 +183,7 @@ def default_deps() -> Deps:
         # The legs the order was armed for (an explicit strike per leg and the expiry they came from) win over the moneyness,
         # exactly as they do for a market order.
         return open_manual_option_group(
-            o.user_id, o.segment, o.symbol, o.action, "spread" if o.strategy == "spread" else "naked", o.moneyness or "ATM",
+            o.user_id, o.segment, o.symbol, o.action, o.strategy if o.strategy in ("spread", "credit_spread") else "naked", o.moneyness or "ATM",
             o.expiry, "combined", float(o.quantity) if o.quantity is not None else None, exec_settings, db, resolve_underlying,
             get_expiry_list, get_option_chain, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size,
             spread_width=o.spread_width,
@@ -165,6 +191,7 @@ def default_deps() -> Deps:
             second_strike=float(o.second_strike) if o.second_strike is not None else None,
             plan_checklist=[], order_type="limit", trend_followed=o.trend_followed, risk_managed=o.risk_managed,
             setup_tag=o.setup_tag, confidence=o.confidence, notes=o.notes, entry_interval=o.entry_interval, auto_traded=False,
+            positional=(getattr(o, "horizon", None) or "intraday") == "positional",
         )
 
     def open_spot(db, o, exec_settings):
@@ -180,7 +207,10 @@ def default_deps() -> Deps:
             auto_traded=False, entry_interval=o.entry_interval, horizon="positional", notes=o.notes,
         )
 
-    return Deps(underlying_ltp, open_future, open_option, update_group_spot_stop_loss, update_group_spot_target, holds_open_position, open_spot)
+    return Deps(
+        underlying_ltp, open_future, open_option, update_group_spot_stop_loss, update_group_spot_target, holds_open_position, open_spot,
+        update_group_stop_loss, update_group_target,
+    )
 
 
 def holds_open_position(db: Session, user_id: uuid.UUID, segment: str, symbol: str, horizon: str = "intraday") -> Optional[str]:
@@ -253,10 +283,12 @@ def create_pending_order(
     now = now or _now()
     if is_live:
         raise PendingOrderError(409, "pending orders are paper-only, and this account is live: place a market order, or switch live trading off first")
-    problem = bracket_problem(payload.action, payload.trigger_price, payload.stop_loss_price, payload.target_price)
-    if problem:
-        raise PendingOrderError(422, problem)
-    ttl = payload.expires_in_minutes or settings.pending_order_default_ttl_minutes
+    waits_for_open = bool(payload.fire_when_open)
+    if not waits_for_open:
+        problem = bracket_problem(payload.action, payload.trigger_price, payload.stop_loss_price, payload.target_price)
+        if problem:
+            raise PendingOrderError(422, problem)
+    ttl = payload.expires_in_minutes or (_WAIT_FOR_OPEN_TTL_MINUTES if waits_for_open else settings.pending_order_default_ttl_minutes)
     if ttl > settings.pending_order_max_ttl_minutes:
         raise PendingOrderError(422, f"expires_in_minutes may be at most {settings.pending_order_max_ttl_minutes}")
 
@@ -267,8 +299,17 @@ def create_pending_order(
     except UnknownUnderlying:
         raise PendingOrderError(404, f"unknown symbol {symbol} on {payload.segment}")
     except UnderlyingUnavailable as exc:
-        raise PendingOrderError(503, f"could not get a live price for {symbol} to arm the order: {exc}")
-    if ltp == payload.trigger_price:
+        # With the market shut the feed often has no live price. An order that waits for the open does not need one: the price the
+        # person's chart showed (sent as trigger_price) is only what its stop and target are checked against.
+        if not (waits_for_open and payload.trigger_price is not None):
+            raise PendingOrderError(503, f"could not get a live price for {symbol} to arm the order: {exc}")
+        ltp = payload.trigger_price
+    trigger = ltp if waits_for_open else payload.trigger_price
+    if waits_for_open:
+        problem = bracket_problem(payload.action, trigger, payload.stop_loss_price, payload.target_price)
+        if problem:
+            raise PendingOrderError(422, problem)
+    elif ltp == trigger:
         raise PendingOrderError(422, "the price is already at the trigger: place a market order instead")
 
     P = db_models.PendingOrder
@@ -282,8 +323,8 @@ def create_pending_order(
 
     row = P(
         user_id=user_id, segment=payload.segment, symbol=symbol, action=payload.action, strategy=payload.strategy,
-        moneyness=payload.moneyness if payload.strategy != "future" else None, trigger_price=payload.trigger_price,
-        started_above=ltp > payload.trigger_price, stop_loss_price=payload.stop_loss_price, target_price=payload.target_price,
+        moneyness=payload.moneyness if payload.strategy != "future" else None, trigger_price=trigger,
+        started_above=ltp > trigger, stop_loss_price=payload.stop_loss_price, target_price=payload.target_price,
         quantity=payload.quantity, trend_followed=payload.trend_followed, risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag, confidence=payload.confidence, entry_interval=payload.entry_interval,
         status="pending", expires_at=now + timedelta(minutes=ttl), last_price=ltp, last_checked_at=now,
@@ -291,6 +332,7 @@ def create_pending_order(
         source_note_id=_uuid_or_none(payload.source_note_id),
         primary_strike=payload.primary_strike, second_strike=payload.second_strike, expiry=payload.expiry,
         spread_width=payload.spread_width, notes=(payload.notes or "").strip() or None,
+        fire_when_open=waits_for_open, combined_stop_loss_price=payload.combined_stop_loss_price, combined_target_price=payload.combined_target_price,
     )
     try:
         row.plan_snapshot = decode_snapshot(payload.plan_snapshot_png_base64)
@@ -396,7 +438,7 @@ def _place(db: Session, order, deps: Deps) -> str:
     from app.domain.position_manager import load_account, load_settings
 
     order_id, user_id = order.id, order.user_id
-    positional = (order.horizon or "intraday") == "positional"
+    positional = order.strategy == "spot"  # an option order is on the everyday balance even when it is held for days
     account = load_account(db, user_id, order.segment, "positional" if positional else "intraday")
     if account is not None and account.live_trading_enabled:
         _finish(db, order_id, "failed", "the account went live while this order was armed: pending orders are paper-only, so it was not placed")
@@ -417,8 +459,13 @@ def _place(db: Session, order, deps: Deps) -> str:
             rejected, reason, position_id, group_id = row.status == "REJECTED", row.rejection_reason, None, row.id
             if not rejected:
                 warnings = []
-                for label, price, setter in (("stop-loss", order.stop_loss_price, deps.set_spot_stop), ("target", order.target_price, deps.set_spot_target)):
-                    if price is None:
+                levels = (
+                    ("stop-loss", order.stop_loss_price, deps.set_spot_stop), ("target", order.target_price, deps.set_spot_target),
+                    ("combined stop-loss", order.combined_stop_loss_price, deps.set_combined_stop),
+                    ("combined target", order.combined_target_price, deps.set_combined_target),
+                )
+                for label, price, setter in levels:
+                    if price is None or setter is None:
                         continue
                     try:
                         setter(db, user_id, row.id, float(price))
@@ -451,7 +498,8 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
         .update({P.status: "expired", P.status_reason: "expired before the price reached the trigger"}, synchronize_session=False)
     )
     db.commit()
-    live = db.query(P).filter(P.status == "pending").all()
+    # An order waiting for the open is left alone (and its price not even fetched) until the market is trading.
+    live = [r for r in db.query(P).filter(P.status == "pending").all() if not (getattr(r, "fire_when_open", False) and not market_is_open(r.segment, now))]
 
     # With JOB_QUOTES_USE_OWNER_KEYS each owner's orders are priced on that owner's own keys, so the
     # price is fetched once per (underlying, owner) instead of once per underlying.
@@ -476,7 +524,7 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
             counts["no_price"] += 1  # retried next tick
             continue
         r.last_price, r.last_checked_at = price, now
-        if not crossed(bool(r.started_above), float(r.trigger_price), price):
+        if not getattr(r, "fire_when_open", False) and not crossed(bool(r.started_above), float(r.trigger_price), price):
             continue
         # Manual trades are independent of the signal-conflict policies, so without this a waiting order would
         # quietly stack a second position on one already open. Skip it (cancelled, with the reason) unless the
@@ -485,7 +533,7 @@ def process_pending_orders(db: Session, deps: Deps, now: Optional[datetime] = No
         if deps.holds_open is not None and not r.allow_stacking:
             held = (
                 deps.holds_open(db, r.user_id, r.segment, r.symbol, "positional")
-                if (r.horizon or "intraday") == "positional"
+                if r.strategy == "spot"
                 else deps.holds_open(db, r.user_id, r.segment, r.symbol)
             )
         if held:

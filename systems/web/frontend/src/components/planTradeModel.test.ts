@@ -50,7 +50,7 @@ describe("the order a plan places", () => {
     expect(o.kind).toBe("market");
     expect(o.body).toMatchObject({
       segment: "NSE", symbol: "RELIANCE", action: "BUY", instrument_type: "spot", horizon: "positional", price: 100, order_type: "market",
-      stop_loss_price: 95, target_price: 120, source_note_id: "n1", risk_managed: true, entry_interval: "daily", notes: note.text,
+      stop_loss_price: 95, target_price: 120, source_note_id: "n1", risk_managed: true, notes: note.text,
     });
     expect(o.body).not.toHaveProperty("quantity"); // sized by risk on the server
   });

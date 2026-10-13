@@ -91,6 +91,8 @@ export type Ticket = {
   // A WAITING order only: may it open a second position on an instrument already held? Off by default - the
   // server then skips it, with a reason, if something is open on that instrument when its price is hit.
   allowStacking: boolean;
+  // A MARKET option order only: hold it for days instead of the day. Skips the intraday window and the end-of-day square-off.
+  holdOvernight: boolean;
   entry: string;
   stop: string;
   target: string;
@@ -112,7 +114,7 @@ export type Ticket = {
 export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
   combinedStopLossPrice: null, combinedTargetPrice: null,
-  orderType: "market", allowStacking: false, entry: "", stop: "", target: "", lots: "", setupTag: null, planState: null, planKind: null, trigger: null, confidence: null, reason: "",
+  orderType: "market", allowStacking: false, holdOvernight: false, entry: "", stop: "", target: "", lots: "", setupTag: null, planState: null, planKind: null, trigger: null, confidence: null, reason: "",
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -417,10 +419,20 @@ export type OrderRequest =
     }
   | { kind: "pending"; path: string; body: Record<string, unknown> };
 
-export type BuildMeta = { instrument: "spot" | "future"; interval: string; trendFollowed: boolean };
+export type BuildMeta = {
+  instrument: "spot" | "future";
+  interval: string;
+  trendFollowed: boolean;
+  /** The market is shut: an option order at the market price waits for the open (and is placed then at the latest prices) instead of opening at stale ones. */
+  marketClosed?: boolean;
+};
 
 /** The request for this ticket. A market order goes straight in at the live price; a limit order
  * is armed on the server, which watches the price and fires it (so it works with the app closed). */
+/** The order records which chart it was planned on, but only intraday ones (the server's list); a daily or weekly chart sends nothing rather than a value it would refuse. */
+const INTRADAY_ENTRY = ["1min", "3min", "5min", "15min", "30min", "60min"];
+export const entryIntervalOf = (interval: string | null | undefined) => (interval && INTRADAY_ENTRY.includes(interval) ? { entry_interval: interval } : {});
+
 export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: BuildMeta): OrderRequest {
   const journal = {
     ...(t.setupTag ? { setup_tag: t.setupTag } : {}),
@@ -438,12 +450,30 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, strategy: t.strategy, moneyness: t.moneyness, trigger_price: a.entry,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, allow_stacking: t.allowStacking, ...journal,
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal,
         // An option order waits with the exact legs the ticket showed (a strike per leg and the expiry they came from), not a fresh pick when it fires.
         ...(t.strategy !== "future" && t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
         ...(t.strategy === "spread" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
         ...(t.strategy !== "future" && t.expiry != null ? { expiry: t.expiry } : {}),
         ...(t.strategy === "spread" ? { spread_width: t.spreadWidth } : {}),
+      },
+    };
+  }
+  if (t.strategy !== "future" && meta.marketClosed) {
+    return {
+      kind: "pending",
+      path: "/pending-orders",
+      body: {
+        ...common, strategy: t.strategy, moneyness: t.moneyness, fire_when_open: true, ...(a.entry != null ? { trigger_price: a.entry } : {}),
+        ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal,
+        ...(t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
+        ...(t.strategy !== "naked" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
+        ...(t.expiry != null ? { expiry: t.expiry } : {}),
+        ...(t.strategy !== "naked" ? { spread_width: t.spreadWidth } : {}),
+        ...(t.holdOvernight ? { horizon: "positional" } : {}),
+        ...(t.combinedStopLossPrice != null ? { combined_stop_loss_price: t.combinedStopLossPrice } : {}),
+        ...(t.combinedTargetPrice != null ? { combined_target_price: t.combinedTargetPrice } : {}),
       },
     };
   }
@@ -454,7 +484,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, instrument_type: meta.instrument, price: a.entry, order_type: "market", ...qty,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, plan_checklist: [], ...journal,
+        trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), plan_checklist: [], ...journal,
       },
     };
   }
@@ -470,7 +500,8 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       ...(t.strategy !== "naked" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
       ...(t.expiry != null ? { expiry: t.expiry } : {}),
       ...(a.lotsAuto ? {} : { option_fixed_lots: a.lots }), plan_checklist: [], order_type: "market",
-      trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, ...journal,
+      ...(t.holdOvernight ? { positional: true } : {}),
+      trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), ...journal,
     },
     stop: a.stop,
     target: a.target,

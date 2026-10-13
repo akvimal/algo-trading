@@ -28,7 +28,7 @@ def _to_out(row) -> PendingOrderOut:
     return PendingOrderOut(
         id=str(row.id), segment=row.segment, symbol=row.symbol, action=row.action, strategy=row.strategy, moneyness=row.moneyness,
         trigger_price=float(row.trigger_price), started_above=bool(row.started_above), stop_loss_price=_f(row.stop_loss_price),
-        target_price=_f(row.target_price), quantity=_f(row.quantity), trend_followed=bool(row.trend_followed),
+        target_price=_f(row.target_price), quantity=_f(row.quantity), fire_when_open=bool(row.fire_when_open), primary_strike=_f(row.primary_strike), second_strike=_f(row.second_strike), expiry=row.expiry, spread_width=row.spread_width, trend_followed=bool(row.trend_followed),
         risk_managed=bool(row.risk_managed), setup_tag=row.setup_tag, confidence=row.confidence, entry_interval=row.entry_interval,
         status=row.status, status_reason=row.status_reason, expires_at=row.expires_at, created_at=row.created_at,
         triggered_at=row.triggered_at, last_price=_f(row.last_price), last_checked_at=row.last_checked_at,

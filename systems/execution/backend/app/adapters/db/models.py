@@ -550,7 +550,7 @@ class PendingOrder(Base):
     segment = Column(Text, nullable=False)
     symbol = Column(Text, nullable=False)
     action = Column(Text, nullable=False)
-    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread' | 'spot' (positional)
+    strategy = Column(Text, nullable=False)  # 'future' | 'naked' | 'spread' | 'credit_spread' | 'spot' (positional)
     moneyness = Column(Text)
     trigger_price = Column(Numeric, nullable=False)
     started_above = Column(Boolean, nullable=False)
@@ -584,6 +584,10 @@ class PendingOrder(Base):
     expiry = Column(Text)
     spread_width = Column(SmallInteger)
     notes = Column(Text)
+    # A market order placed while the market is closed: no price trigger, placed on the first pass after the open (migration 057).
+    fire_when_open = Column(Boolean, nullable=False, default=False)
+    combined_stop_loss_price = Column(Numeric)
+    combined_target_price = Column(Numeric)
 
 
 class StudyNote(Base):

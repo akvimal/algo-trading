@@ -11,9 +11,9 @@ import { formatDay, formatPct, formatPrice } from "../format";
 import { useResource } from "../hooks/useResource";
 import { ChartIcon, HistoryIcon, TradeIcon } from "../chart/icons";
 import { ScanChartPanel } from "./ScanChartPanel";
-import { ScanTradePanel } from "./ScanTradePanel";
+import { TRADE_FILTER_OPTIONS, matchesTradeFilter, statusOf, useTradeStatus, type TradeFilter, type TradeStatus } from "./scanTradeStatus";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, defaultViewFromOi, visible,
   UNIVERSES, UNIVERSE_LABEL, haveLiquidity, sizeLabel, universeCounts, ZONE_TIER_HELP, zonePlace, zoneTrends, type OiFilters, type OiSignal, type OiSort, type RsCut, type ScreenerFilters, type ScreenerSort, type ZoneFilter,
 } from "./scanModel";
 import {
@@ -88,15 +88,13 @@ function OiScan() {
   // The nightly zone scan is a separate read: if it is missing or fails the OI list works exactly as before, just without the zone filter's matches.
   const zoneScan = useResource(() => api<ZoneScan>("marketData", "/zone-scan"), []);
   const zones = useMemo(() => Object.fromEntries((zoneScan.data?.rows ?? []).map((z) => [z.symbol, z])) as Record<string, ZoneScanRow>, [zoneScan.data]);
-  const rows = data.data ? filterOi(data.data.rows, f, zones) : [];
-  const [shown, more] = useShown(JSON.stringify(f));
-  // Only one card's chart, and independently only one card's ticket, is ever open at a time - each
-  // is its own live read (a quote socket for the chart, an account/regime read for the ticket), so
-  // this bounds the page to at most one of each however many cards are on screen. The two track
-  // separately (a different card's Chart and a different card's Trade can be open together) since
-  // there is no real link between which chart you are looking at and which ticket you are filling.
+  const trades = useTradeStatus();
+  const [tradeFilter, setTradeFilter] = useState<TradeFilter>("any");
+  const rows = data.data ? filterOi(data.data.rows, f, zones).filter((r) => matchesTradeFilter(statusOf(trades.map, r.symbol), tradeFilter)) : [];
+  const [shown, more] = useShown(JSON.stringify(f) + tradeFilter);
+  // Only one card's chart is open at a time - it is a live quote socket, so this bounds the page to one.
+  // Placing a trade is the Trade page's job: a card's trade icon links there.
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [tradeOpen, setTradeOpen] = useState<string | null>(null);
 
   return (
     <div className="stack">
@@ -160,6 +158,7 @@ function OiScan() {
         />
         <Select label="Call side" value={f.call} onChange={(call) => setF({ ...f, call })} options={buildupOptions} />
         <Select label="Put side" value={f.put} onChange={(put) => setF({ ...f, put })} options={buildupOptions} />
+        <Select<TradeFilter> label="My trades" value={tradeFilter} onChange={setTradeFilter} options={TRADE_FILTER_OPTIONS} />
         <Select<OiSort>
           label="Sort by"
           value={f.sort}
@@ -228,10 +227,9 @@ function OiScan() {
                     row={r}
                     zone={zones[r.symbol]}
                     minShift={f.minShift}
+                    trade={statusOf(trades.map, r.symbol)}
                     expanded={expanded === r.symbol}
                     onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))}
-                    tradeOpen={tradeOpen === r.symbol}
-                    onToggleTrade={() => setTradeOpen((cur) => (cur === r.symbol ? null : r.symbol))}
                   />
                 ))}
               </div>
@@ -259,7 +257,7 @@ function BuildupPill({ b }: { b: Buildup | null }) {
 }
 
 /** The last five days of call and put OI change for one stock, newest first, each against the day before it. */
-const SCAN_ICONS = { history: HistoryIcon, chart: ChartIcon, trade: TradeIcon } as const;
+const SCAN_ICONS = { history: HistoryIcon, chart: ChartIcon } as const;
 
 /** The History / Chart / Trade toggles on a result card: an icon, with the word kept as its accessible name and tooltip. */
 function ScanIconButton({ kind, open, onClick }: { kind: keyof typeof SCAN_ICONS; open: boolean; onClick: () => void }) {
@@ -269,6 +267,34 @@ function ScanIconButton({ kind, open, onClick }: { kind: keyof typeof SCAN_ICONS
     <button className="link-btn icon-only" aria-expanded={open} aria-label={label} title={label} onClick={onClick}>
       <Icon />
     </button>
+  );
+}
+
+/** The trade icon: straight to the Trade page for this stock, where a spot, option or spread order is placed. */
+function ScanTradeLink({ symbol, oiView }: { symbol: string; oiView?: "BUY" | "SELL" }) {
+  return (
+    <Link className="link-btn icon-only" to={oiView ? oiTradeLink(symbol, oiView) : fullTradeLink(symbol)} target="_blank" rel="noopener noreferrer" aria-label="Trade" title="Trade (opens the Trade page in a new tab)">
+      <TradeIcon />
+    </Link>
+  );
+}
+
+/** Marks a result that already has something on it, so it is not traded twice by accident. */
+function TradePills({ s }: { s: TradeStatus }) {
+  if (s.open === 0 && s.waiting === 0) return null;
+  return (
+    <span data-testid="trade-status">
+      {s.open > 0 && (
+        <span className="pill pill-small up" style={{ marginLeft: 8 }} title="You have an open trade on this stock" data-testid="trade-open-badge">
+          Open trade{s.open > 1 ? ` ×${s.open}` : ""}
+        </span>
+      )}
+      {s.waiting > 0 && (
+        <span className="pill pill-small" style={{ marginLeft: 8 }} title="You have an order waiting for its price on this stock" data-testid="trade-waiting-badge">
+          Waiting order{s.waiting > 1 ? ` ×${s.waiting}` : ""}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -343,18 +369,16 @@ function OiCard({
   row: r,
   zone,
   minShift,
+  trade,
   expanded,
   onToggle,
-  tradeOpen,
-  onToggleTrade,
 }: {
   row: OiRow;
   zone?: ZoneScanRow;
   minShift: number;
+  trade: TradeStatus;
   expanded: boolean;
   onToggle: () => void;
-  tradeOpen: boolean;
-  onToggleTrade: () => void;
 }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   return (
@@ -362,6 +386,7 @@ function OiCard({
       <div className="row">
         <strong>
           {r.symbol}
+          <TradePills s={trade} />
           {(() => {
             const signal = oiSignal(r, minShift);
             return signal ? (
@@ -403,21 +428,13 @@ function OiCard({
         <span className="field-actions">
           <ScanIconButton kind="history" open={historyOpen} onClick={() => setHistoryOpen((v) => !v)} />
           <ScanIconButton kind="chart" open={expanded} onClick={onToggle} />
-          <ScanIconButton kind="trade" open={tradeOpen} onClick={onToggleTrade} />
+          <ScanTradeLink symbol={r.symbol} oiView={defaultViewFromOi(r)} />
         </span>
       </div>
       {historyOpen && <OiHistory row={r} />}
-      {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
-      {tradeOpen && (
-        <div className="scan-chart">
-          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} oiDefaultView={defaultViewFromOi(r)} />
-        </div>
-      )}
-      {(expanded || tradeOpen) && (
+      {expanded && (
         <>
-          <p style={{ margin: "2px 0 0" }}>
-          <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
-        </p>
+          <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />
           <AnalysisPanel symbol={r.symbol} />
         </>
       )}
@@ -431,12 +448,12 @@ const proximityOptions = [{ value: "all" as const, label: "All" }, ...(Object.ke
 function ScreenerScan() {
   const data = useResource(() => api<Screener>("marketData", "/equity-screener?history_days=10"), []);
   const [f, setF] = useState<ScreenerFilters>(SCREENER_DEFAULTS);
-  const rows = data.data ? filterScreener(data.data.rows, f) : [];
-  const [shown, more] = useShown(JSON.stringify(f));
-  // Same one-at-a-time inline chart/trade accordions as OI buildup (see OiScan) - each its own,
-  // not shared with the OI tab's, since switching tabs unmounts this component anyway.
+  const trades = useTradeStatus();
+  const [tradeFilter, setTradeFilter] = useState<TradeFilter>("any");
+  const rows = data.data ? filterScreener(data.data.rows, f).filter((r) => matchesTradeFilter(statusOf(trades.map, r.symbol), tradeFilter)) : [];
+  const [shown, more] = useShown(JSON.stringify(f) + tradeFilter);
+  // Same one-at-a-time inline chart as OI buildup (see OiScan).
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [tradeOpen, setTradeOpen] = useState<string | null>(null);
 
   const counts = data.data ? universeCounts(data.data.rows, f.liquid) : null;
   const liquidityKnown = data.data ? haveLiquidity(data.data.rows) : true;
@@ -477,6 +494,7 @@ function ScreenerScan() {
           ]}
         />
         <Select label="52-week range" value={f.proximity} onChange={(proximity) => setF({ ...f, proximity })} options={proximityOptions} />
+        <Select<TradeFilter> label="My trades" value={tradeFilter} onChange={setTradeFilter} options={TRADE_FILTER_OPTIONS} />
         <Select<ScreenerSort>
           label="Sort by"
           value={f.sort}
@@ -525,10 +543,9 @@ function ScreenerScan() {
                   <ScreenerCard
                     key={r.symbol}
                     row={r}
+                    trade={statusOf(trades.map, r.symbol)}
                     expanded={expanded === r.symbol}
                     onToggle={() => setExpanded((cur) => (cur === r.symbol ? null : r.symbol))}
-                    tradeOpen={tradeOpen === r.symbol}
-                    onToggleTrade={() => setTradeOpen((cur) => (cur === r.symbol ? null : r.symbol))}
                   />
                 ))}
               </div>
@@ -574,21 +591,22 @@ function SwingLine({ r }: { r: ScreenerRow }) {
 
 function ScreenerCard({
   row: r,
+  trade,
   expanded,
   onToggle,
-  tradeOpen,
-  onToggleTrade,
 }: {
   row: ScreenerRow;
+  trade: TradeStatus;
   expanded: boolean;
   onToggle: () => void;
-  tradeOpen: boolean;
-  onToggleTrade: () => void;
 }) {
   return (
     <div className="card scan-card" data-testid="screener-card">
       <div className="row">
-        <strong>{r.symbol}</strong>
+        <strong>
+          {r.symbol}
+          <TradePills s={trade} />
+        </strong>
         <span className="num">{formatPrice(r.close)}</span>
       </div>
       <div className="pair">
@@ -615,20 +633,12 @@ function ScreenerCard({
         </span>
         <span className="field-actions">
           <ScanIconButton kind="chart" open={expanded} onClick={onToggle} />
-          <ScanIconButton kind="trade" open={tradeOpen} onClick={onToggleTrade} />
+          <ScanTradeLink symbol={r.symbol} />
         </span>
       </div>
-      {expanded && <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />}
-      {tradeOpen && (
-        <div className="scan-chart">
-          <ScanTradePanel exchange={r.exchange} symbol={r.symbol} />
-        </div>
-      )}
-      {(expanded || tradeOpen) && (
+      {expanded && (
         <>
-          <p style={{ margin: "2px 0 0" }}>
-          <Link to={fullTradeLink(r.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
-        </p>
+          <ScanChartPanel exchange={r.exchange} symbol={r.symbol} />
           <AnalysisPanel symbol={r.symbol} />
         </>
       )}
@@ -654,9 +664,10 @@ function CustomScreenScan() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Same one-at-a-time inline chart/trade accordions as OI buildup/Screener - their own.
+  // Same one-at-a-time inline chart as OI buildup/Screener.
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [tradeOpen, setTradeOpen] = useState<string | null>(null);
+  const trades = useTradeStatus();
+  const [tradeFilter, setTradeFilter] = useState<TradeFilter>("any");
 
   const errors = validateForm(form);
 
@@ -664,7 +675,6 @@ function CustomScreenScan() {
     setRunError(null);
     setResult(null);
     setExpanded(null);
-    setTradeOpen(null);
     setBusy(true);
     try {
       setResult(await previewCustomScreen(formToDef(form)));
@@ -679,7 +689,6 @@ function CustomScreenScan() {
     setRunError(null);
     setResult(null);
     setExpanded(null);
-    setTradeOpen(null);
     setBusy(true);
     try {
       setResult(await runCustomScreen(s.id));
@@ -816,34 +825,31 @@ function CustomScreenScan() {
               {result.intraday_note}
             </p>
           )}
+          <div className="filters" style={{ marginTop: 8 }}>
+            <Select<TradeFilter> label="My trades" value={tradeFilter} onChange={setTradeFilter} options={TRADE_FILTER_OPTIONS} />
+          </div>
           {result.snapshot_date && result.matches.length === 0 ? (
             <Empty title="No matches">Try a different condition, or loosen the filters.</Empty>
           ) : (
             <div className="stack" data-testid="custom-screen-matches">
-              {result.matches.map((m) => {
+              {result.matches.filter((m) => matchesTradeFilter(statusOf(trades.map, m.symbol), tradeFilter)).map((m) => {
                 const isExpanded = expanded === m.symbol;
-                const isTradeOpen = tradeOpen === m.symbol;
                 return (
                   <div className="card scan-card" key={m.symbol}>
                     <div className="row">
-                      <strong>{m.symbol}</strong>
+                      <strong>
+                        {m.symbol}
+                        <TradePills s={statusOf(trades.map, m.symbol)} />
+                      </strong>
                       <span className="num">{formatPrice(m.close)}</span>
                       <span className="field-actions">
                         <ScanIconButton kind="chart" open={isExpanded} onClick={() => setExpanded((cur) => (cur === m.symbol ? null : m.symbol))} />
-                        <ScanIconButton kind="trade" open={isTradeOpen} onClick={() => setTradeOpen((cur) => (cur === m.symbol ? null : m.symbol))} />
+                        <ScanTradeLink symbol={m.symbol} />
                       </span>
                     </div>
-                    {isExpanded && <ScanChartPanel exchange={m.exchange} symbol={m.symbol} />}
-                    {isTradeOpen && (
-                      <div className="scan-chart">
-                        <ScanTradePanel exchange={m.exchange} symbol={m.symbol} />
-                      </div>
-                    )}
-                    {(isExpanded || isTradeOpen) && (
+                    {isExpanded && (
                       <>
-                        <p style={{ margin: "2px 0 0" }}>
-                        <Link to={fullTradeLink(m.symbol)} target="_blank" rel="noopener noreferrer" title="Opens in a new tab">Open the full Trade page →</Link>
-                      </p>
+                        <ScanChartPanel exchange={m.exchange} symbol={m.symbol} />
                         <AnalysisPanel symbol={m.symbol} />
                       </>
                     )}

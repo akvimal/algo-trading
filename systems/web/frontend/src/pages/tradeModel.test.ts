@@ -569,3 +569,13 @@ describe("cryptoLeverage", () => {
     expect(cryptoLeverage(null, true, 10)).toBeNull();
   });
 });
+
+describe("entryIntervalOf", () => {
+  it("sends only the intraday intervals the server accepts", async () => {
+    const { entryIntervalOf } = await import("./tradeModel");
+    expect(entryIntervalOf("15min")).toEqual({ entry_interval: "15min" });
+    expect(entryIntervalOf("1d")).toEqual({});
+    expect(entryIntervalOf("daily")).toEqual({});
+    expect(entryIntervalOf(undefined)).toEqual({});
+  });
+});

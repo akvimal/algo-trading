@@ -77,6 +77,20 @@ export type Position = {
   auto_traded?: boolean;
 };
 
+/** One leg of an option group, as the groups API returns it. `live_price`/`unrealized_pnl` only come with `with_live_pnl=true`. */
+export type OptionLeg = {
+  id: string;
+  symbol: string;
+  action: "BUY" | "SELL";
+  quantity: number | null;
+  entry_price: number;
+  exit_price: number | null;
+  pnl: number | null;
+  status: string;
+  live_price?: number | null;
+  unrealized_pnl?: number | null;
+};
+
 export type OptionGroup = {
   id: string;
   underlying_symbol: string;
@@ -121,6 +135,7 @@ export type OptionGroup = {
   review_notes?: string | null;
   strategy_id?: string | null;
   auto_traded?: boolean;
+  legs?: OptionLeg[];
 };
 
 export type SentimentUnderlying = {
@@ -450,7 +465,7 @@ export type PendingOrder = {
   segment: Segment;
   symbol: string;
   action: "BUY" | "SELL";
-  strategy: "future" | "naked" | "spread" | "spot";
+  strategy: "future" | "naked" | "spread" | "credit_spread" | "spot";
   trigger_price: number;
   stop_loss_price: number | null;
   target_price: number | null;
@@ -459,6 +474,14 @@ export type PendingOrder = {
   expires_at: string;
   last_price: number | null;
   allow_stacking: boolean;
+  quantity?: number | null;
+  fire_when_open?: boolean;
+  primary_strike?: number | null;
+  second_strike?: number | null;
+  expiry?: string | null;
+  spread_width?: number | null;
+  moneyness?: string | null;
+  horizon?: "intraday" | "positional";
 };
 
 export type Profile = {

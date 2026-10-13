@@ -3,6 +3,7 @@ import { formatDay, formatPnl, formatPrice, formatTime } from "../format";
 import type { Trade } from "../pages/portfolioModel";
 import { Signed } from "./bits";
 import { TradeJournal } from "./TradeJournal";
+import { TradeSnapshots } from "./TradeSnapshots";
 
 export const EXIT_REASONS: Record<string, string> = {
   square_off: "closed at square-off time",
@@ -42,7 +43,15 @@ export function TradeListItem({ trade, onSaved, cta }: { trade: Trade; onSaved: 
         </div>
         <Signed value={trade.pnl} text={formatPnl(trade.pnl)} />
       </button>
-      {open && <TradeJournal trade={trade} onSaved={onSaved} />}
+      {open && (
+        <>
+          {/* The charts kept with the trade (plan at entry and every update). Read-only here: a new one is taken from the Trade page while the trade is open. */}
+          <div style={{ padding: "4px 0 8px" }}>
+            <TradeSnapshots trade={{ kind: trade.kind, id: trade.id }} symbol={trade.symbol} segment={trade.segment} levels={() => ({ entry: null, stop: null, target: null })} />
+          </div>
+          <TradeJournal trade={trade} onSaved={onSaved} />
+        </>
+      )}
     </div>
   );
 }

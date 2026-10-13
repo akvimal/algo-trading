@@ -900,3 +900,91 @@ def test_a_fired_option_order_opens_the_legs_it_was_armed_for_not_a_fresh_pick(m
     a, k = seen["args"], seen["kwargs"]
     assert a[6] == "2026-10-27"  # the expiry the strikes came from
     assert (k["primary_strike"], k["second_strike"], k["spread_width"], k["notes"]) == (23200.0, 23300.0, 3, "why")
+
+
+# --- a market order placed while the market is closed waits for the open ---------------------------------------------------------------
+
+
+CLOSED = datetime(2026, 9, 25, 13, 0, tzinfo=timezone.utc)  # Friday 18:30 in Mumbai
+MONDAY_OPEN = datetime(2026, 9, 28, 4, 0, tzinfo=timezone.utc)  # Monday 09:30 in Mumbai
+SATURDAY = datetime(2026, 9, 26, 5, 0, tzinfo=timezone.utc)
+
+
+def test_market_hours():
+    assert po.market_is_open("NSE", NOW)
+    assert not po.market_is_open("NSE", CLOSED)
+    assert not po.market_is_open("NSE", SATURDAY)
+    assert po.market_is_open("NSE", MONDAY_OPEN)
+    assert po.market_is_open("MCX", CLOSED) and not po.market_is_open("MCX", SATURDAY)
+    assert po.market_is_open("CRYPTO", SATURDAY)
+
+
+def test_an_order_with_no_price_trigger_needs_to_say_it_waits_for_the_open():
+    with pytest.raises(ValidationError):
+        PendingOrderCreate(segment="NSE", symbol="ITC", action="SELL", strategy="credit_spread")
+    with pytest.raises(ValidationError):
+        PendingOrderCreate(segment="NSE", symbol="ITC", action="SELL", strategy="future", fire_when_open=True)
+
+
+def wait_for_open(db, **over):
+    deps = fake_deps({("NSE", "ITC"): 261.0})
+    return create_pending_order(
+        db, ALICE, PendingOrderCreate(**{**dict(segment="NSE", symbol="itc", action="SELL", strategy="credit_spread", fire_when_open=True, horizon="positional"), **over}),
+        deps, False, now=CLOSED,
+    )
+
+
+def test_a_closed_market_order_waits_over_the_weekend_and_can_be_cancelled():
+    db = FakeDb()
+    row = wait_for_open(db, quantity=2, combined_stop_loss_price=3.0, stop_loss_price=270.0)
+    assert row.status == "pending" and row.fire_when_open and float(row.trigger_price) == 261.0
+    assert row.expires_at - CLOSED >= timedelta(days=4)
+    counts, deps = run(db, {("NSE", "ITC"): 261.0}, now=CLOSED + timedelta(minutes=1))
+    assert row.status == "pending" and counts["checked"] == 0 and deps.log.options == []  # market shut: left alone
+    assert cancel_pending_order(db, ALICE, row.id).status == "cancelled"
+
+
+def test_it_is_placed_at_the_first_pass_after_the_open_whatever_the_price_has_done():
+    db = FakeDb()
+    row = wait_for_open(db, stop_loss_price=270.0)
+    counts, deps = run(db, {("NSE", "ITC"): 240.0}, now=MONDAY_OPEN)  # gapped well away from the price it was armed at
+    assert counts["triggered"] == 1 and row.status == "triggered" and row.option_group_id is not None
+    assert deps.log.options == [("triggered", "ITC", "credit_spread", "ATM")]
+
+
+def test_the_spreads_own_stop_and_target_are_attached_after_it_opens():
+    db = FakeDb()
+    combined = []
+    row = wait_for_open(db, combined_stop_loss_price=3.0, combined_target_price=0.7)
+    run(db, {("NSE", "ITC"): 261.0}, now=MONDAY_OPEN,
+        set_combined_stop=lambda d, u, g, p: combined.append(("stop", p)), set_combined_target=lambda d, u, g, p: combined.append(("target", p)))
+    assert row.status == "triggered" and combined == [("stop", 3.0), ("target", 0.7)]
+
+
+def test_without_a_price_it_keeps_waiting():
+    db = FakeDb()
+    row = wait_for_open(db)
+    counts, _ = run(db, {}, now=MONDAY_OPEN)
+    assert row.status == "pending" and counts["no_price"] == 1
+
+
+def test_a_credit_spreads_negative_combined_stop_and_target_are_accepted_and_attached():
+    db = FakeDb()
+    combined = []
+    row = wait_for_open(db, combined_stop_loss_price=-29.85, combined_target_price=-0.7)
+    run(db, {("NSE", "ITC"): 261.0}, now=MONDAY_OPEN,
+        set_combined_stop=lambda d, u, g, p: combined.append(("stop", p)), set_combined_target=lambda d, u, g, p: combined.append(("target", p)))
+    assert row.status == "triggered" and combined == [("stop", -29.85), ("target", -0.7)]
+
+
+def test_a_closed_market_order_still_arms_when_the_feed_has_no_price_if_the_charts_price_is_sent():
+    def no_price(segment, symbol, token=None, owner=None):
+        raise UnderlyingUnavailable("no price for ITC")
+
+    deps = fake_deps({}, underlying_ltp=no_price)
+    mk = lambda **o: PendingOrderCreate(segment="NSE", symbol="itc", action="SELL", strategy="credit_spread", fire_when_open=True, **o)
+    row = create_pending_order(FakeDb(), ALICE, mk(trigger_price=261.0, stop_loss_price=270.0), deps, False, now=CLOSED)
+    assert row.status == "pending" and float(row.trigger_price) == 261.0
+    with pytest.raises(PendingOrderError) as err:
+        create_pending_order(FakeDb(), ALICE, mk(), deps, False, now=CLOSED)
+    assert err.value.status_code == 503

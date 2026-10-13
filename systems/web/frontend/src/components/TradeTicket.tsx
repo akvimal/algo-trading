@@ -1,3 +1,4 @@
+import { marketIsOpen } from "../pages/marketHours";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
@@ -220,7 +221,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           planPicture = null; // a picture that cannot be taken never stops the order
         }
       }
-      const outcome = await placeOrder(buildOrder(t, now, ctx, meta), { planPicture });
+      const outcome = await placeOrder(buildOrder(t, now, ctx, { ...meta, marketClosed: !marketIsOpen(ctx.segment) }), { planPicture });
       if (outcome.ok) onPlaced();
       setResult(outcome);
     } catch (e) {
@@ -390,6 +391,21 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
             Wait for a price
           </button>
         </div>
+      )}
+
+      {isOption && !limit && (
+        <label className="check-row" style={{ marginBottom: 12 }}>
+          <input type="checkbox" checked={t.holdOvernight} onChange={(e) => set("holdOvernight", e.target.checked)} /> Hold for days (positional)
+          <span className="faint" style={{ fontSize: 12, display: "block" }}>
+            Not squared off at the end of the day, and can be placed after the square-off time. Your stop-loss and target still apply.
+          </span>
+        </label>
+      )}
+
+      {isOption && !limit && !marketIsOpen(ctx.segment) && (
+        <p className="faint" role="note" data-testid="market-closed-note" style={{ fontSize: 12, margin: "0 0 12px" }}>
+          The market is closed. This order waits and is placed when it opens, at the latest prices. You can cancel it until then.
+        </p>
       )}
 
       {waitingHere && (

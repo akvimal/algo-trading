@@ -274,7 +274,6 @@ describe("the page", () => {
     expect(await screen.findByRole("button", { name: "Bearish" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Bearish" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Credit" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {

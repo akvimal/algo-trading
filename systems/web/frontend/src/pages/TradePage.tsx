@@ -31,6 +31,7 @@ import { loadAiRead } from "../chart/aiReadStore";
 import { PositionCard } from "../components/PositionCard";
 import { composeTradePicture, type PictureLevels } from "../chart/tradePicture";
 import { TradeTicket } from "../components/TradeTicket";
+import { ScanOptionBias } from "./ScanOptionBias";
 import { formatPnl, formatPrice } from "../format";
 import { useQuoteSocket } from "../hooks/useQuoteSocket";
 import { useResource } from "../hooks/useResource";
@@ -49,7 +50,7 @@ import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
 import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
-import { PRESETS, analyzeTicket, defaultLevel, emptyTicketFor, instrumentFor, isFresh, type Ticket } from "./tradeModel";
+import { PRESETS, analyzeTicket, defaultLevel, EMPTY_TICKET, emptyTicketFor, instrumentFor, isFresh, type Ticket } from "./tradeModel";
 import { groupsApi, positionsApi } from "../api/rupees";
 
 // The chart library is large and only this screen needs it, so it loads on demand.
@@ -64,6 +65,9 @@ export function TradePage() {
   const urlSegment = params.get("segment");
   const urlLayout = params.get("layout");
   const urlIntervals = params.get("intervals");
+  // The OI buildup card's link opens the option form (a credit spread leaning the way the card reads) for that one stock.
+  const urlView = params.get("view") === "SELL" ? "SELL" : params.get("view") === "BUY" ? "BUY" : null;
+  const urlOptionForm = params.get("form") === "credit" && urlView != null;
   // A picture of the active chart as it is on screen (the person's drawings and indicators, the plan or open-trade lines), under a header that says what
   // it is and what the trade's levels are: kept with a trade as its plan at entry, or as an update after the chart, stop or target was changed.
   async function takePicture(label: string, levels: PictureLevels, caption = ""): Promise<string | null> {
@@ -287,7 +291,10 @@ export function TradePage() {
 
   // ---- the ticket belongs to the active chart ----
   const { instrument: defaultInstrument, optionStrategy: defaultOptionStrategy } = defaultsFor(activeSpec.segment); // this market's own default
-  const [ticket, setTicket] = useState<Ticket>(() => emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
+  const optionFormHere = urlOptionForm && activeSpec.segment === "NSE" && activeSpec.symbol.toUpperCase() === (urlSymbol ?? "").toUpperCase();
+  const freshTicket = () =>
+    optionFormHere ? ({ ...EMPTY_TICKET, strategy: "credit_spread", action: urlView!, lots: "1" } as Ticket) : emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy);
+  const [ticket, setTicket] = useState<Ticket>(freshTicket);
   const [pickField, setPickField] = useState<PriceField | null>(null);
   // The same chart click can instead set the stop or target of an OPEN trade (saved straight away, like
   // dragging its line) - never both at once.
@@ -296,7 +303,7 @@ export function TradePage() {
   // look at, and a second order on top of one is how a plan turns into averaging in. To add, close it first or let its stop or target
   // do it. (There used to be a "+ Place another order" link here; it is gone by decision.)
   useEffect(() => {
-    setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
+    setTicket(freshTicket());
     setSuggested({});
     setPickField(null);
     setLevelPick(null);
@@ -809,6 +816,19 @@ export function TradePage() {
               </div>
             )}
             {ctx && !live && !hasOpenForInstrument && !tradesKnown && <Skeleton lines={6} />}
+            {ctx && !live && !hasOpenForInstrument && tradesKnown && optionFormHere && (
+              <div className="chips" role="group" aria-label="Instrument" style={{ marginBottom: 12 }}>
+                <button aria-pressed={ticket.strategy === "future"} onClick={() => setTicket((cur) => ({ ...cur, strategy: "future" }))}>
+                  Spot
+                </button>
+                <button aria-pressed={ticket.strategy !== "future"} onClick={() => setTicket((cur) => (cur.strategy === "future" ? { ...cur, strategy: "credit_spread", lots: "1" } : cur))}>
+                  Option
+                </button>
+              </div>
+            )}
+            {ctx && !live && !hasOpenForInstrument && tradesKnown && optionFormHere && ticket.strategy !== "future" && (
+              <ScanOptionBias exchange={activeSpec.segment} symbol={activeSpec.symbol} ticket={ticket} onChange={setTicket} />
+            )}
             {ctx && !live && !hasOpenForInstrument && tradesKnown && (
               <TradeTicket
                 ticket={ticket}
@@ -847,10 +867,14 @@ export function TradePage() {
                   // draft - left alone, they kept showing the just-placed order's prices
                   // indefinitely (nothing else ever cleared them; the ticket itself only resets
                   // on a symbol/segment change, not on a successful placement).
-                  setTicket(emptyTicketFor(activeSpec.symbol, defaultInstrument, defaultOptionStrategy));
+                  setTicket(freshTicket());
                   setSuggested({});
                   setPickField(null);
                 }}
+                optionsForced={optionFormHere || undefined}
+                hideStrategyChips={optionFormHere && ticket.strategy !== "future"}
+                hideMoneynessField={optionFormHere && ticket.strategy !== "future"}
+                hideOptionExtras={optionFormHere && ticket.strategy !== "future"}
               />
             )}
             {hasOpenForInstrument && (

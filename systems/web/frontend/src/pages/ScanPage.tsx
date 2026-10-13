@@ -13,7 +13,7 @@ import { ChartIcon, HistoryIcon, TradeIcon } from "../chart/icons";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { TRADE_FILTER_OPTIONS, matchesTradeFilter, statusOf, useTradeStatus, type TradeFilter, type TradeStatus } from "./scanTradeStatus";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, defaultViewFromOi, visible,
   UNIVERSES, UNIVERSE_LABEL, haveLiquidity, sizeLabel, universeCounts, ZONE_TIER_HELP, zonePlace, zoneTrends, type OiFilters, type OiSignal, type OiSort, type RsCut, type ScreenerFilters, type ScreenerSort, type ZoneFilter,
 } from "./scanModel";
 import {
@@ -271,9 +271,9 @@ function ScanIconButton({ kind, open, onClick }: { kind: keyof typeof SCAN_ICONS
 }
 
 /** The trade icon: straight to the Trade page for this stock, where a spot, option or spread order is placed. */
-function ScanTradeLink({ symbol }: { symbol: string }) {
+function ScanTradeLink({ symbol, oiView }: { symbol: string; oiView?: "BUY" | "SELL" }) {
   return (
-    <Link className="link-btn icon-only" to={fullTradeLink(symbol)} target="_blank" rel="noopener noreferrer" aria-label="Trade" title="Trade (opens the Trade page in a new tab)">
+    <Link className="link-btn icon-only" to={oiView ? oiTradeLink(symbol, oiView) : fullTradeLink(symbol)} target="_blank" rel="noopener noreferrer" aria-label="Trade" title="Trade (opens the Trade page in a new tab)">
       <TradeIcon />
     </Link>
   );
@@ -428,7 +428,7 @@ function OiCard({
         <span className="field-actions">
           <ScanIconButton kind="history" open={historyOpen} onClick={() => setHistoryOpen((v) => !v)} />
           <ScanIconButton kind="chart" open={expanded} onClick={onToggle} />
-          <ScanTradeLink symbol={r.symbol} />
+          <ScanTradeLink symbol={r.symbol} oiView={defaultViewFromOi(r)} />
         </span>
       </div>
       {historyOpen && <OiHistory row={r} />}

@@ -259,6 +259,10 @@ export const tradeLink = (symbol: string) => `/trade?symbol=${encodeURIComponent
  * the swing view a scan result is read in. (The interval link is off in that layout so each chart keeps its own.) */
 export const fullTradeLink = (symbol: string) => `${tradeLink(symbol)}&layout=side&intervals=weekly,daily`;
 
+/** The OI buildup card's trade link: the same two charts, with the ticket opened on a credit spread leaning the way the card's own call/put
+ * reading does (Bullish = bull put spread, Bearish = bear call spread). Only a starting point; the Bullish/Bearish and Debit/Credit chips change it. */
+export const oiTradeLink = (symbol: string, view: "BUY" | "SELL") => `${fullTradeLink(symbol)}&form=credit&view=${view}`;
+
 /** One day of the per-stock OI history: how call and put open interest and the price moved against the day before. */
 export type OiDay = {
   date: string;

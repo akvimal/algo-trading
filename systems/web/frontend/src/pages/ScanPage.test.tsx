@@ -492,7 +492,7 @@ describe("OI buildup", () => {
       await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("interval=daily") && c.url.includes("symbol=TCS"))).toBe(true));
       // The card's trade icon goes straight to the Trade page (weekly | daily side by side), in a new tab so the scan stays where it is.
       const trade = tcs.getByRole("link", { name: "Trade" });
-      expect(trade).toHaveAttribute("href", "/trade?symbol=TCS&segment=NSE&layout=side&intervals=weekly,daily");
+      expect(trade).toHaveAttribute("href", expect.stringMatching(/^\/trade\?symbol=TCS&segment=NSE&layout=side&intervals=weekly,daily&form=credit&view=(BUY|SELL)$/));
       expect(trade).toHaveAttribute("target", "_blank");
       expect(trade).toHaveAttribute("rel", expect.stringContaining("noopener"));
     });

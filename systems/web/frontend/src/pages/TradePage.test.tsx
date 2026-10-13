@@ -268,6 +268,15 @@ describe("the page", () => {
     expect(t.getByRole("button", { name: "Option" })).toBeInTheDocument();
   });
 
+  it("opens on the option form with a credit spread when the link comes from an OI buildup card", async () => {
+    renderAt("/trade?symbol=RELIANCE&segment=NSE&form=credit&view=SELL");
+    await ticket();
+    expect(await screen.findByRole("button", { name: "Bearish" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Option" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Bearish" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Credit" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();

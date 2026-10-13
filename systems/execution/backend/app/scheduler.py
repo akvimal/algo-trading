@@ -21,6 +21,7 @@ its own independent interval - see position_manager.check_exits.
 import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.adapters.db.session import SessionLocal
@@ -29,6 +30,7 @@ from app.config import settings
 from app.domain.broker_reconciliation import reconcile_stuck_broker_orders
 from app.domain.equity_history import record_equity_snapshots
 from app.domain.pending_orders import default_deps, process_pending_orders
+from app.domain.spread_bot import default_deps as spread_bot_deps, run_spread_bot
 from app.domain.option_position_manager import check_option_group_exits, record_option_group_pnl_snapshots, square_off_due_option_groups
 from app.domain.position_manager import check_exits, record_position_pnl_snapshots, square_off_due_positions
 
@@ -40,6 +42,7 @@ _EXIT_MONITOR_JOB_ID = "exit-monitor"
 _PNL_SNAPSHOT_JOB_ID = "pnl-snapshots"
 _BROKER_RECONCILIATION_JOB_ID = "broker-order-reconciliation"
 _EQUITY_SNAPSHOT_JOB_ID = "equity-snapshot"
+_SPREAD_BOT_JOB_ID = "spread-bot"
 _PENDING_ORDERS_JOB_ID = "pending-orders"
 
 
@@ -95,6 +98,14 @@ def run_equity_snapshots() -> dict:
     return result
 
 
+def run_bot() -> dict:
+    with SessionLocal() as db:
+        result = run_spread_bot(db, spread_bot_deps())
+    if result["entered"] or result["failed"]:
+        logger.info("spread bot run: %s", result)
+    return result
+
+
 def run_pending_orders() -> dict:
     with SessionLocal() as db:
         result = process_pending_orders(db, default_deps())
@@ -144,5 +155,13 @@ def start_scheduler() -> None:
             id=_PENDING_ORDERS_JOB_ID,
             replace_existing=True,
         )
+    _scheduler.add_job(
+        run_bot,
+        CronTrigger(day_of_week="mon-fri", minute="*/5", timezone="Asia/Kolkata"),
+        id=_SPREAD_BOT_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     if not _scheduler.running:
         _scheduler.start()

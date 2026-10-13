@@ -162,6 +162,18 @@ def resolve_underlying(segment: str, underlying: str) -> Optional[dict]:
     return resp.json()
 
 
+def get_json(path: str, params: dict) -> Optional[dict]:
+    """A plain GET against market-data (the platform read, no user token). None if it says 404; raises on any other failure. Used by the spread bot
+    for the reads it votes on (regime, structure, sentiment, pre-market), which this service does not model."""
+    resp = requests.get(
+        f"{settings.market_data_base_url}{path}", params=params, headers=_auth_headers(None), timeout=settings.market_data_timeout_seconds
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_expiry_list(exchange: str, symbol: str, token: Optional[str] = None) -> Optional[list[str]]:
     """Active option expiry dates (YYYY-MM-DD) for `symbol` on `exchange` -
     None if unresolvable (unknown underlying, or market-data has no

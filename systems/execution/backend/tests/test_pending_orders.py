@@ -966,3 +966,12 @@ def test_without_a_price_it_keeps_waiting():
     row = wait_for_open(db)
     counts, _ = run(db, {}, now=MONDAY_OPEN)
     assert row.status == "pending" and counts["no_price"] == 1
+
+
+def test_a_credit_spreads_negative_combined_stop_and_target_are_accepted_and_attached():
+    db = FakeDb()
+    combined = []
+    row = wait_for_open(db, combined_stop_loss_price=-29.85, combined_target_price=-0.7)
+    run(db, {("NSE", "ITC"): 261.0}, now=MONDAY_OPEN,
+        set_combined_stop=lambda d, u, g, p: combined.append(("stop", p)), set_combined_target=lambda d, u, g, p: combined.append(("target", p)))
+    assert row.status == "triggered" and combined == [("stop", -29.85), ("target", -0.7)]

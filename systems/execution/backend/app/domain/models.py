@@ -270,8 +270,8 @@ class PendingOrderCreate(BaseModel):
     # A market order placed while the market is closed: it waits and is placed at the latest prices on the first pass after the open.
     fire_when_open: bool = False
     # A spread's own premium stop/target (from the ticket's % of max loss/profit), attached right after it opens.
-    combined_stop_loss_price: Optional[float] = Field(default=None, gt=0)
-    combined_target_price: Optional[float] = Field(default=None, gt=0)
+    combined_stop_loss_price: Optional[float] = None  # not gt=0: a credit spread's combined premium is negative
+    combined_target_price: Optional[float] = None
     stop_loss_price: Optional[float] = Field(default=None, gt=0)
     target_price: Optional[float] = Field(default=None, gt=0)
     quantity: Optional[float] = Field(default=None, gt=0)  # None = risk-size at fill

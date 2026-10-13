@@ -123,8 +123,8 @@ def cfg(**o):
 
 
 GOOD_READS = {
-    "/regime": {"regime": "trending_up"}, "/order-blocks": {"trend": "up"}, "/premarket": {"bias": "bullish"},
-    "/options/sentiment": {"exchanges": {"NSE": {"underlyings": [{"symbol": "NIFTY", "direction": "bullish"}]}}},
+    "/regime": {"regime": "trending_up"}, "/order-blocks": {"trend": "up"}, "/premarket": {"day": "2026-10-12", "bias": "bullish"},
+    "/options/sentiment-history": {"points": [{"recorded_at": "2026-10-12T05:25:00Z", "direction": "bullish"}]},
 }
 
 
@@ -178,7 +178,7 @@ def test_agreeing_reads_open_a_put_spread_on_the_wall_sized_to_one_percent_with_
 
 def test_disagreement_is_recorded_as_a_skip_with_the_reads():
     db = FakeDb()
-    deps = fake_deps(reads={"/regime": {"regime": "trending_up"}, "/order-blocks": {"trend": "down"}, "/premarket": None, "/options/sentiment": None})
+    deps = fake_deps(reads={"/regime": {"regime": "trending_up"}, "/order-blocks": {"trend": "down"}, "/premarket": None, "/options/sentiment-history": None})
     counts = bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)
     assert counts["skipped"] == 1 and deps.opened == []
     assert db.added[-1].outcome == "skipped" and db.added[-1].votes["structure"] == -1
@@ -241,3 +241,11 @@ def test_the_scheduler_pass_runs_every_enabled_user(monkeypatch):
             return [cfg(), cfg()]
 
     assert bot.run_spread_bot(Db(), fake_deps(), OPEN_NOW)["entered"] == 2 and len(calls) == 2
+
+
+def test_a_stale_oi_read_or_yesterdays_premarket_report_counts_for_nothing():
+    stale = {**GOOD_READS, "/options/sentiment-history": {"points": [{"recorded_at": "2026-10-12T04:00:00Z", "direction": "bullish"}]},
+             "/premarket": {"day": "2026-10-09", "bias": "bullish"}}
+    db, deps = FakeDb(), fake_deps(reads=stale)
+    bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)
+    assert db.added[-1].votes == {"trend": 1, "oi": 0, "structure": 1, "premarket": 0} and deps.opened == []  # two of four: not enough

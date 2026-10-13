@@ -7,10 +7,12 @@ import { useResource } from "../hooks/useResource";
 import { AdvancedSection } from "./settings/AdvancedSection";
 import { BrokerSection } from "./settings/BrokerSection";
 import { RiskSection } from "./settings/RiskSection";
+import { SpreadBotSection } from "./settings/SpreadBotSection";
 
 const TABS = [
   { id: "risk", label: "Risk limits" },
   { id: "broker", label: "Broker & live" },
+  { id: "bot", label: "Spread bot" },
   { id: "advanced", label: "Advanced" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
@@ -80,6 +82,7 @@ export function SettingsPage() {
 
       {tab === "broker" && accounts.data && <BrokerSection creds={creds} accounts={accounts.data} onAccountSaved={accounts.reload} />}
       {tab === "advanced" && <AdvancedSection />}
+      {tab === "bot" && <SpreadBotSection />}
     </div>
   );
 }

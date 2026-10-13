@@ -3,9 +3,9 @@
 Each cycle, for each enabled user and each of their symbols (NIFTY / BANKNIFTY), it reads four things market-data already publishes:
 
   trend      GET /regime         (ADX + structure trend on 15min)
-  OI         GET /options/sentiment   (put-minus-call OI shift: who is writing the options)
+  OI         GET /options/sentiment-history   (the latest recorded put-minus-call OI read: who is writing the options)
   structure  GET /order-blocks   (BOS/CHoCH trend on 15min)
-  pre-market GET /premarket      (the day's overnight bias)
+  pre-market GET /premarket      (today's overnight bias; yesterday's report counts for nothing)
 
 Each leans bullish (+1), bearish (-1) or nowhere (0). It trades only when at least `min_votes` lean one way and NONE lean the other. Bullish sells
 a put spread, bearish a call spread, with the short strike on the OI WALL: the strike with the most open interest on the safe side of the spot
@@ -174,7 +174,25 @@ def _in_window(now_ist: datetime, start: dt_time, end: dt_time) -> bool:
     return start <= now_ist.time() < end
 
 
-def _gather(deps: BotDeps, symbol: str, premarket_cache: dict) -> tuple[dict, dict]:
+SENTIMENT_MAX_AGE_MINUTES = 20  # the recorder writes every five minutes; an older read is a stalled recorder, not a view
+
+
+def _fresh_sentiment(history: Optional[dict], now: datetime) -> Optional[dict]:
+    """The latest recorded OI read, if it is recent and was not an error."""
+    for point in reversed((history or {}).get("points") or []):
+        if point.get("error"):
+            continue
+        at = datetime.fromisoformat(str(point["recorded_at"]).replace("Z", "+00:00"))
+        return point if (now - at).total_seconds() <= SENTIMENT_MAX_AGE_MINUTES * 60 else None
+    return None
+
+
+def _todays(report: Optional[dict], now_ist: datetime) -> Optional[dict]:
+    """The pre-market report only if it is today's: with none yet, market-data serves the latest one, which is yesterday's view."""
+    return report if report and str(report.get("day")) == now_ist.date().isoformat() else None
+
+
+def _gather(deps: BotDeps, symbol: str, premarket_cache: dict, now: datetime) -> tuple[dict, dict]:
     """The four raw reads, and any that failed (a failed read counts as no lean, and is recorded)."""
     errors: dict[str, str] = {}
 
@@ -187,12 +205,9 @@ def _gather(deps: BotDeps, symbol: str, premarket_cache: dict) -> tuple[dict, di
 
     regime = read("regime", "/regime", {"exchange": EXCHANGE, "symbol": symbol, "interval": STRUCTURE_INTERVAL})
     structure = read("structure", "/order-blocks", {"exchange": EXCHANGE, "symbol": symbol, "interval": STRUCTURE_INTERVAL})
-    sentiment_all = read("oi", "/options/sentiment", {})
-    sentiment = next(
-        (u for u in ((sentiment_all or {}).get("exchanges", {}).get(EXCHANGE, {}) or {}).get("underlyings", []) if u.get("symbol") == symbol), None
-    )
+    sentiment = _fresh_sentiment(read("oi", "/options/sentiment-history", {"symbol": symbol}), now)
     if "premarket" not in premarket_cache:
-        premarket_cache["premarket"] = read("premarket", "/premarket", {})
+        premarket_cache["premarket"] = _todays(read("premarket", "/premarket", {}), now.astimezone(_IST))
     return {"regime": regime, "structure": structure, "sentiment": sentiment, "premarket": premarket_cache["premarket"]}, errors
 
 
@@ -219,7 +234,7 @@ def run_bot_for_user(db: Session, cfg, deps: BotDeps, now: datetime, premarket_c
         return counts
 
     for symbol in _symbols(cfg):
-        reads, errors = _gather(deps, symbol, premarket_cache)
+        reads, errors = _gather(deps, symbol, premarket_cache, now)
         votes = read_votes(reads["regime"], reads["sentiment"], reads["structure"], reads["premarket"])
         detail = {"errors": errors} if errors else {}
         bias, why = decide_bias(votes, cfg.min_votes)

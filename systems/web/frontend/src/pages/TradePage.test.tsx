@@ -1120,7 +1120,7 @@ describe("options", () => {
 
   it("waits for the open when the market is closed, then places at the latest prices; it can be cancelled meanwhile", async () => {
     marketOpen = false;
-    const { t } = await spread();
+    await spread();
     await waitFor(() => expect(posts("/pending-orders")).toHaveLength(1));
     expect(posts("/option-groups/manual")).toHaveLength(0); // nothing opened at stale prices
     expect(posts("/pending-orders")[0].body).toMatchObject({ segment: "NSE", symbol: "NIFTY", strategy: "spread", fire_when_open: true, stop_loss_price: 990, target_price: 1030 });

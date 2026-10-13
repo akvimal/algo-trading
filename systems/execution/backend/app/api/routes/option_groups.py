@@ -412,6 +412,7 @@ def open_manual(payload: ManualOptionPositionCreate, user: User = Depends(get_cu
         payload.notes,
         payload.entry_interval,
         payload.auto_traded,
+        positional=payload.positional,
     )
     legs = legs_by_group(db, [row]).get(row.id, {})
     return _group_to_out(row, [_leg_dict(pos) for pos in legs.values()])

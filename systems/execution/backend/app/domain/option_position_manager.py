@@ -745,6 +745,7 @@ def open_manual_option_group(
     notes: Optional[str] = None,
     entry_interval: Optional[str] = None,
     auto_traded: bool = False,
+    positional: bool = False,
 ) -> db_models.OptionPositionGroup:
     """Manual tab (signal-generation's frontend) - option orders, bypassing
     signal-generation/signal-processing entirely (no auto-provisioned
@@ -772,7 +773,13 @@ def open_manual_option_group(
     group for future performance review, same "just a caller-resolved
     label" reasoning as open_manual_position's own copy of this
     docstring note - it never changes leg selection/pricing here, which
-    is always resolved fresh from a live quote regardless."""
+    is always resolved fresh from a live quote regardless.
+
+    `positional=True` is a multi-day hold (e.g. a weekly-expiry spread held
+    for days): no intraday-window check, and the group opens with
+    square_off_time=NULL so the end-of-day square-off never closes it. Stop-
+    loss/target still apply. It stays on the account's normal balance - only
+    spot has a separate positional book."""
     signal_id = uuid.uuid4()
     strategy_type_for_rejection = f"{option_position_style}_{action.lower()}"  # best-effort label pre-leg-selection
 
@@ -869,7 +876,7 @@ def open_manual_option_group(
         return row
 
     now = datetime.now(dt_timezone.utc)
-    if not is_within_intraday_window(now, account.square_off_time, settings.timezone):
+    if not positional and not is_within_intraday_window(now, account.square_off_time, settings.timezone):
         row = _reject_manual_group(
             db, user_id, signal_id, symbol, segment, action, strategy_type,
             f"received outside intraday window (square-off is {account.square_off_time})." + OUTSIDE_WINDOW_HINT,
@@ -992,7 +999,7 @@ def open_manual_option_group(
         # identical conversion).
         account.current_balance = float(account.current_balance) - open_fee * settings.usdinr_rate
 
-    effective_square_off_time = square_off_time if square_off_time is not None else account.square_off_time
+    effective_square_off_time = None if positional else (square_off_time if square_off_time is not None else account.square_off_time)
     group_id = uuid.uuid4()
     group = db_models.OptionPositionGroup(
         id=group_id,

@@ -91,6 +91,8 @@ export type Ticket = {
   // A WAITING order only: may it open a second position on an instrument already held? Off by default - the
   // server then skips it, with a reason, if something is open on that instrument when its price is hit.
   allowStacking: boolean;
+  // A MARKET option order only: hold it for days instead of the day. Skips the intraday window and the end-of-day square-off.
+  holdOvernight: boolean;
   entry: string;
   stop: string;
   target: string;
@@ -112,7 +114,7 @@ export type Ticket = {
 export const EMPTY_TICKET: Ticket = {
   action: "BUY", strategy: "future", moneyness: "ATM", spreadWidth: 2, primaryStrike: null, secondStrike: null, expiry: null,
   combinedStopLossPrice: null, combinedTargetPrice: null,
-  orderType: "market", allowStacking: false, entry: "", stop: "", target: "", lots: "", setupTag: null, planState: null, planKind: null, trigger: null, confidence: null, reason: "",
+  orderType: "market", allowStacking: false, holdOvernight: false, entry: "", stop: "", target: "", lots: "", setupTag: null, planState: null, planKind: null, trigger: null, confidence: null, reason: "",
 };
 
 export type DefaultInstrument = "future" | "option";
@@ -470,6 +472,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       ...(t.strategy !== "naked" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
       ...(t.expiry != null ? { expiry: t.expiry } : {}),
       ...(a.lotsAuto ? {} : { option_fixed_lots: a.lots }), plan_checklist: [], order_type: "market",
+      ...(t.holdOvernight ? { positional: true } : {}),
       trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, ...journal,
     },
     stop: a.stop,

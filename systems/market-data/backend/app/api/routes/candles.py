@@ -1,3 +1,4 @@
+import logging
 import re
 import threading
 import time
@@ -135,11 +136,61 @@ def get_candle_history(
     try:
 # source=yahoo is public data and never needs (or is gated on) Dhan keys
         credentials = data_credentials(caller, exchange) if source != "yahoo" else None
-        return fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials, source=source)
+        candles = fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials, source=source)
+        if source == "yahoo" and exchange == "NSE" and interval in ("daily", "weekly"):
+            candles = _fill_yahoo_gaps(candles, caller, symbol, interval, from_date, to_date)
+        return candles
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+_GAP_FILL_DAYS = 21
+_IST_MIDNIGHT = "T00:00:00+05:30"
+
+
+def _fill_yahoo_gaps(candles: list[Candle], caller: Caller, symbol: str, interval: str, from_date: date, to_date: date) -> list[Candle]:
+    """Yahoo's NSE daily feed sometimes skips a whole trading day (confirmed
+    2026-10-13: TATAELXSI had no 2026-10-12 row, so the daily chart lost a
+    candle and the weekly bar opened on Tuesday). Dhan's completed daily bars
+    for the last few weeks fill those days in; the current weekly bar is then
+    rebuilt from the filled dailies. Best-effort - any Dhan failure (no token,
+    rate limit) returns Yahoo's series untouched."""
+    try:
+        recent_from = max(from_date, date.fromordinal(to_date.toordinal() - _GAP_FILL_DAYS))
+        daily = candles if interval == "daily" else fetch_candle_history_cached(
+            None, "NSE", symbol, "daily", recent_from, to_date, None, source="yahoo"
+        )
+        have = {c.timestamp[:10] for c in daily}
+        dhan = fetch_candle_history_cached(
+            get_provider("NSE"), "NSE", symbol, "daily", recent_from, to_date, data_credentials(caller, "NSE")
+        )
+        added = [
+            c.model_copy(update={"timestamp": c.timestamp[:10] + _IST_MIDNIGHT, "interval": "daily"})
+            for c in dhan if c.timestamp[:10] not in have
+        ]
+        if not added:
+            return candles
+        filled = sorted(daily + added, key=lambda c: c.timestamp)
+        if interval == "daily":
+            return filled
+        last = candles[-1]
+        week_start = date.fromisoformat(last.timestamp[:10])
+        week = [c for c in filled if date.fromisoformat(c.timestamp[:10]) >= week_start]
+        if not any(c in added for c in week):
+            return candles
+        rebuilt = last.model_copy(update={
+            "open": week[0].open,
+            "high": max(c.high for c in week),
+            "low": min(c.low for c in week),
+            "close": week[-1].close,
+            "volume": sum(c.volume for c in week),
+        })
+        return candles[:-1] + [rebuilt]
+    except Exception:  # noqa: BLE001 - enrichment only; never break the chart over it
+        logging.getLogger(__name__).warning("Dhan gap-fill for %s %s failed; serving Yahoo as-is", symbol, interval, exc_info=True)
+        return candles
 
 
 def fetch_candle_history_cached(provider, exchange, symbol, interval, from_date, to_date, credentials=None, source: Optional[str] = None) -> list[Candle]:

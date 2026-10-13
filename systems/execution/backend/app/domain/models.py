@@ -967,6 +967,8 @@ class ManualOptionPositionCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=2000)
     # See ManualPositionCreate.auto_traded's own comment.
     auto_traded: bool = False
+    # A multi-day hold: skips the intraday-window check and is never squared off at the end of the day.
+    positional: bool = False
     # See ManualPositionCreate.entry_interval's own comment.
     entry_interval: Optional[ChartInterval] = None
 

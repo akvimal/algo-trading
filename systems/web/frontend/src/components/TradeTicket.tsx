@@ -392,6 +392,15 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         </div>
       )}
 
+      {isOption && !limit && (
+        <label className="check-row" style={{ marginBottom: 12 }}>
+          <input type="checkbox" checked={t.holdOvernight} onChange={(e) => set("holdOvernight", e.target.checked)} /> Hold for days (positional)
+          <span className="faint" style={{ fontSize: 12, display: "block" }}>
+            Not squared off at the end of the day, and can be placed after the square-off time. Your stop-loss and target still apply.
+          </span>
+        </label>
+      )}
+
       {waitingHere && (
         <div className="stack-notice" role="note" data-testid="waiting-reminder">
           <b>You still have {waitingHere.text}.</b>{" "}

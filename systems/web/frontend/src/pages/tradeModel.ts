@@ -423,6 +423,10 @@ export type BuildMeta = { instrument: "spot" | "future"; interval: string; trend
 
 /** The request for this ticket. A market order goes straight in at the live price; a limit order
  * is armed on the server, which watches the price and fires it (so it works with the app closed). */
+/** The order records which chart it was planned on, but only intraday ones (the server's list); a daily or weekly chart sends nothing rather than a value it would refuse. */
+const INTRADAY_ENTRY = ["1min", "3min", "5min", "15min", "30min", "60min"];
+export const entryIntervalOf = (interval: string | null | undefined) => (interval && INTRADAY_ENTRY.includes(interval) ? { entry_interval: interval } : {});
+
 export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: BuildMeta): OrderRequest {
   const journal = {
     ...(t.setupTag ? { setup_tag: t.setupTag } : {}),
@@ -440,7 +444,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, strategy: t.strategy, moneyness: t.moneyness, trigger_price: a.entry,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, allow_stacking: t.allowStacking, ...journal,
+        ...qty, trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), allow_stacking: t.allowStacking, ...journal,
         // An option order waits with the exact legs the ticket showed (a strike per leg and the expiry they came from), not a fresh pick when it fires.
         ...(t.strategy !== "future" && t.primaryStrike != null ? { primary_strike: t.primaryStrike } : {}),
         ...(t.strategy === "spread" && t.secondStrike != null ? { second_strike: t.secondStrike } : {}),
@@ -456,7 +460,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, instrument_type: meta.instrument, price: a.entry, order_type: "market", ...qty,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, plan_checklist: [], ...journal,
+        trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), plan_checklist: [], ...journal,
       },
     };
   }
@@ -473,7 +477,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       ...(t.expiry != null ? { expiry: t.expiry } : {}),
       ...(a.lotsAuto ? {} : { option_fixed_lots: a.lots }), plan_checklist: [], order_type: "market",
       ...(t.holdOvernight ? { positional: true } : {}),
-      trend_followed: meta.trendFollowed, risk_managed: riskManaged, entry_interval: meta.interval, ...journal,
+      trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), ...journal,
     },
     stop: a.stop,
     target: a.target,

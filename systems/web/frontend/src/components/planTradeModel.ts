@@ -1,5 +1,6 @@
 import type { NoteTrade, PlanOrder } from "../api/planTrade";
 import type { StudyNote } from "../api/types";
+import { entryIntervalOf } from "../pages/tradeModel";
 
 /** A positional (multi-day) trade is a spot hold, so it can be planned on NSE and crypto but not MCX, which has futures only.
  * It is paper only, and long only: nobody holds a short in the cash market for days. */
@@ -71,7 +72,7 @@ export function buildPlanOrder(note: Pick<StudyNote, "id" | "segment" | "symbol"
     ...(p.target !== null ? { target_price: p.target } : {}),
     ...(p.quantity !== null ? { quantity: p.quantity } : {}),
     risk_managed: p.quantity === null,
-    ...(note.interval ? { entry_interval: note.interval } : {}),
+    ...entryIntervalOf(note.interval),
   };
   if (f.entryType === "limit") {
     return { kind: "limit", body: { ...common, strategy: "spot", trigger_price: p.entry, expires_in_minutes: f.days * 1440 } };

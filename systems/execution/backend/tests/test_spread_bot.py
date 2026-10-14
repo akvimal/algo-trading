@@ -74,6 +74,10 @@ def test_size_is_the_most_lots_whose_max_loss_fits_one_percent():
     assert bot.lots_for(1_000_000, 1, 50, 75) == 2  # 3750 a lot, 10000 allowed
     assert bot.lots_for(1_000_000, 1, 50, 300) == 0  # 15000 a lot: not even one
     assert bot.lots_for(1_000_000, 1, 0, 75) == 0
+    # the account's per-trade capital caps it too: 1% of 13.3M would allow 33 lots, 50,000 only 12 at 4,033 a lot... and 0 at 75,000 a lot
+    assert bot.lots_for(13_300_000, 1, 62, 65, 50_000) == 12
+    assert bot.lots_for(13_300_000, 1, 62, 65, None) == 33
+    assert bot.lots_for(13_300_000, 1, 1000, 75, 50_000) == 0
 
 
 def test_the_spreads_own_stop_and_target_follow_the_tickets_arithmetic():
@@ -158,7 +162,7 @@ def fake_deps(reads=None, group_status="OPEN", **over):
 def account(monkeypatch):
     from app.domain import position_manager as pm
 
-    state = SimpleNamespace(live_trading_enabled=False, current_balance=1_000_000)
+    state = SimpleNamespace(live_trading_enabled=False, current_balance=1_000_000, capital_per_trade=1_000_000)
     monkeypatch.setattr(pm, "load_account", lambda db, uid, seg, book="intraday": state)
     return state
 
@@ -212,6 +216,13 @@ def test_a_balance_too_small_for_one_lot_skips_and_says_what_one_lot_risks(accou
     db, deps = FakeDb(), fake_deps()
     bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)
     assert deps.opened == [] and "more than 1% of the balance" in db.added[-1].reason
+
+
+def test_the_per_trade_capital_caps_the_lots_and_a_lot_that_does_not_fit_is_skipped_with_that_reason(account):
+    account.capital_per_trade = 1  # far below what one lot risks
+    db, deps = FakeDb(), fake_deps()
+    bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)
+    assert deps.opened == [] and "capital per trade" in db.added[-1].reason
 
 
 def test_a_rejected_order_is_a_failure_and_a_missing_attachment_is_flagged():

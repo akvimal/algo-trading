@@ -126,6 +126,12 @@ CREATE TABLE IF NOT EXISTS market_data.oi_eod_snapshot (
     -- reasoning as sentiment_history's atm_call_buildup/atm_put_buildup.
     call_buildup       TEXT,
     put_buildup        TEXT,
+    -- The option's own premium change (near-the-money legs, weighted by open interest) and what it says about who moved the open interest:
+    -- buying / writing / writers_covering / unwinding. Measured from migration 060 on; NULL before.
+    call_premium_change_pct DOUBLE PRECISION,
+    put_premium_change_pct  DOUBLE PRECISION,
+    call_activity           TEXT,
+    put_activity            TEXT,
     UNIQUE (symbol, snapshot_date)
 );
 

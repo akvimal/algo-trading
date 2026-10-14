@@ -68,6 +68,10 @@ def get_oi_buildup(history_days: int = Query(10, ge=1, le=60), db: Session = Dep
             price_change_pct=row.price_change_pct,
             call_buildup=row.call_buildup,
             put_buildup=row.put_buildup,
+            call_premium_change_pct=row.call_premium_change_pct,
+            put_premium_change_pct=row.put_premium_change_pct,
+            call_activity=row.call_activity,
+            put_activity=row.put_activity,
             history=[
                 OiEodSnapshotHistoryPoint.model_validate(h)
                 for h in reversed(history_by_symbol.get(row.symbol, []))

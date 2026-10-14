@@ -1801,6 +1801,7 @@ class DhanProvider(QuoteProvider):
             last_price=raw["last_price"],
             oi=raw["oi"],
             previous_oi=raw["previous_oi"],
+            previous_close_price=raw.get("previous_close_price"),
             volume=raw["volume"],
             implied_volatility=raw["implied_volatility"],
             top_bid_price=raw["top_bid_price"],

@@ -25,9 +25,13 @@ describe("filterOi", () => {
   });
 
   it("filters each side of the chain separately", () => {
-    expect(filterOi(rows, { ...OI_DEFAULTS, call: "long_buildup" }).map((r) => r.symbol)).toEqual(["AAA"]);
-    expect(filterOi(rows, { ...OI_DEFAULTS, put: "short_covering" }).map((r) => r.symbol)).toEqual(["AAA"]);
-    expect(filterOi(rows, { ...OI_DEFAULTS, call: "long_buildup", put: "long_unwinding" })).toEqual([]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, call: "buying" }).map((r) => r.symbol)).toEqual(["AAA"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, put: "unwinding" }).map((r) => r.symbol)).toEqual(["AAA"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, call: "buying", put: "writers_covering" })).toEqual([]);
+    // a day measured from the option's own price wins over the one worked out from the stock's price
+    const measured = [oi("MMM", { call_buildup: "long_buildup", call_activity: "writing" })];
+    expect(filterOi(measured, { ...OI_DEFAULTS, call: "writing" }).map((r) => r.symbol)).toEqual(["MMM"]);
+    expect(filterOi(measured, { ...OI_DEFAULTS, call: "buying" })).toEqual([]);
   });
 
   it("searches by symbol, ignoring case and spaces", () => {
@@ -157,7 +161,7 @@ describe("major two-sided shifts", () => {
   });
 
   it("combines with the call and put filters, and ignores the threshold when no signal is chosen", () => {
-    expect(filterOi(universe, { ...OI_DEFAULTS, signal: "strong_bull", call: "short_buildup" })).toEqual([]);
+    expect(filterOi(universe, { ...OI_DEFAULTS, signal: "strong_bull", call: "writing" })).toEqual([]);
     expect(filterOi(universe, { ...OI_DEFAULTS, minShift: 99 }).map((r) => r.symbol).sort()).toEqual(["BEAR1", "BULL1", "BULL2", "PLAIN", "SMALL"]);
   });
 

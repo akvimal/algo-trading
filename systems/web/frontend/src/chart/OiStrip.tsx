@@ -2,7 +2,7 @@ import type { OiSummary, SentimentHistoryPoint } from "../api/types";
 import type { Ref } from "react";
 import { AiReadButton, type AiReadHandle } from "./AiReadPanel";
 import { formatPrice } from "../format";
-import { SIDE_HELP, SIDE_LABEL } from "../pages/scanModel";
+import { ACTIVITY_LABEL, SIDE_HELP, sideActivity } from "../pages/scanModel";
 import type { OiLevelLine } from "./oiLevels";
 import {
   BUILDUP_ABBR, BUILDUP_ICON, buildupTone, classifyPcr, deltaPct, flowSkew, hasSentimentTrend, skewView, isStaleAt, pcrDiverges, sentimentSteps, volumePcr,
@@ -159,12 +159,12 @@ export function OiStrip({
         </span>
       )}
       {summary.total_call_buildup && (
-        <span className={`pill ${buildupTone(summary.total_call_buildup, "CE")}`} title={`Call OI: ${SIDE_LABEL.call[summary.total_call_buildup]} - ${SIDE_HELP.call[summary.total_call_buildup]}`}>
+        <span className={`pill ${buildupTone(summary.total_call_buildup, "CE")}`} title={`Call OI: ${ACTIVITY_LABEL[sideActivity("call", null, summary.total_call_buildup)!.activity]} - ${SIDE_HELP.call[summary.total_call_buildup]}`}>
           {BUILDUP_ICON[summary.total_call_buildup]} CE {BUILDUP_ABBR[summary.total_call_buildup]}
         </span>
       )}
       {summary.total_put_buildup && (
-        <span className={`pill ${buildupTone(summary.total_put_buildup, "PE")}`} title={`Put OI: ${SIDE_LABEL.put[summary.total_put_buildup]} - ${SIDE_HELP.put[summary.total_put_buildup]}`}>
+        <span className={`pill ${buildupTone(summary.total_put_buildup, "PE")}`} title={`Put OI: ${ACTIVITY_LABEL[sideActivity("put", null, summary.total_put_buildup)!.activity]} - ${SIDE_HELP.put[summary.total_put_buildup]}`}>
           {BUILDUP_ICON[summary.total_put_buildup]} PE {BUILDUP_ABBR[summary.total_put_buildup]}
         </span>
       )}

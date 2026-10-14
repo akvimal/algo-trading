@@ -174,7 +174,7 @@ describe("OI buildup", () => {
     const user = userEvent.setup();
     renderAt("/scan");
     await screen.findByTestId("oi-list");
-    await user.selectOptions(screen.getByLabelText("Call side"), "long_buildup");
+    await user.selectOptions(screen.getByLabelText("Call side"), "buying");
     expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(1);
     await user.type(screen.getByLabelText("Search a symbol"), "zzz");
     expect(await screen.findByText("No stocks match")).toBeInTheDocument();
@@ -877,5 +877,25 @@ describe("option wording on the call and put sides", () => {
     expect(card.getByText("Buying")).toBeInTheDocument(); // the call side
     expect(card.getByText("Writing")).toBeInTheDocument(); // the put side
     expect(card.queryByText("Long buildup")).not.toBeInTheDocument();
+  });
+});
+
+describe("measured against worked-out readings", () => {
+  it("shows what the option's own price said when it was recorded, and marks a worked-out day with a *", async () => {
+    oi = {
+      snapshot_date: "2026-09-25",
+      rows: [
+        oiRow("MEASURED", { call_buildup: "long_buildup", call_activity: "writing", put_buildup: "long_buildup", put_activity: "buying" }),
+        oiRow("WORKED", { call_buildup: "long_buildup", put_buildup: "long_buildup" }),
+      ],
+    };
+    renderAt("/scan");
+    const cards = await screen.findAllByTestId("oi-card");
+    const measured = within(cards.find((c) => within(c).queryByText("MEASURED")) as HTMLElement);
+    expect(measured.getByText("Writing")).toBeInTheDocument(); // the call side, from the call's own price, not the stock's
+    expect(measured.getByText("Buying")).toBeInTheDocument(); // the put side
+    expect(measured.queryByText("*")).not.toBeInTheDocument();
+    const worked = within(cards.find((c) => within(c).queryByText("WORKED")) as HTMLElement);
+    expect(worked.getAllByText("*")).toHaveLength(2);
   });
 });

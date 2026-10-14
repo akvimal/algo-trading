@@ -319,7 +319,9 @@ export type Ltp = { exchange: string; symbol: string; ltp: number; provider: str
 export type Buildup = "long_buildup" | "short_buildup" | "short_covering" | "long_unwinding";
 
 /** One earlier end-of-day total, oldest first in OiRow.history (the latest day is the last point). */
-export type OiHistoryPoint = { snapshot_date: string; total_call_oi?: number; total_put_oi?: number; spot_price?: number | null };
+/** Who moved the open interest, read from the option's own premium (market-data records it nightly from 2026-10-14): older days have none. */
+export type Activity = "buying" | "writing" | "writers_covering" | "unwinding";
+export type OiHistoryPoint = { snapshot_date: string; total_call_oi?: number; total_put_oi?: number; spot_price?: number | null; call_activity?: Activity | null; put_activity?: Activity | null };
 
 export type OiRow = {
   symbol: string;
@@ -334,6 +336,10 @@ export type OiRow = {
   price_change_pct: number | null;
   call_buildup: Buildup | null;
   put_buildup: Buildup | null;
+  call_premium_change_pct?: number | null;
+  put_premium_change_pct?: number | null;
+  call_activity?: Activity | null;
+  put_activity?: Activity | null;
   history: OiHistoryPoint[];
 };
 export type OiBuildup = { snapshot_date: string; rows: OiRow[] };

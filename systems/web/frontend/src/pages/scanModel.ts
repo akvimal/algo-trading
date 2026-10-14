@@ -1,4 +1,4 @@
-import type { Buildup, OiHistoryPoint, OiRow, Proximity, Regime, ScreenerRow, ZoneScanRow } from "../api/types";
+import type { Activity, Buildup, OiHistoryPoint, OiRow, Proximity, Regime, ScreenerRow, ZoneScanRow } from "../api/types";
 
 export const BUILDUP_LABEL: Record<Buildup, string> = {
   long_buildup: "Long buildup",
@@ -41,6 +41,37 @@ export const SIDE_HELP: Record<OptionSide, Record<Buildup, string>> = {
   },
 };
 
+export const ACTIVITY_LABEL: Record<Activity, string> = { buying: "Buying", writing: "Writing", writers_covering: "Writers covering", unwinding: "Unwinding" };
+export const ACTIVITY_ORDER: Activity[] = ["buying", "writing", "writers_covering", "unwinding"];
+/** Read from the option's own premium, so these are stated, not "most likely". */
+export const ACTIVITY_HELP: Record<OptionSide, Record<Activity, string>> = {
+  call: {
+    buying: "call open interest up and the call price up: calls are being bought (bullish)",
+    writing: "call open interest up and the call price down: calls are being written, a ceiling forming (bearish)",
+    writers_covering: "call open interest down and the call price up: call writers are buying back (bullish)",
+    unwinding: "call open interest down and the call price down: call buyers are selling out (bearish)",
+  },
+  put: {
+    buying: "put open interest up and the put price up: puts are being bought (bearish, or hedging)",
+    writing: "put open interest up and the put price down: puts are being written, a floor forming (bullish)",
+    writers_covering: "put open interest down and the put price up: put writers are buying back (bearish)",
+    unwinding: "put open interest down and the put price down: put buyers are selling out (bullish)",
+  },
+};
+const INFERRED: Record<OptionSide, Record<Buildup, Activity>> = {
+  call: { long_buildup: "buying", short_buildup: "writing", short_covering: "writers_covering", long_unwinding: "unwinding" },
+  put: { long_buildup: "writing", short_buildup: "buying", short_covering: "unwinding", long_unwinding: "writers_covering" },
+};
+/** The reading for one side of a stock: the measured one (from the option's own price) when it was recorded, else the likelier one worked out from the
+ * stock's price. `measured` says which, so the page can be honest about it. */
+export function sideActivity(side: OptionSide, activity: Activity | null | undefined, buildup: Buildup | null | undefined): { activity: Activity; measured: boolean } | null {
+  if (activity) return { activity, measured: true };
+  if (buildup) return { activity: INFERRED[side][buildup], measured: false };
+  return null;
+}
+/** Green when the reading leans bullish: calls bought or their writers covering, puts written or their buyers selling out. */
+export const activityIsBullish = (side: OptionSide, a: Activity): boolean => (side === "call" ? a === "buying" || a === "writers_covering" : a === "writing" || a === "unwinding");
+
 /** A first guess at Bullish/Bearish from the call/put OI buildup readings already on the card -
  * "good" (long_buildup/short_covering - this leg's OWN premium rising, see BUILDUP_HELP) on the
  * call side reads bullish (calls being bought or short-covered as the underlying rises); the same
@@ -75,7 +106,7 @@ export const QUADRANT_SIGNALS: Buildup[] = ["long_buildup", "short_covering", "s
 export const isQuadrantSignal = (s: OiSignal): s is Buildup => (QUADRANT_SIGNALS as string[]).includes(s);
 /** The "At a zone" filter: every stock, only the stocks the nightly zone scan put in tier A or B, or any stock at a zone (tier C too). */
 export type ZoneFilter = "all" | "shortlist" | "any";
-export type OiFilters = { call: Buildup | "all"; put: Buildup | "all"; signal: OiSignal; minShift: number; search: string; sort: OiSort; zone: ZoneFilter };
+export type OiFilters = { call: Activity | "all"; put: Activity | "all"; signal: OiSignal; minShift: number; search: string; sort: OiSort; zone: ZoneFilter };
 /** minShift: how much (in %) the call AND the put open interest must each have grown for a shift to count as a major one. */
 export const DEFAULT_MIN_SHIFT = 10;
 export const OI_DEFAULTS: OiFilters = { call: "all", put: "all", signal: "all", minShift: DEFAULT_MIN_SHIFT, search: "", sort: "call_oi", zone: "all" };
@@ -159,8 +190,8 @@ export function filterOi(rows: OiRow[], f: OiFilters, zones: Record<string, Zone
     (r) =>
       matches(r.symbol, f.search) &&
       zoneMatches(zones[r.symbol], f.zone) &&
-      (f.call === "all" || r.call_buildup === f.call) &&
-      (f.put === "all" || r.put_buildup === f.put) &&
+      (f.call === "all" || sideActivity("call", r.call_activity, r.call_buildup)?.activity === f.call) &&
+      (f.put === "all" || sideActivity("put", r.put_activity, r.put_buildup)?.activity === f.put) &&
       (f.signal === "all" || (isQuadrantSignal(f.signal) ? oiQuadrant(r) === f.signal : oiSignal(r, f.minShift) === f.signal)),
   );
   const sorters: Record<OiSort, (a: OiRow, b: OiRow) => number> = {
@@ -297,6 +328,8 @@ export type OiDay = {
   pricePct: number | null;
   callBuildup: Buildup | null;
   putBuildup: Buildup | null;
+  callActivity: Activity | null;
+  putActivity: Activity | null;
   pcr: number | null;
 };
 
@@ -328,6 +361,8 @@ export function oiDays(history: OiHistoryPoint[], days = 5): OiDay[] {
       pricePct: pctChange(cur.spot_price, prev.spot_price),
       callBuildup: callNow != null && prev.total_call_oi != null ? classifyBuildup(callNow - prev.total_call_oi, priceDiff) : null,
       putBuildup: putNow != null && prev.total_put_oi != null ? classifyBuildup(putNow - prev.total_put_oi, priceDiff) : null,
+      callActivity: cur.call_activity ?? null,
+      putActivity: cur.put_activity ?? null,
       pcr: callNow ? (putNow ?? 0) / callNow : null,
     });
   }

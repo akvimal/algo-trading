@@ -143,6 +143,11 @@ class OiEodSnapshot(Base):
     price_change_pct = Column(Float)
     call_buildup = Column(Text)
     put_buildup = Column(Text)
+    # Measured from the option's own premium (migration 060); NULL on earlier days. See app/domain/oi_buildup.py.
+    call_premium_change_pct = Column(Float)
+    put_premium_change_pct = Column(Float)
+    call_activity = Column(Text)
+    put_activity = Column(Text)
 
 
 class EquityScreenerSnapshot(Base):

@@ -79,7 +79,7 @@ export function spreadDetail(g: Pick<OptionGroup, "net_debit" | "strike_width" |
   };
 }
 
-export type SpreadMetrics = { maxProfitPct: number | null; fundUsedPct: number | null };
+export type SpreadMetrics = { maxProfitPct: number | null; fundUsedPct: number | null; fundUsed: number | null };
 
 /** A spread (2-leg) position: how far its live P&L is toward the position's own defined max
  * profit, and against the capital actually committed to it - net_debit for a debit spread (the
@@ -89,13 +89,14 @@ export type SpreadMetrics = { maxProfitPct: number | null; fundUsedPct: number |
 export function spreadMetrics(g: Pick<OptionGroup, "net_debit" | "strike_width" | "unrealized_pnl" | "quantity">): SpreadMetrics {
   const { net_debit, quantity, unrealized_pnl } = g;
   const strikeWidth = g.strike_width;
-  if (net_debit == null || strikeWidth == null || unrealized_pnl == null || !quantity) return { maxProfitPct: null, fundUsedPct: null };
+  if (net_debit == null || strikeWidth == null || unrealized_pnl == null || !quantity) return { maxProfitPct: null, fundUsedPct: null, fundUsed: null };
   const maxProfitPerUnit = net_debit >= 0 ? strikeWidth - net_debit : Math.abs(net_debit);
   const fundUsedPerUnit = net_debit >= 0 ? net_debit : strikeWidth - Math.abs(net_debit);
   const maxProfitTotal = maxProfitPerUnit * quantity;
   const fundUsedTotal = fundUsedPerUnit * quantity;
   return {
     maxProfitPct: maxProfitTotal > 0 ? (unrealized_pnl / maxProfitTotal) * 100 : null,
+    fundUsed: fundUsedTotal > 0 ? fundUsedTotal : null,
     fundUsedPct: fundUsedTotal > 0 ? (unrealized_pnl / fundUsedTotal) * 100 : null,
   };
 }

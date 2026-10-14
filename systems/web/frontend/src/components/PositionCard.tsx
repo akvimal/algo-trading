@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/http";
 import { listTradeEvents, moveOpenLevel, setAutoTrail, squareOffPosition, type TradeEvent } from "../api/trade";
 import type { OptionGroup, Position } from "../api/types";
-import { formatPct, formatPnl, formatPrice, formatTime } from "../format";
+import { formatInr, formatPct, formatPnl, formatPrice, formatTime } from "../format";
 import { ScanChartPanel } from "../pages/ScanChartPanel";
 import { isNakedOption, isSpreadOption, legPnl, nakedMetrics, spreadDetail, spreadMetrics } from "./positionMetrics";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
@@ -250,7 +250,7 @@ export function PositionCard(props: Props) {
             Max profit reached <Signed value={spread.maxProfitPct} text={pctText(spread.maxProfitPct)} />
           </span>
           <span>
-            Fund used <Signed value={spread.fundUsedPct} text={pctText(spread.fundUsedPct)} />
+            Fund used {spread.fundUsed == null ? "–" : formatInr(spread.fundUsed)} <Signed value={spread.fundUsedPct} text={`(${pctText(spread.fundUsedPct)})`} />
           </span>
         </div>
       )}

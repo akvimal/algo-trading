@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db import models as db_models
 from app.config import settings as app_settings
 from app.config import settings as app_settings
+from app.domain.numfmt import num
 from app.domain.india_charges import kind_for, round_trip_charges
 from app.domain import stop_rules
 from app.domain.slippage import slippage_cost
@@ -1609,8 +1610,8 @@ def open_position(
             db,
             order,
             signal_id,
-            f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
-            f"need at least {order.price * lot_size * required_lots} for {required_lots} lot(s))",
+            f"insufficient account balance ({num(effective_capital)} {capital_unit} available for {order.segment}, "
+            f"need at least {num(order.price * lot_size * required_lots)} for {num(required_lots)} lot(s))",
         )
         db.commit()
         return row
@@ -2039,8 +2040,8 @@ def open_manual_position(
         if effective_capital < required_cost:
             row = _reject_manual(
                 db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
-                f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
-                f"need at least {required_cost} for {quantity} lot(s))",
+                f"insufficient account balance ({num(effective_capital)} {capital_unit} available for {segment}, "
+                f"need at least {num(required_cost)} for {num(quantity)} lot(s))",
             )
             db.commit()
             return row
@@ -2052,8 +2053,8 @@ def open_manual_position(
         if effective_capital < price * lot_size:
             row = _reject_manual(
                 db, user_id, signal_id, symbol, segment, segment, action, instrument_type, price,
-                f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
-                f"need at least {price * lot_size} for 1 lot)",
+                f"insufficient account balance ({num(effective_capital)} {capital_unit} available for {segment}, "
+                f"need at least {num(price * lot_size)} for 1 lot)",
             )
             db.commit()
             return row

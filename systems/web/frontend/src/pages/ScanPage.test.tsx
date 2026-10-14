@@ -163,7 +163,7 @@ describe("OI buildup", () => {
     expect(cards.map((c) => within(c).getByRole("button", { name: "Chart" }).getAttribute("aria-expanded"))).toEqual(["false", "false"]);
     const first = within(cards[0]);
     expect(first.getByText("+12.0%")).toBeInTheDocument(); // signed, not colour alone
-    expect(first.getByText("Call writing")).toBeInTheDocument();
+    expect(first.getByText("Writing")).toBeInTheDocument();
     expect(first.getByText(/Call OI 12\.35L/)).toBeInTheDocument();
     expect(first.getByText("1.62")).toBeInTheDocument();
     expect(screen.getByText(/End-of-day snapshot for 25 Sept/)).toBeInTheDocument();
@@ -289,7 +289,7 @@ describe("OI buildup", () => {
       expect(rows[0]).toHaveTextContent("25 Sept"); // newest first
       expect(rows[0]).toHaveTextContent("+8.3%"); // call 1200 -> 1300
       expect(rows[0]).toHaveTextContent("+9.1%"); // put 1100 -> 1200
-      expect(rows[0]).toHaveTextContent("Call buying"); // price up, call OI up
+      expect(rows[0]).toHaveTextContent("Buying"); // price up, call OI up
       expect(rows[4]).toHaveTextContent("19 Sept");
       expect(within(table).getByText(/Since 18 Sept/)).toBeInTheDocument();
       await user.click(card.getByRole("button", { name: "Close history" }));
@@ -874,8 +874,8 @@ describe("option wording on the call and put sides", () => {
     oi = { snapshot_date: "2026-09-25", rows: [oiRow("CANBK", { call_buildup: "long_buildup", put_buildup: "long_buildup", call_oi_change_pct: 32.7, put_oi_change_pct: 28.7, price_change_pct: 3.59 })] };
     renderAt("/scan");
     const card = within((await screen.findAllByTestId("oi-card"))[0]);
-    expect(card.getByText("Call buying")).toBeInTheDocument();
-    expect(card.getByText("Put writing")).toBeInTheDocument();
+    expect(card.getByText("Buying")).toBeInTheDocument(); // the call side
+    expect(card.getByText("Writing")).toBeInTheDocument(); // the put side
     expect(card.queryByText("Long buildup")).not.toBeInTheDocument();
   });
 });

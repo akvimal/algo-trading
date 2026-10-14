@@ -22,8 +22,9 @@ export const BUILDUP_HELP: Record<Buildup, string> = {
  * likelier one when the stock is rising, and its help says so. */
 export type OptionSide = "call" | "put";
 export const SIDE_LABEL: Record<OptionSide, Record<Buildup, string>> = {
-  call: { long_buildup: "Call buying", short_buildup: "Call writing", short_covering: "Call writers covering", long_unwinding: "Call unwinding" },
-  put: { long_buildup: "Put writing", short_buildup: "Put buying", short_covering: "Put unwinding", long_unwinding: "Put writers covering" },
+  // No "Call"/"Put" prefix: every place these show sits under a call or put heading already.
+  call: { long_buildup: "Buying", short_buildup: "Writing", short_covering: "Writers covering", long_unwinding: "Unwinding" },
+  put: { long_buildup: "Writing", short_buildup: "Buying", short_covering: "Unwinding", long_unwinding: "Writers covering" },
 };
 export const SIDE_HELP: Record<OptionSide, Record<Buildup, string>> = {
   call: {

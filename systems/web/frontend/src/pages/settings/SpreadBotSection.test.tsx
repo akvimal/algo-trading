@@ -6,6 +6,7 @@ import { SpreadBotSection } from "./SpreadBotSection";
 const calls: { path: string; method: string; body: unknown }[] = [];
 let settings: Record<string, unknown>;
 let decisions: unknown[];
+let groups: unknown[] = [];
 
 vi.mock("../../api/http", async () => {
   const actual = await vi.importActual<typeof import("../../api/http")>("../../api/http");
@@ -19,6 +20,7 @@ vi.mock("../../api/http", async () => {
         }
         return settings;
       }
+      if (path.startsWith("/option-groups")) return groups;
       return decisions;
     },
   };
@@ -28,6 +30,7 @@ beforeEach(() => {
   calls.length = 0;
   settings = { enabled: false, risk_pct: 1, symbols: ["NIFTY", "BANKNIFTY"], entry_from: "09:45", entry_to: "13:30", min_votes: 3, width_strikes: 2, max_trades_per_day: 2 };
   decisions = [];
+  groups = [];
 });
 
 describe("the spread bot settings", () => {
@@ -51,5 +54,19 @@ describe("the spread bot settings", () => {
     const list = await screen.findByTestId("bot-decisions");
     expect(list).toHaveTextContent("the reads disagree");
     expect(list).toHaveTextContent("Trend: bullish · OI: no lean · Structure: bearish · Pre-market: no lean");
+  });
+
+  it("totals only the bot's own trades and lists why each ended", async () => {
+    groups = [
+      { id: "a", setup_tag: "spread-bot", underlying_symbol: "NIFTY", strategy_type: "bull_put_spread", status: "CLOSED", quantity: 3, pnl: 1200, entry_time: "2026-10-13T04:00:00Z", exit_time: "2026-10-13T08:00:00Z", exit_reason: "target" },
+      { id: "b", setup_tag: "spread-bot", underlying_symbol: "BANKNIFTY", strategy_type: "bear_call_spread", status: "CLOSED", quantity: 2, pnl: -500, entry_time: "2026-10-12T04:00:00Z", exit_time: "2026-10-12T08:00:00Z", exit_reason: "stop_loss" },
+      { id: "c", setup_tag: null, underlying_symbol: "ITC", strategy_type: "bear_call_spread", status: "CLOSED", quantity: 1, pnl: 9999, entry_time: "2026-10-12T04:00:00Z", exit_time: "2026-10-12T08:00:00Z", exit_reason: "target" },
+    ];
+    render(<SpreadBotSection />);
+    const box = await screen.findByTestId("bot-results");
+    expect(box).toHaveTextContent("+₹700");
+    expect(box).toHaveTextContent("Win rate 50%");
+    expect(box).toHaveTextContent("ended by stop loss");
+    expect(box).not.toHaveTextContent("ITC");
   });
 });

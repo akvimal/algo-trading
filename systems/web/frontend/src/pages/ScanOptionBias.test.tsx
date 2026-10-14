@@ -96,3 +96,14 @@ describe("switching Debit <-> Credit re-derives BOTH strikes for the new side, a
     expect(screen.getByTestId("option-strategy-summary")).toHaveTextContent("Net debit");
   });
 });
+
+describe("buying the option outright", () => {
+  it("one tap on Buy outright turns a credit spread into a single bought call (bullish)", async () => {
+    const user = userEvent.setup();
+    render(<Harness initial={{ strategy: "credit_spread", action: "BUY" }} />);
+    await waitFor(() => expect(screen.getByTestId("option-strategy-summary")).toHaveTextContent("Bull Put Spread"));
+    await user.click(screen.getByRole("button", { name: "Buy outright" }));
+    await waitFor(() => expect(screen.getByTestId("option-strategy-summary")).toHaveTextContent("Buy Call"));
+    expect(screen.getByRole("button", { name: "Buy outright" })).toHaveAttribute("aria-pressed", "true");
+  });
+});

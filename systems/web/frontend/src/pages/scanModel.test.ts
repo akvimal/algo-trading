@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OiRow, ScreenerRow } from "../api/types";
-import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, haveLiquidity, inUniverse, sizeLabel, universeCounts, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, tradeLink, visible } from "./scanModel";
+import { DEFAULT_MIN_SHIFT, OI_DEFAULTS, PAGE, SCREENER_DEFAULTS, compactCount, defaultViewFromOi, filterOi, filterScreener, haveLiquidity, inUniverse, sizeLabel, universeCounts, classifyBuildup, oiDays, oiQuadrant, oiSignal, oiStrength, oiWindowChange, nearMonthlyExpiry, reversalWatch, totalOiChangePct, fullTradeLink, oiTradeLink, tradeLink, visible } from "./scanModel";
 import QUADRANT_CASES from "./fixtures/oi_quadrant_cases.json";
 
 const oi = (symbol: string, over: Partial<OiRow> = {}): OiRow => ({
@@ -25,9 +25,13 @@ describe("filterOi", () => {
   });
 
   it("filters each side of the chain separately", () => {
-    expect(filterOi(rows, { ...OI_DEFAULTS, call: "long_buildup" }).map((r) => r.symbol)).toEqual(["AAA"]);
-    expect(filterOi(rows, { ...OI_DEFAULTS, put: "short_covering" }).map((r) => r.symbol)).toEqual(["AAA"]);
-    expect(filterOi(rows, { ...OI_DEFAULTS, call: "long_buildup", put: "long_unwinding" })).toEqual([]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, call: "buying" }).map((r) => r.symbol)).toEqual(["AAA"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, put: "unwinding" }).map((r) => r.symbol)).toEqual(["AAA"]);
+    expect(filterOi(rows, { ...OI_DEFAULTS, call: "buying", put: "writers_covering" })).toEqual([]);
+    // a day measured from the option's own price wins over the one worked out from the stock's price
+    const measured = [oi("MMM", { call_buildup: "long_buildup", call_activity: "writing" })];
+    expect(filterOi(measured, { ...OI_DEFAULTS, call: "writing" }).map((r) => r.symbol)).toEqual(["MMM"]);
+    expect(filterOi(measured, { ...OI_DEFAULTS, call: "buying" })).toEqual([]);
   });
 
   it("searches by symbol, ignoring case and spaces", () => {
@@ -157,7 +161,7 @@ describe("major two-sided shifts", () => {
   });
 
   it("combines with the call and put filters, and ignores the threshold when no signal is chosen", () => {
-    expect(filterOi(universe, { ...OI_DEFAULTS, signal: "strong_bull", call: "short_buildup" })).toEqual([]);
+    expect(filterOi(universe, { ...OI_DEFAULTS, signal: "strong_bull", call: "writing" })).toEqual([]);
     expect(filterOi(universe, { ...OI_DEFAULTS, minShift: 99 }).map((r) => r.symbol).sort()).toEqual(["BEAR1", "BULL1", "BULL2", "PLAIN", "SMALL"]);
   });
 
@@ -341,5 +345,63 @@ describe("Screener universe, liquidity and relative strength", () => {
 describe("oiTradeLink", () => {
   it("opens the credit-spread option form leaning the way the card reads", () => {
     expect(oiTradeLink("TCS", "SELL")).toBe("/trade?symbol=TCS&segment=NSE&layout=side&intervals=weekly,daily&form=credit&view=SELL");
+  });
+});
+
+describe("reversalWatch: the other side piles in against a trend", () => {
+  // Six consecutive weekdays: a reference day, then four days of trend and today.
+  const WEEKDAYS = ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07"];
+  type Act = import("../api/types").Activity;
+  const series = (days: { call: Act; put: Act; callPct: number; putPct: number }[], dates = WEEKDAYS) => {
+    let call = 1_000_000;
+    let put = 1_000_000;
+    const history = [{ snapshot_date: dates[0], total_call_oi: call, total_put_oi: put, spot_price: 100 }] as import("../api/types").OiHistoryPoint[];
+    days.forEach((d, i) => {
+      call *= 1 + d.callPct / 100;
+      put *= 1 + d.putPct / 100;
+      history.push({ snapshot_date: dates[i + 1], total_call_oi: call, total_put_oi: put, spot_price: 100, call_activity: d.call, put_activity: d.put });
+    });
+    return { history, snapshot_date: dates[dates.length - 1] };
+  };
+  const bullishDay = { call: "buying", put: "writing", callPct: 3, putPct: 3 } as const;
+  const bearishDay = { call: "writing", put: "buying", callPct: 3, putPct: 3 } as const;
+
+  it("flags a bullish trend that the call side challenges with a big jump", () => {
+    const row = series([bullishDay, bullishDay, bullishDay, bullishDay, { call: "writing", put: "writing", callPct: 30, putPct: 3 }]);
+    expect(reversalWatch(row)).toMatchObject({ direction: "down", sides: ["call"] });
+  });
+
+  it("flags a bearish trend that the put side challenges (puts being written)", () => {
+    const row = series([bearishDay, bearishDay, bearishDay, bearishDay, { call: "writing", put: "writing", callPct: 3, putPct: 40 }]);
+    expect(reversalWatch(row)).toMatchObject({ direction: "up", sides: ["put"] });
+  });
+
+  it("needs the jump to be big and out of the stock's own pattern", () => {
+    const small = series([bullishDay, bullishDay, bullishDay, bullishDay, { call: "writing", put: "writing", callPct: 8, putPct: 3 }]);
+    expect(reversalWatch(small)).toBeNull(); // under the minimum
+    const usuallyBig = series([{ ...bullishDay, callPct: 20 }, { ...bullishDay, callPct: 20 }, { ...bullishDay, callPct: 20 }, { ...bullishDay, callPct: 20 }, { call: "writing", put: "writing", callPct: 25, putPct: 3 }]);
+    expect(reversalWatch(usuallyBig)).toBeNull(); // 25% is not twice its usual 20%
+  });
+
+  it("needs a trend to reverse", () => {
+    const mixed = series([bullishDay, bearishDay, bullishDay, bearishDay, { call: "writing", put: "writing", callPct: 40, putPct: 40 }]);
+    expect(reversalWatch(mixed)).toBeNull();
+  });
+
+  it("is not fooled by a missing day in the snapshots", () => {
+    const gap = series([bullishDay, bullishDay, bullishDay, bullishDay, { call: "writing", put: "writing", callPct: 30, putPct: 3 }], ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-07", "2026-09-08"]);
+    expect(reversalWatch(gap)).toBeNull(); // 3 Sep to 7 Sep skips the 4th
+  });
+
+  it("treats a Friday to Monday as the next day", () => {
+    const week = series([bullishDay, bullishDay, bullishDay, bullishDay, { call: "writing", put: "writing", callPct: 30, putPct: 3 }], ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07", "2026-09-08"]);
+    expect(reversalWatch(week)).not.toBeNull();
+  });
+
+  it("stays quiet around a monthly expiry, when open interest rolls to the next series", () => {
+    const expiryWeek = series([bullishDay, bullishDay, bullishDay, bullishDay, { call: "writing", put: "writing", callPct: 30, putPct: 3 }], ["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-28"]);
+    expect(nearMonthlyExpiry("2026-09-28")).toBe(true); // the expiry is Tuesday 29 Sep
+    expect(reversalWatch(expiryWeek)).toBeNull();
+    expect(nearMonthlyExpiry("2026-10-06")).toBe(false);
   });
 });

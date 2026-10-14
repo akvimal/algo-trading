@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/http";
 import { AnalysisPanel } from "../components/AnalysisPanel";
 import { createCustomScreen, deleteCustomScreen, listCustomScreens, previewCustomScreen, runCustomScreen, updateCustomScreen } from "../api/customScreens";
-import type { ZoneScan, ZoneScanRow, Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
+import type { Activity, ZoneScan, ZoneScanRow, Buildup, CustomScreen, CustomScreenRunResult, OiBuildup, OiRow, Proximity, Regime, Screener, ScreenerRow } from "../api/types";
 import { Empty, ErrorNotice, Signed, Skeleton } from "../components/bits";
 import { TextField } from "../components/Field";
 import { Sparkline } from "../components/Sparkline";
@@ -13,7 +13,7 @@ import { ChartIcon, HistoryIcon, TradeIcon } from "../chart/icons";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { TRADE_FILTER_OPTIONS, matchesTradeFilter, statusOf, useTradeStatus, type TradeFilter, type TradeStatus } from "./scanTradeStatus";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, defaultViewFromOi, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, ACTIVITY_HELP, ACTIVITY_LABEL, ACTIVITY_ORDER, REVERSAL_LABEL, REVERSAL_MIN_OI_PCT, REVERSAL_PRIOR_DAYS, REVERSAL_SPIKE_MULT, reversalHelp, reversalWatch, SIDE_HELP, activityIsBullish, sideActivity, type OptionSide, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, defaultViewFromOi, visible,
   UNIVERSES, UNIVERSE_LABEL, haveLiquidity, sizeLabel, universeCounts, ZONE_TIER_HELP, zonePlace, zoneTrends, type OiFilters, type OiSignal, type OiSort, type RsCut, type ScreenerFilters, type ScreenerSort, type ZoneFilter,
 } from "./scanModel";
 import {
@@ -80,7 +80,7 @@ function useShown(resetKey: string): [number, () => void] {
   return [shown, () => setShown((n) => n + PAGE)];
 }
 
-const buildupOptions = [{ value: "all" as const, label: "All" }, ...(Object.keys(BUILDUP_LABEL) as Buildup[]).map((b) => ({ value: b, label: BUILDUP_LABEL[b] }))];
+const sideOptions = [{ value: "all" as const, label: "All" }, ...ACTIVITY_ORDER.map((a) => ({ value: a, label: ACTIVITY_LABEL[a] }))];
 
 function OiScan() {
   const data = useResource(() => api<OiBuildup>("marketData", "/oi-buildup?history_days=10"), []);
@@ -100,7 +100,7 @@ function OiScan() {
     <div className="stack">
       <div className="oi-signal">
         <div className="chips" role="group" aria-label="Signal">
-          {(["all", ...QUADRANT_SIGNALS, "strong_bull", "strong_bear"] as OiSignal[]).map((s) => (
+          {(["all", ...QUADRANT_SIGNALS, "strong_bull", "strong_bear", "reversal"] as OiSignal[]).map((s) => (
             <button
               key={s}
               aria-pressed={f.signal === s}
@@ -156,8 +156,8 @@ function OiScan() {
             { value: "any", label: "Any zone (A, B and C)" },
           ]}
         />
-        <Select label="Call side" value={f.call} onChange={(call) => setF({ ...f, call })} options={buildupOptions} />
-        <Select label="Put side" value={f.put} onChange={(put) => setF({ ...f, put })} options={buildupOptions} />
+        <Select label="Call side" value={f.call} onChange={(call) => setF({ ...f, call })} options={sideOptions} />
+        <Select label="Put side" value={f.put} onChange={(put) => setF({ ...f, put })} options={sideOptions} />
         <Select<TradeFilter> label="My trades" value={tradeFilter} onChange={setTradeFilter} options={TRADE_FILTER_OPTIONS} />
         <Select<OiSort>
           label="Sort by"
@@ -199,6 +199,10 @@ function OiScan() {
               </div>
             ))}
             <div>
+              <strong>Call side and put side</strong> read each side's open interest against the stock's price. A put whose open interest grew as the stock rose was most likely written (a floor forming), not bought,
+              so it reads "Put writing"; a call whose open interest grew as the stock fell reads "Call writing" (a ceiling). From the nightly snapshot of 14 Oct on, the reading comes from the option's own price (up with rising open interest is buying, down is writing). Earlier days are worked out from the stock's price instead, which is the likelier reading but not a certainty; those carry a * (hover for the reasoning).
+            </div>
+            <div>
               <strong>Put/call ratio</strong>: put open interest divided by call open interest. Above 1 means more puts are open than calls.
             </div>
             <div>
@@ -208,6 +212,10 @@ function OiScan() {
             <div>
               <strong>At a zone</strong>: the nightly scan reads each F&O stock's daily and weekly chart for an untested demand or supply zone that price is inside or within one day's range of, and not against the
               daily trend. {ZONE_TIER_HELP.A} {ZONE_TIER_HELP.B} {ZONE_TIER_HELP.C} Zones are a judgment drawn from price history, not a signal.
+            </div>
+            <div>
+              <strong>Early reversal</strong>: {OI_SIGNAL_HELP.reversal} It needs the last {REVERSAL_PRIOR_DAYS} days to lean one way, a jump of at least {REVERSAL_MIN_OI_PCT}% on the other side that is
+              also {REVERSAL_SPIKE_MULT}x its usual move, and {REVERSAL_PRIOR_DAYS + 2} consecutive snapshot days (a missing day, or the days around a monthly expiry, are skipped).
             </div>
             <div>
               <strong>Strong bullish</strong>: {OI_SIGNAL_HELP.strong_bull} <strong>Strong bearish</strong>: {OI_SIGNAL_HELP.strong_bear} A shift counts only when open interest
@@ -246,12 +254,17 @@ function OiScan() {
   );
 }
 
-function BuildupPill({ b }: { b: Buildup | null }) {
-  if (!b) return null;
-  const good = b === "long_buildup" || b === "short_covering";
+/** One side's reading: measured from the option's own price when recorded, else the likelier one worked out from the stock's price (says so on hover). */
+function ActivityPill({ activity, buildup, side }: { activity?: Activity | null; buildup: Buildup | null; side: OptionSide }) {
+  const read = sideActivity(side, activity, buildup);
+  if (!read) return null;
+  const help = read.measured
+    ? ACTIVITY_HELP[side][read.activity]
+    : `Likely: ${SIDE_HELP[side][buildup!]}. Worked out from the stock's price; days recorded from now on are measured from the option's own price.`;
   return (
-    <span className={`pill ${good ? "up" : "dn"}`} title={BUILDUP_HELP[b]}>
-      {BUILDUP_LABEL[b]}
+    <span className={`pill ${activityIsBullish(side, read.activity) ? "up" : "dn"}`} title={help}>
+      {ACTIVITY_LABEL[read.activity]}
+      {!read.measured && <span aria-hidden="true">*</span>}
     </span>
   );
 }
@@ -329,10 +342,10 @@ function OiHistory({ row }: { row: OiRow }) {
                 <Signed value={d.pricePct} text={formatPct(d.pricePct, 2, true)} />
               </td>
               <td>
-                <Signed value={d.callPct} text={formatPct(d.callPct, 1, true)} /> <BuildupPill b={d.callBuildup} />
+                <Signed value={d.callPct} text={formatPct(d.callPct, 1, true)} /> <ActivityPill activity={d.callActivity} buildup={d.callBuildup} side="call" />
               </td>
               <td>
-                <Signed value={d.putPct} text={formatPct(d.putPct, 1, true)} /> <BuildupPill b={d.putBuildup} />
+                <Signed value={d.putPct} text={formatPct(d.putPct, 1, true)} /> <ActivityPill activity={d.putActivity} buildup={d.putBuildup} side="put" />
               </td>
               <td className="num">{d.pcr == null ? "–" : d.pcr.toFixed(2)}</td>
             </tr>
@@ -396,6 +409,14 @@ function OiCard({
             ) : null;
           })()}
           {(() => {
+            const rev = reversalWatch(r);
+            return rev ? (
+              <span className={`pill pill-small ${rev.direction === "up" ? "up" : "dn"}`} title={reversalHelp(rev)} data-testid="oi-reversal-badge" style={{ marginLeft: 8 }}>
+                {REVERSAL_LABEL[rev.direction]}
+              </span>
+            ) : null;
+          })()}
+          {(() => {
             const q = oiQuadrant(r);
             const total = totalOiChangePct(r);
             return q ? (
@@ -413,11 +434,11 @@ function OiCard({
       <div className="pair">
         <div>
           <div className="dim">Call OI {compactCount(r.total_call_oi)}</div>
-          <Signed value={r.call_oi_change_pct} text={formatPct(r.call_oi_change_pct, 1, true)} /> <BuildupPill b={r.call_buildup} />
+          <Signed value={r.call_oi_change_pct} text={formatPct(r.call_oi_change_pct, 1, true)} /> <ActivityPill activity={r.call_activity} buildup={r.call_buildup} side="call" />
         </div>
         <div>
           <div className="dim">Put OI {compactCount(r.total_put_oi)}</div>
-          <Signed value={r.put_oi_change_pct} text={formatPct(r.put_oi_change_pct, 1, true)} /> <BuildupPill b={r.put_buildup} />
+          <Signed value={r.put_oi_change_pct} text={formatPct(r.put_oi_change_pct, 1, true)} /> <ActivityPill activity={r.put_activity} buildup={r.put_buildup} side="put" />
         </div>
       </div>
       {zone && <ZoneLine z={zone} />}

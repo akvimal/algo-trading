@@ -17,7 +17,7 @@ from app.domain.dhan_retry import dhan_retry_delay
 from app.domain.job_tracker import tracked
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.models import Candle
-from app.domain.oi_buildup import PreviousSnapshot, compute_eod_buildup
+from app.domain.oi_buildup import EodActivityResult, PreviousSnapshot, compute_eod_activity, compute_eod_buildup
 from app.domain.oi_strikes import RECORDED_UNDERLYINGS, RETENTION_DAYS, nearest_expiry, strike_rows
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
@@ -347,6 +347,12 @@ def _record_oi_eod_snapshot() -> None:
                     else None
                 )
                 result = compute_eod_buildup(total_call_oi, total_put_oi, spot_price, previous)
+                try:
+                    activity = compute_eod_activity(chain, total_call_oi, total_put_oi, previous)
+                except Exception:
+                    # The premium read is an extra on top of the OI snapshot: never lose the day's row over it.
+                    logger.exception("scheduled OI EOD snapshot: could not read the premium change for %s", symbol)
+                    activity = EodActivityResult(None, None, None, None)
 
                 # A re-run on the SAME day (e.g. a manual retrigger after an
                 # earlier partial failure) updates today's own row in place
@@ -369,6 +375,10 @@ def _record_oi_eod_snapshot() -> None:
                 row.price_change_pct = result.price_change_pct
                 row.call_buildup = result.call_buildup
                 row.put_buildup = result.put_buildup
+                row.call_premium_change_pct = activity.call_premium_change_pct
+                row.put_premium_change_pct = activity.put_premium_change_pct
+                row.call_activity = activity.call_activity
+                row.put_activity = activity.put_activity
                 db.commit()
                 tally["written"] += 1
             except Exception:

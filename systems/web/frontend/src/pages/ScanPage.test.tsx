@@ -163,7 +163,7 @@ describe("OI buildup", () => {
     expect(cards.map((c) => within(c).getByRole("button", { name: "Chart" }).getAttribute("aria-expanded"))).toEqual(["false", "false"]);
     const first = within(cards[0]);
     expect(first.getByText("+12.0%")).toBeInTheDocument(); // signed, not colour alone
-    expect(first.getByText("Short buildup")).toBeInTheDocument();
+    expect(first.getByText("Writing")).toBeInTheDocument();
     expect(first.getByText(/Call OI 12\.35L/)).toBeInTheDocument();
     expect(first.getByText("1.62")).toBeInTheDocument();
     expect(screen.getByText(/End-of-day snapshot for 25 Sept/)).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe("OI buildup", () => {
     const user = userEvent.setup();
     renderAt("/scan");
     await screen.findByTestId("oi-list");
-    await user.selectOptions(screen.getByLabelText("Call side"), "long_buildup");
+    await user.selectOptions(screen.getByLabelText("Call side"), "buying");
     expect(within(screen.getByTestId("oi-list")).getAllByTestId("oi-card")).toHaveLength(1);
     await user.type(screen.getByLabelText("Search a symbol"), "zzz");
     expect(await screen.findByText("No stocks match")).toBeInTheDocument();
@@ -289,7 +289,7 @@ describe("OI buildup", () => {
       expect(rows[0]).toHaveTextContent("25 Sept"); // newest first
       expect(rows[0]).toHaveTextContent("+8.3%"); // call 1200 -> 1300
       expect(rows[0]).toHaveTextContent("+9.1%"); // put 1100 -> 1200
-      expect(rows[0]).toHaveTextContent("Long buildup"); // price up, OI up
+      expect(rows[0]).toHaveTextContent("Buying"); // price up, call OI up
       expect(rows[4]).toHaveTextContent("19 Sept");
       expect(within(table).getByText(/Since 18 Sept/)).toBeInTheDocument();
       await user.click(card.getByRole("button", { name: "Close history" }));
@@ -868,3 +868,62 @@ describe("Scan: what you already have on a stock", () => {
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
   });
 });
+
+describe("option wording on the call and put sides", () => {
+  it("reads a put whose OI grew as the stock rose as writing, not as a long", async () => {
+    oi = { snapshot_date: "2026-09-25", rows: [oiRow("CANBK", { call_buildup: "long_buildup", put_buildup: "long_buildup", call_oi_change_pct: 32.7, put_oi_change_pct: 28.7, price_change_pct: 3.59 })] };
+    renderAt("/scan");
+    const card = within((await screen.findAllByTestId("oi-card"))[0]);
+    expect(card.getByText("Buying")).toBeInTheDocument(); // the call side
+    expect(card.getByText("Writing")).toBeInTheDocument(); // the put side
+    expect(card.queryByText("Long buildup")).not.toBeInTheDocument();
+  });
+});
+
+describe("measured against worked-out readings", () => {
+  it("shows what the option's own price said when it was recorded, and marks a worked-out day with a *", async () => {
+    oi = {
+      snapshot_date: "2026-09-25",
+      rows: [
+        oiRow("MEASURED", { call_buildup: "long_buildup", call_activity: "writing", put_buildup: "long_buildup", put_activity: "buying" }),
+        oiRow("WORKED", { call_buildup: "long_buildup", put_buildup: "long_buildup" }),
+      ],
+    };
+    renderAt("/scan");
+    const cards = await screen.findAllByTestId("oi-card");
+    const measured = within(cards.find((c) => within(c).queryByText("MEASURED")) as HTMLElement);
+    expect(measured.getByText("Writing")).toBeInTheDocument(); // the call side, from the call's own price, not the stock's
+    expect(measured.getByText("Buying")).toBeInTheDocument(); // the put side
+    expect(measured.queryByText("*")).not.toBeInTheDocument();
+    const worked = within(cards.find((c) => within(c).queryByText("WORKED")) as HTMLElement);
+    expect(worked.getAllByText("*")).toHaveLength(2);
+  });
+});
+
+describe("early reversal", () => {
+  const dates = ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07"];
+  const point = (i: number, call: number, put: number, extra: object = {}) => ({ snapshot_date: dates[i], total_call_oi: call, total_put_oi: put, spot_price: 100, ...extra });
+  const bull = { call_activity: "buying", put_activity: "writing" };
+  const history = [
+    point(0, 1000, 1000),
+    point(1, 1030, 1030, bull),
+    point(2, 1061, 1061, bull),
+    point(3, 1093, 1093, bull),
+    point(4, 1126, 1126, bull),
+    point(5, 1464, 1160, { call_activity: "writing", put_activity: "writing" }), // calls up 30% against a bullish run
+  ];
+
+  it("badges a stock whose call side has just piled in against a bullish run, and the chip lists only those", async () => {
+    oi = { snapshot_date: "2026-09-07", rows: [oiRow("TURNING", { history, call_activity: "writing", put_activity: "writing", call_oi_change_pct: 30, put_oi_change_pct: 3 }), oiRow("STEADY", { history: [] })] };
+    const user = userEvent.setup();
+    renderAt("/scan");
+    const badges = await screen.findAllByTestId("oi-reversal-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toHaveTextContent("Early reversal ↓");
+    await user.click(screen.getByRole("button", { name: "★ Early reversal" }));
+    const cards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent("TURNING");
+  });
+});
+

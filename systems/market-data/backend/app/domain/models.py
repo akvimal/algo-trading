@@ -344,6 +344,8 @@ class OptionLegQuote(BaseModel):
     last_price: float
     oi: int
     previous_oi: Optional[int] = None
+    # The option's own close the day before (Dhan always sends it; Delta has none): what makes the premium change measurable.
+    previous_close_price: Optional[float] = None
     volume: float
     implied_volatility: float
     top_bid_price: float
@@ -798,6 +800,8 @@ class OiEodSnapshotHistoryPoint(BaseModel):
     total_call_oi: int
     total_put_oi: int
     spot_price: Optional[float] = None
+    call_activity: Optional[str] = None
+    put_activity: Optional[str] = None
 
 
 class OiEodSnapshotOut(BaseModel):
@@ -834,6 +838,11 @@ class OiEodSnapshotOut(BaseModel):
     price_change_pct: Optional[float] = None
     call_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
     put_buildup: Optional[Literal["long_buildup", "short_buildup", "short_covering", "long_unwinding"]] = None
+    # Measured from the option's own premium, from the day it was first recorded on; None before that (the buildups above are the underlying-price proxy).
+    call_premium_change_pct: Optional[float] = None
+    put_premium_change_pct: Optional[float] = None
+    call_activity: Optional[Literal["buying", "writing", "writers_covering", "unwinding"]] = None
+    put_activity: Optional[Literal["buying", "writing", "writers_covering", "unwinding"]] = None
     history: list[OiEodSnapshotHistoryPoint] = Field(default_factory=list)
 
 

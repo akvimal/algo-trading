@@ -62,3 +62,4 @@
 057-pending-at-open.sql|execution.pending_orders|fire_when_open
 058-oi-strike-snapshot.sql|market_data.oi_strike_snapshot|
 059-spread-bot.sql|execution.spread_bot_settings|
+060-oi-premium-flow.sql|market_data.oi_eod_snapshot|call_activity

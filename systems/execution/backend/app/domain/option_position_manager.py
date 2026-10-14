@@ -44,6 +44,7 @@ see _spread_sizing_basis - since a negative net_debit isn't a cost to
 size against, it's a credit received against a defined max loss."""
 
 import logging
+import time as time_module
 import uuid
 from datetime import datetime, time
 from datetime import timezone as dt_timezone
@@ -145,6 +146,22 @@ def _open_delta_option_fee(
         )
     return fee
 
+
+
+# Opening a position needs every leg's price at that moment. Dhan's rate limit is account-wide and shared with everything else polling quotes, so one
+# call in a while comes back empty; a short retry turns that into a placed order instead of a "could not fetch a live quote" rejection.
+QUOTE_RETRIES = 2
+QUOTE_RETRY_DELAY_SECONDS = 1.5
+
+
+def _quotes_for_open(get_ltp_batch, segment: str, symbols: list[str]) -> dict[str, float]:
+    quotes = get_ltp_batch(segment, symbols)
+    for _ in range(QUOTE_RETRIES):
+        if all(quotes.get(sym) is not None for sym in symbols):
+            break
+        time_module.sleep(QUOTE_RETRY_DELAY_SECONDS)
+        quotes = {**quotes, **get_ltp_batch(segment, [sym for sym in symbols if quotes.get(sym) is None])}
+    return quotes
 
 def _spread_sizing_basis(net_debit: float, long_leg_dict: dict, short_leg_dict: Optional[dict]) -> Optional[float]:
     """The per-lot amount capital sizing/affordability is measured against.
@@ -449,7 +466,7 @@ def open_option_group(
     # infra/postgres/init/02-execution.sql) - a missing underlying quote
     # doesn't reject the group the way a missing LEG quote does below.
     symbols_to_quote = [long_symbol, order.symbol] + ([short_symbol] if short_symbol else [])
-    quotes = get_ltp_batch(order.exchange, symbols_to_quote)
+    quotes = _quotes_for_open(get_ltp_batch, order.exchange, symbols_to_quote)
     long_premium = quotes.get(long_symbol)
     short_premium = quotes.get(short_symbol) if short_symbol else 0.0
     entry_spot_price = quotes.get(order.symbol)
@@ -909,7 +926,7 @@ def open_manual_option_group(
     # symbol (the underlying) rides along in the same batched quote call -
     # see open_option_group's identical comment.
     symbols_to_quote = [long_symbol, symbol] + ([short_symbol] if short_symbol else [])
-    quotes = get_ltp_batch(segment, symbols_to_quote)
+    quotes = _quotes_for_open(get_ltp_batch, segment, symbols_to_quote)
     long_premium = quotes.get(long_symbol)
     short_premium = quotes.get(short_symbol) if short_symbol else 0.0
     entry_spot_price = quotes.get(symbol)

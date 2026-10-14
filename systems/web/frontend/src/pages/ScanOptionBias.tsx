@@ -384,16 +384,17 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
           </table>
         </div>
       )}
-      {hasSecondLeg && (
-        <div className="chips" role="group" aria-label="Debit or credit" style={{ margin: "8px 0" }}>
-          <button aria-pressed={style === "spread"} onClick={() => setStyle("spread")}>
-            Pay premium (debit)
-          </button>
-          <button aria-pressed={style === "credit_spread"} onClick={() => setStyle("credit_spread")}>
-            Receive premium (credit)
-          </button>
-        </div>
-      )}
+      <div className="chips" role="group" aria-label="How to trade it" style={{ margin: "8px 0" }}>
+        <button aria-pressed={style === "naked"} onClick={() => setStyle("naked")} title="Buy the call or put outright: one leg, you pay the premium, and that is the most you can lose">
+          Buy outright
+        </button>
+        <button aria-pressed={style === "spread"} onClick={() => setStyle("spread")}>
+          Pay premium (debit)
+        </button>
+        <button aria-pressed={style === "credit_spread"} onClick={() => setStyle("credit_spread")}>
+          Receive premium (credit)
+        </button>
+      </div>
       {chain.data && strikesForType.length > 0 && (
         <div className="row" style={{ marginTop: 8, fontSize: 13 }} data-testid="option-strategy-summary">
           <span className="dim">

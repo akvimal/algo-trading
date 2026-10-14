@@ -109,10 +109,16 @@ def pick_spread(chain: dict, bias: str, width_strikes: int) -> dict | str:
     }
 
 
-def lots_for(balance: float, risk_pct: float, max_loss_per_unit: float, lot_size: float) -> int:
-    """The most lots whose max loss stays within risk_pct of the balance (0 = not even one fits)."""
+def lots_for(balance: float, risk_pct: float, max_loss_per_unit: float, lot_size: float, capital_per_trade: Optional[float] = None) -> int:
+    """The most lots whose max loss stays within risk_pct of the balance, and also within what one trade may use (the account's capital per trade,
+    which is what the order check measures a credit spread's max loss against; 0 = not even one fits)."""
     per_lot = max_loss_per_unit * lot_size
-    return int(math.floor((balance * risk_pct / 100.0) / per_lot)) if per_lot > 0 else 0
+    if per_lot <= 0:
+        return 0
+    lots = int(math.floor((balance * risk_pct / 100.0) / per_lot))
+    if capital_per_trade is not None:
+        lots = min(lots, int(math.floor(min(capital_per_trade, balance) / per_lot)))
+    return lots
 
 
 def combined_levels(spread: dict) -> tuple[float, float]:
@@ -272,11 +278,13 @@ def _enter(db, cfg, deps: BotDeps, account, symbol, bias, why, votes, detail, no
         _record(db, user_id, symbol, "skipped", f"{why}; but {spread}", votes, detail, now=now)
         return "skipped"
     lot_size = deps.get_lot_size(EXCHANGE, symbol) or 0
-    lots = lots_for(float(account.current_balance), float(cfg.risk_pct), spread["max_loss_per_unit"], lot_size)
+    per_trade = float(account.capital_per_trade) if account.capital_per_trade is not None else None
+    lots = lots_for(float(account.current_balance), float(cfg.risk_pct), spread["max_loss_per_unit"], lot_size, per_trade)
     detail = {**detail, "expiry": expiry, "lot_size": lot_size, "lots": lots, **spread}
     if lots < 1:
         need = spread["max_loss_per_unit"] * lot_size
-        _record(db, user_id, symbol, "skipped", f"{why}; but one lot risks {need:,.0f}, more than {cfg.risk_pct}% of the balance", votes, detail, now=now)
+        limit = f"{cfg.risk_pct}% of the balance" if per_trade is None or need > float(account.current_balance) * float(cfg.risk_pct) / 100.0 else f"the {per_trade:,.0f} one trade may use (capital per trade, in Risk limits)"
+        _record(db, user_id, symbol, "skipped", f"{why}; but one lot risks {need:,.0f}, more than {limit}", votes, detail, now=now)
         return "skipped"
 
     action = "BUY" if bias == "BUY" else "SELL"

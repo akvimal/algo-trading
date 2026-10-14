@@ -15,6 +15,31 @@ export const BUILDUP_HELP: Record<Buildup, string> = {
   long_unwinding: "price down, open interest down: buyers are exiting",
 };
 
+/** The call-side and put-side readings, worded for options. The data is the same four quadrants (this side's open interest against the UNDERLYING's
+ * price move), but "long buildup" is a futures word: for an option, rising open interest has a buyer AND a seller, and which one is the aggressor shows in
+ * the option's own premium, which falls when the stock rises for a put. So a put whose OI grew as the stock rose is most likely written (bullish support),
+ * not "long". Call OI up with the stock up is the one reading that cannot be told apart from this data (buying or writing): it is worded as buying, the
+ * likelier one when the stock is rising, and its help says so. */
+export type OptionSide = "call" | "put";
+export const SIDE_LABEL: Record<OptionSide, Record<Buildup, string>> = {
+  call: { long_buildup: "Call buying", short_buildup: "Call writing", short_covering: "Call writers covering", long_unwinding: "Call unwinding" },
+  put: { long_buildup: "Put writing", short_buildup: "Put buying", short_covering: "Put unwinding", long_unwinding: "Put writers covering" },
+};
+export const SIDE_HELP: Record<OptionSide, Record<Buildup, string>> = {
+  call: {
+    long_buildup: "stock up, call open interest up: most likely new call buyers (bullish), though writers can be adding too",
+    short_buildup: "stock down, call open interest up: most likely new call writers, a ceiling forming (bearish)",
+    short_covering: "stock up, call open interest down: call writers closing out as the stock rises (bullish)",
+    long_unwinding: "stock down, call open interest down: call buyers giving up (bearish)",
+  },
+  put: {
+    long_buildup: "stock up, put open interest up: most likely new put writers, a floor forming (bullish)",
+    short_buildup: "stock down, put open interest up: most likely new put buyers, hedging or betting lower (bearish)",
+    short_covering: "stock up, put open interest down: put buyers giving up (bullish)",
+    long_unwinding: "stock down, put open interest down: put writers closing out as the stock falls (bearish)",
+  },
+};
+
 /** A first guess at Bullish/Bearish from the call/put OI buildup readings already on the card -
  * "good" (long_buildup/short_covering - this leg's OWN premium rising, see BUILDUP_HELP) on the
  * call side reads bullish (calls being bought or short-covered as the underlying rises); the same

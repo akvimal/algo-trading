@@ -44,7 +44,7 @@ see _spread_sizing_basis - since a negative net_debit isn't a cost to
 size against, it's a credit received against a defined max loss."""
 
 import logging
-import time
+import time as time_module
 import uuid
 from datetime import datetime, time
 from datetime import timezone as dt_timezone
@@ -154,12 +154,12 @@ QUOTE_RETRIES = 2
 QUOTE_RETRY_DELAY_SECONDS = 1.5
 
 
-def _quotes_for_open(segment: str, symbols: list[str]) -> dict[str, float]:
+def _quotes_for_open(get_ltp_batch, segment: str, symbols: list[str]) -> dict[str, float]:
     quotes = get_ltp_batch(segment, symbols)
     for _ in range(QUOTE_RETRIES):
         if all(quotes.get(sym) is not None for sym in symbols):
             break
-        time.sleep(QUOTE_RETRY_DELAY_SECONDS)
+        time_module.sleep(QUOTE_RETRY_DELAY_SECONDS)
         quotes = {**quotes, **get_ltp_batch(segment, [sym for sym in symbols if quotes.get(sym) is None])}
     return quotes
 
@@ -466,7 +466,7 @@ def open_option_group(
     # infra/postgres/init/02-execution.sql) - a missing underlying quote
     # doesn't reject the group the way a missing LEG quote does below.
     symbols_to_quote = [long_symbol, order.symbol] + ([short_symbol] if short_symbol else [])
-    quotes = _quotes_for_open(order.exchange, symbols_to_quote)
+    quotes = _quotes_for_open(get_ltp_batch, order.exchange, symbols_to_quote)
     long_premium = quotes.get(long_symbol)
     short_premium = quotes.get(short_symbol) if short_symbol else 0.0
     entry_spot_price = quotes.get(order.symbol)
@@ -926,7 +926,7 @@ def open_manual_option_group(
     # symbol (the underlying) rides along in the same batched quote call -
     # see open_option_group's identical comment.
     symbols_to_quote = [long_symbol, symbol] + ([short_symbol] if short_symbol else [])
-    quotes = _quotes_for_open(segment, symbols_to_quote)
+    quotes = _quotes_for_open(get_ltp_batch, segment, symbols_to_quote)
     long_premium = quotes.get(long_symbol)
     short_premium = quotes.get(short_symbol) if short_symbol else 0.0
     entry_spot_price = quotes.get(symbol)

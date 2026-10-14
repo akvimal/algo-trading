@@ -13,7 +13,7 @@ import { ChartIcon, HistoryIcon, TradeIcon } from "../chart/icons";
 import { ScanChartPanel } from "./ScanChartPanel";
 import { TRADE_FILTER_OPTIONS, matchesTradeFilter, statusOf, useTradeStatus, type TradeFilter, type TradeStatus } from "./scanTradeStatus";
 import {
-  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, ACTIVITY_HELP, ACTIVITY_LABEL, ACTIVITY_ORDER, SIDE_HELP, activityIsBullish, sideActivity, type OptionSide, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, defaultViewFromOi, visible,
+  BUILDUP_HELP, BUILDUP_LABEL, DEFAULT_MIN_SHIFT, ACTIVITY_HELP, ACTIVITY_LABEL, ACTIVITY_ORDER, REVERSAL_LABEL, REVERSAL_MIN_OI_PCT, REVERSAL_PRIOR_DAYS, REVERSAL_SPIKE_MULT, reversalHelp, reversalWatch, SIDE_HELP, activityIsBullish, sideActivity, type OptionSide, MIN_OI_CHANGE_PCT, MIN_PRICE_MOVE_PCT, OI_DEFAULTS, OI_SIGNAL_HELP, OI_SIGNAL_LABEL, PAGE, PROXIMITY_LABEL, QUADRANT_SIGNALS, REGIME_LABEL, SCREENER_DEFAULTS, compactCount, filterOi, filterScreener, isQuadrantSignal, oiDays, oiQuadrant, oiSignal, oiWindowChange, totalOiChangePct, fullTradeLink, oiTradeLink, defaultViewFromOi, visible,
   UNIVERSES, UNIVERSE_LABEL, haveLiquidity, sizeLabel, universeCounts, ZONE_TIER_HELP, zonePlace, zoneTrends, type OiFilters, type OiSignal, type OiSort, type RsCut, type ScreenerFilters, type ScreenerSort, type ZoneFilter,
 } from "./scanModel";
 import {
@@ -100,7 +100,7 @@ function OiScan() {
     <div className="stack">
       <div className="oi-signal">
         <div className="chips" role="group" aria-label="Signal">
-          {(["all", ...QUADRANT_SIGNALS, "strong_bull", "strong_bear"] as OiSignal[]).map((s) => (
+          {(["all", ...QUADRANT_SIGNALS, "strong_bull", "strong_bear", "reversal"] as OiSignal[]).map((s) => (
             <button
               key={s}
               aria-pressed={f.signal === s}
@@ -212,6 +212,10 @@ function OiScan() {
             <div>
               <strong>At a zone</strong>: the nightly scan reads each F&O stock's daily and weekly chart for an untested demand or supply zone that price is inside or within one day's range of, and not against the
               daily trend. {ZONE_TIER_HELP.A} {ZONE_TIER_HELP.B} {ZONE_TIER_HELP.C} Zones are a judgment drawn from price history, not a signal.
+            </div>
+            <div>
+              <strong>Early reversal</strong>: {OI_SIGNAL_HELP.reversal} It needs the last {REVERSAL_PRIOR_DAYS} days to lean one way, a jump of at least {REVERSAL_MIN_OI_PCT}% on the other side that is
+              also {REVERSAL_SPIKE_MULT}x its usual move, and {REVERSAL_PRIOR_DAYS + 2} consecutive snapshot days (a missing day, or the days around a monthly expiry, are skipped).
             </div>
             <div>
               <strong>Strong bullish</strong>: {OI_SIGNAL_HELP.strong_bull} <strong>Strong bearish</strong>: {OI_SIGNAL_HELP.strong_bear} A shift counts only when open interest
@@ -401,6 +405,14 @@ function OiCard({
             return signal ? (
               <span className={`pill pill-small ${signal === "strong_bull" ? "up" : "dn"}`} title={OI_SIGNAL_HELP[signal]} data-testid="oi-signal-badge" style={{ marginLeft: 8 }}>
                 ★ {OI_SIGNAL_LABEL[signal]}
+              </span>
+            ) : null;
+          })()}
+          {(() => {
+            const rev = reversalWatch(r);
+            return rev ? (
+              <span className={`pill pill-small ${rev.direction === "up" ? "up" : "dn"}`} title={reversalHelp(rev)} data-testid="oi-reversal-badge" style={{ marginLeft: 8 }}>
+                {REVERSAL_LABEL[rev.direction]}
               </span>
             ) : null;
           })()}

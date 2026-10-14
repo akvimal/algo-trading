@@ -899,3 +899,31 @@ describe("measured against worked-out readings", () => {
     expect(worked.getAllByText("*")).toHaveLength(2);
   });
 });
+
+describe("early reversal", () => {
+  const dates = ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07"];
+  const point = (i: number, call: number, put: number, extra: object = {}) => ({ snapshot_date: dates[i], total_call_oi: call, total_put_oi: put, spot_price: 100, ...extra });
+  const bull = { call_activity: "buying", put_activity: "writing" };
+  const history = [
+    point(0, 1000, 1000),
+    point(1, 1030, 1030, bull),
+    point(2, 1061, 1061, bull),
+    point(3, 1093, 1093, bull),
+    point(4, 1126, 1126, bull),
+    point(5, 1464, 1160, { call_activity: "writing", put_activity: "writing" }), // calls up 30% against a bullish run
+  ];
+
+  it("badges a stock whose call side has just piled in against a bullish run, and the chip lists only those", async () => {
+    oi = { snapshot_date: "2026-09-07", rows: [oiRow("TURNING", { history, call_activity: "writing", put_activity: "writing", call_oi_change_pct: 30, put_oi_change_pct: 3 }), oiRow("STEADY", { history: [] })] };
+    const user = userEvent.setup();
+    renderAt("/scan");
+    const badges = await screen.findAllByTestId("oi-reversal-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toHaveTextContent("Early reversal ↓");
+    await user.click(screen.getByRole("button", { name: "★ Early reversal" }));
+    const cards = within(screen.getByTestId("oi-list")).getAllByTestId("oi-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent("TURNING");
+  });
+});
+

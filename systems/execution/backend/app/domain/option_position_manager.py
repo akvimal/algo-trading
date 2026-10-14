@@ -54,6 +54,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
+from app.domain.numfmt import num
 from app.domain.delta_fees import compute_option_trading_fee
 from app.domain.india_charges import group_charges, kind_for
 from app.domain import stop_rules
@@ -534,8 +535,8 @@ def open_option_group(
         capital_unit = "USD" if order.segment == "CRYPTO" else "INR"
         row = _reject_group(
             db, order, signal_id,
-            f"insufficient account balance ({effective_capital} {capital_unit} available for {order.segment}, "
-            f"need at least {sizing_basis * lot_size * required_lots} for {required_lots} lot(s))",
+            f"insufficient account balance ({num(effective_capital)} {capital_unit} available for {order.segment}, "
+            f"need at least {num(sizing_basis * lot_size * required_lots)} for {num(required_lots)} lot(s))",
         )
         db.commit()
         return row
@@ -979,8 +980,8 @@ def open_manual_option_group(
     if effective_capital < sizing_basis * lot_size * required_lots:
         row = _reject_manual_group(
             db, user_id, signal_id, symbol, segment, action, strategy_type,
-            f"insufficient account balance ({effective_capital} {capital_unit} available for {segment}, "
-            f"need at least {sizing_basis * lot_size * required_lots} for {required_lots} lot(s))",
+            f"insufficient account balance ({num(effective_capital)} {capital_unit} available for {segment}, "
+            f"need at least {num(sizing_basis * lot_size * required_lots)} for {num(required_lots)} lot(s))",
         )
         db.commit()
         return row

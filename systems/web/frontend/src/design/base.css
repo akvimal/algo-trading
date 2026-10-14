@@ -501,7 +501,7 @@ a {
 }
 .pos {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 .pos-head {
   display: flex;

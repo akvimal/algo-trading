@@ -259,18 +259,15 @@ export function PositionCard(props: Props) {
           {g.legs.map((leg) => {
             const lp = legPnl(leg);
             return (
-              <li key={leg.id} className="stack" style={{ gap: 2 }}>
-                <span className="row">
-                  <span>
-                    <span className={`pill pill-small ${leg.action === "BUY" ? "up" : "dn"}`}>{leg.action}</span> {leg.symbol}
-                  </span>
-                  <span className="num dim">
-                    {leg.quantity ?? "–"} @ {formatPrice(leg.entry_price)}
-                    {leg.live_price != null && ` → ${formatPrice(leg.live_price)}`}
-                  </span>
+              <li key={leg.id} className="row" style={{ gap: 8 }}>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span className={`pill pill-small ${leg.action === "BUY" ? "up" : "dn"}`}>{leg.action}</span> {leg.symbol}
                 </span>
-                <span className="row" data-testid="leg-pnl">
-                  <span className="faint">P&amp;L</span>
+                <span className="num dim">
+                  {leg.quantity ?? "–"} @ {formatPrice(leg.entry_price)}
+                  {leg.live_price != null && ` → ${formatPrice(leg.live_price)}`}
+                </span>
+                <span data-testid="leg-pnl" style={{ minWidth: 64, textAlign: "right" }}>
                   <Signed value={lp} text={lp == null ? "–" : formatPnl(lp)} />
                 </span>
               </li>
@@ -279,37 +276,31 @@ export function PositionCard(props: Props) {
         </ul>
       )}
       {detailed && (
-        <div className="stack" style={{ fontSize: 12, gap: 2 }} data-testid="pos-spread-detail">
-          <div className="row">
-            <span>
-              Profit left <Signed value={detailed.profitLeft} text={detailed.profitLeft == null ? "–" : `${formatPnl(detailed.profitLeft)} (${pctText(detailed.profitLeftPct)})`} />
-            </span>
-            <span>
-              Loss left <Signed value={detailed.lossLeft == null ? null : -detailed.lossLeft} text={detailed.lossLeft == null ? "–" : `${formatPnl(-detailed.lossLeft)} (${pctText(detailed.lossLeftPct == null ? null : -detailed.lossLeftPct)})`} />
-            </span>
-          </div>
-          <div className="row">
-            <span>
-              Max profit <Signed value={detailed.maxProfit} text={`${formatPnl(detailed.maxProfit)} (${pctText(detailed.maxProfitPct)})`} />
-            </span>
-            <span>
-              Max loss <Signed value={-detailed.maxLoss} text={`${formatPnl(-detailed.maxLoss)} (${pctText(-detailed.maxLossPct)})`} />
-            </span>
-          </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 12px", fontSize: 12 }} data-testid="pos-spread-detail">
+          <span>
+            Profit left <Signed value={detailed.profitLeft} text={detailed.profitLeft == null ? "–" : `${formatPnl(detailed.profitLeft)} (${pctText(detailed.profitLeftPct)})`} />
+          </span>
+          <span>
+            Loss left <Signed value={detailed.lossLeft == null ? null : -detailed.lossLeft} text={detailed.lossLeft == null ? "–" : `${formatPnl(-detailed.lossLeft)} (${pctText(detailed.lossLeftPct == null ? null : -detailed.lossLeftPct)})`} />
+          </span>
+          <span>
+            Max profit <Signed value={detailed.maxProfit} text={`${formatPnl(detailed.maxProfit)} (${pctText(detailed.maxProfitPct)})`} />
+          </span>
+          <span>
+            Max loss <Signed value={-detailed.maxLoss} text={`${formatPnl(-detailed.maxLoss)} (${pctText(-detailed.maxLossPct)})`} />
+          </span>
           {detailed.breakeven != null && (
-            <div className="faint">
+            <span className="faint" style={{ gridColumn: "1 / -1" }}>
               Breakeven at expiry {formatPrice(detailed.breakeven)}
               {detailed.breakevenFromSpotPct != null && ` (${pctText(detailed.breakevenFromSpotPct)} from spot)`}
-            </div>
+            </span>
           )}
         </div>
       )}
       <div className="pos-sub">
         {level("stop", stop)}
         {level("target", target)}
-      </div>
-      {canAutoTrail && (
-        <div className="pos-sub">
+        {canAutoTrail && (
           <button
             type="button"
             className="link-btn"
@@ -324,8 +315,8 @@ export function PositionCard(props: Props) {
           >
             Auto-trail {autoTrail ? "on" : "off"}
           </button>
-        </div>
-      )}
+        )}
+      </div>
       {error && (
         <div className="dn" role="alert">
           {error}

@@ -30,7 +30,7 @@ export function legPnl(leg: Pick<OptionLeg, "action" | "quantity" | "entry_price
 export type SpreadDetail = {
   maxProfit: number;
   maxLoss: number;
-  /** Money still to make before max profit / still to lose before max loss. Every % is of the capital committed (the max loss, which is the debit paid or the credit spread's margin). */
+  /** Money still to make before max profit / still to lose before max loss. Every % is of the capital committed (the debit paid, or for a credit spread the strike gap x quantity, which is about the margin held). */
   profitLeft: number | null;
   lossLeft: number | null;
   maxProfitPct: number;
@@ -54,6 +54,7 @@ export function spreadDetail(g: Pick<OptionGroup, "net_debit" | "strike_width" |
   const maxProfit = (credit ? Math.abs(net_debit) : w - net_debit) * quantity;
   const maxLoss = (credit ? w - Math.abs(net_debit) : net_debit) * quantity;
   if (!(maxProfit > 0) || !(maxLoss > 0)) return null;
+  const base = credit ? w * quantity : maxLoss;
   const pnl = unrealized_pnl ?? null;
   let breakeven: number | null = null;
   const carrier = (g.legs ?? []).find((l) => l.action === (credit ? "SELL" : "BUY"));
@@ -70,10 +71,10 @@ export function spreadDetail(g: Pick<OptionGroup, "net_debit" | "strike_width" |
     maxLoss,
     profitLeft: pnl == null ? null : maxProfit - pnl,
     lossLeft: pnl == null ? null : maxLoss + pnl,
-    maxProfitPct: (maxProfit / maxLoss) * 100,
-    maxLossPct: 100,
-    profitLeftPct: pnl == null ? null : ((maxProfit - pnl) / maxLoss) * 100,
-    lossLeftPct: pnl == null ? null : ((maxLoss + pnl) / maxLoss) * 100,
+    maxProfitPct: (maxProfit / base) * 100,
+    maxLossPct: (maxLoss / base) * 100,
+    profitLeftPct: pnl == null ? null : ((maxProfit - pnl) / base) * 100,
+    lossLeftPct: pnl == null ? null : ((maxLoss + pnl) / base) * 100,
     breakeven,
     breakevenFromSpotPct: breakeven != null && spot ? ((breakeven - spot) / spot) * 100 : null,
   };
@@ -91,7 +92,7 @@ export function spreadMetrics(g: Pick<OptionGroup, "net_debit" | "strike_width" 
   const strikeWidth = g.strike_width;
   if (net_debit == null || strikeWidth == null || unrealized_pnl == null || !quantity) return { maxProfitPct: null, fundUsedPct: null, fundUsed: null };
   const maxProfitPerUnit = net_debit >= 0 ? strikeWidth - net_debit : Math.abs(net_debit);
-  const fundUsedPerUnit = net_debit >= 0 ? net_debit : strikeWidth - Math.abs(net_debit);
+  const fundUsedPerUnit = net_debit >= 0 ? net_debit : strikeWidth; // credit: the margin held is about the strike gap; the credit lands in cash, it does not reduce it
   const maxProfitTotal = maxProfitPerUnit * quantity;
   const fundUsedTotal = fundUsedPerUnit * quantity;
   return {

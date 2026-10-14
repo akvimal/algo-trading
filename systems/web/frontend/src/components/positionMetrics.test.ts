@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { legPnl, spreadDetail } from "./positionMetrics";
+import { legPnl, spreadDetail, spreadMetrics } from "./positionMetrics";
 
 const leg = (action: "BUY" | "SELL", symbol: string, entry: number, live: number) => ({ id: symbol, symbol, action, quantity: 75, entry_price: entry, exit_price: null, pnl: null, status: "OPEN", live_price: live });
 
@@ -26,5 +26,12 @@ describe("legPnl", () => {
   it("signs a sold leg by the move against it", () => {
     expect(legPnl(leg("SELL", "X-100-PE", 81, 36.55))).toBeCloseTo(3333.75);
     expect(legPnl(leg("BUY", "X-100-PE", 56.8, 27))).toBeCloseTo(-2235);
+  });
+});
+
+describe("spreadMetrics fund used", () => {
+  it("is the strike gap times quantity for a credit spread, the premium paid for a debit spread", () => {
+    expect(spreadMetrics({ net_debit: -24.2, strike_width: 100, quantity: 75, unrealized_pnl: 750 }).fundUsed).toBe(7500);
+    expect(spreadMetrics({ net_debit: 30, strike_width: 100, quantity: 75, unrealized_pnl: 750 }).fundUsed).toBe(2250);
   });
 });

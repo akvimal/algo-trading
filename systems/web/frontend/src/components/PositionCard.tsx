@@ -4,7 +4,7 @@ import { listTradeEvents, moveOpenLevel, setAutoTrail, squareOffPosition, type T
 import type { OptionGroup, Position } from "../api/types";
 import { formatPct, formatPnl, formatPrice, formatTime } from "../format";
 import { ScanChartPanel } from "../pages/ScanChartPanel";
-import { isNakedOption, isSpreadOption, nakedMetrics, spreadMetrics } from "./positionMetrics";
+import { isNakedOption, isSpreadOption, legPnl, nakedMetrics, spreadDetail, spreadMetrics } from "./positionMetrics";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import { Signed } from "./bits";
 import { TradeSnapshots } from "./TradeSnapshots";
@@ -71,6 +71,7 @@ export function PositionCard(props: Props) {
   // actually committed to it - see positionMetrics.ts for the debit/credit math either needs.
   const naked = g && isNakedOption(g.strategy_type) ? nakedMetrics(g) : null;
   const spread = g && isSpreadOption(g.strategy_type) ? spreadMetrics(g) : null;
+  const detailed = g && isSpreadOption(g.strategy_type) ? spreadDetail(g) : null;
   const pctText = (v: number | null) => (v == null ? "–" : formatPct(v, 1, true));
 
   async function squareOff() {
@@ -246,7 +247,7 @@ export function PositionCard(props: Props) {
       {spread && (
         <div className="pos-sub" data-testid="pos-option-metrics">
           <span>
-            Max profit <Signed value={spread.maxProfitPct} text={pctText(spread.maxProfitPct)} />
+            Max profit reached <Signed value={spread.maxProfitPct} text={pctText(spread.maxProfitPct)} />
           </span>
           <span>
             Fund used <Signed value={spread.fundUsedPct} text={pctText(spread.fundUsedPct)} />
@@ -255,18 +256,53 @@ export function PositionCard(props: Props) {
       )}
       {g && g.legs && g.legs.length > 0 && (
         <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0, fontSize: 12 }} data-testid="pos-legs" aria-label="Legs">
-          {g.legs.map((leg) => (
-            <li key={leg.id} className="row">
-              <span>
-                <span className={`pill pill-small ${leg.action === "BUY" ? "up" : "dn"}`}>{leg.action}</span> {leg.symbol}
-              </span>
-              <span className="num dim">
-                {leg.quantity ?? "–"} @ {formatPrice(leg.entry_price)}
-                {leg.live_price != null && ` → ${formatPrice(leg.live_price)}`}
-              </span>
-            </li>
-          ))}
+          {g.legs.map((leg) => {
+            const lp = legPnl(leg);
+            return (
+              <li key={leg.id} className="stack" style={{ gap: 2 }}>
+                <span className="row">
+                  <span>
+                    <span className={`pill pill-small ${leg.action === "BUY" ? "up" : "dn"}`}>{leg.action}</span> {leg.symbol}
+                  </span>
+                  <span className="num dim">
+                    {leg.quantity ?? "–"} @ {formatPrice(leg.entry_price)}
+                    {leg.live_price != null && ` → ${formatPrice(leg.live_price)}`}
+                  </span>
+                </span>
+                <span className="row" data-testid="leg-pnl">
+                  <span className="faint">P&amp;L</span>
+                  <Signed value={lp} text={lp == null ? "–" : formatPnl(lp)} />
+                </span>
+              </li>
+            );
+          })}
         </ul>
+      )}
+      {detailed && (
+        <div className="stack" style={{ fontSize: 12, gap: 2 }} data-testid="pos-spread-detail">
+          <div className="row">
+            <span>
+              Profit left <Signed value={detailed.profitLeft} text={detailed.profitLeft == null ? "–" : `${formatPnl(detailed.profitLeft)} (${pctText(detailed.profitLeftPct)})`} />
+            </span>
+            <span>
+              Loss left <Signed value={detailed.lossLeft == null ? null : -detailed.lossLeft} text={detailed.lossLeft == null ? "–" : `${formatPnl(-detailed.lossLeft)} (${pctText(detailed.lossLeftPct == null ? null : -detailed.lossLeftPct)})`} />
+            </span>
+          </div>
+          <div className="row">
+            <span>
+              Max profit <Signed value={detailed.maxProfit} text={`${formatPnl(detailed.maxProfit)} (${pctText(detailed.maxProfitPct)})`} />
+            </span>
+            <span>
+              Max loss <Signed value={-detailed.maxLoss} text={`${formatPnl(-detailed.maxLoss)} (${pctText(-detailed.maxLossPct)})`} />
+            </span>
+          </div>
+          {detailed.breakeven != null && (
+            <div className="faint">
+              Breakeven at expiry {formatPrice(detailed.breakeven)}
+              {detailed.breakevenFromSpotPct != null && ` (${pctText(detailed.breakevenFromSpotPct)} from spot)`}
+            </div>
+          )}
+        </div>
       )}
       <div className="pos-sub">
         {level("stop", stop)}

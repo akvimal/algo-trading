@@ -1,4 +1,5 @@
 import { Popover } from "../chart/Popover";
+import { ComboIcon } from "../chart/icons";
 import { comboLabel, hasCombo, sameSide, type Combo, isActiveCombo } from "./combos";
 import { paneCount, type WorkstationState } from "./state";
 
@@ -22,7 +23,7 @@ export function CombosMenu({ ws, combos, onApply, onRemove, onSave }: Props) {
   const active = combos.find((c) => isActiveCombo(ws, c));
   const buttonLabel = `Combos${active ? `: ${active.label}` : ""}${combos.length ? `, ${combos.length} saved` : ""}`;
   return (
-    <Popover label="Combos" text={active?.label} buttonLabel={buttonLabel} badge={combos.length || undefined}>
+    <Popover label="Combos" icon={<ComboIcon />} text={active?.label} buttonLabel={buttonLabel} badge={combos.length || undefined}>
       {(close) => (
         <>
       {combos.length === 0 && (

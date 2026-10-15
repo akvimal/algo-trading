@@ -8,7 +8,8 @@ const svg = (children: ReactNode, size = 14) => (
   </svg>
 );
 
-export const TrendingIcon = () => svg(<><path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" /></>);
+export const TrendUpIcon = () => svg(<><path d="M3 17l6-6 4 4 8-8" /><path d="M15 7h6v6" /></>);
+export const TrendDownIcon = () => svg(<><path d="M3 7l6 6 4-4 8 8" /><path d="M15 17h6v-6" /></>);
 export const RangingIcon = () => svg(<><path d="M3 8h18" /><path d="M3 16h18" /><path d="M8 12h8" /></>);
 export const PullbackIcon = () => svg(<path d="M3 19l5-10 4 5 3-4 6-8" />);
 export const BreakoutIcon = () => svg(<><path d="M3 12h18" /><path d="M12 21V7" /><path d="M8 11l4-4 4 4" /></>);

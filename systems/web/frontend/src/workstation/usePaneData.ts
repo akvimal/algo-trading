@@ -1,4 +1,5 @@
-import { getCandles, getLtp, getRegime, resolveUnderlying } from "../api/trade";
+import { getCandles, getExpiries, getLtp, getRegime, resolveUnderlying } from "../api/trade";
+import { hasOiChain } from "../chart/oiLevels";
 import { useResource } from "../hooks/useResource";
 import type { MarketRegime, ResolvedUnderlying, Segment } from "../api/types";
 
@@ -29,6 +30,8 @@ export type PaneData = {
    * lets the caller tell a genuinely live price apart from one that stopped updating a while ago. */
   polledAt: number | null;
   regime: MarketRegime | null;
+  /** The nearest option expiry that has not passed (YYYY-MM-DD) for an instrument with an option chain: the weekly one for an index that has weeklies. */
+  optionExpiry: string | null;
   error: Error | null;
   reloadResolve: () => void;
 };
@@ -44,6 +47,10 @@ export function usePaneData(spec: { symbol: string; segment: Segment; interval: 
   const ready = on && exchange != null && symbol != null;
   const ltp = useResource(() => getLtp(exchange!, symbol!), [exchange, symbol], { pollMs: socketConnected ? LTP_POLL_MS_SOCKET_UP : LTP_POLL_MS_SOCKET_DOWN, enabled: ready });
   const regime = useResource(() => getRegime(exchange!, symbol!, spec!.interval), [exchange, symbol, spec?.interval], { pollMs: 60_000, enabled: ready });
+  const expiries = useResource(() => getExpiries(exchange!, symbol!), [exchange, symbol], { enabled: ready && hasOiChain(spec!.symbol) });
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const optionExpiry = expiries.data?.find((e) => e >= todayIso) ?? null;
   return {
     resolved: resolved.data,
     exchange,
@@ -51,6 +58,7 @@ export function usePaneData(spec: { symbol: string; segment: Segment; interval: 
     polledPrice: ltp.data?.ltp ?? null,
     polledAt: ltp.fetchedAt,
     regime: regime.data,
+    optionExpiry,
     error: resolved.error ?? ltp.error,
     reloadResolve: resolved.reload,
   };

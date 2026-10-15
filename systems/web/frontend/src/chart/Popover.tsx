@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 /** A button that opens a small panel beneath it. Closes on a click elsewhere or Escape, returns focus
  * to the button, and tells assistive tech whether it is open. */
@@ -36,6 +36,8 @@ export function Popover({
   title?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Where the button ends, for a phone: the panel is laid out across the screen from just under the button (see base.css).
+  const [anchorTop, setAnchorTop] = useState<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
 
@@ -58,6 +60,11 @@ export function Popover({
     };
   }, [open]);
 
+  const toggle = () => {
+    if (!open) setAnchorTop(Math.round((button.current?.getBoundingClientRect().bottom ?? 0) + 6));
+    setOpen(!open);
+  };
+
   return (
     <div className="popover" ref={root}>
       {variant === "tool" ? (
@@ -69,13 +76,13 @@ export function Popover({
           aria-pressed={pressed}
           aria-expanded={open}
           aria-haspopup="true"
-          onClick={() => setOpen(!open)}
+          onClick={toggle}
         >
           {icon}
           {badge != null && badge !== 0 && <span className="tool-count">{badge}</span>}
         </button>
       ) : (
-        <button ref={button} className="chip-btn" aria-label={buttonLabel} aria-expanded={open} aria-haspopup="true" onClick={() => setOpen(!open)}>
+        <button ref={button} className="chip-btn" aria-label={buttonLabel} aria-expanded={open} aria-haspopup="true" onClick={toggle}>
           {icon}
           <span className="popover-text">{text ?? label}</span>
           {badge != null && badge !== 0 && <span className="badge">{badge}</span>}
@@ -83,7 +90,7 @@ export function Popover({
         </button>
       )}
       {open && (
-        <div className={`popover-panel ${side === "beside" ? "beside" : align}`} role="group" aria-label={label}>
+        <div className={`popover-panel ${side === "beside" ? "beside" : align}`} role="group" aria-label={label} style={anchorTop != null ? ({ "--anchor-top": `${anchorTop}px` } as CSSProperties) : undefined}>
           {typeof children === "function" ? children(() => setOpen(false)) : children}
         </div>
       )}

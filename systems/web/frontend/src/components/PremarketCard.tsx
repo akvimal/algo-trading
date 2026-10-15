@@ -1,3 +1,4 @@
+import { RefreshIcon } from "../chart/icons";
 import { useEffect, useState } from "react";
 import { getMarketBrief, getPremarket, refreshPremarket } from "../api/premarket";
 import { ApiError } from "../api/http";
@@ -44,8 +45,8 @@ export function PremarketCard({ segment = "NSE" }: { segment?: BriefSegment }) {
         <h2 className="section-title" style={{ margin: 0 }}>
           {TITLE[segment]}
         </h2>
-        <button className="btn btn-small" onClick={refresh} disabled={busy} aria-label={`Refresh the ${segment === "NSE_PULSE" ? "market pulse" : segment === "CRYPTO" ? "market brief" : "pre-market report"}`}>
-          {busy ? "Refreshing…" : "Refresh"}
+        <button className={`tool ${busy ? "spin" : ""}`} onClick={refresh} disabled={busy} title={busy ? "Refreshing…" : "Refresh"} aria-label={`Refresh the ${segment === "NSE_PULSE" ? "market pulse" : segment === "CRYPTO" ? "market brief" : "pre-market report"}`}>
+          <RefreshIcon />
         </button>
       </div>
 

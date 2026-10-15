@@ -1,7 +1,9 @@
 import type { MarketRegime } from "../api/types";
 import { INTERVALS, toggleFavoriteInterval, type IntervalDef } from "../chart/config";
 import { Popover } from "../chart/Popover";
+import { ClockIcon } from "../chart/icons";
 import { formatPrice } from "../format";
+import { WORKSTATION_QUERY, useMediaQuery } from "./useMediaQuery";
 import { directionOf } from "./direction";
 import { useFavoriteIntervals } from "./useFavoriteIntervals";
 
@@ -35,6 +37,8 @@ type Props = {
   /** The contract this chart is traded on, and when it expires (YYYY-MM-DD) - shown so which expiry is in use is never a guess. */
   contract?: string | null;
   expiry?: string | null;
+  /** The expiry an option order on this instrument goes to (YYYY-MM-DD): the nearest weekly for an index that has them. Shown beside the futures expiry. */
+  optionExpiry?: string | null;
   /** A fixed list of intervals to show as buttons (the Scan page's inline chart). Left out, the chart shows
    * the person's FAVOURITE intervals as buttons, plus a star menu that lists every interval. */
   intervals?: IntervalDef[];
@@ -45,8 +49,9 @@ type Props = {
 
 /** The title bar of one chart: which instrument, its price, whether it is live, the interval, and a
  * one-line read of the market (regime, and structure trend where that layer is on). */
-export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals, contract = null, expiry = null, maximized = false, onToggleMaximize }: Props) {
+export function PaneHeader({ index, symbol, interval, onInterval, price, priceShown, live, regime, structureTrend, active, showActive, intervals, contract = null, expiry = null, optionExpiry = null, maximized = false, onToggleMaximize }: Props) {
   const favorites = useFavoriteIntervals();
+  const wide = useMediaQuery(WORKSTATION_QUERY);
   // A fixed list wins; otherwise the favourites, in size order, plus the size on screen when it is not one of them
   // (so the active size is never invisible).
   const buttons: IntervalDef[] = intervals ?? INTERVALS.filter((i) => favorites.includes(i.value) || i.value === interval);
@@ -58,6 +63,16 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
         <strong>{symbol}</strong>
         {showActive && active && <span className="pill" title="Orders and drawing tools apply to this chart">Trading</span>}
       </div>
+      {!wide && !intervals ? (
+        // A phone: one dropdown in place of a row of buttons plus a menu, to keep the chart tall.
+        <select className="ws-select" aria-label={`Interval, ${symbol}`} value={interval} onChange={(e) => onInterval(e.target.value)}>
+          {INTERVALS.map((i) => (
+            <option key={i.value} value={i.value}>
+              {i.label}
+            </option>
+          ))}
+        </select>
+      ) : (
       <div className="chips" role="group" aria-label={`Interval, ${symbol}`}>
         {buttons.map((i) => (
           <button key={i.value} aria-pressed={interval === i.value} onClick={() => onInterval(i.value)}>
@@ -65,7 +80,7 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
           </button>
         ))}
         {!intervals && (
-          <Popover label="Intervals" align="left">
+          <Popover label="Intervals" icon={<ClockIcon />} align="left">
             <div className="menu-heading">Interval</div>
             <div className="interval-list">
               {INTERVALS.map((i) => {
@@ -95,7 +110,9 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
           </Popover>
         )}
       </div>
-      {expiry && <ExpiryPill index={index} symbol={symbol} contract={contract} expiry={expiry} />}
+      )}
+      {optionExpiry && <ExpiryPill kind="opt" index={index} symbol={symbol} contract={null} expiry={optionExpiry} />}
+      {expiry && <ExpiryPill kind={optionExpiry ? "fut" : "exp"} index={index} symbol={symbol} contract={contract} expiry={expiry} />}
       {regime && (
         <span className={`pill ${dir === "up" ? "up" : dir === "down" ? "dn" : ""}`} data-testid={`regime-${index}`}>
           {REGIME_WORD[regime.regime]} · ADX {regime.adx.toFixed(0)}
@@ -138,16 +155,16 @@ export function PaneHeader({ index, symbol, interval, onInterval, price, priceSh
   );
 }
 
-function ExpiryPill({ index, symbol, contract, expiry }: { index: number; symbol: string; contract: string | null; expiry: string }) {
+function ExpiryPill({ kind, index, symbol, contract, expiry }: { kind: "exp" | "opt" | "fut"; index: number; symbol: string; contract: string | null; expiry: string }) {
   const e = expiryLabel(expiry);
   const near = e.days <= EXPIRY_WARN_DAYS;
   return (
     <span
       className={`pill ${near ? "warn" : ""}`}
-      data-testid={`expiry-${index}`}
-      title={`${contract ?? symbol} expires ${expiry}${near ? " - close to expiry, trading moves to the next contract" : ""}`}
+      data-testid={kind === "opt" ? `opt-expiry-${index}` : `expiry-${index}`}
+      title={kind === "opt" ? `Options on ${symbol}: the nearest expiry, ${expiry}. An option order goes to this one.` : `${contract ?? symbol} expires ${expiry}${near ? " - close to expiry, trading moves to the next contract" : ""}`}
     >
-      Exp {e.text}
+      {kind === "opt" ? "Opt" : kind === "fut" ? "Fut" : "Exp"} {e.text}
     </span>
   );
 }

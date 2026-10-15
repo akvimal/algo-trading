@@ -4,7 +4,7 @@ import { candleAtOrBefore, levelWithOtherEnd, snapZoneCorner, zoneOnWick, type W
 import { getCandles } from "../api/trade";
 import type { ChartStructure } from "../api/types";
 import { formatPrice } from "../format";
-import { ALERTABLE, SERVER_WATCHED, checkAlert, levelText, sideOf, alertZone, type SelectionInfo, type Side, type Trigger } from "./alerts";
+import { ALERTABLE, SERVER_WATCHED, checkAlert, levelText, sideOf, alertZone, type ArmedAlert, type SelectionInfo, type Side, type Trigger } from "./alerts";
 import { toChartPoint, pointTimestamp, type BarAnchor } from "./anchor";
 import {
   DRAWINGS_CHANGED_EVENT, INDICATOR_BY_NAME, effectiveParams, intervalDef, loadDrawingDefaults, loadDrawings, pricePrecision, saveDrawingDefault, saveDrawings, structureIsOn, toKLine,
@@ -34,6 +34,10 @@ export type ChartPaneHandle = {
   removeSelected: () => void;
   /** Arm the selected drawing (or, with null, disarm it). Only lines and zones can be armed. */
   setSelectedAlert: (trigger: Trigger | null) => void;
+  /** Every drawing on this chart that has an alert armed. */
+  listAlerts: () => ArmedAlert[];
+  /** Switch one drawing's alert off (the drawing stays). */
+  disarmAlert: (id: string) => void;
   /** Put a short label on the selected line, ray, level or zone (empty removes it). */
   setSelectedLabel: (text: string) => void;
   /** How far the instrument typically moves in one bar of this chart (null until enough bars have loaded) -
@@ -122,6 +126,8 @@ type Props = {
   /** Support and resistance lines read from the option chain (none by default). */
   oiLevels?: OiLevelLine[];
   magnet: boolean;
+  /** Let a finger (or the mouse) move the chart up and down the price scale as well as along time. Off, the price scale fits the visible candles by itself. */
+  pricePan?: boolean;
   /** Arm a zone with an alert the moment it is drawn (default true). It can still be switched off, and on, per zone afterwards. */
   zoneAlert?: boolean;
   drawingsHidden: boolean;
@@ -163,7 +169,7 @@ const magnetMode = (on: boolean): OverlayMode => (on ? OverlayMode.WeakMagnet : 
  * about the screen around it: the toolbar and menus live in the workstation and steer it through props
  * and the imperative handle. */
 export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(props, ref) {
-  const { exchange, symbol, interval, price, indicators, indicatorParams, indicatorsHidden, structure, plan, magnet, drawingsHidden, pickField } = props;
+  const { exchange, symbol, interval, price, indicators, indicatorParams, indicatorsHidden, structure, plan, magnet, drawingsHidden, pickField, pricePan = false } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const [status, setStatus] = useState<Status>("loading");
@@ -173,6 +179,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
   const [message, setMessage] = useState<string | null>(null);
   // Bumped after every full (re)load of the series; later effects re-apply their overlays against it.
   const [epoch, setEpoch] = useState(0);
+  // Whether the window has been moved back so the newest candle is off the right edge: then there is a button to jump to it.
+  const [behind, setBehind] = useState(false);
   // Bumped by the Retry button (and by the automatic retry) to run the download again.
   const [tick, setTick] = useState(0);
   const [retrying, setRetrying] = useState(false);
@@ -250,6 +258,8 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     };
     chart.subscribeAction(ActionType.OnCrosshairChange, onCursor);
     const onRange = () => {
+      const latest = chart.getDataList().length - 1;
+      setBehind(latest > 0 && Math.round(chart.getVisibleRange().to) < latest);
       if (applyingPeer.current) return;
       const list = chart.getDataList();
       const to = Math.min(list.length - 1, Math.round(chart.getVisibleRange().to));
@@ -1069,6 +1079,106 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     chart.overrideOverlay({ groupId: DRAW_TAGS, visible: !drawingsHidden });
   }, [drawingsHidden, magnet, epoch]);
 
+  // The price scale fits the visible candles until the person stretches or moves it (a mouse drag on the scale, or the touch handling below);
+  // a new series, or switching price pan, hands it back to the candles. Runs after the series settles. Uses the library's own pane objects, so
+  // any failure leaves the scale as it is.
+  useEffect(() => {
+    const chart = chartRef.current as unknown as { getDrawPaneById?: (id: string) => { getAxisComponent?: () => { setAutoCalcTickFlag: (f: boolean) => void } } | null; adjustPaneViewport?: (...a: boolean[]) => void } | null;
+    if (!chart) return;
+    const t = window.setTimeout(() => {
+      try {
+        chart.getDrawPaneById?.("candle_pane")?.getAxisComponent?.()?.setAutoCalcTickFlag(true);
+        chart.adjustPaneViewport?.(false, true, true, true);
+      } catch {
+        /* the scale stays as it is */
+      }
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [pricePan, epoch]);
+
+  // Touch: the library's own touch handling only moves a chart sideways (its vertical moves are for a mouse), so a finger gets these here -
+  // dragging up or down the price scale at the right edge stretches or squeezes the candles, double-tapping it fits the scale to the candles
+  // again, and (with price pan on) dragging the chart body moves it up and down. They use the library's own price-axis object, and do nothing if it is
+  // not there. A mouse never reaches them (touch events only).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    type Range = { from: number; to: number; range: number };
+    type Axis = { getRange: () => Range; setRange: (r: Range & { realFrom: number; realTo: number; realRange: number }) => void; setAutoCalcTickFlag: (f: boolean) => void; convertToRealValue: (v: number) => number };
+    type Host = { getDrawPaneById?: (id: string) => { getAxisComponent?: () => Axis } | null; adjustPaneViewport?: (...a: boolean[]) => void };
+    const host = () => chartRef.current as unknown as Host | null;
+    const axisOf = (): Axis | null => host()?.getDrawPaneById?.("candle_pane")?.getAxisComponent?.() ?? null;
+    const AXIS_WIDTH = 72; // px at the right edge that count as the price scale
+    let g: { y: number; h: number; onAxis: boolean; range: Range } | null = null;
+    let lastAxisTap = 0;
+    const put = (axis: Axis, from: number, to: number) => {
+      const realFrom = axis.convertToRealValue(from);
+      const realTo = axis.convertToRealValue(to);
+      axis.setRange({ from, to, range: to - from, realFrom, realTo, realRange: realTo - realFrom });
+      host()?.adjustPaneViewport?.(false, true, true, true);
+    };
+    const onStart = (e: TouchEvent) => {
+      g = null;
+      if (e.touches.length !== 1) return;
+      try {
+        const axis = axisOf();
+        if (!axis) return;
+        const t = e.touches[0];
+        const rect = el.getBoundingClientRect();
+        const onAxis = t.clientX > rect.right - AXIS_WIDTH;
+        if (onAxis) {
+          const now = Date.now();
+          if (now - lastAxisTap < 350) {
+            lastAxisTap = 0;
+            axis.setAutoCalcTickFlag(true);
+            host()?.adjustPaneViewport?.(false, true, true, true);
+            return;
+          }
+          lastAxisTap = now;
+        }
+        g = { y: t.clientY, h: Math.max(rect.height, 1), onAxis, range: { ...axis.getRange() } };
+      } catch {
+        g = null;
+      }
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!g || e.touches.length !== 1) {
+        g = null;
+        return;
+      }
+      try {
+        const axis = axisOf();
+        if (!axis) return;
+        const dy = e.touches[0].clientY - g.y;
+        if (Math.abs(dy) < 4) return;
+        const { from, to, range } = g.range;
+        if (g.onAxis) {
+          const scale = Math.min(5, Math.max(0.2, 1 + dy / (g.h * 0.5)));
+          const dif = (range * scale - range) / 2;
+          put(axis, from - dif, to + dif);
+        } else if (propsRef.current.pricePan) {
+          const shift = (range * dy) / g.h;
+          put(axis, from + shift, to + shift);
+        }
+      } catch {
+        g = null;
+      }
+    };
+    const onEnd = () => {
+      g = null;
+    };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: true });
+    el.addEventListener("touchend", onEnd, { passive: true });
+    el.addEventListener("touchcancel", onEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, []);
+
   useImperativeHandle(ref, () => ({
     startDrawing(tool) {
       const chart = chartRef.current;
@@ -1176,6 +1286,23 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
     },
     removeSelected() {
       if (selectedRef.current) chartRef.current?.removeOverlay(selectedRef.current);
+    },
+    listAlerts() {
+      return [...drawnRef.current.entries()]
+        .filter(([, d]) => d.alert)
+        .map(([id, d]) => ({ id, name: d.name, level: levelText(d), trigger: d.alert!.trigger, ...(d.label ? { label: d.label } : {}) }));
+    },
+    disarmAlert(id) {
+      const d = drawnRef.current.get(id);
+      if (!d?.alert) return;
+      const { alert: _old, ...rest } = d;
+      void _old;
+      drawnRef.current.set(id, rest);
+      sidesRef.current.delete(id);
+      syncTag(id);
+      persist();
+      emitDrawing();
+      emitArmed();
     },
     setSelectedAlert(trigger) {
       const id = selectedRef.current;
@@ -1304,6 +1431,13 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         {summary}
       </p>
       <div ref={containerRef} className="chart-canvas" role="img" aria-label={`${symbol} price chart`} />
+      {behind && status === "ready" && (
+        <button className="chart-latest" aria-label="Back to the latest candle" title="Back to the latest candle" onClick={() => chartRef.current?.scrollToRealTime(250)}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <path d="M6 6l6 6-6 6M13 6l6 6-6 6" />
+          </svg>
+        </button>
+      )}
       {textEdit && (
         <input
           className="chart-text-input"
@@ -1323,9 +1457,15 @@ export const ChartPane = forwardRef<ChartPaneHandle, Props>(function ChartPane(p
         />
       )}
       {status !== "ready" && (
-        <div className="chart-status" role={status === "error" ? "alert" : "status"}>
+        <div className={`chart-status ${status === "loading" ? "chart-loading" : ""}`} role={status === "error" ? "alert" : "status"}>
           {status === "loading" ? (
-            "Loading candles…"
+            <>
+              <span className="chart-loading-bar" aria-hidden="true" />
+              <span className="chart-loading-body">
+                <span className="spinner" aria-hidden="true" />
+                <span>Loading candles…</span>
+              </span>
+            </>
           ) : (
             <div>
               <p style={{ margin: "0 0 8px" }}>{message}</p>

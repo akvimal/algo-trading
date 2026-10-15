@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
-import { OiLevelsIcon, OiStripIcon, PriceTagIcon, TicketPanelIcon, TradesIcon } from "./icons";
+import { OiLevelsIcon, OiStripIcon, PriceTagIcon, SparkleIcon, TicketPanelIcon, TradesIcon } from "./icons";
 
 type TicketProps = { open: boolean; onToggle: (open: boolean) => void };
 
-type OiProps = { stripOn: boolean; onStripOn: (on: boolean) => void; levelsOn: boolean; onLevelsOn: (on: boolean) => void };
+type OiProps = { stripOn: boolean; onStripOn: (on: boolean) => void; levelsOn: boolean; onLevelsOn: (on: boolean) => void; aiAvailable: boolean; onAiRead: () => void };
 
 type Props = {
   tradesOn: boolean;
@@ -31,6 +31,11 @@ export function ViewToggles({ tradesOn, onTradesOn, oi, priceShown, onPriceShown
     <div className="view-toggles" role="group" aria-label="View">
       {oi && <Toggle on={oi.stripOn} onChange={oi.onStripOn} label="OI strip" hint="The option-chain readings under each chart" icon={<OiStripIcon />} />}
       {oi && <Toggle on={oi.levelsOn} onChange={oi.onLevelsOn} label="OI levels" hint="Support and resistance from option open interest (indices, gold, crude, Bitcoin, Ether)" icon={<OiLevelsIcon />} />}
+      {oi && (
+        <button className="tool tool-ai" aria-label="AI read" disabled={!oi.aiAvailable} title={oi.aiAvailable ? "AI read of this chart's option chain, price and news" : "No option chain for this instrument"} onClick={oi.onAiRead}>
+          <SparkleIcon />
+        </button>
+      )}
       <Toggle on={tradesOn} onChange={onTradesOn} label="My trades" hint="Your own trades on the chart" icon={<TradesIcon />} />
       <Toggle on={priceShown} onChange={onPriceShown} label="Price in header" hint="The live price and its dot in each chart's own header" icon={<PriceTagIcon />} />
       {ticket && <Toggle on={ticket.open} onChange={ticket.onToggle} label="Show ticket" hint="The order ticket panel" icon={<TicketPanelIcon />} />}

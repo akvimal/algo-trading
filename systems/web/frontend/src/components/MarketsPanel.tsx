@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { getNews } from "../api/news";
 import { ApiError } from "../api/http";
 import { CalendarTab } from "../workstation/CalendarTab";
@@ -6,6 +6,7 @@ import { useResource } from "../hooks/useResource";
 import { BIAS_LABEL, nseSessionStarted, shortDate } from "../pages/premarketModel";
 import { ErrorNotice, Skeleton } from "./bits";
 import { PremarketCard } from "./PremarketCard";
+import { CalendarIcon, NewsIcon, PulseIcon, SunriseIcon } from "../chart/icons";
 
 export type MarketSegment = "NSE" | "MCX" | "CRYPTO";
 type Tab = "pulse" | "premarket" | "news" | "calendar";
@@ -25,17 +26,19 @@ export function MarketsPanel({ segment, symbol, markets, onViewChange }: { segme
   // Opens on the market given (the chart's on Trade, the one trading right now on Today); the pills read any other market.
   const [view, setView] = useState<MarketSegment>(segment);
   // NSE has the live pulse (from the open), the morning report and the news. A tab that does not exist for the market on show falls back to the first.
-  const tabs: { id: Tab; label: string }[] = [
-    ...(view === "NSE" ? [{ id: "pulse" as const, label: "Pulse" }] : []),
-    { id: "premarket", label: view === "CRYPTO" ? "Brief" : "Pre-market" },
-    { id: "news", label: "News" },
-    { id: "calendar", label: "Calendar" },
+  const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
+    ...(view === "NSE" ? [{ id: "pulse" as const, label: "Pulse", icon: <PulseIcon /> }] : []),
+    { id: "premarket", label: view === "CRYPTO" ? "Brief" : "Pre-market", icon: <SunriseIcon /> },
+    { id: "news", label: "News", icon: <NewsIcon /> },
+    { id: "calendar", label: "Calendar", icon: <CalendarIcon /> },
   ];
   const shown: Tab = tabs.some((t) => t.id === tab) ? tab : tabs[0].id;
   const choices = (["NSE", "MCX", "CRYPTO"] as const).filter((s) => markets.includes(s) || s === segment);
   const newsSymbol = symbol && view === segment ? symbol : DEFAULT_NEWS_SYMBOL[view];
   return (
     <div className="market-info">
+      {/* The market and the report are one row (it scrolls sideways if it must), not two rows of badges. */}
+      <div className="market-info-head">
       {choices.length > 1 && (
         <div className="chips" role="group" aria-label="Market">
           {choices.map((s) => (
@@ -55,10 +58,11 @@ export function MarketsPanel({ segment, symbol, markets, onViewChange }: { segme
       )}
       <div className="chips" role="tablist" aria-label="Market info">
         {tabs.map((t) => (
-          <button key={t.id} role="tab" aria-selected={shown === t.id} aria-pressed={shown === t.id} onClick={() => setTab(t.id)}>
-            {t.label}
+          <button key={t.id} role="tab" className="icon-tab" aria-label={t.label} title={t.label} aria-selected={shown === t.id} aria-pressed={shown === t.id} onClick={() => setTab(t.id)}>
+            {t.icon}
           </button>
         ))}
+      </div>
       </div>
       {shown === "pulse" ? (
         <PremarketCard key="pulse" segment="NSE_PULSE" />

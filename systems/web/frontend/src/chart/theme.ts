@@ -41,7 +41,7 @@ export function chartStyles(light: boolean = prefersLight()): DeepPartial<Styles
         high: { color: c.dim, textFamily: FONT_MONO }, low: { color: c.dim, textFamily: FONT_MONO },
         last: { upColor: BUY, downColor: SELL, noChangeColor: c.dim, text: { color: "#0e1319", family: FONT_MONO } },
       },
-      tooltip: { text: { color: c.text, family: FONT_MONO } },
+      tooltip: { text: { color: c.dim, family: FONT_MONO } }, // the OHLC read-out sits over the candles: quiet, not bold white
     },
     indicator: { tooltip: { text: { color: c.dim, family: FONT_SANS } }, lastValueMark: { show: false, text: { family: FONT_MONO } } },
     xAxis: { axisLine: { color: c.border }, tickLine: { color: c.border }, tickText: { color: c.dim, family: FONT_MONO } },

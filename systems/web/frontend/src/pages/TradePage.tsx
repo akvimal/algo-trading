@@ -14,7 +14,7 @@ import type { AiReadHandle } from "../chart/AiReadPanel";
 import { OiTools } from "../chart/OiTools";
 import { hasOiChain } from "../chart/oiLevels";
 import { StyleBar } from "../chart/StyleBar";
-import type { SelectionInfo, Trigger } from "../chart/alerts";
+import type { ArmedAlert, SelectionInfo, Trigger } from "../chart/alerts";
 import { DrawToolbar } from "../chart/DrawToolbar";
 import { IndicatorMenu } from "../chart/IndicatorMenu";
 import { ViewToggles } from "../chart/ViewToggles";
@@ -48,7 +48,7 @@ import { OiStrip } from "../chart/OiStrip";
 import { oiStripItems } from "../chart/oiStripModel";
 import { useOiData } from "../workstation/useOiData";
 import { usePaneData } from "../workstation/usePaneData";
-import { WIDE_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
+import { WORKSTATION_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { dayPnl } from "./todayModel";
 import { PRESETS, analyzeTicket, defaultLevel, EMPTY_TICKET, emptyTicketFor, instrumentFor, isFresh, type Ticket } from "./tradeModel";
 import { groupsApi, positionsApi } from "../api/rupees";
@@ -58,7 +58,7 @@ const ChartPane = lazy(() => import("../chart/ChartPane").then((m) => ({ default
 
 export function TradePage() {
   const [params] = useSearchParams();
-  const wide = useMediaQuery(WIDE_QUERY);
+  const wide = useMediaQuery(WORKSTATION_QUERY);
   const { markets, defaultsFor } = useProfile();
 
   const urlSymbol = params.get("symbol");
@@ -106,6 +106,8 @@ export function TradePage() {
   const [indicatorParams, setIndicatorParams] = useState<Record<string, number[]>>(() => loadIndicatorParams());
   const [structure, setStructure] = useState<StructureConfig>(() => loadStructure());
   const [tools, setTools] = useState(() => loadTools());
+  // Phone only: the chart moves up and down the price scale under a finger; off, the scale fits the candles on screen.
+  const [pricePanOn, setPricePanOn] = useState(true);
   useEffect(() => saveIndicators(indicators), [indicators]);
   useEffect(() => saveIndicatorParams(indicatorParams), [indicatorParams]);
   useEffect(() => saveStructure(structure), [structure]);
@@ -489,16 +491,82 @@ export function TradePage() {
   }, [twoUp, linkCrosshair]);
   const linkScale = twoUp && ws.links.scale;
 
+  // Beside the charts on a wide screen; on a phone directly under them, above the notes.
+  const drawBar = (
+          <DrawToolbar
+            active={tool}
+            onTool={chooseTool}
+            magnet={tools.magnet}
+            onMagnet={() => setTools((t) => ({ ...t, magnet: !t.magnet }))}
+            pricePan={wide ? undefined : pricePanOn}
+            onPricePan={wide ? undefined : () => setPricePanOn((on) => !on)}
+            zoneAlert={tools.zoneAlert}
+            onZoneAlert={() => setTools((t) => ({ ...t, zoneAlert: !t.zoneAlert }))}
+            hidden={tools.drawingsHidden}
+            onHidden={() => setTools((t) => ({ ...t, drawingsHidden: !t.drawingsHidden }))}
+            onClear={() => paneRefs[active].current?.clearDrawings()}
+            hasSelection={hasSelection}
+            onDeleteSelected={() => paneRefs[active].current?.removeSelected()}
+            analysis={
+              !wide ? undefined : (
+              <>
+              <AnalysisTools
+                selected={indicators}
+                onSelected={setIndicators}
+                params={indicatorParams}
+                onParams={setIndicatorParams}
+                indicatorsHidden={tools.indicatorsHidden}
+                onIndicatorsHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
+                structure={structure}
+                onStructure={setStructure}
+                structureOn={structureIsOn(structure)}
+                onStructureOn={setStructureOn}
+              />
+              <span className="tool-sep" role="separator" />
+              <OiTools
+                available={hasOiChain(activeSpec.symbol)}
+                stripOn={tools.oiStripOn}
+                onStrip={(on) => setTools((t) => ({ ...t, oiStripOn: on }))}
+                levelsOn={tools.oiLevelsOn}
+                onLevels={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
+                onAiRead={() => aiRefs[active].current?.activate()}
+              />
+              </>
+              )
+            }
+          />
+  );
+
   return (
     <div className={`workstation ${wide ? "wide" : ""} ${fullscreen ? "fullscreen" : ""}`} ref={stage}>
       <div className="ws-bar">
-        <div className="chips" role="group" aria-label="Instrument">
-          {PRESETS.filter((p) => markets.includes(p.segment) || p.symbol === activeSpec.symbol).map((p) => (
-            <button key={p.symbol} aria-pressed={activeSpec.symbol === p.symbol} onClick={() => setWs((cur) => setSymbol(cur, active, p.symbol, p.segment))}>
-              {p.label}
-            </button>
-          ))}
-        </div>
+        {wide ? (
+          <div className="chips" role="group" aria-label="Instrument">
+            {PRESETS.filter((p) => markets.includes(p.segment) || p.symbol === activeSpec.symbol).map((p) => (
+              <button key={p.symbol} aria-pressed={activeSpec.symbol === p.symbol} onClick={() => setWs((cur) => setSymbol(cur, active, p.symbol, p.segment))}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          // A phone: one dropdown instead of two rows of buttons. A stock typed in the search is not a preset, so it gets its own entry.
+          <select
+            className="ws-select"
+            aria-label="Instrument"
+            value={activeSpec.symbol}
+            onChange={(e) => {
+              const p = PRESETS.find((x) => x.symbol === e.target.value);
+              if (p) setWs((cur) => setSymbol(cur, active, p.symbol, p.segment));
+            }}
+          >
+            {!PRESETS.some((p) => p.symbol === activeSpec.symbol) && <option value={activeSpec.symbol}>{activeSpec.symbol}</option>}
+            {PRESETS.filter((p) => markets.includes(p.segment) || p.symbol === activeSpec.symbol).map((p) => (
+              <option key={p.symbol} value={p.symbol}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        )}
         <form onSubmit={go} className="ws-search">
           <label className="sr-only" htmlFor="ws-stock">
             Trade a stock
@@ -555,6 +623,8 @@ export function TradePage() {
                     onStripOn: (on) => setTools((t) => ({ ...t, oiStripOn: on })),
                     levelsOn: tools.oiLevelsOn,
                     onLevelsOn: (on) => setTools((t) => ({ ...t, oiLevelsOn: on })),
+                    aiAvailable: hasOiChain(activeSpec.symbol),
+                    onAiRead: () => aiRefs[active].current?.activate(),
                   }
             }
             priceShown={!tools.priceHidden}
@@ -570,46 +640,7 @@ export function TradePage() {
       </div>
 
       <div className="ws-body">
-        {wide && (
-          <DrawToolbar
-            active={tool}
-            onTool={chooseTool}
-            magnet={tools.magnet}
-            onMagnet={() => setTools((t) => ({ ...t, magnet: !t.magnet }))}
-            zoneAlert={tools.zoneAlert}
-            onZoneAlert={() => setTools((t) => ({ ...t, zoneAlert: !t.zoneAlert }))}
-            hidden={tools.drawingsHidden}
-            onHidden={() => setTools((t) => ({ ...t, drawingsHidden: !t.drawingsHidden }))}
-            onClear={() => paneRefs[active].current?.clearDrawings()}
-            hasSelection={hasSelection}
-            onDeleteSelected={() => paneRefs[active].current?.removeSelected()}
-            analysis={
-              <>
-              <AnalysisTools
-                selected={indicators}
-                onSelected={setIndicators}
-                params={indicatorParams}
-                onParams={setIndicatorParams}
-                indicatorsHidden={tools.indicatorsHidden}
-                onIndicatorsHidden={(h) => setTools((t) => ({ ...t, indicatorsHidden: h }))}
-                structure={structure}
-                onStructure={setStructure}
-                structureOn={structureIsOn(structure)}
-                onStructureOn={setStructureOn}
-              />
-              <span className="tool-sep" role="separator" />
-              <OiTools
-                available={hasOiChain(activeSpec.symbol)}
-                stripOn={tools.oiStripOn}
-                onStrip={(on) => setTools((t) => ({ ...t, oiStripOn: on }))}
-                levelsOn={tools.oiLevelsOn}
-                onLevels={(on) => setTools((t) => ({ ...t, oiLevelsOn: on }))}
-                onAiRead={() => aiRefs[active].current?.activate()}
-              />
-              </>
-            }
-          />
-        )}
+        {wide && drawBar}
 
         <div className="ws-charts">
           <StyleBar
@@ -619,7 +650,13 @@ export function TradePage() {
             onDefault={(on) => paneRefs[active].current?.setSelectedStyleAsDefault(on)}
             onLabel={(text) => paneRefs[active].current?.setSelectedLabel(text)}
           />
-          <AlertBar selection={selection} armed={shown.reduce<number>((n, i) => n + armed[i], 0)} onSet={setAlert} />
+          <AlertBar
+            selection={selection}
+            armed={shown.reduce<number>((n, i) => n + armed[i], 0)}
+            onSet={setAlert}
+            getAlerts={() => shown.flatMap((i) => (paneRefs[i].current?.listAlerts() ?? []).map((a) => ({ ...a, ...(shown.length > 1 ? { where: ws.panes[i].symbol } : {}), pane: i })))}
+            onDisarm={(a) => paneRefs[(a as ArmedAlert & { pane?: number }).pane ?? active].current?.disarmAlert(a.id)}
+          />
           {levelNote && (
             <div className={`ws-flash ${levelNote.error ? "error" : ""}`} role={levelNote.error ? "alert" : "status"} data-testid="level-note">
               {levelNote.text}
@@ -665,6 +702,7 @@ export function TradePage() {
                   regime={d.regime}
                   contract={d.resolved?.trade_symbol ?? null}
                   expiry={d.resolved?.expiry ?? null}
+                  optionExpiry={d.optionExpiry}
                   structureTrend={trendFor(i)}
                   active={active === i}
                   showActive={twoUp}
@@ -700,6 +738,7 @@ export function TradePage() {
                       onLevelCancel={(l) => void cancelWaitingLevel(l)}
                       oiLevels={oiLevels[i]}
                       magnet={tools.magnet}
+                      pricePan={!wide && pricePanOn}
                       zoneAlert={tools.zoneAlert}
                       drawingsHidden={tools.drawingsHidden}
                       pickField={active === i ? (levelPick?.field ?? pickField) : null}
@@ -752,6 +791,7 @@ export function TradePage() {
             />
           )}
           </div>
+          {!wide && drawBar}
           {/* No key on the instrument: it remounted the panel (folding it shut) whenever a click made the other chart active. The panel
               clears its own draft when the segment or symbol changes. */}
           <NotesPanel

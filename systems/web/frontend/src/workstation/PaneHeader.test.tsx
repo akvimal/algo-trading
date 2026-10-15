@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EXPIRY_WARN_DAYS, PaneHeader, expiryLabel } from "./PaneHeader";
 import { DEFAULT_FAVORITE_INTERVALS, INTERVALS, favoriteIntervals } from "../chart/config";
 
@@ -14,7 +14,26 @@ function header(price: number | null = 1000, priceShown = true) {
   );
 }
 
-beforeEach(() => localStorage.clear());
+function screenIs(wide: boolean) {
+  vi.stubGlobal("matchMedia", (q: string) => ({ matches: wide && q.includes("min-width"), media: q, addEventListener: () => undefined, removeEventListener: () => undefined }));
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  screenIs(true);
+});
+
+describe("PaneHeader on a phone", () => {
+  it("picks the interval from one dropdown instead of a row of buttons", async () => {
+    screenIs(false);
+    const picked: string[] = [];
+    render(<PaneHeader index={0} symbol="RELIANCE" interval="15min" onInterval={(i) => picked.push(i)} price={1000} priceShown live={false} regime={null} active showActive={false} />);
+    const box = screen.getByRole("combobox", { name: "Interval, RELIANCE" });
+    expect(box).toHaveValue("15min");
+    await userEvent.setup().selectOptions(box, INTERVALS[0].value);
+    expect(picked).toEqual([INTERVALS[0].value]);
+  });
+});
 
 describe("PaneHeader", () => {
   it("puts the price last in the header row, after the interval buttons", () => {

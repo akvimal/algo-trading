@@ -1,5 +1,6 @@
 import { cloneElement, createRef } from "react";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_STRUCTURE } from "./config";
 import { ChartPane, type ChartPaneHandle } from "./ChartPane";
@@ -299,5 +300,20 @@ describe("armed zones are sent to the server", () => {
     await sentSomething();
     await new Promise((r) => setTimeout(r, 1000));
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("back to the latest candle", () => {
+  it("shows a button only while the newest candle is off the right edge, and the button brings it back", async () => {
+    renderChart(1000);
+    const c = await loaded();
+    expect(screen.queryByRole("button", { name: "Back to the latest candle" })).not.toBeInTheDocument();
+    c.visibleTo = c.data.length - 10; // scrolled back into the past
+    act(() => c.emit("onVisibleRangeChange"));
+    const button = await screen.findByRole("button", { name: "Back to the latest candle" });
+    await userEvent.setup().click(button);
+    expect(c.realTimeCalls).toBe(1);
+    act(() => c.emit("onVisibleRangeChange")); // the window is at the latest again
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Back to the latest candle" })).not.toBeInTheDocument());
   });
 });

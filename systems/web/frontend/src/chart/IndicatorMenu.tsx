@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { INDICATORS, effectiveParams, parseParamList } from "./config";
 import { Popover } from "./Popover";
+import { IndicatorsIcon } from "./icons";
 
 type Props = {
   selected: string[];
@@ -50,7 +51,7 @@ export function IndicatorsPanel({ selected, onSelected, params, onParams, hidden
 /** The same panel as a top-bar dropdown (a phone has no rail). */
 export function IndicatorMenu(props: Props) {
   return (
-    <Popover label="Indicators" badge={props.selected.length}>
+    <Popover label="Indicators" icon={<IndicatorsIcon />} badge={props.selected.length}>
       <IndicatorsPanel {...props} />
     </Popover>
   );

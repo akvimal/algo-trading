@@ -487,8 +487,8 @@ describe("OI buildup", () => {
       expect(await tcs.findByTestId("chart-pane")).toBeInTheDocument();
       expect(tcs.getByRole("button", { name: "1d" })).toHaveAttribute("aria-pressed", "true");
       expect(tcs.getByRole("toolbar", { name: "Drawing tools" })).toBeInTheDocument();
-      expect(tcs.getByRole("button", { name: "Trend line" })).toBeInTheDocument();
-      expect(tcs.getByRole("button", { name: "Zone (supply or demand)" })).toBeInTheDocument();
+      expect(tcs.getByRole("button", { name: "Lines" })).toBeInTheDocument();
+      expect(tcs.getByRole("button", { name: "Levels and zones" })).toBeInTheDocument();
       await waitFor(() => expect(calls.some((c) => c.url.includes("/candles/history") && c.url.includes("interval=daily") && c.url.includes("symbol=TCS"))).toBe(true));
       // The card's trade icon goes straight to the Trade page (weekly | daily side by side), in a new tab so the scan stays where it is.
       const trade = tcs.getByRole("link", { name: "Trade" });

@@ -1,3 +1,4 @@
+import { WORKSTATION_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
 import { marketIsOpen } from "../pages/marketHours";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -16,14 +17,14 @@ import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import type { Pretrade } from "../api/types";
 import { TextField, type FieldStatus } from "./Field";
 import { Popover } from "../chart/Popover";
-import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, FutureIcon, OptionIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, SpreadIcon, TrendingIcon } from "./BadgeIcons";
+import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, FutureIcon, OptionIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, SpreadIcon, TrendDownIcon, TrendUpIcon } from "./BadgeIcons";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
-  { value: "ITM2", label: "2 strikes in the money" },
-  { value: "ITM1", label: "1 strike in the money" },
-  { value: "ATM", label: "At the money" },
-  { value: "OTM1", label: "1 strike out of the money" },
-  { value: "OTM2", label: "2 strikes out of the money" },
+  { value: "ITM2", label: "2 ITM" },
+  { value: "ITM1", label: "1 ITM" },
+  { value: "ATM", label: "ATM" },
+  { value: "OTM1", label: "1 OTM" },
+  { value: "OTM2", label: "2 OTM" },
 ];
 
 const STATUS_MARK = { good: "✓", warn: "!", bad: "✕", na: "–", info: "·" } as const;
@@ -98,6 +99,9 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const [result, setResult] = useState<PlaceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [another, setAnother] = useState(false);
+  // The plan picker (market state and plan) is one line until opened; open from the start only where the ticket is a roomy side panel.
+  const roomy = useMediaQuery(WORKSTATION_QUERY);
+  const [planOpen, setPlanOpen] = useState(roomy);
   const [cleared, setCleared] = useState<string | null>(null); // what changing the side just took off the form, until the next edit
   useEffect(() => {
     if (!waitingHere) setAnother(false);
@@ -137,8 +141,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
     onChange({ ...raw, planState: next, planKind: raw.planKind && !planAvailable(s, raw.planKind) ? null : raw.planKind });
   };
   // "Trending" on its own: the read's direction if it is a trend, else up (the ↑|↓ switch beside it changes it).
-  const chooseTrending = () => chooseState(read === "trending_up" || read === "trending_down" ? read : (raw.planState === "trending_down" ? "trending_down" : "trending_up"));
-  const trending = state === "trending_up" || state === "trending_down";
   const choosePlan = (kind: PlanKind) => {
     setResult(null);
     if (raw.planKind === kind) return onChange({ ...raw, planKind: null });
@@ -264,6 +266,35 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
     );
   }
 
+  // Number of lots / shares: beside the strike for an option order (one row), else on its own row after the stop-loss and target.
+  const lotsField = simplifiedOption ? null : (
+        <TextField
+          id="t-lots"
+          // An option order is always lot-based, whatever the underlying is - stock vs index only
+          // matters for a spot/future order's own units. Previously always true together (only
+          // PRESETS symbols - all index/commodity/crypto - ever reached the option chips, and none
+          // of those are "stock"), so this only started to matter once optionsForced (the Scan
+          // page's ticket) let a stock's own option order through.
+          label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
+          value={t.lots}
+          status={fieldStatus("size")}
+          onChange={(v) => set("lots", v)}
+          placeholder={
+            isOption || ctx.segment === "CRYPTO"
+              ? "Sized for you"
+              : a.lots != null && t.lots.trim() === "" ? `${a.lots} · from your ${ctx.riskPct}% risk` : "Auto from your risk"
+          }
+          action={
+            t.lots.trim() !== "" ? (
+              <button className="link-btn" title="Go back to the size worked out from your risk" onClick={() => set("lots", "")}>
+                Use system size
+              </button>
+            ) : undefined
+          }
+          dimmed={t.lots.trim() === ""}
+        />
+  );
+
   return (
     <div className="card ticket" data-testid="ticket">
       <div className="row">
@@ -298,54 +329,8 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         </span>
       </div>
 
-      {!simplifiedOption && (
-        <div className="plan-pick" data-testid="plan-pick" style={{ margin: "12px 0" }}>
-          <div className="chips" role="group" aria-label="Market state">
-            {/* Trending | Ranging is one toggle (two joined segments, one pressed); the up/down switch is a second, joined pair that only
-                appears beside it while Trending is the one pressed (a range has no direction). */}
-            <span className="badge-split">
-              <button aria-pressed={trending} onClick={chooseTrending}>
-                <TrendingIcon />
-                Trending
-              </button>
-              <button aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
-                <RangingIcon />
-                Ranging
-              </button>
-            </span>
-            {trending && (
-              <span className="badge-split badge-dir" role="group" aria-label="Trend direction">
-                <button aria-label="Up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
-                  ↑
-                </button>
-                <button aria-label="Down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
-                  ↓
-                </button>
-              </span>
-            )}
-          </div>
-          <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
-            {raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
-          </div>
-          <div className="chips" role="group" aria-label="Plan">
-            {PLAN_KINDS.map((k) => (
-              <button key={k.value} aria-pressed={raw.planKind === k.value} disabled={!planAvailable(state, k.value)} title={!planAvailable(state, k.value) ? "A pullback needs a trend." : undefined} onClick={() => choosePlan(k.value)}>
-                {PLAN_ICON[k.value]}
-                {k.label}
-              </button>
-            ))}
-          </div>
-          {raw.planKind && (
-            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }} data-testid="plan-hint">
-              {t.setupTag && state ? <b>{t.setupTag}. </b> : null}
-              {planHint(state, raw.planKind)}
-            </p>
-          )}
-        </div>
-      )}
-
       {!hideSideChips && !(hideStrategyChips && isOption) && (
-        <div className="chips seg" role="group" aria-label="Side" style={{ margin: "12px 0" }}>
+        <div className="chips seg" role="group" aria-label="Side" style={{ margin: "10px 0" }}>
           {(["BUY", "SELL"] as Action[]).map((s) => (
             <button key={s} className={s === "BUY" ? "buy" : "sell"} aria-pressed={t.action === s} onClick={() => setSide(s)}>
               {s === "BUY" ? <BuyIcon /> : <SellIcon />}
@@ -360,17 +345,21 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         </p>
       )}
 
+      <div className="ticket-opts">
       {isOption && !hideMoneynessField && (
-        <label className="select-field" style={{ marginBottom: 12 }}>
-          <span className="dim">Strike</span>
-          <select value={t.moneyness} onChange={(e) => set("moneyness", e.target.value as Moneyness)}>
-            {MONEYNESS.map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="strike-row">
+          <label className="select-field" style={{ marginBottom: 0 }}>
+            <span className="dim">Strike</span>
+            <select value={t.moneyness} onChange={(e) => set("moneyness", e.target.value as Moneyness)}>
+              {MONEYNESS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {lotsField}
+        </div>
       )}
 
       {/* Market/"Wait for a price". A simplified option order in Scan (the F&O view) gets the same choice: "Wait for a price" arms the
@@ -378,7 +367,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           Its stop-loss and target are levels of the underlying too (shown below only for a waiting order); the leg table's combined
           stop-loss %/target % are taken from the premium once the position exists, so they apply to an order placed now, not a waiting one. */}
       {(
-        <div className="chips" role="group" aria-label="Order type" style={{ marginBottom: 12 }}>
+        <div className="chips" role="group" aria-label="Order type">
           <button aria-pressed={!limit} onClick={() => set("orderType", "market")}>
             <BoltIcon />
             Market
@@ -392,13 +381,11 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           </button>
         </div>
       )}
+      </div>
 
       {isOption && !limit && (
-        <label className="check-row" style={{ marginBottom: 12 }}>
+        <label className="check-row" style={{ marginBottom: 8 }} title="Not squared off at the end of the day, and can be placed after the square-off time. Your stop-loss and target still apply.">
           <input type="checkbox" checked={t.holdOvernight} onChange={(e) => set("holdOvernight", e.target.checked)} /> Hold for days (positional)
-          <span className="faint" style={{ fontSize: 12, display: "block" }}>
-            Not squared off at the end of the day, and can be placed after the square-off time. Your stop-loss and target still apply.
-          </span>
         </label>
       )}
 
@@ -453,33 +440,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           <TextField id="t-target" label="Target" action={pickAction("target")} status={fieldStatus("reward")} value={t.target} onChange={(v) => set("target", v)} />
         </div>
       )}
-      {!simplifiedOption && (
-        <TextField
-          id="t-lots"
-          // An option order is always lot-based, whatever the underlying is - stock vs index only
-          // matters for a spot/future order's own units. Previously always true together (only
-          // PRESETS symbols - all index/commodity/crypto - ever reached the option chips, and none
-          // of those are "stock"), so this only started to matter once optionsForced (the Scan
-          // page's ticket) let a stock's own option order through.
-          label={isOption ? "Number of lots" : stock ? "Number of shares" : "Number of lots"}
-          value={t.lots}
-          status={fieldStatus("size")}
-          onChange={(v) => set("lots", v)}
-          placeholder={
-            isOption || ctx.segment === "CRYPTO"
-              ? "Sized for you"
-              : a.lots != null && t.lots.trim() === "" ? `${a.lots} · from your ${ctx.riskPct}% risk` : "Auto from your risk"
-          }
-          action={
-            t.lots.trim() !== "" ? (
-              <button className="link-btn" title="Go back to the size worked out from your risk" onClick={() => set("lots", "")}>
-                Use system size
-              </button>
-            ) : undefined
-          }
-          dimmed={t.lots.trim() === ""}
-        />
-      )}
+      {!simplifiedOption && !(isOption && !hideMoneynessField) && lotsField}
 
       {!simplifiedOption && (
         <div className="summary-badges" data-testid="summary">
@@ -511,6 +472,55 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
             </div>
           )}
         </div>
+      )}
+
+      {!simplifiedOption && (
+        <details className="plan-fold" open={planOpen} onToggle={(e) => setPlanOpen(e.currentTarget.open)}>
+          <summary data-testid="plan-summary">
+            <span className="dim">Plan</span> {state == null ? "none" : state === "ranging" ? "Ranging" : state === "trending_up" ? "Trending ↑" : "Trending ↓"}
+            {raw.planKind ? ` · ${PLAN_KINDS.find((k) => k.value === raw.planKind)?.label ?? ""}` : " · pick one"}
+          </summary>
+        <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>
+          <div className="plan-icons">
+            {/* What the market is doing (up, down or sideways) and what to do about it (pullback, breakout, reversal): icon buttons, named for
+                screen readers and in the tooltip. */}
+            <div className="chips" role="group" aria-label="Market state">
+              <button aria-label="Trending up" title="Trending up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
+                <TrendUpIcon />
+              </button>
+              <button aria-label="Trending down" title="Trending down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
+                <TrendDownIcon />
+              </button>
+              <button aria-label="Ranging" title="Ranging (sideways)" aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
+                <RangingIcon />
+              </button>
+            </div>
+            <div className="chips" role="group" aria-label="Plan">
+              {PLAN_KINDS.map((k) => (
+                <button
+                  key={k.value}
+                  aria-label={k.label}
+                  aria-pressed={raw.planKind === k.value}
+                  disabled={!planAvailable(state, k.value)}
+                  title={!planAvailable(state, k.value) ? "A pullback needs a trend." : k.label}
+                  onClick={() => choosePlan(k.value)}
+                >
+                  {PLAN_ICON[k.value]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
+            {raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
+          </div>
+          {raw.planKind && (
+            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }} data-testid="plan-hint">
+              {t.setupTag && state ? <b>{t.setupTag}. </b> : null}
+              {planHint(state, raw.planKind)}
+            </p>
+          )}
+        </div>
+        </details>
       )}
 
       {!simplifiedOption && (

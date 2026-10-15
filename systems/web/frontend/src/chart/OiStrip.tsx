@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { OiSummary, SentimentHistoryPoint } from "../api/types";
 import type { Ref } from "react";
 import { AiReadButton, type AiReadHandle } from "./AiReadPanel";
@@ -112,10 +113,12 @@ export function OiStrip({
   /** Lets the screen start the AI read from outside (the rail's AI read button). */
   aiRef?: Ref<AiReadHandle>;
 }) {
+  // On a phone the strip is one line (PCR, the call and put reading, the 15-minute trend); this opens the rest.
+  const [more, setMore] = useState(false);
   if (!stripOn) {
     return aiTarget ? (
       <div className="oi-strip oi-strip-slim" data-testid="oi-strip-slim">
-        <AiReadButton ref={aiRef} exchange={aiTarget.exchange} symbol={aiTarget.symbol} />
+        <AiReadButton ref={aiRef} exchange={aiTarget.exchange} symbol={aiTarget.symbol} hideButton />
       </div>
     ) : null;
   }
@@ -129,32 +132,32 @@ export function OiStrip({
   const support = solid.filter((l) => l.kind === "support").sort((a, b) => a.rank - b.rank);
 
   return (
-    <div className="oi-strip" data-testid="oi-strip" title={`Nearest-expiry option OI for ${summary.underlying_symbol}, as of this poll`}>
+    <div className={`oi-strip ${more ? "open" : ""}`} data-testid="oi-strip" title={`Nearest-expiry option OI for ${summary.underlying_symbol}, as of this poll`}>
       <span>
         PCR <b>{summary.pcr != null ? summary.pcr.toFixed(2) : "–"}</b>
       </span>
       <span
-        className={diverges ? "pill warn" : undefined}
+        className={`oi-extra${diverges ? " pill warn" : ""}`}
         title={diverges ? `Volume PCR (today's trading) reads ${classifyPcr(volPcr)} while OI PCR (standing positions) reads ${classifyPcr(summary.pcr)}` : "Put volume / call volume, today's actual trading"}
       >
         Vol PCR <b>{volPcr != null ? volPcr.toFixed(2) : "–"}</b>
         {diverges ? " ⇄" : ""}
       </span>
-      <span>
+      <span className="oi-extra">
         CE OI {fmtOi(summary.total_call_oi, crypto)}{" "}
         <OiChangeBadge change={summary.total_call_oi_change_15m} total={summary.total_call_oi} />/15m <OiChangeBadge change={summary.total_call_oi_change_5m} total={summary.total_call_oi} />/5m
       </span>
-      <span>
+      <span className="oi-extra">
         PE OI {fmtOi(summary.total_put_oi, crypto)}{" "}
         <OiChangeBadge change={summary.total_put_oi_change_15m} total={summary.total_put_oi} />/15m <OiChangeBadge change={summary.total_put_oi_change_5m} total={summary.total_put_oi} />/5m
       </span>
       {resistance.length > 0 && (
-        <span title={resistance.map((l) => l.label).join("  ")}>
+        <span className="oi-extra" title={resistance.map((l) => l.label).join("  ")}>
           R <b>{resistance.map((l) => formatPrice(l.price)).join(" · ")}</b>
         </span>
       )}
       {support.length > 0 && (
-        <span title={support.map((l) => l.label).join("  ")}>
+        <span className="oi-extra" title={support.map((l) => l.label).join("  ")}>
           S <b>{support.map((l) => formatPrice(l.price)).join(" · ")}</b>
         </span>
       )}
@@ -168,11 +171,20 @@ export function OiStrip({
           {BUILDUP_ICON[summary.total_put_buildup]} PE {BUILDUP_ABBR[summary.total_put_buildup]}
         </span>
       )}
-      {skew && <FlowSkew skew={skew} summary={summary} />}
-      {hasSentimentTrend(sentiment) && <span className="faint oi-strip-trend-label">OI trend</span>}
+      {skew && (
+        <span className="oi-extra">
+          <FlowSkew skew={skew} summary={summary} />
+        </span>
+      )}
+      {hasSentimentTrend(sentiment) && <span className="faint oi-strip-trend-label oi-extra">OI trend</span>}
       <Sentiment points={sentiment} window="15m" />
-      <Sentiment points={sentiment} window="5m" />
-      <AiReadButton ref={aiRef} exchange={summary.underlying_exchange} symbol={summary.underlying_symbol} expiry={summary.expiry} />
+      <span className="oi-extra">
+        <Sentiment points={sentiment} window="5m" />
+      </span>
+      <button className="oi-more" aria-expanded={more} aria-label={more ? "Show fewer open-interest readings" : "Show all open-interest readings"} onClick={() => setMore((m) => !m)}>
+        {more ? "▴" : "▾"}
+      </button>
+      <AiReadButton ref={aiRef} exchange={summary.underlying_exchange} symbol={summary.underlying_symbol} expiry={summary.expiry} hideButton />
     </div>
   );
 }

@@ -20,7 +20,7 @@ export type AiReadHandle = { activate: () => void };
 
 /** `expiry` is only passed to the model's context when the page knows it (the option chain is loaded); without it the
  * server picks the nearest. A read is saved per instrument, not per expiry. */
-export const AiReadButton = forwardRef<AiReadHandle, { exchange: string; symbol: string; expiry?: string }>(function AiReadButton({ exchange, symbol, expiry }, ref) {
+export const AiReadButton = forwardRef<AiReadHandle, { exchange: string; symbol: string; expiry?: string; hideButton?: boolean }>(function AiReadButton({ exchange, symbol, expiry, hideButton = false }, ref) {
   const key = `${exchange}:${symbol}`;
   const restore = (): State => {
     const saved = loadAiRead(key);
@@ -61,9 +61,12 @@ export const AiReadButton = forwardRef<AiReadHandle, { exchange: string; symbol:
   useImperativeHandle(ref, () => ({ activate: () => (loading ? undefined : click()) }));
   return (
     <>
-      <button className="chip-btn ai-read-btn" onClick={click} disabled={loading} data-testid="ai-read-btn">
-        {loading ? "Reading…" : state.status === "done" ? (open ? "✦ Hide AI read" : "✦ Show AI read") : "✦ AI read"}
-      </button>
+      {!hideButton && (
+        <button className="chip-btn ai-read-btn" onClick={click} disabled={loading} data-testid="ai-read-btn">
+          {loading ? "Reading…" : state.status === "done" ? (open ? "✦ Hide AI read" : "✦ Show AI read") : "✦ AI read"}
+        </button>
+      )}
+      {hideButton && loading && <span className="faint" data-testid="ai-read-loading">Reading…</span>}
       {state.status === "error" && (
         <div className="ai-read" role="alert" data-testid="ai-read-error">
           <span className="error-text">{state.message}</span> <button className="chip-btn" onClick={run}>Retry</button>

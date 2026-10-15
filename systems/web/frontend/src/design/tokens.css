@@ -6,7 +6,7 @@
   --surface: #151c24;
   --surface-2: #1c2530;
   --border: #263241;
-  --text: #e6edf3;
+  --text: #d3dbe5; /* softer than near-white: bright text on a dark screen glares, most of all on a phone */
   --text-dim: #93a1b1;
   --text-faint: #6b7a8b;
   --accent: #4cc2ff;

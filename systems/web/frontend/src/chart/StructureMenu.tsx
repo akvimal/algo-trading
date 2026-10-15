@@ -1,5 +1,6 @@
 import { STRUCTURE_TIMEFRAMES, type StructureConfig } from "./config";
 import { Popover } from "./Popover";
+import { StructureIcon } from "./icons";
 
 type PanelProps = {
   config: StructureConfig;
@@ -69,7 +70,7 @@ export function StructurePanel({ config, onChange, on, onOn }: PanelProps) {
 /** The same panel as a top-bar dropdown (a phone has no rail), shown once the layer is on. */
 export function StructureMenu({ config, onChange }: { config: StructureConfig; onChange: (c: StructureConfig) => void }) {
   return (
-    <Popover label="Structure" badge={config.tfs.length}>
+    <Popover label="Structure" icon={<StructureIcon />} badge={config.tfs.length}>
       <StructurePanel config={config} onChange={onChange} />
     </Popover>
   );

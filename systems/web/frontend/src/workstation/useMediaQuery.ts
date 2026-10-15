@@ -24,3 +24,7 @@ export function useMediaQuery(query: string): boolean {
 
 /** The width at which the workstation can lay charts out side by side with a tool strip. */
 export const WIDE_QUERY = "(min-width: 900px)";
+
+/** The width at which the Trade workstation has room for its full layout: a tool strip, two charts side by side and the 360px ticket. Below it (a phone,
+ * a tablet, a half-width window) it shows one chart, with dropdowns in place of rows of buttons, the tools under the chart and the ticket beneath. */
+export const WORKSTATION_QUERY = "(min-width: 1200px)";

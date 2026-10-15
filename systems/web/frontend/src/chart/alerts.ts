@@ -33,6 +33,11 @@ export type Trigger = "cross" | "close";
 export type Side = "above" | "inside" | "below";
 export type Zone = { lo: number; hi: number };
 
+/** One armed drawing alert, as the list of them describes it. */
+export type ArmedAlert = { id: string; name: string; level: string | null; trigger: Trigger; label?: string };
+
+export const ALERT_TOOL_NAME: Record<string, string> = { horizontalStraightLine: "Horizontal line", priceLine: "Price level", segment: "Trend line", rayLine: "Ray", rect: "Zone" };
+
 export const TRIGGER_WORDS: Record<Trigger, string> = { cross: "as soon as it crosses", close: "when a candle closes across" };
 
 export const isTrigger = (v: unknown): v is Trigger => v === "cross" || v === "close";

@@ -88,8 +88,16 @@ export class FakeChart {
   setStyles(s: unknown) {
     this.styles = s;
   }
+  /** A test sets this to put the right edge of the window at that bar index (null: at the latest bar). */
+  visibleTo: number | null = null;
+  realTimeCalls = 0;
   getVisibleRange() {
-    return { from: 0, to: this.data.length, realFrom: 0, realTo: this.data.length };
+    const to = this.visibleTo ?? this.data.length;
+    return { from: 0, to, realFrom: 0, realTo: to };
+  }
+  scrollToRealTime() {
+    this.realTimeCalls += 1;
+    this.visibleTo = null;
   }
   getBarSpace() {
     return this.barSpace;

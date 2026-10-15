@@ -63,6 +63,23 @@ const candlesFor = (symbol: string) => {
 const emptyStructure = { order_blocks: [], fvgs: [], trend: "up", events: [], trend_changes: [], setups: [] };
 
 /** A screen wide enough for the workstation (tool strip, side-by-side charts), or a phone. */
+const TOOL_GROUP: Record<string, string> = {
+  "Trend line": "Lines",
+  Ray: "Lines",
+  Channel: "Lines",
+  "Horizontal line": "Levels and zones",
+  "Price level": "Levels and zones",
+  "Zone (supply or demand)": "Levels and zones",
+};
+
+/** Arms a drawing tool from the strip, opening its group first when it sits in one. */
+async function armTool(user: ReturnType<typeof userEvent.setup>, name: string) {
+  const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+  const group = TOOL_GROUP[name];
+  if (group) await user.click(bar.getByRole("button", { name: group }));
+  await user.click(bar.getByRole("button", { name }));
+}
+
 function screenIs(wide: boolean) {
   vi.stubGlobal("matchMedia", (q: string) => ({ matches: wide && q.includes("min-width"), media: q, addEventListener: () => undefined, removeEventListener: () => undefined }));
 }
@@ -398,7 +415,7 @@ describe("the plan picker: market state and plan", () => {
   const down = { regime: "trending_down", adx: 31, atr_percentile: 40, trend: "down", advice: "x" };
   const ranging = { regime: "ranging", adx: 14, atr_percentile: 40, trend: "range", advice: "x" };
   const state = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Market state" })).getByRole("button", { name });
-  const dir = (t: ReturnType<typeof within>, name: "Up" | "Down") => within(t.getByRole("group", { name: "Trend direction" })).getByRole("button", { name });
+  const dir = (t: ReturnType<typeof within>, name: "Up" | "Down") => within(t.getByRole("group", { name: "Market state" })).getByRole("button", { name: `Trending ${name.toLowerCase()}` });
   const plan = (t: ReturnType<typeof within>, name: string) => within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name });
 
   it("pre-selects what the market is doing from the regime read, and says where that came from", async () => {
@@ -464,7 +481,7 @@ describe("the plan picker: market state and plan", () => {
     expect(t.getByTestId("market-state-source")).toHaveTextContent("Your read.");
     expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range break\./);
     expect(within(t.getByTestId("plan-block")).getByText("Tagged Range break.")).toBeInTheDocument();
-    await user.click(state(t, "Trending")); // back to what the read says
+    await user.click(state(t, "Trending up")); // back to what the read says
     expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
     expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
   });
@@ -484,9 +501,9 @@ describe("the plan picker: market state and plan", () => {
     await user.click(dir(t, "Up")); // what the market says again: not a pin
     expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
     await user.click(state(t, "Ranging"));
-    expect(t.queryByRole("group", { name: "Trend direction" })).not.toBeInTheDocument(); // a range has no direction
-    expect(state(t, "Trending")).toHaveAttribute("aria-pressed", "false");
-    await user.click(state(t, "Trending")); // back to a trend: the direction the market read shows
+    expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "false"); // a range has no direction
+    expect(state(t, "Trending up")).toHaveAttribute("aria-pressed", "false");
+    await user.click(state(t, "Trending up")); // back to a trend: the direction the market read shows
     expect(dir(t, "Up")).toHaveAttribute("aria-pressed", "true");
     expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
   });
@@ -714,6 +731,7 @@ describe("placing", () => {
   });
 
   it("brings the form back for a different instrument, and once the position is closed", async () => {
+    screenIs(true); // the preset buttons are a dropdown on a phone
     positionRows = [{ id: "p1", symbol: "RELIANCE", segment: "NSE", action: "BUY", instrument_type: "spot", quantity: 10, entry_price: 1000, entry_time: new Date().toISOString(), status: "OPEN", stop_loss_price: 990, target_price: null, option_group_id: null, unrealized_pnl: 0 }];
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
@@ -1145,6 +1163,7 @@ describe("safety", () => {
   });
 
   it("starts a clean ticket when the instrument changes", async () => {
+    screenIs(true); // the preset buttons are a dropdown on a phone
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     let t = await ticket();
@@ -1263,6 +1282,7 @@ describe("live price push", () => {
   });
 
   it("does not carry the old symbol's price to the new one", async () => {
+    screenIs(true); // the preset buttons are a dropdown on a phone
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const socket = await openSocket();
@@ -1280,10 +1300,25 @@ describe("live price push", () => {
 // ---------------------------------------------------------------------------------------------------
 
 describe("on a phone", () => {
-  it("has one chart, no tool strip, no layout controls, and the ticket beneath", async () => {
+  it("picks the instrument and the interval from dropdowns, and can turn the chart's up-and-down movement off", async () => {
+    const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    expect(screen.queryByRole("toolbar", { name: "Drawing tools" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Instrument" })).toHaveValue("NIFTY");
+    expect(screen.getByRole("combobox", { name: /Interval/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bank Nifty" })).not.toBeInTheDocument();
+    const pan = screen.getByRole("button", { name: "Move chart up and down" });
+    expect(pan).toHaveAttribute("aria-pressed", "true");
+    await user.click(pan);
+    expect(pan).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("has one chart, the drawing tools as a strip, no layout controls, and the ticket beneath", async () => {
+    renderAt("/trade?symbol=NIFTY");
+    await loaded();
+    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
+    expect(bar.getByRole("button", { name: "Lines" })).toBeInTheDocument(); // the line tools are one group
+    expect(bar.queryByRole("button", { name: /Indicators/ })).not.toBeInTheDocument(); // those stay in the top bar on a phone
     expect(screen.queryByRole("group", { name: "Layout" })).not.toBeInTheDocument();
     expect(screen.getAllByTestId("chart-pane")).toHaveLength(1);
     expect(screen.getByTestId("ticket")).toBeInTheDocument();
@@ -1300,8 +1335,8 @@ describe("drawing tools", () => {
     const c = await loaded();
     const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
     expect(bar.getByRole("button", { name: "Cursor" })).toHaveAttribute("aria-pressed", "true");
-    await user.click(bar.getByRole("button", { name: "Trend line" }));
-    expect(bar.getByRole("button", { name: "Trend line" })).toHaveAttribute("aria-pressed", "true");
+    await armTool(user, "Trend line");
+    expect(bar.getByRole("button", { name: "Lines" })).toHaveAttribute("aria-pressed", "true");
     const armed = c.overlaysNamed("segment");
     expect(armed).toHaveLength(1);
     act(() => c.finishDrawing(armed[0].id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[10].timestamp, value: 1020 }]));
@@ -1319,7 +1354,7 @@ describe("drawing tools", () => {
       renderAt("/trade?symbol=NIFTY");
       const c = await loaded();
       const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
-      await user.click(bar.getByRole("button", { name: "Text" }));
+      await armTool(user, "Text");
       expect(bar.getByRole("button", { name: "Text" })).toHaveAttribute("aria-pressed", "true");
       const armed = c.overlaysNamed("textNote");
       expect(armed).toHaveLength(1);
@@ -1413,8 +1448,7 @@ describe("drawing tools", () => {
 
     async function drawLine(user: ReturnType<typeof userEvent.setup>, tool = "Trend line", name = "segment") {
       const c = chart(0);
-      const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
-      await user.click(bar.getByRole("button", { name: tool }));
+      await armTool(user, tool);
       const armed = c.overlaysNamed(name).filter((o) => o.points.length === 0);
       const ov = armed[armed.length - 1];
       act(() => c.finishDrawing(ov.id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[10].timestamp, value: 1020 }]));
@@ -1508,7 +1542,7 @@ describe("drawing tools", () => {
       const user = userEvent.setup();
       renderAt("/trade?symbol=NIFTY");
       const c = await loaded();
-      await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Text" }));
+      await armTool(user, "Text");
       const ov = c.overlaysNamed("textNote")[0];
       act(() => c.finishDrawing(ov.id, [{ timestamp: c.data[5].timestamp, value: 1010 }]));
       await user.type(await screen.findByLabelText("Text on the chart"), "Supply above{Enter}");
@@ -1558,8 +1592,7 @@ describe("drawing tools", () => {
     // click back into chart 0 so the toolbar draws there instead.
     await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
 
-    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
-    await user.click(bar.getByRole("button", { name: "Trend line" }));
+    await armTool(user, "Trend line");
     const pending = chart(0).overlaysNamed("segment");
     expect(pending).toHaveLength(1);
     act(() => chart(0).finishDrawing(pending[0].id, [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[10].timestamp, value: 1020 }]));
@@ -1596,8 +1629,7 @@ describe("drawing tools", () => {
     // click back into chart 0 so the toolbar draws there instead.
     await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
 
-    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
-    await user.click(bar.getByRole("button", { name: "Trend line" }));
+    await armTool(user, "Trend line");
     const pending = chart(0).overlaysNamed("segment");
     expect(pending).toHaveLength(1);
     act(() => chart(0).finishDrawing(pending[0].id, [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[10].timestamp, value: 1020 }]));
@@ -1644,8 +1676,7 @@ describe("drawing tools", () => {
     // click back into chart 0 so the toolbar draws there instead.
     await user.pointer({ target: screen.getAllByRole("region")[0], keys: "[MouseLeft]" });
 
-    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
-    await user.click(bar.getByRole("button", { name: "Trend line" }));
+    await armTool(user, "Trend line");
     const pending = chart(0).overlaysNamed("segment");
     expect(pending).toHaveLength(1);
     act(() => chart(0).finishDrawing(pending[0].id, [{ timestamp: chart(0).data[3].timestamp, value: 1010 }, { timestamp: chart(0).data[10].timestamp, value: 1020 }]));
@@ -1677,8 +1708,7 @@ describe("drawing tools", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
-    await user.click(bar.getByRole("button", { name: "Zone (supply or demand)" }));
+    await armTool(user, "Zone (supply or demand)");
     const zone = c.overlaysNamed("rect").find((o) => o.points.length === 0)!;
     act(() => c.finishDrawing(zone.id, [{ timestamp: c.data[3].timestamp, value: 1010 }, { timestamp: c.data[10].timestamp, value: 1020 }]));
     await waitFor(() => expect(c.overlaysNamed("drawTag")).toHaveLength(1)); // a zone is armed as it is drawn, so it carries a bell
@@ -1691,13 +1721,12 @@ describe("drawing tools", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const c = await loaded();
-    const bar = within(screen.getByRole("toolbar", { name: "Drawing tools" }));
-    await user.click(bar.getByRole("button", { name: "Zone (supply or demand)" }));
+    await armTool(user, "Zone (supply or demand)");
     expect(c.overlaysNamed("rect")).toHaveLength(1);
-    await user.click(bar.getByRole("button", { name: "Zone (supply or demand)" }));
+    await armTool(user, "Zone (supply or demand)");
     expect(c.overlaysNamed("rect")).toHaveLength(0);
-    await user.click(bar.getByRole("button", { name: "Ray" }));
-    await user.click(bar.getByRole("button", { name: "Cursor" }));
+    await armTool(user, "Ray");
+    await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Cursor" }));
     expect(c.overlaysNamed("rayLine")).toHaveLength(0);
     expect(JSON.parse(localStorage.getItem("web.chart.drawings:NSE:NIFTY") ?? "[]")).toEqual([]); // nothing was drawn, so nothing is saved
   });
@@ -1943,7 +1972,6 @@ describe("structure", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
-    expect(screen.queryByRole("toolbar", { name: "Drawing tools" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Indicators/ }));
     const panel = within(screen.getByRole("group", { name: "Indicators" }));
     await user.click(panel.getByLabelText("Structure"));
@@ -2290,7 +2318,7 @@ describe("two linked charts", () => {
     it("does nothing while a drawing tool is armed - that click places a drawing", async () => {
       const user = userEvent.setup();
       await pair(user);
-      await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Trend line" }));
+      await armTool(user, "Trend line");
       click(0, chart(0).data[5].timestamp);
       expect(chart(0).overlaysNamed("timeMark")).toHaveLength(0);
     });
@@ -2375,7 +2403,7 @@ describe("two linked charts", () => {
     const panes = screen.getAllByRole("region");
     await user.pointer({ target: panes[1], keys: "[MouseLeft]" });
     expect(await screen.findByRole("heading", { name: "Trade BANKNIFTY" })).toBeInTheDocument();
-    await user.click(within(screen.getByRole("toolbar", { name: "Drawing tools" })).getByRole("button", { name: "Ray" }));
+    await armTool(user, "Ray");
     expect(chart(1).overlaysNamed("rayLine")).toHaveLength(1);
     expect(chart(0).overlaysNamed("rayLine")).toHaveLength(0);
   });
@@ -2900,7 +2928,8 @@ describe("the OI group on the rail", () => {
   beforeEach(() => screenIs(true));
   const rail = () => within(screen.getByRole("group", { name: "Open interest" }));
   const aiCalls = () => calls.filter((c) => c.url.includes("/ai-read"));
-  const chainCalls = () => calls.filter((c) => c.url.includes("/options/"));
+  // The header's own look-up of the expiry list (for the Opt badge) is not a read of the chain, and runs whatever the OI switches say.
+  const chainCalls = () => calls.filter((c) => c.url.includes("/options/") && !c.url.includes("/options/expiries"));
 
   it("has the OI strip, the OI levels and the AI read, with the strip on and the levels off to start", async () => {
     renderAt("/trade?symbol=NIFTY");
@@ -2932,13 +2961,13 @@ describe("the OI group on the rail", () => {
     expect(await screen.findByTestId("oi-strip")).toBeInTheDocument();
   });
 
-  it("keeps the AI read reachable with the strip hidden: a slim row with just its button", async () => {
+  it("has no AI read button on the chart itself: the rail's button is the one place, and with the strip hidden none of the readings show", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     await loaded();
+    expect(screen.queryByTestId("ai-read-btn")).not.toBeInTheDocument();
     await user.click(rail().getByRole("button", { name: "OI strip" }));
-    const slim = within(screen.getByTestId("oi-strip-slim"));
-    expect(slim.getByTestId("ai-read-btn")).toBeInTheDocument();
+    expect(screen.queryByTestId("ai-read-btn")).not.toBeInTheDocument();
     expect(screen.queryByText(/PCR/)).not.toBeInTheDocument(); // none of the readings
   });
 
@@ -2990,7 +3019,7 @@ describe("the OI group on the rail", () => {
     await loaded();
     expect(screen.queryByRole("group", { name: "Open interest" })).not.toBeInTheDocument();
     const view = within(screen.getByRole("group", { name: "View" }));
-    expect(view.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI strip", "OI levels", "My trades", "Price in header"]);
+    expect(view.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["OI strip", "OI levels", "AI read", "My trades", "Price in header"]);
   });
 });
 
@@ -3101,6 +3130,18 @@ describe("option-chain levels on the chart", () => {
     expect(screen.queryByTestId("oi-strip")).not.toBeInTheDocument();
   });
 
+  it("shows the nearest option expiry (the weekly one) beside the futures expiry", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: new Date("2026-09-30T05:00:00Z") });
+    try {
+      renderAt("/trade?symbol=NIFTY");
+      await loaded();
+      // The listed option expiries are 29 Sep and 6 Oct: on 30 Sep the nearest one that has not passed is 6 Oct.
+      expect(await screen.findByTestId("opt-expiry-0")).toHaveTextContent(/^Opt .*Oct/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("looks up the expiry once and reuses it, and again after a failed reading", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
@@ -3111,13 +3152,13 @@ describe("option-chain levels on the chart", () => {
       await waitFor(() => expect(levels(c).length).toBeGreaterThan(0));
       await act(async () => void vi.advanceTimersByTime(60_500));
       await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/oi-summary")).length).toBe(2));
-      expect(calls.filter((x) => x.url.includes("/options/expiries"))).toHaveLength(1);
+      expect(calls.filter((x) => x.url.includes("/options/expiries"))).toHaveLength(2); // one is the header's own, for the Opt badge
       oiFails = true;
       await act(async () => void vi.advanceTimersByTime(60_500));
       await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/oi-summary")).length).toBe(3));
       oiFails = false;
       await act(async () => void vi.advanceTimersByTime(60_500));
-      await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/expiries"))).toHaveLength(2));
+      await waitFor(() => expect(calls.filter((x) => x.url.includes("/options/expiries"))).toHaveLength(3));
     } finally {
       vi.useRealTimers();
     }
@@ -3370,6 +3411,21 @@ describe("alerts on drawings", () => {
     expect(saved()[0].alert).toBeUndefined();
     tick(1016);
     expect(flash()).not.toBeInTheDocument();
+  });
+
+  it("lists every armed alert from the count, and switches one off from the list", async () => {
+    const user = userEvent.setup();
+    await open([level(1015, { alert: { trigger: "cross" } }), level(1030, { alert: { trigger: "close" } })]);
+    expect(screen.queryByTestId("alert-list")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("armed"));
+    const list = within(screen.getByTestId("alert-list"));
+    expect(list.getAllByRole("listitem")).toHaveLength(2);
+    expect(list.getByText("1,015")).toBeInTheDocument();
+    expect(list.getByText(/on a candle close/)).toBeInTheDocument();
+    await user.click(list.getByRole("button", { name: /Switch off the alert on Horizontal line 1,015/ }));
+    expect(screen.getByTestId("armed")).toHaveTextContent("1 alert armed");
+    expect(within(screen.getByTestId("alert-list")).getAllByRole("listitem")).toHaveLength(1);
+    expect(saved().filter((d: { alert?: unknown }) => d.alert)).toHaveLength(1);
   });
 
   it("remembers an armed alert across a reload, showing that one is armed without selecting anything", async () => {

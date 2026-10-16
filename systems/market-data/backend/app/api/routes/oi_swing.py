@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.adapters.db.models import OiSwingShadow
+from app.adapters.db.models import OiAlertOutcome, OiSwingShadow
 from app.adapters.db.session import get_db
 
 router = APIRouter()
@@ -97,3 +97,67 @@ def get_summary(db: Session = Depends(get_db)):
         taken=_bucket([r for r in rows if r.taken]), skipped=_bucket([r for r in rows if not r.taken]),
         by_direction={d: _bucket([r for r in rows if r.taken and r.direction == d]) for d in ("LONG", "SHORT")},
     )
+
+
+class AlertBucket(BaseModel):
+    n: int  # alerts that have at least a 1-day result
+    hit_rate: Optional[float] = None  # share that moved the called way, %
+    avg: Optional[float] = None  # average signed move, %
+    avg_vs_market: Optional[float] = None  # ...minus the average stock's, same sign convention
+
+
+class AlertSummaryOut(BaseModel):
+    alerts: int
+    nights: int
+    first_night: Optional[date] = None
+    last_night: Optional[date] = None
+    horizons: dict[str, AlertBucket]  # "1d" | "2d" | "3d"
+    by_direction: dict[str, dict[str, AlertBucket]]
+
+
+class AlertRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    snapshot_date: date
+    symbol: str
+    direction: str
+    score: Optional[float] = None
+    source: Optional[str] = None
+    reasons: Optional[list] = None
+    ret_1d: Optional[float] = None
+    ret_2d: Optional[float] = None
+    ret_3d: Optional[float] = None
+    mkt_1d: Optional[float] = None
+    mkt_2d: Optional[float] = None
+    mkt_3d: Optional[float] = None
+
+
+def _alert_bucket(rows: list[OiAlertOutcome], k: int) -> AlertBucket:
+    pairs = [(getattr(r, f"ret_{k}d"), getattr(r, f"mkt_{k}d")) for r in rows if getattr(r, f"ret_{k}d") is not None]
+    if not pairs:
+        return AlertBucket(n=0)
+    rets = [p[0] for p in pairs]
+    diffs = [p[0] - p[1] for p in pairs if p[1] is not None]
+    return AlertBucket(
+        n=len(pairs), hit_rate=round(100 * sum(1 for r in rets if r > 0) / len(rets), 1), avg=round(sum(rets) / len(rets), 2),
+        avg_vs_market=round(sum(diffs) / len(diffs), 2) if diffs else None,
+    )
+
+
+@router.get("/oi-swing/alerts/summary", response_model=AlertSummaryOut)
+def get_alert_summary(db: Session = Depends(get_db)):
+    """How the stocks the major-OI-shift alert named did over the next 1-3 days, against the average stock. Few alerts a week, so read n first."""
+    rows = db.query(OiAlertOutcome).all()
+    dates = sorted({r.snapshot_date for r in rows})
+    return AlertSummaryOut(
+        alerts=len(rows), nights=len(dates), first_night=dates[0] if dates else None, last_night=dates[-1] if dates else None,
+        horizons={f"{k}d": _alert_bucket(rows, k) for k in (1, 2, 3)},
+        by_direction={d: {f"{k}d": _alert_bucket([r for r in rows if r.direction == d], k) for k in (1, 2, 3)} for d in ("bullish", "bearish")},
+    )
+
+
+@router.get("/oi-swing/alerts", response_model=list[AlertRow])
+def get_alerts(limit: int = Query(60, ge=1, le=500), db: Session = Depends(get_db)):
+    """The most recent alerted stocks with their results so far, newest night first."""
+    rows = db.query(OiAlertOutcome).order_by(OiAlertOutcome.snapshot_date.desc(), OiAlertOutcome.score.desc()).limit(limit).all()
+    return [AlertRow.model_validate(r) for r in rows]

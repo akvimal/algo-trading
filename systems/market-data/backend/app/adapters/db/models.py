@@ -539,3 +539,28 @@ class OiSwingShadow(Base):
     r_multiple = Column(Float)
     mfe_r = Column(Float)
     mae_r = Column(Float)
+
+
+class OiAlertOutcome(Base):
+    """One row per (stock, night) the major-OI-shift alert named: the direction it called and the signed close-to-close move over the next 1-3 bars,
+    next to the average stock's. Never drives anything. See migration 064 and app/domain/oi_alert_outcomes.py."""
+
+    __tablename__ = "oi_alert_outcomes"
+    __table_args__ = (UniqueConstraint("symbol", "snapshot_date"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    snapshot_date = Column(Date, nullable=False)
+    symbol = Column(Text, nullable=False)
+    direction = Column(Text, nullable=False)
+    score = Column(Float)
+    source = Column(Text)
+    reasons = Column(JSONB)
+    ref_close = Column(Float)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    ret_1d = Column(Float)
+    ret_2d = Column(Float)
+    ret_3d = Column(Float)
+    mkt_1d = Column(Float)
+    mkt_2d = Column(Float)
+    mkt_3d = Column(Float)
+    resolved_at = Column(TIMESTAMP(timezone=True))

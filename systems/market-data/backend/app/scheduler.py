@@ -18,7 +18,7 @@ from app.domain.job_tracker import tracked
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.models import Candle
 from app.domain.oi_buildup import EodActivityResult, PreviousSnapshot, compute_eod_activity, compute_eod_buildup
-from app.domain import oi_swing_shadow
+from app.domain import oi_alert_outcomes, oi_swing_shadow
 from app.domain.oi_strikes import RECORDED_UNDERLYINGS, RETENTION_DAYS, nearest_expiry, strike_rows
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
@@ -684,6 +684,12 @@ def _record_oi_swing_shadow() -> None:
     zones: list = []
     db = SessionLocal()
     try:
+        # The OI alerts' own track record (what the stocks the alert named did next) is kept here too: same night, same stored bars, no provider calls.
+        try:
+            tally["alerts_logged"], tally["alerts_settled"] = oi_alert_outcomes.record_and_settle(db, today)
+        except Exception:
+            logger.exception("oi alert outcomes failed")
+            db.rollback()
         # Settle the earlier nights first (the bars after the decision night, once they exist): it must not wait on tonight's zone scan.
         for row in db.query(OiSwingShadow).filter(OiSwingShadow.result.is_(None), OiSwingShadow.snapshot_date < today).all():
             try:

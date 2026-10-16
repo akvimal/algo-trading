@@ -147,4 +147,9 @@ export const READINESS_HELP: Record<string, { meaning: string; to: string; actio
   profit: { meaning: "Net profit after costs must be above zero. It is the result of the other checks, not a goal to chase directly.", to: "/portfolio", action: "See your record" },
 };
 
+/** The short name on each readiness tile (the server's label is a full sentence). */
+export const READINESS_TITLE: Record<string, string> = {
+  costs: "Realistic costs", trades: "Paper trades", days: "Days on record", discipline: "Discipline", drawdown: "Max drawdown", profit: "Net profit",
+};
+
 export const FIXED_AT = 10;

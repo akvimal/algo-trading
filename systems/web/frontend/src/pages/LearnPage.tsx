@@ -3,14 +3,14 @@ import { api } from "../api/http";
 import type { LiveEligibility, MistakeSummary, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Skeleton } from "../components/bits";
+import { ReadinessVisual } from "../components/ReadinessVisual";
 import { Signed } from "../components/bits";
 import { SEGMENTS } from "../config";
 import { formatPnl } from "../format";
 import { useResource, type Resource } from "../hooks/useResource";
-import { FIXED_AT, HABITS, PARTS, READINESS_HELP } from "./learnCatalog";
+import { FIXED_AT, HABITS, PARTS } from "./learnCatalog";
 import { focusHabit, habitRows, runLabel, type HabitRow } from "./learnModel";
 import { LEVEL_LABEL, tagLabel } from "./journalModel";
-import { graduation } from "./portfolioModel";
 
 const SEGMENT_LABEL: Record<Segment, string> = { NSE: "Stocks & F&O", MCX: "Commodities", CRYPTO: "Crypto" };
 const parseSegment = (v: string | null): Segment => ((SEGMENTS as readonly string[]).includes(v ?? "") ? (v as Segment) : "NSE");
@@ -49,38 +49,7 @@ function Readiness({ elig }: { elig: Resource<LiveEligibility> }) {
   if (elig.loading) return <Skeleton lines={3} />;
   if (elig.error) return <ErrorNotice error={elig.error} onRetry={elig.reload} />;
   if (!elig.data) return null;
-  const g = graduation(elig.data);
-  return (
-    <div className="card" data-testid="readiness">
-      <div className="row">
-        <h2 className="section-title" style={{ margin: 0 }}>Ready for live trading?</h2>
-        <span className={`pill ${g.eligible ? "up" : "warn"}`}>{g.met} of {g.total}</span>
-      </div>
-      <p className="dim" style={{ margin: "8px 0" }}>
-        These are the real checks. Reading lessons does not change them; your paper trades do.
-        {!g.enforced && " For now they are a guide and do not block you."}
-      </p>
-      {elig.data.requirements.map((r) => {
-        const help = READINESS_HELP[r.key];
-        return (
-          <div key={r.key} className="stack" data-testid="requirement" style={{ padding: "8px 0", borderTop: "1px solid var(--border)" }}>
-            <div className="row">
-              <span>
-                <span aria-hidden="true" className={r.met ? "up" : "faint"}>{r.met ? "✓" : "○"}</span> {r.label}
-              </span>
-              <span className="num dim">{r.actual} / {r.required}</span>
-            </div>
-            {!r.met && help && (
-              <span className="dim" style={{ fontSize: 13 }}>
-                {help.meaning}{" "}
-                {help.to.startsWith("#") ? <a href={help.to}>{help.action}</a> : <Link to={help.to}>{help.action}</Link>}
-              </span>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
+  return <ReadinessVisual eligibility={elig.data} />;
 }
 
 function Habits({ mistakes, segment }: { mistakes: Resource<MistakeSummary>; segment: Segment }) {

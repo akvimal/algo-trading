@@ -42,15 +42,42 @@ afterEach(() => vi.unstubAllGlobals());
 const renderPage = () => render(<MemoryRouter initialEntries={["/learn"]}><LearnPage /></MemoryRouter>);
 
 describe("LearnPage", () => {
-  it("shows each live-readiness check, ticked or not, with what an unmet one means", async () => {
+  it("draws readiness as a ring, one tile per check, and names the single next step", async () => {
     renderPage();
-    const rows = await screen.findAllByTestId("requirement");
-    expect(rows).toHaveLength(3);
-    expect(within(rows[0]).getByText(/Realistic costs/)).toBeInTheDocument();
-    expect(within(rows[1]).getByText(/A handful of trades proves nothing/)).toBeInTheDocument();
-    expect(within(rows[0]).queryByText(/Paper results without charges/)).toBeNull(); // a met check needs no explanation
-    expect(screen.getByText("1 of 3")).toBeInTheDocument();
+    const tiles = await screen.findAllByTestId("requirement");
+    expect(tiles).toHaveLength(3);
+    expect(tiles.map((t) => t.getAttribute("data-met"))).toEqual(["true", "false", "false"]);
+    expect(screen.getByRole("img", { name: "1 of 3 readiness checks met" })).toBeInTheDocument();
+    const next = screen.getByTestId("next-step");
+    expect(next).toHaveTextContent("Paper trades"); // the quickest unmet check, not the first row
+    expect(within(next).getByRole("link", { name: "Place a paper trade" })).toHaveAttribute("href", "/trade");
     expect(screen.getByText(/For now they are a guide/)).toBeInTheDocument();
+  });
+
+  it("draws meters from the numbers the server sends", async () => {
+    elig = {
+      segment: "NSE", enforced: true, eligible: false,
+      requirements: [
+        { ...req("trades", "Paper trades recorded with costs", false), actual: "12 trades", required: "30 trades", value: 12, target: 30 },
+        { ...req("days", "Days on the current record", false), actual: "9 days", required: "14 days", value: 9, target: 14 },
+        { ...req("drawdown", "Max drawdown", true), actual: "5.0%", required: "<= 20%", value: 5, target: 20, higher_is_better: false },
+        { ...req("profit", "Net profit after costs", true), actual: "1200.00", required: "> 0", value: 1200, target: 0 },
+      ],
+    };
+    renderPage();
+    await screen.findAllByTestId("requirement");
+    expect(screen.getByRole("img", { name: "12 trades, 30 trades" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "9 of 14 days" })).toBeInTheDocument();
+    expect(screen.getByText("▲ +1,200")).toBeInTheDocument();
+    expect(screen.queryByText(/do not block you/)).toBeNull();
+  });
+
+  it("says every check is met when they all are, with no next step", async () => {
+    elig = { ...elig, eligible: true, requirements: elig.requirements.map((r) => ({ ...r, met: true })) };
+    renderPage();
+    await screen.findAllByTestId("requirement");
+    expect(screen.getByText(/Every check is met on paper/)).toBeInTheDocument();
+    expect(screen.queryByTestId("next-step")).toBeNull();
   });
 
   it("asks for a review first when there are no reviewed trades", async () => {

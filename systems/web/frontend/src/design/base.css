@@ -2996,3 +2996,15 @@ table.t th {
     display: flex;
   }
 }
+
+/* Live readiness: one tile per check, two across on a wider screen. */
+.ready-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 600px) {
+  .ready-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}

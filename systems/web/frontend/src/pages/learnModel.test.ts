@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { MistakeSummary } from "../api/types";
+import type { MistakeSummary, Requirement } from "../api/types";
 import { HABITS, PARTS } from "./learnCatalog";
-import { focusHabit, habitRows, runLabel } from "./learnModel";
+import { focusHabit, habitRows, meterFill, meterTone, nextCheck, runLabel } from "./learnModel";
 
 const cost = (n: number, pnl: number, level: "study" | "plan" | "execution") => ({ n, pnl, avg_loss: null, level });
 const summary = (by_tag: MistakeSummary["by_tag"], since: Record<string, number>): MistakeSummary => ({
@@ -60,5 +60,44 @@ describe("focusHabit", () => {
 
   it("is none when every habit is fixed", () => {
     expect(focusHabit(habitRows(summary({ no_stop: cost(2, -1, "plan") }, { no_stop: 11 })))).toBeNull();
+  });
+});
+
+describe("readiness meters", () => {
+  const r = (over: Partial<Requirement>): Requirement => ({ key: "trades", label: "t", required: "30 trades", actual: "12 trades", met: false, value: 12, target: 30, higher_is_better: true, ...over });
+
+  it("fills a floor toward its target and caps at full", () => {
+    expect(meterFill(r({}))).toBeCloseTo(0.4);
+    expect(meterFill(r({ value: 45, met: true }))).toBe(1);
+    expect(meterFill(r({ value: null }))).toBe(0);
+  });
+
+  it("fills a ceiling toward its limit and turns red once it is over", () => {
+    const dd = (value: number, met: boolean) => r({ key: "drawdown", value, target: 20, higher_is_better: false, met });
+    expect(meterFill(dd(5, true))).toBeCloseTo(0.25);
+    expect([meterTone(dd(5, true)), meterTone(dd(14, true)), meterTone(dd(25, false))]).toEqual(["up", "warn", "dn"]);
+  });
+
+  it("treats a sign check (net profit above zero) as full or empty", () => {
+    const profit = (value: number | null, met: boolean) => r({ key: "profit", value, target: 0, met });
+    expect(meterFill(profit(1200, true))).toBe(1);
+    expect(meterFill(profit(-50, false))).toBe(0);
+    expect(meterTone(profit(null, false))).toBe("dim");
+  });
+
+  it("reads a check from an older server with no numbers as full or empty by its met flag", () => {
+    expect(meterFill(r({ value: undefined, target: undefined, met: true }))).toBe(1);
+    expect(meterFill(r({ value: undefined, target: undefined }))).toBe(0);
+  });
+
+  it("tones a floor: green when met, amber when started, grey when not started", () => {
+    expect([meterTone(r({ met: true })), meterTone(r({})), meterTone(r({ value: 0 }))]).toEqual(["up", "warn", "dim"]);
+  });
+
+  it("suggests the quickest unmet check next, and none when all are met", () => {
+    const all = [r({ key: "days" }), r({ key: "profit" }), r({ key: "trades" }), r({ key: "costs", met: true })];
+    expect(nextCheck(all)?.key).toBe("trades");
+    expect(nextCheck(all.map((x) => ({ ...x, met: true })))).toBeNull();
+    expect(nextCheck([r({ key: "mystery" }), r({ key: "days" })])?.key).toBe("days");
   });
 });

@@ -420,6 +420,10 @@ class RequirementOut(BaseModel):
     required: str
     actual: str
     met: bool
+    # The check as numbers for a meter (see track_record.Requirement); absent until there is something to measure.
+    value: Optional[float] = None
+    target: Optional[float] = None
+    higher_is_better: bool = True
 
 
 class LiveEligibilityOut(BaseModel):

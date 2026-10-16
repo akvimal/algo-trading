@@ -1,10 +1,12 @@
 """The intraday credit-spread bot: GET/PUT /spread-bot/settings and GET /spread-bot/decisions. See app/domain/spread_bot.py. Paper only."""
 
-from datetime import time as dt_time
+from datetime import date, datetime, time as dt_time, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
@@ -13,6 +15,7 @@ from app.auth import User, get_current_user
 from app.domain.position_manager import load_account
 
 router = APIRouter()
+_IST = ZoneInfo("Asia/Kolkata")
 
 _ALLOWED_SYMBOLS = {"NIFTY", "BANKNIFTY"}
 
@@ -26,6 +29,8 @@ class SpreadBotSettingsOut(BaseModel):
     min_votes: int = 3
     width_strikes: int = 2
     max_trades_per_day: int = 2
+    strategy_mode: str = "credit_spread"
+    daily_loss_pct: float = 2.0
 
 
 class SpreadBotSettingsUpdate(BaseModel):
@@ -37,6 +42,8 @@ class SpreadBotSettingsUpdate(BaseModel):
     min_votes: Optional[int] = Field(default=None, ge=2, le=4)
     width_strikes: Optional[int] = Field(default=None, ge=1, le=10)
     max_trades_per_day: Optional[int] = Field(default=None, ge=1, le=10)
+    strategy_mode: Optional[str] = Field(default=None, pattern="^(credit_spread|auto)$")
+    daily_loss_pct: Optional[float] = Field(default=None, gt=0, le=20)
 
     @field_validator("symbols")
     @classmethod
@@ -78,6 +85,7 @@ def _out(row: Optional[db_models.SpreadBotSettings]) -> SpreadBotSettingsOut:
     return SpreadBotSettingsOut(
         enabled=bool(row.enabled), risk_pct=float(row.risk_pct), symbols=[s for s in row.symbols.split(",") if s], entry_from=_hhmm(row.entry_from),
         entry_to=_hhmm(row.entry_to), min_votes=row.min_votes, width_strikes=row.width_strikes, max_trades_per_day=row.max_trades_per_day,
+        strategy_mode=row.strategy_mode or "credit_spread", daily_loss_pct=float(row.daily_loss_pct if row.daily_loss_pct is not None else 2),
     )
 
 
@@ -94,7 +102,7 @@ def put_settings(payload: SpreadBotSettingsUpdate, user: User = Depends(get_curr
             raise HTTPException(status_code=409, detail="The bot is paper only, and your NSE account is set to live trading. Switch it back to paper first.")
     row = db.get(db_models.SpreadBotSettings, user.id)
     if row is None:
-        row = db_models.SpreadBotSettings(user_id=user.id, enabled=False, risk_pct=1, symbols="NIFTY,BANKNIFTY", entry_from=dt_time(9, 45), entry_to=dt_time(13, 30), min_votes=3, width_strikes=2, max_trades_per_day=2)
+        row = db_models.SpreadBotSettings(user_id=user.id, enabled=False, risk_pct=1, symbols="NIFTY,BANKNIFTY", entry_from=dt_time(9, 45), entry_to=dt_time(13, 30), min_votes=3, width_strikes=2, max_trades_per_day=2, strategy_mode="credit_spread", daily_loss_pct=2)
         db.add(row)
     if payload.enabled is not None:
         row.enabled = payload.enabled
@@ -114,14 +122,32 @@ def put_settings(payload: SpreadBotSettingsUpdate, user: User = Depends(get_curr
         row.width_strikes = payload.width_strikes
     if payload.max_trades_per_day is not None:
         row.max_trades_per_day = payload.max_trades_per_day
+    if payload.strategy_mode is not None:
+        row.strategy_mode = payload.strategy_mode
+    if payload.daily_loss_pct is not None:
+        row.daily_loss_pct = payload.daily_loss_pct
     db.commit()
     return _out(row)
 
 
 @router.get("/spread-bot/decisions", response_model=list[SpreadBotDecisionOut])
-def list_decisions(limit: int = Query(default=100, ge=1, le=500), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_decisions(
+    limit: int = Query(default=100, ge=1, le=1000), outcome: Optional[str] = Query(default=None, pattern="^(entered|skipped|failed)$"),
+    status: Optional[bool] = Query(default=None, description="true = only the 5-minute status rows (holding, outside the window, limit reached); false = leave them out"),
+    day: Optional[date] = Query(default=None, description="only this day, in Indian time"),
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
     D = db_models.SpreadBotDecision
-    rows = db.query(D).filter(D.user_id == user.id).order_by(D.decided_at.desc()).limit(limit).all()
+    q = db.query(D).filter(D.user_id == user.id)
+    if outcome:
+        q = q.filter(D.outcome == outcome)
+    if status is not None:
+        marker = func.coalesce(D.detail["status"].astext, "false")
+        q = q.filter(marker == "true" if status else marker != "true")
+    if day is not None:
+        start = datetime.combine(day, dt_time(0, 0), tzinfo=_IST)
+        q = q.filter(D.decided_at >= start, D.decided_at < start + timedelta(days=1))
+    rows = q.order_by(D.decided_at.desc()).limit(limit).all()
     return [
         SpreadBotDecisionOut(
             id=r.id, symbol=r.symbol, decided_at=r.decided_at.isoformat(), outcome=r.outcome, reason=r.reason, votes=r.votes, detail=r.detail,

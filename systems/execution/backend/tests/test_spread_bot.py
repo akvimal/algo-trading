@@ -102,12 +102,17 @@ class Q:
         return self.db.counts.get(self.model.__name__, 0)
 
     def all(self):
-        return []
+        return list(getattr(self.db, "closed", [])) if self.model.__name__ == "OptionPositionGroup" else []
+
+    def first(self):
+        if not self.db.counts.get(self.model.__name__, 0):
+            return None
+        return SimpleNamespace(id="g1", underlying_symbol="NIFTY", strategy_type="credit_spread", entry_time=datetime(2026, 10, 12, 4, 30, tzinfo=timezone.utc))
 
 
 class FakeDb:
     def __init__(self, **counts):
-        self.counts, self.added, self.commits = counts, [], 0
+        self.counts, self.added, self.commits, self.closed = counts, [], 0, []
 
     def query(self, model):
         return Q(self, model)
@@ -134,7 +139,7 @@ GOOD_READS = {
 
 def fake_deps(reads=None, group_status="OPEN", **over):
     reads = reads if reads is not None else GOOD_READS
-    opened, attached = [], []
+    opened, attached, deps_strategies = [], [], []
 
     def get_json(path, params):
         value = reads[path]
@@ -142,8 +147,9 @@ def fake_deps(reads=None, group_status="OPEN", **over):
             raise value
         return value
 
-    def open_group(db, user_id, symbol, action, short, long, expiry, lots, notes):
+    def open_group(db, user_id, symbol, action, strategy, short, long, expiry, lots, notes):
         opened.append((symbol, action, short, long, expiry, lots, notes))
+        deps_strategies.append(strategy)
         return SimpleNamespace(id=uuid.uuid4(), status=group_status, rejection_reason="nope")
 
     deps = bot.BotDeps(
@@ -154,7 +160,7 @@ def fake_deps(reads=None, group_status="OPEN", **over):
     )
     for k, v in over.items():
         setattr(deps, k, v)
-    deps.attached, deps.opened = attached, opened
+    deps.attached, deps.opened, deps.strategies = attached, opened, deps_strategies
     return deps
 
 
@@ -180,6 +186,58 @@ def test_agreeing_reads_open_a_put_spread_on_the_wall_sized_to_one_percent_with_
     assert d.outcome == "entered" and d.votes == {"trend": 1, "oi": 1, "structure": 1, "premarket": 1} and d.detail["short_strike"] == 24400.0
 
 
+TREND = {"regime": "trending_up", "adx": 31.0, "atr_percentile": 40}
+ALL_UP = {"trend": 1, "oi": 1, "structure": 1, "premarket": 1}
+
+
+def test_the_default_mode_always_sells_the_credit_spread():
+    assert bot.choose_strategy("BUY", ALL_UP, TREND, "credit_spread", 3)[0] == "credit_spread"
+
+
+def test_auto_buys_the_move_only_on_a_strong_aligned_trend():
+    assert bot.choose_strategy("BUY", ALL_UP, TREND, "auto", 3)[0] == "naked"
+    assert bot.choose_strategy("BUY", ALL_UP, {**TREND, "atr_percentile": 80}, "auto", 3)[0] == "debit_spread"  # dear premiums: capped spread
+    assert bot.choose_strategy("BUY", ALL_UP, {**TREND, "adx": 20}, "auto", 3)[0] == "credit_spread"  # weak trend
+    assert bot.choose_strategy("BUY", ALL_UP, {**TREND, "regime": "ranging"}, "auto", 3)[0] == "credit_spread"
+    assert bot.choose_strategy("SELL", ALL_UP, TREND, "auto", 3)[0] == "credit_spread"  # the trend is up, the bias is down
+    assert bot.choose_strategy("BUY", ALL_UP, None, "auto", 3)[0] == "credit_spread"  # no regime read: the safe default
+    assert bot.choose_strategy("BUY", {**ALL_UP, "oi": 0, "premarket": 0}, TREND, "auto", 2)[0] == "credit_spread"  # only two reads agree
+
+
+def test_a_long_option_is_the_strike_nearest_the_price_and_a_debit_spread_adds_a_short_leg_further_out():
+    n = bot.pick_directional(chain(), "BUY", "naked", 2)
+    assert (n["side"], n["long_strike"], n["short_strike"]) == ("ce", 24500.0, None) and n["max_loss_per_unit"] == n["long_ltp"]
+    d = bot.pick_directional(chain(), "BUY", "debit_spread", 2)
+    assert (d["long_strike"], d["short_strike"], d["width"]) == (24500.0, 24600.0, 100.0) and 0 < d["debit"] < 100
+    p = bot.pick_directional(chain(), "SELL", "debit_spread", 2)
+    assert (p["side"], p["long_strike"], p["short_strike"]) == ("pe", 24500.0, 24400.0)
+    assert isinstance(bot.pick_directional({"underlying_last_price": 100.0, "strikes": []}, "BUY", "naked", 2), str)
+
+
+def test_a_bought_option_is_stopped_after_losing_forty_percent_and_targets_sixty_percent_more():
+    stop, target = bot.combined_levels({"style": "naked", "long_ltp": 50.0, "short_ltp": 0.0, "max_loss_per_unit": 50.0})
+    assert (stop, target) == (30.0, 80.0)
+    stop, target = bot.combined_levels({"style": "debit_spread", "long_ltp": 60.0, "short_ltp": 20.0, "width": 100.0, "max_loss_per_unit": 40.0})
+    assert (stop, target) == (24.0, 40.0 + 0.6 * 60.0)
+
+
+def test_auto_mode_enters_a_long_option_on_a_strong_trend_with_no_underlying_stop():
+    db = FakeDb()
+    deps = fake_deps(reads={**GOOD_READS, "/regime": {**TREND, "regime": "trending_up"}})
+    counts = bot.run_bot_for_user(db, cfg(strategy_mode="auto"), deps, OPEN_NOW)
+    assert counts["entered"] == 1 and deps.strategies == ["naked"]
+    assert deps.opened[0][2:4] == (24500.0, None)
+    assert [k for k, _ in deps.attached] == ["stop", "target"]  # a bought option has no OI wall to stop on
+    d = db.added[-1]
+    assert d.detail["strategy"] == "naked" and "long option" in d.reason
+
+
+def test_auto_mode_falls_back_to_the_credit_spread_without_a_strong_trend():
+    deps = fake_deps(reads={**GOOD_READS, "/regime": {"regime": "trending_up", "adx": 19.0, "atr_percentile": 40}})
+    bot.run_bot_for_user(FakeDb(), cfg(strategy_mode="auto"), deps, OPEN_NOW)
+    assert deps.strategies == ["credit_spread"]
+
+
 def test_disagreement_is_recorded_as_a_skip_with_the_reads():
     db = FakeDb()
     deps = fake_deps(reads={"/regime": {"regime": "trending_up"}, "/order-blocks": {"trend": "down"}, "/premarket": None, "/options/sentiment-history": None})
@@ -198,17 +256,36 @@ def test_a_failed_read_counts_as_no_lean_and_is_recorded():
 def test_nothing_happens_outside_the_market_the_window_a_live_account_or_a_spread_already_open(account):
     closed = datetime(2026, 10, 12, 13, 0, tzinfo=timezone.utc)  # 18:30 in Mumbai
     early = datetime(2026, 10, 12, 4, 0, tzinfo=timezone.utc)  # 09:30: before the entry window
-    for when in (closed, early):
-        deps = fake_deps()
-        assert bot.run_bot_for_user(FakeDb(), cfg(), deps, when) == {"entered": 0, "skipped": 0, "failed": 0} and deps.opened == []
+    deps, db = fake_deps(), FakeDb()
+    assert bot.run_bot_for_user(db, cfg(), deps, closed) == {"entered": 0, "skipped": 0, "failed": 0} and deps.opened == [] and db.added == []  # shut: silent
+    deps, db = fake_deps(), FakeDb()
+    assert bot.run_bot_for_user(db, cfg(), deps, early)["entered"] == 0 and deps.opened == []
+    assert "Outside the entry window" in db.added[-1].reason and db.added[-1].detail["status"]  # a heartbeat, not silence
     account.live_trading_enabled = True
-    deps = fake_deps()
-    assert bot.run_bot_for_user(FakeDb(), cfg(), deps, OPEN_NOW)["entered"] == 0 and deps.opened == []
+    deps, db = fake_deps(), FakeDb()
+    assert bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)["entered"] == 0 and deps.opened == [] and db.added == []
     account.live_trading_enabled = False
-    deps = fake_deps()
-    assert bot.run_bot_for_user(FakeDb(OptionPositionGroup=1), cfg(), deps, OPEN_NOW)["entered"] == 0  # one at a time
-    deps = fake_deps()
-    assert bot.run_bot_for_user(FakeDb(SpreadBotDecision=2), cfg(), deps, OPEN_NOW)["entered"] == 0  # the day's limit
+    deps, db = fake_deps(), FakeDb(OptionPositionGroup=1)
+    assert bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)["entered"] == 0 and deps.opened == []  # one at a time
+    assert db.added[-1].reason.startswith("Holding NIFTY") and db.added[-1].detail["group_id"] == "g1"
+    deps, db = fake_deps(), FakeDb(SpreadBotDecision=2)
+    assert bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)["entered"] == 0 and "limit" in db.added[-1].reason  # the day's limit
+
+
+def test_a_day_that_has_lost_the_daily_limit_stops_looking_for_entries(account):
+    # balance 1,000,000 and the default 2%: 20,000 allowed. Two stopped-out trades today lost 12,000 + 9,000.
+    db, deps = FakeDb(), fake_deps()
+    db.closed = [SimpleNamespace(pnl=-12_000), SimpleNamespace(pnl=-9_000)]
+    assert bot.run_bot_for_user(db, cfg(daily_loss_pct=2), deps, OPEN_NOW)["entered"] == 0 and deps.opened == []
+    assert "Daily loss limit reached" in db.added[-1].reason and db.added[-1].detail["lost_today"] == 21_000 and db.added[-1].detail["status"]
+    # a win in between nets the day back inside the limit
+    db, deps = FakeDb(), fake_deps()
+    db.closed = [SimpleNamespace(pnl=-12_000), SimpleNamespace(pnl=5_000)]
+    assert bot.run_bot_for_user(db, cfg(daily_loss_pct=2), deps, OPEN_NOW)["entered"] == 1
+    # a limit left unset is the old behaviour
+    db, deps = FakeDb(), fake_deps()
+    db.closed = [SimpleNamespace(pnl=-900_000)]
+    assert bot.run_bot_for_user(db, cfg(), deps, OPEN_NOW)["entered"] == 1
 
 
 def test_a_balance_too_small_for_one_lot_skips_and_says_what_one_lot_risks(account):

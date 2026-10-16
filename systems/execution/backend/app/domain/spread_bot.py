@@ -10,7 +10,8 @@ Each cycle, for each enabled user and each of their symbols (NIFTY / BANKNIFTY),
 Each leans bullish (+1), bearish (-1) or nowhere (0). It trades only when at least `min_votes` lean one way and NONE lean the other. Bullish sells
 a put spread, bearish a call spread, with the short strike on the OI WALL: the strike with the most open interest on the safe side of the spot
 (the put wall below it, the call wall above it), and the long strike `width_strikes` further out. The size is the most lots whose max loss stays
-within `risk_pct` of the NSE paper balance. One spread at a time, at most `max_trades_per_day` a day, inside the entry window only.
+within `risk_pct` of the NSE paper balance. One spread at a time, at most `max_trades_per_day` a day, inside the entry window only, and no new entry once its own closed trades
+that day have lost `daily_loss_pct` of the balance.
 
 Exits: the underlying's stop sits ON the short strike (the wall failing is the thesis failing), the spread's own stop is half its max loss, its
 target 70% of the credit, and the account's square-off time closes anything left. Every cycle writes a decision row (entered, skipped or
@@ -109,6 +110,58 @@ def pick_spread(chain: dict, bias: str, width_strikes: int) -> dict | str:
     }
 
 
+# --- which strategy ---------------------------------------------------------------------------------------------------------
+
+STRATEGY_CREDIT, STRATEGY_DEBIT, STRATEGY_NAKED = "credit_spread", "debit_spread", "naked"
+TREND_ADX_MIN = 25.0  # the same line market-data's regime read draws between "trending" and "transitional"
+CHEAP_PREMIUM_ATR_MAX = 60  # ATR percentile at or under this: premiums are not stretched, so a long option is worth its price
+LONG_STOP_FRACTION = 0.4  # a bought option / debit spread is stopped out after losing this share of what it cost
+LONG_TARGET_FRACTION = 0.6  # a bought option targets this share of its cost; a debit spread, this share of its max profit
+
+
+def choose_strategy(bias: str, votes: dict[str, int], regime: Optional[dict], mode: str, min_votes: int) -> tuple[str, str]:
+    """(strategy, why). 'credit_spread' mode (the default) always sells the spread. 'auto' buys the move instead when the trend is strong AND
+    agrees with the bias: a long ATM option while premiums are not stretched, a debit spread (cheaper, capped) when volatility is high. Everything
+    else - a weak, transitional or ranging market, where time decay and the OI wall are the edge - sells the credit spread."""
+    if mode != "auto":
+        return STRATEGY_CREDIT, "credit spread (the bot's fixed mode)"
+    regime = regime or {}
+    adx, atr = float(regime.get("adx") or 0), regime.get("atr_percentile")
+    with_trend = regime.get("regime") == ("trending_up" if bias == "BUY" else "trending_down")
+    aligned = sum(1 for v in votes.values() if v == (1 if bias == "BUY" else -1))
+    if not (with_trend and adx >= TREND_ADX_MIN and aligned >= max(min_votes, 3)):
+        return STRATEGY_CREDIT, f"credit spread: no strong aligned trend (ADX {adx:g}, regime {regime.get('regime') or 'unknown'}, {aligned} reads agree)"
+    if atr is not None and atr > CHEAP_PREMIUM_ATR_MAX:
+        return STRATEGY_DEBIT, f"debit spread: strong trend (ADX {adx:g}) but volatility is high (ATR percentile {atr}), so a capped spread instead of a long option"
+    return STRATEGY_NAKED, f"long option: strong trend (ADX {adx:g}) with ordinary volatility (ATR percentile {atr if atr is not None else 'n/a'})"
+
+
+def pick_directional(chain: dict, bias: str, style: str, width_strikes: int) -> dict | str:
+    """The option(s) to BUY for a strong trend, or a sentence saying why there is none. BUY = a call (or call debit spread), SELL = a put. The long
+    leg is the strike nearest the spot; a debit spread sells `width_strikes` strikes further out."""
+    spot = float(chain["underlying_last_price"])
+    side = "ce" if bias == "BUY" else "pe"
+    rows = sorted((s for s in chain["strikes"] if s.get(side) and (s[side].get("last_price") or 0) > 0), key=lambda s: s["strike"])
+    if not rows:
+        return "no priced strikes on that side of the chain"
+    i = min(range(len(rows)), key=lambda k: abs(rows[k]["strike"] - spot))
+    near = rows[i]
+    long_ltp = float(near[side]["last_price"])
+    out = {"style": style, "side": side, "long_strike": near["strike"], "long_ltp": long_ltp, "spot": spot, "short_strike": None, "short_ltp": 0.0, "width": None}
+    if style == STRATEGY_NAKED:
+        return {**out, "debit": long_ltp, "max_loss_per_unit": long_ltp}
+    j = i + width_strikes if bias == "BUY" else i - width_strikes
+    if j < 0 or j >= len(rows):
+        return "the chain has no strike far enough out for the short leg"
+    far = rows[j]
+    short_ltp = float(far[side]["last_price"])
+    width = abs(far["strike"] - near["strike"])
+    debit = long_ltp - short_ltp
+    if debit <= 0 or debit >= width:
+        return f"the spread does not cost a debit inside its width (debit {debit:.2f}, width {width:.0f})"
+    return {**out, "short_strike": far["strike"], "short_ltp": short_ltp, "width": width, "debit": debit, "max_loss_per_unit": debit}
+
+
 def lots_for(balance: float, risk_pct: float, max_loss_per_unit: float, lot_size: float, capital_per_trade: Optional[float] = None) -> int:
     """The most lots whose max loss stays within risk_pct of the balance, and also within what one trade may use (the account's capital per trade,
     which is what the order check measures a credit spread's max loss against; 0 = not even one fits)."""
@@ -125,6 +178,11 @@ def combined_levels(spread: dict) -> tuple[float, float]:
     """The spread's own stop and target, as the combined premium (long leg minus short leg, negative for a credit): the same arithmetic the Scan
     ticket uses for its % of max loss / % of max profit."""
     net = spread["long_ltp"] - spread["short_ltp"]
+    style = spread.get("style", STRATEGY_CREDIT)
+    if style == STRATEGY_NAKED:  # net is the premium paid: stop after losing a share of it, target a share above it
+        return net * (1 - LONG_STOP_FRACTION), net * (1 + LONG_TARGET_FRACTION)
+    if style == STRATEGY_DEBIT:  # net is the debit: the most it can reach is the width
+        return net * (1 - LONG_STOP_FRACTION), net + LONG_TARGET_FRACTION * (spread["width"] - net)
     return net - STOP_FRACTION_OF_MAX_LOSS * spread["max_loss_per_unit"], net + TARGET_FRACTION_OF_CREDIT * spread["credit"]
 
 
@@ -139,7 +197,7 @@ class BotDeps:
     get_expiry_list: Callable  # (exchange, symbol) -> list[str] | None
     get_option_chain: Callable  # (exchange, symbol, expiry) -> dict | None
     get_lot_size: Callable  # (exchange, symbol) -> float | None
-    open_group: Callable  # (db, user_id, symbol, action, short_strike, long_strike, expiry, lots, notes) -> OptionPositionGroup
+    open_group: Callable  # (db, user_id, symbol, action, strategy, primary_strike, second_strike, expiry, lots, notes) -> OptionPositionGroup
     set_spot_stop: Callable  # (db, user_id, group_id, price)
     set_combined_stop: Callable
     set_combined_target: Callable
@@ -154,11 +212,13 @@ def default_deps() -> BotDeps:
     )
     from app.domain.position_manager import load_settings
 
-    def open_group(db, user_id, symbol, action, short_strike, long_strike, expiry, lots, notes):
+    style_of = {STRATEGY_CREDIT: "credit_spread", STRATEGY_DEBIT: "spread", STRATEGY_NAKED: "naked"}
+
+    def open_group(db, user_id, symbol, action, strategy, primary_strike, second_strike, expiry, lots, notes):
         return open_manual_option_group(
-            user_id, EXCHANGE, symbol, action, "credit_spread", "ATM", expiry, "combined", float(lots), load_settings(db, user_id), db, resolve_underlying,
+            user_id, EXCHANGE, symbol, action, style_of[strategy], "ATM", expiry, "combined", float(lots), load_settings(db, user_id), db, resolve_underlying,
             get_expiry_list, get_option_chain, get_ltp_batch, resolve_symbol_by_security_id, get_lot_size,
-            primary_strike=short_strike, second_strike=long_strike, plan_checklist=[], order_type="market", setup_tag=BOT_TAG, notes=notes,
+            primary_strike=primary_strike, second_strike=second_strike, plan_checklist=[], order_type="market", setup_tag=BOT_TAG, notes=notes,
             trend_followed=False, risk_managed=True, auto_traded=True,
         )
 
@@ -224,20 +284,46 @@ def run_bot_for_user(db: Session, cfg, deps: BotDeps, now: datetime, premarket_c
     counts = {"entered": 0, "skipped": 0, "failed": 0}
     premarket_cache = premarket_cache if premarket_cache is not None else {}
     now_ist = now.astimezone(_IST)
-    if not market_is_open(EXCHANGE, now) or not _in_window(now_ist, cfg.entry_from, cfg.entry_to):
-        return counts
+    if not market_is_open(EXCHANGE, now):
+        return counts  # the market is shut: nothing to log every five minutes overnight
     user_id = cfg.user_id
+    first = (_symbols(cfg) or ["-"])[0]
+
+    def idle(reason: str, votes=None, detail=None, symbol: str = first) -> dict:
+        """A heartbeat row: the cycle ran and chose not to look for an entry, and why (stored as 'skipped' with a 'status' marker in its detail)."""
+        _record(db, user_id, symbol, "skipped", reason, votes, {"status": True, **(detail or {})}, now=now)
+        counts["skipped"] += 1
+        return counts
+
+    if not _in_window(now_ist, cfg.entry_from, cfg.entry_to):
+        return idle(f"Outside the entry window ({cfg.entry_from:%H:%M}-{cfg.entry_to:%H:%M}); not looking for an entry")
     account = load_account(db, user_id, EXCHANGE)
     if account is None or account.live_trading_enabled:
         return counts  # paper only; a live account is never touched, and nothing is logged every five minutes for it
 
     G = db_models.OptionPositionGroup
-    if db.query(G).filter(G.user_id == user_id, G.status == "OPEN", G.setup_tag == BOT_TAG).count():
-        return counts  # one spread at a time
+    held = db.query(G).filter(G.user_id == user_id, G.status == "OPEN", G.setup_tag == BOT_TAG).first()
+    if held is not None:
+        # One spread at a time. Log what the four reads say about it now, so the thesis can be followed alongside its P&L.
+        sym = str(held.underlying_symbol).upper()
+        try:
+            reads, errors = _gather(deps, sym, premarket_cache, now)
+            votes = read_votes(reads["regime"], reads["sentiment"], reads["structure"], reads["premarket"])
+        except Exception:  # noqa: BLE001 - a heartbeat must never break the cycle
+            votes, errors = None, {}
+        return idle(f"Holding {sym} {str(held.strategy_type).replace('_', ' ')} since {held.entry_time.astimezone(_IST):%H:%M}; no new entry while it is open", votes,
+                    {"group_id": str(held.id), **({"errors": errors} if errors else {})}, sym)
     D = db_models.SpreadBotDecision
     day_start = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
     if db.query(D).filter(D.user_id == user_id, D.outcome == "entered", D.decided_at >= day_start).count() >= cfg.max_trades_per_day:
-        return counts
+        return idle(f"Reached today's limit of {cfg.max_trades_per_day} trade(s); not looking for another")
+    loss_pct = float(getattr(cfg, "daily_loss_pct", None) or 0)
+    if loss_pct > 0:
+        lost = -sum(float(g.pnl or 0) for g in db.query(G).filter(G.user_id == user_id, G.status == "CLOSED", G.setup_tag == BOT_TAG, G.exit_time >= day_start).all())
+        allowed = float(account.current_balance) * loss_pct / 100.0
+        if lost >= allowed:
+            return idle(f"Daily loss limit reached: the bot's closed trades today are down {lost:,.0f}, past {loss_pct:g}% of the balance ({allowed:,.0f}); no more entries today",
+                        detail={"lost_today": round(lost, 2), "limit": round(allowed, 2), "daily_loss_pct": loss_pct})
 
     for symbol in _symbols(cfg):
         reads, errors = _gather(deps, symbol, premarket_cache, now)
@@ -249,7 +335,7 @@ def run_bot_for_user(db: Session, cfg, deps: BotDeps, now: datetime, premarket_c
             counts["skipped"] += 1
             continue
         try:
-            outcome = _enter(db, cfg, deps, account, symbol, bias, why, votes, detail, now_ist, now)
+            outcome = _enter(db, cfg, deps, account, symbol, bias, why, votes, detail, now_ist, now, reads["regime"])
         except Exception as exc:  # noqa: BLE001 - recorded, and the next symbol still gets its turn
             logger.exception("spread bot: %s failed for %s", symbol, user_id)
             db.rollback()
@@ -261,8 +347,11 @@ def run_bot_for_user(db: Session, cfg, deps: BotDeps, now: datetime, premarket_c
     return counts
 
 
-def _enter(db, cfg, deps: BotDeps, account, symbol, bias, why, votes, detail, now_ist: datetime, now: datetime) -> str:
+def _enter(db, cfg, deps: BotDeps, account, symbol, bias, why, votes, detail, now_ist: datetime, now: datetime, regime: Optional[dict] = None) -> str:
     user_id = cfg.user_id
+    strategy, strategy_why = choose_strategy(bias, votes, regime, getattr(cfg, "strategy_mode", None) or "credit_spread", cfg.min_votes)
+    detail = {**detail, "strategy": strategy, "strategy_why": strategy_why}
+    why = f"{why}; {strategy_why}"
     today: date = now_ist.date()
     expiries = sorted(e for e in (deps.get_expiry_list(EXCHANGE, symbol) or []) if e > today.isoformat())  # never the day it expires
     if not expiries:
@@ -273,7 +362,9 @@ def _enter(db, cfg, deps: BotDeps, account, symbol, bias, why, votes, detail, no
     if not chain:
         _record(db, user_id, symbol, "skipped", f"{why}; but the option chain could not be read", votes, detail, now=now)
         return "skipped"
-    spread = pick_spread(chain, bias, cfg.width_strikes)
+    spread = pick_spread(chain, bias, cfg.width_strikes) if strategy == STRATEGY_CREDIT else pick_directional(chain, bias, strategy, cfg.width_strikes)
+    if not isinstance(spread, str):
+        spread = {**spread, "style": strategy}
     if isinstance(spread, str):
         _record(db, user_id, symbol, "skipped", f"{why}; but {spread}", votes, detail, now=now)
         return "skipped"
@@ -288,25 +379,36 @@ def _enter(db, cfg, deps: BotDeps, account, symbol, bias, why, votes, detail, no
         return "skipped"
 
     action = "BUY" if bias == "BUY" else "SELL"
-    notes = f"Spread bot: {why}. Short {spread['short_strike']:g} (the OI wall, {spread['wall_oi']:,} open interest), long {spread['long_strike']:g}."
-    group = deps.open_group(db, user_id, symbol, action, spread["short_strike"], spread["long_strike"], expiry, lots, notes)
+    if strategy == STRATEGY_CREDIT:
+        primary, second = spread["short_strike"], spread["long_strike"]
+        what = f"Sold {spread['short_strike']:g}/{spread['long_strike']:g} for {spread['credit']:.2f}"
+        notes = f"Spread bot: {why}. Short {spread['short_strike']:g} (the OI wall, {spread['wall_oi']:,} open interest), long {spread['long_strike']:g}."
+    elif strategy == STRATEGY_DEBIT:
+        primary, second = spread["long_strike"], spread["short_strike"]
+        what = f"Bought the {spread['long_strike']:g}/{spread['short_strike']:g} debit spread for {spread['debit']:.2f}"
+        notes = f"Spread bot: {why}. Long {spread['long_strike']:g}, short {spread['short_strike']:g}."
+    else:
+        primary, second = spread["long_strike"], None
+        what = f"Bought the {spread['long_strike']:g} option for {spread['debit']:.2f}"
+        notes = f"Spread bot: {why}. Long {spread['long_strike']:g} outright."
+    group = deps.open_group(db, user_id, symbol, action, strategy, primary, second, expiry, lots, notes)
     if group.status == "REJECTED":
         _record(db, user_id, symbol, "failed", f"{why}; rejected: {group.rejection_reason}", votes, detail, group_id=group.id, now=now)
         return "failed"
 
     problems = []
     stop, target = combined_levels(spread)
-    for label, setter, price in (
-        ("underlying stop", deps.set_spot_stop, spread["short_strike"]),
-        ("spread stop", deps.set_combined_stop, stop),
-        ("spread target", deps.set_combined_target, target),
-    ):
+    # The underlying stop sits on the short strike (the wall failing is the thesis failing); a bought option has no wall, only its own stop and target.
+    levels = [("stop", deps.set_combined_stop, stop), ("target", deps.set_combined_target, target)]
+    if strategy == STRATEGY_CREDIT:
+        levels.insert(0, ("underlying stop", deps.set_spot_stop, spread["short_strike"]))
+    for label, setter, price in levels:
         try:
             setter(db, user_id, group.id, float(price))
         except Exception as exc:  # noqa: BLE001 - the spread is open; say which protection did not attach
             logger.exception("spread bot: the %s did not attach to %s", label, group.id)
             problems.append(f"{label}: {exc}"[:100])
-    reason = f"{why}. Sold {spread['short_strike']:g}/{spread['long_strike']:g} for {spread['credit']:.2f}, {lots} lot(s)."
+    reason = f"{why}. {what}, {lots} lot(s)."
     if problems:
         reason += " NOT ATTACHED: " + "; ".join(problems)
         detail = {**detail, "not_attached": problems}

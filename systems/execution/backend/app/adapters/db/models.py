@@ -605,6 +605,8 @@ class SpreadBotSettings(Base):
     min_votes = Column(SmallInteger, nullable=False, default=3)
     width_strikes = Column(SmallInteger, nullable=False, default=2)
     max_trades_per_day = Column(SmallInteger, nullable=False, default=2)
+    strategy_mode = Column(Text, nullable=False, default="credit_spread")  # 'credit_spread' | 'auto' (migration 061)
+    daily_loss_pct = Column(Numeric, nullable=False, default=2)  # stop for the day after losing this % of the balance (migration 062)
     updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

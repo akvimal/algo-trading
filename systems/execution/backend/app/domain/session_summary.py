@@ -6,7 +6,7 @@ What it answers: how the day went in money and against the account, which trades
 was followed, not by whether the trade made money), and how that compares with the last 30 days."""
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 from uuid import UUID
 
@@ -124,6 +124,23 @@ def open_now(db: Session, user_id: UUID, segment: str) -> int:
     return singles + groups
 
 
+REVIEW_NUDGE_DAYS = 14
+
+
+def unreviewed_count(db: Session, user_id: UUID, segment: str, day: date) -> int:
+    """Closed manual trades of the last two weeks with no "what went wrong" review yet (no root cause): the Telegram nudge to do it."""
+    since = datetime.combine(day - timedelta(days=REVIEW_NUDGE_DAYS), time.min)
+    P, G = db_models.Position, db_models.OptionPositionGroup
+    singles = db.query(P).filter(
+        P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.segment == segment, P.option_group_id.is_(None), P.horizon != "positional",
+        P.exit_time >= since, P.root_cause.is_(None), P.auto_traded.isnot(True),
+    ).count()
+    groups = db.query(G).filter(
+        G.user_id == user_id, G.strategy_id.is_(None), G.status == "CLOSED", G.segment == segment, G.exit_time >= since, G.root_cause.is_(None), G.auto_traded.isnot(True),
+    ).count()
+    return singles + groups
+
+
 def account_view(db: Session, user_id: UUID, segment: str, day_pnl: float, month_pnl: float) -> Optional[dict]:
     """The paper account: its balance, how much today moved it, how far it is from where it started, and the recent equity curve.
     A day's change is the day's realized net result, because the balance is credited by exactly that when a trade closes."""
@@ -171,4 +188,5 @@ def trader_day(db: Session, user_id: UUID, segment: str, day: date) -> dict:
         "stats": {"paper": stats_over(paper_all, day), "live": stats_over([t for t in manual if t.live], day)},
         "open_now": open_now(db, user_id, segment),
         "discipline_score": score,
+        "unreviewed": unreviewed_count(db, user_id, segment, day),
     }

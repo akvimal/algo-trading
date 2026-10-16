@@ -47,6 +47,14 @@ def test_the_message_leads_with_your_account_and_trades_then_the_market():
     assert text.rstrip().endswith("not a recommendation. Details in the app.")
 
 
+def test_unreviewed_trades_get_a_nudge_and_none_means_no_line():
+    text = n.session_message("NSE", DAY, MARKET, {**trader(), "unreviewed": 3}, bias="bullish")
+    assert "3 closed trades not reviewed yet" in text
+    assert "1 closed trade not reviewed yet" in n.session_message("NSE", DAY, MARKET, {**trader(), "unreviewed": 1})
+    assert "not reviewed yet" not in n.session_message("NSE", DAY, MARKET, {**trader(), "unreviewed": 0})
+    assert "not reviewed yet" not in n.session_message("NSE", DAY, MARKET, trader())  # an older execution that sends no count
+
+
 def test_each_trade_is_judged_by_the_plan_with_its_levels_and_why():
     text = n.session_message("NSE", DAY, MARKET, trader())
     assert "✅ NIFTY long  +₹900 (+2.1R)" in text and "Good trade · followed the plan · 100.00 → 105.00 · 1h35m" in text

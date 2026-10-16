@@ -558,6 +558,9 @@ def session_message(segment: str, day: date, market: dict, trader: Optional[dict
             extras.append(f"Discipline (30 days): {trader['discipline_score']}/100")
         if extras:
             lines.append(" · ".join(extras))
+        owed = trader.get("unreviewed") if trader else None
+        if owed:
+            lines += ["", f"📝 {owed} closed trade{'s' if owed != 1 else ''} not reviewed yet. Tag what went wrong (study, plan or execution) in Portfolio › Review."]
     if zones:
         lines += ["", "Your zones today"] + [zone_line(z) for z in zones]
     lines += ["", _market_strip(market, bias, segment), "", "Your own record and public market data, not a recommendation. Details in the app."]

@@ -25,6 +25,7 @@ def trade(pnl, *, day=DAY, live=False, auto=False, order_type="limit", stop=95.0
 def run(monkeypatch, trades, open_count=0, account=None):
     monkeypatch.setattr(ss, "load_manual_trades", lambda db, user, seg, since=None: trades)
     monkeypatch.setattr(ss, "open_now", lambda db, user, seg: open_count)
+    monkeypatch.setattr(ss, "unreviewed_count", lambda db, user, seg, day: 2)
     monkeypatch.setattr(ss, "account_view", lambda db, user, seg, day_pnl, month_pnl: account if account is not None else {"day_pnl": day_pnl, "month_pnl": month_pnl})
     return ss.trader_day(None, USER, "NSE", DAY)
 
@@ -103,6 +104,28 @@ def test_thirty_day_stats_use_only_that_window_and_keep_paper_and_live_apart(mon
     paper = out["stats"]["paper"]
     assert paper["trades"] == 3 and paper["net_pnl"] == 400 and round(paper["win_rate_pct"]) == 67 and paper["profit_factor"] == 3.0
     assert out["stats"]["live"]["trades"] == 1 and out["stats"]["live"]["net_pnl"] == 700
+
+
+def test_the_summary_carries_how_many_closed_trades_still_have_no_review(monkeypatch):
+    assert run(monkeypatch, [trade(500)])["unreviewed"] == 2
+
+
+def test_unreviewed_count_adds_single_positions_and_spreads():
+    class Q:
+        def __init__(self, n):
+            self.n = n
+
+        def filter(self, *a):
+            return self
+
+        def count(self):
+            return self.n
+
+    class DB:
+        def query(self, model):
+            return Q(3 if model.__name__ == "Position" else 2)
+
+    assert ss.unreviewed_count(DB(), USER, "NSE", DAY) == 5
 
 
 def test_the_account_change_for_the_day_and_the_month_come_from_paper_trades_only(monkeypatch):

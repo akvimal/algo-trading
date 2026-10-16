@@ -162,7 +162,7 @@ export function TradePage() {
   // Needed whenever the "My trades" chart overlay is on OR the ticket is open (which shows the
   // active instrument's own open positions/groups beneath the order form) - either on its own
   // already justifies the fetch, so this is not gated behind both.
-  const tradeRows = useResource(() => loadChartTrades(segmentKey.split(",") as Segment[]), [segmentKey], { pollMs: 15_000, enabled: tools.tradesOn || ticketOpen });
+  const tradeRows = useResource(() => loadChartTrades(segmentKey.split(",") as Segment[]), [segmentKey], { pollMs: 5_000, enabled: tools.tradesOn || ticketOpen });
   const chartTrades = useMemo(
     () => [0, 1].map((i) => (tools.tradesOn && tradeRows.data ? toChartTrades(ws.panes[i].symbol, tradeRows.data.positions, tradeRows.data.groups, 0) : [])),
     [tools.tradesOn, tradeRows.data, ws.panes[0].symbol, ws.panes[1].symbol], // eslint-disable-line react-hooks/exhaustive-deps

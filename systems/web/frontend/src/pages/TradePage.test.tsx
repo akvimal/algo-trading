@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { AuthProvider } from "../auth/AuthContext";
 import { setToken } from "../auth/token";
+import { resetTradeCache } from "../api/trade";
 import { FakeChart } from "../test/fakeKlinecharts";
 
 // The ticket asks whether the market is trading; tests decide, so none of them depends on the time of day they run at.
@@ -85,6 +86,7 @@ function screenIs(wide: boolean) {
 }
 
 beforeEach(() => {
+  resetTradeCache();
   calls = [];
   lotSize = 1;
   attachFails = false;
@@ -1109,6 +1111,7 @@ describe("waiting orders", () => {
 
 describe("options", () => {
   beforeEach(() => {
+  resetTradeCache();
     marketOpen = true;
   });
   const spread = async () => {

@@ -42,16 +42,45 @@ export const getRegime = (exchange: string, symbol: string, interval: string) =>
 export async function loadChartTrades(segments: Segment[]): Promise<{ positions: Position[]; groups: OptionGroup[] }> {
   const none = <T,>() => [] as T[];
   const calls = segments.flatMap((s) => [
-    positionsApi(`/positions?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<Position>),
+    // A failed OPEN read falls back to the last good list, not to "no open trades" (that blanked the ticket's open-position card for a poll).
+    positionsApi(`/positions?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).then((r) => (lastOpen.set(`p:${s}`, r), r), () => (lastOpen.get(`p:${s}`) ?? []) as Position[]),
     positionsApi(`/positions?segment=${s}&status=CLOSED&limit=50`).catch(none<Position>),
-    groupsApi(`/option-groups?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).catch(none<OptionGroup>),
+    groupsApi(`/option-groups?segment=${s}&status=OPEN&with_live_pnl=true&limit=100`).then((r) => (lastOpen.set(`g:${s}`, r), r), () => (lastOpen.get(`g:${s}`) ?? []) as OptionGroup[]),
     groupsApi(`/option-groups?segment=${s}&status=CLOSED&limit=50`).catch(none<OptionGroup>),
   ]);
   const results = await Promise.all(calls);
   return {
-    positions: results.filter((_, i) => i % 4 < 2).flat() as Position[],
-    groups: results.filter((_, i) => i % 4 >= 2).flat() as OptionGroup[],
+    positions: results.filter((_, i) => i % 4 < 2).flat().map(keepLive) as Position[],
+    groups: results.filter((_, i) => i % 4 >= 2).flat().map(keepLive) as OptionGroup[],
   };
+}
+
+// A poll whose live quote failed comes back OK but with every live figure null, which blanked the open trade's P&L ("–") until the next good poll.
+// Remember the last real live figures per trade (and per leg) and fill the nulls from them.
+const lastLive = new Map<string, Record<string, unknown>>();
+const lastOpen = new Map<string, unknown[]>();
+/** Forget the remembered live figures (tests; also a sign-out should not leak one user's trades to the next). */
+export function resetTradeCache() {
+  lastLive.clear();
+  lastOpen.clear();
+}
+function carry<T extends object>(key: string, row: T): T {
+  const out = { ...row } as Record<string, unknown>;
+  const prev = lastLive.get(key) ?? {};
+  for (const [k, v] of Object.entries(out)) {
+    if (!/^(live_|unrealized_pnl)/.test(k)) continue;
+    if (v == null) {
+      if (prev[k] != null) out[k] = prev[k];
+    } else prev[k] = v;
+  }
+  lastLive.set(key, prev);
+  return out as T;
+}
+function keepLive<T extends { id: string; status?: string; legs?: Array<{ id?: string }> }>(row: T): T {
+  if (row.status !== "OPEN") return row;
+  const out = carry(`r:${row.id}`, row);
+  if (Array.isArray(row.legs)) out.legs = row.legs.map((l, i) => carry(`l:${row.id}:${l.id ?? i}`, l));
+  return out;
 }
 
 /** The option-chain expiries for an underlying, nearest first. The provider can be slow to answer. */

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { InboxBell } from "../components/InboxBell";
 import { useProfile } from "../auth/ProfileContext";
 import { loadSidebarChoice, saveSidebarChoice } from "./sidebarPrefs";
 
@@ -111,6 +112,7 @@ export function AppShell() {
             <span className={`nav-email ${collapsed ? "sr-only" : ""}`} title={session.email}>
               {session.email}
             </span>
+            <InboxBell variant="nav" collapsed={collapsed} />
             <button className="nav-signout" onClick={signOut} title="Sign out" aria-label="Sign out">
               <SignOutIcon />
               <span className={collapsed ? "sr-only" : undefined}>Sign out</span>
@@ -119,6 +121,9 @@ export function AppShell() {
         )}
       </nav>
       <main className={`app-main${wide ? " wide" : ""}${dash ? " dash" : ""}`}>
+        <div className="inbox-bar">
+          <InboxBell />
+        </div>
         <Outlet />
       </main>
     </div>

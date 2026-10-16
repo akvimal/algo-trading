@@ -22,6 +22,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.adapters import execution_client
 from app.adapters.db.models import AlertChannel, NotificationLog, NotificationSubscription
 from app.domain import oi_quadrants as oiq
 from app.domain.notify import send_telegram, send_telegram_photo
@@ -157,6 +158,16 @@ def _attempt(db: Session, row: NotificationLog, chat_id: str, now: datetime, ima
     return True
 
 
+_INBOX_LINK = {"oi_buildup": "/scan", "oi_index_shift": "/scan", "session_nse": "/portfolio", "session_mcx": "/portfolio", "session_crypto": "/portfolio"}
+
+
+def _to_inbox(user_id: UUID, category: str, key: str, text: str) -> None:
+    """The same message, in the person's in-app inbox: its first line as the title, the rest as the detail. Posted once per message (the
+    delivery's own key), whether or not Telegram then succeeds."""
+    first, _, rest = text.partition("\n")
+    execution_client.post_inbox(user_id, category, first.strip()[:200] or CATEGORIES[category].label, rest.strip() or None, _INBOX_LINK.get(category), f"{category}:{key}")
+
+
 def deliver(db: Session, user_id: UUID, chat_id: str, category: str, key: str, text: str, now: Optional[datetime] = None, image: Optional[bytes] = None, caption: Optional[str] = None) -> str:
     """Send one message once (as a picture with a caption when `image` is given, with the full text as the fallback). Returns "sent", "failed" (kept for a retry) or "skipped" (already sent, or given up on)."""
     now = now or datetime.now(timezone.utc)
@@ -164,6 +175,7 @@ def deliver(db: Session, user_id: UUID, chat_id: str, category: str, key: str, t
     if row is None:
         row = NotificationLog(user_id=user_id, category=category, dedupe_key=key, text=text, created_at=now, attempts=0)
         db.add(row)
+        _to_inbox(user_id, category, key, text)
     elif row.sent_at is not None or (row.attempts or 0) >= MAX_ATTEMPTS:
         return "skipped"
     ok = _attempt(db, row, chat_id, now, image, caption)

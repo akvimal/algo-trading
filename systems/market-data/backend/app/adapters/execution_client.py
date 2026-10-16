@@ -28,3 +28,20 @@ def trader_day(user_id: UUID, segment: str, day: date) -> Optional[dict]:
     except requests.exceptions.RequestException as exc:
         logger.warning("session summary: execution could not be asked for %s: %s", user_id, exc)
         return None
+
+
+def post_inbox(user_id: UUID, category: str, title: str, body: Optional[str], link: Optional[str], dedupe_key: str) -> bool:
+    """Put a line in the person's in-app inbox (execution owns it). Best effort and short: a message must never fail or stall because the
+    inbox could not be reached. Posting the same dedupe key again is harmless."""
+    try:
+        resp = requests.post(
+            f"{settings.execution_base_url}/internal/inbox",
+            json={"user_id": str(user_id), "category": category, "title": title, "body": body, "link": link, "dedupe_key": dedupe_key},
+            headers={"X-Internal-Secret": settings.internal_service_secret},
+            timeout=4,
+        )
+        resp.raise_for_status()
+        return True
+    except requests.exceptions.RequestException as exc:
+        logger.warning("inbox: could not post %s for %s: %s", category, user_id, exc)
+        return False

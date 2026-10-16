@@ -1112,6 +1112,10 @@ CREATE TABLE IF NOT EXISTS execution.spread_bot_settings (
     min_votes     SMALLINT NOT NULL DEFAULT 3 CHECK (min_votes BETWEEN 2 AND 4),
     width_strikes SMALLINT NOT NULL DEFAULT 2 CHECK (width_strikes BETWEEN 1 AND 10),
     max_trades_per_day SMALLINT NOT NULL DEFAULT 2 CHECK (max_trades_per_day BETWEEN 1 AND 10),
+    -- 'credit_spread' (always sell the spread) or 'auto' (a strong aligned trend buys the move instead; migration 061).
+    strategy_mode TEXT NOT NULL DEFAULT 'credit_spread' CHECK (strategy_mode IN ('credit_spread', 'auto')),
+    -- Stop looking for entries for the day once the bot's own closed trades have lost this % of the balance (migration 062).
+    daily_loss_pct NUMERIC NOT NULL DEFAULT 2 CHECK (daily_loss_pct > 0 AND daily_loss_pct <= 20),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

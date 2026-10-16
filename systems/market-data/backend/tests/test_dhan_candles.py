@@ -346,6 +346,7 @@ def test_get_candle_history_daily_routes_to_historical_endpoint_not_intraday(mon
 
     provider = DhanProvider()
     provider._symbol_to_security_id = {"RELIANCE": "2885"}
+    monkeypatch.setattr(dhan, "_now", lambda tz: datetime.now(tz).replace(hour=10, minute=0))  # mid-session, whatever time the suite runs
 
     candles = provider.get_candle_history("RELIANCE", "daily", today - timedelta(days=5), today)
 
@@ -416,3 +417,22 @@ def test_get_data_availability_daily_reports_no_fixed_cap():
     assert result.interval == "daily"
     assert result.max_days_per_request is None
     assert "inception" in result.note
+
+
+# --- when today's daily bar counts as final -----------------------------------------------------
+
+
+def _bar_ts(day: date, tz: ZoneInfo) -> float:
+    return datetime(day.year, day.month, day.day, tzinfo=tz).timestamp()
+
+
+def test_an_nse_daily_bar_is_final_once_the_session_has_closed_not_only_a_day_later():
+    tz = ZoneInfo("Asia/Kolkata")
+    day = date(2026, 10, 15)
+    bar = _bar_ts(day, tz)
+    complete = lambda hour, minute, exchange="NSE": dhan._daily_bar_complete(bar, datetime(2026, 10, 15, hour, minute, tzinfo=tz), exchange, tz)
+    assert not complete(10, 0) and not complete(15, 44)  # still trading, or the close not yet settled
+    assert complete(15, 45) and complete(16, 30)  # what the 16:30 screener and 17:30 zone scan need
+    assert not complete(16, 30, "MCX")  # MCX trades on until the night: it keeps the whole-day rule
+    assert dhan._daily_bar_complete(bar, datetime(2026, 10, 16, 0, 0, tzinfo=tz), "MCX", tz)  # and is final the next day
+    assert not dhan._daily_bar_complete(_bar_ts(date(2026, 10, 16), tz), datetime(2026, 10, 15, 16, 30, tzinfo=tz), "NSE", tz)  # a bar from the future never is

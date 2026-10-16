@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import func
 
-from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, OiStrikeSnapshot, SentimentHistory, ZoneScan
+from app.adapters.db.models import EquityDailyBar, EquityScreenerSnapshot, OiEodSnapshot, OiStrikeSnapshot, OiSwingShadow, SentimentHistory, ZoneScan
 from app.adapters.db.session import SessionLocal
 from app.config import settings
 from app.domain import job_tracker
@@ -18,6 +18,7 @@ from app.domain.job_tracker import tracked
 from app.domain.equity_screener import compute_equity_screener_row
 from app.domain.models import Candle
 from app.domain.oi_buildup import EodActivityResult, PreviousSnapshot, compute_eod_activity, compute_eod_buildup
+from app.domain import oi_alert_outcomes, oi_swing_shadow
 from app.domain.oi_strikes import RECORDED_UNDERLYINGS, RETENTION_DAYS, nearest_expiry, strike_rows
 from app.domain.sentiment import SENTIMENT_UNDERLYINGS, is_within_session
 from app.domain.sentiment_fetch import fetch_underlying_sentiment
@@ -249,6 +250,21 @@ def _record_oi_strikes() -> None:
         run.fail(f"{type(exc).__name__}: {exc}"[:300])
     finally:
         db.close()
+
+
+@tracked("oi-index-shift-check", "NIFTY / BANKNIFTY OI shift check", keep=288, keep_skips=False)
+def _check_oi_index_shift() -> None:
+    """Every five minutes while the market is open (a minute after the strike recorder has written its snapshot): has NIFTY's or BANKNIFTY's option
+    picture shifted hard in the last half hour? If so, tells the subscribers (app/domain/oi_index_shift.py has the rules; one alert per index per hour).
+    It only reads the stored strike snapshots, so it makes no provider calls."""
+    from app.domain.notification_jobs import send_oi_index_check
+
+    run = job_tracker.current()
+    result = send_oi_index_check()
+    if not result["checked"]:
+        run.skip("outside the alert hours")
+        return
+    run.tick(result["checked"], result)
 
 
 @tracked("oi-eod-snapshot-record", "OI buildup snapshot")
@@ -652,6 +668,93 @@ def _record_zone_scan() -> None:
     _log_eod_summary("zone scan", len(symbols), tally)
 
 
+@tracked("oi-swing-shadow-record", "OI swing shadow")
+def _record_oi_swing_shadow() -> None:
+    """The shadow log of the 1-3 day OI swing idea (app/domain/oi_swing_shadow.py): for every stock the zone scan found at a zone tonight, writes what a
+    rule-following bot would have done and why, then settles the earlier nights whose three following bars have arrived. Places no orders. It only
+    READS rows the zone scan, OI snapshot and screener have already stored, so it makes no provider calls and has to run after them. Idempotent: a
+    re-run rewrites tonight's undecided rows and never touches a row that already has an outcome."""
+    run = job_tracker.current()
+    now = datetime.now(ZoneInfo(settings.timezone))
+    if now.weekday() >= 5:
+        run.skip("weekend")
+        return
+    today = now.date()
+    tally = {"written": 0, "taken": 0, "resolved": 0, "failed": 0}
+    zones: list = []
+    db = SessionLocal()
+    try:
+        # The OI alerts' own track record (what the stocks the alert named did next) is kept here too: same night, same stored bars, no provider calls.
+        try:
+            tally["alerts_logged"], tally["alerts_settled"] = oi_alert_outcomes.record_and_settle(db, today)
+        except Exception:
+            logger.exception("oi alert outcomes failed")
+            db.rollback()
+        # Settle the earlier nights first (the bars after the decision night, once they exist): it must not wait on tonight's zone scan.
+        for row in db.query(OiSwingShadow).filter(OiSwingShadow.result.is_(None), OiSwingShadow.snapshot_date < today).all():
+            try:
+                bars = [
+                    {"open": b.open, "high": b.high, "low": b.low, "close": b.close}
+                    for b in db.query(EquityDailyBar).filter(EquityDailyBar.symbol == row.symbol, EquityDailyBar.bar_date > row.snapshot_date).order_by(EquityDailyBar.bar_date.asc()).limit(oi_swing_shadow.HOLD_DAYS)
+                ]
+                outcome = oi_swing_shadow.resolve_outcome(row.direction, row.stop_price, bars)
+                if outcome is None:
+                    continue
+                for k, v in outcome.items():
+                    setattr(row, k, v)
+                row.resolved_at = datetime.now(ZoneInfo("UTC"))
+                db.commit()
+                tally["resolved"] += 1
+            except Exception:
+                tally["failed"] += 1
+                logger.exception("oi swing shadow outcome failed for %s %s", row.symbol, row.snapshot_date)
+                db.rollback()
+        zones = db.query(ZoneScan).filter(ZoneScan.snapshot_date == today, ZoneScan.zone_kind.isnot(None)).all()
+        if not zones and db.query(ZoneScan).filter(ZoneScan.snapshot_date == today).count() == 0:
+            run.skip(f"no zone scan for {today} yet")
+            return
+        oi_today = {r.symbol: r for r in db.query(OiEodSnapshot).filter(OiEodSnapshot.snapshot_date == today)}
+        screener = {r.symbol: r for r in db.query(EquityScreenerSnapshot).filter(EquityScreenerSnapshot.snapshot_date == today, EquityScreenerSnapshot.is_fno.is_(True))}
+        turnovers = [r.avg_turnover_cr for r in screener.values() if r.avg_turnover_cr is not None]
+        turnover_median = sorted(turnovers)[len(turnovers) // 2] if turnovers else None
+        moves = [r.price_change_pct for r in oi_today.values() if r.price_change_pct is not None]
+        breadth = sum(1 for m in moves if m > 0) / len(moves) if moves else None
+        history: dict[str, list[dict]] = {}
+        for h in db.query(OiEodSnapshot).filter(OiEodSnapshot.snapshot_date < today, OiEodSnapshot.snapshot_date >= today - timedelta(days=45)):
+            history.setdefault(h.symbol, []).append({"call_oi_change_pct": h.call_oi_change_pct, "put_oi_change_pct": h.put_oi_change_pct})
+        run.set_total(len(zones))
+        for i, z in enumerate(zones):
+            run.tick(i, tally)
+            try:
+                existing = db.query(OiSwingShadow).filter(OiSwingShadow.symbol == z.symbol, OiSwingShadow.snapshot_date == today).first()
+                if existing is not None and existing.result is not None:
+                    continue
+                o, sc = oi_today.get(z.symbol), screener.get(z.symbol)
+                decision = oi_swing_shadow.evaluate(
+                    {k: getattr(z, k) for k in ("zone_kind", "zone_distal", "close", "daily_trend", "weekly_trend", "weekly_zone", "weekly_agrees", "tier", "oi_agrees")},
+                    None if o is None else {k: getattr(o, k) for k in ("call_activity", "put_activity", "call_oi_change_pct", "put_oi_change_pct")},
+                    history.get(z.symbol, []),
+                    None if sc is None else {"adx": sc.adx, "avg_turnover_cr": sc.avg_turnover_cr},
+                    turnover_median, breadth, today,
+                )
+                row = existing or OiSwingShadow(symbol=z.symbol, exchange="NSE", snapshot_date=today)
+                if existing is None:
+                    db.add(row)
+                for k in ("direction", "taken", "skip_reason", "score", "tier", "criteria", "ref_close", "stop_price", "risk_pct"):
+                    setattr(row, k, decision[k])
+                db.commit()
+                tally["written"] += 1
+                tally["taken"] += int(decision["taken"])
+            except Exception:
+                tally["failed"] += 1
+                logger.exception("oi swing shadow failed for %s", z.symbol)
+                db.rollback()
+    finally:
+        db.close()
+    run.tick(len(zones), tally)
+    _log_eod_summary("oi swing shadow", len(zones), tally)
+
+
 @tracked("premarket-report-record", "Pre-market bias report")
 def _record_premarket_report() -> None:
     """Builds today's pre-market bias report (app/domain/premarket_report.py) on the platform OpenRouter key and stores it.
@@ -795,6 +898,8 @@ def job_catalog() -> list[dict]:
         ("oi-eod-snapshot-record", "OI buildup snapshot", f"Weekdays {s.oi_eod_snapshot_hour:02d}:{s.oi_eod_snapshot_minute:02d}", "Stores each F&O stock's total call and put open interest for the day, which the OI buildup scan and its history read."),
         ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches the new daily bars for every NSE stock (a full year only on Mondays or for a new stock) and stores the screener row, which the Screener and custom scans read."),
         ("zone-scan-record", "Zone scan", f"Weekdays {s.zone_scan_hour:02d}:{s.zone_scan_minute:02d}", "Reads each F&O stock's stored daily and weekly bars for an untested demand or supply zone at price, sets it against the day's open-interest read, and stores the tier for the OI scan page's At a zone filter."),
+        ("oi-index-shift-check", "NIFTY / BANKNIFTY OI shift check", "Every 5 minutes on weekdays, alerts only 9:30 AM to 3:15 PM IST", "Looks for a hard shift in NIFTY's or BANKNIFTY's option picture over the last half hour and tells the people subscribed to it."),
+        ("oi-swing-shadow-record", "OI swing shadow", f"Weekdays {s.oi_swing_shadow_hour:02d}:{s.oi_swing_shadow_minute:02d}", "Writes down what a rule-following 1-3 day OI swing bot would have done on each stock at a zone tonight, and settles earlier nights' outcomes. Paper log only: it places no orders."),
         ("session-summary-nse", "Post-session summary: NSE", f"Weekdays {s.session_summary_nse_hour:02d}:{s.session_summary_nse_minute:02d}", "Sends each subscriber how the NSE session went and their own closed trades that day."),
         ("session-summary-mcx", "Post-session summary: MCX", f"Weekdays {s.session_summary_mcx_hour:02d}:{s.session_summary_mcx_minute:02d}", "Sends each subscriber how gold, crude, silver and natural gas did and their own closed MCX trades that day."),
         ("session-summary-crypto", "Post-session summary: crypto", f"Daily {s.session_summary_crypto_hour:02d}:{s.session_summary_crypto_minute:02d}", "Sends each subscriber the last 24 hours in BTC and ETH and their own crypto trades that day."),
@@ -818,6 +923,7 @@ MANUAL_RUN_JOBS = {
     "oi-eod-snapshot-record": _record_oi_eod_snapshot,
     "equity-screener-snapshot-record": _record_equity_screener_snapshot,
     "zone-scan-record": _record_zone_scan,
+    "oi-swing-shadow-record": _record_oi_swing_shadow,
     "premarket-report-record": _record_premarket_report,
     "instrument-sync-daily": _sync_all,
 }
@@ -896,6 +1002,20 @@ def start_scheduler() -> None:
         _record_zone_scan,
         CronTrigger(day_of_week="mon-fri", hour=settings.zone_scan_hour, minute=settings.zone_scan_minute, timezone=settings.timezone),
         id="zone-scan-record",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _check_oi_index_shift,
+        CronTrigger(day_of_week="mon-fri", minute=f"1-59/{settings.sentiment_history_interval_minutes}", timezone=settings.timezone),
+        id="oi-index-shift-check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    _scheduler.add_job(
+        _record_oi_swing_shadow,
+        CronTrigger(day_of_week="mon-fri", hour=settings.oi_swing_shadow_hour, minute=settings.oi_swing_shadow_minute, timezone=settings.timezone),
+        id="oi-swing-shadow-record",
         replace_existing=True,
     )
     _scheduler.add_job(

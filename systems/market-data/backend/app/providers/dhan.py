@@ -769,6 +769,24 @@ class DhanCredentials:
     throttle_key: str
 
 
+# An NSE daily bar is final shortly after the 15:30 close. Waiting for a full 24 hours after the bar's own timestamp (what this used to do) kept
+# today's bar out until after midnight, so every evening scan (the equity screener at 16:30, the zone scan and OI swing shadow after it) read data a
+# day old and the zone scan skipped every night. MCX trades until 23:30 (23:55 in summer), so it keeps the whole-day rule.
+NSE_DAILY_BAR_FINAL_AFTER = (15, 45)
+
+
+def _now(tz: ZoneInfo) -> datetime:
+    """The current time; a seam so tests can pin the clock."""
+    return datetime.now(tz)
+
+
+def _daily_bar_complete(bar_ts: float, now: datetime, exchange: str, tz: ZoneInfo) -> bool:
+    if bar_ts + 86400 <= now.timestamp():
+        return True
+    bar_day = datetime.fromtimestamp(bar_ts, tz=tz).date()
+    return exchange == "NSE" and bar_day == now.date() and (now.hour, now.minute) >= NSE_DAILY_BAR_FINAL_AFTER
+
+
 class DhanProvider(QuoteProvider):
     def __init__(self, segment_configs: Optional[list[SegmentConfig]] = None, name: str = "dhan") -> None:
         # Defaults to NSE-cash-equity-only, matching this class's
@@ -1439,7 +1457,8 @@ class DhanProvider(QuoteProvider):
 
         config = self._config_for(symbol)
         tz = ZoneInfo(settings.timezone)
-        now_epoch = datetime.now(tz).timestamp()
+        now = _now(tz)
+        now_epoch = now.timestamp()
 
         resp = requests.post(
             HISTORICAL_URL,
@@ -1478,8 +1497,10 @@ class DhanProvider(QuoteProvider):
         # A full trading day, not an interval_minutes-derived duration
         # (this endpoint has no interval concept) - excludes today's own
         # not-yet-complete day, same "still-forming bar" defensiveness
-        # _fetch_native_candles applies at intraday granularity.
-        completed = [i for i, ts in enumerate(timestamps) if ts + 86400 <= now_epoch]
+        # _fetch_native_candles applies at intraday granularity. An NSE bar
+        # counts as complete once the session has closed (see
+        # _daily_bar_complete), not only a whole day later.
+        completed = [i for i, ts in enumerate(timestamps) if _daily_bar_complete(ts, now, config.exchange, tz)]
 
         return [
             Candle(

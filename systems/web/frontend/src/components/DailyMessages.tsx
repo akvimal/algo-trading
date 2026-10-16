@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ApiError } from "../api/http";
-import { getDeliveries, getNotifications, sendLatestNow, setNotification, type NotificationCategory } from "../api/notifications";
+import { getDeliveries, getNotifications, sendLatestNow, setNotification, type NotificationCategory, type NotificationParams, type OiMode } from "../api/notifications";
 import { useResource } from "../hooks/useResource";
 import { DEFAULT_TOP_N, STATUS_LABEL, deliveryProblem, deliveryTime, statusTone, topNOptions } from "../pages/notificationsModel";
 import { ErrorNotice, Skeleton } from "./bits";
@@ -59,8 +59,11 @@ function CategoryCard({ category: c, chatReady, onChanged }: { category: Notific
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const topN = c.params.top_n;
+  const mode = c.params.mode;
+  /** What a save sends: every setting this category has, with the one being changed replaced. */
+  const current = (): NotificationParams => ({ ...(topN != null ? { top_n: topN } : {}), ...(mode != null ? { mode } : {}) });
 
-  async function save(enabled: boolean, params?: { top_n?: number }) {
+  async function save(enabled: boolean, params?: NotificationParams) {
     setBusy(true);
     setError(null);
     setNote(null);
@@ -98,15 +101,25 @@ function CategoryCard({ category: c, chatReady, onChanged }: { category: Notific
           <span className="faint" style={{ display: "block", fontSize: 12 }}>{c.schedule}</span>
         </span>
         <label className="check" htmlFor={`daily-${c.key}-on`} style={{ flex: "none" }}>
-          <input id={`daily-${c.key}-on`} type="checkbox" checked={c.enabled} disabled={busy || (!chatReady && !c.enabled)} onChange={(e) => void save(e.target.checked, topN != null ? { top_n: topN } : undefined)} />
+          <input id={`daily-${c.key}-on`} type="checkbox" checked={c.enabled} disabled={busy || (!chatReady && !c.enabled)} onChange={(e) => void save(e.target.checked, Object.keys(current()).length ? current() : undefined)} />
           <span>{c.enabled ? "On" : "Off"}</span>
         </label>
       </div>
       <span className="dim" style={{ fontSize: 13 }}>{c.description}</span>
-      {topN != null && (
+      {mode != null && (
+        <div className="row" style={{ justifyContent: "flex-start" }}>
+          <label htmlFor={`daily-${c.key}-mode`} className="dim" style={{ fontSize: 13 }}>Send me</label>
+          <select id={`daily-${c.key}-mode`} value={mode} disabled={busy} onChange={(e) => void save(c.enabled, { ...current(), mode: e.target.value as OiMode })} aria-label="Which OI message">
+            <option value="shifts">Major shifts only (default)</option>
+            <option value="digest">The full buildup digest</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+      )}
+      {topN != null && mode !== "shifts" && (
         <div className="row" style={{ justifyContent: "flex-start" }}>
           <label htmlFor={`daily-${c.key}-n`} className="dim" style={{ fontSize: 13 }}>List the top</label>
-          <select id={`daily-${c.key}-n`} value={topN} disabled={busy} onChange={(e) => void save(c.enabled, { top_n: Number(e.target.value) })} aria-label="How many per box">
+          <select id={`daily-${c.key}-n`} value={topN} disabled={busy} onChange={(e) => void save(c.enabled, { ...current(), top_n: Number(e.target.value) })} aria-label="How many per box">
             {topNOptions(topN).map((n) => (
               <option key={n} value={n}>{n}{n === DEFAULT_TOP_N ? " (default)" : ""}</option>
             ))}

@@ -37,7 +37,7 @@ describe("the spread bot settings", () => {
   it("is off until switched on, and says so plainly when nothing has been decided", async () => {
     render(<SpreadBotSection />);
     expect(await screen.findByLabelText(/Credit-spread bot/)).not.toBeChecked();
-    expect(await screen.findByText("No decisions yet")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing here")).toBeInTheDocument();
   });
 
   it("switches on with one tick and saves its limits", async () => {
@@ -54,6 +54,25 @@ describe("the spread bot settings", () => {
     const list = await screen.findByTestId("bot-decisions");
     expect(list).toHaveTextContent("the reads disagree");
     expect(list).toHaveTextContent("Trend: bullish · OI: no lean · Structure: bearish · Pre-market: no lean");
+  });
+
+  it("filters the decisions by kind and walks back to other days", async () => {
+    render(<SpreadBotSection />);
+    await screen.findByText("Nothing here");
+    const last = () => {
+      const list = calls.filter((c) => c.path.startsWith("/spread-bot/decisions") && c.path.includes("limit=1000")); // not the trades' own "entered" lookup
+      return list[list.length - 1].path;
+    };
+    expect(last()).toMatch(/day=\d{4}-\d{2}-\d{2}$/);
+    await userEvent.click(screen.getByRole("button", { name: "Skipped" }));
+    await waitFor(() => expect(last()).toContain("&outcome=skipped&status=false"));
+    await userEvent.click(screen.getByRole("button", { name: "Status checks" }));
+    await waitFor(() => expect(last()).toContain("&status=true"));
+    const today = (screen.getByLabelText("Day") as HTMLInputElement).value;
+    expect(screen.getByRole("button", { name: "Next day" })).toBeDisabled(); // nothing after today
+    await userEvent.click(screen.getByRole("button", { name: "Previous day" }));
+    await waitFor(() => expect(last()).not.toContain(`day=${today}`));
+    expect(screen.getByRole("button", { name: "Today" })).toBeInTheDocument();
   });
 
   it("totals only the bot's own trades and lists why each ended", async () => {

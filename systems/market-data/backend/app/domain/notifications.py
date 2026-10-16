@@ -47,7 +47,16 @@ CATEGORIES: dict[str, Category] = {
     c.key: c
     for c in (
         Category("premarket", "Pre-market bias", "The morning read on the overnight US close, crude, USD/INR, yields, ADRs and the GIFT Nifty gap, with the AI's call.", "Weekdays at 8:45 AM IST, 30 minutes before NSE opens"),
-        Category("oi_buildup", "OI buildup", "How F&O stocks moved against their open interest that day, in four boxes: long buildup and short covering (bullish), short buildup and long unwinding (bearish), the biggest OI change first.", "Weekdays after the end-of-day OI scan finishes (about 4:05 PM IST)", defaults={"top_n": 5}),
+        Category(
+            "oi_buildup", "OI alerts",
+            "After the day's OI scan: either the few stocks whose option picture really shifted (major shifts, the default) or the full four-box buildup digest, or both. A major shift is option flow leaning one way (put writing, short covering, call buying, ...) with the price agreeing and a large PCR or OI move for that stock; it sends nothing on a quiet day.",
+            "Weekdays after the end-of-day OI scan finishes (about 4:05 PM IST)", defaults={"top_n": 5, "mode": "shifts"},
+        ),
+        Category(
+            "oi_index_shift", "NIFTY / BANKNIFTY OI shift",
+            "During the session, when NIFTY or BANKNIFTY's option picture shifts hard within half an hour: the PCR moves a lot, two option flows lean the same way (or the lean flips) and the index price agrees. At most one per index per hour.",
+            "While the market is open, checked every 5 minutes (9:30 AM to 3:15 PM IST)",
+        ),
         Category("session_nse", "Post-session summary: NSE", "How the NSE session went (NIFTY, BANKNIFTY, VIX, and whether the morning bias held) and your own closed trades that day, paper and live apart.", "Weekdays at 3:50 PM IST, after the 3:30 PM close; skipped on a market holiday"),
         Category("session_mcx", "Post-session summary: MCX", "How gold, crude, silver and natural gas (the mini contracts) did in the MCX session, and your own closed MCX trades that day, paper and live apart.", "Weekdays at 11:58 PM IST, after the late-evening close; skipped on an MCX holiday"),
         Category("session_crypto", "Post-session summary: crypto", "The last 24 hours in BTC and ETH and your own crypto trades that day, paper and live apart. Crypto never closes, so this goes out at a fixed time.", "Every day at 11:30 PM IST"),
@@ -55,6 +64,7 @@ CATEGORIES: dict[str, Category] = {
     )
 }
 
+OI_MODES = ("shifts", "digest", "both")  # which OI message(s) a subscriber gets; new subscriptions start on "shifts"
 TOP_N_MIN, TOP_N_MAX = 3, 10  # per box: four boxes of ten would be a very long message
 
 
@@ -73,6 +83,10 @@ def clean_params(category: str, params: Optional[dict]) -> dict:
         if isinstance(n, bool) or not isinstance(n, int) or not TOP_N_MIN <= n <= TOP_N_MAX:
             raise NotificationError(422, f"top_n must be a whole number from {TOP_N_MIN} to {TOP_N_MAX}.")
         out["top_n"] = n
+    if category == "oi_buildup" and params and "mode" in params:
+        if params["mode"] not in OI_MODES:
+            raise NotificationError(422, "mode must be shifts, digest or both.")
+        out["mode"] = params["mode"]
     return out
 
 
@@ -106,7 +120,16 @@ def subscribers(db: Session, category: str) -> list[Subscriber]:
     if not subs:
         return []
     chats = _chats_for(db, [s.user_id for s in subs])
-    return [Subscriber(s.user_id, {**CATEGORIES[category].defaults, **(s.params or {})}, chats[s.user_id]) for s in subs if s.user_id in chats]
+    return [Subscriber(s.user_id, effective_params(category, s.params), chats[s.user_id]) for s in subs if s.user_id in chats]
+
+
+def effective_params(category: str, stored: Optional[dict]) -> dict:
+    """A category's defaults under what the person saved. An OI subscription saved before `mode` existed keeps the full digest it signed up for;
+    only subscriptions made since default to the major shifts."""
+    out = {**CATEGORIES[category].defaults, **(stored or {})}
+    if category == "oi_buildup" and stored is not None and "mode" not in stored:
+        out["mode"] = "digest"
+    return out
 
 
 # ---- delivery, recorded and retried ---------------------------------------------------------------------------------------------
@@ -317,6 +340,54 @@ def oi_digest_message(rows: list[dict], snapshot_date: date, top_n: int) -> Opti
     lines += ["", f"★ call and put OI both grew {oiq.STRONG_MIN_SHIFT:.0f}% or more the same way (a strong two-sided build).", "Option-chain activity for the day, not a prediction or a recommendation."]
     return "\n".join(lines)
 
+
+def _shift_line(i: int, s: dict) -> str:
+    arrow = "🟢" if s["direction"] == "bullish" else "🔴"
+    bits = [" + ".join(s["reasons"]), f"price {_signed(s['price_change_pct'])}"]
+    if s["pcr"] is not None and s["prev_pcr"] is not None:
+        bits.append(f"PCR {s['prev_pcr']:.2f} → {s['pcr']:.2f}")
+    if s["lead_side"] and s["lead_oi_change_pct"] is not None:
+        z = f" ({abs(s['lead_z']):.1f}σ)" if s["lead_z"] is not None else ""
+        bits.append(f"{s['lead_side']} OI {_signed(s['lead_oi_change_pct'], 0)}{z}")
+    tags = []
+    if s["flipped"]:
+        tags.append("flipped from " + ("bearish" if s["direction"] == "bullish" else "bullish") + " last scan")
+    if s["source"] == "price_proxy":
+        tags.append("price-based read")
+    if s["expiry_week"]:
+        tags.append("expiry week, OI may be rollover")
+    return f"{i}. {arrow} {s['symbol']}  " + " · ".join(bits) + (f"\n   ⚑ {'; '.join(tags)}" if tags else "")
+
+
+def oi_shifts_message(shifts: list[dict], snapshot_date: date) -> Optional[str]:
+    """The major-shifts alert, strongest first. None on a quiet day (no message rather than an empty one)."""
+    if not shifts:
+        return None
+    lines = [
+        f"⚡ OI major shifts · {snapshot_date.day} {snapshot_date.strftime('%b')} close",
+        f"{len(shifts)} stock{'s' if len(shifts) != 1 else ''} whose option flow leaned one way with the price agreeing and a big PCR or OI move for that stock, strongest first.",
+        "",
+    ]
+    lines += [_shift_line(i, s) for i, s in enumerate(shifts, 1)]
+    lines += ["", "Option-chain activity for the day, not a prediction or a recommendation."]
+    return "\n".join(lines)
+
+
+def oi_index_message(symbol: str, w: dict, at: datetime) -> str:
+    """The intraday index alert for one detected shift (see oi_index_shift.detect)."""
+    bullish = w["direction"] == "bullish"
+    acts = " + ".join(w["reasons"])
+    flip = f"\n⚑ flipped from {'bearish' if bullish else 'bullish'} the half hour before" if w.get("flipped") else ""
+    return (
+        f"{'🟢' if bullish else '🔴'} {symbol} OI shift · {at.strftime('%H:%M')}\n"
+        f"{acts}\n"
+        f"PCR {w['pcr_then']:.2f} → {w['pcr_now']:.2f} in the last {WINDOW_MINUTES_TEXT} · index {_signed(w['spot_move_pct'])}\n"
+        f"Call OI {_signed(w['call_oi_pct'], 1)} · put OI {_signed(w['put_oi_pct'], 1)}{flip}\n"
+        "Option-chain activity, not a prediction or a recommendation."
+    )
+
+
+WINDOW_MINUTES_TEXT = "30 minutes"
 
 SESSION_TITLES = {"NSE": ("📈", "Post-session · NSE"), "MCX": ("🛢️", "Post-session · MCX"), "CRYPTO": ("🪙", "Daily summary · crypto")}
 BIAS_HELD_BAND = 0.10  # percent: a bullish or bearish call needs the index to have moved at least this much its way to count as held

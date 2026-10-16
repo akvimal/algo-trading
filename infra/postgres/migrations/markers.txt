@@ -63,3 +63,7 @@
 058-oi-strike-snapshot.sql|market_data.oi_strike_snapshot|
 059-spread-bot.sql|execution.spread_bot_settings|
 060-oi-premium-flow.sql|market_data.oi_eod_snapshot|call_activity
+061-spread-bot-strategy-mode.sql|execution.spread_bot_settings|strategy_mode
+062-spread-bot-daily-loss-limit.sql|execution.spread_bot_settings|daily_loss_pct
+063-oi-swing-shadow.sql|market_data.oi_swing_shadow|
+064-oi-alert-outcomes.sql|market_data.oi_alert_outcomes|

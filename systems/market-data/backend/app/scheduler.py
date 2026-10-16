@@ -252,6 +252,21 @@ def _record_oi_strikes() -> None:
         db.close()
 
 
+@tracked("oi-index-shift-check", "NIFTY / BANKNIFTY OI shift check", keep=288, keep_skips=False)
+def _check_oi_index_shift() -> None:
+    """Every five minutes while the market is open (a minute after the strike recorder has written its snapshot): has NIFTY's or BANKNIFTY's option
+    picture shifted hard in the last half hour? If so, tells the subscribers (app/domain/oi_index_shift.py has the rules; one alert per index per hour).
+    It only reads the stored strike snapshots, so it makes no provider calls."""
+    from app.domain.notification_jobs import send_oi_index_check
+
+    run = job_tracker.current()
+    result = send_oi_index_check()
+    if not result["checked"]:
+        run.skip("outside the alert hours")
+        return
+    run.tick(result["checked"], result)
+
+
 @tracked("oi-eod-snapshot-record", "OI buildup snapshot")
 def _record_oi_eod_snapshot() -> None:
     """Writes one market_data.oi_eod_snapshot row per NSE F&O stock
@@ -877,6 +892,7 @@ def job_catalog() -> list[dict]:
         ("oi-eod-snapshot-record", "OI buildup snapshot", f"Weekdays {s.oi_eod_snapshot_hour:02d}:{s.oi_eod_snapshot_minute:02d}", "Stores each F&O stock's total call and put open interest for the day, which the OI buildup scan and its history read."),
         ("equity-screener-snapshot-record", "Equity screener snapshot", f"Weekdays {s.equity_screener_snapshot_hour:02d}:{s.equity_screener_snapshot_minute:02d}", "Fetches the new daily bars for every NSE stock (a full year only on Mondays or for a new stock) and stores the screener row, which the Screener and custom scans read."),
         ("zone-scan-record", "Zone scan", f"Weekdays {s.zone_scan_hour:02d}:{s.zone_scan_minute:02d}", "Reads each F&O stock's stored daily and weekly bars for an untested demand or supply zone at price, sets it against the day's open-interest read, and stores the tier for the OI scan page's At a zone filter."),
+        ("oi-index-shift-check", "NIFTY / BANKNIFTY OI shift check", "Every 5 minutes on weekdays, alerts only 9:30 AM to 3:15 PM IST", "Looks for a hard shift in NIFTY's or BANKNIFTY's option picture over the last half hour and tells the people subscribed to it."),
         ("oi-swing-shadow-record", "OI swing shadow", f"Weekdays {s.oi_swing_shadow_hour:02d}:{s.oi_swing_shadow_minute:02d}", "Writes down what a rule-following 1-3 day OI swing bot would have done on each stock at a zone tonight, and settles earlier nights' outcomes. Paper log only: it places no orders."),
         ("session-summary-nse", "Post-session summary: NSE", f"Weekdays {s.session_summary_nse_hour:02d}:{s.session_summary_nse_minute:02d}", "Sends each subscriber how the NSE session went and their own closed trades that day."),
         ("session-summary-mcx", "Post-session summary: MCX", f"Weekdays {s.session_summary_mcx_hour:02d}:{s.session_summary_mcx_minute:02d}", "Sends each subscriber how gold, crude, silver and natural gas did and their own closed MCX trades that day."),
@@ -981,6 +997,14 @@ def start_scheduler() -> None:
         CronTrigger(day_of_week="mon-fri", hour=settings.zone_scan_hour, minute=settings.zone_scan_minute, timezone=settings.timezone),
         id="zone-scan-record",
         replace_existing=True,
+    )
+    _scheduler.add_job(
+        _check_oi_index_shift,
+        CronTrigger(day_of_week="mon-fri", minute=f"1-59/{settings.sentiment_history_interval_minutes}", timezone=settings.timezone),
+        id="oi-index-shift-check",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
     _scheduler.add_job(
         _record_oi_swing_shadow,

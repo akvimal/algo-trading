@@ -84,6 +84,16 @@ describe("DailyMessages", () => {
     await waitFor(() => expect(writes("PUT")[1].body).toEqual({ enabled: true, params: { top_n: 3 } }));
   });
 
+  it("offers major shifts, the full digest or both for the OI alerts, and only asks for the digest size when the digest is wanted", async () => {
+    state = { chat_ready: true, categories: [cat("oi_buildup", "OI alerts", { params: { top_n: 5, mode: "shifts" } })] };
+    render(<DailyMessages />);
+    const oi = await screen.findByTestId("daily-oi_buildup");
+    expect(within(oi).getByLabelText("Which OI message")).toHaveValue("shifts");
+    expect(within(oi).queryByLabelText("How many per box")).not.toBeInTheDocument(); // no digest, no size to choose
+    await userEvent.selectOptions(within(oi).getByLabelText("Which OI message"), "both");
+    await waitFor(() => expect(writes("PUT")[0].body).toEqual({ enabled: false, params: { top_n: 5, mode: "both" } }));
+  });
+
   it("will not let anything be switched on until Telegram is connected, and says so", async () => {
     state = { ...state, chat_ready: false };
     render(<DailyMessages />);

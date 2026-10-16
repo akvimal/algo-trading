@@ -11,10 +11,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from app.adapters.db.models import JobRun, OiEodSnapshot
+from app.adapters.db.models import JobRun, NotificationLog, OiEodSnapshot, OiStrikeSnapshot
 from app.adapters.db.session import SessionLocal
 from app.config import settings
 from app.domain import notifications as n
+from app.domain import oi_index_shift, oi_shifts
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,7 @@ def latest_oi_rows(db: Session) -> tuple[list[dict], Optional[date]]:
         {
             "symbol": r.symbol, "total_call_oi": r.total_call_oi, "total_put_oi": r.total_put_oi, "call_oi_change_pct": r.call_oi_change_pct,
             "put_oi_change_pct": r.put_oi_change_pct, "price_change_pct": r.price_change_pct, "call_buildup": r.call_buildup, "put_buildup": r.put_buildup,
+            "pcr": r.pcr, "call_activity": r.call_activity, "put_activity": r.put_activity,
         }
         for r in rows
     ], latest
@@ -174,12 +176,126 @@ def oi_digest_to_subscribers(db: Session, today: Optional[date] = None) -> n.Tal
             cards[top_n] = oi_card_for(rows, snapshot_date, top_n)
         return cards[top_n]
 
-    return n.broadcast(db, "oi_buildup", f"oi:{snapshot_date.isoformat()}", lambda params: n.oi_digest_message(rows, snapshot_date, params.get("top_n", 5)), card=card)
+    def build(params: dict) -> Optional[str]:
+        if params.get("mode", "shifts") not in ("digest", "both"):
+            return None  # this person asked for the major shifts only
+        return n.oi_digest_message(rows, snapshot_date, params.get("top_n", 5))
+
+    return n.broadcast(db, "oi_buildup", f"oi:{snapshot_date.isoformat()}", build, card=card)
+
+
+HISTORY_DAYS = 45
+
+
+def oi_history_by_symbol(db: Session, before: date) -> dict[str, list[dict]]:
+    """Each stock's earlier snapshots (up to HISTORY_DAYS back), for the shifts' own-history checks."""
+    out: dict[str, list[dict]] = {}
+    for h in db.query(OiEodSnapshot).filter(OiEodSnapshot.snapshot_date < before, OiEodSnapshot.snapshot_date >= before - timedelta(days=HISTORY_DAYS)):
+        out.setdefault(h.symbol, []).append({
+            "snapshot_date": h.snapshot_date, "pcr": h.pcr, "call_oi_change_pct": h.call_oi_change_pct, "put_oi_change_pct": h.put_oi_change_pct,
+            "call_activity": h.call_activity, "put_activity": h.put_activity, "call_buildup": h.call_buildup, "put_buildup": h.put_buildup,
+        })
+    return out
+
+
+def latest_shifts(db: Session) -> tuple[list[dict], Optional[date]]:
+    """The major shifts in the latest scan (any age: the caller decides whether that is fresh enough) and the date it is for."""
+    rows, snapshot_date = latest_oi_rows(db)
+    if snapshot_date is None:
+        return [], None
+    return oi_shifts.pick_major_shifts(rows, oi_history_by_symbol(db, snapshot_date), snapshot_date, oi_shifts.DEFAULT_LIMIT), snapshot_date
+
+
+def oi_shifts_to_subscribers(db: Session, today: Optional[date] = None) -> n.Tally:
+    """The major-shifts message, for everyone whose OI alerts are set to shifts or both. Only a scan for TODAY, and nothing at all on a quiet day."""
+    shifts, snapshot_date = latest_shifts(db)
+    if snapshot_date is None or snapshot_date != (today or datetime.now(_tz()).date()):
+        return n.Tally()
+    text = n.oi_shifts_message(shifts, snapshot_date)
+    return n.broadcast(db, "oi_buildup", f"oi-shifts:{snapshot_date.isoformat()}", lambda params: text if params.get("mode", "shifts") in ("shifts", "both") else None)
 
 
 def send_oi_digest() -> n.Tally:
-    """Called when the end-of-day OI scan has finished, so the digest reflects the whole day's data, not a half-written scan."""
-    return _safely("OI digest", oi_digest_to_subscribers)
+    """Called when the end-of-day OI scan has finished, so the messages reflect the whole day's data, not a half-written scan. Sends the full digest to
+    those who asked for it and the major shifts to those who asked for those (the default); each is its own message and fails on its own."""
+    digest = _safely("OI digest", oi_digest_to_subscribers)
+    shifts = _safely("OI major shifts", oi_shifts_to_subscribers)
+    return n.Tally(sent=digest.sent + shifts.sent, failed=digest.failed + shifts.failed, skipped=digest.skipped + shifts.skipped)
+
+
+# ---- the intraday index shift ---------------------------------------------------------------------------------------------------
+
+
+def _snapshots(db: Session, symbol: str, now: datetime) -> list[dict]:
+    """The last ~100 minutes of strike snapshots for one index, oldest first, each {"at", "spot", "rows"}; only the expiry the latest one is for."""
+    since = now - timedelta(minutes=100)
+    rows = db.query(OiStrikeSnapshot).filter(OiStrikeSnapshot.symbol == symbol, OiStrikeSnapshot.recorded_at >= since).order_by(OiStrikeSnapshot.recorded_at.asc()).all()
+    if not rows:
+        return []
+    expiry = rows[-1].expiry
+    by_time: dict[datetime, list] = {}
+    for r in rows:
+        if r.expiry == expiry:
+            by_time.setdefault(r.recorded_at, []).append(r)
+    return [
+        {"at": at, "spot": group[0].spot_price, "rows": [{"strike": r.strike, "ce_oi": r.ce_oi, "pe_oi": r.pe_oi, "ce_ltp": r.ce_ltp, "pe_ltp": r.pe_ltp} for r in group]}
+        for at, group in sorted(by_time.items())
+    ]
+
+
+def detect_index_shift(db: Session, symbol: str, now: datetime) -> Optional[dict]:
+    """The shift now under way in one index, or None. Reads the strike snapshots only; sends nothing."""
+    snaps = _snapshots(db, symbol, now)
+    picked = oi_index_shift.pick_snapshots([s["at"] for s in snaps], now)
+    if picked is None:
+        return None
+    before, then, last = picked
+    return oi_index_shift.detect(snaps[before] if before is not None else None, snaps[then], snaps[last])
+
+
+def _recently_alerted(db: Session, symbol: str, now: datetime) -> bool:
+    cutoff = now - timedelta(minutes=oi_index_shift.COOLDOWN_MINUTES)
+    return db.query(NotificationLog).filter(
+        NotificationLog.category == "oi_index_shift", NotificationLog.dedupe_key.like(f"{symbol}:%"), NotificationLog.created_at >= cutoff, ~NotificationLog.dedupe_key.like("%manual%"),
+    ).first() is not None
+
+
+def check_oi_index_shift(db: Session, now: Optional[datetime] = None) -> dict:
+    """The scheduler's pass: for NIFTY and BANKNIFTY, detect a shift and tell the subscribers, at most one alert per index per cooldown.
+    Returns {"checked", "detected", "sent"} for the job's own record."""
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(_tz())
+    out = {"checked": 0, "detected": 0, "sent": 0}
+    if not oi_index_shift.active_now(local):
+        return out
+    for symbol in oi_index_shift_symbols():
+        out["checked"] += 1
+        w = detect_index_shift(db, symbol, now)
+        if w is None or _recently_alerted(db, symbol, now):
+            continue
+        out["detected"] += 1
+        text = n.oi_index_message(symbol, w, local)
+        tally = n.broadcast(db, "oi_index_shift", f"{symbol}:{local:%Y%m%d%H%M}", lambda params: text, now)
+        out["sent"] += tally.sent
+    return out
+
+
+def oi_index_shift_symbols() -> list[str]:
+    from app.domain.oi_strikes import RECORDED_UNDERLYINGS
+
+    return [s for symbols in RECORDED_UNDERLYINGS.values() for s in symbols]
+
+
+def send_oi_index_check() -> dict:
+    db = SessionLocal()
+    try:
+        return check_oi_index_shift(db)
+    except Exception:
+        logger.exception("notifications: the OI index shift check failed")
+        db.rollback()
+        return {"checked": 0, "detected": 0, "sent": 0}
+    finally:
+        db.close()
 
 
 # ---- operator alerts ------------------------------------------------------------------------------------------------------------

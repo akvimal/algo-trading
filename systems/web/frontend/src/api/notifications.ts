@@ -7,8 +7,12 @@ export type NotificationCategory = {
   schedule: string;
   admin_only: boolean;
   enabled: boolean;
-  params: { top_n?: number };
+  params: NotificationParams;
 };
+
+/** `mode` is only on the OI alerts: the major shifts (the default), the full digest, or both. `top_n` sizes the digest. */
+export type OiMode = "shifts" | "digest" | "both";
+export type NotificationParams = { top_n?: number; mode?: OiMode };
 
 export type Notifications = {
   /** The person has set a Telegram chat; without one nothing can be sent. */
@@ -30,7 +34,7 @@ export type Delivery = {
 };
 
 export const getNotifications = () => api<Notifications>("marketData", "/notifications");
-export const setNotification = (category: string, enabled: boolean, params?: { top_n?: number }) =>
+export const setNotification = (category: string, enabled: boolean, params?: NotificationParams) =>
   api<Notifications>("marketData", `/notifications/${category}`, { method: "PUT", json: { enabled, ...(params ? { params } : {}) } });
 export const getDeliveries = (limit = 12) => api<Delivery[]>("marketData", `/notifications/history?limit=${limit}`);
 /** Send the latest message of a category to the person's own chat now, to check it works. */

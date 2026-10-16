@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.adapters.db.models import AlertChannel, JobRun, NotificationLog, NotificationSubscription
 from app.adapters.db.session import get_db
 from app.auth import User, require_user
+from app.config import settings
 from app.domain import notification_jobs, notifications as n
 from app.domain.premarket_report import get_report
 
@@ -76,7 +78,7 @@ def _state(db: Session, user: User) -> NotificationsOut:
     cats = []
     for c in _visible(user):
         s = subs.get(c.key)
-        cats.append(CategoryOut(key=c.key, label=c.label, description=c.description, schedule=c.schedule, admin_only=c.admin_only, enabled=bool(s and s.enabled), params={**c.defaults, **((s.params if s else None) or {})}))
+        cats.append(CategoryOut(key=c.key, label=c.label, description=c.description, schedule=c.schedule, admin_only=c.admin_only, enabled=bool(s and s.enabled), params=n.effective_params(c.key, s.params if s else None)))
     return NotificationsOut(chat_ready=_has_chat(db, user.user_id), categories=cats)
 
 
@@ -136,12 +138,27 @@ def _latest_text(db: Session, user: User, cat: n.Category) -> str:
             raise HTTPException(status_code=404, detail="There is no pre-market report yet.")
         return n.premarket_message({"inputs": row.inputs, "rules": row.rules, "ai": row.ai}, row.day)
     if cat.key == "oi_buildup":
-        rows, snapshot_date = notification_jobs.latest_oi_rows(db)
         sub = db.get(NotificationSubscription, (user.user_id, cat.key))
-        text = n.oi_digest_message(rows, snapshot_date, {**cat.defaults, **((sub.params if sub else None) or {})}["top_n"]) if snapshot_date else None
+        params = n.effective_params(cat.key, sub.params if sub else None)
+        if params["mode"] in ("shifts", "both"):
+            shifts, snapshot_date = notification_jobs.latest_shifts(db)
+            text = n.oi_shifts_message(shifts, snapshot_date) if snapshot_date else None
+            if not text and params["mode"] == "shifts":
+                raise HTTPException(status_code=404, detail="No stock had a major shift in the latest scan." if snapshot_date else "There is no OI scan yet.")
+            if text:
+                return text
+        rows, snapshot_date = notification_jobs.latest_oi_rows(db)
+        text = n.oi_digest_message(rows, snapshot_date, params["top_n"]) if snapshot_date else None
         if not text:
             raise HTTPException(status_code=404, detail="No stock moved enough in price and open interest in the latest scan." if snapshot_date else "There is no OI scan yet.")
         return text
+    if cat.key == "oi_index_shift":
+        now = datetime.now(timezone.utc)
+        for symbol in notification_jobs.oi_index_shift_symbols():
+            w = notification_jobs.detect_index_shift(db, symbol, now)
+            if w is not None:
+                return n.oi_index_message(symbol, w, now.astimezone(ZoneInfo(settings.timezone)))
+        raise HTTPException(status_code=404, detail="No index is shifting right now (checked over the last half hour).")
     if cat.key in ("session_nse", "session_mcx", "session_crypto"):
         return _session_text(db, user, {"session_nse": "NSE", "session_mcx": "MCX"}.get(cat.key, "CRYPTO"))
     return notification_jobs.ops_status_text(db, datetime.now(timezone.utc))
@@ -158,10 +175,12 @@ def _latest_message(db: Session, user: User, cat: n.Category):
         return text, image, caption
     text = _latest_text(db, user, cat)
     if cat.key == "oi_buildup":
-        rows, snapshot_date = notification_jobs.latest_oi_rows(db)
         sub = db.get(NotificationSubscription, (user.user_id, cat.key))
-        top_n = {**cat.defaults, **((sub.params if sub else None) or {})}["top_n"]
-        image, caption = notification_jobs.oi_card_for(rows, snapshot_date, top_n)
+        params = n.effective_params(cat.key, sub.params if sub else None)
+        if text.startswith("⚡"):
+            return text, None, None  # the major shifts go out as text; only the full digest has a picture
+        rows, snapshot_date = notification_jobs.latest_oi_rows(db)
+        image, caption = notification_jobs.oi_card_for(rows, snapshot_date, params["top_n"])
         return text, image, caption
     return text, None, None
 

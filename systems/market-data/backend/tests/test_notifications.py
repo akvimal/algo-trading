@@ -72,14 +72,14 @@ def subs(monkeypatch, *people, category="premarket", params=None):
 
 
 def test_every_category_starts_with_sane_defaults_and_only_ops_is_admin_only():
-    assert {k: c.admin_only for k, c in n.CATEGORIES.items()} == {"premarket": False, "oi_buildup": False, "session_nse": False, "session_mcx": False, "session_crypto": False, "ops": True}
-    assert n.clean_params("oi_buildup", None) == {"top_n": 5}
+    assert {k: c.admin_only for k, c in n.CATEGORIES.items()} == {"premarket": False, "oi_buildup": False, "oi_index_shift": False, "session_nse": False, "session_mcx": False, "session_crypto": False, "ops": True}
+    assert n.clean_params("oi_buildup", None) == {"top_n": 5, "mode": "shifts"}  # new subscriptions start on the major shifts
     assert n.clean_params("premarket", {"top_n": 99}) == {}  # settings a category does not have are dropped
 
 
 def test_the_oi_digest_size_is_a_whole_number_in_range():
-    assert n.clean_params("oi_buildup", {"top_n": 5}) == {"top_n": 5}
-    assert n.clean_params("oi_buildup", {"top_n": 10}) == {"top_n": 10}
+    assert n.clean_params("oi_buildup", {"top_n": 5}) == {"top_n": 5, "mode": "shifts"}
+    assert n.clean_params("oi_buildup", {"top_n": 10}) == {"top_n": 10, "mode": "shifts"}
     for bad in (2, 21, 0, -1, "10", 7.5, True, None):
         with pytest.raises(n.NotificationError):
             n.clean_params("oi_buildup", {"top_n": bad})
@@ -419,18 +419,28 @@ class RouteDB:
         return SimpleNamespace(filter=lambda *a: SimpleNamespace(all=lambda: [self.sub] if self.sub else []))
 
 
+def test_the_oi_alert_mode_is_one_of_three_and_an_old_subscription_keeps_its_digest():
+    assert n.clean_params("oi_buildup", {"mode": "digest"})["mode"] == "digest" and n.clean_params("oi_buildup", {"mode": "both"})["mode"] == "both"
+    for bad in ("daily", "", None, 1):
+        with pytest.raises(n.NotificationError):
+            n.clean_params("oi_buildup", {"mode": bad})
+    assert n.effective_params("oi_buildup", {"top_n": 7})["mode"] == "digest"  # saved before modes existed: it signed up for the digest
+    assert n.effective_params("oi_buildup", {"top_n": 7, "mode": "shifts"})["mode"] == "shifts"
+    assert n.effective_params("oi_buildup", None)["mode"] == "shifts"  # no subscription row at all: the default
+
+
 def test_a_person_sees_the_categories_they_may_use_all_off_and_whether_they_have_a_chat():
     out = route._state(RouteDB(chat=False), User(ME, False))
-    assert out.chat_ready is False and [c.key for c in out.categories] == ["premarket", "oi_buildup", "session_nse", "session_mcx", "session_crypto"]
-    assert not any(c.enabled for c in out.categories) and next(c for c in out.categories if c.key == "oi_buildup").params == {"top_n": 5}
-    assert [c.key for c in route._state(RouteDB(), User(ME, True)).categories] == ["premarket", "oi_buildup", "session_nse", "session_mcx", "session_crypto", "ops"]
+    assert out.chat_ready is False and [c.key for c in out.categories] == ["premarket", "oi_buildup", "oi_index_shift", "session_nse", "session_mcx", "session_crypto"]
+    assert not any(c.enabled for c in out.categories) and next(c for c in out.categories if c.key == "oi_buildup").params == {"top_n": 5, "mode": "shifts"}
+    assert [c.key for c in route._state(RouteDB(), User(ME, True)).categories] == ["premarket", "oi_buildup", "oi_index_shift", "session_nse", "session_mcx", "session_crypto", "ops"]
 
 
 def test_switching_a_category_on_saves_it_and_a_bad_setting_is_refused():
     db = RouteDB()
     out = route.set_notification("oi_buildup", route.SubscriptionIn(enabled=True, params={"top_n": 5}), User(ME, False), db)
-    assert db.sub.enabled is True and db.sub.params == {"top_n": 5} and db.sub.category == "oi_buildup"
-    assert next(c for c in out.categories if c.key == "oi_buildup").params == {"top_n": 5}
+    assert db.sub.enabled is True and db.sub.params == {"top_n": 5, "mode": "shifts"} and db.sub.category == "oi_buildup"
+    assert next(c for c in out.categories if c.key == "oi_buildup").params == {"top_n": 5, "mode": "shifts"}
     with pytest.raises(HTTPException) as e:
         route.set_notification("oi_buildup", route.SubscriptionIn(enabled=True, params={"top_n": 99}), User(ME, False), RouteDB())
     assert e.value.status_code == 422
@@ -468,8 +478,15 @@ def test_send_now_with_nothing_to_send_says_so_instead_of_sending_an_empty_messa
     assert e.value.status_code == 404 and tg.sent == []
     route._last_send.clear()
     monkeypatch.setattr(route.notification_jobs, "latest_oi_rows", lambda db: ([oi("A", 0.2, 5)], date(2026, 10, 6)))
+    monkeypatch.setattr(route.notification_jobs, "latest_shifts", lambda db: ([], date(2026, 10, 6)))
     with pytest.raises(HTTPException) as e:
-        route.send_now("oi_buildup", User(ME, False), RouteDB())
+        route.send_now("oi_buildup", User(ME, False), RouteDB())  # no subscription row: the default, major shifts
+    assert e.value.status_code == 404 and "major shift" in e.value.detail and tg.sent == []
+    route._last_send.clear()
+    db = RouteDB()
+    db.sub = SimpleNamespace(user_id=ME, category="oi_buildup", enabled=True, params={"top_n": 5})  # saved before modes: the digest
+    with pytest.raises(HTTPException) as e:
+        route.send_now("oi_buildup", User(ME, False), db)
     assert e.value.status_code == 404 and "moved enough in price and open interest" in e.value.detail and tg.sent == []
 
 
@@ -566,10 +583,15 @@ def test_a_digest_is_not_sent_for_an_old_snapshot(monkeypatch):
 def test_a_digest_is_sent_for_todays_snapshot_once_with_a_per_day_key(monkeypatch):
     calls = []
     monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([oi("A", 1.0, 20)], date(2026, 10, 6)))
-    monkeypatch.setattr(n, "broadcast", lambda db, category, key, build, now=None, **kw: (calls.append((category, key, build({"top_n": 5}))), n.Tally(sent=1))[1])
+    monkeypatch.setattr(n, "broadcast", lambda db, category, key, build, now=None, **kw: (calls.append((category, key, build({"top_n": 5, "mode": "digest"}))), n.Tally(sent=1))[1])
     assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 1
     category, key, text = calls[0]
     assert (category, key) == ("oi_buildup", "oi:2026-10-06") and text.startswith("📊 OI buildup · 6 Oct close")
+    # and a subscriber on the major shifts only gets none of the digest:
+    seen = []
+    monkeypatch.setattr(n, "broadcast", lambda db, category, key, build, now=None, **kw: (seen.append(build({"top_n": 5, "mode": "shifts"})), n.Tally())[1])
+    jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6))
+    assert seen == [None]
 
 
 def test_no_snapshot_at_all_sends_nothing(monkeypatch):

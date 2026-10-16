@@ -232,6 +232,17 @@ def _record(db: Session, user_id, symbol, outcome, reason, votes=None, detail=No
     db.commit()
 
 
+def _tell(db: Session, user_id, title: str, body: str, severity: str, key: str) -> None:
+    """Put the bot's news in the person's inbox. Best effort: the bot never fails because the inbox could not be written."""
+    try:
+        from app.domain import inbox
+
+        inbox.post(db, user_id, "bot", title, body, "/more/settings", severity, dedupe_key=key)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("spread bot: the inbox line could not be written")
+
+
 def _symbols(cfg) -> list[str]:
     return [s.strip().upper() for s in (cfg.symbols or "").split(",") if s.strip()]
 
@@ -322,6 +333,7 @@ def run_bot_for_user(db: Session, cfg, deps: BotDeps, now: datetime, premarket_c
         lost = -sum(float(g.pnl or 0) for g in db.query(G).filter(G.user_id == user_id, G.status == "CLOSED", G.setup_tag == BOT_TAG, G.exit_time >= day_start).all())
         allowed = float(account.current_balance) * loss_pct / 100.0
         if lost >= allowed:
+            _tell(db, user_id, "Spread bot stopped for today: daily loss limit reached", f"The bot's closed trades today are down {lost:,.0f}, past {loss_pct:g}% of the balance ({allowed:,.0f}). No more entries today.", "alert", f"bot-loss:{now_ist.date().isoformat()}")
             return idle(f"Daily loss limit reached: the bot's closed trades today are down {lost:,.0f}, past {loss_pct:g}% of the balance ({allowed:,.0f}); no more entries today",
                         detail={"lost_today": round(lost, 2), "limit": round(allowed, 2), "daily_loss_pct": loss_pct})
 
@@ -394,6 +406,7 @@ def _enter(db, cfg, deps: BotDeps, account, symbol, bias, why, votes, detail, no
     group = deps.open_group(db, user_id, symbol, action, strategy, primary, second, expiry, lots, notes)
     if group.status == "REJECTED":
         _record(db, user_id, symbol, "failed", f"{why}; rejected: {group.rejection_reason}", votes, detail, group_id=group.id, now=now)
+        _tell(db, user_id, f"Spread bot: {symbol} order rejected", f"{group.rejection_reason}", "warn", f"bot-reject:{group.id}")
         return "failed"
 
     problems = []
@@ -413,6 +426,7 @@ def _enter(db, cfg, deps: BotDeps, account, symbol, bias, why, votes, detail, no
         reason += " NOT ATTACHED: " + "; ".join(problems)
         detail = {**detail, "not_attached": problems}
     _record(db, user_id, symbol, "entered", reason, votes, detail, group_id=group.id, now=now)
+    _tell(db, user_id, f"Spread bot entered {symbol}", reason, "warn" if problems else "info", f"bot-entry:{group.id}")
     return "entered"
 
 

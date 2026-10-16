@@ -4,6 +4,7 @@ import { ProfileProvider, useProfile } from "./auth/ProfileContext";
 import { Skeleton } from "./components/bits";
 import { AppShell } from "./layout/AppShell";
 import { AiModelsPage } from "./pages/AiModelsPage";
+import { InboxPage } from "./pages/InboxPage";
 import { AlertsPage } from "./pages/AlertsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { MorePage } from "./pages/MorePage";
@@ -70,6 +71,7 @@ export function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="notes" element={<NotesPage />} />
             <Route path="alerts" element={<AlertsPage />} />
+            <Route path="inbox" element={<InboxPage />} />
             <Route path="strategies" element={<StrategiesPage />} />
             <Route path="swing-shadow" element={<SwingShadowPage />} />
             <Route path="jobs" element={<RequireAdmin><JobsPage /></RequireAdmin>} />

@@ -598,3 +598,12 @@ def test_no_snapshot_at_all_sends_nothing(monkeypatch):
     monkeypatch.setattr(jobs, "latest_oi_rows", lambda db: ([], None))
     assert jobs.oi_digest_to_subscribers(object(), today=date(2026, 10, 6)).sent == 0
 
+
+
+def test_a_message_also_lands_in_the_inbox_once_even_when_telegram_fails(monkeypatch, inbox_posts):
+    db, tg = FakeDB(), Telegram(monkeypatch, fail="blocked")
+    assert n.deliver(db, ME, "111", "oi_buildup", "oi:2026-10-06", "OI shift: RELIANCE\nPCR 1.4, put writing", NOW) == "failed"
+    assert inbox_posts == [{"user_id": ME, "category": "oi_buildup", "title": "OI shift: RELIANCE", "body": "PCR 1.4, put writing", "link": "/scan", "dedupe_key": "oi_buildup:oi:2026-10-06"}]
+    tg.fail = None
+    assert n.deliver(db, ME, "111", "oi_buildup", "oi:2026-10-06", "OI shift: RELIANCE\nPCR 1.4, put writing", NOW) == "sent"  # a retry is not a new message
+    assert len(inbox_posts) == 1

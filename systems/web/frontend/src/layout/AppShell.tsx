@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { InboxBell } from "../components/InboxBell";
 import { useProfile } from "../auth/ProfileContext";
 import { loadSidebarChoice, saveSidebarChoice } from "./sidebarPrefs";
 
@@ -96,6 +97,7 @@ export function AppShell() {
       <nav className={`nav ${collapsed ? "collapsed" : ""}`} aria-label="Main">
         <div className="nav-top">
           <div className="brand">Algo Trading</div>
+          <InboxBell className="in-nav" />
           <button className="nav-collapse" aria-pressed={collapsed} aria-label={collapsed ? "Expand navigation" : "Collapse navigation"} title={collapsed ? "Expand" : "Collapse"} onClick={toggleCollapsed}>
             <CollapseIcon collapsed={collapsed} />
           </button>
@@ -119,6 +121,9 @@ export function AppShell() {
         )}
       </nav>
       <main className={`app-main${wide ? " wide" : ""}${dash ? " dash" : ""}`}>
+        <div className="inbox-bar">
+          <InboxBell />
+        </div>
         <Outlet />
       </main>
     </div>

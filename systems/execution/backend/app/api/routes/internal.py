@@ -9,14 +9,17 @@ forward here, only the shared secret."""
 
 import logging
 from datetime import date
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.adapters.db import models
 from app.adapters.db.session import get_db
 from app.config import settings
+from app.domain import inbox
 from app.domain.position_manager import settle_live_position_exit
 from app.domain.session_summary import trader_day
 
@@ -131,3 +134,23 @@ def session_summary(user_id: UUID, segment: str, day: date, db: Session = Depend
     if seg not in ("NSE", "MCX", "CRYPTO"):
         raise HTTPException(status_code=404, detail=f"unknown segment {segment}")
     return trader_day(db, user_id, seg, day)
+
+
+class InboxPost(BaseModel):
+    user_id: UUID
+    category: str
+    title: str
+    body: Optional[str] = None
+    link: Optional[str] = None
+    severity: str = "info"
+    dedupe_key: Optional[str] = None
+
+
+@router.post("/inbox", dependencies=[Depends(_require_internal_secret)])
+def post_inbox(payload: InboxPost, db: Session = Depends(get_db)):
+    """Another service (market-data's alerts and messages) puts a line in one person's inbox. Posting the same dedupe key twice adds it once."""
+    try:
+        item = inbox.post(db, payload.user_id, payload.category, payload.title, payload.body, payload.link, payload.severity, payload.dedupe_key)
+    except inbox.InboxError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"created": item is not None}

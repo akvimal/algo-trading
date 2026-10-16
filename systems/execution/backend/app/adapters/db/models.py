@@ -637,6 +637,27 @@ class SpreadBotDecision(Base):
     group_id = Column(UUID(as_uuid=True))
 
 
+class InboxItem(Base):
+    """One line of the in-app inbox (migration 066, app/domain/inbox.py): an event or a self-clearing to-do, unread until read_at is set."""
+
+    __tablename__ = "inbox_items"
+    __table_args__ = {"schema": SCHEMA}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    kind = Column(Text, nullable=False)
+    category = Column(Text, nullable=False)
+    severity = Column(Text, nullable=False, default="info")
+    title = Column(Text, nullable=False)
+    body = Column(Text)
+    link = Column(Text)
+    dedupe_key = Column(Text)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    read_at = Column(TIMESTAMP(timezone=True))
+    dismissed_at = Column(TIMESTAMP(timezone=True))
+    resolved_at = Column(TIMESTAMP(timezone=True))
+
+
 class StudyNote(Base):
     """One note from the thoughts-and-plans panel under a chart - see infra/postgres/migrations/031-study-notes.sql
     and app/domain/study_notes.py. `snapshot_png` is deferred so listing notes never pulls the images."""

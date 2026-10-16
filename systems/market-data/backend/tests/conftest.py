@@ -24,6 +24,16 @@ def _no_model_settings_db(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def inbox_posts(monkeypatch):
+    """Every message also goes to the person's in-app inbox over HTTP (execution owns it). No test may make that call: they are recorded here instead."""
+    from app.adapters import execution_client
+
+    posted = []
+    monkeypatch.setattr(execution_client, "post_inbox", lambda user_id, category, title, body, link, dedupe_key: posted.append({"user_id": user_id, "category": category, "title": title, "body": body, "link": link, "dedupe_key": dedupe_key}) or True)
+    return posted
+
+
+@pytest.fixture(autouse=True)
 def _no_notifications_sent(monkeypatch):
     """The jobs call app/domain/notification_jobs when they finish (the OI digest, the pre-market push, the operator check). Nothing a
     test does may send a message or queue one: tests that exercise the notification code replace these with their own."""

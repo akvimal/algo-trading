@@ -2,6 +2,7 @@ import { useState } from "react";
 import { formatDay, formatPnl, formatPrice, formatTime } from "../format";
 import type { Trade } from "../pages/portfolioModel";
 import { Signed } from "./bits";
+import { LEVEL_LABEL } from "../pages/journalModel";
 import { TradeJournal } from "./TradeJournal";
 import { TradeSnapshots } from "./TradeSnapshots";
 
@@ -33,6 +34,7 @@ export function TradeListItem({ trade, onSaved, cta }: { trade: Trade; onSaved: 
             {trade.symbol} <span className={`pill ${trade.action === "BUY" ? "up" : "dn"}`}>{trade.action}</span>
             {trade.kind === "group" && <span className="pill"> options</span>}
             {trade.setupTag && <span className="pill"> {trade.setupTag}</span>}
+            {trade.rootCause && <span className={`pill ${trade.rootCause === "clean" ? "up" : "dn"}`}> {LEVEL_LABEL[trade.rootCause]}</span>}
           </strong>
           <div className="faint" style={{ fontSize: 12 }}>
             {formatDay(trade.exitTime)} {formatTime(trade.exitTime)}

@@ -6,6 +6,7 @@ import { useResource } from "../hooks/useResource";
 import { NOTES_MAX, SETUP_TAGS, buildReviewPayload, nextSetupTag, reviewItemsFor, validateReview } from "../pages/journalModel";
 import type { Trade } from "../pages/portfolioModel";
 import { ErrorNotice, Skeleton } from "./bits";
+import { MistakeReview } from "./MistakeReview";
 
 const message = (e: unknown) => (e instanceof ApiError ? e.message : "Something went wrong. Try again.");
 
@@ -104,6 +105,8 @@ export function TradeJournal({ trade, onSaved }: { trade: Trade; onSaved: () => 
           {error}
         </div>
       )}
+
+      {trade.manual && !trade.autoTraded && <MistakeReview trade={trade} onSaved={onSaved} />}
 
       <ReviewSection trade={trade} onSaved={onSaved} />
     </div>

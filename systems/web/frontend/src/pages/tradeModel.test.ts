@@ -221,6 +221,14 @@ describe("buildOrder", () => {
     expect("quantity" in o.body).toBe(false); // auto: the server sizes it
   });
 
+  it("records the market read the order was placed on, for the post-trade review, and nothing when there was none", () => {
+    const t = ticket({ stop: "990" });
+    const read = buildOrder(t, analyzeTicket(t, ctx()), ctx(), { ...meta, regime: { regime: "trending_down", trend: "down", adx: 31.2 } });
+    expect(read.body).toMatchObject({ entry_context: { regime: "trending_down", trend: "down", adx: 31.2 } });
+    expect("entry_context" in buildOrder(t, analyzeTicket(t, ctx()), ctx(), meta).body).toBe(false);
+    expect("entry_context" in buildOrder(t, analyzeTicket(t, ctx()), ctx(), { ...meta, regime: null }).body).toBe(false);
+  });
+
   it("sends the size when it was typed, and marks the order not risk-managed", () => {
     const t = ticket({ stop: "990", lots: "5" });
     const o = buildOrder(t, analyzeTicket(t, ctx()), ctx(), meta);

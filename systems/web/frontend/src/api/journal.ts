@@ -1,5 +1,6 @@
 import { api } from "./http";
 import type { ReviewPayload } from "../pages/journalModel";
+import type { ReviewSuggestions } from "./types";
 
 export type TradeKind = "position" | "group";
 
@@ -19,4 +20,14 @@ export function saveNotes(kind: TradeKind, id: string, notes: string) {
 /** The one-time review of a closed manual trade. The server refuses a second review. */
 export function submitReview(kind: TradeKind, id: string, payload: ReviewPayload) {
   return api<unknown>("execution", `${base(kind, id)}/review`, { method: "PUT", json: payload });
+}
+
+/** Save what went wrong: the confirmed mistake tags, or `{ clean: true }` for a trade where nothing did. The server files it under the earliest failed level. */
+export function saveMistakes(kind: TradeKind, id: string, body: { mistake_tags: string[] } | { clean: true }) {
+  return api<unknown>("execution", `${base(kind, id)}/tags`, { method: "PUT", json: body });
+}
+
+/** The mistakes the order and its history support for a closed trade, each with why. Suggestions only. */
+export function loadSuggestions(kind: TradeKind, id: string) {
+  return api<ReviewSuggestions>("execution", `/trade-review/${kind}/${id}/suggestions`);
 }

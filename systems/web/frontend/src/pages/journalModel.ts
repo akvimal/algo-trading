@@ -1,4 +1,4 @@
-import type { ChecklistItem, Segment } from "../api/types";
+import type { ChecklistItem, RootCause, Segment } from "../api/types";
 
 // The plan a trade was taken on, picked on the ticket (market state x plan, see tradeModel's planTag): five labels. Results are grouped by these
 // exact strings.
@@ -23,6 +23,59 @@ export const SETUP_TAGS = [
 export const TRIGGERS = ["Order block", "Fair value gap", "Support / resistance", "Break of structure", "Open-interest shift", "News"] as const;
 
 export const NOTES_MAX = 2000;
+
+/** What went wrong, by the step that failed (mirrors the server's app/domain/trade_review.py). A trade is filed under the EARLIEST level that
+ * failed: no study explains no plan, and no plan explains the rest. */
+export type ReviewLevel = { level: Exclude<RootCause, "clean">; label: string; question: string; tags: { tag: string; label: string }[] };
+export const REVIEW_LEVELS: ReviewLevel[] = [
+  {
+    level: "study", label: "Study", question: "Did you analyse it before entering?",
+    tags: [
+      { tag: "against_trend", label: "Against the trend" },
+      { tag: "ignored_regime", label: "Ignored the regime / OI read" },
+      { tag: "event_risk", label: "Traded into news or an event" },
+      { tag: "wrong_setup", label: "Wrong setup for the conditions" },
+      { tag: "impulse", label: "Impulse or tip, no analysis" },
+    ],
+  },
+  {
+    level: "plan", label: "Plan", question: "Did you define the trade before entering?",
+    tags: [
+      { tag: "no_stop", label: "No stop" },
+      { tag: "no_target", label: "No target" },
+      { tag: "low_rr", label: "Reward-to-risk below minimum" },
+      { tag: "oversized", label: "Oversized" },
+      { tag: "chased", label: "Chased the entry" },
+      { tag: "no_exit_rule", label: "No exit rule" },
+    ],
+  },
+  {
+    level: "execution", label: "Execution", question: "Did you follow the plan?",
+    tags: [
+      { tag: "stop_moved", label: "Moved or removed the stop" },
+      { tag: "exited_early", label: "Exited early" },
+      { tag: "held_past_plan", label: "Held past the plan" },
+      { tag: "added_to_loser", label: "Added to a loser" },
+      { tag: "revenge", label: "Revenge trade or overtrading" },
+      { tag: "broke_limits", label: "Broke a limit" },
+    ],
+  },
+];
+
+export const LEVEL_LABEL: Record<RootCause, string> = { study: "Study", plan: "Plan", execution: "Execution", clean: "Clean" };
+export const tagLabel = (tag: string): string => REVIEW_LEVELS.flatMap((l) => l.tags).find((t) => t.tag === tag)?.label ?? tag;
+const levelOfTag = (tag: string) => REVIEW_LEVELS.find((l) => l.tags.some((t) => t.tag === tag))?.level;
+
+/** The earliest level among the tags, as the server files the trade; null when none. */
+export function rootCauseOf(tags: string[]): RootCause | null {
+  const levels = new Set(tags.map(levelOfTag));
+  return REVIEW_LEVELS.find((l) => levels.has(l.level))?.level ?? null;
+}
+
+/** Tap a mistake to add it, tap again to remove it. */
+export function toggleTag(tags: string[], tag: string): string[] {
+  return tags.includes(tag) ? tags.filter((t) => t !== tag) : [...tags, tag];
+}
 
 /** Empty `segments` means every segment. */
 export function appliesToSegment(item: ChecklistItem, segment: Segment): boolean {

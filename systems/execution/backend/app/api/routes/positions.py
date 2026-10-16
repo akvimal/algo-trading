@@ -9,7 +9,7 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.adapters.quotes.client import get_candle_history, get_ltp_batch, get_previous_candle, resolve_underlying
 from app.auth import User, get_current_user, require_admin
-from app.domain import stop_rules
+from app.domain import stop_rules, trade_review
 from app.domain.pending_orders import link_note_to_position
 from app.domain.study_notes import create_note
 from app.domain.stop_rules import DEFAULT_ATR_INTERVAL
@@ -147,6 +147,9 @@ def _position_to_out(row: db_models.Position, live_price: Optional[float] = None
         "setup_tag": row.setup_tag,
         "confidence": row.confidence,
         "emotion_tag": row.emotion_tag,
+        "root_cause": row.root_cause,
+        "mistake_tags": row.mistake_tags or [],
+        "entry_context": row.entry_context,
         # Immutable entry snapshot of the two above + whether the fill was
         # auto-traded - the Discipline score's "plan review" component
         # (before vs after) and its auto-trade exclusion.
@@ -376,6 +379,9 @@ def open_manual(payload: ManualPositionCreate, user: User = Depends(get_current_
         entry_interval=payload.entry_interval,
         horizon=payload.horizon,
     )
+    if payload.entry_context and row.status == "OPEN":
+        row.entry_context = trade_review.clean_context(payload.entry_context)
+        db.commit()
     if payload.source_note_id and row.status == "OPEN":
         try:
             link_note_to_position(db, user.id, uuid.UUID(payload.source_note_id.strip()), row.id)
@@ -561,6 +567,18 @@ def edit_position_notes(
     return _position_to_out(row)
 
 
+
+def _mistakes_from(sent: dict, payload) -> Optional[tuple]:
+    """(tags, root_cause) when the request carried a review of the mistakes, else None. A bad tag or a contradictory request is a 422."""
+    if "mistake_tags" not in sent and "clean" not in sent:
+        return None
+    try:
+        tags = trade_review.clean_tags(payload.mistake_tags)
+        return tags, trade_review.root_cause_for(tags, bool(payload.clean))
+    except trade_review.ReviewError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 @router.put("/positions/{position_id}/tags")
 def edit_position_tags(
     position_id: str, payload: TradeTagsUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -590,6 +608,7 @@ def edit_position_tags(
         set_confidence="confidence" in sent,
         emotion_tag=payload.emotion_tag,
         set_emotion_tag="emotion_tag" in sent,
+        mistakes=_mistakes_from(sent, payload),
     )
     if row is None:
         raise HTTPException(status_code=404, detail="position not found")

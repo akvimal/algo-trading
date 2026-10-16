@@ -1638,6 +1638,7 @@ def update_group_tags(
     set_confidence: bool = False,
     emotion_tag: Optional[str] = None,
     set_emotion_tag: bool = False,
+    mistakes: Optional[tuple] = None,  # (tags, root_cause) from trade_review, already validated; None leaves them alone
 ) -> Optional[db_models.OptionPositionGroup]:
     """PUT /option-groups/{id}/tags - option-group sibling of
     position_manager.update_position_tags. Partial: `set_*` say which
@@ -1651,6 +1652,8 @@ def update_group_tags(
         row.confidence = confidence
     if set_emotion_tag:
         row.emotion_tag = emotion_tag or None
+    if mistakes is not None:
+        row.mistake_tags, row.root_cause = (mistakes[0] or None), mistakes[1]
     db.commit()
     return row
 

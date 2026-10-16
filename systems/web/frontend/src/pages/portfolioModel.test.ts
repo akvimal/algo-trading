@@ -101,7 +101,7 @@ describe("bySetup", () => {
 describe("unreviewed", () => {
   it("does not blame the person for automated fills, or for reviews already done", () => {
     const trades = closedTrades(
-      [pos({ id: "a", reviewed_at: null }), pos({ id: "b", reviewed_at: "2026-09-26T07:00:00Z" }), pos({ id: "c", reviewed_at: null, auto_traded: true })],
+      [pos({ id: "a", reviewed_at: null }), pos({ id: "b", reviewed_at: "2026-09-26T07:00:00Z", root_cause: "clean" }), pos({ id: "c", reviewed_at: null, auto_traded: true })],
       [],
     );
     expect(unreviewed(trades).map((t) => t.id)).toEqual(["a"]);

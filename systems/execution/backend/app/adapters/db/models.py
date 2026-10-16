@@ -283,6 +283,11 @@ class OptionPositionGroup(Base):
     system_quantity = Column(Numeric)
     # Discipline v2: how the person felt after a loss or an early exit (calm/fearful/greedy/fomo). See migration 035.
     emotion_tag = Column(Text)
+    # Post-trade review by cause (migration 065, app/domain/trade_review.py): the earliest failed level, the confirmed mistake tags, and the
+    # regime/trend the ticket showed at order time.
+    root_cause = Column(Text)
+    mistake_tags = Column(JSONB)
+    entry_context = Column(JSONB)
     combined_stop_loss_price = Column(Numeric)
     combined_target_price = Column(Numeric)
     sl_scope = Column(Text, nullable=False, default="combined")
@@ -401,6 +406,11 @@ class Position(Base):
     system_quantity = Column(Numeric)
     # Discipline v2: how the person felt after a loss or an early exit (calm/fearful/greedy/fomo). See migration 035.
     emotion_tag = Column(Text)
+    # Post-trade review by cause (migration 065, app/domain/trade_review.py): the earliest failed level, the confirmed mistake tags, and the
+    # regime/trend the ticket showed at order time.
+    root_cause = Column(Text)
+    mistake_tags = Column(JSONB)
+    entry_context = Column(JSONB)
     target_price = Column(Numeric)
     trailing_stop_enabled = Column(Boolean, nullable=False, default=False)
     # Copied from the Strategy at open time - the exit-monitor job's

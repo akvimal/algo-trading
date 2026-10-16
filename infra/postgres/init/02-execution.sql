@@ -1211,3 +1211,15 @@ ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_grou
 -- The USD/INR rate a CRYPTO trade's P&L was credited at (2026-10-09). See migrations/051-usdinr-at-close.sql.
 ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS usdinr_at_close NUMERIC;
 ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS usdinr_at_close NUMERIC;
+
+-- Post-trade review by cause (migration 065): root_cause = earliest failed level (study/plan/execution) or clean.
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS root_cause TEXT;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS mistake_tags JSONB;
+ALTER TABLE execution.positions ADD COLUMN IF NOT EXISTS entry_context JSONB;
+ALTER TABLE execution.positions DROP CONSTRAINT IF EXISTS positions_root_cause_check;
+ALTER TABLE execution.positions ADD CONSTRAINT positions_root_cause_check CHECK (root_cause IN ('study', 'plan', 'execution', 'clean'));
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS root_cause TEXT;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS mistake_tags JSONB;
+ALTER TABLE execution.option_position_groups ADD COLUMN IF NOT EXISTS entry_context JSONB;
+ALTER TABLE execution.option_position_groups DROP CONSTRAINT IF EXISTS option_position_groups_root_cause_check;
+ALTER TABLE execution.option_position_groups ADD CONSTRAINT option_position_groups_root_cause_check CHECK (root_cause IN ('study', 'plan', 'execution', 'clean'));

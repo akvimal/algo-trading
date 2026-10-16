@@ -809,6 +809,8 @@ class ManualPositionCreate(BaseModel):
     # any other caller.
     trend_followed: Optional[bool] = None
     risk_managed: Optional[bool] = None
+    # What the ticket showed at order time (regime, trend, ADX), kept for the post-trade review. Free-form keys are dropped server-side.
+    entry_context: Optional[dict] = None
     # Structured trade journal set at order time - setup_tag from
     # manualOrder.ts's SETUP_TAGS, confidence a 1-5 self-rating. Both
     # editable later via PUT /positions/{id}/tags. Feed Trading Performance.
@@ -981,6 +983,7 @@ class ManualOptionPositionCreate(BaseModel):
     # /spot-stop-loss after create, not on this payload.
     trend_followed: Optional[bool] = None
     risk_managed: Optional[bool] = None
+    entry_context: Optional[dict] = None  # see ManualPositionCreate
     # Structured trade journal set at order time - see ManualPositionCreate.
     setup_tag: Optional[str] = Field(default=None, max_length=40)
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
@@ -1164,6 +1167,10 @@ class TradeTagsUpdate(BaseModel):
     confidence: Optional[int] = Field(default=None, ge=1, le=5)
     # Discipline v2: how the person felt after a loss or an early exit. "" clears it.
     emotion_tag: Optional[Literal["calm", "fearful", "greedy", "fomo", ""]] = None
+    # Post-trade review by cause: the confirmed mistake tags (slugs from app/domain/trade_review.py; [] clears) and/or clean=true. The root
+    # cause is derived on the server: the earliest level among the tags, or 'clean'.
+    mistake_tags: Optional[list[str]] = None
+    clean: Optional[bool] = None
 
 
 class AdminResetAllConfirm(BaseModel):

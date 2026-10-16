@@ -66,3 +66,16 @@ describe("nextSetupTag", () => {
     expect(nextSetupTag("Breakout", "Breakout")).toBe("");
   });
 });
+
+describe("what went wrong, by step", () => {
+  it("files a trade under the earliest step that failed", async () => {
+    const { rootCauseOf, toggleTag, tagLabel } = await import("./journalModel");
+    expect(rootCauseOf(["stop_moved", "no_stop", "against_trend"])).toBe("study");
+    expect(rootCauseOf(["stop_moved", "no_stop"])).toBe("plan");
+    expect(rootCauseOf(["revenge"])).toBe("execution");
+    expect(rootCauseOf([])).toBeNull();
+    expect(toggleTag(["no_stop"], "no_stop")).toEqual([]);
+    expect(toggleTag(["no_stop"], "low_rr")).toEqual(["no_stop", "low_rr"]);
+    expect(tagLabel("against_trend")).toBe("Against the trend");
+  });
+});

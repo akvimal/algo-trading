@@ -70,6 +70,9 @@ export type Position = {
   notes?: string | null;
   setup_tag?: string | null;
   confidence?: number | null;
+  /** The post-trade review by cause: the earliest failed level (or clean), and the confirmed mistake tags. */
+  root_cause?: RootCause | null;
+  mistake_tags?: string[] | null;
   reviewed_at?: string | null;
   review_violation?: boolean | null;
   review_notes?: string | null;
@@ -130,6 +133,9 @@ export type OptionGroup = {
   notes?: string | null;
   setup_tag?: string | null;
   confidence?: number | null;
+  /** The post-trade review by cause: the earliest failed level (or clean), and the confirmed mistake tags. */
+  root_cause?: RootCause | null;
+  mistake_tags?: string[] | null;
   reviewed_at?: string | null;
   review_violation?: boolean | null;
   review_notes?: string | null;
@@ -601,6 +607,22 @@ export type DisciplineTrade = {
   /** How the person said they felt after a loss or an early exit, and whether that question is still open for this trade. */
   emotion_tag: Feeling | null;
   needs_emotion: boolean;
+};
+export type RootCause = "study" | "plan" | "execution" | "clean";
+export type SuggestedTag = { tag: string; level: Exclude<RootCause, "clean">; label: string; why: string };
+/** What the data supports for one closed trade (GET /trade-review/{kind}/{id}/suggestions). Never a verdict: the person confirms. */
+export type ReviewSuggestions = { available: boolean; tags: SuggestedTag[]; root_cause: RootCause | null; had_context: boolean };
+export type CostBlock = { n: number; pnl: number; avg_loss: number | null };
+/** GET /trade-review/summary/{segment}: what the reviewed trades cost, by level and by tag. */
+export type MistakeSummary = {
+  segment: Segment;
+  reviewed: number;
+  pending: number;
+  by_level: Record<RootCause, CostBlock>;
+  by_tag: Record<string, CostBlock & { level: Exclude<RootCause, "clean"> }>;
+  clean: CostBlock & { lost: number };
+  flawed: CostBlock;
+  trades_since_last: Record<string, number>;
 };
 /** One habit rewarded over a run of trades. Motivation only: it is not connected to the live-trading gate. */
 export type Credential = {

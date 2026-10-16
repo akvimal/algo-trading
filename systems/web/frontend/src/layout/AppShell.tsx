@@ -107,12 +107,12 @@ export function AppShell() {
             <span className={collapsed ? "sr-only" : undefined}>{item.label}</span>
           </NavLink>
         ))}
-        <InboxBell variant="nav" collapsed={collapsed} />
         {session?.email && (
           <div className="nav-bottom">
             <span className={`nav-email ${collapsed ? "sr-only" : ""}`} title={session.email}>
               {session.email}
             </span>
+            <InboxBell variant="nav" collapsed={collapsed} />
             <button className="nav-signout" onClick={signOut} title="Sign out" aria-label="Sign out">
               <SignOutIcon />
               <span className={collapsed ? "sr-only" : undefined}>Sign out</span>

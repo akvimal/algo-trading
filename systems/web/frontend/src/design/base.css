@@ -2936,35 +2936,38 @@ table.t th {
   margin-bottom: 0;
 }
 
-/* The inbox bell: a slim bar above the page on a phone, and a button in the sidebar header on a desktop. */
-.inbox-bell {
+/* The inbox bell: a larger bell in a slim bar above the page on a phone, and a row in the sidebar on a desktop (icon-only when collapsed). */
+.inbox-icon {
   position: relative;
+  display: inline-flex;
+}
+.inbox-bell {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 48px;
+  height: 48px;
   color: var(--text-dim);
 }
 .inbox-bell svg {
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
 }
 .inbox-bell:hover {
   color: var(--text);
 }
 .inbox-badge {
   position: absolute;
-  top: 2px;
-  right: 0;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
+  top: -6px;
+  right: -8px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
   background: #d64545;
   color: #fff;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 18px;
   text-align: center;
   font-weight: 700;
 }
@@ -2972,17 +2975,14 @@ table.t th {
   display: flex;
   justify-content: flex-end;
 }
-.nav .inbox-bell.in-nav {
+.nav .inbox-nav {
   display: none;
 }
 @media (min-width: 900px) {
   .inbox-bar {
     display: none;
   }
-  .nav .inbox-bell.in-nav {
-    display: inline-flex;
-  }
-  .nav.collapsed .inbox-bell.in-nav {
-    display: none;
+  .nav .inbox-nav {
+    display: flex;
   }
 }

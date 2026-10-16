@@ -97,7 +97,6 @@ export function AppShell() {
       <nav className={`nav ${collapsed ? "collapsed" : ""}`} aria-label="Main">
         <div className="nav-top">
           <div className="brand">Algo Trading</div>
-          <InboxBell className="in-nav" />
           <button className="nav-collapse" aria-pressed={collapsed} aria-label={collapsed ? "Expand navigation" : "Collapse navigation"} title={collapsed ? "Expand" : "Collapse"} onClick={toggleCollapsed}>
             <CollapseIcon collapsed={collapsed} />
           </button>
@@ -108,6 +107,7 @@ export function AppShell() {
             <span className={collapsed ? "sr-only" : undefined}>{item.label}</span>
           </NavLink>
         ))}
+        <InboxBell variant="nav" collapsed={collapsed} />
         {session?.email && (
           <div className="nav-bottom">
             <span className={`nav-email ${collapsed ? "sr-only" : ""}`} title={session.email}>

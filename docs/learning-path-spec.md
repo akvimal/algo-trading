@@ -239,7 +239,7 @@ All computed server-side from existing data, over the person's closed manual tra
 
 ## 8. Readiness (top of the page)
 
-**Built (2026-10-16):** a headline ring (checks met of total), one meter tile per check (progress bar, day blocks, the discipline gauge, a ceiling bar for drawdown, a signed figure for profit), a single "Next step" card (quickest unmet check first: costs, trades, discipline, drawdown, profit, days), and an equity curve is still to come. The server sends each check's `value`, `target` and `higher_is_better` as numbers alongside the text.
+**Built (2026-10-16):** a headline ring (checks met of total), one meter tile per check (progress bar, day blocks, the discipline gauge, a ceiling bar for drawdown, a signed figure for profit), and a single "Next step" card (quickest unmet check first: costs, trades, discipline, drawdown, profit, days). Still to come: the equity curve with the drawdown shaded. The server sends each check's `value`, `target` and `higher_is_better` as numbers alongside the text.
 
 - The live-eligibility checks (trades with costs, track record, drawdown, discipline and so on), each with "what this means" and a link to the module or fix that clears it.
 - Portfolio keeps a small status card linking here; the full list lives on Learn only.

@@ -1161,7 +1161,7 @@ describe("safety", () => {
     renderAt("/trade?symbol=RELIANCE");
     expect(await screen.findByText(/set to live trading/)).toBeInTheDocument();
     expect(screen.queryByTestId("ticket")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/more/settings?tab=broker");
+    expect(within(screen.getByRole("main")).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/more/settings?tab=broker");
     expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
 

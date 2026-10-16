@@ -113,7 +113,7 @@ describe("navigation", () => {
   it("is reachable from More", async () => {
     const user = userEvent.setup();
     renderAt("/more");
-    await user.click(await screen.findByRole("link", { name: /Settings/ }));
+    await user.click(await within(await screen.findByRole("main")).findByRole("link", { name: /Settings/ })); // the sidebar has its own Settings link
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
   });
 });

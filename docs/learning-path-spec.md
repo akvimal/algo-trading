@@ -35,13 +35,52 @@ Discipline components (v2): **Planned** (limit order with a stop, weight 1), **S
 
 ### 3.1 Learning path (newcomers, fixed order)
 
-| Stage | Theme | Content |
+Fundamentals come first, because every habit fix assumes the person can already read a chart. The order on the page:
+
+| Part | Theme | Content |
 |---|---|---|
-| 1 | Fundamentals | Paper vs live. How a trade loses. Stop, target, reward-to-risk. Position size and risk per trade. Costs and slippage. What the regime, trend and OI reads mean. |
-| 2 | Plan before you click | The plan checklist. **Always set a stop.** Then target, size, and why to wait for a limit entry. |
-| 3 | One strategy at a time | One module per approach the app supports (section 5). |
-| 4 | Follow the plan | Not moving stops. Not exiting early. Not revenge trading. Daily limits. |
-| 5 | Review and graduate | Study / plan / execution review. The cost view. The live-readiness checklist. |
+| **A** | Fundamentals of reading the market | Trends, ranges, support and resistance, structure, multi-timeframe analysis, OI and volume (syllabus below) |
+| **B** | Risk and the trade plan | Stops, size, reward-to-risk, order types, the plan checklist, costs |
+| **C** | Habits | Journaling, review, the repair catalog (section 4), discipline and psychology |
+| **D** | One strategy at a time | One module per approach the app supports (section 5) |
+| **E** | Ready for live | The readiness checklist (section 8) |
+
+Part A is where the *study* level of the review chain is taught; B is *plan*; C is *execution* and the review loop.
+
+#### Part A: fundamentals syllabus
+
+Every lesson has four parts: **Learn** (the key ideas, about a minute of reading), **See it in the app** (where the idea shows up on screen),
+**Practice** (a small exercise on paper money or on a chart) and **Done when** (a measured check where possible, otherwise a self-check).
+
+| # | Lesson | Learn | See it in the app | Practice | Done when |
+|---|---|---|---|---|---|
+| A1 | What you are trading | Spot, futures and options in plain terms; lots and expiry; NSE, MCX and crypto; paper vs live | The segment switch; the paper account | Open a paper position in each instrument type the person will use, then close it | One paper trade closed in each chosen instrument |
+| A2 | Reading a chart | Candles (open, high, low, close), what an interval is, how the same move looks on different intervals | The live chart and its interval switch | Look at one symbol on three intervals and write what changes | Self-check |
+| A3 | Trends | An uptrend is higher highs and higher lows, a downtrend the reverse; why trends persist; how to tell a strong trend from a weak one | The regime badge (ADX and direction) and the trend read on the ticket | Pick five symbols on one interval. For each call it up, down or range, *then* reveal the app's read and compare | Calls agree with the app on 4 of 5 (self-check; it is a learning aid, not a score) |
+| A4 | Ranges | Price bouncing between a floor and a ceiling; false breakouts; why a trend method loses in a range | The ranging regime; the zone drawings | Draw the range boundaries on one chart with the rectangle tool; wait for a break and note whether it held | One range drawn and checked later |
+| A5 | Support, resistance and zones | Levels price reacts to; supply and demand zones; why a zone is an area, not a line | Auto-detected order blocks and fair value gaps ("Structure" menu) | Mark three levels by hand, then turn on the detected zones and compare | Self-check |
+| A6 | Market structure | Break of structure and change of character; how a trend ends; what a pullback is and why it is where entries live | BOS and CHoCH marks, confirmed trend, the pullback zones | On one chart, find the last two structure breaks and say whether the trend changed | Self-check |
+| A7 | **Multi-timeframe analysis** | Why the larger picture matters; the top-down method (context, then trading, then optionally entry); keeping the intervals about 4 to 6 times apart; when the intervals agree and when they conflict | The structure view on a chosen interval; the context read; the trading-style pair (section 6.1) | On three symbols: read the context interval first, write the bias, then read the trading interval and say whether it agrees. Repeat with a conflict case | Context read written before the trade on 5 paper trades (measured once the context read is saved with the order) |
+| A8 | Open interest and volume | What OI shows; buying vs writing; PCR; how price agreeing with OI strengthens a read | The OI sentiment badges and the OI strip on the chart | For one F&O stock, read the OI labels and price together and say who is in control | Self-check |
+| A9 | Events and news | Earnings, results, expiry day, policy days; why risk jumps around a scheduled event | The economic calendar | Find the next three events for a symbol and decide whether to avoid or plan around each | Self-check |
+
+Part B (risk and the plan) follows the same four-part format:
+
+| # | Lesson | Learn | See it in the app | Practice | Done when |
+|---|---|---|---|---|---|
+| B1 | Risk first | Risk per trade as a share of the account; why survival comes before profit; drawdown and why a 50% loss needs a 100% gain | The loss budget on Today; risk limits in Settings | Set a per-trade risk limit that suits the paper account | A limit saved in Settings |
+| B2 | Stops | A stop belongs where the idea is wrong (beyond structure), not at a convenient distance; always on the order | The stop field on the ticket; the stop line on the chart | Place a stop beyond the last swing on three paper trades | 3 trades with a structure-based stop at order time (auto) |
+| B3 | Targets and reward-to-risk | R multiples; why 1:1 needs a high win rate; expectancy in a sentence | Reward-to-risk on the ticket; the account's minimum | Compute R for five past trades | Self-check |
+| B4 | Position size | Size from the stop distance and the risk limit | Auto-sizing on the ticket | Compare the size at two different stop distances | Self-check |
+| B5 | Order types | Market, limit and stop orders; slippage; why a limit order at a pullback beats chasing; what a waiting order is | Waiting (limit) orders in the ticket | Place two limit entries at a pullback zone and see them fill or not | 2 waiting orders placed |
+| B6 | Costs | Brokerage, taxes, slippage; why a small edge can vanish | Charges and slippage on the closed trade | Open one closed trade and read its cost breakdown | Self-check |
+| B7 | The trade plan | The plan checklist: context, setup, entry, stop, target, size, exit; a setup tag and a confidence score before entering | The plan checklist and the setup/confidence fields | Write a full plan for three trades before placing any | 3 trades with a plan, setup tag and confidence (auto) |
+
+Part C starts with **C1 Journaling and review** (study, plan, execution, the one-tap review) and **C2 Discipline and psychology** (fear of missing out,
+revenge, overtrading, daily limits), and then the repair catalog in section 4.
+
+Each lesson names the discipline component it supports and the tags it prevents; for example A3, A6 and A7 prevent `against_trend` and `ignored_regime`,
+B2 prevents `no_stop`, B5 prevents `chased`.
 
 ### 3.2 Fix a habit (people who already trade)
 
@@ -91,11 +130,33 @@ drill depends on honest reviewing (and the entry context saved with the order ca
 | `revenge` | After a loss, wait before the next entry (a cool-off you choose). | 10 trades, none inside the cool-off after a loss | Auto: a new entry soon after a loss |
 | `broke_limits` | The daily loss limit, trade cap and session window are not negotiable. | 10 days within the limits | Auto |
 
+### How to practice a habit (the same method for every tag)
+
+1. **Read the rule and its fundamentals first.** Each repair module names the Part A and B lessons it depends on (for example `against_trend` needs A3, A6, A7;
+   `chased` needs B5 and A6; `no_stop` needs B2).
+2. **One habit at a time.** Pick the tag costing the most. Everything else is trade as usual; this one rule is the focus for the next 10 trades.
+3. **Practice on paper first**, even for someone who has traded live before. The drill runs on the paper account, with the guardrail (section 6.2) turned on for
+   the rule being practised if the person wants the friction.
+4. **Review each trade against that one rule** (the one-tap review). A trade that breaks it resets the count.
+5. **The counter** ("3 of 10 clean") sits on the Learn page and on the trade ticket; reaching 10 marks the habit fixed and offers the next one.
+6. **Fixed is not forever**: the page keeps watching the tag, and shows "back on the list" if it returns in a later trade.
+
 ### How a person gets a repair list
 1. Review the closed trades (every unreviewed trade comes first, since the list is only as good as the tags).
 2. The page ranks tags by money lost and by how recently they happened.
 3. The person picks one, does the module, then the drill. The page shows "trades since you last made this mistake" until it reaches 10.
 4. One habit at a time is the default; the page suggests the earliest level first (study, then plan, then execution), as an earlier failure explains the later ones.
+
+### Fundamentals each habit depends on
+
+| Habit tags | Read first |
+|---|---|
+| `against_trend`, `ignored_regime` | A3 Trends, A4 Ranges, A6 Structure, A7 Multi-timeframe |
+| `wrong_setup`, `impulse` | A5 Zones, B7 The trade plan |
+| `event_risk` | A9 Events and news |
+| `no_stop`, `low_rr`, `oversized`, `no_target`, `no_exit_rule` | B1 to B4, B7 |
+| `chased` | A6 Structure, B5 Order types |
+| `stop_moved`, `exited_early`, `held_past_plan`, `added_to_loser`, `revenge`, `broke_limits` | B1, C1, C2 |
 
 ### Illustration: one person's case
 Someone who misses the larger picture, hops between chart intervals, enters at market and sets the stop afterwards, and neither plans nor reviews.
@@ -188,13 +249,15 @@ All computed server-side from existing data, over the person's closed manual tra
 
 ### Build order
 
-1. Learn page: readiness, plus "Fix a habit" ranked from real mistake data (no new writing needed).
-2. Trading style setting, and the measures in section 7 (including saving the higher-timeframe read with the order).
-3. Lesson format and drill tracking, with three lessons: "always set a stop", "reward-to-risk", "against the trend".
-4. Guardrail mode on the ticket.
-5. The repair modules from the section 4 catalog, most common mistakes first.
-6. Strategy modules, starting with manual chart-setup trading.
-7. "?" links, the personal entry warning, then the remaining fundamentals.
+1. Learn page shell: the Part A to E structure, readiness at the top, and "Fix a habit" ranked from real mistake data (no new writing needed).
+2. Lesson format (Learn, See it in the app, Practice, Done when) and the drill tracking.
+3. **Part A fundamentals, A1 to A9** (written first, since everything else depends on them), starting with A3 Trends, A4 Ranges and A7 Multi-timeframe.
+4. Trading style setting (the interval pair), saving the higher-timeframe read with the order, and the measures in section 7.
+5. Part B, risk and the plan (B1 to B7).
+6. Guardrail mode on the ticket.
+7. The repair modules from the section 4 catalog, most common mistakes first, with Part C.
+8. Strategy modules (Part D), starting with manual chart-setup trading.
+9. "?" links, the personal entry warning, and the remaining lessons.
 
 ## 10. Decisions
 

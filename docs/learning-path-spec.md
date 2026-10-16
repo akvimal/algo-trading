@@ -50,36 +50,59 @@ Discipline components (v2): **Planned** (limit order with a stop, weight 1), **S
 3. Unreviewed trades come first as "review these before the list is accurate" (the list is only as good as the tags).
 4. A habit counts as **fixed after a clean run** (default 10 trades without the tag), not after reading. The page shows "trades since you last made this mistake".
 
-## 4. Worked example: one person's behaviours
+## 4. Habit repair catalog (every mistake, for anyone)
 
-A real case that shaped this spec. The person:
+The "Fix a habit" door is general: there is one repair module for **each** review tag, so whatever mistake a person's own trades show, the fix exists.
+Each module has the same four parts: the **rule** (one sentence), the **why** (what it costs), a **drill** (the next N trades), and a **measure**.
+A habit counts as **fixed after 10 clean trades** in a row (no trade carrying that tag; 10 is confirmed, and the same for every tag).
 
-- misses the larger picture,
-- changes the chart interval from trade to trade instead of fixing one that suits their style,
-- usually enters at **market**, then sets the stop afterwards (impulsive; a limit order at the likely pullback was available),
-- has no plan beforehand and does no review afterwards.
+"Auto" = the app detects it from the order and its history, so the drill ticks itself. "Self" = only the person's own review tag shows it today, so the
+drill depends on honest reviewing (and the entry context saved with the order can later turn some of these into auto).
 
-| Behaviour | Level | Tags | Measured from |
+### Study
+
+| Tag | Rule | Drill | Measured |
 |---|---|---|---|
-| Misses the larger picture | Study | `against_trend`, `ignored_regime`, `wrong_setup` | The entry context saved with the order (regime, trend, ADX); a higher-timeframe read is **not saved yet** |
-| Interval hopping | Study | `wrong_setup`, `impulse` | `entry_interval` on each order (stored on positions and option groups); not compared to anything yet |
-| Market entry, then stop | Plan | `chased`, `no_stop`, `impulse` | `order_type`, and whether the stop was present at order time (the stop-move history shows a stop added after entry) |
-| No plan, no review | Plan / Execution | unreviewed to-do | Review time against exit time |
+| `against_trend` | Read the trend on your context interval first. Trade with it, or write the reason before sending. | 10 trades, none against the context trend | Auto, from the regime and trend saved with the order (a higher-timeframe read is not saved yet) |
+| `ignored_regime` | Look at the regime and OI read before every entry. In a ranging regime, use a range approach or a smaller size. | 10 trades each with the context read saved | Auto: the entry context is present; plus the tag |
+| `event_risk` | Check the calendar before entering. No new entry just before a scheduled event unless that is the plan. | 10 trades, calendar checked each time | Self today. Becomes auto once the calendar read is saved with the order |
+| `wrong_setup` | Trade only setups you have named, and name it on the order. | 10 trades each with a setup tag | Auto: setup tag present; plus the tag |
+| `impulse` | Pause and write the one-line reason before ordering. No reason, no order. | 10 trades each with a setup tag and a confidence score | Auto: market entry with no setup tag or confidence; plus the tag |
 
-Their repair path: four modules, in dependency order.
+### Plan
 
-1. **Pick your two intervals.**
-   Declare one *trading interval* (where you enter) and one *context interval* (the bigger picture, one or two steps up). Why a fixed pair matters.
-   Drill: the next 10 trades are all entered on the trading interval, each after looking at the context read.
-   Measured: number of distinct entry intervals in the last 10 entries (goal: 1).
-2. **Read the bigger picture first.**
-   The context trend, structure and OI in about a minute. Rule: no trade against the context without a written reason.
-   Measured: `against_trend` and trades since the last one.
-3. **Wait for the pullback.**
-   Mark the pullback zone before entering. Place a **limit order there with the stop attached in the same order.** A trade that never pulls back is one you let go; missing it costs nothing.
-   Measured, over the last 10 entries: share that were market orders (goal at most 30%, adjustable) and share with a stop at order time (goal 100%).
-4. **Review every trade within a day.**
-   The one-tap "what went wrong". Measured: share reviewed within 24 hours of closing; the inbox to-do and Telegram nudge chase the rest.
+| Tag | Rule | Drill | Measured |
+|---|---|---|---|
+| `no_stop` | The stop goes on the order itself, never afterwards. | 10 orders with a stop at order time | Auto |
+| `no_target` | Set a target before entry. | 10 orders with a target | Auto |
+| `low_rr` | Skip a trade whose reward-to-risk is below your minimum. | 10 trades all at or above the minimum | Auto, against the account's minimum |
+| `oversized` | Size from the risk you will lose if the stop hits, not from conviction. | 10 trades within the per-trade risk limit | Auto |
+| `chased` | Put a limit order at the planned pullback. If the price never gets there, let the trade go: missing it costs nothing. | 10 entries, at most 3 at market | Auto: order type, and entry versus the planned level |
+| `no_exit_rule` | Know how you will exit (stop, target, trail, time) before you enter. | 10 trades each with an exit attached | Auto: a target, trail, time or condition exit exists |
+
+### Execution
+
+| Tag | Rule | Drill | Measured |
+|---|---|---|---|
+| `stop_moved` | A stop only ever moves toward profit. Never widen it or remove it. | 10 trades with no widened or cleared stop | Auto, from the stop move history |
+| `exited_early` | Let the stop or target close the trade. Closing by hand needs a written reason. | 10 trades with no early manual exit | Auto: closed by hand before the stop or target |
+| `held_past_plan` | When the plan says exit (target, time, condition), exit. | 10 trades closed at their plan | Auto where the plan has a target or time; otherwise self |
+| `added_to_loser` | Never add to a position that is losing. | 10 trades with no add to a loser | Self today (no automatic check yet) |
+| `revenge` | After a loss, wait before the next entry (a cool-off you choose). | 10 trades, none inside the cool-off after a loss | Auto: a new entry soon after a loss |
+| `broke_limits` | The daily loss limit, trade cap and session window are not negotiable. | 10 days within the limits | Auto |
+
+### How a person gets a repair list
+1. Review the closed trades (every unreviewed trade comes first, since the list is only as good as the tags).
+2. The page ranks tags by money lost and by how recently they happened.
+3. The person picks one, does the module, then the drill. The page shows "trades since you last made this mistake" until it reaches 10.
+4. One habit at a time is the default; the page suggests the earliest level first (study, then plan, then execution), as an earlier failure explains the later ones.
+
+### Illustration: one person's case
+Someone who misses the larger picture, hops between chart intervals, enters at market and sets the stop afterwards, and neither plans nor reviews.
+They would be offered, in order: `against_trend` / `ignored_regime` (study), then `chased` and `no_stop` (plan), then the review habit (the inbox
+to-do). Two things they need that are not tags yet are the **trading style** pair of intervals and **guardrail mode** (section 6): "hops between
+intervals" is checked against the interval pair they declare, which is why that setting exists. This is an example only; the catalog above is the same for
+everyone.
 
 ## 5. Strategy modules
 
@@ -169,14 +192,16 @@ All computed server-side from existing data, over the person's closed manual tra
 2. Trading style setting, and the measures in section 7 (including saving the higher-timeframe read with the order).
 3. Lesson format and drill tracking, with three lessons: "always set a stop", "reward-to-risk", "against the trend".
 4. Guardrail mode on the ticket.
-5. The four repair modules from section 4.
+5. The repair modules from the section 4 catalog, most common mistakes first.
 6. Strategy modules, starting with manual chart-setup trading.
 7. "?" links, the personal entry warning, then the remaining fundamentals.
 
-## 10. Open decisions
+## 10. Decisions
 
-- The person's trading and context intervals (or accept a suggested pair).
-- The "fixed" bar: 10 clean trades is the proposal.
-- The goal for market-entry share (at most 30% proposed).
-- Whether guardrail overrides should lower the Planned component of the discipline score or stay purely informational (proposed: informational).
-- How many lessons to write before launch (proposed: about 10 core ones, then add based on what gets opened).
+Settled:
+- "Fixed" means **10 clean trades** for every tag.
+
+Still to choose (each has a default, used if nothing is said):
+- **Starting interval pair** for each person: they pick their own two intervals (the table in 6.1 is only a suggestion). Default: ask on first use.
+- **Guardrail overrides and the score:** whether overriding a guardrail should lower the Planned part of the discipline score. Default: no, record it only.
+- **How many lessons to write first:** default is the lessons that unlock the most common tags first (`no_stop`, `low_rr`, `chased`, `against_trend`, `impulse`, review), then the rest as people open them.

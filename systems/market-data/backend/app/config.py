@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # 17:30 IST: after the screener above has stored today's daily bars (a run of about half an hour from 16:30) - the zone scan only reads them.
     zone_scan_hour: int = 17
     zone_scan_minute: int = 30
+    # 17:45 IST: after the zone scan above, which it reads (the shadow log of the 1-3 day OI swing idea; it also settles earlier nights' outcomes).
+    oi_swing_shadow_hour: int = 17
+    oi_swing_shadow_minute: int = 45
 
     dhan_client_id: str = ""
     dhan_access_token: str = ""

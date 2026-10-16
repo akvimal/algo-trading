@@ -508,3 +508,34 @@ class ZoneScan(Base):
     put_buildup = Column(Text)
     oi_agrees = Column(Boolean)
     tier = Column(Text)
+
+
+class OiSwingShadow(Base):
+    """One row per (stock, night) with an untested trend-aligned daily zone at price: every criterion's value and verdict, whether the shadow bot
+    would have taken it, and the outcome once three more bars exist. Never drives an order. See migration 063 and app/domain/oi_swing_shadow.py."""
+
+    __tablename__ = "oi_swing_shadow"
+    __table_args__ = (UniqueConstraint("symbol", "snapshot_date"), {"schema": SCHEMA})
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    snapshot_date = Column(Date, nullable=False)
+    exchange = Column(Text, nullable=False, server_default="NSE")
+    symbol = Column(Text, nullable=False)
+    direction = Column(Text, nullable=False)
+    taken = Column(Boolean, nullable=False)
+    skip_reason = Column(Text)
+    score = Column(Float)
+    tier = Column(Text)
+    criteria = Column(JSONB, nullable=False)
+    ref_close = Column(Float, nullable=False)
+    stop_price = Column(Float, nullable=False)
+    risk_pct = Column(Float)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    resolved_at = Column(TIMESTAMP(timezone=True))
+    result = Column(Text)
+    entry_price = Column(Float)
+    exit_price = Column(Float)
+    exit_day = Column(SmallInteger)
+    r_multiple = Column(Float)
+    mfe_r = Column(Float)
+    mae_r = Column(Float)

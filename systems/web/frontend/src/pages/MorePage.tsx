@@ -165,6 +165,15 @@ export function MorePage() {
         </Link>
       </div>
       <div className="card">
+        <Link to="/more/swing-shadow" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
+          <span>
+            <strong>Swing shadow</strong>
+            <span className="dim" style={{ display: "block", fontSize: 13 }}>
+              A paper log of what a 1-3 day open-interest swing bot would have done each night, and how it turned out
+            </span>
+          </span>
+          <span aria-hidden="true">›</span>
+        </Link>
         <Link to="/more/strategies" className="list-row" style={{ textDecoration: "none", color: "inherit", minHeight: "var(--tap)", alignItems: "center" }}>
           <span>
             <strong>Strategies</strong>

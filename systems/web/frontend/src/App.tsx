@@ -13,6 +13,7 @@ import { NotesPage } from "./pages/NotesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SignInPage } from "./pages/SignInPage";
 import { StrategiesPage } from "./pages/StrategiesPage";
+import { SwingShadowPage } from "./pages/SwingShadowPage";
 import { TodayPage } from "./pages/TodayPage";
 import { TradePage } from "./pages/TradePage";
 import { WelcomePage } from "./pages/WelcomePage";
@@ -70,6 +71,7 @@ export function App() {
             <Route path="notes" element={<NotesPage />} />
             <Route path="alerts" element={<AlertsPage />} />
             <Route path="strategies" element={<StrategiesPage />} />
+            <Route path="swing-shadow" element={<SwingShadowPage />} />
             <Route path="jobs" element={<RequireAdmin><JobsPage /></RequireAdmin>} />
             <Route path="ai-models" element={<RequireAdmin><AiModelsPage /></RequireAdmin>} />
           </Route>

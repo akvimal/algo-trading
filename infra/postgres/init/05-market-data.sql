@@ -456,3 +456,33 @@ CREATE TABLE IF NOT EXISTS market_data.zone_scan (
 );
 CREATE INDEX IF NOT EXISTS idx_zone_scan_date ON market_data.zone_scan (snapshot_date);
 CREATE INDEX IF NOT EXISTS idx_zone_scan_date_tier ON market_data.zone_scan (snapshot_date, tier);
+
+-- The 1-3 day OI swing shadow log (migration 063, app/domain/oi_swing_shadow.py): what a rule-following bot would have done each night, and what happened.
+CREATE TABLE IF NOT EXISTS market_data.oi_swing_shadow (
+    id             BIGSERIAL PRIMARY KEY,
+    snapshot_date  DATE NOT NULL,
+    exchange       TEXT NOT NULL DEFAULT 'NSE',
+    symbol         TEXT NOT NULL,
+    direction      TEXT NOT NULL CHECK (direction IN ('LONG', 'SHORT')),
+    taken          BOOLEAN NOT NULL,
+    skip_reason    TEXT,
+    score          DOUBLE PRECISION,
+    tier           TEXT,
+    criteria       JSONB NOT NULL,
+    ref_close      DOUBLE PRECISION NOT NULL,
+    stop_price     DOUBLE PRECISION NOT NULL,
+    risk_pct       DOUBLE PRECISION,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- the outcome, NULL until it is known
+    resolved_at    TIMESTAMPTZ,
+    result         TEXT CHECK (result IN ('target', 'stop', 'time', 'invalid')),
+    entry_price    DOUBLE PRECISION,
+    exit_price     DOUBLE PRECISION,
+    exit_day       SMALLINT,
+    r_multiple     DOUBLE PRECISION,
+    mfe_r          DOUBLE PRECISION,
+    mae_r          DOUBLE PRECISION,
+    UNIQUE (symbol, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_oi_swing_shadow_date ON market_data.oi_swing_shadow (snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_oi_swing_shadow_open ON market_data.oi_swing_shadow (snapshot_date) WHERE result IS NULL;

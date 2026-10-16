@@ -1,6 +1,6 @@
 # Learn: the learning path, habit fixes and guardrails (spec)
 
-Status: **design only, nothing built** (2026-10-16). This describes the Learn page in the web app, from the learner's point of view.
+Status (2026-10-16): the **Learn page shell is built** (web app, `/learn`: live readiness, a ranked Fix-a-habit list from the person's reviewed trades with all 17 rules and drills, and the path with every lesson listed as "coming soon"). Lesson content, drill tracking from orders, the trading-style setting and guardrail mode are **not built**. This describes the Learn page in the web app, from the learner's point of view.
 It builds on [discipline-v2-spec.md](discipline-v2-spec.md) (the habit score), the post-trade review by cause (`app/domain/trade_review.py`, migration 065),
 the live-eligibility checks (`app/domain/track_record.py`) and the in-app inbox (migration 066).
 

@@ -2986,3 +2986,13 @@ table.t th {
     display: flex;
   }
 }
+
+/* Learn is a sidebar row on a desktop only; on a phone the bottom bar is full, so it lives under More. */
+.nav a.nav-desk-only {
+  display: none;
+}
+@media (min-width: 900px) {
+  .nav a.nav-desk-only {
+    display: flex;
+  }
+}

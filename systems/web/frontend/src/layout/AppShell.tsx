@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { InboxBell } from "../components/InboxBell";
@@ -40,6 +40,14 @@ const Icon = {
     </svg>
   ),
 } satisfies Record<string, ReactNode>;
+
+/** Learn is a sidebar row on a desktop; on a phone the bottom bar is full at five, so it is reached from More. */
+const LEARN_ICON = (
+  <svg viewBox="0 0 24 24" {...stroke} aria-hidden="true">
+    <path d="M2 9l10-5 10 5-10 5z" />
+    <path d="M6 11.5V16c0 1.5 3 3 6 3s6-1.5 6-3v-4.5" />
+  </svg>
+);
 
 export const NAV = [
   { to: "/", label: "Today", icon: Icon.today, end: true },
@@ -110,10 +118,18 @@ export function AppShell() {
           </button>
         </div>
         {NAV.map((item) => (
-          <NavLink key={item.to} to={item.to} end={"end" in item ? item.end : false} title={collapsed ? item.label : undefined}>
-            {item.icon}
-            <span className={collapsed ? "sr-only" : undefined}>{item.label}</span>
-          </NavLink>
+          <Fragment key={item.to}>
+            {item.to === "/more" && (
+              <NavLink to="/learn" className="nav-desk-only" title={collapsed ? "Learn" : undefined}>
+                {LEARN_ICON}
+                <span className={collapsed ? "sr-only" : undefined}>Learn</span>
+              </NavLink>
+            )}
+            <NavLink to={item.to} end={"end" in item ? item.end : false} title={collapsed ? item.label : undefined}>
+              {item.icon}
+              <span className={collapsed ? "sr-only" : undefined}>{item.label}</span>
+            </NavLink>
+          </Fragment>
         ))}
         {session?.email && (
           <div className="nav-bottom">

@@ -63,6 +63,9 @@ Every lesson has four parts: **Learn** (the key ideas, about a minute of reading
 | A7 | **Multi-timeframe analysis** | Why the larger picture matters; the top-down method (context, then trading, then optionally entry); keeping the intervals about 4 to 6 times apart; when the intervals agree and when they conflict | The structure view on a chosen interval; the context read; the trading-style pair (section 6.1) | On three symbols: read the context interval first, write the bias, then read the trading interval and say whether it agrees. Repeat with a conflict case | Context read written before the trade on 5 paper trades (measured once the context read is saved with the order) |
 | A8 | Open interest and volume | What OI shows; buying vs writing; PCR; how price agreeing with OI strengthens a read | The OI sentiment badges and the OI strip on the chart | For one F&O stock, read the OI labels and price together and say who is in control | Self-check |
 | A9 | Events and news | Earnings, results, expiry day, policy days; why risk jumps around a scheduled event | The economic calendar | Find the next three events for a symbol and decide whether to avoid or plan around each | Self-check |
+| A10 | What moves the market | The big outside drivers and the chain from each to prices: inflation (CPI), interest rates (RBI repo, US Fed), crude oil, the rupee, bond yields, the dollar, foreign and domestic institutional flows, volatility (VIX). The key terms are in the appendix | The pre-market card inputs and the markets panel | For each driver, say which way it usually pushes the index and which sectors feel it most, then check the appendix | Self-check |
+| A11 | Reading the pre-market card | How the overnight US close, crude, USD/INR, bond yields, ADRs and the GIFT Nifty gap combine into a morning bias, and why it is a lean, not a forecast | The pre-market card and its Telegram message; the post-session summary says whether the morning bias held | Before the open, read the card and write the one-line bias and the level that would prove you wrong. After the close, compare with how the day went | 5 mornings written down, each compared with the day (a note per morning; measured once pre-market notes are tagged) |
+| A12 | The calendar and the news | Scheduled events (CPI, RBI policy, US Fed and jobs data, results, expiry) against surprises; "priced in"; why the first reaction can reverse; waiting for price to confirm | The economic calendar and the news feed with its AI summary | Plan one week: list the events, mark which symbols they touch and say whether you will trade, shrink or stay out around each | One weekly event plan written |
 
 Part B (risk and the plan) follows the same four-part format:
 
@@ -153,7 +156,7 @@ drill depends on honest reviewing (and the entry context saved with the order ca
 |---|---|
 | `against_trend`, `ignored_regime` | A3 Trends, A4 Ranges, A6 Structure, A7 Multi-timeframe |
 | `wrong_setup`, `impulse` | A5 Zones, B7 The trade plan |
-| `event_risk` | A9 Events and news |
+| `event_risk` | A9 Events and news, A10 What moves the market, A12 The calendar and the news |
 | `no_stop`, `low_rr`, `oversized`, `no_target`, `no_exit_rule` | B1 to B4, B7 |
 | `chased` | A6 Structure, B5 Order types |
 | `stop_moved`, `exited_early`, `held_past_plan`, `added_to_loser`, `revenge`, `broke_limits` | B1, C1, C2 |
@@ -268,3 +271,34 @@ Still to choose (each has a default, used if nothing is said):
 - **Starting interval pair** for each person: they pick their own two intervals (the table in 6.1 is only a suggestion). Default: ask on first use.
 - **Guardrail overrides and the score:** whether overriding a guardrail should lower the Planned part of the discipline score. Default: no, record it only.
 - **How many lessons to write first:** default is the lessons that unlock the most common tags first (`no_stop`, `low_rr`, `chased`, `against_trend`, `impulse`, review), then the rest as people open them.
+
+## Appendix: key terms and how they move the market
+
+These are the terms the pre-market card, the calendar and the news use. The directions below are **what usually happens, not what will happen**: a number
+that is better or worse than *expected* moves prices, and a result that was already expected is "priced in" and often moves nothing. The lessons (A10 to A12)
+teach that distinction first, then the terms. Educational, not a prediction and not a recommendation.
+
+| Term | What it is | Usually affects | How, typically | Where it shows in the app |
+|---|---|---|---|---|
+| **CPI** (inflation) | The yearly rise in consumer prices, published monthly (India and the US) | The whole market, through interest-rate expectations | Higher than expected raises the odds of higher rates, which usually weighs on shares (rate-sensitive sectors most); lower than expected usually helps. The US figure also moves global sentiment | Calendar |
+| **RBI repo rate and policy** | The rate at which the central bank lends to banks; the policy meeting sets it and its stance | Banks, NBFCs, real estate, autos (anything bought on loans); the rupee | A cut makes borrowing cheaper and usually supports rate-sensitive sectors; a hike does the opposite. The stance and the governor's words often matter more than the number. A move that was already expected rarely surprises | Calendar, news |
+| **US Fed rate and jobs data** | The US central bank's rate decision, and monthly job numbers | Global risk appetite, the dollar, bond yields, money flowing in or out of emerging markets | Higher-for-longer rates usually strengthen the dollar and pull foreign money out of markets like India; the opposite supports them | Calendar, pre-market card |
+| **Crude oil** | The price of oil; India imports most of what it uses | Oil marketing companies, airlines, paints, tyres, chemicals, the rupee, inflation | Higher crude widens the import bill, weakens the rupee and lifts inflation, which usually weighs on the index; oil producers gain while refiners and fuel users lose margin | Pre-market card, MCX |
+| **USD/INR** (the rupee) | How many rupees one dollar costs | Exporters (IT, pharma), importers, foreign investors | A weaker rupee helps exporters' earnings and hurts importers and oil users; a sharply falling rupee often goes with foreign selling | Pre-market card |
+| **Bond yields** (India 10-year, US 10-year) | The return on government bonds | Valuations, banks, foreign flows | Rising yields make bonds more attractive against shares and raise the rate used to value earnings, which usually pressures high-valuation shares; banks holding bonds can book losses when yields jump | Pre-market card |
+| **Dollar index (DXY)** | The dollar against a basket of major currencies | Emerging-market flows, gold, commodities | A strong dollar usually pulls money out of emerging markets and weighs on gold and commodities | News |
+| **ADR / GDR** | Shares of some Indian companies listed in the US (for example large IT and banking names) | The same companies' shares at the next Indian open | Their overnight move hints at the opening gap for that stock. It is a hint only: currency and a conversion premium differ | Pre-market card |
+| **GIFT Nifty** | Nifty futures traded at GIFT City almost around the clock | The opening gap of NIFTY | Where it trades against the last Nifty close is the expected gap at the open | Pre-market card |
+| **FII / DII flows** | Net buying or selling by foreign and by domestic institutions | The index and the rupee | Sustained foreign selling pressures prices and the rupee; domestic buying often cushions it. A single day says little, a run says more | News |
+| **India VIX** | The market's expected volatility, from Nifty option prices | Option prices, expected swing size, stop distance | High VIX means bigger swings and dearer options (wider stops, smaller size); low VIX means calm, and options are cheaper but a sudden move catches people out | Markets panel, post-session summary |
+| **Results (earnings) and guidance** | A company's reported profit and its outlook | That one stock, often with a gap | The reaction depends on the result against expectations and on the guidance; a good result can still fall if it was priced for more | Calendar |
+| **Expiry day** | The day option contracts expire (weekly and monthly) | Index and option prices, option time decay | Volatility is higher late in the day and time value drains fast, so buyers lose value quickly and sellers carry sharp risk | Calendar |
+| **Budget, GDP, PMI, IIP, GST** | Government and economic activity numbers | Sectors named in them; overall sentiment | Better than expected activity usually supports shares; sector-specific measures (tax, subsidies) move that sector most | Calendar, news |
+| **Gold and safe-haven moves** | Gold rises when fear rises or real yields fall | MCX gold and silver; sometimes the index in the opposite direction | Risk-off days tend to lift gold and weigh on shares; a strong dollar and rising real yields weigh on gold | Pre-market card, MCX |
+| **Natural gas and silver** | Gas follows weather and storage; silver follows gold plus industrial demand | MCX natural gas and silver | Gas is driven by weather and inventory data, and moves sharply on them; silver tends to move more than gold in both directions | MCX |
+| **Crypto drivers** | Risk appetite, the dollar, interest rates, large fund flows | BTC and ETH | Crypto tends to rise with easy-money, risk-on conditions and fall with a strong dollar and tighter policy, with large swings either way | Pre-market, news |
+
+### Three habits the lessons build around this appendix
+1. **Expected against actual.** Know the consensus before the number comes out; the surprise moves the price, not the number itself.
+2. **Event, then reaction.** The first move on a headline often reverses. Plan before the event; if you trade it, wait for price (the structure on your trading interval) to confirm.
+3. **One driver is not a signal.** Treat each driver as one input to the context read (A7), next to the trend, structure and OI. A pre-market lean that price does not follow is information too: the post-session summary's "did the bias hold" is the feedback.

@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
-import type { Book, DisciplineV2, EquityHistory, LiveEligibility, OptionGroup, Performance, Position, Segment } from "../api/types";
+import type { Book, DisciplineV2, EquityHistory, LiveEligibility, MistakeSummary, OptionGroup, Performance, Position, Segment } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
 import { SEGMENTS } from "../config";
 import { useProfile } from "../auth/ProfileContext";
@@ -10,7 +10,7 @@ import { HistoryTab } from "./portfolio/HistoryTab";
 import { OverviewTab } from "./portfolio/OverviewTab";
 import { PositionsTab } from "./portfolio/PositionsTab";
 import { ReviewTab } from "./portfolio/ReviewTab";
-import { closedTrades } from "./portfolioModel";
+import { closedTrades, unreviewed } from "./portfolioModel";
 import { groupsApi, positionsApi } from "../api/rupees";
 
 const TABS = [
@@ -67,6 +67,7 @@ export function PortfolioPage() {
   const perf = useResource(() => api<Performance>("execution", `/performance/${segment}${book === "positional" ? "?book=positional" : ""}`), [segment, book]);
   // Discipline and the live-trading graduation are about the everyday account only.
   const discipline = useResource(() => api<DisciplineV2>("execution", `/discipline/${segment}`), [segment], { enabled: book === "intraday" });
+  const mistakes = useResource(() => api<MistakeSummary>("execution", `/trade-review/summary/${segment}`), [segment], { enabled: book === "intraday" });
   const elig = useResource(() => api<LiveEligibility>("execution", `/live-eligibility/${segment}`), [segment], { enabled: book === "intraday" });
   const closed = useResource(() => loadClosed(segment, book), [segment, book]);
   // A saved tag, note or review changes both the trade list and the numbers derived from it.
@@ -74,6 +75,7 @@ export function PortfolioPage() {
     closed.reload();
     perf.reload();
     discipline.reload();
+    mistakes.reload();
   };
   const open = useResource(() => loadOpen(segment, book), [segment, book], { pollMs: 15_000, enabled: tab === "positions" });
   const live = useLivePositions(tab === "positions" ? open.data?.positions : undefined);
@@ -106,12 +108,20 @@ export function PortfolioPage() {
         ))}
       </div>
 
+      {book === "intraday" && tab !== "review" && closed.data && unreviewed(closed.data).length > 0 && (
+        <div className="notice" role="status" data-testid="review-nudge">
+          {unreviewed(closed.data).length} closed trade{unreviewed(closed.data).length === 1 ? "" : "s"} not reviewed yet: say what went wrong (or that nothing did).{" "}
+          <button className="btn btn-small" onClick={() => set({ tab: "review" })}>
+            Review now
+          </button>
+        </div>
+      )}
       {tab === "overview" && <OverviewTab equity={equity} perf={perf} elig={book === "intraday" ? elig : null} trades={closed.data} book={book} />}
       {tab === "positions" && <PositionsTab open={open} positions={live.positions} live={live.live} />}
       {(tab === "history" || tab === "review") && closed.loading && <Skeleton lines={4} />}
       {(tab === "history" || tab === "review") && closed.error && <ErrorNotice error={closed.error} onRetry={closed.reload} />}
       {tab === "history" && closed.data && <HistoryTab trades={closed.data} onSaved={saved} />}
-      {tab === "review" && book === "intraday" && closed.data && <ReviewTab perf={perf} discipline={discipline} trades={closed.data} onSaved={saved} />}
+      {tab === "review" && book === "intraday" && closed.data && <ReviewTab perf={perf} discipline={discipline} mistakes={mistakes} trades={closed.data} onSaved={saved} />}
     </div>
   );
 }

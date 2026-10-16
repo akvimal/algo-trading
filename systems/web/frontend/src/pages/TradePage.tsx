@@ -878,6 +878,7 @@ export function TradePage() {
                   instrument: instrumentFor(activeSpec.symbol, activeSpec.segment),
                   interval: activeSpec.interval,
                   trendFollowed: activeData.regime ? activeData.regime.trend !== "range" && (activeData.regime.trend === "up") === (ticket.action === "BUY") : false,
+                  regime: activeData.regime,
                 }}
                 regime={activeData.regime}
                 budget={account?.max_daily_loss != null && today.data ? { limit: account.max_daily_loss, lostToday: Math.max(0, -today.data.realized) } : null}

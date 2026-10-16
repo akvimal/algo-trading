@@ -1,4 +1,4 @@
-import type { EquityPoint, EquityStats, LiveEligibility, OptionGroup, Position, Requirement, Segment } from "../api/types";
+import type { EquityPoint, EquityStats, LiveEligibility, OptionGroup, Position, Requirement, RootCause, Segment } from "../api/types";
 
 export type CurvePoint = { date: string; equity: number };
 
@@ -43,6 +43,8 @@ export type Trade = {
   exitReason: string | null;
   setupTag: string | null;
   confidence: number | null;
+  rootCause: RootCause | null;
+  mistakeTags: string[];
   notes: string | null;
   reviewed: boolean;
   violation: boolean | null;
@@ -62,7 +64,7 @@ export function closedTrades(positions: Position[], groups: OptionGroup[], fallb
     if (p.status !== "CLOSED" || p.option_group_id != null || !p.exit_time) continue;
     trades.push({
       id: p.id, kind: "position", symbol: p.symbol, action: p.action, pnl: p.pnl ?? 0, exitTime: p.exit_time,
-      exitReason: p.exit_reason ?? null, setupTag: p.setup_tag ?? null, confidence: p.confidence ?? null, notes: p.notes ?? null,
+      exitReason: p.exit_reason ?? null, setupTag: p.setup_tag ?? null, confidence: p.confidence ?? null, rootCause: p.root_cause ?? null, mistakeTags: p.mistake_tags ?? [], notes: p.notes ?? null,
       reviewed: p.reviewed_at != null, violation: p.review_violation ?? null, charges: p.charges ?? null, autoTraded: Boolean(p.auto_traded),
       segment: p.segment, manual: p.strategy_id == null, reviewNotes: p.review_notes ?? null,
     });
@@ -71,7 +73,7 @@ export function closedTrades(positions: Position[], groups: OptionGroup[], fallb
     if (g.status !== "CLOSED" || !g.exit_time) continue;
     trades.push({
       id: g.id, kind: "group", symbol: g.underlying_symbol, action: g.action, pnl: g.pnl ?? 0, exitTime: g.exit_time,
-      exitReason: g.exit_reason ?? null, setupTag: g.setup_tag ?? null, confidence: g.confidence ?? null, notes: g.notes ?? null,
+      exitReason: g.exit_reason ?? null, setupTag: g.setup_tag ?? null, confidence: g.confidence ?? null, rootCause: g.root_cause ?? null, mistakeTags: g.mistake_tags ?? [], notes: g.notes ?? null,
       reviewed: g.reviewed_at != null, violation: g.review_violation ?? null, charges: g.charges ?? null, autoTraded: Boolean(g.auto_traded),
       segment: g.segment ?? fallbackSegment, manual: g.strategy_id == null, reviewNotes: g.review_notes ?? null,
     });
@@ -103,8 +105,9 @@ export function bySetup(trades: Trade[]): SetupRow[] {
 
 /** Trades the person should still review. Anything a strategy or the auto-trader opened is
  * not reviewed by hand (the server refuses it), so it never counts as owed. */
+/** Closed manual trades still owing a review: the plan review, or the one-tap "what went wrong" (a root cause) that the results by cause run on. */
 export function unreviewed(trades: Trade[]): Trade[] {
-  return trades.filter((t) => !t.reviewed && t.manual && !t.autoTraded);
+  return trades.filter((t) => (!t.reviewed || t.rootCause == null) && t.manual && !t.autoTraded);
 }
 
 export type Graduation = { met: number; total: number; unmet: Requirement[]; eligible: boolean; enforced: boolean };

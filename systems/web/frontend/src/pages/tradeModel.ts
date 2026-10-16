@@ -423,6 +423,8 @@ export type BuildMeta = {
   instrument: "spot" | "future";
   interval: string;
   trendFollowed: boolean;
+  /** The regime read the ticket showed (for the post-trade review's "against the trend"); omitted when there was none. */
+  regime?: { regime: string; trend: string; adx: number } | null;
   /** The market is shut: an option order at the market price waits for the open (and is placed then at the latest prices) instead of opening at stale ones. */
   marketClosed?: boolean;
 };
@@ -432,6 +434,8 @@ export type BuildMeta = {
 /** The order records which chart it was planned on, but only intraday ones (the server's list); a daily or weekly chart sends nothing rather than a value it would refuse. */
 const INTRADAY_ENTRY = ["1min", "3min", "5min", "15min", "30min", "60min"];
 export const entryIntervalOf = (interval: string | null | undefined) => (interval && INTRADAY_ENTRY.includes(interval) ? { entry_interval: interval } : {});
+
+const contextOf = (meta: BuildMeta) => (meta.regime ? { entry_context: { regime: meta.regime.regime, trend: meta.regime.trend, adx: meta.regime.adx } } : {});
 
 export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: BuildMeta): OrderRequest {
   const journal = {
@@ -484,7 +488,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       body: {
         ...common, instrument_type: meta.instrument, price: a.entry, order_type: "market", ...qty,
         ...(a.stop !== null ? { stop_loss_price: a.stop } : {}), ...(a.target !== null ? { target_price: a.target } : {}),
-        trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), plan_checklist: [], ...journal,
+        trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), plan_checklist: [], ...journal, ...contextOf(meta),
       },
     };
   }
@@ -501,7 +505,7 @@ export function buildOrder(t: Ticket, a: Analysis, ctx: TicketContext, meta: Bui
       ...(t.expiry != null ? { expiry: t.expiry } : {}),
       ...(a.lotsAuto ? {} : { option_fixed_lots: a.lots }), plan_checklist: [], order_type: "market",
       ...(t.holdOvernight ? { positional: true } : {}),
-      trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), ...journal,
+      trend_followed: meta.trendFollowed, risk_managed: riskManaged, ...entryIntervalOf(meta.interval), ...journal, ...contextOf(meta),
     },
     stop: a.stop,
     target: a.target,

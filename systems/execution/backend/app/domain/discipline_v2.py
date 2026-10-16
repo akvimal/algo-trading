@@ -78,6 +78,9 @@ class TradeFacts:
     auto_traded: bool = False
     entry_interval: Optional[str] = None
     emotion_tag: Optional[str] = None  # calm / fearful / greedy / fomo, answered after a loss or an early exit
+    entry_context: Optional[dict] = None  # regime / trend / ADX the ticket showed at order time
+    mistake_tags: Optional[list] = None  # the review's confirmed mistakes (app/domain/trade_review.py)
+    root_cause: Optional[str] = None
     events: list[EventFact] = field(default_factory=list)
 
 

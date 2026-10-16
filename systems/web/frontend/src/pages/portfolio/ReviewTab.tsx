@@ -1,16 +1,17 @@
-import type { DisciplineV2, Performance } from "../../api/types";
+import type { DisciplineV2, MistakeSummary, Performance } from "../../api/types";
 import type { Resource } from "../../hooks/useResource";
 import { CredentialsShelf } from "../../components/CredentialsShelf";
 import { DisciplineCard } from "../../components/DisciplineCard";
+import { MistakeCostCard } from "../../components/MistakeCostCard";
 import { Signed } from "../../components/bits";
 import { Stat } from "../../components/Stat";
 import { TradeListItem } from "../../components/TradeListItem";
 import { formatInr, formatPct, formatPnl } from "../../format";
 import { bySetup, unreviewed, type Trade } from "../portfolioModel";
 
-type Props = { perf: Resource<Performance>; discipline: Resource<DisciplineV2>; trades: Trade[]; onSaved: () => void };
+type Props = { perf: Resource<Performance>; discipline: Resource<DisciplineV2>; mistakes: Resource<MistakeSummary>; trades: Trade[]; onSaved: () => void };
 
-export function ReviewTab({ perf, discipline, trades, onSaved }: Props) {
+export function ReviewTab({ perf, discipline, mistakes, trades, onSaved }: Props) {
   const p = perf.data?.performance ?? null;
   const manual = trades.filter((t) => t.manual && !t.autoTraded);
   const owed = unreviewed(trades);
@@ -36,6 +37,8 @@ export function ReviewTab({ perf, discipline, trades, onSaved }: Props) {
           </div>
         </div>
       )}
+
+      {mistakes.data && <MistakeCostCard summary={mistakes.data} />}
 
       <h2 className="section-title">By setup</h2>
       {setups.length === 0 ? (

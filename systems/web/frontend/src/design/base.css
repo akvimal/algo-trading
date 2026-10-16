@@ -3008,3 +3008,58 @@ table.t th {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* The habit map: three columns (study, plan, execution) of tappable tiles, then one roomy detail card. */
+.habit-cols {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 760px) {
+  .habit-cols {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.habit-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.habit-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: var(--tap);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.habit-tile:hover {
+  background: var(--surface-2);
+}
+.habit-tile[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.habit-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+@media (min-width: 760px) {
+  .habit-facts {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.habit-fact-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}

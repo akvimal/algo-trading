@@ -3,6 +3,7 @@ import { api } from "../api/http";
 import type { LiveEligibility, MistakeSummary, Segment } from "../api/types";
 import { useProfile } from "../auth/ProfileContext";
 import { Empty, ErrorNotice, Skeleton } from "../components/bits";
+import { HabitDetailCard, HabitMap } from "../components/HabitMap";
 import { ReadinessVisual } from "../components/ReadinessVisual";
 import { Signed } from "../components/bits";
 import { SEGMENTS } from "../config";
@@ -59,12 +60,8 @@ function Habits({ mistakes, segment }: { mistakes: Resource<MistakeSummary>; seg
       {mistakes.loading && <Skeleton lines={3} />}
       {mistakes.error && <ErrorNotice error={mistakes.error} onRetry={mistakes.reload} />}
       {mistakes.data && <HabitList summary={mistakes.data} segment={segment} />}
-      <details className="card">
-        <summary><strong>Every habit and its rule</strong> <span className="faint">({HABITS.length})</span></summary>
-        <div className="stack" style={{ marginTop: 8 }}>
-          {HABITS.map((h) => <HabitDetail key={h.tag} habit={h} />)}
-        </div>
-      </details>
+      <h3 style={{ margin: "8px 0 0", fontSize: 15 }}>All {HABITS.length} habits</h3>
+      <HabitMap rows={habitRows(mistakes.data)} />
     </div>
   );
 }
@@ -121,24 +118,12 @@ function HabitRowView({ row }: { row: HabitRow }) {
           </span>
         </span>
       </summary>
-      <HabitDetail habit={row.habit} />
+      <div style={{ marginTop: 8 }}>
+        <HabitDetailCard habit={row.habit} />
+      </div>
     </details>
   );
 }
-
-function HabitDetail({ habit }: { habit: (typeof HABITS)[number] }) {
-  return (
-    <div className="stack" style={{ marginTop: 8 }}>
-      <strong>{tagLabel(habit.tag)} <span className="faint">· {LEVEL_LABEL[habit.level]}</span></strong>
-      <span><strong>Rule:</strong> {habit.rule}</span>
-      <span className="dim"><strong>Why:</strong> {habit.why}</span>
-      <span className="dim"><strong>Drill:</strong> {habit.drill} {habit.auto ? "The app counts it from your orders." : "Counted from your own review tags."}</span>
-      <span className="faint" style={{ fontSize: 12 }}>Read first: {habit.readFirst.map((id) => lessonTitle(id)).join(", ")}</span>
-    </div>
-  );
-}
-
-const lessonTitle = (id: string) => PARTS.flatMap((p) => p.lessons).find((l) => l.id === id)?.title ?? id;
 
 function Path() {
   return (

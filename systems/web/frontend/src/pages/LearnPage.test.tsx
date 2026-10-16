@@ -110,7 +110,16 @@ describe("LearnPage", () => {
   it("lists every habit with its rule, and the learning path with its lessons marked as coming", async () => {
     renderPage();
     await screen.findByText("No reviewed trades yet");
-    expect(screen.getByText(/Every habit and its rule/)).toBeInTheDocument();
+    const tiles = screen.getAllByTestId("habit-tile");
+    expect(tiles).toHaveLength(17);
+    expect(screen.queryByTestId("habit-detail")).toBeNull();
+    await userEvent.click(within(screen.getByTestId("habit-map")).getByRole("button", { name: /No stop/ }));
+    const detail = screen.getByTestId("habit-detail");
+    expect(detail).toHaveTextContent("The stop goes on the order itself, never afterwards.");
+    expect(detail).toHaveTextContent("Counted from your orders");
+    expect(detail).toHaveTextContent("Risk first"); // read-first chips use lesson titles, not ids
+    await userEvent.click(within(detail).getByRole("button", { name: "Close" }));
+    expect(screen.queryByTestId("habit-detail")).toBeNull();
     await userEvent.click(screen.getByText(/Part A: Reading the market/));
     const lessons = within(screen.getByTestId("path")).getAllByTestId("lesson");
     expect(lessons).toHaveLength(26); // 12 + 7 + 2 + 5

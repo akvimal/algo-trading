@@ -87,6 +87,9 @@ type Props = {
   /** Takes a picture of the chart as it is now, for keeping with the trade as its plan at entry: called just before the order is sent, so it shows
    * the person's drawings and indicators and the planned entry, stop and target. Returns a finished PNG data URL, or null when it cannot. */
   capturePlan?: (levels: { entry: number | null; stop: number | null; target: number | null }) => Promise<string | null>;
+  /** A host's own controls for the first two steps (the OI-buildup option form's view, and its expiry, legs and exit levels): they sit at the top of Study and of Plan. */
+  studyTop?: React.ReactNode;
+  planTop?: React.ReactNode;
 };
 
 type StepTone = "good" | "warn" | "na";
@@ -111,7 +114,7 @@ export function TicketStep({ n, title, summary, tone, open, onToggle, children, 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan }: Props) {
+export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan, studyTop, planTop }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
@@ -228,11 +231,12 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const overridden = raw.planState != null && read != null && raw.planState !== read;
   const kindLabel = raw.planKind ? PLAN_KINDS.find((k) => k.value === raw.planKind)?.label : null;
   const studySummary = simplifiedOption
-    ? t.setupTag ?? "Not tagged"
+    ? [t.action === "BUY" ? "Bullish" : "Bearish", t.setupTag ?? "not tagged"].join(" · ")
     : [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup", t.confidence != null ? `${t.confidence}/5` : null].filter(Boolean).join(" · ");
   const studyTone: StepTone = simplifiedOption ? (t.setupTag ? "good" : "na") : planNudges(t, a, state).length > 0 ? "warn" : kindLabel ? "good" : "na";
   const planNow = planStatus(t, a, ctx);
-  const planSummary = simplifiedOption ? (limit ? "Waits for a price" : "At the market") : planNow?.text ?? "Set a stop and a target";
+  const legsText = t.primaryStrike != null ? `${t.primaryStrike}${t.secondStrike != null && t.strategy !== "naked" ? ` / ${t.secondStrike}` : ""}` : null;
+  const planSummary = simplifiedOption ? [instrumentLabel, legsText, limit ? "waits for a price" : "at the market"].filter(Boolean).join(" · ") : planNow?.text ?? "Set a stop and a target";
   const planTone: StepTone = simplifiedOption ? "na" : planNow?.tone === "ready" ? "good" : planNow?.tone === "warn" ? "warn" : "na";
   const tradeSummary = `${ACTION_WORD(t.action)} ${ctx.symbol} · ${limit ? (t.entry.trim() ? `wait at ${t.entry}` : "wait for a price") : "at the market"}${a.riskAmount != null && !simplifiedOption ? ` · risk ${formatInr(a.riskAmount)}` : ""}`;
 
@@ -376,6 +380,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       )}
 
       <TicketStep n={1} title="Study" summary={studySummary} tone={studyTone} open={step === 1} onToggle={() => setStep(step === 1 ? 2 : 1)} testId="step-study">
+      {studyTop}
       {!simplifiedOption && (
         <>
         <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>
@@ -517,6 +522,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       </TicketStep>
 
       <TicketStep n={2} title="Plan" summary={planSummary} tone={planTone} open={step === 2} onToggle={() => setStep(step === 2 ? 1 : 2)} testId="step-plan">
+      {planTop}
       <div className="ticket-opts">
       {isOption && !hideMoneynessField && (
         <div className="strike-row">

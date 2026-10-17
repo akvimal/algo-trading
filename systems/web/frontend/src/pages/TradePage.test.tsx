@@ -299,6 +299,24 @@ describe("the page", () => {
     expect(screen.getByRole("button", { name: "Bearish" })).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("fits the OI-buildup option form into the steps: the view in Study, the instrument and legs in Plan, nothing above the ticket", async () => {
+    renderAt("/trade?symbol=RELIANCE&segment=NSE&form=credit&view=SELL");
+    const t = await ticket();
+    const study = within(t.getByTestId("step-study"));
+    const plan = within(t.getByTestId("step-plan"));
+    expect(await study.findByRole("group", { name: "Your view" })).toBeInTheDocument();
+    expect(study.getByRole("button", { name: "Bearish" })).toHaveAttribute("aria-pressed", "true");
+    expect(plan.getByRole("group", { name: "Instrument" })).toBeInTheDocument();
+    expect(plan.getByLabelText("Expiry")).toBeInTheDocument();
+    expect(plan.getByRole("group", { name: "How to trade it" })).toBeInTheDocument();
+    expect(plan.queryByRole("group", { name: "Your view" })).not.toBeInTheDocument();
+    expect(study.queryByRole("group", { name: "How to trade it" })).not.toBeInTheDocument();
+    // none of it is left outside the ticket
+    expect(screen.getAllByRole("group", { name: "Your view" })).toHaveLength(1);
+    expect(screen.getAllByRole("group", { name: "Instrument" })).toHaveLength(1);
+    expect(within(t.getByTestId("step-study")).getByRole("button", { name: /Study/ })).toHaveTextContent("Bearish");
+  });
+
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
@@ -436,6 +454,29 @@ describe("the ticket in three parts", () => {
     // Trade: the order as it will go, and the button
     expect(within(t.getByTestId("step-trade")).getByText(/Buy RELIANCE/)).toBeInTheDocument();
     expect(t.getByRole("button", { name: /Buy RELIANCE/ })).toBeInTheDocument();
+  });
+
+  it("lets the ticket panel be made wider or narrower, remembers it, and goes back to the usual width on a double-click", async () => {
+    localStorage.removeItem("web.workstation.ticketWidth");
+    const user = userEvent.setup();
+    renderAt("/trade?symbol=RELIANCE");
+    await ticket();
+    const grip = screen.getByRole("separator", { name: "Resize the order ticket" });
+    const panel = screen.getByRole("complementary", { name: "Order ticket" });
+    expect(grip).toHaveAttribute("aria-valuenow", "440");
+    expect(panel).toHaveStyle({ width: "440px" });
+    grip.focus();
+    await user.keyboard("{ArrowLeft}{ArrowLeft}"); // the panel is on the right, so left widens it
+    expect(grip).toHaveAttribute("aria-valuenow", "488");
+    expect(panel).toHaveStyle({ width: "488px" });
+    expect(localStorage.getItem("web.workstation.ticketWidth")).toBe("488");
+    await user.keyboard("{ArrowRight}");
+    expect(grip).toHaveAttribute("aria-valuenow", "464");
+    await user.dblClick(grip);
+    expect(grip).toHaveAttribute("aria-valuenow", "440");
+    for (let i = 0; i < 40; i++) await user.keyboard("{ArrowRight}"); // never narrower than usable
+    expect(grip).toHaveAttribute("aria-valuenow", "320");
+    localStorage.removeItem("web.workstation.ticketWidth");
   });
 
   it("says in each step's header what is in it, and folds one step at a time (the fold itself is CSS, so every field stays on the page)", async () => {

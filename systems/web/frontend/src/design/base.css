@@ -1340,7 +1340,7 @@ table.t th {
   background: var(--surface);
 }
 .ws-ticket {
-  width: 360px;
+  width: 440px; /* the person can drag it (see .ws-resize); this is the width until they do */
   flex: none;
   min-height: 0;
   overflow-y: auto;
@@ -3556,4 +3556,23 @@ a.tape-dot {
   .tstep-chevron {
     display: none;
   }
+}
+
+/* The grip between the charts and the order ticket: a thin strip you drag sideways. */
+.ws-resize {
+  flex: none;
+  width: 8px;
+  align-self: stretch;
+  margin: 0 -2px;
+  border-radius: 4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.ws-resize:hover,
+.ws-resize:focus-visible {
+  background: var(--accent);
+  opacity: 0.6;
+}
+.workstation:not(.wide) .ws-resize {
+  display: none;
 }

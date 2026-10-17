@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "../api/http";
 import { getComboMargin, getExpiries, getLotSizeForSecurity, getOptionChain } from "../api/trade";
 import type { OptionChainStrike, OptionLegQuote } from "../api/types";
@@ -61,7 +61,9 @@ function nearestIndex(strikes: OptionChainStrike[], price: number): number {
   return best;
 }
 
-type Props = { exchange: string; symbol: string; ticket: Ticket; onChange: (t: Ticket) => void };
+type Props = { exchange: string; symbol: string; ticket: Ticket; onChange: (t: Ticket) => void   /** Hands the controls back in two parts, `view` (bullish or bearish) and `legs` (expiry, strikes, economics, exit levels), for a host that places them itself. */
+  children?: (parts: { view: ReactNode; legs: ReactNode }) => ReactNode;
+};
 
 /** The Scan page's own entry point into an option order - not the Trade page's Future/Option/
  * Option spread chips (see TradeTicket's hideStrategyChips): the OI-buildup card already puts the
@@ -94,7 +96,7 @@ type Props = { exchange: string; symbol: string; ticket: Ticket; onChange: (t: T
  * opens (ticket.combinedStopLossPrice/combinedTargetPrice, see tradeModel.ts's buildOrder). Not
  * offered for a naked position: max profit is unbounded for a naked call and only nominally
  * bounded (at the strike) for a naked put, so "% of max profit" doesn't mean the same thing. */
-export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props) {
+export function ScanOptionBias({ exchange, symbol, ticket: t, onChange, children }: Props) {
   const style: Style = t.strategy === "naked" ? "naked" : t.strategy === "credit_spread" ? "credit_spread" : "spread";
   const hasSecondLeg = style !== "naked";
   const plan = legPlanFor(t.action, style);
@@ -263,36 +265,45 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
   const setStyle = (next: Style) => onChange({ ...t, strategy: next as Strategy });
   const setLots = (v: string) => onChange({ ...t, lots: v });
 
-  return (
-    <div style={{ marginBottom: 12 }}>
+  // The controls come back in two parts so a host can place them: the view (bullish or bearish) belongs to the person's study of the trade, and the
+  // expiry, legs, economics and exit levels to its plan. With no `children` they render together, as one block, exactly as before.
+  const view = (
+    <div style={{ marginBottom: 12 }} data-testid="option-view">
       <label className="dim" style={{ display: "block", fontSize: 12, marginBottom: 4 }}>
         Your view on {symbol}
       </label>
-      <div className="row" style={{ marginBottom: 12, alignItems: "flex-end" }}>
-        <div className="chips" role="group" aria-label="Your view">
-          <button aria-pressed={t.action === "BUY"} onClick={() => onChange({ ...t, action: "BUY" })}>
-            Bullish
-          </button>
-          <button aria-pressed={t.action === "SELL"} onClick={() => onChange({ ...t, action: "SELL" })}>
-            Bearish
-          </button>
-        </div>
-        <label className="select-field" style={{ flex: "0 0 auto" }}>
-          <span className="dim">Expiry</span>
-          <select
-            style={{ width: "max-content" }}
-            value={chainExpiry ?? ""}
-            disabled={!expiries.data || expiries.data.length === 0}
-            onChange={(e) => onChange({ ...t, expiry: e.target.value, primaryStrike: null, secondStrike: null })}
-          >
-            {expiries.data?.map((exp) => (
-              <option key={exp} value={exp}>
-                {formatDay(exp)}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="chips" role="group" aria-label="Your view">
+        <button aria-pressed={t.action === "BUY"} onClick={() => onChange({ ...t, action: "BUY" })}>
+          Bullish
+        </button>
+        <button aria-pressed={t.action === "SELL"} onClick={() => onChange({ ...t, action: "SELL" })}>
+          Bearish
+        </button>
       </div>
+    </div>
+  );
+
+  const expiry = (
+    <label className="select-field" style={{ marginBottom: 12 }}>
+      <span className="dim">Expiry</span>
+      <select
+        style={{ width: "max-content" }}
+        value={chainExpiry ?? ""}
+        disabled={!expiries.data || expiries.data.length === 0}
+        onChange={(e) => onChange({ ...t, expiry: e.target.value, primaryStrike: null, secondStrike: null })}
+      >
+        {expiries.data?.map((exp) => (
+          <option key={exp} value={exp}>
+            {formatDay(exp)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  const legs = (
+    <div style={{ marginBottom: 12 }} data-testid="option-legs">
+      {expiry}
       {expiries.error && (
         <p className="dn" style={{ fontSize: 13, margin: "0 0 12px" }} role="alert">
           Couldn't load expiries: {expiries.error.message}
@@ -471,6 +482,14 @@ export function ScanOptionBias({ exchange, symbol, ticket: t, onChange }: Props)
           </label>
         </div>
       )}
+    </div>
+  );
+
+  if (children) return <>{children({ view, legs })}</>;
+  return (
+    <div>
+      {view}
+      {legs}
     </div>
   );
 }

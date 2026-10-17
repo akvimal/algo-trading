@@ -588,6 +588,8 @@ class PendingOrder(Base):
     source_note_id = Column(UUID(as_uuid=True))
     # The chart as planned when the order was placed; attached to the position when it fills (migration 056).
     plan_snapshot = deferred(Column(LargeBinary))
+    # The order-time read (the system's, and the person's own when they changed it) carried to the position when it fills (migration 067).
+    entry_context = Column(JSONB)
     # The legs an option order was armed for, and the person's reason (migration 055).
     primary_strike = Column(Numeric)
     second_strike = Column(Numeric)

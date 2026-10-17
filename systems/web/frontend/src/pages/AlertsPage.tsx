@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { BackLink } from "../components/nav";
 import { ApiError } from "../api/http";
 import { listZoneWatches, removeZoneWatch, setZoneAlerts, setZoneAlertsForAll, type ZoneAlertLevel, type ZoneEvent, type ZoneWatch } from "../api/zoneWatches";
 import { createPriceAlert, deletePriceAlert, getAlertChannel, listPriceAlerts, sendTestAlert, setAlertChannel, type AlertChannel, type AlertDirection, type PriceAlert } from "../api/priceAlerts";
@@ -25,9 +25,7 @@ export function AlertsPage() {
 
   return (
     <div className="stack">
-      <p style={{ margin: 0 }}>
-        <Link to="/more">← More</Link>
-      </p>
+      <BackLink to="/more" />
       <h1>Price alerts</h1>
       <p className="dim" style={{ margin: 0 }}>
         Get a Telegram message when a price crosses a level, even with the app closed. The server checks every minute, so a very brief spike can be

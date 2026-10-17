@@ -23,6 +23,17 @@ beforeEach(() => {
 });
 
 describe("MistakeReview", () => {
+  it("says what became of an override of the system's read, in the person's words", async () => {
+    vi.mocked(journal.loadSuggestions).mockResolvedValue({
+      available: true, had_context: true, root_cause: null, tags: [],
+      override: { verdict: "paid_off", why: "You overrode the system's read, the plan held and the trade won at least 1R, so the override counts as a pass." },
+    });
+    render(<MistakeReview trade={trade} onSaved={vi.fn()} />);
+    const note = await screen.findByTestId("override-note");
+    expect(note).toHaveTextContent("Override paid off.");
+    expect(note).toHaveTextContent("counts as a pass");
+  });
+
   it("shows what the order supports, and Use these selects it and files the trade under the earliest step", async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();

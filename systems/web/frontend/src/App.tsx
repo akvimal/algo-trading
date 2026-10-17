@@ -5,10 +5,12 @@ import { Skeleton } from "./components/bits";
 import { AppShell } from "./layout/AppShell";
 import { AiModelsPage } from "./pages/AiModelsPage";
 import { InboxPage } from "./pages/InboxPage";
+import { LearnPage } from "./pages/LearnPage";
 import { AlertsPage } from "./pages/AlertsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { MorePage } from "./pages/MorePage";
-import { PortfolioPage } from "./pages/PortfolioPage";
+import { MarketsPage } from "./pages/MarketsPage";
+import { PerformancePage, PortfolioPage } from "./pages/PortfolioPage";
 import { ScanPage } from "./pages/ScanPage";
 import { NotesPage } from "./pages/NotesPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -66,6 +68,9 @@ export function App() {
           <Route path="scan" element={<ScanPage />} />
           <Route path="trade" element={<TradePage />} />
           <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="performance" element={<PerformancePage />} />
+          <Route path="markets" element={<MarketsPage />} />
+          <Route path="learn" element={<LearnPage />} />
           <Route path="more">
             <Route index element={<MorePage />} />
             <Route path="settings" element={<SettingsPage />} />

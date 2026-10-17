@@ -455,32 +455,9 @@ a {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
   }
 }
-/* Phone: Markets (folded) above the positions. From 900px: positions left, Markets in a sticky column on the right. */
-.today-grid {
-  display: grid;
-  gap: var(--gap, 12px);
-  align-items: start;
-}
-.today-grid > * {
-  min-width: 0;
-}
 @media (min-width: 900px) {
   .app-main.dash {
     max-width: 1180px;
-  }
-  .today-grid {
-    grid-template-columns: minmax(0, 1fr) 360px;
-    grid-template-areas: "main aside";
-  }
-  .today-main {
-    grid-area: main;
-  }
-  .today-aside {
-    grid-area: aside;
-    position: sticky;
-    top: 24px;
-    max-height: calc(100vh - 48px);
-    overflow-y: auto;
   }
 }
 .hero .big {
@@ -1363,7 +1340,7 @@ table.t th {
   background: var(--surface);
 }
 .ws-ticket {
-  width: 360px;
+  width: 440px; /* the person can drag it (see .ws-resize); this is the width until they do */
   flex: none;
   min-height: 0;
   overflow-y: auto;
@@ -2985,4 +2962,653 @@ table.t th {
   .nav .inbox-nav {
     display: flex;
   }
+}
+
+/* Learn is a sidebar row on a desktop only; on a phone the bottom bar is full, so it lives under More. */
+.nav a.nav-desk-only {
+  display: none;
+}
+@media (min-width: 900px) {
+  .nav a.nav-desk-only {
+    display: flex;
+  }
+}
+
+/* Live readiness: one tile per check, two across on a wider screen. */
+.ready-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 600px) {
+  .ready-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* The habit map: three columns (study, plan, execution) of tappable tiles, then one roomy detail card. */
+.habit-cols {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 760px) {
+  .habit-cols {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.habit-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.habit-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: var(--tap);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.habit-tile:hover {
+  background: var(--surface-2);
+}
+.habit-tile[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.habit-facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+@media (min-width: 760px) {
+  .habit-facts {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.habit-fact-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+/* A sheet over the page: pinned to the bottom on a phone, centred on a desktop. */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.sheet {
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  border-radius: 16px 16px 0 0;
+  background: var(--bg, var(--surface));
+  outline: none;
+}
+@media (min-width: 760px) {
+  .sheet-backdrop {
+    align-items: center;
+  }
+  .sheet {
+    max-width: 720px;
+    border-radius: 16px;
+    padding: 16px;
+  }
+}
+
+/* Links: a next-step button, a whole-row link with a chevron, a back link, and underlined inline links. */
+.next-step {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.link-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--tap);
+  padding: 8px 0;
+  color: inherit;
+  text-decoration: none;
+}
+.link-row + .link-row {
+  border-top: 1px solid var(--border);
+}
+.link-row-hint {
+  display: block;
+  font-size: 13px;
+}
+.link-row-chevron {
+  color: var(--text-dim, var(--accent));
+  font-size: 20px;
+}
+.link-row:hover .link-row-chevron {
+  color: var(--accent);
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--tap);
+  padding-right: 12px;
+  text-decoration: none;
+  font-weight: 600;
+}
+p a:not(.btn):not(.link-row):not(.back-link),
+li a:not(.btn) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Home: one card per account. The whole card is the link (a stretched ::after); the review chip sits above it. */
+.acct-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 700px) {
+  .acct-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+.acct-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.acct-link {
+  color: inherit;
+  text-decoration: none;
+}
+.acct-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.acct-card:hover {
+  border-color: var(--accent);
+}
+.acct-figures {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+.acct-figures .big {
+  font-size: 26px;
+  font-weight: 600;
+}
+.acct-today {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.acct-trend {
+  width: 100%;
+  height: 44px;
+  display: block;
+}
+.acct-discipline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.acct-chip {
+  position: relative;
+  z-index: 1;
+  align-self: flex-start;
+  text-decoration: none;
+}
+.total-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+/* Last-sessions grids on Home: sessions across, a row per question, a coloured cell per answer. */
+.sgrid-table { display: grid; gap: 4px; align-items: center; }
+.sgrid-row { display: contents; }
+.sgrid-head { display: flex; flex-direction: column; align-items: center; font-size: 11px; line-height: 1.2; }
+.sgrid-head strong { font-size: 13px; }
+.sgrid-label { font-size: 13px; }
+.sgrid-cell { display: block; height: 30px; min-width: 0; border-radius: 4px; background: var(--surface-2); }
+.sgrid-cell.good { background: var(--up); }
+.sgrid-cell.mid { background: var(--warn); }
+.sgrid-cell.poor { background: var(--dn); }
+.sgrid-cell.none { background: var(--surface-2); border: 1px solid var(--border); }
+.sgrid-cell.hatched { background-image: repeating-linear-gradient(45deg, transparent 0 4px, var(--border) 4px 5px); }
+.sgrid-foot { display: flex; justify-content: center; min-height: 22px; }
+.sgrid-foot .pill { text-decoration: none; font-size: 11px; padding: 1px 6px; }
+.sgrid-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12px; }
+.sgrid-key { display: inline-flex; align-items: center; gap: 6px; }
+.sgrid-key .sgrid-cell { display: inline-block; width: 18px; height: 14px; }
+
+/* On the Markets page the report tabs show their names beside the icons, pushed to the right, once there is room (the Trade page's narrow popup keeps icons only). */
+.tab-label {
+  display: none;
+}
+@media (min-width: 900px) {
+  .markets-card .market-info-head {
+    justify-content: space-between;
+  }
+  .markets-card .market-info-head .chips[role="tablist"] {
+    margin-left: auto;
+  }
+  .markets-card .market-info-head .chips button.icon-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+  }
+  .markets-card .tab-label {
+    display: inline;
+  }
+}
+
+/* Market reports (Pre-market / Brief / Pulse, News, Calendar) share one anatomy: head, lead, rows, foot. See components/InfoShell.tsx. */
+.info-section {
+  min-width: 0;
+}
+.info-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.info-title {
+  margin: 0;
+  flex: 1 1 auto;
+}
+.info-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+.info-lead {
+  margin: 0;
+  line-height: 1.5;
+  font-size: 15px;
+}
+.info-reason {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-dim, inherit);
+}
+.info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.info-group {
+  break-inside: avoid;
+  margin-bottom: 8px;
+}
+.info-group-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim, inherit);
+  margin: 4px 0;
+}
+.info-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: start;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  break-inside: avoid;
+  overflow-wrap: anywhere;
+}
+.info-row.with-lead {
+  grid-template-columns: 56px 1fr auto;
+}
+.info-list > .info-row:first-child,
+.info-group-title + .info-row {
+  border-top: 0;
+}
+.info-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.info-row-primary a {
+  display: inline-block;
+  padding: 2px 0;
+}
+.info-row-secondary,
+.info-row-tertiary {
+  font-size: 12px;
+  color: var(--text-dim, inherit);
+}
+.info-row-lead {
+  font-size: 13px;
+  color: var(--text-dim, inherit);
+  white-space: nowrap;
+}
+.info-row-aside {
+  white-space: nowrap;
+  text-align: right;
+}
+.info-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint, var(--text-dim, inherit));
+}
+.info-details > summary {
+  list-style-position: inside;
+}
+@media (max-width: 480px) {
+  /* A phone: the head's status drops under the title, and a long figure never squeezes the label. */
+  .info-status {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  .info-row.with-lead {
+    grid-template-columns: 48px 1fr auto;
+  }
+}
+@media (min-width: 900px) {
+  /* The Markets page has room: lists run in two columns so a wide screen is not one long strip. */
+  .markets-card .info-list,
+  .markets-card .info-details > .stack {
+    display: block;
+    column-count: 2;
+    column-gap: 32px;
+  }
+  .markets-card .info-details > .stack > * {
+    break-inside: avoid;
+    margin-bottom: 12px;
+  }
+  .markets-card .info-lead {
+    max-width: 78ch;
+  }
+}
+
+/* Live progress while an AI read is prepared (components/AiProgress.tsx). */
+.ai-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.ai-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-step {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 14px;
+}
+.ai-step-mark {
+  width: 16px;
+  flex: none;
+  text-align: center;
+  color: var(--up);
+}
+.ai-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: icon-spin 0.9s linear infinite;
+}
+.ai-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.ai-bar > i {
+  display: block;
+  height: 100%;
+  width: 35%;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: ai-slide 1.4s ease-in-out infinite;
+}
+@keyframes ai-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-spinner, .ai-bar > i { animation: none; }
+}
+
+/* Home: the day's trades as a row of dots with the win rate beside it. */
+.tape-dots {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  min-height: 30px;
+}
+.tape-dot {
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.tape-dot.win { background: var(--up); }
+.tape-dot.loss { background: var(--dn); }
+.tape-dot.flat { background: var(--surface-2); border-color: var(--border); }
+.tape-dot.open {
+  background: transparent;
+  animation: tape-pulse 2s ease-in-out infinite;
+}
+.tape-dot.open.win { border-color: var(--up); }
+.tape-dot.open.loss { border-color: var(--dn); }
+.tape-dot.open.flat { border-color: var(--text-dim, var(--border)); }
+@keyframes tape-pulse {
+  50% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tape-dot.open { animation: none; }
+}
+.tape-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.tape-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* An open trade carried over from an earlier day: dashed, because it is not an intraday trade any more. */
+.tape-dot.carried {
+  border-style: dashed;
+}
+a.tape-dot {
+  display: inline-block;
+  text-decoration: none;
+}
+
+/* The ticket in three parts: Study, Plan, Trade. Each is a panel with its own colour (the same ones the Learn page uses for the three levels), so the
+   steps stand out from the fields inside them. On a phone one of Study/Plan is open at a time; on a wide screen both are. */
+.tstep,
+.tstep-trade {
+  --step: var(--accent);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--step);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  margin-top: 12px;
+  padding: 0 12px;
+}
+.tstep-1 { --step: var(--accent); }
+.tstep-2 { --step: var(--warn); }
+.tstep-3 { --step: var(--up); }
+.tstep-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 50px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tstep-num {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--step);
+  color: var(--accent-ink, #0b0f14);
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tstep-title {
+  font-weight: 700;
+  font-size: 17px;
+}
+.tstep-summary {
+  margin-left: auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-dim, inherit);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tstep-chevron {
+  flex: none;
+  transition: transform 0.15s;
+}
+.tstep.open .tstep-chevron {
+  transform: rotate(180deg);
+}
+.tstep-body {
+  padding-bottom: 10px;
+}
+.tstep-next {
+  display: none;
+  margin-top: 4px;
+}
+.tstep-trade {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  margin-bottom: 10px;
+}
+@media (max-width: 720px) {
+  .tstep:not(.open) .tstep-body {
+    display: none;
+  }
+  .tstep-next {
+    display: inline-flex;
+  }
+}
+@media (min-width: 721px) {
+  .tstep-head {
+    cursor: default;
+  }
+  .tstep-chevron {
+    display: none;
+  }
+}
+
+/* The grip between the charts and the order ticket: a thin strip you drag sideways. */
+.ws-resize {
+  flex: none;
+  width: 8px;
+  align-self: stretch;
+  margin: 0 -2px;
+  border-radius: 4px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.ws-resize:hover,
+.ws-resize:focus-visible {
+  background: var(--accent);
+  opacity: 0.6;
+}
+.workstation:not(.wide) .ws-resize {
+  display: none;
+}
+
+/* The plan's checks (setup, entry, trades today ...) as one row of small chips; the sentence for each is its tooltip. */
+.plan-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+}
+.plan-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Study's market state and setup: icon and word on each button, one group per row (words need the room a bare icon did not). */
+.plan-icons {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.plan-icons .chips {
+  flex-wrap: wrap;
+}
+.plan-icons .chips button {
+  width: auto;
+  padding: 0 12px;
+  gap: 6px;
+}
+.plan-icons .chips + .chips {
+  padding-left: 0;
+  border-left: 0;
 }

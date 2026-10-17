@@ -51,7 +51,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.db import models as db_models
 from app.config import settings
-from app.domain import trade_snapshots
+from app.domain import trade_review, trade_snapshots
 from app.domain.study_notes import StudyNoteError, decode_snapshot
 
 logger = logging.getLogger(__name__)
@@ -328,6 +328,7 @@ def create_pending_order(
         quantity=payload.quantity, trend_followed=payload.trend_followed, risk_managed=payload.risk_managed,
         setup_tag=payload.setup_tag, confidence=payload.confidence, entry_interval=payload.entry_interval,
         status="pending", expires_at=now + timedelta(minutes=ttl), last_price=ltp, last_checked_at=now,
+        entry_context=trade_review.clean_context(payload.entry_context),
         allow_stacking=bool(payload.allow_stacking), horizon=payload.horizon,
         source_note_id=_uuid_or_none(payload.source_note_id),
         primary_strike=payload.primary_strike, second_strike=payload.second_strike, expiry=payload.expiry,
@@ -433,6 +434,12 @@ def _finish(db: Session, order_id: uuid.UUID, status: str, reason: Optional[str]
     db.commit()
 
 
+def _carry_context(db: Session, model, row_id, order) -> None:
+    """The order-time read the order was armed with goes onto the trade it became, so the post-trade review sees the study behind a limit order too."""
+    if order.entry_context:
+        db.query(model).filter(model.id == row_id).update({model.entry_context: order.entry_context}, synchronize_session=False)
+
+
 def _place(db: Session, order, deps: Deps) -> str:
     """Places a CLAIMED order (already committed as 'triggered'). Returns the final status."""
     from app.domain.position_manager import load_account, load_settings
@@ -454,6 +461,7 @@ def _place(db: Session, order, deps: Deps) -> str:
             if not rejected:
                 link_note_to_position(db, user_id, order.source_note_id, position_id)
                 trade_snapshots.attach_plan_snapshot(db, order, position_id=position_id)
+                _carry_context(db, db_models.Position, position_id, order)
         else:
             row = deps.open_option(db, order, exec_settings)
             rejected, reason, position_id, group_id = row.status == "REJECTED", row.rejection_reason, None, row.id
@@ -475,6 +483,7 @@ def _place(db: Session, order, deps: Deps) -> str:
                 if warnings:
                     reason = "opened, but " + " and ".join(warnings) + ": set it on the position"
                 trade_snapshots.attach_plan_snapshot(db, order, option_group_id=group_id)
+                _carry_context(db, db_models.OptionPositionGroup, group_id, order)
     except Exception as exc:
         db.rollback()
         logger.exception("pending order %s could not be placed", order_id)

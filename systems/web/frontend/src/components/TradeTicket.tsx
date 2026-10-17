@@ -1,12 +1,11 @@
-import { WORKSTATION_QUERY, useMediaQuery } from "../workstation/useMediaQuery";
+import { NextStep } from "./nav";
 import { marketIsOpen } from "../pages/marketHours";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
 import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
-import { NOTES_MAX, SETUP_TAGS, TRIGGERS } from "../pages/journalModel";
+import { NOTES_MAX } from "../pages/journalModel";
 import {
   ACTION_WORD, PLAN_KINDS, analyzeTicket, buildOrder, checkList, cryptoLeverage, effectiveTicket, marketStateOf, optionsAvailable, planAvailable, planHint, planNudges, planRows,
   planSide, planStatus,
@@ -16,7 +15,6 @@ import type { PriceField } from "../chart/ChartPane";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import type { Pretrade } from "../api/types";
 import { TextField, type FieldStatus } from "./Field";
-import { Popover } from "../chart/Popover";
 import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, FutureIcon, OptionIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, SpreadIcon, TrendDownIcon, TrendUpIcon } from "./BadgeIcons";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
@@ -88,20 +86,41 @@ type Props = {
   /** Takes a picture of the chart as it is now, for keeping with the trade as its plan at entry: called just before the order is sent, so it shows
    * the person's drawings and indicators and the planned entry, stop and target. Returns a finished PNG data URL, or null when it cannot. */
   capturePlan?: (levels: { entry: number | null; stop: number | null; target: number | null }) => Promise<string | null>;
+  /** A host's own controls for the first two steps (the OI-buildup option form's view, and its expiry, legs and exit levels): they sit at the top of Study and of Plan. */
+  studyTop?: React.ReactNode;
+  planTop?: React.ReactNode;
 };
+
+type StepTone = "good" | "warn" | "na";
+
+/** One step of the ticket (Study, Plan). A header that says what is in it, and a body. On a phone only the open step's body shows (the rest is
+ * CSS, so nothing leaves the page: every field stays reachable); on a wide screen every body is open and the header is just a label. */
+export function TicketStep({ n, title, summary, tone, open, onToggle, children, testId }: { n: number; title: string; summary: string; tone: StepTone; open: boolean; onToggle: () => void; children: React.ReactNode; testId: string }) {
+  return (
+    <section className={`tstep tstep-${n}${open ? " open" : ""}`} data-testid={testId}>
+      <button type="button" className="tstep-head" aria-expanded={open} onClick={onToggle}>
+        <span className="tstep-num">{n}</span>
+        <span className="tstep-title">{title}</span>
+        <span className={`mark ${tone}`} aria-hidden="true">{tone === "good" ? "✓" : tone === "warn" ? "!" : "–"}</span>
+        <span className="tstep-summary">{summary}</span>
+        <span className="tstep-chevron" aria-hidden="true">▾</span>
+      </button>
+      <div className="tstep-body">{children}</div>
+    </section>
+  );
+}
 
 /** The guided ticket: plan first (side, entry, stop, target), see the risk in rupees and what the
  * setup has going for it, then place. Everything here is a paper order: a live account never
  * reaches this component. */
-export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan }: Props) {
+export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, pickField = null, onPickField, onAddLine, today = null, suggested = {}, holding = null, waitingHere = null, onPlaced, optionsForced, hideStrategyChips, hideMoneynessField, hideOptionExtras, hideSideChips, capturePlan, studyTop, planTop }: Props) {
   const { guided } = useProfile();
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PlaceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [another, setAnother] = useState(false);
-  // The plan picker (market state and plan) is one line until opened; open from the start only where the ticket is a roomy side panel.
-  const roomy = useMediaQuery(WORKSTATION_QUERY);
-  const [planOpen, setPlanOpen] = useState(roomy);
+  // Study and Plan are steps: on a phone one is open at a time (the other folds to its summary); on a wide screen both are open.
+  const [step, setStep] = useState<1 | 2>(1);
   const [cleared, setCleared] = useState<string | null>(null); // what changing the side just took off the form, until the next edit
   useEffect(() => {
     if (!waitingHere) setAnother(false);
@@ -201,10 +220,21 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   ];
   const current = instrumentChoices.find((c) => c.value === t.strategy);
   const instrumentLabel = current?.label ?? "Credit spread";
-  const instrumentIcon = current?.icon ?? <SpreadIcon />;
   const isOption = t.strategy !== "future";
   const limit = t.orderType === "limit";
   const simplifiedOption = Boolean(hideOptionExtras) && isOption;
+
+  // What each step says when folded: the person's read and setup, the plan's risk and reward, and the order as it will go.
+  const stateWord = state == null ? "No read" : state === "ranging" ? "Ranging" : state === "trending_up" ? "Trending ↑" : "Trending ↓";
+  const overridden = raw.planState != null && read != null && raw.planState !== read;
+  const kindLabel = raw.planKind ? PLAN_KINDS.find((k) => k.value === raw.planKind)?.label : null;
+  const studySummary = [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup"].filter(Boolean).join(" · ");
+  const studyTone: StepTone = planNudges(t, a, state).length > 0 ? "warn" : kindLabel ? "good" : "na";
+  const planNow = planStatus(t, a, ctx);
+  const legsText = t.primaryStrike != null ? `${t.primaryStrike}${t.secondStrike != null && t.strategy !== "naked" ? ` / ${t.secondStrike}` : ""}` : null;
+  const planSummary = simplifiedOption ? [instrumentLabel, legsText, limit ? "waits for a price" : "at the market"].filter(Boolean).join(" · ") : planNow?.text ?? "Set a stop and a target";
+  const planTone: StepTone = simplifiedOption ? "na" : planNow?.tone === "ready" ? "good" : planNow?.tone === "warn" ? "warn" : "na";
+  const tradeSummary = `${ACTION_WORD(t.action)} ${ctx.symbol} · ${limit ? (t.entry.trim() ? `wait at ${t.entry}` : "wait for a price") : "at the market"}${a.riskAmount != null && !simplifiedOption ? ` · risk ${formatInr(a.riskAmount)}` : ""}`;
 
   async function submit() {
     // Re-derive from the current ticket: nothing captured from an earlier render is ever sent.
@@ -302,29 +332,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           Paper order
         </h2>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          {/* Future / Option / Option spread: the person's default (More > Experience) is what the ticket opens on, and this badge changes it for the
-              one trade. It is a menu in the header instead of a row of its own, and only where options exist. */}
-          {options && !hideStrategyChips && (
-            <Popover label="What to trade" text={instrumentLabel} icon={instrumentIcon} buttonLabel={`What to trade: ${instrumentLabel}`} align="right">
-              {(close) => (
-                <div className="chips instrument-menu" style={{ flexDirection: "column", alignItems: "stretch" }}>
-                  {instrumentChoices.map((c) => (
-                    <button
-                      key={c.value}
-                      aria-pressed={t.strategy === c.value}
-                      onClick={() => {
-                        set("strategy", c.value);
-                        close();
-                      }}
-                    >
-                      {c.icon}
-                      {c.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Popover>
-          )}
           <span className="pill">Paper</span>
         </span>
       </div>
@@ -345,6 +352,125 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         </p>
       )}
 
+      <TicketStep n={1} title="Study" summary={studySummary} tone={studyTone} open={step === 1} onToggle={() => setStep(step === 1 ? 2 : 1)} testId="step-study">
+      {studyTop}
+      {(
+        <>
+        <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>
+          <div className="plan-icons">
+            {/* What the market is doing (up, down or sideways) and what to do about it (pullback, breakout, reversal): icon buttons, named for
+                screen readers and in the tooltip. */}
+            <div className="chips" role="group" aria-label="Market state">
+              <button aria-label="Trending up" title="Trending up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
+                <TrendUpIcon />
+                Trending up
+              </button>
+              <button aria-label="Trending down" title="Trending down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
+                <TrendDownIcon />
+                Trending down
+              </button>
+              <button aria-label="Ranging" title="Ranging (sideways)" aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
+                <RangingIcon />
+                Ranging
+              </button>
+            </div>
+            <div className="chips" role="group" aria-label="Plan">
+              {PLAN_KINDS.map((k) => (
+                <button
+                  key={k.value}
+                  aria-label={k.label}
+                  aria-pressed={raw.planKind === k.value}
+                  disabled={!planAvailable(state, k.value)}
+                  title={!planAvailable(state, k.value) ? "A pullback needs a trend." : k.label}
+                  onClick={() => choosePlan(k.value)}
+                >
+                  {PLAN_ICON[k.value]}
+                  {k.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
+            {raw.planState != null && read != null && raw.planState !== read ? "Your read. It differs from the system's: it counts as a pass if your plan holds and the trade wins at least 1R." : raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
+          </div>
+          {raw.planKind && (
+            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }} data-testid="plan-hint">
+              {t.setupTag && state ? <b>{t.setupTag}. </b> : null}
+              {planHint(state, raw.planKind)}
+            </p>
+          )}
+        </div>
+        {/* what the market is doing, as the system reads it: information, never scored */}
+        {marketRead.length > 0 && (
+            <details style={{ marginTop: 6 }}>
+              <summary className="faint" style={{ fontSize: 12 }}>
+                Market read
+              </summary>
+              <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
+                {marketRead.map((c) => (
+                  <li key={c.key} className="check-item">
+                    <span className="mark info" role="img" aria-label="For information">
+                      ·
+                    </span>
+                    <span>
+                      {c.label}
+                      <span className="faint" style={{ display: "block", fontSize: 12 }}>
+                        {c.detail}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+                Information only: it is not scored and never blocks an order.
+              </p>
+            </details>
+          )}
+        </>
+      )}
+      {(() => {
+        const reasonField = (
+          <label className="field" style={{ marginBottom: 12 }}>
+            <span className="dim">Reason (optional)</span>
+            <textarea
+              className="textarea"
+              value={t.reason}
+              maxLength={NOTES_MAX}
+              rows={2}
+              onChange={(e) => set("reason", e.target.value)}
+              placeholder="What made you take this trade?"
+            />
+          </label>
+        );
+        return (
+          <details className="notes-fold" data-testid="ticket-notes" style={{ marginBottom: 12 }}>
+            <summary className="faint" style={{ fontSize: 13, cursor: "pointer" }}>
+              Notes (optional){t.reason.trim() ? " ·" : ""}
+            </summary>
+            {reasonField}
+          </details>
+        );
+      })()}
+
+      <button type="button" className="link-btn tstep-next" onClick={() => setStep(2)}>
+        Next: Plan ›
+      </button>
+      </TicketStep>
+
+      <TicketStep n={2} title="Plan" summary={planSummary} tone={planTone} open={step === 2} onToggle={() => setStep(step === 2 ? 1 : 2)} testId="step-plan">
+      {/* What to trade: Future / Option / Option spread. The person's default (More > Experience) is what the ticket opens on, and this changes it for the
+          one trade. Part of the plan, and only where options exist. */}
+      {options && !hideStrategyChips && (
+        <div className="chips instrument-menu" role="group" aria-label="What to trade" style={{ marginBottom: 12 }}>
+          {instrumentChoices.map((c) => (
+            <button key={c.value} aria-pressed={t.strategy === c.value} onClick={() => set("strategy", c.value)}>
+              {c.icon}
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {planTop}
       <div className="ticket-opts">
       {isOption && !hideMoneynessField && (
         <div className="strike-row">
@@ -475,55 +601,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       )}
 
       {!simplifiedOption && (
-        <details className="plan-fold" open={planOpen} onToggle={(e) => setPlanOpen(e.currentTarget.open)}>
-          <summary data-testid="plan-summary">
-            <span className="dim">Plan</span> {state == null ? "none" : state === "ranging" ? "Ranging" : state === "trending_up" ? "Trending ↑" : "Trending ↓"}
-            {raw.planKind ? ` · ${PLAN_KINDS.find((k) => k.value === raw.planKind)?.label ?? ""}` : " · pick one"}
-          </summary>
-        <div className="plan-pick" data-testid="plan-pick" style={{ margin: "8px 0" }}>
-          <div className="plan-icons">
-            {/* What the market is doing (up, down or sideways) and what to do about it (pullback, breakout, reversal): icon buttons, named for
-                screen readers and in the tooltip. */}
-            <div className="chips" role="group" aria-label="Market state">
-              <button aria-label="Trending up" title="Trending up" aria-pressed={state === "trending_up"} onClick={() => chooseState("trending_up")}>
-                <TrendUpIcon />
-              </button>
-              <button aria-label="Trending down" title="Trending down" aria-pressed={state === "trending_down"} onClick={() => chooseState("trending_down")}>
-                <TrendDownIcon />
-              </button>
-              <button aria-label="Ranging" title="Ranging (sideways)" aria-pressed={state === "ranging"} onClick={() => chooseState("ranging")}>
-                <RangingIcon />
-              </button>
-            </div>
-            <div className="chips" role="group" aria-label="Plan">
-              {PLAN_KINDS.map((k) => (
-                <button
-                  key={k.value}
-                  aria-label={k.label}
-                  aria-pressed={raw.planKind === k.value}
-                  disabled={!planAvailable(state, k.value)}
-                  title={!planAvailable(state, k.value) ? "A pullback needs a trend." : k.label}
-                  onClick={() => choosePlan(k.value)}
-                >
-                  {PLAN_ICON[k.value]}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="faint" style={{ fontSize: 12, margin: "4px 0 8px" }} data-testid="market-state-source">
-            {raw.planState != null && raw.planState !== read ? "Your read." : read != null ? `From the regime read${regime ? ` (ADX ${Math.round(regime.adx)})` : ""}. Tap another to change it.` : "No clear read right now: choose what the market is doing."}
-          </div>
-          {raw.planKind && (
-            <p className="faint" style={{ fontSize: 12, margin: "6px 0 0" }} data-testid="plan-hint">
-              {t.setupTag && state ? <b>{t.setupTag}. </b> : null}
-              {planHint(state, raw.planKind)}
-            </p>
-          )}
-        </div>
-        </details>
-      )}
-
-      {!simplifiedOption && (
         <div className="checks plan-block" data-testid="plan-block">
           {(() => {
             const plan = planStatus(t, a, ctx);
@@ -538,132 +615,41 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
             // What needs attention is always shown; the rest (all fine, or only for information) folds into one line.
             const rows = allRows.filter((r) => r.key !== "stop" && r.key !== "size" && r.key !== "reward");
             const flagged = rows.filter((r) => r.status === "warn" || r.status === "bad");
-            const calm = rows.filter((r) => r.status !== "warn" && r.status !== "bad");
-            const line = (r: (typeof rows)[number]) => (
-              <li key={r.key} className="check-item" data-testid={`plan-row-${r.key}`}>
+            // One row of small icon chips (the word, its mark; the detail is the tooltip). Only what needs attention gets its sentence, under the row.
+            const chip = (r: (typeof rows)[number]) => (
+              <li key={r.key} className="plan-check" data-testid={`plan-row-${r.key}`} title={r.detail}>
                 <span className={`mark ${r.status}`} role="img" aria-label={STATUS_WORD[r.status]}>
                   {STATUS_MARK[r.status]}
                 </span>
-                <span>
-                  {r.label}
-                  <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                    {r.detail}
-                  </span>
-                </span>
+                {r.label}
               </li>
             );
             return (
               <>
-                {flagged.length > 0 && <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>{flagged.map(line)}</ul>}
+                {rows.length > 0 && <ul className="plan-checks" aria-label="Checks">{rows.map(chip)}</ul>}
+                {flagged.map((r) => (
+                  <p key={r.key} className="faint" style={{ fontSize: 12, margin: "2px 0" }} data-testid={`plan-flag-${r.key}`}>
+                    <b>{r.label}:</b> <span>{r.detail}</span>
+                  </p>
+                ))}
                 {planNudges(t, a, state).map((n) => (
                   <p key={n} className="check-item" style={{ color: "var(--warn)", fontSize: 13, margin: "4px 0" }} data-testid="plan-nudge">
                     {n}
                   </p>
                 ))}
-                {calm.length > 0 && (
-                  <details style={{ marginTop: 6 }} data-testid="plan-calm">
-                    <summary className="faint" style={{ fontSize: 12 }}>
-                      {flagged.length > 0 ? `${calm.length} more checks` : `All checks (${calm.length}) are fine`}
-                    </summary>
-                    <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>{calm.map(line)}</ul>
-                  </details>
-                )}
               </>
             );
           })()}
-          {marketRead.length > 0 && (
-            <details style={{ marginTop: 6 }}>
-              <summary className="faint" style={{ fontSize: 12 }}>
-                Market read
-              </summary>
-              <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>
-                {marketRead.map((c) => (
-                  <li key={c.key} className="check-item">
-                    <span className="mark info" role="img" aria-label="For information">
-                      ·
-                    </span>
-                    <span>
-                      {c.label}
-                      <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                        {c.detail}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <p className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
-                Information only: it is not scored and never blocks an order.
-              </p>
-            </details>
-          )}
         </div>
       )}
 
-      {/* Kept even in the simplified option ticket, unlike the rest of the journal prompts below
-          it (Confidence) - a person asked for this back specifically: unlike Confidence, it's the
-          one place to leave an actual note on WHY, not just how sure, and that's worth keeping
-          even in a quick trade. */}
-      {simplifiedOption && (
-        <label className="select-field" style={{ margin: "12px 0" }}>
-          <span className="dim">Why this trade? (helps your review later)</span>
-          <select value={t.setupTag ?? ""} onChange={(e) => set("setupTag", e.target.value || null)}>
-            <option value="">Not tagged</option>
-            {SETUP_TAGS.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {(() => {
-        const reasonField = (
-          <label className="field" style={{ marginBottom: 12 }}>
-            <span className="dim">Reason (optional)</span>
-            <textarea
-              className="textarea"
-              value={t.reason}
-              maxLength={NOTES_MAX}
-              rows={2}
-              onChange={(e) => set("reason", e.target.value)}
-              placeholder="What made you take this trade?"
-            />
-          </label>
-        );
-        if (simplifiedOption) return reasonField;
-        return (
-          <details className="notes-fold" data-testid="ticket-notes" style={{ marginBottom: 12 }}>
-            <summary className="faint" style={{ fontSize: 13, cursor: "pointer" }}>
-              Notes (optional){t.trigger || t.reason.trim() || t.confidence != null ? " ·" : ""}
-              {t.trigger ? ` ${t.trigger}` : ""}
-              {t.confidence != null ? ` · confidence ${t.confidence}` : ""}
-            </summary>
-            <label className="select-field" style={{ margin: "8px 0" }}>
-              <span className="dim">What did you see?</span>
-              <select value={t.trigger ?? ""} onChange={(e) => set("trigger", e.target.value || null)}>
-                <option value="">Not noted</option>
-                {TRIGGERS.map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {reasonField}
-            <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>
-              Confidence
-            </div>
-            <div className="chips" role="group" aria-label="Confidence">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button key={n} aria-pressed={t.confidence === n} onClick={() => set("confidence", t.confidence === n ? null : n)}>
-                  {n}
-                </button>
-              ))}
-            </div>
-          </details>
-        );
-      })()}
+      </TicketStep>
 
+      <div className="tstep-trade tstep-3" data-testid="step-trade">
+        <span className="tstep-num">3</span>
+        <span className="tstep-title">Trade</span>
+        <span className="tstep-summary">{tradeSummary}</span>
+      </div>
       {[...a.errors, ...a.warnings].length > 0 && (
         <ul className="hints" aria-live="polite">
           {a.errors.map((m) => (
@@ -689,8 +675,8 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           <p style={{ margin: "4px 0 0" }}>{result.message}</p>
           {result.warning && <p style={{ margin: "4px 0 0", color: "var(--warn)" }}>{result.warning}</p>}
           {result.ok && result.kind !== "pending" && (
-            <p style={{ margin: "6px 0 0" }}>
-              <Link to="/portfolio?tab=positions">See it in Portfolio</Link>
+            <p style={{ margin: "8px 0 0" }}>
+              <NextStep to="/portfolio?tab=positions">See it in Portfolio</NextStep>
             </p>
           )}
         </div>

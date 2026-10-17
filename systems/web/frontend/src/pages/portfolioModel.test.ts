@@ -106,6 +106,11 @@ describe("unreviewed", () => {
     );
     expect(unreviewed(trades).map((t) => t.id)).toEqual(["a"]);
   });
+
+  it("leaves out trades that went to plan, which need no review", () => {
+    const trades = closedTrades([pos({ id: "a", reviewed_at: null }), pos({ id: "b", reviewed_at: null }), pos({ id: "c", reviewed_at: null })], []);
+    expect(unreviewed(trades, new Set(["b"])).map((t) => t.id).sort()).toEqual(["a", "c"]);
+  });
 });
 
 describe("graduation and discipline band", () => {

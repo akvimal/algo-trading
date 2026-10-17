@@ -73,6 +73,11 @@ class Requirement:
     required: str
     actual: str
     met: bool
+    # The same check as numbers, so a screen can draw a meter without parsing the text above. `value` is None while there is nothing to
+    # measure yet; `higher_is_better` is False for a ceiling (drawdown), where the meter fills toward the limit.
+    value: Optional[float] = None
+    target: Optional[float] = None
+    higher_is_better: bool = True
 
 
 def evaluate(
@@ -92,22 +97,28 @@ def evaluate(
         Requirement(
             "costs", "Realistic costs switched on", f"charges on and slippage >= {th.min_slippage_bps:g} bps",
             f"charges {'on' if apply_charges else 'off'}, slippage {slippage_bps:g} bps", costs_on,
+            value=slippage_bps if apply_charges else 0.0, target=th.min_slippage_bps,
         ),
-        Requirement("trades", "Paper trades recorded with costs", f"{th.min_trades} trades", f"{qualifying_trades} trades", qualifying_trades >= th.min_trades),
-        Requirement("days", "Days on the current record", f"{th.min_days} days", f"{days_tracked} days", days_tracked >= th.min_days),
+        Requirement("trades", "Paper trades recorded with costs", f"{th.min_trades} trades", f"{qualifying_trades} trades", qualifying_trades >= th.min_trades,
+                    value=float(qualifying_trades), target=float(th.min_trades)),
+        Requirement("days", "Days on the current record", f"{th.min_days} days", f"{days_tracked} days", days_tracked >= th.min_days,
+                    value=float(days_tracked), target=float(th.min_days)),
         Requirement(
             "discipline", "Discipline score", f">= {th.min_discipline}",
             "not enough trades yet (needs 5)" if discipline_score is None else str(discipline_score),
             discipline_score is not None and discipline_score >= th.min_discipline,
+            value=None if discipline_score is None else float(discipline_score), target=float(th.min_discipline),
         ),
         Requirement(
             "drawdown", "Max drawdown (close of day)", f"<= {th.max_drawdown_pct:g}%",
             "no equity history yet" if max_drawdown_pct is None else f"{max_drawdown_pct:.1f}%",
             max_drawdown_pct is not None and max_drawdown_pct <= th.max_drawdown_pct,
+            value=max_drawdown_pct, target=float(th.max_drawdown_pct), higher_is_better=False,
         ),
         Requirement(
             "profit", "Net profit after costs", "> 0", "no trades yet" if net_pnl is None else f"{net_pnl:.2f}",
             net_pnl is not None and net_pnl > 0,
+            value=net_pnl, target=0.0,
         ),
     ]
 

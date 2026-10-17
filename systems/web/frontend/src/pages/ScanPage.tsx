@@ -34,6 +34,7 @@ export function ScanPage() {
   return (
     <div className="stack">
       <h1>Scan</h1>
+      <p className="dim" style={{ margin: 0 }}>End-of-day scans of NSE stocks and F&amp;O.</p>
       <div className="chips" role="tablist" aria-label="Scans">
         {TABS.map((t) => (
           <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setParams({ tab: t.id }, { replace: true })}>

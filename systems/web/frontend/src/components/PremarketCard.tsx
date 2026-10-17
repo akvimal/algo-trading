@@ -1,4 +1,3 @@
-import { RefreshIcon } from "../chart/icons";
 import { useEffect, useState } from "react";
 import { getMarketBrief, getPremarket, refreshPremarket } from "../api/premarket";
 import { ApiError } from "../api/http";
@@ -6,7 +5,9 @@ import type { PremarketReport } from "../api/types";
 import { formatPrice, formatTime } from "../format";
 import { useResource } from "../hooks/useResource";
 import { BIAS_LABEL, type BriefSegment, derivedRows, formatIndicator, formatMove, hasMacro, headline, indicatorMove, moveTone, periodLabel, reportAge, sections, shortDate, STANCE_LABEL, stanceTone } from "../pages/premarketModel";
+import { AiProgress } from "./AiProgress";
 import { ErrorNotice, Skeleton } from "./bits";
+import { InfoFoot, InfoGroup, InfoHead, InfoLead, InfoRow } from "./InfoShell";
 
 const BIAS_PILL = { bullish: "pill up", bearish: "pill dn", neutral: "pill" } as const;
 
@@ -39,16 +40,25 @@ export function PremarketCard({ segment = "NSE" }: { segment?: BriefSegment }) {
   // A manual refresh is newer than whatever the poll last fetched, until the poll catches up.
   const data = fresh && (!report.data || fresh.generated_at >= report.data.generated_at) ? fresh : report.data;
 
+  const age = data ? reportAge(data) : null;
   return (
-    <>
-      <div className="row" style={{ alignItems: "baseline" }}>
-        <h2 className="section-title" style={{ margin: 0 }}>
-          {TITLE[segment]}
-        </h2>
-        <button className={`tool ${busy ? "spin" : ""}`} onClick={refresh} disabled={busy} title={busy ? "Refreshing…" : "Refresh"} aria-label={`Refresh the ${segment === "NSE_PULSE" ? "market pulse" : segment === "CRYPTO" ? "market brief" : "pre-market report"}`}>
-          <RefreshIcon />
-        </button>
-      </div>
+    <div className="stack info-section" data-testid="premarket-report">
+      <InfoHead
+        title={TITLE[segment]}
+        status={
+          data && age ? (
+            <>
+              <span className={`${BIAS_PILL[data.bias]} premarket-bias`} data-testid="premarket-bias">{BIAS_LABEL[data.bias]}</span>
+              {/* 0 is a model that did not calibrate (some cheap ones always answer 0), not a real "no confidence" - hide it rather than contradict the call. */}
+              {data.ai && data.ai.confidence > 0 && <span className="dim">{data.ai.confidence}% confident</span>}
+              <span className={age.stale ? "pill warn" : "faint"} style={{ fontSize: 12 }}>{age.stale ? `Older report · ${age.text}` : age.text}</span>
+            </>
+          ) : null
+        }
+        onRefresh={refresh}
+        busy={busy}
+        refreshLabel={`Refresh the ${segment === "NSE_PULSE" ? "market pulse" : segment === "CRYPTO" ? "market brief" : "pre-market report"}`}
+      />
 
       {report.loading && <Skeleton lines={3} />}
       {report.error && !data && <ErrorNotice error={report.error} onRetry={report.reload} />}
@@ -58,9 +68,10 @@ export function PremarketCard({ segment = "NSE" }: { segment?: BriefSegment }) {
           The numbers have not meaningfully changed{data.ai_read_at ? ` since the AI read at ${formatTime(data.ai_read_at)}` : " since the last AI read"}, so that read was kept (no new AI call).
         </div>
       )}
-      {data?.ai_pending && (
-        <div className="notice" data-testid="ai-pending">
-          Showing the rule-based read. The AI read is being prepared and will appear here in a moment.
+      {data?.ai_pending && <AiProgress report={data} />}
+      {data?.ai_deferred && !data.ai_pending && !busy && (
+        <div className="notice" data-testid="ai-deferred">
+          Showing the rule-based read. The AI read is not run on load here: <button className="link-btn" onClick={() => void refresh()}>Run AI read</button>
         </div>
       )}
       {!report.loading && !report.error && !data && (
@@ -71,7 +82,7 @@ export function PremarketCard({ segment = "NSE" }: { segment?: BriefSegment }) {
         </div>
       )}
       {data && <Report report={data} segment={segment} />}
-    </>
+    </div>
   );
 }
 
@@ -85,22 +96,10 @@ const FOOTNOTE: Record<BriefSegment, string> = {
 };
 
 function Report({ report, segment }: { report: PremarketReport; segment: BriefSegment }) {
-  const age = reportAge(report);
   const ai = report.ai;
   return (
-    <div className="card stack">
-      <div className="premarket-head">
-        <span className={`${BIAS_PILL[report.bias]} premarket-bias`} data-testid="premarket-bias">
-          {BIAS_LABEL[report.bias]}
-        </span>
-        {/* 0 is a model that did not calibrate (some cheap ones always answer 0), not a real "no confidence" - hide it rather than contradict the call. */}
-        {ai && ai.confidence > 0 && <span className="dim">{ai.confidence}% confident</span>}
-        <span className={age.stale ? "pill warn" : "faint"} style={{ marginLeft: "auto", fontSize: 12 }}>
-          {age.stale ? `Older report · ${age.text}` : age.text}
-        </span>
-      </div>
-
-      <p className="premarket-headline">{headline(report)}</p>
+    <div className="stack">
+      <InfoLead>{headline(report)}</InfoLead>
 
       {report.agree === false && (
         <div className="notice" data-testid="premarket-disagree">
@@ -115,7 +114,7 @@ function Report({ report, segment }: { report: PremarketReport; segment: BriefSe
         </span>
       )}
 
-      <details>
+      <details className="info-details" open={typeof window !== "undefined" && window.matchMedia?.("(min-width: 900px)").matches ? true : undefined}>
         <summary className="premarket-toggle">Reasoning and numbers</summary>
         <div className="stack" style={{ marginTop: 12 }}>
           {ai && (
@@ -142,26 +141,26 @@ function Report({ report, segment }: { report: PremarketReport; segment: BriefSe
             </>
           )}
           {sections(report.inputs, segment).map((s) => (
-            <div key={s.title}>
-              <div className="dim" style={{ fontSize: 12, marginBottom: 4 }}>
-                {s.title}
-              </div>
+            <InfoGroup key={s.title} title={s.title}>
               {s.inputs.map((i) => (
-                <div className="row" key={i.key}>
-                  <span>{i.label}</span>
-                  <span className="num">
-                    {i.ok && i.value != null ? formatPrice(i.value) : "–"}{" "}
-                    <span className={moveTone(i, segment)}>{formatMove(i)}</span>
-                  </span>
-                </div>
+                <InfoRow
+                  key={i.key}
+                  primary={i.label}
+                  aside={
+                    <span className="num">
+                      {i.ok && i.value != null ? formatPrice(i.value) : "–"}{" "}
+                      <span className={moveTone(i, segment)}>{formatMove(i)}</span>
+                    </span>
+                  }
+                />
               ))}
-            </div>
+            </InfoGroup>
           ))}
           {hasMacro(report.macro, ai) && <Backdrop report={report} />}
-          <span className="faint" style={{ fontSize: 12 }}>
+          <InfoFoot>
             {segment === "NSE" ? "Overnight context" : segment === "NSE_PULSE" ? "Live context" : "Context"} from public market data{report.model ? `, read by ${report.model}` : ""}. It is not a recommendation.{" "}
             {FOOTNOTE[segment]}
-          </span>
+          </InfoFoot>
         </div>
       </details>
     </div>
@@ -183,20 +182,11 @@ function Backdrop({ report }: { report: PremarketReport }) {
       {macro?.indicators
         .filter((i) => i.ok)
         .map((i) => (
-          <div className="row" key={i.key} style={{ alignItems: "flex-start" }}>
-            <span>
-              {i.label}
-              <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                {[periodLabel(i.period), indicatorMove(i)].filter(Boolean).join(" · ")}
-              </span>
-            </span>
-            <span className="num">{formatIndicator(i)}</span>
-          </div>
+          <InfoRow key={i.key} primary={i.label} secondary={[periodLabel(i.period), indicatorMove(i)].filter(Boolean).join(" · ")} aside={<span className="num">{formatIndicator(i)}</span>} />
         ))}
       {derived.map((d) => (
-        <div className="row" key={d.label} title={d.hint}>
-          <span>{d.label}</span>
-          <span className="num">{d.value}</span>
+        <div key={d.label} title={d.hint}>
+          <InfoRow primary={d.label} aside={<span className="num">{d.value}</span>} />
         </div>
       ))}
       {macro && macro.rbi.length > 0 && (

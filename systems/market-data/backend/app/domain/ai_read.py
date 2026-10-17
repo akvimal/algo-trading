@@ -19,6 +19,7 @@ from app.domain import ai_models
 from app.domain.ai_retry import post_json
 from app.domain.models import Candle, ChartStructure, EconomicEvent, MarketRegime, NewsDigest, OptionOiSummary
 from app.providers.news import OPENROUTER_URL, _parse_ai_json
+from app.domain.ai_language import ENGLISH_RULE, english_only
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ _SYSTEM_PROMPT = (
     "yet', not zero. Each strike's `meaning` and `flow_15m` are INFERRED from OI direction x premium direction "
     "(OI up + premium down = writing; OI up + premium up = buying) - treat them as likely, not certain. Flag conflicts between signals instead of forcing a direction; `neutral` with low confidence is a valid "
     "answer. `confidence` is 0-100. `one_liner` is one sentence. `reasoning` is 3-5 short bullets. `wait_for` is the "
-    "single confirmation that would change or firm up the read. This is analysis, not financial advice."
+    "single confirmation that would change or firm up the read. This is analysis, not financial advice. " + ENGLISH_RULE
 )
 
 
@@ -326,7 +327,7 @@ def run_ai_read(context: dict, api_key: str, model: Optional[str] = None) -> dic
                 "max_tokens": 1500,
             },
             90,
-            _parse_ai_json,
+            english_only(_parse_ai_json),
         )
         if parsed.get("bias") not in ("bullish", "bearish", "neutral"):
             raise ValueError("model reply had no valid bias")

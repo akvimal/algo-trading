@@ -2,6 +2,7 @@
 Saving the person's confirmed tags goes through the existing PUT /positions/{id}/tags and /option-groups/{id}/tags."""
 
 import uuid
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,9 +12,11 @@ from app.adapters.db import models as db_models
 from app.adapters.db.session import get_db
 from app.auth import User, get_current_user
 from app.domain import discipline_v2 as dv2
+from app.domain import on_plan as op
+from app.domain import session_grid as sg
 from app.domain import trade_review as tr
 from app.domain.discipline_load import load_trade_facts
-from app.domain.performance import epoch_start
+from app.domain.performance import day_key, epoch_start
 
 router = APIRouter()
 
@@ -48,7 +51,17 @@ def suggestions(kind: Literal["position", "group"], trade_id: str, user: User = 
     mine = next((s for s in scores if s.facts.id == str(parsed) and not s.facts.auto_traded), None)
     if mine is None:
         return none
-    return {"available": True, **tr.suggest(mine.facts.action, mine.mistakes, mine.facts.entry_context)}
+    verdict = tr.override_verdict(mine.facts.entry_context, mine.facts.stop0, mine.facts.target0, mine.planned_rr, mine.exit_r, mine.facts.pnl, cfg.min_rr)
+    won = tr.won_at_min_rr(mine.facts.pnl, mine.exit_r, cfg.min_rr)
+    return {"available": True, **tr.suggest(mine.facts.action, mine.mistakes, mine.facts.entry_context, verdict, won)}
+
+
+@router.get("/trade-review/on-plan")
+def on_plan(days: int = 90, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The ids of the caller's recent closed manual trades that went to plan (a stop and a target at order time, reward-to-risk at the minimum, no
+    mistake found) and have no review of their own: they need none, so they are not counted as waiting. Every market together."""
+    days = max(1, min(days, 365))
+    return {"ids": sorted(op.on_plan_for_user(db, user.id, date.today() - timedelta(days=days)))}
 
 
 @router.get("/trade-review/summary/{segment}")
@@ -61,5 +74,44 @@ def summary(segment: str, scope: Literal["epoch", "all"] = "epoch", user: User =
     account = db.query(db_models.Account).filter_by(user_id=user.id, segment=seg, book="intraday").first()
     since = epoch_start(db, account) if (scope == "epoch" and account is not None) else None
     facts = [f for f in load_trade_facts(db, user.id, seg, since) if not f.auto_traded]
+    if facts:  # a trade that went to plan counts as a clean review
+        cfg = op.segment_config(db, user.id, seg)
+        facts = op.cleared(facts, op.on_plan_ids(dv2.evaluate_all(facts, cfg), cfg))
     out = tr.summarize([{"exit_time": f.exit_time, "pnl": f.pnl, "root_cause": f.root_cause, "tags": f.mistake_tags} for f in facts])
     return {"segment": seg, "scope": scope, **out}
+
+
+@router.get("/trade-review/sessions")
+def sessions(limit: int = 10, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """The last `limit` trading sessions as two grids (app/domain/session_grid.py): the person's own trades judged on Study / Plan / Trade from their reviews,
+    and the bots' trades judged on result, wins and a clean run. Every market together; a session with no closed trade is skipped. `overrides` counts, over the
+    sessions shown, how often the person overrode the system's read of the market and how often that paid off."""
+    limit = max(1, min(limit, 30))
+    since = date.today() - timedelta(days=75)  # ten sessions fit comfortably; older history is not read
+    facts: list = []
+    verdicts: dict = {}
+    for seg in ("NSE", "MCX", "CRYPTO"):
+        seg_facts = load_trade_facts(db, user.id, seg, since)
+        if not seg_facts:
+            continue
+        cfg = op.segment_config(db, user.id, seg)
+        scores = dv2.evaluate_all(seg_facts, cfg)
+        facts += op.cleared(seg_facts, op.on_plan_ids(scores, cfg))  # a trade that went to plan counts as a clean review
+        for s in scores:
+            if s.facts.auto_traded:
+                continue
+            v = tr.override_verdict(s.facts.entry_context, s.facts.stop0, s.facts.target0, s.planned_rr, s.exit_r, s.facts.pnl, cfg.min_rr)
+            if v is None and tr.won_at_min_rr(s.facts.pnl, s.exit_r, cfg.min_rr):
+                v = sg.WON_AT_MIN
+            if v:
+                verdicts[s.facts.id] = v
+    D = db_models.SpreadBotDecision
+    failed: dict = {}
+    for d in db.query(D).filter(D.user_id == user.id, D.outcome == "failed", D.decided_at >= datetime.combine(since, datetime.min.time(), tzinfo=timezone.utc)).all():
+        failed[day_key(d.decided_at)] = failed.get(day_key(d.decided_at), 0) + 1
+    manual = sg.manual_sessions([f for f in facts if not f.auto_traded], limit, verdicts)
+    return {
+        "manual": manual,
+        "bot": sg.bot_sessions([f for f in facts if f.auto_traded], failed, limit),
+        "overrides": {"total": sum(m["overrides"] for m in manual), "paid_off": sum(m["paid_off"] for m in manual)},
+    }

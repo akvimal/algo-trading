@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/http";
@@ -30,6 +31,8 @@ import { buildNoteContext } from "../components/notesModel";
 import { loadAiRead } from "../chart/aiReadStore";
 import { PositionCard } from "../components/PositionCard";
 import { composeTradePicture, type PictureLevels } from "../chart/tradePicture";
+import { TradeStages } from "../components/TradeStages";
+import { TICKET_WIDTH, clampTicketWidth, loadTicketWidth, saveTicketWidth } from "../workstation/ticketWidth";
 import { TradeTicket } from "../components/TradeTicket";
 import { ScanOptionBias } from "./ScanOptionBias";
 import { formatPnl, formatPrice } from "../format";
@@ -466,6 +469,32 @@ export function TradePage() {
 
   const shown: (0 | 1)[] = twoUp ? [0, 1] : [0];
   const gridRef = useRef<HTMLDivElement>(null);
+  // The order-ticket panel's width on a wide screen: dragged by its left edge (or with the arrow keys), remembered, double-click for the default.
+  const [ticketW, setTicketW] = useState<number>(loadTicketWidth);
+  const dragTicket = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const body = e.currentTarget.parentElement?.getBoundingClientRect();
+    if (!body) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const room = body.width - 520; // the charts keep at least this much
+    let latest = ticketW;
+    const move = (ev: PointerEvent) => {
+      latest = clampTicketWidth(body.right - ev.clientX, room);
+      setTicketW(latest);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      saveTicketWidth(latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const setTicketWidth = (px: number) => {
+    const next = clampTicketWidth(px);
+    setTicketW(next);
+    saveTicketWidth(next);
+  };
+
   const dragSplit = (e: ReactPointerEvent<HTMLDivElement>) => {
     const box = gridRef.current?.getBoundingClientRect();
     if (!box) return;
@@ -536,6 +565,74 @@ export function TradePage() {
             }
           />
   );
+
+  // From an OI buildup the ticket can also be a plain spot order: this switch moves between the two.
+  const instrumentChips = (
+    <div className="chips" role="group" aria-label="Instrument" style={{ marginBottom: 12 }}>
+        <button aria-pressed={ticket.strategy === "future"} onClick={() => setTicket((cur) => ({ ...cur, strategy: "future" }))}>
+          Spot
+        </button>
+        <button aria-pressed={ticket.strategy !== "future"} onClick={() => setTicket((cur) => (cur.strategy === "future" ? { ...cur, strategy: "credit_spread", lots: "1" } : cur))}>
+          Option
+        </button>
+      </div>
+  );
+
+  const renderTicket = (studyTop?: ReactNode, planTop?: ReactNode) => {
+    if (!ctx) return null;
+    return (
+      <TradeTicket
+        ticket={ticket}
+        onChange={setTicket}
+        ctx={ctx}
+        meta={{
+          instrument: instrumentFor(activeSpec.symbol, activeSpec.segment),
+          interval: activeSpec.interval,
+          trendFollowed: activeData.regime ? activeData.regime.trend !== "range" && (activeData.regime.trend === "up") === (ticket.action === "BUY") : false,
+          regime: activeData.regime,
+        }}
+        regime={activeData.regime}
+        budget={account?.max_daily_loss != null && today.data ? { limit: account.max_daily_loss, lostToday: Math.max(0, -today.data.realized) } : null}
+        pickField={pickField}
+        onPickField={(f) => {
+          setLevelPick(null);
+          setPickField(f);
+        }}
+        onAddLine={addLine}
+        today={pretrade.data ?? null}
+        waitingHere={
+          mine.length > 0
+            ? {
+                text: mine.length === 1 ? (mine[0].fire_when_open ? `a ${mine[0].action} order waiting for the market to open` : `a waiting ${mine[0].action} order at ${formatPrice(mine[0].trigger_price)}`) : `${mine.length} waiting orders`,
+                cancel: () => void Promise.all(mine.map((w) => cancelWaitingOrder(w.id).catch(() => undefined))).finally(() => waiting.reload()),
+              }
+            : null
+        }
+        suggested={suggested}
+        capturePlan={(levels) => takePicture("Plan at entry", levels)}
+        onPlaced={() => {
+          waiting.reload();
+          today.reload();
+          tradeRows.reload();
+          pretrade.reload();
+          // The chart's "plan" lines (entry/stop/target) are drawn straight from this
+          // draft - left alone, they kept showing the just-placed order's prices
+          // indefinitely (nothing else ever cleared them; the ticket itself only resets
+          // on a symbol/segment change, not on a successful placement).
+          setTicket(freshTicket());
+          setSuggested({});
+          setPickField(null);
+        }}
+        optionsForced={optionFormHere || undefined}
+        hideStrategyChips={optionFormHere && ticket.strategy !== "future"}
+        hideMoneynessField={optionFormHere && ticket.strategy !== "future"}
+        hideOptionExtras={optionFormHere && ticket.strategy !== "future"}
+        studyTop={studyTop}
+        planTop={planTop}
+      />
+
+    );
+  };
 
   return (
     <div className={`workstation ${wide ? "wide" : ""} ${fullscreen ? "fullscreen" : ""}`} ref={stage}>
@@ -817,8 +914,29 @@ export function TradePage() {
           </p>
         </div>
 
+        {(autoTraderVisible || ticketOpen) && wide && (
+          <div
+            className="ws-resize"
+            role="separator"
+            aria-label="Resize the order ticket"
+            aria-orientation="vertical"
+            aria-valuemin={TICKET_WIDTH.min}
+            aria-valuemax={TICKET_WIDTH.max}
+            aria-valuenow={ticketW}
+            tabIndex={0}
+            title="Drag to make the ticket wider or narrower; double-click for the usual width"
+            onPointerDown={dragTicket}
+            onDoubleClick={() => setTicketWidth(TICKET_WIDTH.default)}
+            onKeyDown={(e: ReactKeyboardEvent) => {
+              if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                e.preventDefault();
+                setTicketWidth(ticketW + (e.key === "ArrowLeft" ? 24 : -24)); // the panel is on the right: left makes it wider
+              }
+            }}
+          />
+        )}
         {(autoTraderVisible || ticketOpen) && (
-          <aside className="ws-ticket" aria-label={autoTraderVisible ? "Trade panel" : "Order ticket"}>
+          <aside className="ws-ticket" aria-label={autoTraderVisible ? "Trade panel" : "Order ticket"} style={wide ? { width: ticketW } : undefined}>
             {autoTraderVisible && (
               <div className="chips" role="tablist" aria-label="Trade panel" style={{ marginBottom: 12 }}>
                 <button role="tab" aria-selected={asideTab === "manual"} onClick={() => setAsideTab("manual")}>
@@ -856,74 +974,24 @@ export function TradePage() {
               </div>
             )}
             {ctx && !live && !hasOpenForInstrument && !tradesKnown && <Skeleton lines={6} />}
-            {ctx && !live && !hasOpenForInstrument && tradesKnown && optionFormHere && (
-              <div className="chips" role="group" aria-label="Instrument" style={{ marginBottom: 12 }}>
-                <button aria-pressed={ticket.strategy === "future"} onClick={() => setTicket((cur) => ({ ...cur, strategy: "future" }))}>
-                  Spot
-                </button>
-                <button aria-pressed={ticket.strategy !== "future"} onClick={() => setTicket((cur) => (cur.strategy === "future" ? { ...cur, strategy: "credit_spread", lots: "1" } : cur))}>
-                  Option
-                </button>
-              </div>
-            )}
-            {ctx && !live && !hasOpenForInstrument && tradesKnown && optionFormHere && ticket.strategy !== "future" && (
-              <ScanOptionBias exchange={activeSpec.segment} symbol={activeSpec.symbol} ticket={ticket} onChange={setTicket} />
-            )}
-            {ctx && !live && !hasOpenForInstrument && tradesKnown && (
-              <TradeTicket
-                ticket={ticket}
-                onChange={setTicket}
-                ctx={ctx}
-                meta={{
-                  instrument: instrumentFor(activeSpec.symbol, activeSpec.segment),
-                  interval: activeSpec.interval,
-                  trendFollowed: activeData.regime ? activeData.regime.trend !== "range" && (activeData.regime.trend === "up") === (ticket.action === "BUY") : false,
-                  regime: activeData.regime,
-                }}
-                regime={activeData.regime}
-                budget={account?.max_daily_loss != null && today.data ? { limit: account.max_daily_loss, lostToday: Math.max(0, -today.data.realized) } : null}
-                pickField={pickField}
-                onPickField={(f) => {
-                  setLevelPick(null);
-                  setPickField(f);
-                }}
-                onAddLine={addLine}
-                today={pretrade.data ?? null}
-                waitingHere={
-                  mine.length > 0
-                    ? {
-                        text: mine.length === 1 ? (mine[0].fire_when_open ? `a ${mine[0].action} order waiting for the market to open` : `a waiting ${mine[0].action} order at ${formatPrice(mine[0].trigger_price)}`) : `${mine.length} waiting orders`,
-                        cancel: () => void Promise.all(mine.map((w) => cancelWaitingOrder(w.id).catch(() => undefined))).finally(() => waiting.reload()),
-                      }
-                    : null
+            {ctx && !live && !hasOpenForInstrument && tradesKnown && optionFormHere && ticket.strategy !== "future" ? (
+              // From an OI buildup: the view goes in Study, and the instrument, expiry, legs, economics and exit levels in Plan.
+              <ScanOptionBias exchange={activeSpec.segment} symbol={activeSpec.symbol} ticket={ticket} onChange={setTicket}>
+                {({ view, legs }) =>
+                  renderTicket(
+                    view,
+                    <>
+                      {instrumentChips}
+                      {legs}
+                    </>,
+                  )
                 }
-                suggested={suggested}
-                capturePlan={(levels) => takePicture("Plan at entry", levels)}
-                onPlaced={() => {
-                  waiting.reload();
-                  today.reload();
-                  tradeRows.reload();
-                  pretrade.reload();
-                  // The chart's "plan" lines (entry/stop/target) are drawn straight from this
-                  // draft - left alone, they kept showing the just-placed order's prices
-                  // indefinitely (nothing else ever cleared them; the ticket itself only resets
-                  // on a symbol/segment change, not on a successful placement).
-                  setTicket(freshTicket());
-                  setSuggested({});
-                  setPickField(null);
-                }}
-                optionsForced={optionFormHere || undefined}
-                hideStrategyChips={optionFormHere && ticket.strategy !== "future"}
-                hideMoneynessField={optionFormHere && ticket.strategy !== "future"}
-                hideOptionExtras={optionFormHere && ticket.strategy !== "future"}
-              />
+              </ScanOptionBias>
+            ) : (
+              ctx && !live && !hasOpenForInstrument && tradesKnown && renderTicket(undefined, optionFormHere ? instrumentChips : undefined)
             )}
             {hasOpenForInstrument && (
-              <>
-                <h2 className="section-title" style={{ marginBottom: 2 }}>Open positions</h2>
-                <p className="faint" style={{ fontSize: 12, margin: "0 0 8px" }} data-testid="no-second-order">
-                  To add to it, close it first or let its stop or target do it.
-                </p>
+              <TradeStages positions={activeTrades.positions} groups={activeTrades.groups}>
                 <div className="stack" data-testid="ticket-positions">
                   {activeTrades.positions.map((p) => (
                     <PositionCard key={p.id} kind="position" item={p} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("position", p.id, p.action === "BUY")} snapshotCapture={takePicture} />
@@ -932,7 +1000,7 @@ export function TradePage() {
                     <PositionCard key={g.id} kind="group" item={g} compact interval={activeSpec.interval} onChanged={tradeRows.reload} chart={openTradeHelp("group", g.id, g.action === "BUY")} snapshotCapture={takePicture} />
                   ))}
                 </div>
-              </>
+              </TradeStages>
             )}
             {mine.length > 0 && (
               <>

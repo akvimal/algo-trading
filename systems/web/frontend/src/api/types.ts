@@ -78,6 +78,7 @@ export type Position = {
   review_notes?: string | null;
   strategy_id?: string | null;
   auto_traded?: boolean;
+  entry_context?: EntryContext | null;
 };
 
 /** One leg of an option group, as the groups API returns it. `live_price`/`unrealized_pnl` only come with `with_live_pnl=true`. */
@@ -141,6 +142,7 @@ export type OptionGroup = {
   review_notes?: string | null;
   strategy_id?: string | null;
   auto_traded?: boolean;
+  entry_context?: EntryContext | null;
   legs?: OptionLeg[];
 };
 
@@ -251,6 +253,11 @@ export type PremarketReport = {
   /** When the AI read was actually made, and whether this build reused it because the numbers had not meaningfully changed. */
   ai_read_at?: string | null;
   ai_reused?: boolean;
+  /** While ai_pending: when the model was asked, and which model is reading. */
+  ai_requested_at?: string | null;
+  ai_model?: string | null;
+  /** The AI read was not asked for on load (the server's AI_ON_LOAD is off): the rule-based read shows, and Refresh runs the model. */
+  ai_deferred?: boolean;
 };
 
 export type Segment = "NSE" | "MCX" | "CRYPTO";
@@ -313,7 +320,9 @@ export type Performance = {
   equity: EquityStats | null;
 };
 
-export type Requirement = { key: string; label: string; required: string; actual: string; met: boolean };
+/** One live-readiness check. `value`/`target` are the same check as numbers for a meter (null value = nothing to measure yet); `higher_is_better`
+ * is false for a ceiling such as drawdown. Older servers omit them, so every one is optional. */
+export type Requirement = { key: string; label: string; required: string; actual: string; met: boolean; value?: number | null; target?: number | null; higher_is_better?: boolean };
 
 export type LiveEligibility = { segment: Segment; enforced: boolean; eligible: boolean; requirements: Requirement[] };
 
@@ -611,7 +620,9 @@ export type DisciplineTrade = {
 export type RootCause = "study" | "plan" | "execution" | "clean";
 export type SuggestedTag = { tag: string; level: Exclude<RootCause, "clean">; label: string; why: string };
 /** What the data supports for one closed trade (GET /trade-review/{kind}/{id}/suggestions). Never a verdict: the person confirms. */
-export type ReviewSuggestions = { available: boolean; tags: SuggestedTag[]; root_cause: RootCause | null; had_context: boolean };
+/** What became of overriding the system's read of the market: paid_off (plan held, won at least 1R), small_win, lost, or weak_plan (a win never rescues that). */
+export type OverrideVerdict = "paid_off" | "small_win" | "lost" | "weak_plan";
+export type ReviewSuggestions = { available: boolean; tags: SuggestedTag[]; root_cause: RootCause | null; had_context: boolean; override?: { verdict: OverrideVerdict; why: string } | null };
 export type CostBlock = { n: number; pnl: number; avg_loss: number | null };
 /** GET /trade-review/summary/{segment}: what the reviewed trades cost, by level and by tag. */
 export type MistakeSummary = {
@@ -754,3 +765,15 @@ export type ZoneScanRow = {
   oi_agrees: boolean | null;
 };
 export type ZoneScan = { snapshot_date: string | null; rows: ZoneScanRow[] };
+
+/** The home page's last-sessions grids (execution's GET /trade-review/sessions). A cell's band is good (above 80%), mid (50 to 80), poor (below 50) or none (nothing to judge). */
+export type GridBand = "good" | "mid" | "poor" | "none";
+export type GridCell = { ok: number; of: number; rate: number | null; band: GridBand };
+export type ManualSession = { date: string; trades: number; unreviewed: number; study: GridCell; plan: GridCell; trade: GridCell; overrides?: number; paid_off?: number };
+export type BotSession = {
+  date: string; trades: number; pnl: number; wins: number; win_rate: number; result: GridBand; wins_band: GridBand; clean: GridBand; no_stop: number; failed: number;
+};
+export type SessionGrids = { manual: ManualSession[]; bot: BotSession[]; /** Over the sessions shown: how often the person overrode the system's read of the market, and how often it paid off. */ overrides?: { total: number; paid_off: number } };
+
+/** The read of the market kept with an order (see execution's trade_review.clean_context): the system's, and the person's own when they changed it. */
+export type EntryContext = { regime?: string; trend?: string; adx?: number; person_read?: string; overridden?: boolean };

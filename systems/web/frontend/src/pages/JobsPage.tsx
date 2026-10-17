@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { BackLink } from "../components/nav";
 import { ApiError, api } from "../api/http";
 import type { Job, JobRun, Jobs } from "../api/types";
 import { ErrorNotice, Skeleton } from "../components/bits";
@@ -18,9 +18,7 @@ export function JobsPage() {
 
   return (
     <div className="stack">
-      <p style={{ margin: 0 }}>
-        <Link to="/more">← More</Link>
-      </p>
+      <BackLink to="/more" />
       <h1>Background jobs</h1>
       <p className="dim" style={{ margin: 0 }}>
         The scheduled jobs that keep market data fresh: whether each is running, how far along, when it last ran and how it ended.

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { LinkRow } from "../../components/nav";
 import type { Book, EquityHistory, LiveEligibility, Performance } from "../../api/types";
 import type { Resource } from "../../hooks/useResource";
 import { EquityChart } from "../../components/EquityChart";
@@ -130,9 +130,7 @@ function Graduation({ elig }: { elig: Resource<LiveEligibility> }) {
           For now this is a guide: it does not block you.
         </p>
       )}
-      <p style={{ marginBottom: 0 }}>
-        <Link to="/more/settings?tab=broker">Manage live trading in Settings</Link>
-      </p>
+      <LinkRow to="/more/settings?tab=broker" title="Manage live trading" hint="Live trading is switched on in Settings" />
     </div>
   );
 }

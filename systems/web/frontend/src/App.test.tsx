@@ -60,7 +60,8 @@ function renderApp(path = "/") {
   );
 }
 
-const sentiment = { exchanges: { NSE: { direction: "bullish", strength: "moderate", score: 0.4, underlyings: [] } } };
+const read = { direction: "bullish", strength: "moderate", score: 0.4, underlyings: [] };
+const sentiment = { exchanges: { NSE: read, MCX: read, CRYPTO: read } }; // every market, so the page does not depend on which one is trading when the test runs
 
 beforeEach(() => {
   setToken(jwt({ sub: "u1", email: "me@x.com", exp: Math.floor(Date.now() / 1000) + 3600 }), "me@x.com");
@@ -125,50 +126,98 @@ describe("Today", () => {
       "/options/sentiment": () => json(sentiment),
     });
 
-  it("shows today's P&L with signs, the open position, and the loss budget", async () => {
+  it("shows today's P&L with signs and the day's trades as dots: a closed one opens a summary, an open one goes to Positions", async () => {
     happy();
+    const user = userEvent.setup();
     renderApp("/");
     // booked -600 today + open +250 = -350
     expect(await screen.findByText("−₹350")).toBeInTheDocument();
-    expect(screen.getByText(/RELIANCE/)).toBeInTheDocument();
-    expect(screen.queryByText(/TCS/)).not.toBeInTheDocument(); // closed trades are not "open now"
     expect(screen.getByRole("meter", { name: /daily loss budget/i })).toHaveAttribute("aria-valuenow", "350");
-    expect(screen.getByText(/SL 2,480/)).toBeInTheDocument();
-    expect(screen.getByText(/Target not set/)).toBeInTheDocument();
-    expect(await screen.findByText(/OI bullish · moderate/)).toBeInTheDocument(); // the Markets card's header, for the market trading first
+    const tape = within(screen.getByTestId("trade-tape"));
+    expect(tape.getAllByRole("listitem")).toHaveLength(2); // TCS closed today, RELIANCE open
+    expect(tape.getByRole("listitem", { name: /TCS.*closed.*−₹600/ })).toHaveClass("loss");
+    expect(tape.getByRole("listitem", { name: /RELIANCE.*open.*\+₹250/ })).toHaveClass("open");
+    expect(screen.queryByTestId("position-card")).not.toBeInTheDocument(); // no list of positions on the page
+    expect(screen.getByTestId("open-now")).toHaveTextContent("1 open");
+    expect(screen.queryByTestId("no-stop")).not.toBeInTheDocument(); // it has a stop
+    await user.click(tape.getByRole("listitem", { name: /TCS/ })); // a finished trade opens its summary over the page
+    expect(within(screen.getByTestId("trade-sheet")).getByTestId("closed-trade")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("trade-sheet")).not.toBeInTheDocument();
+    await user.click(tape.getByRole("listitem", { name: /RELIANCE/ })); // an open one goes to where it is managed, with no pop-up
+    expect(screen.queryByTestId("trade-sheet")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("position-card")).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).queryByRole("link", { name: /Markets/ })).not.toBeInTheDocument(); // Markets has its own page, not a block here
+  });
+
+  it("Markets is its own page, with the open-interest read for the market trading first", async () => {
+    mockFetch({ "/options/sentiment": () => json(sentiment) });
+    renderApp("/markets");
+    expect(await screen.findByRole("heading", { name: "Markets" })).toBeInTheDocument();
+    expect(await screen.findByText(/OI bullish · moderate/)).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Markets" })).toBeInTheDocument();
   });
 
-  it("shows performance and a discipline score on Today, scoped to the account's own segment", async () => {
+  it("shows each account as a card: balance, the last days' trend, a discipline read, and a way into its detail", async () => {
     mockFetch({
       "/accounts": () => json([account]),
       "/option-groups": () => json([]),
       "/positions": () => json([]),
       "/options/sentiment": () => json(sentiment),
       "/equity-history": () => json({ segment: "NSE", days: 30, points: [{ snapshot_date: "2026-09-01", balance: 200000, unrealized_pnl: 0, equity: 200000, is_reset_point: true }, { snapshot_date: "2026-09-27", balance: 210000, unrealized_pnl: 0, equity: 210000, is_reset_point: false }], stats: { since: "2026-09-01", baseline: 200000, latest_equity: 210000, return_pct: 5, peak_equity: 210000, max_drawdown_pct: 0, days_tracked: 27, points: 2 } }),
-      "/performance": () =>
-        json({
-          segment: "NSE", scope: "epoch", since: "2026-09-01",
-          performance: { trades: 10, wins: 7, losses: 3, breakeven: 0, win_rate_pct: 70, total_pnl: 10000, gross_pnl: 10500, total_charges: 400, total_slippage: 100, avg_pnl: 1000, avg_win: 2000, avg_loss: -1500, profit_factor: 2.5, avg_r: 0.8, best_trade: 3000, worst_trade: -1500, max_consecutive_losses: 1 },
-          discipline: { score: 82, window_days: 30, window_start: "2026-08-28", trade_count: 10, planned: { rate: 0.9, trades: 10 }, plan_adherence: { rate: 0.8, trades: 10 }, plan_review: { rate: 0.7, trades: 10, before_rate: 0.7, after_rate: 0.7 }, outcome: { rate: 0.7, trades: 10, win_rate: 0.7, avg_r: 0.8 } },
-          equity: null,
-        }),
+      "/trade-review/summary": () => json({ segment: "NSE", reviewed: 4, pending: 2, by_level: {}, by_tag: { chased: { n: 3, pnl: -900 } }, clean: {}, flawed: {}, trades_since_last: { chased: 2 } }),
       "/discipline": () => json({ segment: "NSE", scope: "epoch", score: 82, trade_count: 10, emotions: { greed: 90, fear: 80, patience: 75 }, categories: {}, mistakes: {}, week_mistakes: {}, target_and_stop_moved: 0, emotion_counts: {}, needs_emotion: 2, coaching: null, trades: [] }),
     });
     renderApp("/");
-    expect(await screen.findByText("₹2,10,000")).toBeInTheDocument(); // equity headline
-    expect(screen.getByText("70%")).toBeInTheDocument(); // win rate
-    expect(screen.getByText("+0.80R")).toBeInTheDocument(); // expectancy
-    expect(screen.getByText("82")).toBeInTheDocument(); // discipline score, in the gauge
-    expect(screen.getByText("Good")).toBeInTheDocument(); // discipline band
-    expect(screen.getByTestId("feeling-link")).toHaveTextContent("2 to tag"); // trades waiting for a one-tap feeling
-    expect(screen.getByRole("link", { name: /full breakdown/ })).toHaveAttribute("href", "/portfolio?segment=NSE&tab=review");
+    const card = within(await screen.findByTestId("account-card"));
+    expect(await card.findByTestId("trend")).toBeInTheDocument();
+    expect(await card.findByText("82")).toBeInTheDocument(); // discipline score
+    expect(card.getByText(/Good/)).toBeInTheDocument();
+    expect(card.getByText(/Fix next: Chased/)).toBeInTheDocument();
+    expect(card.getByRole("link", { name: /Stocks & F&O/ })).toHaveAttribute("href", "/performance?segment=NSE&tab=overview");
+    expect(card.getByRole("link", { name: /2 to review/ })).toHaveAttribute("href", "/performance?segment=NSE&tab=review&section=journal");
+  });
+
+  it("shows the last sessions in place of the first-week checklist once there is a session", async () => {
+    const cellOf = (ok: number, of: number) => ({ ok, of, rate: of ? ok / of : null, band: of ? "good" : "none" });
+    mockFetch({
+      "/accounts": () => json([account]),
+      "/option-groups": () => json([]),
+      "/positions": () => json([]),
+      "/options/sentiment": () => json(sentiment),
+      "/trade-review/sessions": () => json({ manual: [{ date: "2026-10-03", trades: 2, unreviewed: 0, study: cellOf(2, 2), plan: cellOf(2, 2), trade: cellOf(2, 2) }], bot: [] }),
+    });
+    renderApp("/");
+    expect(await screen.findByTestId("manual-grid")).toBeInTheDocument();
+    expect(screen.queryByText("Your first week")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bot-grid")).not.toBeInTheDocument(); // no bot trades, no bot grid
+  });
+
+  it("lists spot and option trades together under Everyday, has no Options tab, and Positional shows only its own", async () => {
+    const group = { id: "g1", underlying_symbol: "BANKNIFTY", strategy_type: "long_call", action: "BUY", horizon: "intraday", quantity: 1, net_debit: 100, combined_stop_loss_price: null, spot_stop_loss_price: null, spot_target_price: null, status: "OPEN", pnl: null, unrealized_pnl: 40, entry_time: TODAY, exit_time: null, segment: "NSE" };
+    mockFetch({
+      "/accounts": () => json([account]),
+      "/option-groups": () => json([group]),
+      "/positions": () => json([openPos]),
+      "/options/sentiment": () => json(sentiment),
+    });
+    const user = userEvent.setup();
+    renderApp("/");
+    const tape = within(await screen.findByTestId("trade-tape"));
+    expect(await tape.findByRole("listitem", { name: /RELIANCE/ })).toBeInTheDocument();
+    expect(tape.getByRole("listitem", { name: /BANKNIFTY/ })).toBeInTheDocument(); // an option trade is a dot like any other
+    expect(screen.queryByRole("button", { name: "Options" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Intraday" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Positional" }));
+    await waitFor(() => expect(screen.queryByRole("listitem", { name: /RELIANCE/ })).not.toBeInTheDocument());
+    expect(screen.queryByRole("listitem", { name: /BANKNIFTY/ })).not.toBeInTheDocument();
   });
 
   it("squares off only after an explicit confirm", async () => {
     const calls = happy();
     const user = userEvent.setup();
     renderApp("/");
+    await user.click(await screen.findByRole("listitem", { name: /RELIANCE/ }));
     await user.click(await screen.findByRole("button", { name: "Square off" }));
     expect(calls.some((c) => c.url.includes("/square-off"))).toBe(false); // one tap does nothing
     await user.click(screen.getByRole("button", { name: "Keep open" }));
@@ -190,7 +239,7 @@ describe("Today", () => {
     expect(screen.getByRole("link", { name: "Add Dhan keys" })).toBeInTheDocument();
   });
 
-  it("keeps positions on screen when only the market pulse fails", async () => {
+  it("Today stays fine, and Markets says so, when the market pulse fails", async () => {
     mockFetch({
       "/accounts": () => json([account]),
       "/option-groups": () => json([]),
@@ -200,7 +249,8 @@ describe("Today", () => {
       "/options/sentiment": () => json({ detail: "boom" }, 500),
     });
     renderApp("/");
-    expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument();
+    expect(await screen.findByTestId("trade-tape")).toBeInTheDocument(); // Today does not need the market pulse at all
+    renderApp("/markets");
     expect(await screen.findByText(/OI read unavailable/)).toBeInTheDocument();
   });
 

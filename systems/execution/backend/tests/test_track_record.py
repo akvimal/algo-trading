@@ -41,6 +41,23 @@ def test_a_record_meeting_everything_is_eligible():
     assert all(r.met for r in ev())
 
 
+def test_every_requirement_also_carries_its_numbers_for_a_meter():
+    r = by_key(ev())
+    assert (r["trades"].value, r["trades"].target) == (40.0, 30.0)
+    assert (r["days"].value, r["days"].target) == (20.0, 14.0)
+    assert (r["discipline"].value, r["discipline"].target) == (75.0, 60.0)
+    assert (r["costs"].value, r["costs"].target) == (5.0, 3.0)
+    assert (r["profit"].value, r["profit"].target) == (12000.0, 0.0)
+    assert (r["drawdown"].value, r["drawdown"].target, r["drawdown"].higher_is_better) == (8.0, 20.0, False)
+    assert all(x.higher_is_better for k, x in r.items() if k != "drawdown")
+
+
+def test_numbers_are_empty_while_there_is_nothing_to_measure_and_costs_off_reads_as_zero():
+    r = by_key(ev(discipline_score=None, max_drawdown_pct=None, net_pnl=None, apply_charges=False))
+    assert r["discipline"].value is None and r["drawdown"].value is None and r["profit"].value is None
+    assert r["costs"].value == 0.0 and r["costs"].met is False
+
+
 @pytest.mark.parametrize(
     "key, over",
     [

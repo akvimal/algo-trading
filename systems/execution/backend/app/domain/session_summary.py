@@ -131,14 +131,19 @@ def unreviewed_count(db: Session, user_id: UUID, segment: str, day: date) -> int
     """Closed manual trades of the last two weeks with no "what went wrong" review yet (no root cause): the Telegram nudge to do it."""
     since = datetime.combine(day - timedelta(days=REVIEW_NUDGE_DAYS), time.min)
     P, G = db_models.Position, db_models.OptionPositionGroup
-    singles = db.query(P).filter(
+    singles = db.query(P.id).filter(
         P.user_id == user_id, P.strategy_id.is_(None), P.status == "CLOSED", P.segment == segment, P.option_group_id.is_(None), P.horizon != "positional",
         P.exit_time >= since, P.root_cause.is_(None), P.auto_traded.isnot(True),
-    ).count()
-    groups = db.query(G).filter(
+    ).all()
+    groups = db.query(G.id).filter(
         G.user_id == user_id, G.strategy_id.is_(None), G.status == "CLOSED", G.segment == segment, G.exit_time >= since, G.root_cause.is_(None), G.auto_traded.isnot(True),
-    ).count()
-    return singles + groups
+    ).all()
+    owed = {str(r[0]) for r in singles + groups}
+    if not owed:
+        return 0
+    from app.domain.on_plan import on_plan_for_user  # a trade that went to plan needs no review, so no nudge for it
+
+    return len(owed - on_plan_for_user(db, user_id, since.date(), (segment,)))
 
 
 def account_view(db: Session, user_id: UUID, segment: str, day_pnl: float, month_pnl: float) -> Optional[dict]:

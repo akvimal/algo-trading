@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { BackLink } from "../components/nav";
 import { getAiModels, getModelCatalog, setAiModel } from "../api/aiModels";
 import { ApiError } from "../api/http";
 import type { AiModelTask, CatalogModel } from "../api/types";
@@ -21,9 +21,7 @@ export function AiModelsPage() {
 
   return (
     <div className="stack">
-      <p style={{ margin: 0 }}>
-        <Link to="/more">← More</Link>
-      </p>
+      <BackLink to="/more" />
       <h1>AI models</h1>
       <p className="dim" style={{ margin: 0 }}>
         Choose which model handles each AI task. Set one shared default to use the same model everywhere, or give a task its own. A

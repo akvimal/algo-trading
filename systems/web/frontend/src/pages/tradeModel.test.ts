@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, defaultLevel, checkList, computeRR, cryptoLeverage, effectiveTicket, emptyTicketFor, favorable, instrumentFor, isFresh, marketStateOf, optionsAvailable, parseTradeParams, planAvailable, planHint, planNudges, planRows, planSide, planStatus, planTag, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
+import { EMPTY_TICKET, PRICE_STALE_MS, analyzeTicket, buildOrder, contextOf, defaultLevel, checkList, computeRR, cryptoLeverage, effectiveTicket, emptyTicketFor, favorable, instrumentFor, isFresh, marketStateOf, optionsAvailable, parseTradeParams, planAvailable, planHint, planNudges, planRows, planSide, planStatus, planTag, riskLots, STOP_WIDEN_MESSAGE, type Ticket, type TicketContext } from "./tradeModel";
 
 const ctx = (over: Partial<TicketContext> = {}): TicketContext => ({
   price: 1000, lotSize: 1, capital: 100000, riskPct: 1, minRR: 2, requireStop: false, segment: "NSE", symbol: "RELIANCE", ...over,
@@ -585,5 +585,40 @@ describe("entryIntervalOf", () => {
     expect(entryIntervalOf("1d")).toEqual({});
     expect(entryIntervalOf("daily")).toEqual({});
     expect(entryIntervalOf(undefined)).toEqual({});
+  });
+});
+
+describe("the read kept with an order (entry_context)", () => {
+  const regime = { regime: "trending_up", trend: "up", adx: 31 };
+
+  it("keeps the system's read alone when the person did not change it", () => {
+    expect(contextOf({ planState: null }, { regime })).toEqual({ entry_context: { regime: "trending_up", trend: "up", adx: 31 } });
+    expect(contextOf({ planState: "trending_up" }, { regime })).toEqual({ entry_context: { regime: "trending_up", trend: "up", adx: 31, person_read: "trending_up" } });
+  });
+
+  it("marks an override when the system had a clear read and the person chose another", () => {
+    expect(contextOf({ planState: "ranging" }, { regime }).entry_context).toMatchObject({ regime: "trending_up", person_read: "ranging", overridden: true });
+  });
+
+  it("is not an override when the system had no clear read: the person simply made the call", () => {
+    const changing = { regime: "transitional", trend: "range", adx: 14 };
+    expect(contextOf({ planState: "trending_down" }, { regime: changing }).entry_context).toMatchObject({ person_read: "trending_down" });
+    expect(contextOf({ planState: "trending_down" }, { regime: changing }).entry_context).not.toHaveProperty("overridden");
+    expect(contextOf({ planState: null }, { regime: null })).toEqual({});
+    expect(contextOf({ planState: "ranging" }, { regime: null })).toEqual({ entry_context: { person_read: "ranging" } });
+  });
+
+  it("goes with every order, a waiting one included, so a limit order is judged on the same read", () => {
+    const meta = { instrument: "spot" as const, interval: "15min", trendFollowed: true, regime };
+    const limit = ticket({ orderType: "limit", entry: "980", stop: "970", planState: "ranging" });
+    const waiting = buildOrder(limit, analyzeTicket(limit, ctx()), ctx(), meta);
+    expect(waiting.kind).toBe("pending");
+    expect(waiting.body).toMatchObject({ entry_context: { regime: "trending_up", person_read: "ranging", overridden: true } });
+    const market = ticket({ stop: "990", target: "1030", planState: "ranging" });
+    expect(buildOrder(market, analyzeTicket(market, ctx()), ctx(), meta).body).toMatchObject({ entry_context: { overridden: true } });
+    const option = ticket({ strategy: "naked", planState: "ranging" });
+    expect(buildOrder(option, analyzeTicket(option, ctx()), ctx(), meta).body).toMatchObject({ entry_context: { overridden: true } });
+    const closed = ticket({ strategy: "naked", planState: "ranging" });
+    expect(buildOrder(closed, analyzeTicket(closed, ctx()), ctx(), { ...meta, marketClosed: true }).body).toMatchObject({ entry_context: { overridden: true } });
   });
 });

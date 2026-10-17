@@ -110,22 +110,32 @@ def test_the_summary_carries_how_many_closed_trades_still_have_no_review(monkeyp
     assert run(monkeypatch, [trade(500)])["unreviewed"] == 2
 
 
-def test_unreviewed_count_adds_single_positions_and_spreads():
+def _owed_db():
     class Q:
-        def __init__(self, n):
-            self.n = n
+        def __init__(self, ids):
+            self.ids = ids
 
         def filter(self, *a):
             return self
 
-        def count(self):
-            return self.n
+        def all(self):
+            return [(i,) for i in self.ids]
 
     class DB:
-        def query(self, model):
-            return Q(3 if model.__name__ == "Position" else 2)
+        def query(self, column):
+            return Q(["p1", "p2", "p3"] if column.class_.__name__ == "Position" else ["g1", "g2"])
 
-    assert ss.unreviewed_count(DB(), USER, "NSE", DAY) == 5
+    return DB()
+
+
+def test_unreviewed_count_adds_single_positions_and_spreads(monkeypatch):
+    monkeypatch.setattr("app.domain.on_plan.on_plan_for_user", lambda *a, **k: set())
+    assert ss.unreviewed_count(_owed_db(), USER, "NSE", DAY) == 5
+
+
+def test_a_trade_that_went_to_plan_is_not_nudged_for_a_review(monkeypatch):
+    monkeypatch.setattr("app.domain.on_plan.on_plan_for_user", lambda *a, **k: {"p2", "g1", "elsewhere"})
+    assert ss.unreviewed_count(_owed_db(), USER, "NSE", DAY) == 3
 
 
 def test_the_account_change_for_the_day_and_the_month_come_from_paper_trades_only(monkeypatch):

@@ -299,6 +299,8 @@ class PendingOrderCreate(BaseModel):
     # The chart as planned (drawings, indicators and the entry / stop / target lines), a PNG composed by the page. Kept with the order and attached to
     # the position, as its plan at entry, when the order fills.
     plan_snapshot_png_base64: Optional[str] = None
+    # The order-time read, as a market order sends it (see ManualPositionCreate.entry_context); kept until the order fills.
+    entry_context: Optional[dict] = None
 
     @model_validator(mode="after")
     def _check_legs(self) -> "PendingOrderCreate":
@@ -420,6 +422,10 @@ class RequirementOut(BaseModel):
     required: str
     actual: str
     met: bool
+    # The check as numbers for a meter (see track_record.Requirement); absent until there is something to measure.
+    value: Optional[float] = None
+    target: Optional[float] = None
+    higher_is_better: bool = True
 
 
 class LiveEligibilityOut(BaseModel):

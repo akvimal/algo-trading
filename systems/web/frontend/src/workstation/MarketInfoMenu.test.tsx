@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MarketInfoMenu } from "./MarketInfoMenu";
@@ -85,6 +85,19 @@ describe("MarketInfoMenu", () => {
     render(<MarketInfoMenu segment="MCX" symbol="GOLDM" markets={["MCX"]} />);
     await user.click(screen.getByRole("button", { name: /Market info/ }));
     expect(await screen.findByTestId("ai-pending")).toBeInTheDocument();
+  });
+
+  it("when the server does not run the AI read on load, offers a button to run it and asks for a forced refresh", async () => {
+    const brief = { day: "2026-10-08", generated_at: new Date().toISOString(), bias: "neutral", agree: null, model: null, ai_error: null, ai_pending: false, ai_deferred: true, inputs: [], rules: { score: 0, bias: "neutral", coverage: 1, gift_gap_pct: null, factors: [] }, ai: null, macro: null };
+    const urls: string[] = [];
+    stub((url) => (urls.push(url), json(brief)));
+    const user = userEvent.setup();
+    render(<MarketInfoMenu segment="MCX" symbol="GOLDM" markets={["MCX"]} />);
+    await user.click(screen.getByRole("button", { name: /Market info/ }));
+    const note = await screen.findByTestId("ai-deferred");
+    expect(note).toHaveTextContent("not run on load");
+    await user.click(within(note).getByRole("button", { name: "Run AI read" }));
+    await waitFor(() => expect(urls.some((u) => u.includes("/market-brief/MCX") && u.includes("refresh=true"))).toBe(true));
   });
 
   const pulse = (over: Record<string, unknown> = {}) => ({

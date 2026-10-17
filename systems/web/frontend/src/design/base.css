@@ -3576,3 +3576,20 @@ a.tape-dot {
 .workstation:not(.wide) .ws-resize {
   display: none;
 }
+
+/* The plan's checks (setup, entry, trades today ...) as one row of small chips; the sentence for each is its tooltip. */
+.plan-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+}
+.plan-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}

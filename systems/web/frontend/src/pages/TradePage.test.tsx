@@ -286,7 +286,6 @@ describe("the page", () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
     expect(await t.findByLabelText("Number of lots")).toBeInTheDocument();
-    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ })); // the instrument is a badge in the header that opens a menu
     expect(t.getByRole("button", { name: "Option spread" })).toBeInTheDocument();
     expect(t.getByRole("button", { name: "Option" })).toBeInTheDocument();
   });
@@ -320,8 +319,7 @@ describe("the page", () => {
   it("starts the ticket on Future without a saved preference, same as before preferences existed", async () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
-    expect(t.getByRole("button", { name: "What to trade: Future" })).toBeInTheDocument();
-    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ }));
+    expect(within(t.getByRole("group", { name: "What to trade" })).getByRole("button", { name: "Future", pressed: true })).toBeInTheDocument();
     expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -351,15 +349,13 @@ describe("the page", () => {
     expect(await screen.findByTestId("ticket")).toBeInTheDocument();
   });
 
-  it("changes the instrument for one trade from the header badge, and closes the menu once chosen", async () => {
+  it("changes the instrument for one trade from the plan", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
-    expect(t.queryByRole("group", { name: "What to trade" })).not.toBeInTheDocument(); // no row of its own, and the menu is shut
-    await user.click(t.getByRole("button", { name: "What to trade: Future" }));
+    expect(within(t.getByTestId("step-plan")).getByRole("group", { name: "What to trade" })).toBeInTheDocument(); // part of the plan
     await user.click(t.getByRole("button", { name: "Option" }));
-    expect(t.queryByRole("group", { name: "What to trade" })).not.toBeInTheDocument(); // closed
-    expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument();
+    expect(within(t.getByRole("group", { name: "What to trade" })).getByRole("button", { name: "Option", pressed: true })).toBeInTheDocument();
     expect(t.getByLabelText("Strike")).toBeInTheDocument(); // the option-only field follows
   });
 
@@ -367,8 +363,7 @@ describe("the page", () => {
     profilePrefs = { default_instrument: "option", default_option_strategy: "spread" };
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
-    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option spread" })).toBeInTheDocument());
-    await userEvent.setup().click(t.getByRole("button", { name: /^What to trade/ }));
+    await waitFor(() => expect(within(t.getByRole("group", { name: "What to trade" })).getByRole("button", { name: "Option spread", pressed: true })).toBeInTheDocument());
     expect(t.getByRole("button", { name: "Future" })).toHaveAttribute("aria-pressed", "false");
     expect(t.getByRole("button", { name: "Option spread" })).toHaveAttribute("aria-pressed", "true");
     expect(t.getByLabelText("Strike")).toBeInTheDocument(); // the option-only strike field follows
@@ -386,12 +381,12 @@ describe("the page", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     let t = await ticket();
-    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument());
+    await waitFor(() => expect(within(t.getByRole("group", { name: "What to trade" })).getByRole("button", { name: "Option", pressed: true })).toBeInTheDocument());
     await user.type(t.getByLabelText("Stop-loss"), "900");
     await user.click(t.getByRole("button", { name: /Buy NIFTY, paper order/ }));
     await waitFor(() => expect(posts("/option-groups/manual")).toHaveLength(1));
     t = within(await screen.findByTestId("ticket"));
-    expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument();
+    expect(within(t.getByRole("group", { name: "What to trade" })).getByRole("button", { name: "Option", pressed: true })).toBeInTheDocument();
   });
 
   it("marks the plan on the chart and shows the risk in rupees as you type", async () => {
@@ -575,7 +570,7 @@ describe("the plan picker: market state and plan", () => {
     await user.click(state(t, "Ranging"));
     expect(t.getByTestId("market-state-source")).toHaveTextContent("Your read.");
     expect(t.getByTestId("plan-hint")).toHaveTextContent(/Range break\./);
-    expect(within(t.getByTestId("plan-block")).getByText("Tagged Range break.")).toBeInTheDocument();
+    expect(within(t.getByTestId("plan-block")).getByTitle("Tagged Range break.")).toBeInTheDocument();
     await user.click(state(t, "Trending up")); // back to what the read says
     expect(t.getByTestId("market-state-source")).toHaveTextContent("From the regime read");
     expect(t.getByTestId("plan-hint")).toHaveTextContent("Trend breakout.");
@@ -924,11 +919,11 @@ describe("the plan on the ticket", () => {
     expect(t.queryByTestId("t-target-status")).not.toBeInTheDocument();
     expect(block.queryByText("No stop: your risk is open-ended.")).not.toBeInTheDocument(); // no longer a row of the block
     expect(block.getByText("Not tagged: pick a plan above.")).toBeInTheDocument(); // needs attention: shown straight away
-    expect(block.getByTestId("plan-calm")).not.toHaveAttribute("open"); // the rows that are only for information are one closed line
+    expect(block.getByRole("list", { name: "Checks" })).toBeInTheDocument(); // the checks are one row of small chips
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
     await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" }));
-    expect(await block.findByText("Tagged Trend breakout.")).toBeInTheDocument();
+    expect(await block.findByTitle("Tagged Trend breakout.")).toBeInTheDocument();
     expect(block.queryByText("Not tagged: pick a plan above.")).not.toBeInTheDocument();
     // everything is fine now: a tick beside each field (no words under them), and nothing for the plan block to flag
     await waitFor(() => expect(t.getByTestId("t-stop-status-icon")).toHaveAccessibleName("At 990."));
@@ -936,7 +931,7 @@ describe("the plan on the ticket", () => {
     expect(t.getByTestId("t-target-status-icon")).toHaveAccessibleName(/3\.0 to 1, your minimum is/);
     expect(t.queryByTestId("t-target-status")).not.toBeInTheDocument();
     expect(t.getByTestId("t-lots-status-icon")).toHaveAccessibleName(/At the system size/);
-    expect(block.getByText(/All checks \(\d+\) are fine/)).toBeInTheDocument();
+    expect(block.queryByTestId("plan-flag-setup")).not.toBeInTheDocument(); // nothing left to flag: only the row of chips
     expect(block.getByTestId("plan-chip")).toHaveTextContent(/Planned · R:R 3\.0/);
     expect(block.queryByText(/in favour/)).not.toBeInTheDocument();
   });
@@ -960,7 +955,7 @@ describe("the plan on the ticket", () => {
     const block = within(t.getByTestId("plan-block"));
     expect(await block.findByText("9 min left after your loss on RELIANCE.")).toBeInTheDocument();
     expect(block.getByText("This would be trade 7, over your cap of 6.")).toBeInTheDocument();
-    expect(block.getByText(/₹500 of room left today/)).toBeInTheDocument();
+    expect(block.getByTitle(/₹500 of room left today/)).toBeInTheDocument();
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Number of shares"), "100"); // risks 1000 against 500 of room
     expect(await block.findByText(/could take you past it/)).toBeInTheDocument();
@@ -1010,7 +1005,7 @@ describe("the plan on the ticket", () => {
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
     await loaded();
-    await waitFor(() => expect(t.getByRole("button", { name: "What to trade: Option" })).toBeInTheDocument());
+    await waitFor(() => expect(within(t.getByRole("group", { name: "What to trade" })).getByRole("button", { name: "Option", pressed: true })).toBeInTheDocument());
     expect(t.getByTestId("plan-chip")).toHaveTextContent("No plan yet");
     await user.click(t.getByRole("button", { name: "Add stop line" }));
     await user.click(t.getByRole("button", { name: "Add target line" }));
@@ -1212,7 +1207,6 @@ describe("options", () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=NIFTY");
     const t = await ticket();
-    await user.click(await t.findByRole("button", { name: /^What to trade/ }));
     await user.click(await t.findByRole("button", { name: "Option spread" }));
     await user.selectOptions(t.getByLabelText("Strike"), "OTM1");
     await user.type(t.getByLabelText("Stop-loss"), "990");

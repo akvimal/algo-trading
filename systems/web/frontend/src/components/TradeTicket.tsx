@@ -15,7 +15,6 @@ import type { PriceField } from "../chart/ChartPane";
 import { CrosshairIcon, SparkIcon } from "../chart/icons";
 import type { Pretrade } from "../api/types";
 import { TextField, type FieldStatus } from "./Field";
-import { Popover } from "../chart/Popover";
 import { BoltIcon, BreakoutIcon, BuyIcon, ClockIcon, FutureIcon, OptionIcon, PullbackIcon, RangingIcon, ReversalIcon, SellIcon, SpreadIcon, TrendDownIcon, TrendUpIcon } from "./BadgeIcons";
 
 const MONEYNESS: { value: Moneyness; label: string }[] = [
@@ -221,7 +220,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   ];
   const current = instrumentChoices.find((c) => c.value === t.strategy);
   const instrumentLabel = current?.label ?? "Credit spread";
-  const instrumentIcon = current?.icon ?? <SpreadIcon />;
   const isOption = t.strategy !== "future";
   const limit = t.orderType === "limit";
   const simplifiedOption = Boolean(hideOptionExtras) && isOption;
@@ -336,29 +334,6 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
           Paper order
         </h2>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          {/* Future / Option / Option spread: the person's default (More > Experience) is what the ticket opens on, and this badge changes it for the
-              one trade. It is a menu in the header instead of a row of its own, and only where options exist. */}
-          {options && !hideStrategyChips && (
-            <Popover label="What to trade" text={instrumentLabel} icon={instrumentIcon} buttonLabel={`What to trade: ${instrumentLabel}`} align="right">
-              {(close) => (
-                <div className="chips instrument-menu" style={{ flexDirection: "column", alignItems: "stretch" }}>
-                  {instrumentChoices.map((c) => (
-                    <button
-                      key={c.value}
-                      aria-pressed={t.strategy === c.value}
-                      onClick={() => {
-                        set("strategy", c.value);
-                        close();
-                      }}
-                    >
-                      {c.icon}
-                      {c.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </Popover>
-          )}
           <span className="pill">Paper</span>
         </span>
       </div>
@@ -522,6 +497,18 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
       </TicketStep>
 
       <TicketStep n={2} title="Plan" summary={planSummary} tone={planTone} open={step === 2} onToggle={() => setStep(step === 2 ? 1 : 2)} testId="step-plan">
+      {/* What to trade: Future / Option / Option spread. The person's default (More > Experience) is what the ticket opens on, and this changes it for the
+          one trade. Part of the plan, and only where options exist. */}
+      {options && !hideStrategyChips && (
+        <div className="chips instrument-menu" role="group" aria-label="What to trade" style={{ marginBottom: 12 }}>
+          {instrumentChoices.map((c) => (
+            <button key={c.value} aria-pressed={t.strategy === c.value} onClick={() => set("strategy", c.value)}>
+              {c.icon}
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
       {planTop}
       <div className="ticket-opts">
       {isOption && !hideMoneynessField && (
@@ -667,36 +654,28 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
             // What needs attention is always shown; the rest (all fine, or only for information) folds into one line.
             const rows = allRows.filter((r) => r.key !== "stop" && r.key !== "size" && r.key !== "reward");
             const flagged = rows.filter((r) => r.status === "warn" || r.status === "bad");
-            const calm = rows.filter((r) => r.status !== "warn" && r.status !== "bad");
-            const line = (r: (typeof rows)[number]) => (
-              <li key={r.key} className="check-item" data-testid={`plan-row-${r.key}`}>
+            // One row of small icon chips (the word, its mark; the detail is the tooltip). Only what needs attention gets its sentence, under the row.
+            const chip = (r: (typeof rows)[number]) => (
+              <li key={r.key} className="plan-check" data-testid={`plan-row-${r.key}`} title={r.detail}>
                 <span className={`mark ${r.status}`} role="img" aria-label={STATUS_WORD[r.status]}>
                   {STATUS_MARK[r.status]}
                 </span>
-                <span>
-                  {r.label}
-                  <span className="faint" style={{ display: "block", fontSize: 12 }}>
-                    {r.detail}
-                  </span>
-                </span>
+                {r.label}
               </li>
             );
             return (
               <>
-                {flagged.length > 0 && <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>{flagged.map(line)}</ul>}
+                {rows.length > 0 && <ul className="plan-checks" aria-label="Checks">{rows.map(chip)}</ul>}
+                {flagged.map((r) => (
+                  <p key={r.key} className="faint" style={{ fontSize: 12, margin: "2px 0" }} data-testid={`plan-flag-${r.key}`}>
+                    <b>{r.label}:</b> <span>{r.detail}</span>
+                  </p>
+                ))}
                 {planNudges(t, a, state).map((n) => (
                   <p key={n} className="check-item" style={{ color: "var(--warn)", fontSize: 13, margin: "4px 0" }} data-testid="plan-nudge">
                     {n}
                   </p>
                 ))}
-                {calm.length > 0 && (
-                  <details style={{ marginTop: 6 }} data-testid="plan-calm">
-                    <summary className="faint" style={{ fontSize: 12 }}>
-                      {flagged.length > 0 ? `${calm.length} more checks` : `All checks (${calm.length}) are fine`}
-                    </summary>
-                    <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0 }}>{calm.map(line)}</ul>
-                  </details>
-                )}
               </>
             );
           })()}

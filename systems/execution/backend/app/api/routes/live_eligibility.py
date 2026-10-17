@@ -31,5 +31,5 @@ def get_live_eligibility(segment: str, user: User = Depends(get_current_user), d
         segment=seg,
         enforced=settings.require_paper_track_record,
         eligible=all(r.met for r in requirements),
-        requirements=[RequirementOut(key=r.key, label=r.label, required=r.required, actual=r.actual, met=r.met, value=r.value, target=r.target, higher_is_better=r.higher_is_better) for r in requirements],
+        requirements=[RequirementOut(key=r.key, label=r.label, required=r.required, actual=r.actual, met=r.met, value=r.value, target=r.target, higher_is_better=r.higher_is_better, note=r.note) for r in requirements],
     )

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MistakeSummary, Requirement } from "../api/types";
 import { HABITS, PARTS } from "./learnCatalog";
-import { focusHabit, habitRows, meterFill, meterTone, nextCheck, runLabel } from "./learnModel";
+import { focusHabit, habitRows, meterFill, meterTone, nextCheck, progressNote, runLabel } from "./learnModel";
 
 const cost = (n: number, pnl: number, level: "study" | "plan" | "execution") => ({ n, pnl, avg_loss: null, level });
 const summary = (by_tag: MistakeSummary["by_tag"], since: Record<string, number>): MistakeSummary => ({
@@ -99,5 +99,22 @@ describe("readiness meters", () => {
     expect(nextCheck(all)?.key).toBe("trades");
     expect(nextCheck(all.map((x) => ({ ...x, met: true })))).toBeNull();
     expect(nextCheck([r({ key: "mystery" }), r({ key: "days" })])?.key).toBe("days");
+  });
+});
+
+describe("progressNote", () => {
+  const base = { key: "trades", label: "t", required: "30", actual: "12", met: false, value: 12, target: 30 };
+  it("says how far along a target is, and never 100% until it is met", () => {
+    expect(progressNote(base)).toBe("40% of the way");
+    expect(progressNote({ ...base, value: 29.9 })).toBe("99% of the way");
+    expect(progressNote({ ...base, value: 30, met: true })).toBe("target reached");
+  });
+  it("reads a ceiling as how much of the limit is used", () => {
+    const dd = { ...base, key: "drawdown", higher_is_better: false, value: 5, target: 20, met: true };
+    expect(progressNote(dd)).toBe("25% of the 20% limit used");
+    expect(progressNote({ ...dd, value: 51.8, met: false })).toBe("259% of the limit: over it");
+  });
+  it("is null with nothing to measure", () => {
+    expect(progressNote({ ...base, value: null })).toBeNull();
   });
 });

@@ -55,6 +55,14 @@ export function meterFill(r: Requirement): number {
   return Math.max(0, Math.min(1, r.value / r.target));
 }
 
+/** How far along a check is, in words: "40% of the way" to a target, or "52% of the limit" used up for a ceiling. Null when there is no number to measure. */
+export function progressNote(r: Requirement): string | null {
+  if (r.value == null || r.target == null || r.target <= 0) return null;
+  const pct = Math.round((r.value / r.target) * 100);
+  if (r.higher_is_better === false) return r.met ? `${pct}% of the ${r.target}% limit used` : `${pct}% of the limit: over it`;
+  return r.met ? "target reached" : `${Math.min(99, pct)}% of the way`;
+}
+
 export function meterTone(r: Requirement): MeterTone {
   if (r.value == null) return r.met ? "up" : "dim";
   if (r.higher_is_better === false) {

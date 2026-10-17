@@ -322,7 +322,7 @@ export type Performance = {
 
 /** One live-readiness check. `value`/`target` are the same check as numbers for a meter (null value = nothing to measure yet); `higher_is_better`
  * is false for a ceiling such as drawdown. Older servers omit them, so every one is optional. */
-export type Requirement = { key: string; label: string; required: string; actual: string; met: boolean; value?: number | null; target?: number | null; higher_is_better?: boolean };
+export type Requirement = { key: string; label: string; required: string; actual: string; met: boolean; value?: number | null; target?: number | null; higher_is_better?: boolean; note?: string | null };
 
 export type LiveEligibility = { segment: Segment; enforced: boolean; eligible: boolean; requirements: Requirement[] };
 

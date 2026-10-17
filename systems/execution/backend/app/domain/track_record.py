@@ -78,6 +78,14 @@ class Requirement:
     value: Optional[float] = None
     target: Optional[float] = None
     higher_is_better: bool = True
+    # A short extra sentence for the screen, e.g. why some of your trades are not in the count.
+    note: Optional[str] = None
+
+
+def _uncounted_note(n: int) -> Optional[str]:
+    if n <= 0:
+        return None
+    return f"{n} closed trade{' was' if n == 1 else 's were'} closed without costs, so {'it is' if n == 1 else 'they are'} not counted. Only trades closed with charges and slippage on count."
 
 
 def evaluate(
@@ -90,6 +98,7 @@ def evaluate(
     discipline_score: Optional[int],
     max_drawdown_pct: Optional[float],
     net_pnl: Optional[float],
+    uncounted_trades: int = 0,
 ) -> list[Requirement]:
     """Pure: every requirement with its required and actual value, met or not."""
     costs_on = apply_charges and slippage_bps >= th.min_slippage_bps
@@ -100,7 +109,7 @@ def evaluate(
             value=slippage_bps if apply_charges else 0.0, target=th.min_slippage_bps,
         ),
         Requirement("trades", "Paper trades recorded with costs", f"{th.min_trades} trades", f"{qualifying_trades} trades", qualifying_trades >= th.min_trades,
-                    value=float(qualifying_trades), target=float(th.min_trades)),
+                    value=float(qualifying_trades), target=float(th.min_trades), note=_uncounted_note(uncounted_trades)),
         Requirement("days", "Days on the current record", f"{th.min_days} days", f"{days_tracked} days", days_tracked >= th.min_days,
                     value=float(days_tracked), target=float(th.min_days)),
         Requirement(
@@ -164,4 +173,5 @@ def evaluate_for_account(db: Session, user_id, account, th: Optional[Thresholds]
         discipline_score=discipline["score"],
         max_drawdown_pct=stats.max_drawdown_pct if stats is not None else None,
         net_pnl=perf.total_pnl if perf is not None else None,
+        uncounted_trades=sum(1 for t in trades if not t.costs_applied and not t.auto_traded),
     )

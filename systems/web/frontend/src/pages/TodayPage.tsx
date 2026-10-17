@@ -14,14 +14,14 @@ import { formatInr, formatPnl } from "../format";
 import { useLivePositions } from "../hooks/useLivePositions";
 import { useResource } from "../hooks/useResource";
 import { firstWeek } from "./onboardingModel";
-import { bookOf, bookPnl, cardPnl, inMode, liveDeltaFor, openGroups, openPositions, type Mode } from "./todayModel";
+import type { Book } from "../api/types";
+import { bookPnl, inBook, liveDeltaFor, openGroups, openPositions } from "./todayModel";
 import { groupsApi, positionsApi } from "../api/rupees";
 
 const POLL_MS = 15_000;
-const MODES: { id: Mode; label: string }[] = [
-  { id: "intraday", label: "Intraday" },
+const BOOKS: { id: Book; label: string }[] = [
+  { id: "intraday", label: "Everyday" },
   { id: "positional", label: "Positional" },
-  { id: "options", label: "Options" },
 ];
 
 async function loadToday() {
@@ -36,7 +36,7 @@ async function loadToday() {
 }
 
 export function TodayPage() {
-  const [mode, setMode] = useState<Mode>("intraday");
+  const [book, setBook] = useState<Book>("intraday");
   const { guided, markets } = useProfile();
   const today = useResource(loadToday, [], { pollMs: POLL_MS });
   const grids = useSessionGrids();
@@ -49,29 +49,27 @@ export function TodayPage() {
 
   const { groups } = today.data;
   const positions = live.positions;
-  // Every market has an account, but only the ones the person chose are shown. Intraday and Options trade the everyday
-  // account; Positional is its own balance.
-  const book = bookOf(mode);
+  // Every market has an account, but only the ones the person chose are shown. The everyday book (spot, futures and
+  // options) and the positional book are separate balances.
   const cards = (book === "positional" ? today.data.positionalAccounts : today.data.accounts).filter((a) => markets.includes(a.segment));
   const cardRows = cards.map((a) => {
     const delta = liveDeltaFor(today.data!.positions, positions, a.segment, book);
-    return { account: a, delta, pnl: cardPnl(positions, groups, a.segment, mode), accountPnl: bookPnl(positions, groups, a.segment, book).total };
+    return { account: a, delta, pnl: bookPnl(positions, groups, a.segment, book) };
   });
   const totalBalance = cardRows.reduce((n, r) => n + r.account.current_balance + r.account.unrealized_pnl + r.delta, 0);
   const totalToday = cardRows.reduce((n, r) => n + r.pnl.total, 0);
-  const shownPositions = mode === "options" ? [] : openPositions(positions).filter((p) => inMode(p, mode));
-  const shownGroups = mode === "options" ? openGroups(groups) : [];
-  // A waiting order sits in the tab its trade will open in.
-  const shownWaiting = today.data.waiting.filter((w) =>
-    mode === "options" ? w.strategy === "naked" || w.strategy === "spread" : w.strategy !== "naked" && w.strategy !== "spread" && (w.horizon ?? "intraday") === mode,
-  );
+  // Everything open in the chosen book, every instrument together: option spreads and naked options belong to the everyday book.
+  const shownPositions = openPositions(positions).filter((p) => inBook(p.horizon, book));
+  const shownGroups = book === "intraday" ? openGroups(groups) : [];
+  // A waiting order sits in the book its trade will open in (an option order is always everyday).
+  const shownWaiting = today.data.waiting.filter((w) => (w.strategy === "naked" || w.strategy === "spread" ? book === "intraday" : (w.horizon ?? "intraday") === book));
 
   return (
     <div className="stack">
-      <div className="tabs" role="group" aria-label="Trade type">
-        {MODES.map((m) => (
-          <button key={m.id} aria-pressed={mode === m.id} onClick={() => setMode(m.id)}>
-            {m.label}
+      <div className="tabs" role="group" aria-label="Account">
+        {BOOKS.map((b) => (
+          <button key={b.id} aria-pressed={book === b.id} onClick={() => setBook(b.id)}>
+            {b.label}
           </button>
         ))}
       </div>
@@ -90,7 +88,7 @@ export function TodayPage() {
       )}
       <div className="acct-grid">
         {cardRows.map((r) => (
-          <AccountCard key={r.account.segment} segment={r.account.segment} mode={mode} account={r.account} pnl={r.pnl} accountPnl={r.accountPnl} liveDelta={r.delta} live={live.live} />
+          <AccountCard key={r.account.segment} segment={r.account.segment} book={book} account={r.account} pnl={r.pnl} liveDelta={r.delta} live={live.live} />
         ))}
       </div>
 
@@ -108,7 +106,7 @@ export function TodayPage() {
               Your trades will show up here once you place one. <NextStep to="/trade">Place your first trade</NextStep>
             </>
           ) : (
-            "No open trades in this view."
+            "No open trades in this account."
           )}
         </Empty>
       ) : (

@@ -227,6 +227,7 @@ export function PositionCard(props: Props) {
       <div className="pos-head">
         <strong>
           {title} <span className={`pill ${side === "BUY" ? "up" : "dn"}`}>{side}</span>
+          {g && <span className="pill">Option</span>}
         </strong>
         <Signed value={pnl} text={pnl == null ? "–" : formatPnl(pnl)} />
       </div>

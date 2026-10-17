@@ -1,12 +1,12 @@
 import { Link } from "react-router-dom";
 import { api } from "../api/http";
-import type { Account, DisciplineV2, EquityHistory, MistakeSummary, Segment } from "../api/types";
+import type { Account, Book, DisciplineV2, EquityHistory, MistakeSummary, Segment } from "../api/types";
 import { useResource } from "../hooks/useResource";
 import { formatInr, formatPct, formatPnl } from "../format";
 import { focusHabit, habitRows } from "../pages/learnModel";
 import { tagLabel } from "../pages/journalModel";
 import { disciplineBand } from "../pages/portfolioModel";
-import { bookOf, recentTrend, type DayPnl, type Mode } from "../pages/todayModel";
+import { recentTrend, type DayPnl } from "../pages/todayModel";
 import { Signed } from "./bits";
 
 export const SEGMENT_LABEL: Record<Segment, string> = { NSE: "Stocks & F&O", MCX: "Commodities", CRYPTO: "Crypto" };
@@ -33,12 +33,10 @@ function Trend({ values }: { values: number[] }) {
 
 type Props = {
   segment: Segment;
-  mode: Mode;
+  book: Book;
   account: Account;
-  /** Today's result in the toggle's view. */
+  /** Today's result across the whole account (every kind of trade on its balance): also what the daily loss limit is measured against. */
   pnl: DayPnl;
-  /** Today's result across the whole account: what the daily loss limit is measured against. */
-  accountPnl: number;
   /** Movement of the open positions since the server last reported them (live prices). */
   liveDelta: number;
   live: boolean;
@@ -46,8 +44,7 @@ type Props = {
 
 /** One account on the home page: its balance, today's result, the last ten days, the daily loss limit and a short discipline read.
  * The whole card opens the account's detail; the review chip is the one separate link inside it. */
-export function AccountCard({ segment, mode, account, pnl, accountPnl, liveDelta, live }: Props) {
-  const book = bookOf(mode);
+export function AccountCard({ segment, book, account, pnl, liveDelta, live }: Props) {
   const bookQuery = book === "positional" ? "&book=positional" : "";
   const balance = account.current_balance + account.unrealized_pnl + liveDelta;
   const equity = useResource(() => api<EquityHistory>("execution", `/equity-history/${segment}?days=30${bookQuery}`), [segment, book]);
@@ -58,7 +55,7 @@ export function AccountCard({ segment, mode, account, pnl, accountPnl, liveDelta
   const trend = equity.data ? recentTrend(equity.data.points, balance) : [];
   const since = equity.data?.stats ? { pct: equity.data.stats.return_pct, day: equity.data.stats.since } : null;
   const limit = account.max_daily_loss ?? 0;
-  const used = Math.max(0, -accountPnl);
+  const used = Math.max(0, -pnl.total);
   const score = discipline.data?.score ?? null;
   const band = disciplineBand(score);
   const fix = mistakes.data ? focusHabit(habitRows(mistakes.data)) : null;

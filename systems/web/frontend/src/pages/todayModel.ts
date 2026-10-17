@@ -1,7 +1,6 @@
 import { isToday } from "../format";
 import type { Account, Book, EquityPoint, OptionGroup, Position, Segment } from "../api/types";
 
-export type Mode = "intraday" | "positional" | "options";
 
 /** Legs of an option group are Position rows too; the GROUP is what a person trades, sees
  * and squares off, so legs never appear (or count) on their own. */
@@ -17,10 +16,9 @@ export function openGroups(groups: OptionGroup[]): OptionGroup[] {
   return groups.filter((g) => g.status === "OPEN");
 }
 
-export function inMode(p: Position, mode: Exclude<Mode, "options">): boolean {
-  if (p.instrument_type === "option") return false;
-  const intraday = (p.horizon ?? "intraday") === "intraday";
-  return mode === "intraday" ? intraday : !intraday;
+/** Whether a trade belongs to a book: a multi-day hold is positional, everything else (every instrument, and every option spread) is the everyday book. */
+export function inBook(horizon: string | null | undefined, book: Book): boolean {
+  return ((horizon ?? "intraday") === "positional") === (book === "positional");
 }
 
 export type DayPnl = {
@@ -70,17 +68,6 @@ export function paperBalance(accounts: Account[]): number {
 }
 
 // ---- the account cards on the home page
-
-/** Intraday and Options both trade the everyday account; Positional is its own, separate balance. */
-export const bookOf = (mode: Mode): Book => (mode === "positional" ? "positional" : "intraday");
-
-const inBook = (horizon: string | null | undefined, book: Book) => ((horizon ?? "intraday") === "positional") === (book === "positional");
-
-/** Today's result for one account card, in the toggle's view: Intraday and Positional count that kind of spot and futures trade, Options counts the option groups. */
-export function cardPnl(positions: Position[], groups: OptionGroup[], segment: Segment, mode: Mode, now: Date = new Date()): DayPnl {
-  if (mode === "options") return dayPnl([], groups.filter((g) => (g.segment ?? "NSE") === segment), now);
-  return dayPnl(positions.filter((p) => p.segment === segment && inMode(p, mode)), [], now);
-}
 
 /** Today's result for a whole account (every kind of trade on its balance): what the daily loss limit is measured against. */
 export function bookPnl(positions: Position[], groups: OptionGroup[], segment: Segment, book: Book, now: Date = new Date()): DayPnl {

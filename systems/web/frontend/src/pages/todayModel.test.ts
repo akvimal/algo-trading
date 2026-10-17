@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Account, OptionGroup, Position } from "../api/types";
-import { bookOf, bookPnl, cardPnl, dayPnl, inMode, liveDeltaFor, lossBudget, openGroups, openPositions, paperBalance, recentTrend } from "./todayModel";
+import { bookPnl, dayPnl, inBook, liveDeltaFor, lossBudget, openGroups, openPositions, paperBalance, recentTrend } from "./todayModel";
 
 const NOW = new Date("2026-09-26T06:00:00Z"); // 11:30 IST, 26 Sep
 const TODAY = "2026-09-26T05:00:00Z";
@@ -85,11 +85,12 @@ describe("filters", () => {
     expect(openGroups([grp({ id: "x" }), grp({ id: "y", status: "CLOSED" })]).map((g) => g.id)).toEqual(["x"]);
   });
 
-  it("splits intraday from positional and keeps options out of both", () => {
-    expect(inMode(pos({ horizon: "intraday" }), "intraday")).toBe(true);
-    expect(inMode(pos({ horizon: "intraday" }), "positional")).toBe(false);
-    expect(inMode(pos({ horizon: "swing" }), "positional")).toBe(true);
-    expect(inMode(pos({ instrument_type: "option" }), "intraday")).toBe(false);
+  it("splits the everyday book from the positional one by horizon, every instrument together", () => {
+    expect(inBook("intraday", "intraday")).toBe(true);
+    expect(inBook(null, "intraday")).toBe(true);
+    expect(inBook("intraday", "positional")).toBe(false);
+    expect(inBook("positional", "positional")).toBe(true);
+    expect(inBook("positional", "intraday")).toBe(false);
   });
 });
 
@@ -101,16 +102,6 @@ describe("paperBalance", () => {
 
 describe("account cards", () => {
   const closedToday = (over: Partial<Position>) => pos({ status: "CLOSED", exit_time: TODAY, ...over });
-
-  it("Intraday and Positional split the day by horizon, and Options counts the option groups", () => {
-    const positions = [closedToday({ id: "i", pnl: 100 }), closedToday({ id: "h", pnl: 40, horizon: "positional" }), closedToday({ id: "m", pnl: 9, segment: "MCX" })];
-    const groups = [grp({ id: "g", status: "CLOSED", pnl: 500, exit_time: TODAY, segment: "NSE" })];
-    expect(cardPnl(positions, groups, "NSE", "intraday", NOW).total).toBe(100);
-    expect(cardPnl(positions, groups, "NSE", "positional", NOW).total).toBe(40);
-    expect(cardPnl(positions, groups, "NSE", "options", NOW).total).toBe(500);
-    expect(bookOf("options")).toBe("intraday");
-    expect(bookOf("positional")).toBe("positional");
-  });
 
   it("an account's whole day is what its loss limit is measured against", () => {
     const positions = [closedToday({ id: "i", pnl: -300 }), closedToday({ id: "h", pnl: -40, horizon: "positional" })];

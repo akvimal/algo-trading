@@ -183,6 +183,26 @@ describe("Today", () => {
     expect(screen.queryByTestId("bot-grid")).not.toBeInTheDocument(); // no bot trades, no bot grid
   });
 
+  it("lists spot and option trades together under Everyday, has no Options tab, and Positional shows only its own", async () => {
+    const group = { id: "g1", underlying_symbol: "BANKNIFTY", strategy_type: "long_call", action: "BUY", horizon: "intraday", quantity: 1, net_debit: 100, combined_stop_loss_price: null, spot_stop_loss_price: null, spot_target_price: null, status: "OPEN", pnl: null, unrealized_pnl: 40, entry_time: TODAY, exit_time: null, segment: "NSE" };
+    mockFetch({
+      "/accounts": () => json([account]),
+      "/option-groups": () => json([group]),
+      "/positions": () => json([openPos]),
+      "/options/sentiment": () => json(sentiment),
+    });
+    const user = userEvent.setup();
+    renderApp("/");
+    expect(await screen.findByText(/RELIANCE/)).toBeInTheDocument();
+    expect(screen.getByText(/BANKNIFTY/)).toBeInTheDocument();
+    expect(screen.getByText("Option")).toBeInTheDocument(); // the option card says what it is
+    expect(screen.queryByRole("button", { name: "Options" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Intraday" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Positional" }));
+    await waitFor(() => expect(screen.queryByText(/RELIANCE/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/BANKNIFTY/)).not.toBeInTheDocument();
+  });
+
   it("squares off only after an explicit confirm", async () => {
     const calls = happy();
     const user = userEvent.setup();

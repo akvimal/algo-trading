@@ -622,16 +622,17 @@ describe("the plan picker: market state and plan", () => {
     expect(t.getByRole("button", { name: /Sell RELIANCE/ })).toBeEnabled();
   });
 
-  it("keeps what you saw, the reason and the confidence in one optional, closed section that says what is in it", async () => {
+  it("keeps the reason in one optional, closed section; no what-did-you-see and no confidence, the analysis is the confidence", async () => {
     const user = userEvent.setup();
     renderAt("/trade?symbol=RELIANCE");
     const t = await ticket();
     const notes = t.getByTestId("ticket-notes");
     expect(notes).not.toHaveAttribute("open");
     expect(within(notes).getByText("Notes (optional)")).toBeInTheDocument();
-    await user.selectOptions(t.getByLabelText("What did you see?"), "Fair value gap");
-    await user.click(t.getByRole("button", { name: "3" }));
-    expect(within(notes).getByText(/Notes \(optional\) · Fair value gap · confidence 3/)).toBeInTheDocument();
+    expect(t.queryByLabelText("What did you see?")).not.toBeInTheDocument();
+    expect(t.queryByRole("group", { name: "Confidence" })).not.toBeInTheDocument();
+    await user.type(t.getByLabelText(/Reason/), "Held the level.");
+    expect(within(notes).getByText(/Notes \(optional\) ·/)).toBeInTheDocument();
   });
 
   it("changing Buy to Sell (or back) clears the entry, stop and target, which belonged to the other side, and says what it cleared", async () => {
@@ -712,15 +713,13 @@ describe("placing", () => {
     await user.type(t.getByLabelText("Stop-loss"), "990");
     await user.type(t.getByLabelText("Target"), "1030");
     await user.click(within(t.getByRole("group", { name: "Plan" })).getByRole("button", { name: "Breakout" })); // the regime read is an uptrend: a trend breakout
-    await user.selectOptions(t.getByLabelText("What did you see?"), "Order block");
     await user.type(t.getByLabelText(/Reason/), "Retested the daily OB and held.");
-    await user.click(t.getByRole("button", { name: "4" }));
     await user.click(t.getByRole("button", { name: /Buy RELIANCE, paper order/ }));
     await waitFor(() => expect(posts("/positions/manual")).toHaveLength(1));
     expect(posts("/positions/manual")[0].body).toMatchObject({
       segment: "NSE", symbol: "RELIANCE", action: "BUY", instrument_type: "spot", price: 1000, order_type: "market",
-      stop_loss_price: 990, target_price: 1030, setup_tag: "Trend breakout", confidence: 4, risk_managed: true, trend_followed: true, entry_interval: "15min",
-      notes: "Saw: Order block. Retested the daily OB and held.", // what was seen first, then their own words
+      stop_loss_price: 990, target_price: 1030, setup_tag: "Trend breakout", risk_managed: true, trend_followed: true, entry_interval: "15min",
+      notes: "Retested the daily OB and held.",
     });
     expect("quantity" in posts("/positions/manual")[0].body).toBe(false);
     expect(await t.findByText("Paper order placed.")).toBeInTheDocument();

@@ -5,7 +5,7 @@ import { ApiError } from "../api/http";
 import { placeOrder, type PlaceResult } from "../api/trade";
 import { useProfile } from "../auth/ProfileContext";
 import { formatInr, formatPrice } from "../format";
-import { NOTES_MAX, SETUP_TAGS, TRIGGERS } from "../pages/journalModel";
+import { NOTES_MAX, SETUP_TAGS } from "../pages/journalModel";
 import {
   ACTION_WORD, PLAN_KINDS, analyzeTicket, buildOrder, checkList, cryptoLeverage, effectiveTicket, marketStateOf, optionsAvailable, planAvailable, planHint, planNudges, planRows,
   planSide, planStatus,
@@ -230,7 +230,7 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
   const kindLabel = raw.planKind ? PLAN_KINDS.find((k) => k.value === raw.planKind)?.label : null;
   const studySummary = simplifiedOption
     ? [t.action === "BUY" ? "Bullish" : "Bearish", t.setupTag ?? "not tagged"].join(" · ")
-    : [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup", t.confidence != null ? `${t.confidence}/5` : null].filter(Boolean).join(" · ");
+    : [stateWord + (overridden ? " (yours)" : ""), kindLabel ?? "pick a setup"].filter(Boolean).join(" · ");
   const studyTone: StepTone = simplifiedOption ? (t.setupTag ? "good" : "na") : planNudges(t, a, state).length > 0 ? "warn" : kindLabel ? "good" : "na";
   const planNow = planStatus(t, a, ctx);
   const legsText = t.primaryStrike != null ? `${t.primaryStrike}${t.secondStrike != null && t.strategy !== "naked" ? ` / ${t.secondStrike}` : ""}` : null;
@@ -465,32 +465,9 @@ export function TradeTicket({ ticket: raw, onChange, ctx, meta, regime, budget, 
         return (
           <details className="notes-fold" data-testid="ticket-notes" style={{ marginBottom: 12 }}>
             <summary className="faint" style={{ fontSize: 13, cursor: "pointer" }}>
-              Notes (optional){t.trigger || t.reason.trim() || t.confidence != null ? " ·" : ""}
-              {t.trigger ? ` ${t.trigger}` : ""}
-              {t.confidence != null ? ` · confidence ${t.confidence}` : ""}
+              Notes (optional){t.reason.trim() ? " ·" : ""}
             </summary>
-            <label className="select-field" style={{ margin: "8px 0" }}>
-              <span className="dim">What did you see?</span>
-              <select value={t.trigger ?? ""} onChange={(e) => set("trigger", e.target.value || null)}>
-                <option value="">Not noted</option>
-                {TRIGGERS.map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-            </label>
             {reasonField}
-            <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>
-              Confidence
-            </div>
-            <div className="chips" role="group" aria-label="Confidence">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button key={n} aria-pressed={t.confidence === n} onClick={() => set("confidence", t.confidence === n ? null : n)}>
-                  {n}
-                </button>
-              ))}
-            </div>
           </details>
         );
       })()}
